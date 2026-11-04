@@ -8,7 +8,7 @@
 // reading one account's timeline deletes any other account's, so an account
 // change leaves nothing of the last one here. Kept apart from host.ts so all
 // of it is tested on a real folder.
-import { PERSON_ANSWER_CARD_ENTITIES_V2, validateProjectIdV1 } from '@echo-brain/organization-api';
+import { PERSON_ANSWER_CARD_ENTITIES_V2, validatePersonAnswerGapDetailsV1, validateProjectIdV1 } from '@echo-brain/organization-api';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
@@ -234,13 +234,17 @@ function arranged(value: unknown, count: number): boolean {
     && within(block.statements, count) && (block.title === undefined || string(block.title)) && ARRANGED[block.kind as ArrangedBlock['kind']](block));
 }
 
+function gapDetails(value: unknown): boolean {
+  try { validatePersonAnswerGapDetailsV1(value); return true; } catch { return false; }
+}
+
 /** An answer as the timeline keeps it: what the page reads back of a turn (TimelineAnswer). */
 function answer(value: unknown): value is TimelineAnswer {
   if (!record(value) || !string(value.text, 200_000) || !scope(value.scope) || !OUTCOMES.has(value.outcome)) return false;
   if (!Array.isArray(value.sources) || value.sources.length > MOST || !value.sources.every(source)) return false;
   if (value.direct !== undefined && !statement(value.direct)) return false;
   return Array.isArray(value.parts) && value.parts.length <= 64 && value.parts.every(part => record(part) && string(part.question) && STATUSES.has(part.status)
-    && statements(part.statements) && (part.gap === undefined || string(part.gap)) && (part.records === undefined || statements(part.records))
+    && statements(part.statements) && (part.gap === undefined || string(part.gap)) && (part.gap_details === undefined || gapDetails(part.gap_details)) && (part.records === undefined || statements(part.records))
     && (part.blocks === undefined || arranged(part.blocks, (part.statements as unknown[]).length)));
 }
 

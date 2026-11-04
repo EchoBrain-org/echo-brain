@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  PERSON_ANSWER_PATH_V7, PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
+  PERSON_ASK_GAP_DETAILS_HEADER_V1, PERSON_ANSWER_PATH_V7, PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
   createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8,
   type OrganizationPersonToolV4,
 } from '@echo-brain/organization-api';
@@ -81,6 +81,34 @@ function ask(base: string, headers: Readonly<Record<string, string>>) {
 }
 
 describe('answer layouts on /v7 (ADR-0051)', () => {
+  it('sends typed gaps only to opted-in JSON and streaming clients, preserving the old exact part shape', async () => {
+    const f = await sentFixture();
+    const original = leadAndSection();
+    const model: StructuredGenerationPort = { async generate(input) {
+      const reply = await original.generate(input);
+      return typeof reply === 'object' && reply !== null && 'not_found' in reply ? { ...reply, not_found: ['the reviewer'] } : reply;
+    } };
+    const base = await origin(f, model);
+    for (const progress of [false, true]) {
+      const headers: Readonly<Record<string, string>> = progress ? { [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 } : {};
+      const read = async (extra: Record<string, string>) => {
+        const response = await ask(base, { ...headers, ...extra });
+        expect(response.status).toBe(200);
+        if (!progress) return validatePersonAnswerResponseV8(await response.json());
+        const terminal = decodeAll(createPersonAskProgressDecoderV3(), await response.text()).at(-1)!;
+        if (terminal.type !== 'answer') throw new Error('expected an answer');
+        return terminal.response;
+      };
+      const old = await read({});
+      const current = await read({ [PERSON_ASK_GAP_DETAILS_HEADER_V1]: '1' });
+      expect(Object.keys(old.parts[0]!).sort()).toEqual(['gap', 'question', 'statements', 'status']);
+      const { gap_details, ...plain } = current.parts[0]!;
+      expect(gap_details).toEqual({ not_found: 'Not found: the reviewer.' });
+      expect(plain).toEqual(old.parts[0]);
+      for (const value of ['true', '2', '1, 1']) expect((await ask(base, { ...headers, [PERSON_ASK_GAP_DETAILS_HEADER_V1]: value })).status).toBe(400);
+    }
+  });
+
   it('arranges the V8 answer only when asked for layout v2, answers retired layout v1\'s value as without the header, the same in JSON and in the progress stream', async () => {
     const f = await sentFixture();
     const base = await origin(f, leadAndSection());

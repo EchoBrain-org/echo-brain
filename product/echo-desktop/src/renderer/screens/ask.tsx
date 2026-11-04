@@ -18,7 +18,7 @@ import {
   type LiveRow, type NamedPlace,
 } from '../progress.js';
 import {
-  activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
+  activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
   fullPageOffered, litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, searchAgain, setBarText, sourceName, submitBar, suggestionsShown, toggleEarlier, toggleSourceList, toggleTurn, turnOf, widenScope,
   UNTITLED,
@@ -204,7 +204,7 @@ function Marker({ state, view, group, focus }: { state: State; view: TurnView; g
   const on = paneOn(state, view) && state.sources?.open === group && state.sources.focus === focus;
   const name = sourceName(firstSource(view, view.groups[group]!), state.sources);
   return (
-    <button type="button" class={`marker${on ? ' on' : ''}`} data-testid="citation" aria-pressed={on} aria-label={`Source ${group + 1}: ${name}`}
+    <button type="button" class={`marker${on ? ' on' : ''}`} data-testid="citation" data-reading-focus={focus} aria-pressed={on} aria-label={`Source ${group + 1}: ${name}`}
       title={name} onClick={() => chooseSource(group, focus, view.id)}>{group + 1}</button>
   );
 }
@@ -240,7 +240,7 @@ function markClass(base: string, on: boolean, mark: Mark): string {
  */
 function statementProps(state: State, view: TurnView, statement: AnswerStatement, id: string, base = '') {
   const mark = markIn(view, statement.citation_indexes);
-  return { class: markClass(base, lit(state, view, id), mark) || undefined, 'data-testid': 'statement', 'data-mark': mark ?? undefined };
+  return { class: markClass(base, lit(state, view, id), mark) || undefined, 'data-testid': 'statement', 'data-reading-anchor': id, 'data-mark': mark ?? undefined };
 }
 
 /** A sentence's words as its item reads them (`text`), then the numbers of its sources. */
@@ -264,7 +264,7 @@ function Found({ state, view, statement, id }: { state: State; view: TurnView; s
   if (mark === 'omitted') return null;
   const source = view.answer.sources[statement.citation_indexes[0]!];
   return (
-    <div class={markClass('passage selectable', false, mark)} data-testid="found" data-mark={mark ?? undefined}>
+    <div class={markClass('passage selectable', false, mark)} data-testid="found" data-reading-anchor={id} data-mark={mark ?? undefined}>
       <Passage text={statement.text} label={source?.label ?? ''} />
       <div><Markers state={state} view={view} statement={statement} id={id} /></div>
     </div>
@@ -350,7 +350,7 @@ function Table({ state, view, index, block, place, opens, label }: {
             const id = rowId(index, place, at);
             const late = lateForYou(block.columns, row.cells, me);
             return (
-              <tr key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="answer-row" data-mark={mark ?? undefined}>
+              <tr key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="answer-row" data-reading-anchor={id} data-mark={mark ?? undefined}>
                 {row.cells.map((cell, column) => column === 0
                   ? <td key={column}><span class="first">{cell}<Markers state={state} view={view} statement={rowStatement(row, view.answer.sources)} id={id} /></span></td>
                   : <Cell key={column} cell={cell} late={late && column === due} you={yoursIn(block.columns[column]!, cell, me)} />)}
@@ -491,10 +491,9 @@ function Arranged({ state, view, part, index, blocks, opening }: {
  * The answer: each part in its blocks when the writer arranged it
  * (ADR-0051), and a paragraph per sentence when not. A part with nothing to
  * show is left out, and so is a sentence citing a source you can no longer
- * read; one whose source changed is lit in the signal (ADR-0047). Partial
- * answers keep their explanation, including when no claims were found. A
- * completed no-match answer uses the simple empty line, unless the project's
- * own line says so.
+ * read; one whose source changed is lit in the signal (ADR-0047). Only typed
+ * actionable explanations are shown. A completed no-match answer without an
+ * explanation uses the empty line, unless the project's own line says so.
  */
 function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: State; view: TurnView; dimmed?: boolean; empty?: boolean }) {
   const answer = view.answer;
@@ -516,7 +515,7 @@ function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: S
         </section>
       ))}
       {gaps.map(gap => <p key={gap} class="answer-empty" data-testid="answer-gap">{gap}</p>)}
-      {!said && gaps.length === 0 && empty && <p class="answer-empty" data-testid="answer-empty">Nothing you can see matched.</p>}
+      {!said && gaps.length === 0 && empty && answer.outcome === 'not_found' && <p class="answer-empty" data-testid="answer-empty">Nothing you can see matched.</p>}
     </div>
   );
 }
@@ -543,7 +542,7 @@ function SinceList({ state, view, since, at }: { state: State; view: TurnView; s
       <ChangedSince at={at} />
       <ul class="since-items selectable">
         {shown.map(({ statement, place }) => (
-          <li key={place} class={lit(state, view, `since.${place}`) ? 'on' : undefined} data-testid="since-item">
+          <li key={place} class={lit(state, view, `since.${place}`) ? 'on' : undefined} data-testid="since-item" data-reading-anchor={`since.${place}`}>
             <span><span data-testid="since-text">{statement.text}</span><Markers state={state} view={view} statement={statement} id={`since.${place}`} /></span>
           </li>
         ))}
@@ -708,24 +707,25 @@ function againAt(state: State, turn: TimelineTurn): string | null {
  */
 function FullTurn({ state, turn, took, current, last }: { state: State; turn: TimelineTurn; took: AskTook | undefined; current: boolean; last: boolean }) {
   const view = turnView(turn, shownChecks(turn, state));
-  const omitted = allOmitted(turn, view.checks);
+  const omitted = allOmitted(turn, view.checks) && answerGaps(turn.answer, view.shows).length === 0;
   const changed = !current && !omitted && turnNote(turn, view.checks) === 'changed';
+  const widen = !omitted && !state.ask?.failed && last && canAskEverywhere(turn, state);
   return (
     <div class="turn" data-testid="turn" data-turn={turn.id}>
       <div class="question selectable" data-testid="question">{turn.text}</div>
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
       {changed && <ChangedSince at={turn.asked_at} />}
       {!omitted && <AgenticAnswer state={state} view={view} empty={!foundNothingInProject(turn)} />}
-      {foundNothingInProject(turn) && (
-        <div class="project-empty" data-testid="project-empty">
-          <span>Nothing in {scopeName(turn.scope, state)} matched.</span>
+      {(foundNothingInProject(turn) || widen) && (
+        <div class="project-empty" data-testid={foundNothingInProject(turn) ? 'project-empty' : undefined}>
+          {foundNothingInProject(turn) && <span>Nothing in {scopeName(turn.scope, state)} matched.</span>}
           {/* Offered on the thread's latest turn only, as the next step; never under a question that failed. */}
-          {!state.ask?.failed && last && (
+          {widen && (
             <button type="button" class="link-button" data-testid="ask-everywhere" onClick={() => askEverywhere(turn.id)}>Ask across everything you can see</button>
           )}
         </div>
       )}
-      {/* With every sentence left out, its sources go too: only Ask again shows. */}
+      {/* With every sentence left out, its sources go too; a fixed capability or retry explanation can still be copied. */}
       <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={took} again={!current} copy={!omitted} />
     </div>
   );
@@ -765,7 +765,7 @@ function FoldedTurn({ state, turn, opened, again, quiet }: { state: State; turn:
  */
 function OpenedTurn({ state, turn, checks }: { state: State; turn: TimelineTurn; checks: TurnChecks | undefined }) {
   const view = turnView(turn, checks);
-  const omitted = allOmitted(turn, checks);
+  const omitted = allOmitted(turn, checks) && answerGaps(turn.answer, view.shows).length === 0;
   return (
     <div class="opened" data-testid="opened-turn">
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
@@ -824,48 +824,76 @@ export function AskView({ state }: { state: State }) {
   // The thread of the bar's place, each question once (ADR-0049).
   const turns = askThread(state);
   const scroller = useRef<HTMLElement>(null);
-  // Whether the person was at the bottom when they last scrolled, or the timeline last took them there.
-  const atBottom = useRef(true);
   // Where the timeline last put the view: the scroll event that records a person's scroll can arrive after a new row.
   const placedAt = useRef<number | null>(null);
-  // Keep a visible piece of the answer in place when the source pane or window changes the reading width.
-  const reading = useRef<{ width: number; height: number; element?: Element; offset: number } | null>(null);
+  // Reading follows the bottom until the person scrolls away or chooses a specific citation.
+  type Position = { kind: 'bottom' } | { kind: 'anchor'; element: Element; offset: number };
+  const reading = useRef<{ width: number; height: number; position: Position } | null>(null);
+  const anchors = useRef<NodeListOf<Element> | null>(null);
+  const savePosition = (position: Position) => {
+    const view = scroller.current;
+    if (view) reading.current = { width: view.clientWidth, height: view.clientHeight, position };
+  };
+  const anchorPosition = (element: Element): Position => ({
+    kind: 'anchor', element, offset: element.getBoundingClientRect().top - scroller.current!.getBoundingClientRect().top,
+  });
   const rememberReading = () => {
     const view = scroller.current;
     if (!view) return;
+    if (view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX) { savePosition({ kind: 'bottom' }); return; }
+    // Anchors follow document order. Locate the first visible one with logarithmic layout reads, only when the person
+    // actually scrolls; streaming progress neither scans the thread nor replaces a citation they chose to read.
+    const items = anchors.current ??= view.querySelectorAll('[data-reading-anchor], .question, .folded');
     const bounds = view.getBoundingClientRect();
-    const visible = [...view.querySelectorAll('.question, [data-testid="statement-text"], .answer-table tr, .answer-fact, .folded')]
-      .map(element => ({ element, bounds: element.getBoundingClientRect() }))
-      .filter(item => item.bounds.bottom > bounds.top && item.bounds.top < bounds.bottom);
-    const anchor = visible.find(item => item.bounds.top >= bounds.top) ?? visible[0];
-    reading.current = { width: view.clientWidth, height: view.clientHeight, element: anchor?.element, offset: (anchor?.bounds.top ?? bounds.top) - bounds.top };
+    let low = 0, high = items.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (items[mid]!.getBoundingClientRect().top < bounds.top) low = mid + 1;
+      else high = mid;
+    }
+    const next = items[low];
+    const element = next && next.getBoundingClientRect().top < bounds.bottom ? next : items[low - 1];
+    if (element) savePosition(anchorPosition(element));
   };
   const keepReading = () => {
-    const view = scroller.current, anchor = reading.current;
-    if (view && anchor && (view.clientWidth !== anchor.width || view.clientHeight !== anchor.height) && anchor.element && view.contains(anchor.element)) {
-      view.scrollTop += anchor.element.getBoundingClientRect().top - view.getBoundingClientRect().top - anchor.offset;
-      placedAt.current = view.scrollTop;
-      atBottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX;
-    }
-    rememberReading();
+    const view = scroller.current, saved = reading.current;
+    if (!view || !saved || (view.clientWidth === saved.width && view.clientHeight === saved.height)) return;
+    const position = saved.position;
+    if (position.kind === 'bottom') view.scrollTop = view.scrollHeight;
+    else if (view.contains(position.element)) view.scrollTop += position.element.getBoundingClientRect().top - view.getBoundingClientRect().top - position.offset;
+    placedAt.current = view.scrollTop;
+    savePosition(position);
   };
+  const chooseReading = (event: MouseEvent) => {
+    // Capture the source's turn/focus before chooseSource changes the pane width. Pointer and keyboard activation both
+    // produce this click, and every block gives its sentence or row the same focus id the source pane uses.
+    const marker = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-reading-focus]') : null;
+    const turn = marker?.closest('[data-turn]');
+    const element = marker && turn?.querySelector(`[data-reading-anchor="${CSS.escape(marker.dataset.readingFocus!)}"]`);
+    if (element) savePosition(anchorPosition(element));
+  };
+  // Content changes invalidate only the cached node list; they do not measure the existing thread.
+  useLayoutEffect(() => { anchors.current = null; }, [thread.seq, turns.length, thread.opened, thread.earlier, state.timeline.turns, state.timeline.checks]);
   const toBottom = () => {
     const view = scroller.current;
     if (view) { view.scrollTop = view.scrollHeight; placedAt.current = view.scrollTop; }
-    atBottom.current = true;
-    rememberReading();
+    savePosition({ kind: 'bottom' });
   };
   // A new question, answer, choice or failure scrolls to the bottom.
   useLayoutEffect(toBottom, [thread.seq, turns.length, thread.asking === null, thread.failed, thread.clarify]);
   // A suggestion opened Ask at a turn: that turn comes into view.
   useLayoutEffect(() => {
     if (thread.focus === null) return;
-    scroller.current?.querySelector(`[data-turn="${thread.focus}"]`)?.scrollIntoView({ block: 'start' });
-    atBottom.current = false;
-    rememberReading();
+    const element = scroller.current?.querySelector(`[data-turn="${thread.focus}"]`);
+    if (element) {
+      element.scrollIntoView({ block: 'start' });
+      placedAt.current = scroller.current!.scrollTop;
+      savePosition(anchorPosition(element));
+    }
   }, [thread.focus]);
-  // A pane changes during render; a window resize can happen without one. Both use the position saved before reflow.
-  useLayoutEffect(keepReading);
+  // Pane and sidebar changes restore before paint. Native window resizing can happen without a render.
+  const paneOpen = state.sources?.open != null || state.sources?.named != null;
+  useLayoutEffect(keepReading, [paneOpen, state.sidebarOpen]);
   useLayoutEffect(() => {
     const observer = new ResizeObserver(keepReading);
     if (scroller.current) observer.observe(scroller.current);
@@ -875,15 +903,15 @@ export function AskView({ state }: { state: State }) {
   // their scroll event has arrived, because the view is no longer where the timeline left it.
   const follow = useCallback(() => {
     const view = scroller.current;
-    if (view && placedAt.current !== null && view.scrollTop < placedAt.current - FOLLOW_PX) atBottom.current = false;
-    if (atBottom.current) toBottom();
+    if (view && placedAt.current !== null && view.scrollTop < placedAt.current - FOLLOW_PX) rememberReading();
+    if (reading.current?.position.kind === 'bottom') toBottom();
   }, []);
   const onScroll = () => {
-    const view = scroller.current;
-    if (view) {
-      atBottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX;
-      // Reflow can dispatch a scroll before its resize callback; do not overwrite the old reading position with that jump.
-      if (view.clientWidth === reading.current?.width && view.clientHeight === reading.current?.height) rememberReading();
+    const view = scroller.current, saved = reading.current;
+    // Ignore our own placement and browser scrolls caused by a resize. Only the person's new position changes intent.
+    if (view && view.scrollTop !== placedAt.current && view.clientWidth === saved?.width && view.clientHeight === saved.height) {
+      placedAt.current = null;
+      rememberReading();
     }
   };
   // Which Ask's line is open, by the question on its way's seq: the next question's line starts closed.
@@ -898,7 +926,7 @@ export function AskView({ state }: { state: State }) {
   const again = askedAgain(state.timeline.turns);
   const behind = new Set(behindEarlierLine(turns, full));
   return (
-    <section class="ask timeline" data-testid="ask-view" aria-live="polite" ref={scroller} onScroll={onScroll}>
+    <section class="ask timeline" data-testid="ask-view" aria-live="polite" ref={scroller} onScroll={onScroll} onClickCapture={chooseReading}>
       {behind.size > 0 && <EarlierLine count={behind.size} open={thread.earlier} />}
       {turns.map((turn, index) => (thread.earlier || !behind.has(turn.id)) && (
         <Fragment key={turn.id}>
@@ -1158,6 +1186,12 @@ export function Passage({ text, label }: { text: string; label: string }) {
           : <ul key={index}>{block.items.map((item, at) => <li key={at}><Runs runs={item} /></li>)}</ul>)}</>;
 }
 
+function SourceReviewBadge({ review, shared = false }: { review: 'not_reviewed' | 'reviewed'; shared?: boolean }) {
+  return <div class="meta" data-testid={shared ? 'source-review-summary' : undefined}><span class="tag" data-testid="source-review-state">
+    {review === 'reviewed' ? 'Reviewed' : 'Not reviewed yet'}
+  </span></div>;
+}
+
 /**
  * An original's cited passages, each its verified evidence at most 2,000
  * characters. A sentence's number lights the passages it cites, when it cites
@@ -1168,17 +1202,24 @@ function OriginalSource({ state, target, source }: { state: State; target: PaneT
   const reads = sources.evidence?.group === target.number ? sources.evidence.reads : {};
   const places = paneCitations(target);
   const count = places.length;
-  const meta = target.group ? originalMeta(source, target.group, 'passages cited') : documentName(source.label).version ?? '';
   const answer = activeTurn(state)?.answer;
   const focused = target.group && answer ? answerSentences(answer).find(([id]) => id === sources.focus)?.[1].citation_indexes ?? [] : [];
   const lit = places.filter(index => focused.includes(index));
   const light = lit.length > 0 && lit.length < count;
   const all = places.map(index => reads[index] ?? { loading: true } as const);
   const failure = all.find(read => !read.loading && 'failure' in read);
+  const verified = all.flatMap(read => !read.loading && 'value' in read ? [read.value] : [])[0];
+  // One source group can cite several revisions. Share a badge only once every proof agrees;
+  // while loading, after a refusal, or across different states, each passage keeps its own badge.
+  const review = verified?.imported_meeting_review;
+  const sharedReview = review !== undefined && all.every(read => !read.loading && 'value' in read && read.value.imported_meeting_review === review) ? review : undefined;
+  const label = verified?.label ?? source.label;
+  const meta = target.group ? originalMeta({ ...source, label }, target.group, 'passages cited') : documentName(label).version ?? '';
   return (
     <div class="source-detail">
-      <h2>{documentName(source.label).name}</h2>
+      <h2>{documentName(label).name}</h2>
       {meta && <div class="meta" data-testid="source-meta">{meta}</div>}
+      {sharedReview !== undefined && <SourceReviewBadge review={sharedReview} shared />}
       {failure && !failure.loading && 'failure' in failure && (
         <div class="source-failure">
           <div class="error" data-testid="source-error">{message(failure.failure)}</div>
@@ -1190,9 +1231,12 @@ function OriginalSource({ state, target, source }: { state: State; target: PaneT
         if (read.loading || !('value' in read)) return null;
         const text = read.value.text.length > MAX_EVIDENCE ? `${read.value.text.slice(0, MAX_EVIDENCE)}…` : read.value.text;
         return (
-          <div key={index} class={`passage selectable${light && lit.includes(index) ? ' on' : ''}`} data-testid="evidence-text">
-            <Passage text={text} label={source.label} />
-          </div>
+          <Fragment key={index}>
+            {sharedReview === undefined && read.value.imported_meeting_review !== undefined && <SourceReviewBadge review={read.value.imported_meeting_review} />}
+            <div class={`passage selectable${light && lit.includes(index) ? ' on' : ''}`} data-testid="evidence-text">
+              <Passage text={text} label={read.value.label} />
+            </div>
+          </Fragment>
         );
       })}
       {all.some(read => read.loading) && <div class="notice">Loading verified evidence…</div>}

@@ -8,6 +8,7 @@ import type {
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonSourceEvidenceHttpApplicationV1 } from '../src/presentation/person-source-evidence-http-application.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
+import { createPersonSourceEvidenceRouteV1 } from '../src/composition/person-source-evidence-route.js';
 import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
 
 const project_id = 'prj_00000000-0000-4000-8000-000000000001';
@@ -55,10 +56,10 @@ async function start(application: PersonSourceEvidenceHttpApplicationV1): Promis
   return `http://127.0.0.1:${address.port}`;
 }
 
-function request(origin: string, path: string, body: unknown, authorization = 'Bearer fixture-token'): Promise<Response> {
+function request(origin: string, path: string, body: unknown, authorization = 'Bearer fixture-token', review?: string): Promise<Response> {
   return fetch(`${origin}${path}`, {
     method: 'POST',
-    headers: { authorization, 'content-type': 'application/json' },
+    headers: { authorization, 'content-type': 'application/json', ...(review === undefined ? {} : { 'x-echo-source-review': review }) },
     body: JSON.stringify(body),
   });
 }
@@ -70,6 +71,26 @@ function failure(response: Response, status: number, code: string): Promise<void
 }
 
 describe('cited original HTTP transport', () => {
+  it('keeps the installed-client response shape and releases review metadata only after an opted-in authorized proof', async () => {
+    const packet = { ...evidence, scope: { kind: 'global' } as const, citation: { ...source, label: 'Imported meeting: Pilot' },
+      text: 'Imported meeting (unapproved): Pilot\nThe notes propose shipping the pilot.' };
+    const origin = await start(createPersonSourceEvidenceRouteV1({ originals: {
+      revalidate: () => ({ checked_at: '2026-11-04T00:00:00.000Z' }),
+      read(input) {
+        if (input.access_token !== 'fixture-token') throw new AuthorityOperationError('unauthorized', 'No access to the source');
+        return { scope: packet.scope, atom: { ...source, label: packet.citation.label, text: packet.text }, imported_meeting_review: 'reviewed' };
+      },
+    } }));
+    const body = { schema_version: 1, scope: packet.scope, citation: source };
+    const old = await request(origin, '/v2/person/ask/source', body);
+    expect(old.status).toBe(200);
+    expect(await old.json()).toEqual(packet); // Exactly the old five keys, not an undefined extra field.
+    const current = await request(origin, '/v2/person/ask/source', body, 'Bearer fixture-token', '1');
+    expect(current.status).toBe(200);
+    expect(await current.json()).toEqual({ ...packet, imported_meeting_review: 'reviewed' });
+    await failure(await request(origin, '/v2/person/ask/source', body, 'Bearer denied', '1'), 401, 'unauthorized');
+    for (const header of ['0', 'true', '1, 1']) await failure(await request(origin, '/v2/person/ask/source', body, 'Bearer fixture-token', header), 400, 'invalid_request');
+  });
   it('serializes source evidence separately from its public citation fields', async () => {
     const calls: unknown[] = [];
     const origin = await start({ readSource(input) { calls.push(input); return evidence; } });

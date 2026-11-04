@@ -698,7 +698,7 @@ describe("agentic Ask: research loop", () => {
     expect(audit[0]).toMatchObject({ outcome: 'partial', model_calls: 2, repairs: 1, fallbacks: 1 });
   });
 
-  it('keeps planner hypotheses out of the writer and permits a fully supported answer after bounded research', async () => {
+  it('keeps planner hypotheses out of the writer and retains supported facts when research cannot finish', async () => {
     const question = 'What did we decide about launch?';
     const plan = [{ question, needs: [{ need: 'decision' }, { need: 'speculative vendor biography' }], notes: 'Speculative planner claim: the vendor resigned.' }];
     const script = scripted([
@@ -713,7 +713,8 @@ describe("agentic Ask: research loop", () => {
       },
     ]);
     const result = await ask({ desk: desk({ search: () => [item('launch', 'We approved launch on Tuesday.')] }), model: script.model }).answer({ question });
-    expect(result).toMatchObject({ outcome: 'answered', parts: [{ status: 'answered' }] });
+    expect(result).toMatchObject({ outcome: 'partial', parts: [{ status: 'partial', statements: [{ text: 'We approved launch on Tuesday.' }] }] });
+    expect(result.notice).toContain('Research stopped before it finished');
     expect(result.parts[0]).not.toHaveProperty('gap');
   });
 
@@ -843,7 +844,8 @@ describe("agentic Ask: research loop", () => {
     const result = await ask({ desk: evidence, model: script.model }).answer({ question: 'When is launch?' });
     expect(evidence.search).toHaveBeenCalledTimes(4);
     expect(script.inputs).toHaveLength(5);
-    expect(result.outcome).toBe('answered');
+    expect(result).toMatchObject({ outcome: 'partial', parts: [{ statements: [{ text: 'Launch is Tuesday.' }] }] });
+    expect(result.notice).toContain('Research stopped before it finished');
   });
 
   it('preserves an availability gap across list pages, while normal pagination can complete', async () => {
@@ -1060,9 +1062,9 @@ describe("agentic Ask: failures never lose found evidence", () => {
     ]);
     const audit: AgenticAskAuditEntryV1[] = [];
     const result = await ask({ desk: desk({ search: () => [item("a")] }), model: script.model, audit }).answer({ question: "When is launch?" });
-    expect(result.outcome).toBe("answered");
+    expect(result).toMatchObject({ outcome: "partial", parts: [{ statements: [{ text: "Tuesday." }] }] });
     expect(script.inputs[2]!.system_prompt).toBe(script.inputs[1]!.system_prompt);
-    expect(audit[0]).toMatchObject({ outcome: "answered", fallbacks: 1, repairs: 1, model_calls: 4 });
+    expect(audit[0]).toMatchObject({ outcome: "partial", fallbacks: 1, repairs: 1, model_calls: 4 });
   });
 
   it.each([
@@ -1201,7 +1203,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
     ]);
     const audit: AgenticAskAuditEntryV1[] = [];
     const result = await ask({ desk: evidence, model: script.model, now: () => clock, audit }).answer({ question: "When is launch?" });
-    expect(result.outcome).toBe("answered");
+    expect(result).toMatchObject({ outcome: "partial", parts: [{ statements: [{ text: "Tuesday." }] }] });
     expect(script.inputs).toHaveLength(3);
     expect(audit[0]).toMatchObject({ model_calls: 3, repairs: 0 });
   });
@@ -1237,10 +1239,10 @@ describe("agentic Ask: failures never lose found evidence", () => {
     };
     const audit: AgenticAskAuditEntryV1[] = [];
     const result = await ask({ desk: desk({ search: () => [item("a")] }), model, audit, now: () => clock }).answer({ question: "When is launch?" });
-    expect(result.outcome).toBe("answered");
+    expect(result).toMatchObject({ outcome: "partial", parts: [{ statements: [{ text: "Tuesday." }] }] });
     for (const call of timeouts.filter(value => value.role === "step")) expect(call.at + call.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_RESEARCH_LIVE_BUDGET_V1.writer_reserve_ms);
     expect(timeouts.at(-1)!.role).toBe("answer");
-    expect(audit[0]!.outcome).toBe("answered");
+    expect(audit[0]!.outcome).toBe("partial");
   });
 
   it("keeps fractional-clock research and answer budgets valid for an integer-only adapter", async () => {

@@ -499,6 +499,31 @@ describe('Ask on the timeline', () => {
     expect(byTestId(opened, 'ask-again')).toHaveLength(1);
   });
 
+  it.each([false, true])('keeps fixed actionable messages visible and copyable after every source becomes unreadable (earlier: %s)', async earlier => {
+    const base = status();
+    const answer: Answer = { ...base, outcome: 'partial', parts: [{ ...base.parts[0]!, status: 'partial',
+      gap: 'Not found: the confidential reviewer. Unchecked entries did not fit.',
+      gap_details: { unsupported_action: true, interrupted: true, not_found: 'Not found: the confidential reviewer.' } }] };
+    const one = turn('One?', 2 * DAY, answer);
+    checks = items => ok({ items: items.map(() => ({ state: 'unreadable' })) });
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.check': params => checks!(params.items as never), 'clipboard.writeText': () => ok(null),
+    }, () => ({ active: [apollo], archived: [] })));
+    seed(one, ...(earlier ? [turn('Two?', DAY, status())] : []));
+    const store = await startStore();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    await flush();
+    const shown = (await view())(store);
+    const messages = ["Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.", "I couldn't complete the search. Please try again."];
+    expect(byTestId(shown, 'answer-gap').map(text)).toEqual(messages);
+    expect(text(shown)).not.toContain('confidential reviewer');
+    expect(byTestId(shown, 'statement-text')).toHaveLength(0);
+    expect(byTestId(shown, 'sources-toggle')).toHaveLength(0);
+    click(byTestId(shown, 'copy-answer')[0]);
+    await flush();
+    expect(calls('clipboard.writeText').at(-1)).toEqual({ text: messages.join('\n\n') });
+  });
+
   it('says nothing changed only when every source its sentences cite was checked and is the same, and nothing when the check could not tell', async () => {
     const [one, two] = [turn('One?', 2 * DAY, status()), turn('Two?', DAY, status())];
     seed(one, two);
@@ -1518,7 +1543,7 @@ describe('follow-ups from the bar', () => {
     expect(text(byTestId(shown, 'project-empty'))).toContain('Nothing in Apollo matched.');
     expect(byTestId(shown, 'answer-empty')).toHaveLength(0);
     expect(byTestId(shown, 'sources-toggle')).toHaveLength(0);
-    expect(text(shown)).not.toContain('Not found.');
+    expect(text(byTestId(shown, 'answer-gap'))).toBe('Not found.');
     expect(calls('ask.run').map(call => call.scope)).toEqual([inApollo]);
     click(byTestId(shown, 'ask-everywhere')[0]);
     await flush();
@@ -1531,24 +1556,72 @@ describe('follow-ups from the bar', () => {
     expect(kept().map(turn => turn.text)).toEqual([question, question]);
   });
   it.each([
-    "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.",
-    "I couldn't complete the search. Please try again.",
-  ])('does not offer wider scope for an empty partial project answer: %s', async gap => {
+    { message: "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.", details: { unsupported_action: true as const } },
+    { message: "I couldn't complete the search. Please try again.", details: { interrupted: true as const } },
+    { message: '', details: undefined },
+  ])('does not offer wider scope for an empty partial project answer: $message', async ({ message, details }) => {
     rpc.mockImplementation(rpcFor(held, {
       'ask.run': params => ok(answerOf(String(params.question), [], [], { scope: inApollo, outcome: 'partial',
-        parts: [{ question: String(params.question), status: 'not_found', statements: [], gap }] })),
+        parts: [{ question: String(params.question), status: 'not_found', statements: [], gap: 'Unchecked rows did not fit.', ...(details === undefined ? {} : { gap_details: details }) }] })),
     }, () => ({ active: [apollo], archived: [] })));
     const store = await startStore();
     await store.openProject(apollo);
     await store.ask('Mark action A1 Done.');
     await flush();
     const shown = (await view())(store);
-    expect(text(byTestId(shown, 'answer-gap'))).toBe(gap);
+    expect(text(byTestId(shown, 'answer-gap'))).toBe(message);
     expect(byTestId(shown, 'project-empty')).toHaveLength(0);
     expect(byTestId(shown, 'ask-everywhere')).toHaveLength(0);
     store.askEverywhere(latestTurn(store)!.id);
     await flush();
     expect(calls('ask.run')).toHaveLength(1);
+  });
+
+  it.each([false, true])('offers an explicit wider search for partial factual absence without calling the whole project empty (other citations: %s)', async cited => {
+    const question = 'What was approved, and who handles Harbor?';
+    const missing = 'Not found: the Harbor owner.';
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.run': params => ok(answerOf(String(params.question), cited ? [ticket('THERM-482', '20482')] : [], [], { scope: params.scope as AskScope, outcome: 'partial',
+        parts: [{ question, status: cited ? 'partial' : 'not_found', statements: cited ? [{ text: 'THERM-482 was approved.', citation_indexes: [0], private: false }] : [],
+          gap: `${missing} An unchecked row did not fit.`, gap_details: { not_found: missing } }] })),
+    }, () => ({ active: [apollo], archived: [] })));
+    const store = await startStore();
+    await store.openProject(apollo);
+    await store.ask(question);
+    await flush();
+    const shown = (await view())(store);
+    expect(text(byTestId(shown, 'answer-gap'))).toBe(missing);
+    expect(byTestId(shown, 'project-empty')).toHaveLength(0);
+    expect(byTestId(shown, 'ask-everywhere')).toHaveLength(1);
+    expect(calls('ask.run').map(call => call.scope)).toEqual([inApollo]);
+    if (cited) {
+      // Component decisions must follow its supplied snapshot, not the store's still-readable global state.
+      const current = store.getState();
+      const hidden = { ...latestTurn(store)!, unreadable: [0] };
+      const snapshot = { ...current, timeline: { ...current.timeline, turns: [hidden] } };
+      expect(store.canAskEverywhere(hidden, snapshot)).toBe(false);
+      const hiddenView = (await view())({ getState: () => snapshot });
+      expect(byTestId(hiddenView, 'answer-gap')).toHaveLength(0);
+      expect(byTestId(hiddenView, 'ask-everywhere')).toHaveLength(0);
+    }
+    click(byTestId(shown, 'ask-everywhere')[0]);
+    await flush();
+    expect(calls('ask.run')[1]).toMatchObject({ question, scope: { kind: 'global' } });
+  });
+
+  it('does not widen a partial factual absence while the research remains unfinished', async () => {
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.run': params => ok(answerOf(String(params.question), [], [], { scope: inApollo, outcome: 'partial',
+        parts: [{ question: String(params.question), status: 'not_found', statements: [], gap: 'Not found: the owner.',
+          gap_details: { not_found: 'Not found: the owner.', interrupted: true } }] })),
+    }, () => ({ active: [apollo], archived: [] })));
+    const store = await startStore();
+    await store.openProject(apollo);
+    await store.ask('Who owns Harbor?');
+    await flush();
+    const shown = (await view())(store);
+    expect(byTestId(shown, 'project-empty')).toHaveLength(0);
+    expect(byTestId(shown, 'ask-everywhere')).toHaveLength(0);
   });
 
 });

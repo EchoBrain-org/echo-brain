@@ -140,7 +140,9 @@ describe("agentic Ask model protocol parity", () => {
       "\"which_say\": which members of such a picked set say something (\"which of the tickets updated since Monday mention the recall\")",
       "which items say something when the question picks no set by a date, owner, status, kind or channel (\"which pages mention the recall\": search finds them)",
       "(\"is the beta on hold\", \"who owns OPS-17\", \"when was the onboarding guide created\")",
-      "Mark a which_items need \"found\" with the id of the list that answers it (such as L1, from lists). Give a which_say need the id of the list whose members it checks, whatever its status, and mark it \"found\" with that id and ids whose full text you have seen. Mark a content need \"found\" only with ids whose full text you have seen",
+      "Mark a which_items need \"found\" with its inventory L id and every requested member E id.",
+      "Put supporting facts unrelated to that membership in a separate content need.",
+      "Give a which_say need the id of the list whose members it checks, whatever its status, and mark it \"found\" with that id and ids whose full text you have seen. Mark a content need \"found\" only with ids whose full text you have seen",
     ]) expect(rule3).toContain(text);
     expect([rule3.includes("For which items exist, and each one's title, dates, status and owner, a list's id"), rule(STEP_PROMPT, 3).includes("kind")]).toEqual([false, false]);
     expect([ASK_STEP_PROMPT, STEP_PROMPT].map(prompt => prompt.split("\n")[0])).toEqual([expect.stringContaining("then your plan, lists, last_results"), expect.stringContaining("then your plan, inventories, last_results")]);
@@ -157,7 +159,7 @@ describe("agentic Ask model protocol parity", () => {
     expect(JSON.parse(shape).parts[0].needs).toEqual([{ id: "N1", need: "<a fact needed>", kind: "<which_items, which_say or content>", status: "open", evidence: [] }]);
     expect(ASK_STEP_PROMPT).toContain("A need's \"status\" is \"open\", \"found\" or \"not_found\". A need's \"kind\" is \"which_items\", \"which_say\" or \"content\". \"tool\" is");
     const example = JSON.parse(ASK_STEP_PROMPT.split("\n").at(-1)!) as { parts: { needs: { kind: string; evidence: string[] }[] }[] };
-    expect(example.parts.flatMap(part => part.needs.map(need => [need.kind, need.evidence]))).toEqual([["which_items", ["L1"]], ["which_say", ["L1", "E3"]], ["content", ["E2"]]]);
+    expect(example.parts.flatMap(part => part.needs.map(need => [need.kind, need.evidence]))).toEqual([["which_items", ["L1", "E3", "E4", "E5", "E6"]], ["which_say", ["L1", "E3"]], ["content", ["E2"]]]);
     for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT]) expect(prompt).not.toMatch(/which_items|which_say|A need's "kind"|for a which_say need/u);
     expect([ASK_STEP_PROMPT.includes("You may stop early"), ASK_STEP_PROMPT.includes("instead of paging through it")]).toEqual([false, false]);
     for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT]) expect(prompt).toContain("You may stop early when the facts the question asks for are already supported.");
@@ -220,6 +222,14 @@ describe("agentic Ask model protocol parity", () => {
     }
   });
 
+  it("preserves every requested member of a which_items need beyond the old evidence and read caps", () => {
+    const evidence = ["L1", ...Array.from({ length: 100 }, (_, index) => `E${index + 1}`)];
+    const parsed = parseStep({ parts: [{ question: "Which items?", needs: [{ need: "the selected items", kind: "which_items", status: "found", evidence }], notes: "" }], actions: [{ tool: "finish", args: {} }] }, { lists: true });
+    expect(parsed.parts[0]!.needs[0]!.evidence).toEqual(evidence);
+    const need = (createStepSchema(["tickets"], undefined, true, true, true).properties as Schema).parts.items.properties.needs.items;
+    expect(need.properties.evidence).not.toHaveProperty("maxItems");
+  });
+
   it("reads the lists Ask's answer uses: each once in full or by an owner or status selection, and once by members' ids", () => {
     const parsed = parseAnswer({
       lists: ["l2", { id: "L1" }, { id: "[L3]", where: { field: "Owner", value: " Dana  Lee " } }, { id: "L1", where: { field: "owner", value: "x" } },
@@ -229,17 +239,17 @@ describe("agentic Ask model protocol parity", () => {
     expect([parsed.lists, parsed.sentences, parseAnswer({ sentences: [], not_found: [] }).lists]).toEqual([
       [{ id: "L2" }, { id: "L1" }, { id: "L3", where: { field: "owner", value: "Dana Lee" } }, { id: "L4" }, { id: "L5" }], [{ text: "Two pages mention BUG-412.", evidence: ["L1", "E4"] }], [],
     ]);
-    // Members selected by id take the place of a selection, each once and at most 25; none left keeps the plain use.
+    // Member intent is uncapped and takes the place of a filter; an empty selection never becomes a full inventory.
     const members = parseAnswer({ lists: [
       { id: "L1", members: ["e5", "E5", "[E7]", "L2", 9], where: { field: "owner", value: "Dana" } }, { id: "L2", members: ["x"], where: { field: "status", value: "open" } },
       { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) },
     ], sentences: [], not_found: [] }).lists;
-    expect(members).toEqual([{ id: "L1", members: ["E5", "E7", "E9"] }, { id: "L2", where: { field: "status", value: "open" } }, { id: "L3", members: Array.from({ length: 25 }, (_, index) => `E${index + 1}`) }]);
+    expect(members).toEqual([{ id: "L1", members: ["E5", "E7", "E9"] }, { id: "L2", members: [] }, { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) }]);
     // A list may be used once in full or by a selection and once by id, in the writer's order; still at most 5 lists.
     expect(parseAnswer({ lists: [
       { id: "L1", members: ["E5"] }, { id: "L1" }, { id: "L1", where: { field: "owner", value: "Dana" } }, { id: "L1", members: ["E6"] },
       { id: "L2" }, { id: "L3" }, { id: "L4" }, { id: "L5" }, { id: "L6" }, { id: "L5", members: ["E2"] },
-    ], sentences: [], not_found: [] }).lists).toEqual([{ id: "L1", members: ["E5"] }, { id: "L1" }, { id: "L2" }, { id: "L3" }, { id: "L4" }, { id: "L5" }, { id: "L5", members: ["E2"] }]);
+    ], sentences: [], not_found: [] }).lists).toEqual([{ id: "L1", members: ["E5", "E6"] }, { id: "L1" }, { id: "L2" }, { id: "L3" }, { id: "L4" }, { id: "L5" }, { id: "L5", members: ["E2"] }]);
     // A list reference in prose is stripped only for Ask's answer; elsewhere "(L2)" stays prose.
     expect([stripEvidenceIds("Support tier (L2) owns it (E4)."), stripEvidenceIds("Support tier owns it (L2) [E4, L1].", true)]).toEqual(["Support tier (L2) owns it.", "Support tier owns it."]);
   });
@@ -453,7 +463,7 @@ describe("agentic Ask model protocol parity", () => {
       ["a where code cannot read, so the list is used in full", answer({ lists: [{ id: "L1", where: { field: "title", value: "PRD" } }] }), { model_entry_dropped: 1 }],
       ["a date bound past its cap", answer({ lists: [{ id: "L1", where: { field: "due", until: "2026-10-18T00:00:00Z" } }] }), { model_text_truncated: 1, model_entry_dropped: 1 }],
       ["members respelled, repeated or unreadable", answer({ lists: [{ id: "L1", members: ["e5", "E5", "[E7]", "L2", 9] }] }), { model_id_respelled: 3, model_repeat_dropped: 1, model_entry_dropped: 1 }],
-      ["more members than a use names", answer({ lists: [{ id: "L3", members: items(1, 30) }] }), { model_items_capped: 5 }],
+      ["member selection intent has no presentation cap", answer({ lists: [{ id: "L3", members: items(1, 30) }] }), {}],
       ["a list used twice the same way, or past five lists", answer({ lists: ["L1", "L1", "L2", "L3", "L4", "L5", "L6"].map(id => ({ id })) }), { model_repeat_dropped: 1, model_items_capped: 1 }],
     ] as const)("in an answer: %s", (_name, value, expected) => {
       expect(corrected(() => parseAnswer(value))).toEqual(expected);
@@ -485,6 +495,15 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
   const reply = (blocks: readonly unknown[], fields: Record<string, unknown> = {}) => ({ lists: [], blocks, not_found: [], ...fields });
   const read = (blocks: readonly unknown[]) => parseBlocksAnswer(reply(blocks)).sentences.map(sentence => [sentence.text, sentence.item?.kind]);
 
+  it("reads optional member bindings only on well-formed rows and points, separate from supporting citations", () => {
+    const parsed = parseBlocksAnswer(reply([
+      { block: "table", columns: ["Entry", "Owner"], rows: [{ member: "e1", cells: ["Abbreviated label", "Casey"], evidence: ["E2"] }, { member: "E3", cells: ["Malformed row"], evidence: ["E3"] }] },
+      { block: "points", ordered: false, items: [{ member: "E4", text: "A member.", evidence: ["E5"] }, { member: "not-an-id", text: "No binding.", evidence: ["E6"] }] },
+      { block: "text", sentences: [{ member: "E7", text: "Prose does not declare presentation.", evidence: ["E7"] }] },
+    ])).sentences;
+    expect(parsed.map(sentence => [sentence.member, sentence.evidence])).toEqual([["E1", ["E2"]], [undefined, ["E3"]], ["E4", ["E5"]], [undefined, ["E6"]], [undefined, ["E7"]]]);
+  });
+
   it("keeps selections beyond legacy name/read bounds and unions repeated member groups", () => {
     const members = Array.from({ length: 100 }, (_, index) => `E${index + 1}`);
     const lists = [{ id: "L1", members: members.slice(0, 70) }, { id: "L1", members: members.slice(60) }];
@@ -494,12 +513,13 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(parseBlocksAnswer(reply([], { lists: allUses })).lists.find(use => use.id === "L1" && use.members !== undefined)?.members).toEqual(["E1", "E2"]);
     expect(parseBlocksAnswer(reply([], { lists: [{ id: "L1", members: [] }] })).lists).toEqual([{ id: "L1", members: [] }]);
     expect((answerBlocksSchema.properties as Schema).lists.items.properties.members).not.toHaveProperty("maxItems");
-    expect((answerSchema.properties as Schema).lists.items.properties.members.maxItems).toBe(25);
+    for (const schema of [answerSchema, answerSinceSchema]) expect((schema.properties as Schema).lists.items.properties.members).not.toHaveProperty("maxItems");
+    expect(parseAnswer({ lists, sentences: [], not_found: [] }).lists).toEqual([{ id: "L1", members }]);
   });
 
-  it("keeps Ask again's prompt and schema byte for byte", () => {
+  it("pins Ask again's prompt and schema with shared unbounded selections", () => {
     expect([ANSWER_SINCE_PROMPT, answerSinceSchema].map(value => canonicalSha256(value))).toEqual([
-      "sha256:2384ac104f117a119bb97beaf99415a0c1b6b411d33b013204ec09ac985be48e", "sha256:e568a3836f6cb05aee257db720ef85f15b51bafc38266341f818aec11a58146a",
+      "sha256:2384ac104f117a119bb97beaf99415a0c1b6b411d33b013204ec09ac985be48e", "sha256:008a40c8dd292900600330aef6083e274dc1531cca7bc3de625d146e644e01b0",
     ]);
   });
 
@@ -516,22 +536,25 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect([Object.keys(answerBlocksSchema.properties as Schema), Object.keys(answerBlocksSinceSchema.properties as Schema)]).toEqual([["lists", "blocks", "not_found"], ["lists", "blocks", "not_found", "since"]]);
   });
 
-  it("tells the writer never to restate the question, to write a long identifier once, never to write a list's members, and its reply shape", () => {
+  it("tells the writer never to restate the question, to write a long identifier once, explicit member presentation, and its reply shape", () => {
     const lines = ANSWER_BLOCKS_PROMPT.split("\n");
     const answer = lines.findIndex(line => line.startsWith("- The first block is \"answer\""));
     expect([lines[answer + 1], lines[answer + 2]]).toEqual([NO_RESTATING_RULE, LONG_IDS_ONCE_RULE]);
     expect(NO_RESTATING_RULE).toMatch(/^- The app shows the answer right under the question, so never restate the question: the lead answers it at once\. Call what the question already names "it" or a word or two \("the follow-up", "the release"\), not its full title or identifier; name a follow-up by its title only when the question does not name it\. /u);
     expect(LONG_IDS_ONCE_RULE).toBe("- Write a long identifier, such as a release or build name, at most once in the answer, and only where a short reference would not be clear.");
-    expect(lines).toContain("- Never write items, rows, events or facts for a list's members: code states them, right after the answer.");
+    expect(ANSWER_BLOCKS_PROMPT).toContain("The member id identifies what the item presents; evidence alone does not.");
+    expect(ANSWER_PROMPT).toContain("If you omit a found membership need's list, code restores its requested_members");
+    expect(ANSWER_BLOCKS_PROMPT).not.toContain("Never write items, rows, events or facts for a list's members");
     expect(lines[0]).toContain("\"block_catalog\" lists the blocks it can show");
     expect(Object.keys(JSON.parse(lines.at(-1)!))).toEqual(["lists", "blocks", "not_found"]);
     // An answer in blocks has no count limit, whatever the answer prompt's usual length says (ADR-0051).
     expect(lines).toContain("- An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds: the \"up to 10\" above does not apply.");
     expect(ANSWER_PROMPT).toContain("use up to 10 when the question asks several things");
-    // A request without the header is unchanged: its writer's prompt, follow-up guidance and schema.
+    // The plain writer, which a request without the header gets: its prompt, follow-up guidance and schema, the selection
+    // contract every writer shares, pinned.
     expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, answerSchema].map(value => canonicalSha256(value))).toEqual([
-      "sha256:b784a5eb2cb0a69c2ebdc6c33a8e8bdd3f7820575c59e16a0358fa014b9b4764", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
-      "sha256:f3ec552ec9273a23be69ec2c1596f3b5cf69107d4952962b24a1435e8bc47259",
+      "sha256:15ac24d938855d0c79fc5e650821b9cb59447274e366863a6335964121fdf12d", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
+      "sha256:0c8157fa3082e4ccf8db8f2bff7c6ee648d3fac7093e54dce29b0ddcfb0f01ee",
     ]);
   });
 

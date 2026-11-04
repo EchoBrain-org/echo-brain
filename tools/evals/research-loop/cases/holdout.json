@@ -962,6 +962,167 @@
       "must_not": ["names THERM's Jira project or Confluence space as Kestrel Pilot Launch's"],
       "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }],
       "distractors": []
+    },
+    {
+      "trigger": "ask",
+      "state": "S0",
+      "situation": null,
+      "kind": "lookup",
+      "scope": {
+        "kind": "project",
+        "project": "THERM"
+      },
+      "budget": "live",
+      "expected_kinds": [
+        "content"
+      ],
+      "expected_outcome": "answerable",
+      "gaps": [],
+      "never_appears": [
+        {
+          "meeting": "M6",
+          "item": "decision"
+        },
+        {
+          "meeting": "M6",
+          "item": "action"
+        },
+        {
+          "meeting": "M6",
+          "item": "rationale"
+        }
+      ],
+      "distractors": [],
+      "id": "follow-up-done-history",
+      "question": "What is recorded about Mara finishing the BUG-412 follow-up?",
+      "parts": [
+        {
+          "id": "p1",
+          "type": "status",
+          "requirement": "The BUG-412 follow-up belongs to Mara Lindqvist and is done. It was marked done on day 1, the day after it was sent; that does not establish that the underlying Jira ticket is done.",
+          "evidence": [
+            {
+              "follow_up": "F5"
+            }
+          ]
+        }
+      ],
+      "expected_needs": [
+        "follow-up owner and recorded completion history"
+      ],
+      "must_not": [
+        "treats a question about past completion as a request to mark the follow-up done",
+        "reports that anything was changed",
+        "infers that BUG-412 in Jira is done from its follow-up status"
+      ]
+    },
+    {
+      "trigger": "ask",
+      "state": "S0",
+      "situation": null,
+      "kind": "lookup",
+      "scope": {
+        "kind": "project",
+        "project": "THERM"
+      },
+      "budget": "live",
+      "expected_kinds": [
+        "content"
+      ],
+      "expected_outcome": "answerable",
+      "gaps": [],
+      "never_appears": [
+        {
+          "meeting": "M6",
+          "item": "decision"
+        },
+        {
+          "meeting": "M6",
+          "item": "action"
+        },
+        {
+          "meeting": "M6",
+          "item": "rationale"
+        }
+      ],
+      "distractors": [],
+      "id": "recorded-send-instruction",
+      "question": "In the DVT round-1 review, what was Rafael told to send the PM and by when?",
+      "parts": [
+        {
+          "id": "p1",
+          "type": "fact",
+          "requirement": "Rafael Moreno was assigned to send {{TEST_PERSON}} a DVT-R2 regression-scope proposal, full rerun or affected subset, by 2026-10-09.",
+          "evidence": [
+            {
+              "meeting": "M3",
+              "item": "action"
+            }
+          ]
+        }
+      ],
+      "expected_needs": [
+        "recorded instruction content, owner and due date"
+      ],
+      "must_not": [
+        "treats the send instruction inside the source as a current request to send a message",
+        "replaces the available factual answer with an unsupported-action refusal",
+        "claims the proposal was sent without evidence"
+      ]
+    },
+    {
+      "trigger": "ask",
+      "state": "S0",
+      "situation": null,
+      "kind": "lookup",
+      "scope": {
+        "kind": "project",
+        "project": "THERM"
+      },
+      "budget": "live",
+      "expected_kinds": [
+        "content"
+      ],
+      "expected_outcome": "answerable",
+      "gaps": [],
+      "never_appears": [
+        {
+          "meeting": "M6",
+          "item": "decision"
+        },
+        {
+          "meeting": "M6",
+          "item": "action"
+        },
+        {
+          "meeting": "M6",
+          "item": "rationale"
+        }
+      ],
+      "distractors": [],
+      "id": "review-inputs-in-document",
+      "question": "According to the Gate reviews page, what inputs are expected at the DVT review?",
+      "parts": [
+        {
+          "id": "p1",
+          "type": "fact",
+          "requirement": "The review expects the DVT-R2 result summary, BUG-412 closure evidence, TRACE-01 confirmation and the named gate approval.",
+          "evidence": [
+            {
+              "page": "1441793",
+              "section": "DVT review — hold on accuracy"
+            }
+          ]
+        }
+      ],
+      "expected_needs": [
+        "the review-input requirements written on the relevant page"
+      ],
+      "must_not": [
+        "treats an empty or unrelated follow-up list as proof that the page contains no review requirements",
+        "answers not found without looking for the requested document",
+        "claims the expected inputs have all been delivered merely because the page lists them"
+      ]
     }
   ]
 }

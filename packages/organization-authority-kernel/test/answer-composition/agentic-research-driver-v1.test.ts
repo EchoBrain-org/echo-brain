@@ -22,7 +22,7 @@ function harness(run: (session: AgenticResearchDriverSessionV1) => Promise<void>
     const wrapped = { ...session, call: async (...args: Parameters<AgenticResearchDriverSessionV1['call']>) => { const value = await session.call(...args); released.push(value); return value; } };
     packets.set(wrapped, released); return run(wrapped);
   }) };
-  const options = { desk, model: { generate }, generation, audit: { append: (entry: AgenticAskAuditEntryV1) => { audit.push(entry); } }, research_driver: driver, today: () => '2026-10-20' };
+  const options = { include_gap_details: true as const, desk, model: { generate }, generation, audit: { append: (entry: AgenticAskAuditEntryV1) => { audit.push(entry); } }, research_driver: driver, today: () => '2026-10-20' };
   return { options, desk, generate, revalidate, driver, audit, ask: () => createAgenticAskV5(options).answerWithResearch({ question: 'What was decided?' }) };
 }
 
@@ -87,6 +87,7 @@ describe('native research harness shares the real ECHO tool state', () => {
     expect(output.research.stop).toMatchObject({ reason: 'finished', completed: true });
     expect(output.response.outcome).toBe('not_found');
     expect(output.response.parts[0]?.gap).toBe("I couldn't find this in the sources you can access.");
+    expect(output.response.parts[0]?.gap_details).toEqual({ not_found: "I couldn't find this in the sources you can access." });
     expect(JSON.stringify(output.response)).not.toContain('internal note');
     expect(h.generate).not.toHaveBeenCalled();
   });
@@ -101,11 +102,26 @@ describe('native research harness shares the real ECHO tool state', () => {
     expect(output.research.stop).toMatchObject({ reason: 'finished', completed: true, unsupported_action: true });
     expect(output.response.outcome).toBe('partial');
     expect(output.response.parts[0]?.gap).toBe("Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.");
+    expect(output.response.parts[0]?.gap_details).toEqual({ unsupported_action: true });
     expect(output.response.citations).toEqual([]);
     expect(search).not.toHaveBeenCalled();
     expect(h.generate).not.toHaveBeenCalled();
     expect(h.audit).toHaveLength(1);
     expect(h.revalidate).toHaveBeenCalled();
+  });
+
+  // Contract proof only: model intent classification is evaluated independently, not by this scripted driver.
+  it.each(['Which calibration change was approved?', 'What did the record tell us to send?'])('does not infer an unsupported action from factual question wording: %s', async question => {
+    const h = harness(async session => {
+      await admit(session);
+      await session.call('search', { query: 'calibration rule' });
+      await admit(session, 'observed rule');
+      await session.call('finish', finish());
+    });
+    const output = await createAgenticAskV5(h.options).answerWithResearch({ question });
+    expect(output.response.outcome).toBe('answered');
+    expect(output.research.stop).not.toHaveProperty('unsupported_action');
+    expect(output.response.parts[0]).not.toHaveProperty('gap_details');
   });
 
   it('validates factual needs in a mixed read and unsupported write request', async () => {

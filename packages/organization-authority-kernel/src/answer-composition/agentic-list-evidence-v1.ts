@@ -441,8 +441,10 @@ export interface AgenticWriterListV1 {
   /** Members research checked, out of `count`. */
   readonly checked: number;
   readonly read_at: string;
-  /** Code states it: a which_items need research has not given up on cites it (ADR-0041). */
+  /** A which_items need research has not given up on cites this inventory; selection remains separate from presentation. */
   readonly stated: boolean;
+  /** Exact requested members from found which_items needs, mapped from any opened bodies to inventory row ids. */
+  readonly requested_members?: readonly string[];
   /** Members that fit the writer prompt, in list order. */
   readonly members: readonly AgenticWriterListMemberV1[];
   /** Members past the writer's bound; present only when some were left out. */
@@ -713,6 +715,12 @@ export function agenticListSelectV1<T extends AgenticListNamedMemberV1>(members:
     const date = memberDate(member, where.field);
     return date !== undefined && matchesEvidenceDateV1({ [where.field]: date }, { since: where.since, until: where.until, date_field: where.field, time_zone }, where.field);
   }));
+}
+
+/** Whether every row records the fact needed to decide the selection; missing facts cannot prove an empty subset. */
+export function agenticListSelectionVerifiedV1(members: readonly AgenticListNamedMemberV1[], where: AgenticListSelectionV1, timeZone?: string): boolean {
+  return members.every(member => "value" in where ? member[where.field] !== undefined
+    : evidenceDayV1(memberDate(member, where.field) ?? "", timeZone ?? "UTC") !== undefined);
 }
 
 /** A selection as a statement says it: "have owner Dana Lee", "are due from October 18 to October 24, 2026", "were updated since October 11, 2026". */

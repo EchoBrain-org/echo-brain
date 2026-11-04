@@ -445,49 +445,57 @@ describe('every answer\'s sources start closed, as the one quiet line under it (
   });
 });
 
-describe('partial answers explain their limitations', () => {
-  it('keeps the partial gap after its blocks without adding a coverage banner or retry button', async () => {
+describe('only actionable answer explanations are shown', () => {
+  it('hides legacy partial coverage prose after its blocks without adding a coverage banner or retry button', async () => {
     const result = blocksAnswer(QUESTION, GLOBAL, true) as { parts: Record<string, unknown>[] };
-    // Research stopped short: the answer says what it did not cover, and its part what was not found.
+    // Research stopped short: the answer says what it did not cover, and its part, as prose with no typed details, what was not found.
     const partial = answerView({ ok: true, result: { ...result, outcome: 'partial', notice: 'One of three THERM meetings in range was not read before the time limit.',
       parts: [{ ...result.parts[0], status: 'partial', gap: 'Who signs off PVT was not found in the evidence read.' }] } }, GLOBAL);
     const { thread } = await answered(partial);
     const answer = byTestId(thread(), 'answer')[0]!;
-    const children = (answer.props.children as unknown[]).flat(2).filter(Boolean) as Node[];
-    expect(children.at(-1)!.props['data-testid']).toBe('answer-gap');
     expect(text(thread())).not.toContain('THERM meetings in range');
-    expect(byTestId(thread(), 'answer-gap').map(text)).toEqual(['Who signs off PVT was not found in the evidence read.']);
+    expect(byTestId(thread(), 'answer-gap')).toHaveLength(0);
     for (const gone of ['coverage-note', 'answer-notice', 'answer-assumption', 'answer-off-scope', 'ask-again']) expect(byTestId(thread(), gone)).toEqual([]);
     expect(byClass(answer, 'answer-banner')).toEqual([]);
   });
 
-  it('keeps missing-part explanations and heads the factual parts with their questions', async () => {
+  it('keeps typed missing-part explanations and heads the factual parts with their questions', async () => {
     const base = therm(false);
-    const answer: Answer = { ...base, outcome: 'partial', parts: [base.parts[0]!, { question: 'Who signs off PVT?', status: 'not_found', statements: [], gap: 'This was not found.' }] };
+    const answer: Answer = { ...base, outcome: 'partial', parts: [base.parts[0]!, { question: 'Who signs off PVT?', status: 'not_found', statements: [],
+      gap: 'Not found: its sign-off. Some sentences did not fit.', gap_details: { not_found: 'Not found: its sign-off.' } }] };
     const shown = await shownAnswer(answer);
     expect(byClass(shown, 'answer-part')).toHaveLength(1);
     expect(byClass(shown, 'section-label').map(text)).toEqual([QUESTION]);
-    expect(text(shown)).toContain('This was not found.');
+    expect(text(shown)).toContain('Not found: its sign-off.');
+    expect(text(shown)).not.toContain('Some sentences did not fit.');
   });
 
   it.each([
-    "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.",
-    "I couldn't complete the search. Please try again.",
-  ])('shows and copies an empty partial answer explanation: %s', async gap => {
+    { message: "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.", details: { unsupported_action: true as const } },
+    { message: "I couldn't complete the search. Please try again.", details: { interrupted: true as const } },
+  ])('shows and copies an empty partial answer explanation: $message', async ({ message, details }) => {
     const base = therm(false);
-    const { thread } = await answered({ ...base, sources: [], outcome: 'partial', parts: [{ question: QUESTION, status: 'not_found', statements: [], gap }] });
-    expect(byTestId(thread(), 'answer-gap').map(text)).toEqual([gap]);
+    const { thread } = await answered({ ...base, sources: [], outcome: 'partial', parts: [{ question: QUESTION, status: 'not_found', statements: [],
+      gap: 'Unchecked entries and sentences did not fit.', gap_details: details }] });
+    expect(byTestId(thread(), 'answer-gap').map(text)).toEqual([message]);
     expect(byTestId(thread(), 'answer-empty')).toHaveLength(0);
     click(byTestId(thread(), 'copy-answer')[0]);
     await flush();
-    expect(rpc.mock.calls.filter(([name]) => name === 'clipboard.writeText').at(-1)?.[1]).toEqual({ text: gap });
+    expect(rpc.mock.calls.filter(([name]) => name === 'clipboard.writeText').at(-1)?.[1]).toEqual({ text: message });
   });
 
-  it('says nothing you can see matched when the answer has nothing to say', async () => {
+  it('shows a completed not-found explanation, including a saved answer without typed details', async () => {
     const base = therm(false);
     const { thread } = await answered({ ...base, sources: [], outcome: 'not_found', parts: [{ question: QUESTION, status: 'not_found', statements: [], gap: 'Not found.' }] });
-    expect(byTestId(thread(), 'answer-empty').map(text)).toEqual(['Nothing you can see matched.']);
-    expect(text(thread())).not.toContain('Not found.');
+    expect(byTestId(thread(), 'answer-gap').map(text)).toEqual(['Not found.']);
+    expect(byTestId(thread(), 'answer-empty')).toHaveLength(0);
+  });
+
+  it('does not call an empty technical partial answer a completed no-match search', async () => {
+    const base = therm(false);
+    const { thread } = await answered({ ...base, sources: [], outcome: 'partial', parts: [{ question: QUESTION, status: 'not_found', statements: [], gap: 'Some list rows did not fit.' }] });
+    expect(byTestId(thread(), 'answer-gap')).toHaveLength(0);
+    expect(byTestId(thread(), 'answer-empty')).toHaveLength(0);
   });
 });
 
@@ -504,6 +512,18 @@ describe('Copy answer', () => {
     expect(markdown).toContain('\n### Before PVT\n\n1. Freeze the firmware at 1.4.2. [3]\n2. Ship the build to the line. [3]\n');
     expect(markdown).toContain('\n> Start PVT once the soak passes. [3]\n>\n> Noor Haddad, Oct 23 review\n');
     expect(markdown).toMatch(/\nSources\n\n1\. Soak test plan\n2\. Soak test report\n3\. PVT readiness review\n4\. THERM-48 · Soak sign-off\n5\. THERM-52 · Thermal pad supplier\n6\. THERM-55 · Line fixture$/u);
+  });
+
+  it('keeps only visible typed explanations when long Markdown falls back to plain text', async () => {
+    const base = therm(false);
+    const long = 'x'.repeat(11_850);
+    const missing = 'Not found: the person who approved the launch.';
+    const { store, thread } = await answered({ ...base, text: long, outcome: 'partial', parts: [{ question: QUESTION, status: 'partial',
+      statements: [{ text: long, citation_indexes: [0], private: false }],
+      gap: `${missing} Some unchecked entries did not fit.`, gap_details: { not_found: missing } }] });
+    expect(byTestId(thread(), 'answer-gap').map(text)).toEqual([missing]);
+    expect(await store.copyAnswer(paneTurn(store))).toBe(true);
+    expect(copied()).toEqual([`${long}\n${missing}`]);
   });
 
   it('copies the plain text when the Markdown is past what Copy answer takes', async () => {

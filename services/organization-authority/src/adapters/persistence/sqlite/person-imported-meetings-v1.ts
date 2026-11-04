@@ -12,6 +12,8 @@ import { personOriginalGrantedProjectIdsV1 } from './person-original-access-v1.j
 interface ImportedMeetingTextV1 {
   readonly dates: EvidenceDatesV1;
   readonly api_version: 0; readonly context_id: `cap_${string}`; readonly title: string; readonly text: string;
+  /** Immutable source heading for cited packets, independent of the display title. */
+  readonly packet_title: string;
   readonly received_at: string;
   readonly source_id: string; readonly revision_id: string; readonly source_sha256: Sha256Digest; readonly representation_sha256: Sha256Digest;
   readonly source_content_sha256: string; readonly manifest_json: string; readonly source_content_json: string; readonly lexical_score: number;
@@ -27,6 +29,14 @@ function invalid(): never { throw new AuthorityOperationError('unavailable', 'Im
  */
 export function importedMeetingTextV1(meeting: MeetingDocument): string {
   return meeting.content.filter(block => block.kind !== 'transcript').map(block => block.text).join('\n\n');
+}
+/**
+ * The v1 packet format, retained byte-for-byte for saved citations. This historical heading describes
+ * raw source material, never review state. Only the immutable source revision's title enters it;
+ * presentation labels and live review status must not change packet boundaries or anchor hashes.
+ */
+export function importedMeetingPacketTitleV1(meeting: MeetingDocument): string {
+  return `Imported meeting (unapproved): ${meeting.title ?? 'Untitled'}`;
 }
 /**
  * Read view over existing custody. There is no second meeting body or derived-content table.
@@ -65,10 +75,29 @@ export class SqlitePersonImportedMeetingsV1 {
       assertCanonicalMeetingDocument(meeting, { kind: 'meeting-source', adapter_id: row.adapter_id, instance_id: row.instance_id, version: meeting.provenance.source.version });
       if (sourceItemIdV1(meeting.provenance.source, row.external_id) !== row.source_id || meeting.provenance.external_id !== row.external_id || meeting.provenance.canonical_revision !== row.revision_id || !/^source:[a-f0-9]{64}$/.test(row.source_id)) invalid();
       const text = importedMeetingTextV1(meeting);
-      return { dates: meetingEvidenceDatesV1(meeting.time), api_version: 0, context_id: row.context_id, title: `Imported meeting: ${meeting.title ?? 'Untitled'}`, text,
+      return { dates: meetingEvidenceDatesV1(meeting.time), api_version: 0, context_id: row.context_id, title: `Imported meeting: ${meeting.title ?? 'Untitled'}`, text, packet_title: importedMeetingPacketTitleV1(meeting),
         received_at: row.captured_at,
         source_id: row.source_id, revision_id: row.revision_id, source_sha256: `sha256:${row.revision_sha256}`, representation_sha256: canonicalSha256({ kind: 'imported-meeting-notes-v1', text }),
         source_content_sha256: row.content_sha256, manifest_json: row.manifest_json, source_content_json: row.content_json, lexical_score: 0 };
     });
+  }
+
+  /** A human's complete decision for this exact retained revision, after a successful original proof read. */
+  reviewState(actor: PersonAccessAuthorization, source: Pick<ImportedMeetingTextV1, 'source_id' | 'revision_id' | 'source_content_json'>): 'not_reviewed' | 'reviewed' {
+    const meeting = JSON.parse(source.source_content_json) as MeetingDocument;
+    const decided = this.database.prepare(`SELECT 1 FROM authority_sources_v1 s
+      JOIN authority_live_source_admission_v2 a ON a.organization_id=s.organization_id AND a.source_adapter_id=s.adapter_id AND a.source_adapter_instance_id=s.instance_id
+      JOIN authority_live_source_candidates_v2 c ON c.admission_semantic_input_sha256=a.semantic_input_sha256
+      JOIN authority_live_approval_outbox_v2 o ON o.candidate_id=c.candidate_id
+      JOIN authority_approval_decisions_v1 d ON d.approval_id=o.approval_id
+      WHERE s.organization_id=? AND s.source_id=? AND a.membership_id=? AND a.principal_id=?
+        AND s.custody_ref=('person:' || a.membership_id) AND s.access_policy_ref=('personal-meeting:' || a.source_key)
+        AND json_extract(c.meeting_json,'$.provenance.source.adapter_id')=s.adapter_id
+        AND json_extract(c.meeting_json,'$.provenance.source.instance_id')=s.instance_id
+        AND json_extract(c.meeting_json,'$.provenance.source.version')=?
+        AND json_extract(c.meeting_json,'$.provenance.external_id')=s.external_id
+        AND json_extract(c.meeting_json,'$.provenance.canonical_revision')=? LIMIT 1`)
+      .get(actor.organization_id, source.source_id, actor.membership_id, actor.principal_id, meeting.provenance.source.version, source.revision_id);
+    return decided === undefined ? 'not_reviewed' : 'reviewed';
   }
 }
