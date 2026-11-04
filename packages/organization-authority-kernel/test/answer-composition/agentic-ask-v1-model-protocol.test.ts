@@ -431,7 +431,7 @@ describe("agentic Ask model protocol parity", () => {
     expect(rules[lead + 2]).toBe("- Write a long identifier, such as a release or build name, at most once in the answer, and only where a short reference would not be clear.");
     // Pin the shared selection contract; layout-only wording does not leak into the base writer.
     expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, answerSchema].map(value => canonicalSha256(value))).toEqual([
-      "sha256:476614b28aa67ac367c9fed395d9bf1a4f204b437c5811e6350a0404dc09c7c9", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
+      "sha256:15ac24d938855d0c79fc5e650821b9cb59447274e366863a6335964121fdf12d", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
       "sha256:0c8157fa3082e4ccf8db8f2bff7c6ee648d3fac7093e54dce29b0ddcfb0f01ee",
     ]);
   });

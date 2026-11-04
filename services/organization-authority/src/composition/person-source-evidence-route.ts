@@ -18,7 +18,7 @@ export function createPersonSourceEvidenceRouteV1(input: {
   readonly originals: PersonOriginalContextRetrievalPortV1;
 }): PersonSourceEvidenceHttpApplicationV1 {
   return Object.freeze({
-    readSource(request: { readonly access_token: string; readonly request: PersonSourceEvidenceReadRequestV1 }): PersonSourceEvidenceV1 {
+    readSource(request: { readonly access_token: string; readonly request: PersonSourceEvidenceReadRequestV1; readonly include_imported_meeting_review?: true }): PersonSourceEvidenceV1 {
       const proof = input.originals.read({
         access_token: request.access_token,
         scope: scopeOf(request.request.scope),
@@ -39,6 +39,7 @@ export function createPersonSourceEvidenceRouteV1(input: {
           label: proof.atom.label ?? "Saved context",
         },
         text: proof.atom.text,
+        ...(!request.include_imported_meeting_review || proof.imported_meeting_review === undefined ? {} : { imported_meeting_review: proof.imported_meeting_review }),
       });
     },
   });

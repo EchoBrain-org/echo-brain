@@ -952,6 +952,7 @@ describe("Person client", () => {
         now: () => NOW,
         fetch: async (input, init) => {
           expect(new URL(String(input)).pathname).toBe("/v2/person/ask/source");
+          expect(new Headers(init?.headers).get('x-echo-source-review')).toBe('1');
           expect(JSON.parse(String(init?.body))).toEqual({
             schema_version: 1,
             scope: { kind: "global" },

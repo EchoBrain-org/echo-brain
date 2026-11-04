@@ -32,6 +32,7 @@ import {
   type PersonResearchEvalStartReceiptV1,
   type PersonResearchEvalStartRequestV1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
+  PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1, PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_VALUE_V1,
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
   PERSON_LIST_RESPONSE_MAX_BYTES_V1,
@@ -1186,6 +1187,7 @@ export class PersonAuthorityClient {
     const response = await this.json({
       path: PERSON_SOURCE_EVIDENCE_PATH_V1,
       body: request,
+      headers: { [PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1]: PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_VALUE_V1 },
       validate_request: validatePersonSourceEvidenceReadRequestV1,
       validate_response: validatePersonSourceEvidenceV1,
       access_token: accessToken,
