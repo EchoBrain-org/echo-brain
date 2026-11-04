@@ -858,10 +858,32 @@ export function AskView({ state }: { state: State }) {
   const atBottom = useRef(true);
   // Where the timeline last put the view: the scroll event that records a person's scroll can arrive after a new row.
   const placedAt = useRef<number | null>(null);
+  // Keep a visible piece of the answer in place when the source pane or window changes the reading width.
+  const reading = useRef<{ width: number; height: number; element?: Element; offset: number } | null>(null);
+  const rememberReading = () => {
+    const view = scroller.current;
+    if (!view) return;
+    const bounds = view.getBoundingClientRect();
+    const visible = [...view.querySelectorAll('.question, [data-testid="statement-text"], .answer-table tr, .answer-fact, .folded')]
+      .map(element => ({ element, bounds: element.getBoundingClientRect() }))
+      .filter(item => item.bounds.bottom > bounds.top && item.bounds.top < bounds.bottom);
+    const anchor = visible.find(item => item.bounds.top >= bounds.top) ?? visible[0];
+    reading.current = { width: view.clientWidth, height: view.clientHeight, element: anchor?.element, offset: (anchor?.bounds.top ?? bounds.top) - bounds.top };
+  };
+  const keepReading = () => {
+    const view = scroller.current, anchor = reading.current;
+    if (view && anchor && (view.clientWidth !== anchor.width || view.clientHeight !== anchor.height) && anchor.element && view.contains(anchor.element)) {
+      view.scrollTop += anchor.element.getBoundingClientRect().top - view.getBoundingClientRect().top - anchor.offset;
+      placedAt.current = view.scrollTop;
+      atBottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX;
+    }
+    rememberReading();
+  };
   const toBottom = () => {
     const view = scroller.current;
     if (view) { view.scrollTop = view.scrollHeight; placedAt.current = view.scrollTop; }
     atBottom.current = true;
+    rememberReading();
   };
   // A new question, answer, choice or failure scrolls to the bottom.
   useLayoutEffect(toBottom, [thread.seq, turns.length, thread.asking === null, thread.failed, thread.clarify]);
@@ -870,7 +892,15 @@ export function AskView({ state }: { state: State }) {
     if (thread.focus === null) return;
     scroller.current?.querySelector(`[data-turn="${thread.focus}"]`)?.scrollIntoView({ block: 'start' });
     atBottom.current = false;
+    rememberReading();
   }, [thread.focus]);
+  // A pane changes during render; a window resize can happen without one. Both use the position saved before reflow.
+  useLayoutEffect(keepReading);
+  useLayoutEffect(() => {
+    const observer = new ResizeObserver(keepReading);
+    if (scroller.current) observer.observe(scroller.current);
+    return () => observer.disconnect();
+  }, []);
   // A row of the question on its way only when the person is there: one who scrolled up to read stays put, even before
   // their scroll event has arrived, because the view is no longer where the timeline left it.
   const follow = useCallback(() => {
@@ -880,7 +910,11 @@ export function AskView({ state }: { state: State }) {
   }, []);
   const onScroll = () => {
     const view = scroller.current;
-    if (view) atBottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX;
+    if (view) {
+      atBottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX;
+      // Reflow can dispatch a scroll before its resize callback; do not overwrite the old reading position with that jump.
+      if (view.clientWidth === reading.current?.width && view.clientHeight === reading.current?.height) rememberReading();
+    }
   };
   // Which Ask's line is open, by the question on its way's seq: the next question's line starts closed.
   const [openFor, setOpenFor] = useState<number | null>(null);
