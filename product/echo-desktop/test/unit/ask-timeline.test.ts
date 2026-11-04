@@ -473,6 +473,32 @@ describe('Ask on the timeline', () => {
     expect(calls('ask.source')).toHaveLength(1);
   });
 
+  it.each([
+    [['nothing_to_review'], []],
+    [['reviewed'], ['Reviewed']],
+    [['reviewed', 'nothing_to_review'], ['Reviewed']],
+    [['nothing_to_review', 'not_reviewed'], ['Not reviewed yet']],
+  ] as const)('badges imported notes cited from revisions reviewed %j as %j: one with nothing to review has no badge', async (reviews, badges) => {
+    const label = 'Imported meeting: Pilot';
+    const revision = (at: number) => ({
+      source_id: `source:${'3'.repeat(64)}`, revision_id: `r${at + 1}`, source_sha256: sha(`4${at}`), representation_sha256: sha(`5${at}`), anchor_sha256: sha(`6${at}`),
+    } as const);
+    const notes = reviews.map((_, at): AnswerSource => ({ kind: 'original', label, ref: revision(at),
+      cited: { kind: 'imported_meeting', label, visibility: 'only_me', citation: { kind: 'source_revision', ...revision(at) } } }));
+    const one = turn('One?', DAY, answerOf('One?', notes, [['The notes propose shipping the pilot.', notes.map((_, at) => at)]]));
+    seed(one);
+    const reads = reviews.map(() => held.hold('ask.source'));
+    const store = await startStore();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    store.chooseSource(0, null, one.id);
+    reviews.forEach((imported_meeting_review, at) => reads[at]!(ok({ label, text: `Passage ${at + 1}.`, imported_meeting_review })));
+    await flush();
+    const { SourcePane } = await import('../../src/renderer/screens/ask.js');
+    const pane = render(SourcePane({ state: store.getState() }));
+    expect(byTestId(pane, 'evidence-text').map(text)).toEqual(reviews.map((_, at) => `Passage ${at + 1}.`));
+    expect(byTestId(pane, 'source-review-state').map(text)).toEqual(badges);
+  });
+
   it('says nothing when nothing changed (ADR-0049), and with every sentence left out shows only Ask again', async () => {
     const [one, two] = [turn('One?', 2 * DAY, status()), turn('Two?', DAY, status())];
     seed(one, two);

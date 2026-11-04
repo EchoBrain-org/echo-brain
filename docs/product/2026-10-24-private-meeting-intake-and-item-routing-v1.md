@@ -136,9 +136,14 @@ card's pre-ticks only. The source label is `Imported meeting: <title>` before
 and after review. Approval publishes separate records; it does not turn the
 source notes into an approved record or change their audience. The source pane
 shows `Not reviewed yet` until the importer completes an approve or reject
-decision for that exact source revision, then `Reviewed`. A pending proposal,
-an incomplete review, or a newer source revision is not a completed review;
-publishing the decision's records does not change its review state.
+decision on the card that reviews that exact source revision, then `Reviewed`.
+A revision whose title, participants and items match the card current when it
+arrives is coalesced and queues no card of its own; that card reviews it. A
+revision with no decision or action (§1.4) never gets a card: its state is
+`nothing_to_review`, and the pane shows no badge. A pending proposal, an
+incomplete review, or a newer revision that changes what a review covers is not
+a completed review; publishing the decision's records does not change its
+review state.
 
 Imported-note citations retain the `imported-meeting-notes-v1` representation
 and its historical canonical packet heading, `Imported meeting (unapproved):

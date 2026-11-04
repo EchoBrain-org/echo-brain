@@ -1247,7 +1247,9 @@ export function Passage({ text, label }: { text: string; label: string }) {
           : <ul key={index}>{block.items.map((item, at) => <li key={at}><Runs runs={item} /></li>)}</ul>)}</>;
 }
 
-function SourceReviewBadge({ review, shared = false }: { review: 'not_reviewed' | 'reviewed'; shared?: boolean }) {
+/** Imported notes' review badge. Notes with no decision or action have nothing to review, and no badge. */
+function SourceReviewBadge({ review, shared = false }: { review: 'not_reviewed' | 'reviewed' | 'nothing_to_review'; shared?: boolean }) {
+  if (review === 'nothing_to_review') return null;
   return <div class="meta" data-testid={shared ? 'source-review-summary' : undefined}><span class="tag" data-testid="source-review-state">
     {review === 'reviewed' ? 'Reviewed' : 'Not reviewed yet'}
   </span></div>;
