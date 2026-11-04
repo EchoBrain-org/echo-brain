@@ -443,7 +443,7 @@ export interface AgenticWriterListV1 {
   readonly read_at: string;
   /** A which_items need research has not given up on cites this inventory; selection remains separate from presentation. */
   readonly stated: boolean;
-  /** Exact requested members from found which_items needs, mapped from any opened bodies to inventory row ids. */
+  /** Exact requested members from which_items needs research has not given up on, mapped from any opened bodies to inventory row ids. */
   readonly requested_members?: readonly string[];
   /** Members that fit the writer prompt, in list order. */
   readonly members: readonly AgenticWriterListMemberV1[];

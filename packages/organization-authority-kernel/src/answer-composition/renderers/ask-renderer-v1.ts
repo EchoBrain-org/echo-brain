@@ -52,6 +52,7 @@ import {
   agenticListStatementV1,
   agenticListStatementsV2,
   agenticListTableV1,
+  agenticNeedReadsListV1,
   agenticOpenReadsV1,
   agenticPlanListsV1,
   agenticWriterListMemberV1,
@@ -279,8 +280,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const { stated, checking, unlisted } = agenticPlanListsV1(needs, id => listById.has(id));
       const checked = checkedItems(bundle, agenticOpenReadsV1(bundle.rounds, short => byShort.get(short)?.full === true));
       const rows = new Map(lists.map(list => [list.id, list.members.map(short => agenticWriterListMemberV1(byShort.get(short)!, checked.has(short), options.context.time_zone))]));
+      // A which_items need research has not given up on, found or still open when research stopped, requests its members,
+      // as it states its lists (agenticNeedReadsListV1); an interrupted answer stays partial.
       const requestedByList = new Map(lists.map(list => {
-        const selections = needs.filter(need => need.kind === "which_items" && need.status === "found" && need.evidence.includes(list.id))
+        const selections = needs.filter(need => need.kind === "which_items" && agenticNeedReadsListV1(need) && need.evidence.includes(list.id))
           .map(need => need.evidence.flatMap(short => membership.in(list.id, short) ?? []));
         // Each L-only need keeps its declared-list fallback even when another need selects specific members of that list.
         return [list.id, { members: [...new Set(selections.flat())], inventoryFallback: selections.some(members => members.length === 0) }] as const;
@@ -536,14 +539,14 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             members.add(sentence.member); presented.set(list.id, members);
           }
         }
-        // Research's found which_items needs preserve the requested member set. Their L ids are inventories;
-        // their E ids identify the requested members, including opened bodies mapped back to listed rows.
+        // Research's which_items needs, found or still open when research stopped, preserve the requested member set. Their
+        // L ids are inventories; their E ids identify the requested members, including opened bodies mapped back to listed rows.
         // A stated list shows the writer's valid selection, a use that names a member or carries a where, together with the
-        // requested members it leaves out. If a found need declares only L and the writer selects none of that list, that
+        // requested members it leaves out. If such a need declares only L and the writer selects none of that list, that
         // declared list is the fallback. A selection that names no member, given empty or left empty of ids outside the
         // list, is no selection, except an explicit empty one beside not_found: that says no member answers, which holds
         // only for a list research requested no member of, since its requested members are still stated.
-        // Inventories unrelated to a found membership need never become answers merely because research read them.
+        // Inventories unrelated to a membership need never become answers merely because research read them.
         const restored = new Set<string>();
         for (const id of stated) {
           const list = views.get(id)!;

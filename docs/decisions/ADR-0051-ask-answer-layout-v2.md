@@ -257,7 +257,10 @@ requested member E id. These ids preserve the requested selection across
 writer and layout choices; supporting facts unrelated to membership belong in
 a separate content need. Opened bodies map back to the inventory's member
 identity. The writer receives this set as `requested_members`, independently
-of `stated`, which says that a membership need cites the inventory.
+of `stated`, which says that a membership need cites the inventory. A
+`which_items` need still open when research stopped requests its members, or
+declares its list, in the same way, as ADR-0041 states such a need's list; the
+answer stays partial.
 
 Every layout parses the whole selection before applying presentation bounds.
 A `members` array has no 25-item or evidence-array bound. Repeated groups for

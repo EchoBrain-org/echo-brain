@@ -659,6 +659,20 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.cited).toEqual(requested);
       expect(blocksOf(rendered)).toMatchObject([{ kind: "table", caption: "43 of the 100 tickets created on October 4, 2026", rows: Array.from({ length: 43 }, () => expect.any(Object)) }]);
     });
+    it.each([
+      { evidence: ["L1"], caption: "12 tickets created on October 4, 2026", cited: ids(1, 12) },
+      { evidence: ["L1", "E2", "E3"], caption: "2 of the 12 tickets created on October 4, 2026", cited: ["E2", "E3"] },
+    ])("states the list of a which_items need still open when research stopped, and stays partial ($evidence)", async ({ evidence, caption, cited }) => {
+      const found = listBundle(12, 0, [list("L1", ids(1, 12))], [WI(evidence)]);
+      const stopped: AgenticEvidenceBundleV1 = { ...found, stop: { reason: "budget", completed: false },
+        plan: [{ part: 1, question: "Which tickets are open?", notes: "", needs: [{ need: "open tickets", kind: "which_items", status: "open", evidence }] }] };
+      const rendered = await alone({ bundle: stopped, layout: 2, replies: [{
+        lists: [], blocks: [{ block: "answer", sentences: [{ text: "Here are the open tickets.", evidence: [] }] }], not_found: [],
+      }] }).render("Which tickets are open?");
+      expect(rendered.outcome).toBe("partial");
+      expect(rendered.cited).toEqual(cited);
+      expect(blocksOf(rendered)).toMatchObject([{ kind: "table", caption }]);
+    });
     it("keeps the precise members research found when the writer omits its list selection", async () => {
       const selected = ids(5, 43);
       const rendered = await alone({ bundle: listBundle(100, 0, [list("L1", ids(1, 100))], [WI(["L1", ...selected])]), layout: 2, replies: [{
