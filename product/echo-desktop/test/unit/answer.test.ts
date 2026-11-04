@@ -178,6 +178,8 @@ describe('Copy answer writes Markdown (ADR-0045)', () => {
       '| Fix BUG-412 on the board (HW-11) [5] | Tomas Okafor | 2026-10-28 | In Progress |',
       '| Run DVT-R2 and publish the report [6] | QA | 2026-10-30 | To Do |',
       '',
+      'Who proposed the reduced scope was not found in the evidence read.',
+      '',
       'Sources',
       '',
       '1. DVT failure review',
@@ -197,13 +199,25 @@ describe('Copy answer writes Markdown (ADR-0045)', () => {
       'Yes. [3]\n\nWe ship annual plans first. [1][3]\n\nMonthly plans follow. [2]\n\nSources\n\n1. Launch plan\n2. Pricing\n3. Board');
   });
 
-  it('heads what each part says with its question when there are several, and leaves out what research did not cover (ADR-0047)', () => {
+  it('heads factual parts with their questions and includes partial explanations', () => {
     const answer: Answer = { ...plain([['Annual first.', [0]]]), sources: [page('1')], outcome: 'partial', parts: [
       { question: 'What did we agree?', status: 'answered', statements: [{ text: 'Annual first.', citation_indexes: [0], private: false }] },
       { question: 'Who approved it?', status: 'not_found', statements: [], gap: 'This was not found.' },
     ] };
     expect(markdown(answer, ['Launch plan'])).toBe(
-      '## What did we agree?\n\nAnnual first. [1]\n\nSources\n\n1. Launch plan');
+      '## What did we agree?\n\nAnnual first. [1]\n\nThis was not found.\n\nSources\n\n1. Launch plan');
+  });
+
+  it('copies partial explanations in both formats and hides them when any cited source becomes unreadable', () => {
+    const gap = 'The requested change is unsupported; nothing changed.';
+    const answer: Answer = { ...plain([['Annual first.', [0]]]), sources: [page('1'), page('2')], outcome: 'partial', parts: [
+      { question: 'What was decided, and update it?', status: 'partial', statements: [{ text: 'Annual first.', citation_indexes: [0], private: false }], gap },
+    ] };
+    expect(markdown(answer, ['Launch', 'Review'])).toContain(gap);
+    expect(answerText(answer, () => true)).toBe(`Annual first.\n${gap}`);
+    const shows = (ids: readonly number[]) => !ids.includes(1);
+    expect(answerMarkdown(answer, ['Launch'], [{ indexes: [0] }], shows)).not.toContain(gap);
+    expect(answerText(answer, shows)).toBe('Annual first.');
   });
 
   it('keeps a table cell\'s pipes and backslashes as text, and a line that would start a list as a sentence', () => {

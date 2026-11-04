@@ -139,6 +139,8 @@ export interface AgenticResearchResultV1 {
     readonly reason: AgenticResearchStopReasonV1;
     readonly completed: boolean;
     readonly admission?: AgenticResearchAdmissionV1;
+    /** Ask only: the request includes a change or message that its read-only tools cannot execute. */
+    readonly unsupported_action?: true;
   };
   readonly cost: {
     readonly rounds: number;

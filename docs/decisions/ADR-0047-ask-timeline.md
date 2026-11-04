@@ -85,7 +85,11 @@ lived in the answer it never saw.
   (only the A1 pipeline did, from `298ebfd` on 2026-09-27 to `e0b6980` on
   2026-09-28), and nothing re-reads stored audit outcomes, so ADR-0022's
   off-scope outcome no longer exists. `notice` and `gap` stay in the contract
-  for the person client and the evals.
+  for the person client and the evals. Partial-answer `gap` explanations also
+  appear in the desktop and Copy answer, so an interrupted search or an
+  unsupported action cannot read as a completed no-match result. Gaps have no
+  citation map and are hidden after any cited source becomes unreadable. The
+  project widening offer requires an actual `not_found` outcome.
 - **Only `/v7`.** Ask routes before /v7 are retired: no Authority serves only
   them, and clients older than the 2026-10-22 release update from the feed.
   `POST /v3/person/ask` to `/v6/person/ask`, Ask progress V1 and V2, and

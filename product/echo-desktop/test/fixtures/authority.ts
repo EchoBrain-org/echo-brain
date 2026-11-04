@@ -1850,6 +1850,17 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (mode === 'ask-progress' && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V3) {
         return progressStream(question, scope, init?.signal ?? undefined);
       }
+      if (mode === 'ask-completion') {
+        const noMatch = question === 'Find the missing launch note.';
+        const interrupted = question === 'What changed during the unavailable search?';
+        const mixed = question === 'What was decided? Mark action A1 Done.';
+        const [original] = desktop.answer.parts as Record<string, unknown>[];
+        return json({ ...answer, scope, outcome: noMatch ? 'not_found' : 'partial', citations: mixed ? desktop.answer.citations : [],
+          parts: [{ question, status: mixed ? 'partial' : 'not_found', statements: mixed ? original!.statements : [],
+            gap: noMatch ? "I couldn't find this in the sources you can access." : interrupted ? "I couldn't complete the search. Please try again."
+              : "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent." }],
+        });
+      }
       if (mode === 'ask-ticket') {
         const included = scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null);
         return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',

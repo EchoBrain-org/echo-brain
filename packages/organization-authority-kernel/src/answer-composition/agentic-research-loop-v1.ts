@@ -1233,6 +1233,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   let researchIncomplete = true;
   let researchStop: 'finished' | 'empty_catalog' | 'no_progress' | 'step_limit' | 'budget' | 'unusable_step' = 'step_limit';
   let researchAdmission: AgenticResearchAdmissionV1 | undefined;
+  let unsupportedAction = false;
 
   // ---- research bookkeeping (never enters a prompt) ----------------------
   const rounds: AgenticResearchRoundV1[] = [];
@@ -1575,11 +1576,15 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
                 for (const part of candidate) for (const need of part.needs) for (const id of need.evidence) {
                   if (entryOf(id) === undefined && !listsInOrder().some(list => list.id === id)) throw new AgenticAskOutputErrorV1('Cite only returned E/L ids');
                 }
-                if (value.completed) checkCompletion(candidate, seenObservations.size > 0 || [...entries.values()].some(entry => entry.full), [...seenObservations]);
-                // An honest completed=false still finished; incompleteness travels as researchIncomplete.
-                plan = candidate; finished = true; researchIncomplete = !value.completed; researchStop = 'finished';
+                // Completion is about the investigation, not whether it found the requested fact. Closed needs must
+                // pass the same observed-read checks even when a driver reports completed=false for a no-match result.
+                const completed = value.completed || (ask && candidate.every(part => part.needs.every(need => need.status !== 'open')));
+                const capabilityOnly = value.unsupported_action === true && candidate.length === 0;
+                if (completed && !capabilityOnly) checkCompletion(candidate, seenObservations.size > 0 || [...entries.values()].some(entry => entry.full), [...seenObservations]);
+                plan = candidate; finished = true; researchIncomplete = !completed; researchStop = 'finished';
+                unsupportedAction = value.unsupported_action === true;
                 addAction(started, roundView('finish', {}, undefined));
-                return { accepted: true, completed: value.completed };
+                return { accepted: true, completed };
               }
               if (tool !== 'search' && tool !== 'open' && tool !== 'list') throw new AgenticAskOutputErrorV1('Unknown research tool');
               if (tool === 'list' && !listAvailable) throw new AgenticAskOutputErrorV1(LIST_UNAVAILABLE);
@@ -1627,7 +1632,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         if (researchStop !== 'budget') { fallbacks += 1; observeCoreModelCorrectionV1('research_unusable_step_stop'); }
       }
     } finally { clearTimeout(timer); closeTurn(); }
-    if (plan.length === 0) plan = proposedPlan([{ question: partQuestion(goal.kind === 'question' ? goal.question : goal.task), needs: [], notes: '' }]);
+    if (plan.length === 0 && !unsupportedAction) plan = proposedPlan([{ question: partQuestion(goal.kind === 'question' ? goal.question : goal.task), needs: [], notes: '' }]);
   };
 
   /** Everything research gathered, as the server holds it; built once research stops. */
@@ -1651,7 +1656,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       plan: planView() as readonly AgenticResearchPartV1[], items: Object.freeze(items), ...(ask ? { lists: Object.freeze(listRecords) } : {}),
       unreadable_starting: Object.freeze([...unreadableStarting]), rounds: Object.freeze([...rounds]),
       coverage: Object.freeze({ reads: Object.freeze(readCoverage.map(read => Object.freeze({ ...read }))), inventories: Object.freeze(inventoryView().map(({ args, ...inventory }) => Object.freeze({ source: args.source, ...inventory }))), notices: Object.freeze([...notice]) }),
-      stop: Object.freeze({ reason: researchStop, completed: !researchIncomplete, ...(researchAdmission === undefined ? {} : { admission: researchAdmission }) }),
+      stop: Object.freeze({ reason: researchStop, completed: !researchIncomplete, ...(researchAdmission === undefined ? {} : { admission: researchAdmission }), ...(unsupportedAction ? { unsupported_action: true as const } : {}) }),
       cost: Object.freeze({ rounds: steps, model_calls: calls, repairs, fallbacks, input_tokens: usage("input_tokens"), output_tokens: usage("output_tokens"), total_tokens: usage("total_tokens"),
         model_ms: Math.max(0, Math.round(observed.model_ms)), desk_ms: Math.max(0, Math.round(observed.desk_ms)), elapsed_ms: Math.max(0, Math.round(now() - researchStartedAt)) }),
       gathered_for: Object.freeze({ scope: desk.scope, checked_at: observed.checked_at }),

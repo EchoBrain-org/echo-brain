@@ -6,7 +6,7 @@ import type {
 } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import {
-  answerSentences, blockTitle, CARD_WORDS, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownArranged,
+  answerGaps, answerSentences, blockTitle, CARD_WORDS, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownArranged,
   shownBlocks, shownItems, statementGroups, tableDay, yoursIn, type AnswerTable, type Inline, type Shows, type SourceGroup,
 } from '../answer.js';
 import { askedToday, askedWhen, identity, initial, marked, meetingTime, snippet, when } from '../format.js';
@@ -520,12 +520,13 @@ function Arranged({ state, view, part, index, blocks, opening }: {
  * when the writer arranged it (ADR-0051), and a paragraph per sentence when
  * neither. A part with nothing to show is left out, and so is a sentence
  * citing a source you can no longer read; one whose source changed is lit in
- * the signal (ADR-0047). What research did not cover is not shown; an answer
- * with nothing to say says nothing matched, unless the project's own line
- * says so.
+ * the signal (ADR-0047). Partial answers keep their explanation, including
+ * when no claims were found. A completed no-match answer uses the simple
+ * empty line, unless the project's own line says so.
  */
 function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: State; view: TurnView; dimmed?: boolean; empty?: boolean }) {
   const answer = view.answer;
+  const gaps = answerGaps(answer, view.shows);
   // A part opens the answer when it is the first and no direct answer is above it.
   const parts = answer.parts.map((part, index) => ({ part, index, opening: index === 0 && !answer.direct })).filter(({ part }) => partShows(part, view.shows));
   const said = parts.length > 0 || (answer.direct !== undefined && view.shows(answer.direct.citation_indexes));
@@ -544,7 +545,8 @@ function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: S
           {part.records?.map((statement, place) => <Found key={`record-${place}`} state={state} view={view} statement={statement} id={`${index}.r${place}`} />)}
         </section>
       ))}
-      {!said && empty && <p class="answer-empty" data-testid="answer-empty">Nothing you can see matched.</p>}
+      {gaps.map(gap => <p key={gap} class="answer-empty" data-testid="answer-gap">{gap}</p>)}
+      {!said && gaps.length === 0 && empty && <p class="answer-empty" data-testid="answer-empty">Nothing you can see matched.</p>}
     </div>
   );
 }

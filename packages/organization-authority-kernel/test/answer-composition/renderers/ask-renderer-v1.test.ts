@@ -66,6 +66,23 @@ function bundle(entries: readonly { readonly item: EvidenceDeskItemV2; readonly 
 const records = (count: number, options: Parameters<typeof record>[2] = {}) => bundle(Array.from({ length: count }, (_, index) => ({ item: record(`r${index + 1}`, `Approved record ${index + 1}.`, options), full: true, touched: index + 1 })), Array.from({ length: count }, (_, index) => `E${index + 1}`));
 
 describe("Ask renderer", () => {
+  it("keeps the read-only explanation when a writer supplies a long missing-fact gap", async () => {
+    const run = alone({ bundle: { ...records(1), stop: { reason: "finished", completed: true, unsupported_action: true } },
+      replies: [{ sentences: [{ text: "The rule applies.", evidence: ["E1"] }], lists: [], not_found: ["Missing detail. ".repeat(40)] }] });
+    const rendered = await run.render("What is the rule? Change the status.");
+    expect(rendered.result.response.parts[0]!.gap).toMatch(/^Ask can read your sources, but it can't make changes or send messages\. Nothing was changed or sent\./u);
+    expect(rendered.result.response.parts[0]!.gap!.length).toBeLessThanOrEqual(600);
+  });
+
+  it("explains unfinished factual research beside an unsupported action and usable evidence", async () => {
+    const run = alone({ bundle: { ...records(1), stop: { reason: "finished", completed: false, unsupported_action: true } },
+      replies: [{ sentences: [{ text: "The rule applies.", evidence: ["E1"] }], lists: [], not_found: [] }] });
+    const rendered = await run.render("What are all the rules? Change the status.");
+    expect(rendered.result.response.parts[0]!.gap).toContain("Nothing was changed or sent.");
+    expect(rendered.result.response.parts[0]!.gap).toContain("Research stopped before it finished");
+    expect(rendered.outcome).toBe("partial");
+  });
+
   it.each([false, true])("keeps both project leads when both needs are which_items (extra person citation: %s)", async extraPerson => {
     const question = "What are the active projects, and who leads them?";
     const projects: EvidenceDeskItemV2[] = ["Alpha", "Beta"].map((label, index) => ({

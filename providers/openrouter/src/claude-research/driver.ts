@@ -14,7 +14,8 @@ const SYSTEM = [
   'Use list for which/all/count requests and continue identical filters while more is true. Rows establish metadata, not body contents. Open relevant E ids for what they say. Follow returned links using their E ids.',
   'For open work, inspect both live ticket status and meeting actions/follow-ups where available. Project role describes the asker, not necessarily the lead. Open project evidence for the lead and members.',
   'A finish need has kind content, which_items (membership or selection by returned metadata such as status/owner), or which_say (members selected because of what their bodies say). Open items and owners is which_items when status and owner are metadata; opening a body for extra detail does not change that. Cite L ids for both list kinds and E ids for supporting text. A metadata row is not full text.',
-  'Recover from tool validation errors by changing arguments or approach. A rejected finish explains missing evidence. Use completed=false and open needs if sources cannot establish the requested facts; do not invent completion.',
+  'Recover from tool validation errors by changing arguments or approach. A rejected finish explains missing evidence. completed means the investigation finished, not that every fact was found: use completed=true with not_found needs after completed searches establish no match. Use completed=false with open needs when reads or investigation remain incomplete.',
+  'Ask only reads sources; it cannot change data or send messages. For a person question requesting such an action, set unsupported_action=true at finish. Research any factual questions as usual; when only an action is requested, use parts=[] without searching. ECHO supplies the capability explanation; do not treat an unsupported action as a missing fact.',
   'After finish is accepted, return {"finished":true}. Do not write the final user answer.',
 ].join('\n');
 
@@ -22,7 +23,7 @@ const date = z.string().optional().describe('Inclusive YYYY-MM-DD in the supplie
 const source = z.string().describe('Exact selector from source_catalog.');
 const dates = { since: date, until: date, date_field: z.string().optional().describe('A date meaning advertised by this source; omit to match any supported date.') };
 const need = z.object({ need: z.string(), kind: z.enum(['content', 'which_items', 'which_say']), status: z.enum(['open', 'found', 'not_found']), evidence: z.array(z.string()) });
-const finish = { completed: z.boolean(), parts: z.array(z.object({ question: z.string(), notes: z.string(), needs: z.array(need) })) };
+const finish = { completed: z.boolean(), unsupported_action: z.literal(true).optional().describe('Ask only: requested changes or messages cannot be executed. Keep factual needs in parts; use parts=[] for an action-only request.'), parts: z.array(z.object({ question: z.string(), notes: z.string(), needs: z.array(need) })) };
 
 /** Native SDK harness over the existing ECHO research session and its exact-body model gate. */
 export function createClaudeResearchDriverV1(options: {
@@ -72,7 +73,7 @@ export function createClaudeResearchDriverV1(options: {
         source, ...dates, kind: z.string().optional(), status: z.string().optional(), owner: z.string().optional(), role: z.string().optional(), channel: z.string().optional(),
         limit: z.string().optional().describe('Optional page size as decimal text, 1 to 25. Omit for the normal page.'),
       }, handler('list'))] : []),
-      tool('finish', 'Submit research notes for ECHO\'s existing renderer. Use after gathering evidence. Only returned E/L ids are valid. Validation feedback may require more reading. Set completed=false when evidence remains unavailable; open needs explain gaps. Once accepted, stop.', finish, handler('finish')),
+      tool('finish', 'Submit research notes for ECHO\'s existing renderer. Only returned E/L ids are valid. completed=true includes validated not_found results; completed=false means open research remains. For Ask changes/messages set unsupported_action=true and keep only factual research in parts. Validation feedback may require more reading. Once accepted, stop.', finish, handler('finish')),
     ];
     try {
       await (options.run ?? runClaudeResearchV1)({ prompt: JSON.stringify(session.initial), system: SYSTEM, model: options.model, base_url: fence.base_url,

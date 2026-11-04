@@ -74,6 +74,105 @@ describe('native research harness shares the real ECHO tool state', () => {
     expect((await h.ask()).response.outcome).toBe('not_found');
   });
 
+  it('treats validated absence as completed even when the driver reports completed false', async () => {
+    const h = harness(async session => {
+      await admit(session);
+      await session.call('search', { query: 'LANTERN reminder' });
+      await session.call('search', { query: 'LANTERN-2046' });
+      await admit(session, 'observed empty searches');
+      expect(await session.call('finish', { completed: false, parts: [{ question: 'Reminder', notes: 'No matches; internal note must stay private.',
+        needs: [{ need: 'reminder content', kind: 'content', status: 'not_found', evidence: [] }] }] })).toMatchObject({ accepted: true, completed: true });
+    }, { search: async () => result([]) });
+    const output = await h.ask();
+    expect(output.research.stop).toMatchObject({ reason: 'finished', completed: true });
+    expect(output.response.outcome).toBe('not_found');
+    expect(output.response.parts[0]?.gap).toBe("I couldn't find this in the sources you can access.");
+    expect(JSON.stringify(output.response)).not.toContain('internal note');
+    expect(h.generate).not.toHaveBeenCalled();
+  });
+
+  it('explains an unsupported Ask write without searching or publishing researcher notes', async () => {
+    const search = vi.fn(async () => result([]));
+    const h = harness(async session => {
+      await admit(session);
+      expect(await session.call('finish', { completed: true, unsupported_action: true, parts: [] })).toMatchObject({ accepted: true, completed: true });
+    }, { search });
+    const output = await createAgenticAskV5(h.options).answerWithResearch({ question: 'Mark action A1 Done.' });
+    expect(output.research.stop).toMatchObject({ reason: 'finished', completed: true, unsupported_action: true });
+    expect(output.response.outcome).toBe('partial');
+    expect(output.response.parts[0]?.gap).toBe("Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.");
+    expect(output.response.citations).toEqual([]);
+    expect(search).not.toHaveBeenCalled();
+    expect(h.generate).not.toHaveBeenCalled();
+    expect(h.audit).toHaveLength(1);
+    expect(h.revalidate).toHaveBeenCalled();
+  });
+
+  it('validates factual needs in a mixed read and unsupported write request', async () => {
+    const h = harness(async session => {
+      await admit(session);
+      const mixed = { ...finish(), unsupported_action: true };
+      expect(await session.call('finish', mixed)).toHaveProperty('error');
+      await session.call('search', { query: 'calibration rule' });
+      await admit(session, 'observed rule');
+      expect(await session.call('finish', mixed)).toMatchObject({ accepted: true, completed: true });
+    });
+    const output = await createAgenticAskV5(h.options).answerWithResearch({ question: 'What was decided, and mark the calibration task Done.' });
+    expect(output.response.outcome).toBe('partial');
+    expect(output.response.parts[0]?.statements[0]?.text).toBe('Calibrate every unit.');
+    expect(output.response.parts[0]?.gap).toContain("Ask can read your sources, but it can't make changes");
+    expect(output.response.citations).toHaveLength(1);
+  });
+
+  it('keeps the no-match explanation for the factual portion of an unsupported write request', async () => {
+    const h = harness(async session => {
+      await admit(session);
+      await session.call('search', { query: 'A1 rule' });
+      await session.call('search', { query: 'A1 decision' });
+      await admit(session, 'observed absence');
+      await session.call('finish', { completed: true, unsupported_action: true, parts: [{ question: 'Find and update A1', notes: '',
+        needs: [{ need: 'A1 rule', kind: 'content', status: 'not_found', evidence: [] }] }] });
+    }, { search: async () => result([]) });
+    const output = await h.ask();
+    expect(output.response.parts[0]?.gap).toContain("Nothing was changed or sent.");
+    expect(output.response.parts[0]?.gap).toContain("I couldn't find this in the sources you can access.");
+    expect(output.response.outcome).toBe('partial');
+  });
+
+  it.each(['unseen', 'truncated', 'unavailable'] as const)('does not normalize an unproven absence after %s reads', async failure => {
+    const h = harness(async session => {
+      await admit(session);
+      await session.call('search', { query: 'absent' });
+      await session.call('search', { query: 'missing' });
+      if (failure !== 'unseen') await admit(session, 'incomplete reads');
+      const absent = { completed: false, parts: [{ question: 'Absent', notes: '', needs: [{ need: 'missing fact', kind: 'content', status: 'not_found', evidence: [] }] }] };
+      expect(await session.call('finish', absent)).toHaveProperty('error');
+      expect(await session.call('finish', finish([], false))).toMatchObject({ accepted: true, completed: false });
+    }, { search: async () => result([], failure === 'truncated' ? { truncated: true } : failure === 'unavailable' ? { notice: 'Source temporarily unavailable.' } : {}) });
+    const output = await h.ask();
+    expect(output.research.stop.completed).toBe(false);
+    expect(output.response.outcome).toBe('partial');
+    expect(output.response.parts[0]?.gap).toContain("I couldn't complete the search");
+  });
+
+  it('does not let a task goal use the Ask-only unsupported-action outcome', () => {
+    expect(() => parseAgenticDriverFinishV1({ completed: true, unsupported_action: true, parts: [] }, false)).toThrow();
+    expect(() => parseAgenticDriverFinishV1({ completed: true, parts: [] }, true)).toThrow();
+  });
+
+  it('keeps a background task driver’s completion semantics unchanged', async () => {
+    const h = harness(async session => {
+      await admit(session);
+      await session.call('search', { query: 'calibration' });
+      await admit(session, 'read');
+      expect(await session.call('finish', { ...finish(), completed: false })).toMatchObject({ accepted: true, completed: false });
+    });
+    const output = await createAgenticResearchV1(h.options).research({ trigger: 'approved_record', brief: {
+      goal: { kind: 'task', task: 'Find related records.' }, starting: [], options: { list: false }, budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
+    } });
+    expect(output.stop).toEqual({ reason: 'finished', completed: false });
+  });
+
   it('hands released evidence to the unchanged writer, progress and audited release', async () => {
     const h = harness(async session => {
       await admit(session, 'initial');

@@ -1502,4 +1502,25 @@ describe('follow-ups from the bar', () => {
     expect(byTestId(show(store), 'ask-everywhere')).toHaveLength(0);
     expect(kept().map(turn => turn.text)).toEqual([question, question]);
   });
+  it.each([
+    "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.",
+    "I couldn't complete the search. Please try again.",
+  ])('does not offer wider scope for an empty partial project answer: %s', async gap => {
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.run': params => ok(answerOf(String(params.question), [], [], { scope: inApollo, outcome: 'partial',
+        parts: [{ question: String(params.question), status: 'not_found', statements: [], gap }] })),
+    }, () => ({ active: [apollo], archived: [] })));
+    const store = await startStore();
+    await store.openProject(apollo);
+    await store.ask('Mark action A1 Done.');
+    await flush();
+    const shown = (await view())(store);
+    expect(text(byTestId(shown, 'answer-gap'))).toBe(gap);
+    expect(byTestId(shown, 'project-empty')).toHaveLength(0);
+    expect(byTestId(shown, 'ask-everywhere')).toHaveLength(0);
+    store.askEverywhere(latestTurn(store)!.id);
+    await flush();
+    expect(calls('ask.run')).toHaveLength(1);
+  });
+
 });

@@ -91,6 +91,7 @@ const NOT_FOUND_GAP = "I couldn't find this in the sources you can access.";
 const UNCHECKED_EMPTY_GAP = "None of the items that record the date asked for matched.";
 const RECORDS_GAP = "I found these records, but could not write a verified summary.";
 const INCOMPLETE_SEARCH_GAP = "I couldn't complete the search. Please try again.";
+const READ_ONLY_GAP = "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.";
 const INCOMPLETE_SEARCH_NOTICE = "Research stopped before it finished, so relevant context may be missing.";
 const LIMITED_COVERAGE_GAP = "Some source coverage was incomplete, so relevant context may be missing.";
 const LIST_FALLBACK_GAP = "I found these items, but could not write the rest of the answer.";
@@ -243,6 +244,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const { bundle } = input;
       const askedQuestion = input.trigger_input.question;
       const researchIncomplete = !bundle.stop.completed;
+      const unsupportedAction = bundle.stop.unsupported_action === true;
       const byShort = new Map(bundle.items.map(entry => [entry.short, entry]));
       const entryOf = (short: string): Entry | undefined => {
         const id = cleanId(short);
@@ -602,7 +604,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // list, a sentence left out for resting on rows, and what did not fit.
         const extraGaps = [...new Set([...listGaps.map(gap => gap.text), ...(dropped ? [FIT_GAP] : [])])];
         const withGaps = (base: string | undefined) => {
-          const gaps = [...(base === undefined ? [] : [base]), ...extraGaps];
+          // Keep capability and unfinished-research explanations ahead of variable-length missing-fact text.
+          const gaps = [...(unsupportedAction ? [READ_ONLY_GAP] : []),
+            ...(unsupportedAction && researchIncomplete && !base?.startsWith(INCOMPLETE_SEARCH_GAP) ? [INCOMPLETE_SEARCH_NOTICE] : []),
+            ...(base === undefined ? [] : [base]), ...extraGaps];
           return gaps.length === 0 ? undefined : cleanLine(gaps.join(" "), 600);
         };
         type Draft = { status: PersonAnswerPartV4["status"]; statements: Statement[]; gap?: string; records?: Statement[] };
@@ -619,7 +624,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const records = fallback.map(entry => statementOf(entry.item.text!, [entry.short]));
           draft = records.length > 0
             ? { status: "records_only", statements: [], records, gap: withGaps(RECORDS_GAP)! }
-            : { status: "not_found", statements: [], gap: withGaps(gapText ?? (uncheckedEmpty ? UNCHECKED_EMPTY_GAP : NOT_FOUND_GAP))! };
+            : { status: "not_found", statements: [], gap: withGaps(gapText ?? (unsupportedAction && needs.length === 0 ? undefined : uncheckedEmpty ? UNCHECKED_EMPTY_GAP : NOT_FOUND_GAP))! };
         }
         const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
         // What the person is told about the filters of every list the answer uses, and of those which_say needs check (W7).
@@ -631,7 +636,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           ...(coverageLimited ? [LIMITED_COVERAGE_GAP] : []),
           ...(researchIncomplete && anyEvidence && draft.gap === undefined ? [INCOMPLETE_SEARCH_NOTICE] : []),
         ];
-        const outcome = !anyEvidence ? (incomplete || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
+        const outcome = !anyEvidence ? (incomplete || unsupportedAction || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
         // The blocks of the statements kept (ADR-0045), only for a part with statements; a list's rows cite their items' citations.
         const indexesOf = (shorts: readonly string[]) => [...new Set(shorts.map(short => usedKeys.get(keyOf(short))!))];
         /** A list statement's table, its rows citing their items' citations. */
