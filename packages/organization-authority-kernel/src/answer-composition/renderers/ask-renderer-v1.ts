@@ -458,11 +458,16 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             noun: value.noun, filter: value.list.filter, count: value.list.count, complete: value.list.complete, selected: value.selected,
             ...(where === undefined ? {} : { where }), ...(value.by_id ? { by_id: true, which: value.which } : {}),
           };
-          const statements = laid ? agenticListStatementsV2(description)
-            : [agenticListStatementV1({ ...description, share: shares[index]!.share, free: shares[index]!.free })];
-          if (statements.reduce((total, statement) => total + statement.cited.length, 0) < value.selected.length) listGaps.push({ text: FIT_GAP, partial: true });
-          // Each named member cites its own row; in blocks, a statement naming two or more names is a table, a row per name.
-          const table = !laid ? undefined : agenticListTableV1({ selected: value.selected, names: statements.flatMap(statement => statement.names), by_id: value.by_id, ...(value.list.filter.time_zone === undefined ? {} : { time_zone: value.list.filter.time_zone }) });
+          // Each named member cites its own row.
+          if (!laid) {
+            const statement = agenticListStatementV1({ ...description, share: shares[index]!.share, free: shares[index]!.free });
+            if (statement.cited.length < value.selected.length) listGaps.push({ text: FIT_GAP, partial: true });
+            return [{ text: statement.text, shorts: statement.cited.map(at => value.selected[at]!.id), shape: PROSE }];
+          }
+          // In blocks every member is named, in as many statements as their bounds need, and a statement naming two or more
+          // names is a table, a row per name.
+          const statements = agenticListStatementsV2(description);
+          const table = agenticListTableV1({ selected: value.selected, names: statements.flatMap(statement => statement.names), by_id: value.by_id, ...(value.list.filter.time_zone === undefined ? {} : { time_zone: value.list.filter.time_zone }) });
           let firstRow = 0;
           return statements.map(statement => {
             const shape: DraftShape = table === undefined ? PROSE : {
