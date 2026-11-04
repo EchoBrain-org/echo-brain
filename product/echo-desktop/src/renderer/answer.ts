@@ -46,17 +46,12 @@ export function rowId(part: number, block: number, row: number): string {
   return `${part}.t${block}.${row}`;
 }
 
-/**
- * A table row as a sentence the pane can light: its cells, and the citations
- * it has. It says only you can read a source of it when one of its own
- * citations is private among the answer's `sources`, whatever its table's
- * other rows cite.
- */
-export function rowStatement(row: AnswerTableRow, sources: readonly AnswerSource[]): AnswerStatement {
-  return {
-    text: row.cells.filter(cell => cell !== '').join(' · '), citation_indexes: row.citation_indexes,
-    private: row.citation_indexes.some(index => sources[index]?.private === true),
-  };
+/** A sentence the pane can light: an answer's statement, or a table's row. */
+export type Sentence = Omit<AnswerStatement, 'private'>;
+
+/** A table row as a sentence the pane can light: its cells, and the citations it has. */
+export function rowStatement(row: AnswerTableRow): Sentence {
+  return { text: row.cells.filter(cell => cell !== '').join(' · '), citation_indexes: row.citation_indexes };
 }
 
 /**
@@ -65,14 +60,14 @@ export function rowStatement(row: AnswerTableRow, sources: readonly AnswerSource
  * ("0.t4.1"). An arranged part's point, event, fact and quote are its
  * sentences, by their place.
  */
-export function answerSentences(answer: Answer): [string, AnswerStatement][] {
+export function answerSentences(answer: Answer): [string, Sentence][] {
   return [
     ...(answer.direct ? [['direct', answer.direct] as [string, AnswerStatement]] : []),
     ...answer.parts.flatMap((part, p) => [
       ...part.statements.map((statement, i) => [`${p}.${i}`, statement] as [string, AnswerStatement]),
       ...(part.records ?? []).map((statement, i) => [`${p}.r${i}`, statement] as [string, AnswerStatement]),
       ...(part.blocks ?? []).flatMap((block, b) => block.kind !== 'table' ? []
-        : block.rows.map((row, r) => [rowId(p, b, r), rowStatement(row, answer.sources)] as [string, AnswerStatement])),
+        : block.rows.map((row, r) => [rowId(p, b, r), rowStatement(row)] as [string, Sentence])),
     ]),
   ];
 }

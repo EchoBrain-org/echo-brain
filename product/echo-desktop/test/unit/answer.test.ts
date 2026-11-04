@@ -179,33 +179,6 @@ describe('Copy answer writes Markdown', () => {
   });
 });
 
-describe('a table row says only you can read a source of it by its own citations', () => {
-  const secret: AnswerSource = { ...page('9'), private: true };
-
-  it('marks a row private only when one of its own citations is, whatever another row of its table cites', () => {
-    // A cites a team page and a page only you can read; B cites the team page alone.
-    const base = plain([['A.', [0, 1]], ['B.', [0]]]);
-    const answer: Answer = { ...base, sources: [page('1'), secret], parts: [{ ...base.parts[0]!,
-      statements: [{ text: 'A.', citation_indexes: [0, 1], private: true }, { text: 'B.', citation_indexes: [0], private: false }],
-      blocks: [{ kind: 'table', statements: [0, 1], columns: ['Item', 'Status'], rows: [
-        { cells: ['A', 'Open'], citation_indexes: [0, 1] }, { cells: ['B', 'Open'], citation_indexes: [0] },
-      ] }] }] };
-    const rows = Object.fromEntries(answerSentences(answer).filter(([id]) => id.includes('t')));
-    expect(rows['0.t0.0']!.private).toBe(true);
-    expect(rows['0.t0.1']!.private).toBe(false);
-  });
-
-  it('marks private only the private members\' rows of a list table over members of mixed visibility', () => {
-    const base = plain([['3 Jira tickets are open: ECHO-1, ECHO-2 and ECHO-3.', [0, 1, 2]]]);
-    const answer: Answer = { ...base, sources: [page('1'), secret, page('3')], parts: [{ ...base.parts[0]!,
-      statements: [{ text: '3 Jira tickets are open: ECHO-1, ECHO-2 and ECHO-3.', citation_indexes: [0, 1, 2], private: true }],
-      blocks: [{ kind: 'table', statements: [0], columns: ['Item', 'Status'], caption: '3 Jira tickets are open', rows: [
-        { cells: ['ECHO-1', 'Open'], citation_indexes: [0] }, { cells: ['ECHO-2', 'Open'], citation_indexes: [1] }, { cells: ['ECHO-3', 'Open'], citation_indexes: [2] },
-      ] }] }] };
-    expect(answerSentences(answer).filter(([id]) => id.includes('t')).map(([, row]) => row.private)).toEqual([false, true, false]);
-  });
-});
-
 describe('a done row is never late, and only an owner column says whose a row is', () => {
   const late = (status: string, owner = 'Owner') => lateForYou(['Action', owner, 'Due', 'Status'], ['Confirm the trace', 'You', '2026-10-14', status], null, NOW);
 
@@ -270,8 +243,8 @@ describe('an arranged answer (answer layout v2, ADR-0051)', () => {
     const sentences = answerSentences(arranged());
     expect(sentences.map(([id]) => id)).toEqual(['0.0', '0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.9', '0.t1.0', '0.t1.1']);
     expect(Object.fromEntries(sentences.filter(([id]) => id.includes('t')))).toEqual({
-      '0.t1.0': { text: 'THERM-52 · Thermal pad supplier · In Progress · Tomas Okafor · 2026-11-04', citation_indexes: [4], private: true },
-      '0.t1.1': { text: 'THERM-55 · Line fixture · To Do · You · 2026-10-30', citation_indexes: [5], private: true },
+      '0.t1.0': { text: 'THERM-52 · Thermal pad supplier · In Progress · Tomas Okafor · 2026-11-04', citation_indexes: [4] },
+      '0.t1.1': { text: 'THERM-55 · Line fixture · To Do · You · 2026-10-30', citation_indexes: [5] },
     });
     // An event, a fact and a quote are the part's own sentences, as the Authority wrote them from their blocks.
     expect(sentences.filter(([id]) => ['0.2', '0.4', '0.9'].includes(id)).map(([, statement]) => statement.text)).toEqual([
