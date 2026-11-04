@@ -204,7 +204,7 @@ function Marker({ state, view, group, focus }: { state: State; view: TurnView; g
   const on = paneOn(state, view) && state.sources?.open === group && state.sources.focus === focus;
   const name = sourceName(firstSource(view, view.groups[group]!), state.sources);
   return (
-    <button type="button" class={`marker${on ? ' on' : ''}`} data-testid="citation" aria-pressed={on} aria-label={`Source ${group + 1}: ${name}`}
+    <button type="button" class={`marker${on ? ' on' : ''}`} data-testid="citation" data-reading-focus={focus} aria-pressed={on} aria-label={`Source ${group + 1}: ${name}`}
       title={name} onClick={() => chooseSource(group, focus, view.id)}>{group + 1}</button>
   );
 }
@@ -240,7 +240,7 @@ function markClass(base: string, on: boolean, mark: Mark): string {
  */
 function statementProps(state: State, view: TurnView, statement: AnswerStatement, id: string, base = '') {
   const mark = markIn(view, statement.citation_indexes);
-  return { class: markClass(base, lit(state, view, id), mark) || undefined, 'data-testid': 'statement', 'data-mark': mark ?? undefined };
+  return { class: markClass(base, lit(state, view, id), mark) || undefined, 'data-testid': 'statement', 'data-reading-anchor': id, 'data-mark': mark ?? undefined };
 }
 
 /** A sentence's words as its item reads them (`text`), then the numbers of its sources. */
@@ -264,7 +264,7 @@ function Found({ state, view, statement, id }: { state: State; view: TurnView; s
   if (mark === 'omitted') return null;
   const source = view.answer.sources[statement.citation_indexes[0]!];
   return (
-    <div class={markClass('passage selectable', false, mark)} data-testid="found" data-mark={mark ?? undefined}>
+    <div class={markClass('passage selectable', false, mark)} data-testid="found" data-reading-anchor={id} data-mark={mark ?? undefined}>
       <Passage text={statement.text} label={source?.label ?? ''} />
       <div><Markers state={state} view={view} statement={statement} id={id} /></div>
     </div>
@@ -350,7 +350,7 @@ function Table({ state, view, index, block, place, opens, label }: {
             const id = rowId(index, place, at);
             const late = lateForYou(block.columns, row.cells, me);
             return (
-              <tr key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="answer-row" data-mark={mark ?? undefined}>
+              <tr key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="answer-row" data-reading-anchor={id} data-mark={mark ?? undefined}>
                 {row.cells.map((cell, column) => column === 0
                   ? <td key={column}><span class="first">{cell}<Markers state={state} view={view} statement={rowStatement(row, view.answer.sources)} id={id} /></span></td>
                   : <Cell key={column} cell={cell} late={late && column === due} you={yoursIn(block.columns[column]!, cell, me)} />)}
@@ -573,7 +573,7 @@ function SinceList({ state, view, since, at }: { state: State; view: TurnView; s
       <ChangedSince at={at} />
       <ul class="since-items selectable">
         {shown.map(({ statement, place }) => (
-          <li key={place} class={lit(state, view, `since.${place}`) ? 'on' : undefined} data-testid="since-item">
+          <li key={place} class={lit(state, view, `since.${place}`) ? 'on' : undefined} data-testid="since-item" data-reading-anchor={`since.${place}`}>
             <span><span data-testid="since-text">{statement.text}</span><Markers state={state} view={view} statement={statement} id={`since.${place}`} /></span>
           </li>
         ))}
@@ -855,33 +855,95 @@ export function AskView({ state }: { state: State }) {
   // The thread of the bar's place, each question once (ADR-0049).
   const turns = askThread(state);
   const scroller = useRef<HTMLElement>(null);
-  // Whether the person was at the bottom when they last scrolled, or the timeline last took them there.
-  const atBottom = useRef(true);
   // Where the timeline last put the view: the scroll event that records a person's scroll can arrive after a new row.
   const placedAt = useRef<number | null>(null);
+  // Reading follows the bottom until the person scrolls away or chooses a specific citation.
+  type Position = { kind: 'bottom' } | { kind: 'anchor'; element: Element; offset: number };
+  const reading = useRef<{ width: number; height: number; position: Position } | null>(null);
+  const anchors = useRef<NodeListOf<Element> | null>(null);
+  const savePosition = (position: Position) => {
+    const view = scroller.current;
+    if (view) reading.current = { width: view.clientWidth, height: view.clientHeight, position };
+  };
+  const anchorPosition = (element: Element): Position => ({
+    kind: 'anchor', element, offset: element.getBoundingClientRect().top - scroller.current!.getBoundingClientRect().top,
+  });
+  const rememberReading = () => {
+    const view = scroller.current;
+    if (!view) return;
+    if (view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX) { savePosition({ kind: 'bottom' }); return; }
+    // Anchors follow document order. Locate the first visible one with logarithmic layout reads, only when the person
+    // actually scrolls; streaming progress neither scans the thread nor replaces a citation they chose to read.
+    const items = anchors.current ??= view.querySelectorAll('[data-reading-anchor], .question, .folded');
+    const bounds = view.getBoundingClientRect();
+    let low = 0, high = items.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (items[mid]!.getBoundingClientRect().top < bounds.top) low = mid + 1;
+      else high = mid;
+    }
+    const next = items[low];
+    const element = next && next.getBoundingClientRect().top < bounds.bottom ? next : items[low - 1];
+    if (element) savePosition(anchorPosition(element));
+  };
+  const keepReading = () => {
+    const view = scroller.current, saved = reading.current;
+    if (!view || !saved || (view.clientWidth === saved.width && view.clientHeight === saved.height)) return;
+    const position = saved.position;
+    if (position.kind === 'bottom') view.scrollTop = view.scrollHeight;
+    else if (view.contains(position.element)) view.scrollTop += position.element.getBoundingClientRect().top - view.getBoundingClientRect().top - position.offset;
+    placedAt.current = view.scrollTop;
+    savePosition(position);
+  };
+  const chooseReading = (event: MouseEvent) => {
+    // Capture the source's turn/focus before chooseSource changes the pane width. Pointer and keyboard activation both
+    // produce this click, and every block gives its sentence or row the same focus id the source pane uses.
+    const marker = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-reading-focus]') : null;
+    const turn = marker?.closest('[data-turn]');
+    const element = marker && turn?.querySelector(`[data-reading-anchor="${CSS.escape(marker.dataset.readingFocus!)}"]`);
+    if (element) savePosition(anchorPosition(element));
+  };
+  // Content changes invalidate only the cached node list; they do not measure the existing thread.
+  useLayoutEffect(() => { anchors.current = null; }, [thread.seq, turns.length, thread.opened, thread.earlier, state.timeline.turns, state.timeline.checks]);
   const toBottom = () => {
     const view = scroller.current;
     if (view) { view.scrollTop = view.scrollHeight; placedAt.current = view.scrollTop; }
-    atBottom.current = true;
+    savePosition({ kind: 'bottom' });
   };
   // A new question, answer, choice or failure scrolls to the bottom.
   useLayoutEffect(toBottom, [thread.seq, turns.length, thread.asking === null, thread.failed, thread.clarify]);
   // A suggestion opened Ask at a turn: that turn comes into view.
   useLayoutEffect(() => {
     if (thread.focus === null) return;
-    scroller.current?.querySelector(`[data-turn="${thread.focus}"]`)?.scrollIntoView({ block: 'start' });
-    atBottom.current = false;
+    const element = scroller.current?.querySelector(`[data-turn="${thread.focus}"]`);
+    if (element) {
+      element.scrollIntoView({ block: 'start' });
+      placedAt.current = scroller.current!.scrollTop;
+      savePosition(anchorPosition(element));
+    }
   }, [thread.focus]);
+  // Pane and sidebar changes restore before paint. Native window resizing can happen without a render.
+  const paneOpen = state.sources?.open != null || state.sources?.named != null;
+  useLayoutEffect(keepReading, [paneOpen, state.sidebarOpen]);
+  useLayoutEffect(() => {
+    const observer = new ResizeObserver(keepReading);
+    if (scroller.current) observer.observe(scroller.current);
+    return () => observer.disconnect();
+  }, []);
   // A row of the question on its way only when the person is there: one who scrolled up to read stays put, even before
   // their scroll event has arrived, because the view is no longer where the timeline left it.
   const follow = useCallback(() => {
     const view = scroller.current;
-    if (view && placedAt.current !== null && view.scrollTop < placedAt.current - FOLLOW_PX) atBottom.current = false;
-    if (atBottom.current) toBottom();
+    if (view && placedAt.current !== null && view.scrollTop < placedAt.current - FOLLOW_PX) rememberReading();
+    if (reading.current?.position.kind === 'bottom') toBottom();
   }, []);
   const onScroll = () => {
-    const view = scroller.current;
-    if (view) atBottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX;
+    const view = scroller.current, saved = reading.current;
+    // Ignore our own placement and browser scrolls caused by a resize. Only the person's new position changes intent.
+    if (view && view.scrollTop !== placedAt.current && view.clientWidth === saved?.width && view.clientHeight === saved.height) {
+      placedAt.current = null;
+      rememberReading();
+    }
   };
   // Which Ask's line is open, by the question on its way's seq: the next question's line starts closed.
   const [openFor, setOpenFor] = useState<number | null>(null);
@@ -895,7 +957,7 @@ export function AskView({ state }: { state: State }) {
   const again = askedAgain(state.timeline.turns);
   const behind = new Set(behindEarlierLine(turns, full));
   return (
-    <section class="ask timeline" data-testid="ask-view" aria-live="polite" ref={scroller} onScroll={onScroll}>
+    <section class="ask timeline" data-testid="ask-view" aria-live="polite" ref={scroller} onScroll={onScroll} onClickCapture={chooseReading}>
       {behind.size > 0 && <EarlierLine count={behind.size} open={thread.earlier} />}
       {turns.map((turn, index) => (thread.earlier || !behind.has(turn.id)) && (
         <Fragment key={turn.id}>

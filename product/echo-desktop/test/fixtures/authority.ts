@@ -1895,6 +1895,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return json(layout === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2 ? blocksAnswer(question, scope, true)
           : layout === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1 ? layoutAnswer(question, scope, true) : blocksAnswer(question, scope, false));
       }
+      if (mode === 'ask-scroll') {
+        const statements = question === 'Quick status' ? [{ text: 'The release remains scheduled for Friday.', citation_indexes: [0], private: false }] : Array.from({ length: 12 }, (_, index) => ({
+          text: `${question} Item ${index + 1}: The team reviewed the supplier report, the manufacturing checklist, and the latest test results. The next review will compare those results with the release requirements before confirming the schedule and assigning the remaining follow-ups.`,
+          citation_indexes: [0], private: false,
+        }));
+        return json({ ...answer, scope, citations: THERM_BLOCK_CITATIONS.slice(0, 1), parts: [{ question, status: 'answered', statements,
+          blocks: [{ kind: 'text', statements: statements.map((_, index) => index) }],
+        }] });
+      }
       // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
       const [part] = desktop.answer.parts as Record<string, unknown>[];
       return json({ ...answer, scope, parts: [{ ...part, question }] });
