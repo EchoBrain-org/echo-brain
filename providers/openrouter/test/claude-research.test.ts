@@ -284,6 +284,7 @@ it('admits the exact initial packet and refuses an unexpected model before forwa
     run: async input => {
       expect(input.system).toContain('For which_items, cite the inventory L ids and every requested member E id');
       expect(input.system).toContain('Put unrelated supporting facts in a separate content need.');
+      expect(input.system).toContain('A question about one named item\'s attributes, such as who leads it or when it is due, is content, even when you listed items to find it.');
       await fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model: requestedModel, messages: [{ role: 'user', content: input.prompt }], max_tokens: 100 }) });
     },
   });

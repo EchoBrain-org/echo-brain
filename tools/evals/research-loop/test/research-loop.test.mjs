@@ -923,6 +923,10 @@ test("each Ask run reports its plan's needs by declared kind, and a case may nam
   };
   assert.deepEqual([declared(jira, [need("content", ["E1"])]), declared(jira, [need(undefined, ["E1"])]), declared(jira, [need("which_say")]), declared(confluence, [need("which_say")]), declared(confluence, [need("which_items"), need("which_say")])],
     [true, true, false, true, false]);
+  // One named project's leads are content, even when research lists projects to find it: a which_items plan on that list fails.
+  const lead = caseById("named-project-leads");
+  assert.deepEqual([lead.question, lead.expected_kinds, declared(lead, [need("content", ["E1"])]), declared(lead, [need("which_items")]), declared(lead, [need("which_items", ["L1", "E1"])])],
+    ["Who leads THERM?", ["content"], true, false, false]);
   // Every held-out Ask case names its kinds, so the score also measures rule 3 on questions tuning never sees. The keys
   // are read from the file and restated nowhere (tests/architecture/research-loop-holdout-isolation.test.ts): each case's
   // check passes a plan declaring exactly its kinds and fails one declaring only the kinds it does not name.

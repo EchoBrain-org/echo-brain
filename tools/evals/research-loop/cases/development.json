@@ -1684,6 +1684,36 @@
       "distractors": [{ "project": "THERM EVT Archive" }]
     },
     {
+      "id": "named-project-leads",
+      "trigger": "ask",
+      "state": "S0",
+      "family": "open_ended",
+      "category": "structure",
+      "scope": { "kind": "global" },
+      "budget": "live",
+      "question": "Who leads THERM?",
+      "expected_outcome": "answerable",
+      "expected_kinds": ["content"],
+      "reach": { "collections": ["projects"] },
+      "parts": [
+        {
+          "id": "p1",
+          "type": "owner",
+          "requirement": "THERM's leads are {{TEST_PERSON}} and Mara Lindqvist.",
+          "evidence": [{ "project": "THERM" }]
+        }
+      ],
+      "expected_needs": ["THERM's leads"],
+      "gaps": [],
+      "must_not": [
+        "states a list of projects, such as \"1 project: THERM.\", for a question about one project's leads",
+        "names Rafael Moreno, a member, as one of THERM's leads",
+        "gives THERM EVT Archive's or Kestrel Pilot Launch's leads as THERM's"
+      ],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "project": "THERM Supplier Review" }],
+      "distractors": [{ "project": "THERM EVT Archive" }]
+    },
+    {
       "id": "what-happened-yesterday",
       "trigger": "ask",
       "state": "S0",
