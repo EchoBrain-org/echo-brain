@@ -429,7 +429,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       ...(linked.size === 0 ? {} : { linked: Object.freeze([...linked.values()]) }),
       ...(untested === undefined ? {} : { unchecked: untested }),
       ...(next_cursor === undefined ? {} : { next_cursor }),
-      ...(notice === undefined ? {} : { notice }),
+      ...(notice === undefined ? {} : { notice, notice_kind: 'informational' as const }),
       ...(page_full === undefined ? {} : { page_full }),
     });
   };

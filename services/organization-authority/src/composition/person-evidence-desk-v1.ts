@@ -254,7 +254,9 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     readNotices.clear();
     const unchecked = readUnchecked;
     readUnchecked = undefined;
-    return Object.freeze({ items: Object.freeze(items), truncated, receipt_digests: Object.freeze(all), ...(notices.length > 0 ? { notice: notices.join(" ") } : {}), ...(unchecked === undefined ? {} : { unchecked }) });
+    // With the record index behind its log, meeting records could not be searched in this request: absence over them is
+    // unproven until a retry after the index catches up, so the notice is an availability one.
+    return Object.freeze({ items: Object.freeze(items), truncated, receipt_digests: Object.freeze(all), ...(notices.length > 0 ? { notice: notices.join(" "), notice_kind: recordsUnavailableAtStart ? "availability" as const : "informational" as const } : {}), ...(unchecked === undefined ? {} : { unchecked }) });
   };
   /** A record open's result, with whether the anchor's own text was cut (ADR-0041). */
   const opened = (value: PersonEvidenceDeskResultV1, expanded: { readonly anchor_truncated?: boolean }): PersonEvidenceDeskResultV1 =>

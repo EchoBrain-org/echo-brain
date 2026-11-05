@@ -325,7 +325,7 @@ describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () =
     await list(desk);
     expect(f.opened.length - opens).toBe(21);
     // Past the bound a ticket key cannot be checked, and the search says so whether or not any follow-up holds that key.
-    for (const query of ['ECHO-12', 'ECHO-999']) expect([query, await search(desk, query)]).toEqual([query, expect.objectContaining({ items: [], notice: FOLLOW_UPS_KEY_PAST_READS_V1 })]);
+    for (const query of ['ECHO-12', 'ECHO-999']) expect([query, await search(desk, query)]).toEqual([query, expect.objectContaining({ items: [], notice: FOLLOW_UPS_KEY_PAST_READS_V1, notice_kind: 'informational' })]);
     expect(f.opened.length - opens).toBe(21);
     // Within it, a key no follow-up holds says nothing.
     expect(await search(askDesk(f, 'mina').desk, 'ECHO-999')).not.toHaveProperty('notice');

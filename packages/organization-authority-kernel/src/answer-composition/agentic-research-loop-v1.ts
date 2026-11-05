@@ -540,6 +540,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const refusedReads = new Map<string, ToolResult>();
   const receipts: Sha256Digest[] = [];
   const notice = new Set<string>();
+  /**
+   * Availability failures in this request: a read whose notice says a source could not be read in it (an outage, a rate
+   * limit or a quota, or meeting records whose index is behind their log), or the read budget running out. A read that
+   * came back cut or with an informational notice, an item gone or never readable, a model's argument mistake and a
+   * starting read are none of these.
+   */
+  let availabilityFailures = 0;
   const entries = new Map<string, Entry>();
   const retrievedTickets = new Set<string>();
   const byShort = new Map<string, string>();
@@ -578,6 +585,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
 
   const observe = (result: EvidenceDeskResultV2) => {
     if (result.notice !== undefined) notice.add(result.notice);
+    if (result.notice_kind === "availability") availabilityFailures += 1;
     for (const item of result.items) if (item.citation.kind === "ticket") retrievedTickets.add(item.id);
     // Audits bind every released item, even one that never reaches a prompt: an item released beside a row too.
     for (const item of [...result.items, ...(result.linked ?? [])]) if (!receipts.includes(item.receipt_sha256)) receipts.push(item.receipt_sha256);
@@ -1287,6 +1295,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     }
   };
 
+  /**
+   * After an availability failure, every not_found need of an Ask's plan is unconfirmed: absence there is unproven, so
+   * research is incomplete whatever the planner or driver said, and the reader is asked to try again. Found needs stand.
+   */
+  const absenceUnconfirmed = (parts: readonly PartState[]): boolean =>
+    ask && availabilityFailures > 0 && parts.some(part => part.needs.some(need => need.status === 'not_found'));
+
   /** The research phase: starting reads, then the loop until a stop rule fires. */
   const research = async (gate: AgenticModelGateV1): Promise<void> => {
     // ---- starting evidence: read fresh through the access-checked desk ----
@@ -1473,7 +1488,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       if (reads.length === 0) {
         const identity = { tool_call_id: ++toolCalls, round: steps, tool: 'finish' } as const;
         observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', ...identity, args: {} });
-        researchIncomplete = false;
+        researchIncomplete = absenceUnconfirmed(plan);
         researchStop = 'finished';
         recordRound(roundStartedAt, [roundView("finish", {}, undefined)]);
         observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', ...identity, result: { tool: 'finish' } });
@@ -1578,13 +1593,16 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
                 }
                 // Completion is about the investigation, not whether it found the requested fact. Closed needs must
                 // pass the same observed-read checks even when a driver reports completed=false for a no-match result.
-                const completed = value.completed || (ask && candidate.every(part => part.needs.every(need => need.status !== 'open')));
+                // After an availability failure every not_found need is unconfirmed, whatever completed says: research is
+                // then incomplete, and a completed=false finish is accepted as the driver gave it.
+                const unconfirmed = absenceUnconfirmed(candidate);
+                const completed = value.completed || (ask && !unconfirmed && candidate.every(part => part.needs.every(need => need.status !== 'open')));
                 const capabilityOnly = value.unsupported_action === true && candidate.length === 0;
                 if (completed && !capabilityOnly) checkCompletion(candidate, seenObservations.size > 0 || [...entries.values()].some(entry => entry.full), [...seenObservations]);
-                plan = candidate; finished = true; researchIncomplete = !completed; researchStop = 'finished';
+                plan = candidate; finished = true; researchIncomplete = !completed || unconfirmed; researchStop = 'finished';
                 unsupportedAction = value.unsupported_action === true;
                 addAction(started, roundView('finish', {}, undefined));
-                return { accepted: true, completed };
+                return { accepted: true, completed: !researchIncomplete };
               }
               if (tool !== 'search' && tool !== 'open' && tool !== 'list') throw new AgenticAskOutputErrorV1('Unknown research tool');
               if (tool === 'list' && !listAvailable) throw new AgenticAskOutputErrorV1(LIST_UNAVAILABLE);
@@ -1592,7 +1610,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
               const action = parsed.actions[0]!;
               if (tool === 'open' && entryOf(action.args.id ?? '') === undefined) throw new AgenticAskOutputErrorV1('Open only a returned E id');
               // A read adds at most one release receipt per item it returns; stop before the audit row would overflow.
-              if (receipts.length + OPEN_EXTRA_ITEMS + 1 > budget.max_receipts) throw new AgenticAskOutputErrorV1('The read budget is used up; finish with the evidence already gathered.');
+              // Research its read budget stopped short could not read what it still needed: an availability failure.
+              if (receipts.length + OPEN_EXTRA_ITEMS + 1 > budget.max_receipts) {
+                availabilityFailures += 1;
+                throw new AgenticAskOutputErrorV1('The read budget is used up; finish with the evidence already gathered.');
+              }
               report?.reads(tool !== 'open');
               const observationsBefore = researchObservations.length;
               let raw: ToolResult;
