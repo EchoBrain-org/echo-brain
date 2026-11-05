@@ -691,6 +691,42 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.result.response.parts[0]!.statements).toHaveLength(1);
       expect(rendered.result.response.parts[0]!.statements[0]!.text).toMatch(/^3 tickets/u);
     });
+    describe("lists that overlap: each member a need requests is stated once for that need", () => {
+      const open = { filter: { status: "open" as const }, filter_applied: { status: "applied" as const } };
+      const statementsOf = (rendered: Rendering) => rendered.result.response.parts[0]!.statements.map(statement => statement.text);
+      const reply = (lists: readonly unknown[] = []) => ({ lists, blocks: [], not_found: [] });
+      // L1 holds THERM-1 to THERM-3, and L2, the open ones, THERM-2 to THERM-4: THERM-2 and THERM-3 are in both.
+      const both = (needs: Parameters<typeof listBundle>[3]) => listBundle(4, 0, [list("L1", ids(1, 3)), list("L2", ids(2, 3), open)], needs);
+      it("states a member one need requests of two lists under the first list the need cites, and tells the writer it is requested there", async () => {
+        const run = alone({ bundle: both([WI(["L1", "L2", "E2"])]), layout: 2, replies: [reply()] });
+        const rendered = await run.render("Which open tickets are mine?");
+        expect(rendered.cited).toEqual(["E2"]);
+        expect(statementsOf(rendered)).toEqual([expect.stringMatching(/^1 of the 3 tickets created on October 4, 2026: THERM-2: /u)]);
+        expect(run.prompt(0).lists.map((value: { requested_members?: string[] }) => value.requested_members)).toEqual([["E2"], undefined]);
+      });
+      it("states it where the writer selected it, and adds it nowhere else for that need", async () => {
+        const rendered = await alone({ bundle: both([WI(["L1", "L2", "E2"])]), layout: 2, replies: [reply([{ id: "L2", members: ["E2"] }])] }).render("Which open tickets are mine?");
+        expect(rendered.cited).toEqual(["E2"]);
+        expect(statementsOf(rendered)).toEqual([expect.stringMatching(/^1 of the 3 tickets with status open: THERM-2: /u)]);
+      });
+      it("renders the writer's selections where the writer put them, both of them", async () => {
+        const rendered = await alone({ bundle: both([WI(["L1", "L2", "E2"])]), layout: 2, replies: [reply([{ id: "L1", members: ["E2"] }, { id: "L2", members: ["E2"] }])] }).render("Which open tickets are mine?");
+        expect(statementsOf(rendered)).toEqual([expect.stringMatching(/^1 of the 3 tickets created on October 4, 2026: THERM-2: /u), expect.stringMatching(/^1 of the 3 tickets with status open: THERM-2: /u)]);
+      });
+      it("keeps a statement under each need's list for a member two needs request", async () => {
+        const rendered = await alone({ bundle: both([WI(["L1", "E2"]), WI(["L2", "E2"])]), layout: 2, replies: [reply()] }).render("Which tickets are mine, and which open ones?");
+        expect(statementsOf(rendered)).toEqual([expect.stringMatching(/^1 of the 3 tickets created on October 4, 2026: THERM-2: /u), expect.stringMatching(/^1 of the 3 tickets with status open: THERM-2: /u)]);
+      });
+      it("states a need's two declared lists once each member: the first whole, the second's other members by id", async () => {
+        const rendered = await alone({ bundle: both([WI(["L1", "L2"])]), layout: 2, replies: [reply()] }).render("Which tickets were created or are open?");
+        expect(rendered.cited).toEqual(["E1", "E2", "E3", "E4"]);
+        expect(statementsOf(rendered)).toEqual([expect.stringMatching(/^3 tickets created on October 4, 2026: /u), expect.stringMatching(/^1 of the 3 tickets with status open: THERM-4: /u)]);
+      });
+      it("states both declared lists whole for two needs, whatever they share", async () => {
+        const rendered = await alone({ bundle: both([WI(["L1"]), WI(["L2"])]), layout: 2, replies: [reply()] }).render("Which tickets were created, and which are open?");
+        expect(statementsOf(rendered)).toEqual([expect.stringMatching(/^3 tickets created on October 4, 2026: /u), expect.stringMatching(/^3 tickets with status open: /u)]);
+      });
+    });
     it.each([undefined, 2] as const)("states only the members a need cites by id, never the whole of another list it cites (layout: %s)", async layout => {
       // E2 and E3 are members of L1 only: the need requests them, and L2's ten tickets are no answer.
       const research = listBundle(13, 0, [list("L1", ids(1, 3)), list("L2", ids(4, 10), { filter: { status: "open" }, filter_applied: { status: "applied" } })], [WI(["L1", "L2", "E2", "E3"])]);

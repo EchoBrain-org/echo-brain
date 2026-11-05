@@ -287,7 +287,13 @@ the list answers, and code states nothing of it, unless research requested
 specific members of it, which code still states. Other inventories do not
 enter the answer merely because research read them. Each need retains that
 fallback independently: another need's precise subset of the same inventory
-does not erase an omitted L-only declaration.
+does not erase an omitted L-only declaration. Within one need that cites
+several lists, each member it requests, by id or by declaring its lists, is
+stated once: where the writer selected it in a list the need cites, otherwise
+under the first of those lists, in the need's citation order, that holds it,
+which is also where the writer is told it is requested. Members that different
+needs request keep a statement under each need's list, and the writer's
+selections render where the writer put them.
 
 A v2 table row or points item may declare an optional internal `member` E id
 for the inventory member it presents, independently of its supporting

@@ -58,6 +58,7 @@ import {
   agenticWriterListMemberV1,
   agenticWriterListV1,
   parseAgenticListIdV1,
+  type AgenticListIdV1,
   type AgenticListNounFormsV1,
   type AgenticListSelectionV1,
   type AgenticOpenReadsV1,
@@ -304,15 +305,24 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // of each list it cites, opened bodies mapped back to their rows. Only a need that cites no member declares its lists,
       // each the fallback when the writer selects none of it: a need citing members never brings another list's inventory.
       // Each L-only need keeps its declared-list fallback even when another need selects specific members of that list.
+      // Within one need, a member is requested once: of the first list it cites, in its own order, that holds the member.
+      const listNeeds = needs.flatMap(need => {
+        if (need.kind !== "which_items" || !agenticNeedReadsListV1(need)) return [];
+        const cited = [...new Set(need.evidence)].flatMap(id => listById.has(id as AgenticListIdV1) ? [id as AgenticListIdV1] : [])
+          .map(id => ({ id, members: [...new Set(need.evidence.flatMap(short => membership.in(id, short) ?? []))] }));
+        return [{ cited, declares: cited.every(list => list.members.length === 0) }];
+      });
       const requestedByList = new Map(lists.map(list => [list.id, { members: [] as string[], inventoryFallback: false }]));
-      for (const need of needs) {
-        if (need.kind !== "which_items" || !agenticNeedReadsListV1(need)) continue;
-        const cited = lists.filter(list => need.evidence.includes(list.id)).map(list => ({ id: list.id, members: need.evidence.flatMap(short => membership.in(list.id, short) ?? []) }));
-        const declares = cited.every(list => list.members.length === 0);
-        for (const { id, members } of cited) {
+      for (const need of listNeeds) {
+        const placed = new Set<string>();
+        for (const { id, members } of need.cited) {
           const request = requestedByList.get(id)!;
-          if (declares) request.inventoryFallback = true;
-          for (const member of members) if (!request.members.includes(member)) request.members.push(member);
+          if (need.declares) request.inventoryFallback = true;
+          for (const member of members) {
+            if (placed.has(member)) continue;
+            placed.add(member);
+            if (!request.members.includes(member)) request.members.push(member);
+          }
         }
       }
       const viewOf = (list: (typeof lists)[number], cap?: number) => ({ ...agenticWriterListV1(list, rows.get(list.id)!, stated.includes(list.id), cap),
@@ -582,23 +592,36 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // Bindings never narrow a selection: a member the writer presents through a bound row or point is only not stated
         // again (naming, below). Inventories unrelated to a membership need never become answers merely because research
         // read them.
+        // Within one need, each member it requests, by id or by declaring its lists, is stated once: where the writer
+        // selected it in a list the need cites, otherwise under the first of those lists, in the need's order, that holds
+        // it. Members different needs request keep a statement under each need's list; the writer's selections render
+        // where the writer put them.
+        const selectedIn = (id: AgenticListIdV1) => uses.filter(use => use.id === id)
+          .flatMap(use => use.members ?? agenticListSelectV1(rows.get(id)!, use.where, views.get(id)!.filter.time_zone).map(member => member.id));
+        const added = new Map<string, readonly string[]>();
+        const whole = new Set<string>();
+        for (const need of listNeeds) {
+          const done = new Set(need.cited.flatMap(({ id }) => selectedIn(id)));
+          for (const { id, members } of need.cited) {
+            // The declared list, when the writer selects none of it.
+            const declared = need.declares && !uses.some(use => use.id === id);
+            const wanted = declared ? rows.get(id)!.map(member => member.id) : members;
+            const fresh = wanted.filter(member => !done.has(member));
+            for (const member of fresh) done.add(member);
+            if (declared && fresh.length === wanted.length) whole.add(id);
+            else added.set(id, [...new Set([...(added.get(id) ?? []), ...fresh])]);
+          }
+        }
         const restored = new Set<string>();
         for (const id of stated) {
-          const list = views.get(id)!;
-          const request = requestedByList.get(id)!;
-          const requested = new Set(request.members);
-          const given = uses.filter(use => use.id === id);
-          // The declared list, when the writer selects none of it; it holds every requested member too.
-          if (given.length === 0 && request.inventoryFallback) { uses.push({ id }); restored.add(id); continue; }
-          const selected = new Set(given.flatMap(use => use.members ?? agenticListSelectV1(rows.get(id)!, use.where, list.filter.time_zone).map(member => member.id)));
-          const missing = [...requested].filter(member => !selected.has(member));
-          if (missing.length > 0) {
-            const at = uses.findIndex(use => use.id === id && use.members !== undefined);
-            if (given.length === 0 && missing.length === list.count) uses.push({ id });
-            else if (at < 0) uses.push({ id, members: missing });
-            else uses[at] = { id, members: [...new Set([...uses[at]!.members!, ...missing])] };
-            restored.add(id);
-          }
+          if (whole.has(id)) { uses.push({ id }); restored.add(id); continue; }
+          const missing = added.get(id) ?? [];
+          if (missing.length === 0) continue;
+          const at = uses.findIndex(use => use.id === id && use.members !== undefined);
+          if (!uses.some(use => use.id === id) && missing.length === views.get(id)!.count) uses.push({ id });
+          else if (at < 0) uses.push({ id, members: missing });
+          else uses[at] = { id, members: [...new Set([...uses[at]!.members!, ...missing])] };
+          restored.add(id);
         }
         const usedLists = [...new Set(uses.map(use => use.id).filter(id => writerById.has(id) || restored.has(id)))].map(id => views.get(id)!);
         // A list whose date filter could not test some items (research tool contract v1) supports neither "none" nor "all" of
