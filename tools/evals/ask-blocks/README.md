@@ -951,6 +951,50 @@ it reads as not found.
   nothing-found example is checked by unit tests only; neither evaluation asks
   again, so an Ask again's line is checked by unit tests only.
 
+### Result, 2026-11-05
+
+Before at `d257bd6` and after at `24101b2`, each with no uncommitted change,
+through the founder's Claude account (`claude-sonnet-5-5`): 45 gate trials and
+30 wording trials a side, no failed call and no repair.
+
+| | `e9ccc09` (2026-11-02) | Before | After |
+| --- | --- | --- | --- |
+| 1. Valid (43) | 45 | 45 | 45 |
+| 2. Grounded (43) | 45 | 44 | 45 |
+| 3. Nothing lost (41) | 44 | 45 | 45 |
+| 4. Fit (36) | 39 | 39 | 40 |
+| 5. Stable (12) | 15 | 15 | 15 |
+| Answer block, mean words | 25.0 | 25.7 | 27.2 |
+| The same, without `trap-disagree` | 25.9 | 26.7 | 26.7 |
+| Prose blocks | 24 | 27 | 26 |
+| Output tokens | 19,993 | 22,887 | 21,825 |
+| Wording rules 1, 2 and 3 (27 each) | 30, 30, 30 | 30, 30, 30 | 28, 30, 30 |
+| Wording lead, mean words | 15.2 | 15.3 | 13.9 |
+
+- **Both rules hold,** so the change is proposed: after, `built` passes rules
+  1 to 5, and the wording evaluation its three rules.
+- **Before is the first measurement of today's writer,** PR #400's prompt and
+  schema, and it passes too. Its one trial that is not grounded,
+  `workstreams-status` trial 1, says today is "Oct 30 per the request, or Nov
+  5 per the environment". The Claude account route shows the writer the real
+  date beside the case's own, as the ranking of 2026-11-03 found. Both sides
+  ran on the same day.
+- **The kinds of blocks barely moved:** 2 of the 15 cases' trial-1 answers
+  changed the kinds of their blocks between before and after. `week-events`
+  dropped a last paragraph, and `trap-undated` gave a timeline and a paragraph
+  instead of points. Between the run at `e9ccc09` and before, two runs of
+  nearly one prompt, 5 changed.
+- **One case moved in every trial:** `trap-disagree` ("When is the PVT
+  build?") puts the possible slip in the answer block after. Trial 1 leads
+  "The approved schedule review puts the PVT build on Nov 16, but it may slip
+  to Nov 20.", above a paragraph; trials 2 and 3 are one answer block whose
+  second sentence is "That date may slip: ticket THERM-493 ... says the
+  fixture vendor now expects the test fixtures on Nov 20, so the build may
+  move to Nov 20." Before led with Nov 16 alone, above a paragraph titled
+  "Possible slip", in every trial, as at `e9ccc09`. This case is the whole of
+  the answer block's rise; without it the mean is 26.7 words on both sides.
+- **Fit gains one trial:** `review-multi` gave titled sections once.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model
