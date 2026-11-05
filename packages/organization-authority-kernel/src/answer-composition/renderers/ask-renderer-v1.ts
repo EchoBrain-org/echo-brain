@@ -206,21 +206,32 @@ function privateItem(item: Entry["item"]): boolean {
 
 /** Lowercase, each run of spaces one space: how a member's name is matched in a statement. */
 function folded(value: string): string { return value.toLowerCase().replace(/\s+/gu, " ").trim(); }
+/** A ticket-style key ("THERM-2", "OPS-17"): only such a key names a member short of its whole title. */
+const TICKET_KEY = /^[A-Z][A-Z0-9]+-\d+$/u;
+/** The names a list member goes by as the writer saw it listed: its whole title, and a ticket-style key, its own or the one its title leads with ("THERM-2: Fixture work 2"). */
+function memberNames(member: Pick<AgenticWriterListMemberV1, "title" | "key">): readonly string[] {
+  const leading = /^([^\s:]+): /u.exec(member.title)?.[1];
+  return [member.title, ...[member.key, leading].filter((name): name is string => name !== undefined && TICKET_KEY.test(name))];
+}
+/** Whether `text` holds `name` whole, in any case: never inside a longer word or number ("THERM-12" holds no "THERM-1"). */
+function holdsName(text: string, name: string): boolean {
+  const said = folded(text), wanted = folded(name);
+  if (wanted.length === 0) return false;
+  for (let at = said.indexOf(wanted); at >= 0; at = said.indexOf(wanted, at + 1)) {
+    if (!/[\p{L}\p{N}]/u.test(said[at - 1] ?? " ") && !/[\p{L}\p{N}]/u.test(said[at + wanted.length] ?? " ")) return true;
+  }
+  return false;
+}
 /**
- * Whether a statement's text names a list member as the writer saw it listed: its key, its title, or the key its title
- * leads with ("THERM-2: Fixture work 2"), whole and in any case, never inside a longer word or number ("THERM-12").
+ * Whether a statement's text names list member `member`: it holds one of the member's names whole, and names no other
+ * member of the list (`members`) whose name holds that one. A text naming "Launch checklist" or "Q4: Budget" may be about
+ * that member, not "Launch" or "Q4: Planning", so it names neither of those: the binding is ignored, and code states the
+ * member, never hides it.
  */
-function namesMember(text: string, member: Pick<AgenticWriterListMemberV1, "title" | "key">): boolean {
-  const said = folded(text);
-  const leading = /^([^\s:]*\d[^\s:]*): /u.exec(member.title)?.[1];
-  return [member.key, member.title, leading].some(name => {
-    const wanted = name === undefined ? "" : folded(name);
-    if (wanted.length === 0) return false;
-    for (let at = said.indexOf(wanted); at >= 0; at = said.indexOf(wanted, at + 1)) {
-      if (!/[\p{L}\p{N}]/u.test(said[at - 1] ?? " ") && !/[\p{L}\p{N}]/u.test(said[at + wanted.length] ?? " ")) return true;
-    }
-    return false;
-  });
+function namesMember(text: string, member: AgenticWriterListMemberV1, members: readonly AgenticWriterListMemberV1[]): boolean {
+  const said = memberNames(member).filter(name => holdsName(text, name));
+  return said.length > 0 && !members.some(other => other.id !== member.id
+    && memberNames(other).some(name => holdsName(text, name) && said.some(own => holdsName(name, own))));
 }
 
 /**
@@ -565,8 +576,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const statementKeyOf = (sentence: Laid) => JSON.stringify([sentence.text, [...new Set(sentence.shorts.map(keyOf))].sort(), sentence.shorts.some(short => privateItem(byShort.get(short)!.item))]);
         // Only retained, grounded structured items can present a member. A citation alone is not a declaration. An item
         // presents member M of a list when the member it declares is M (an opened body or section is the member it is part
-        // of), it cites one of M's ids, and its text names M as the writer saw M listed. It may cite other members too, as a
-        // comparison or a dependency does; an item about another member names that one, not M.
+        // of), it cites one of M's ids, and its text names M as the writer saw M listed: its whole title or its ticket-style
+        // key, and no other member whose name holds M's (namesMember). It may cite other members too, as a comparison or a
+        // dependency does; an item about another member names that one, not M.
         // Blocks have no count bound; an oversized whole answer is recomposed without these bindings before its
         // legacy presentation bounds apply, so a dropped item can never suppress the research member floor.
         const presented = new Map<string, Set<string>>();
@@ -579,7 +591,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           for (const list of lists) {
             const member = membership.in(list.id, sentence.member);
             const row = member === undefined ? undefined : rows.get(list.id)!.find(value => value.id === member);
-            if (row === undefined || !(sentence.cites ?? []).some(short => membership.in(list.id, short) === member) || !namesMember(sentence.text, row)) continue;
+            if (row === undefined || !(sentence.cites ?? []).some(short => membership.in(list.id, short) === member) || !namesMember(sentence.text, row, rows.get(list.id)!)) continue;
             const members = presented.get(list.id) ?? new Set<string>();
             members.add(row.id); presented.set(list.id, members);
           }

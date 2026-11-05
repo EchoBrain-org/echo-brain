@@ -306,11 +306,14 @@ A v2 table row or points item may declare an optional internal `member` E id
 for the inventory member it presents, independently of its supporting
 `evidence`, so membership is never guessed from wording alone. Code accepts the declaration for member M only when the declared
 id is M or an opened body or section of M, the retained item cites one of M's
-ids, and its text names M as the writer saw it listed: M's key, its title, or
-the key its title leads with ("THERM-2" of "THERM-2: Fixture work 2"), whole
-and in any case. The item may cite other members too, as a comparison or a
-dependency row does; an item about another member names that member, not M,
-so it cannot hide M. A declaration that fails is ignored. Unknown or
+ids, and its text names M as the writer saw it listed: M's whole title, or a
+ticket-style key (`[A-Z][A-Z0-9]+-\d+`), its own or the one its title leads
+with ("THERM-2" of "THERM-2: Fixture work 2"), as whole words in any case, so
+"THERM-12" never names THERM-1. A text that also names another member of the
+list whose name holds M's ("Launch checklist" beside "Launch") does not name
+M. The item may cite other members too, as a comparison or a dependency row
+does; an item about another member names that member, not M, so it cannot
+hide M. A declaration that fails is ignored, and code states M. Unknown or
 mismatched ids, a citation without a declaration, downgraded rows, and statements
 dropped by grounding or per-statement citation limits do not cover a member.
 Bindings never narrow a list: code states the selection above, less the
