@@ -411,6 +411,44 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
   });
 
+  // The writer's free text says what a where selection would: over a list not read to its end, or one whose filter could
+  // not test every item, it is no more a confirmed absence.
+  it.each(["complete", "truncated", "unverified", "unchecked"] as const)("types a writer's no-match over a which_items need's list only after verified complete coverage: %s", async state => {
+    const extra = state === "truncated" ? { ended: false, truncated: true } : state === "unverified" ? { unverified_end: true }
+      : state === "unchecked" ? { unchecked: { count: 1, dates: ["created" as const] } } : {};
+    const research: AgenticEvidenceBundleV1 = { ...listBundle(25, 0, [list("L1", ids(1, 25), extra)], []),
+      plan: [{ part: 1, question: "Which tickets are blocked?", notes: "", needs: [{ need: "blocked tickets", kind: "which_items", status: "not_found", evidence: ["L1"] }] }] };
+    const rendered = await alone({ bundle: research, replies: [{ lists: [], sentences: [], not_found: ["blocked tickets"] }] }).render("Which tickets are blocked?");
+    expect(rendered.outcome).toBe(state === "complete" ? "not_found" : "partial");
+    if (state === "complete") expect(rendered.result.response.parts[0]!.gap_details).toEqual({ not_found: "Not found: blocked tickets." });
+    else expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
+  });
+
+  // A not_found which_items need that cites no list covers every list research read: one not read to its end leaves the
+  // writer's absence unconfirmed, as it would if the need cited it.
+  it.each(["complete", "truncated"] as const)("types a writer's no-match for a which_items need citing no list only when every list is complete: %s", async state => {
+    const research: AgenticEvidenceBundleV1 = { ...listBundle(25, 0, [list("L1", ids(1, 25), state === "truncated" ? { ended: false, truncated: true } : {})], []),
+      plan: [{ part: 1, question: "Which tickets are blocked?", notes: "", needs: [{ need: "blocked tickets", kind: "which_items", status: "not_found", evidence: [] }] }] };
+    const rendered = await alone({ bundle: research, replies: [{ lists: [], sentences: [], not_found: ["blocked tickets"] }] }).render("Which tickets are blocked?");
+    expect(rendered.outcome).toBe(state === "complete" ? "not_found" : "partial");
+    if (state === "complete") expect(rendered.result.response.parts[0]!.gap_details).toEqual({ not_found: "Not found: blocked tickets." });
+    else expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
+  });
+
+  it("types an unrelated missing fact beside a found need's list that was not read to its end", async () => {
+    // The found need's list reads "at least"; it says nothing about who owns Harbor.
+    const research: AgenticEvidenceBundleV1 = { ...listBundle(25, 0, [list("L1", ids(1, 25), { ended: false, truncated: true })], []),
+      plan: [{ part: 1, question: "Which tickets were created on October 4, and who owns Harbor?", notes: "", needs: [
+        { need: "tickets created on October 4", kind: "which_items", status: "found", evidence: ["L1"] },
+        { need: "the Harbor owner", status: "not_found", evidence: [] },
+      ] }] };
+    const rendered = await alone({ bundle: research, replies: [{ lists: [{ id: "L1" }], sentences: [], not_found: ["the Harbor owner"] }] })
+      .render("Which tickets were created on October 4, and who owns Harbor?");
+    expect(rendered.outcome).toBe("partial");
+    expect(rendered.result.response.parts[0]!.statements[0]!.text).toMatch(/^At least 25 tickets created on October 4, 2026/u);
+    expect(rendered.result.response.parts[0]!.gap_details).toEqual({ not_found: "Not found: the Harbor owner." });
+  });
+
   it("gives the writer final list coverage instead of superseded page truncation", async () => {
     const complete = list("L1", ids(1, 4));
     const incomplete = list("L2", ids(5, 4), { filter: { status: "open" }, filter_applied: { status: "applied" }, ended: false });

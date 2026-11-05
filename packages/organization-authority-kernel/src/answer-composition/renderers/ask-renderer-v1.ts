@@ -766,8 +766,17 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             : { status: "not_found", statements: [], gap: withGaps(gapText ?? (unsupportedAction && needs.length === 0 ? undefined : uncheckedEmpty ? UNCHECKED_EMPTY_GAP : NOT_FOUND_GAP))! };
         }
         const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
-        // A writer's missing text has no per-need provenance: an unchecked declared content list cannot prove absence.
-        const unconfirmedContent = unchecked.length > 0 || checking.some(id => (views.get(id)!.unchecked?.count ?? 0) > 0);
+        // A writer's missing text has no per-need provenance, so incomplete coverage of a list a need still asks about leaves
+        // it unproven, as it does a where selection over such a list: an unchecked declared content list, or, for a which_items
+        // need not found (not_found or open), a list it cites, or every list when it cites none, that was not read to its end
+        // or whose filter could not test every item. A found need's list reads "at least" and never blocks it.
+        const coverageIncomplete = (list: (typeof lists)[number]) => !list.complete || (list.unchecked?.count ?? 0) > 0;
+        const unconfirmedAbsence = unchecked.length > 0 || checking.some(id => (views.get(id)!.unchecked?.count ?? 0) > 0)
+          || needs.some(need => {
+            if (need.kind !== "which_items" || need.status === "found") return false;
+            const cited = need.evidence.flatMap(id => listById.get(parseAgenticListIdV1(id) ?? "L0") ?? []);
+            return (cited.length === 0 ? lists : cited).some(coverageIncomplete);
+          });
         // What the person is told about the filters of every list the answer uses, and of those which_say needs check (W7).
         const filterNotices = [...new Set([...usedLists, ...checking.map(id => views.get(id)!)])].flatMap(list => agenticListFilterNoticeV1(list, nounOf(list).plural) ?? []);
         // A completed answer can retain source coverage as a notice. A stop
@@ -777,12 +786,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           ...(coverageLimited ? [LIMITED_COVERAGE_GAP] : []),
           ...(researchIncomplete && anyEvidence && draft.gap === undefined ? [INCOMPLETE_SEARCH_NOTICE] : []),
         ];
-        const outcome = researchIncomplete ? "partial" as const : !anyEvidence ? (incomplete || unsupportedAction || unconfirmedContent || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
+        const outcome = researchIncomplete ? "partial" as const : !anyEvidence ? (incomplete || unsupportedAction || unconfirmedAbsence || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
         // Preserve reason provenance before diagnostic gap strings are combined. Desktop actions never classify prose.
         // Only finished research confirms the writer's missing text: an interrupted search keeps its retry reason alone.
-        const confirmedMissing = [...(researchIncomplete || unconfirmedContent || selectionNotFound.some(gap => !gap.confirmed) ? [] : reply?.not_found ?? []), ...selectionNotFound.filter(gap => gap.confirmed).map(gap => gap.text)];
+        const confirmedMissing = [...(researchIncomplete || unconfirmedAbsence || selectionNotFound.some(gap => !gap.confirmed) ? [] : reply?.not_found ?? []), ...selectionNotFound.filter(gap => gap.confirmed).map(gap => gap.text)];
         const missing = confirmedMissing.length > 0 ? boundedBytes(cleanLine(`Not found: ${confirmedMissing.join("; ")}.`, 600), 2 * 1024)
-          : outcome === "not_found" || (unsupportedAction && !anyEvidence && !incomplete && !unconfirmedContent && !listGaps.some(gap => gap.partial)
+          : outcome === "not_found" || (unsupportedAction && !anyEvidence && !incomplete && !unconfirmedAbsence && !listGaps.some(gap => gap.partial)
             && needs.length > 0 && needs.every(need => need.status === "not_found")) ? NOT_FOUND_GAP : undefined;
         const gapDetails = { ...(unsupportedAction ? { unsupported_action: true as const } : {}),
           ...(researchIncomplete ? { interrupted: true as const } : {}), ...(missing === undefined ? {} : { not_found: missing }) };
