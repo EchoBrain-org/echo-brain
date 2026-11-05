@@ -7,6 +7,8 @@ export interface AskResearchObservationV1 {
   readonly fingerprint: string;
   /** False for an error, availability notice, truncated search or unfinished list. */
   readonly complete: boolean;
+  /** A completed search's source, or null for a search across the catalog. */
+  readonly source?: string | null;
 }
 
 export interface AskResearchNeedV1 {
