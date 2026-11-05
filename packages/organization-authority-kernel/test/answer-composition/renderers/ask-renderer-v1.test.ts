@@ -391,6 +391,24 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     if (state === "complete") expect(rendered.result.response.parts[0]!.gap_details?.not_found).toContain("Blocked");
     else expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
   });
+  it.each([
+    ["complete", {}], ["truncated", { ended: false, truncated: true }], ["unverified end", { unverified_end: true }], ["notice", { available: false }],
+    ["unshown members", { shown: 40 }], ["untested dates", { unchecked: { count: 2, dates: ["updated" as const] } }],
+  ] as const)("types an explicit none's absence like a no-match selection's, only over a complete list: %s", async (state, extra) => {
+    const rendered = await alone({ bundle: listBundle(50, 0, [list("L1", ids(1, 50), extra)], [WI(["L1"])]), replies: [{ ...use({ id: "L1", members: [] }), not_found: ["tickets assigned to Casey"] }] })
+      .render("Which tickets are assigned to Casey?");
+    expect(rendered.outcome).toBe(state === "complete" ? "not_found" : "partial");
+    if (state === "complete") expect(rendered.result.response.parts[0]!.gap_details).toEqual({ not_found: "Not found: tickets assigned to Casey." });
+    else expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
+  });
+  it("leaves an explicit none's absence untyped over an incomplete list no which_items need cites", async () => {
+    const research = listBundle(50, 1, [list("L1", ids(1, 50), { unverified_end: true })], [C(["E51"])]);
+    const rendered = await alone({ bundle: research, replies: [{ lists: [{ id: "L1", members: [] }], sentences: [{ text: "The review approved the plan.", evidence: ["E51"] }], not_found: ["tickets assigned to Casey"] }] })
+      .render("What did the review approve, and which tickets are Casey's?");
+    expect(rendered.outcome).toBe("partial");
+    expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual(["The review approved the plan."]);
+    expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
+  });
 
   it("keeps a selected no-match over a list read to its end typed beside the retry line when research stopped", async () => {
     const research: AgenticEvidenceBundleV1 = { ...listBundle(2, 0, [list("L1", ids(1, 2))], [WI(["L1"])]), stop: { reason: "budget", completed: false } };
@@ -839,6 +857,27 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.result.response.parts[0]!.statements.some(statement => statement.text.startsWith("1 of the 2") && statement.text.includes(`LIVE-QA-20261104-A Atlas ledger ${selected.slice(1)}`))).toBe(true);
       expect(rendered.cited).toContain(selected);
     });
+    it.each([
+      { name: "a shared leading token (Q4)", titles: ["Q4: Planning", "Q4: Budget"], cells: "Q4: Budget", hidden: "Q4: Planning" },
+      { name: "a title another member's title holds (Launch)", titles: ["Launch", "Launch checklist"], cells: "Launch checklist", hidden: "Launch" },
+    ])("never lets one member's name hide another through $name", async ({ titles, cells, hidden }) => {
+      const docs = titles.map((title, index) => ({ ...document(index + 1), label: title, text: `${title} is on track.` }));
+      const rendered = await alone({ bundle: fullListBundle("documents", docs, ["E1", "E2"]), layout: 2, replies: [{ lists: [], not_found: [], blocks: [{ block: "table", columns: ["Document", "State"], rows: [
+        { member: "E1", evidence: ["E1", "E2"], cells: [cells, "approved"] }, { member: "E2", evidence: ["E2"], cells: [cells, "approved"] },
+      ] }] }] }).render("Which documents are approved?");
+      // The first row reads as the second member's, so its binding is ignored and code states the first member.
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([`1 of the 2 documents created on October 4, 2026: ${hidden}.`, `Document: ${cells}; State: approved.`, `Document: ${cells}; State: approved.`]);
+    });
+    it("tells THERM-1 from THERM-12 by its whole key, beside it or alone", async () => {
+      const tickets = Array.from({ length: 12 }, (_, index) => ticketRow(index + 1, `THERM-${index + 1}: fixture work ${index + 1}.`));
+      const reply = (first: string) => ({ lists: [], not_found: [], blocks: [{ block: "table", columns: ["Ticket", "State"], rows: [
+        { member: "E1", evidence: ["E1", "E12"], cells: [first, "blocked"] }, { member: "E12", evidence: ["E12"], cells: ["THERM-12", "blocking"] },
+      ] }] });
+      const beside = await alone({ bundle: fullListBundle("tickets", tickets, ["E1", "E12"]), layout: 2, replies: [reply("THERM-1, behind THERM-12")] }).render("Which tickets are blocked?");
+      expect(beside.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual(["Ticket: THERM-1, behind THERM-12; State: blocked.", "Ticket: THERM-12; State: blocking."]);
+      const alone12 = await alone({ bundle: fullListBundle("tickets", tickets, ["E1", "E12"]), layout: 2, replies: [reply("THERM-12")] }).render("Which tickets are blocked?");
+      expect(alone12.result.response.parts[0]!.statements[0]!.text).toMatch(/^1 of the 12 tickets created on October 4, 2026: THERM-1: /u);
+    });
     it("lets a comparison row that names its member also cite another member", async () => {
       const rendered = await alone({ bundle: fullListBundle("documents", [document(1), document(2)], ["E1"]), layout: 2, replies: [{ lists: [], not_found: [], blocks: [{
         block: "table", columns: ["Entry", "Versus ledger 2"], rows: [{ member: "E1", evidence: ["E1", "E2"], cells: ["LIVE-QA-20261104-A Atlas ledger 1", "Opened the same day"] }],
@@ -999,6 +1038,18 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.outcome).toBe("not_found");
       expect(rendered.cited).toEqual([]);
       expect(rendered.result.response.parts[0]).toMatchObject({ status: "not_found", statements: [], gap: "Not found: tickets assigned to Casey." });
+    });
+    it.each([
+      { name: "an explicit none", lists: [{ id: "L1", members: [] }], needs: [WI(["L1", "E2"])], says: /^1 of the 50 tickets created on October 4, 2026: THERM-2: / },
+      { name: "an invalid selection", lists: [{ id: "L1", members: ["E999"] }], needs: [WI(["L1", "E2"])], says: /^1 of the 50 tickets created on October 4, 2026: THERM-2: / },
+      { name: "no selection", lists: [], needs: [WI(["L1", "E2"])], says: /^1 of the 50 tickets created on October 4, 2026: THERM-2: / },
+      { name: "no selection of a declared list", lists: [], needs: [WI(["L1"])], says: /^50 tickets created on October 4, 2026: / },
+    ])("leaves the writer's not_found untyped beside the research members code states over $name", async ({ lists, needs, says }) => {
+      const rendered = await alone({ bundle: listBundle(50, 0, [list("L1", ids(1, 50))], needs), layout: 2, replies: [{ lists, blocks: [], not_found: ["tickets assigned to Casey"] }] })
+        .render("Which tickets are assigned to Casey?");
+      const part = rendered.result.response.parts[0]!;
+      expect(part.statements[0]!.text).toMatch(says);
+      expect(part).not.toHaveProperty("gap_details");
     });
     it("still states the members research requested when the writer selects their list explicitly empty beside not_found", async () => {
       const rendered = await alone({ bundle: listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1", "E2"])]), layout: 2, replies: [{
