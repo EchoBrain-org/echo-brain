@@ -409,3 +409,41 @@ answer released without its blocks no longer holds:
   "up to 10", which the layout part replaces. They are the words the block
   evaluation measured the writer with, so they stay until another evaluation
   says otherwise.
+
+## Amended 2026-11-05: the writer prompt without the plain answer
+
+With the plain answer retired, its wording in the writer's prompt only told
+the writer what to set aside. The founder asked for a prompt that says only
+what the block writer needs, measured before it ships. What the amendment
+above leaves as it is ("Left as they are") no longer holds:
+
+- **One reply shape.** The answer prompt opens its rules with "Write a direct
+  answer:", no longer "as a list of sentences", and shows no reply shape of
+  its own. The layout part shows the blocks one, without "With layout" or
+  "instead".
+- **No count of sentences.** The answer prompt no longer says "Usually 2 to 6
+  sentences; use up to 10 when the question asks several things". The layout
+  part still says an answer in blocks has no limit on how many sentences,
+  items, rows, events or facts it holds, and no longer adds that the "up to
+  10" does not apply.
+- **Nothing found, in blocks.** The plain example, a reply with no sentences,
+  cannot be given in blocks: the schema needs one block, and the answer block
+  one sentence. The example is now an answer block whose one sentence cites
+  nothing, which code leaves out (W1), with the requested fact in `not_found`.
+- **Ask again.** Its writer is told to answer in "blocks", no longer in
+  "sentences".
+- **Unchanged:** every other line of the three prompts, the block catalog,
+  both reply schemas and the follow-up guidance.
+- **Measured,** as pre-registered in the
+  [block evaluation](../../tools/evals/ask-blocks/README.md) ("The writer
+  prompt without the plain answer"): one complete gate run of the built
+  writer and one complete wording run before the change and after it, on the
+  same day through the founder's Claude account. After passes both, as
+  before does: the gate's rules 1 to 5 at 45, 45, 45, 40 and 15 of their 45
+  trials and 15 cases, the wording's three rules at 28, 30 and 30 of 30. One
+  case moved in every trial: asked when the PVT build is, the writer now puts
+  the ticket's possible slip in the answer block, where before it gave the
+  slip a paragraph of its own.
+- **Not measured:** no case of either evaluation has nothing that answers it,
+  and neither asks again, so the nothing-found example and the Ask again line
+  are covered by unit tests only.
