@@ -113,6 +113,15 @@ describe("Ask renderer", () => {
     expect(rendered.result.response.parts[0]).toMatchObject({ status: "partial", gap_details: { interrupted: true } });
   });
 
+  it.each([false, true])("types only the retry reason when interrupted research leaves a writer's missing fact (with facts: %s)", async withFacts => {
+    const rendered = await alone({ bundle: { ...records(1), stop: { reason: "budget", completed: false } }, replies: [{ lists: [],
+      sentences: withFacts ? [{ text: "The rule applies.", evidence: ["E1"] }] : [], not_found: ["the Harbor owner"] }] }).render("Who owns Harbor, and what is the rule?");
+    const part = rendered.result.response.parts[0]!;
+    expect(rendered.outcome).toBe("partial");
+    expect(part.gap).toBe("I couldn't complete the search. Please try again. Missing context: the Harbor owner.");
+    expect(part.gap_details).toEqual({ interrupted: true });
+  });
+
   it.each([false, true])("keeps both project leads when both needs are which_items (extra person citation: %s)", async extraPerson => {
     const question = "What are the active projects, and who leads them?";
     const projects: EvidenceDeskItemV2[] = ["Alpha", "Beta"].map((label, index) => ({
@@ -382,6 +391,17 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(rendered.outcome).toBe(state === "complete" ? "not_found" : "partial");
     if (state === "complete") expect(rendered.result.response.parts[0]!.gap_details?.not_found).toContain("Blocked");
     else expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
+  });
+
+  it("keeps a selected no-match over a list read to its end typed beside the retry line when research stopped", async () => {
+    const research: AgenticEvidenceBundleV1 = { ...listBundle(2, 0, [list("L1", ids(1, 2))], [WI(["L1"])]), stop: { reason: "budget", completed: false } };
+    const rendered = await alone({ bundle: research, replies: [{ ...use({ id: "L1", where: { field: "status", value: "Blocked" } }), not_found: ["the Harbor owner"] }] })
+      .render("Which tickets are blocked, and who owns Harbor?");
+    const part = rendered.result.response.parts[0]!;
+    expect(rendered.outcome).toBe("partial");
+    expect(part.gap).toMatch(/^I couldn't complete the search\. Please try again\./u);
+    // Code checked the selection against every row of a list read to its end; only the writer's own absence waits for research.
+    expect(part.gap_details).toEqual({ interrupted: true, not_found: "Not found: tickets created on October 4, 2026 that have status Blocked." });
   });
 
   it("withholds writer absence for a declared text list whose members were not all checked", async () => {
