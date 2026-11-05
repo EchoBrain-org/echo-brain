@@ -494,7 +494,9 @@ credential, refreshing first if it would expire during the request. Document
 transfers also reserve time for metadata and local preparation. This changes
 local coordination, not Authority access policy or credential-revocation rules.
 
-Signed-out reads reject before creating operation files. Cancellation releases
+Signed-out reads reject before creating operation files. A refresh that waited
+while the person signed out, or while another refresh ended the session,
+releases its claim and reports the session ended. Cancellation releases
 a waiting refresh intent before it claims a token. Once claimed, the existing
 refresh operation finishes its single-use transition; a cancelled Ask is then
 withheld rather than abandoning or replaying the submitted credential.

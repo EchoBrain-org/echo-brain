@@ -500,7 +500,22 @@ export class PersonSessionStore {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') return undefined;
       throw error;
     }
-    renameSync(this.paths.live, this.paths.refreshing);
+    try {
+      renameSync(this.paths.live, this.paths.refreshing);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      // Signed out, or another refresh ended the session, while this one waited
+      // its turn: nothing is left to refresh, and the claim must not outlive it.
+      try {
+        if (readPrivateFile(this.paths.refresh_claim) === `${claimId}\n` && removeIfPresent(this.paths.refresh_claim)) {
+          fsyncDirectory(this.paths.directory);
+        }
+      } catch {
+        // Already cleaned up by a sign-in.
+      }
+      const ended = this.readEnded();
+      throw new PersonClientSessionUnavailableError(undefined, ended === null ? undefined : { code: ended.reason });
+    }
     fsyncDirectory(this.paths.directory);
     return Object.freeze({
       claim_id: claimId,

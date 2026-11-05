@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { setImmediate, setTimeout } from 'node:timers/promises';
 import { expect, it, vi } from 'vitest';
 import { PersonClient } from '../../src/product/person-client/client.js';
-import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
+import { PersonClientSessionUnavailableError, PersonSessionStore } from '../../src/product/person-client/session-store.js';
 import { signedInHome } from './signed-in-home.js';
 import { PersonSessionOperations } from '../../src/product/person-client/session-operations.js';
 
@@ -331,4 +331,66 @@ it('returns a read\'s result after signing in again cleared its entry', async ()
     release();
     await expect(read).resolves.toBe('result');
   } finally { release(); await Promise.allSettled([read]); rmSync(home, { recursive: true, force: true }); }
+});
+
+it('ends a refresh queued behind one the Authority refused as signed out, leaving no claim', async () => {
+  const now = '2026-11-05T07:00:00.000Z';
+  const home = signedInHome({ prefix: 'echo-refresh-queued-refused-', now });
+  const store = new PersonSessionStore(home);
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let sent!: () => void;
+  const firstSent = new Promise<void>(resolve => { sent = resolve; });
+  let refreshes = 0;
+  const fetch: typeof globalThis.fetch = async input => {
+    expect(new URL(String(input)).pathname).toBe('/v2/session/refresh');
+    refreshes += 1; sent(); await held;
+    return Response.json({ error: { code: 'unauthorized', message: 'person authentication failed' } }, { status: 401 });
+  };
+  const first = new PersonClient({ home_directory: home, now: () => now, fetch }).refresh();
+  await firstSent;
+  const second = new PersonClient({ home_directory: home, now: () => now, fetch }).refresh();
+  const settled = Promise.allSettled([first, second]);
+  try {
+    await setTimeout(100); // The second waits for the first's single-use claim.
+    release();
+    const [, queued] = await settled;
+    const reason = queued.status === 'rejected' ? queued.reason : undefined;
+    expect(reason).toBeInstanceOf(PersonClientSessionUnavailableError);
+    expect((reason as PersonClientSessionUnavailableError).code).toBe('sign_in_required');
+    expect(refreshes).toBe(1);
+    expect([store.paths.live, store.paths.refreshing, store.paths.refresh_claim].filter(existsSync)).toEqual([]);
+  } finally { release(); await settled; rmSync(home, { recursive: true, force: true }); }
+});
+
+it('ends a refresh that waited for a read while the person signed out as signed out, leaving no claim', async () => {
+  const now = '2026-11-05T07:00:00.000Z';
+  const home = signedInHome({ prefix: 'echo-refresh-queued-logout-', now });
+  const store = new PersonSessionStore(home);
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void;
+  const reading = new Promise<void>(resolve => { started = resolve; });
+  const fetch: typeof globalThis.fetch = async input => {
+    const path = new URL(String(input)).pathname;
+    if (path === '/v2/session/revocations') return new Response(null, { status: 204 });
+    expect(path).toBe('/v1/person/records');
+    started(); await held;
+    return records();
+  };
+  const read = new PersonClient({ home_directory: home, now: () => now, fetch }).records();
+  await reading;
+  const refresh = new PersonClient({ home_directory: home, now: () => now, fetch }).refresh();
+  const settled = Promise.allSettled([read, refresh]);
+  try {
+    await setTimeout(50); // The refresh waits for the read.
+    await new PersonClient({ home_directory: home, now: () => now, fetch }).logout();
+    release();
+    const [, waited] = await settled;
+    const reason = waited.status === 'rejected' ? waited.reason : undefined;
+    expect(reason).toBeInstanceOf(PersonClientSessionUnavailableError);
+    expect([store.paths.live, store.paths.refreshing, store.paths.refresh_claim].filter(existsSync)).toEqual([]);
+    await expect(new PersonClient({ home_directory: home, now: () => now, fetch }).refresh())
+      .rejects.toThrow('Person session is unavailable; sign in again');
+  } finally { release(); await settled; rmSync(home, { recursive: true, force: true }); }
 });
