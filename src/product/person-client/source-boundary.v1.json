@@ -182,6 +182,7 @@
       "name": "person-session-operations-coordinate-local-requests",
       "from": "src/product/person-client/session-operations.ts",
       "allowed_imports": [
+        "src/product/person-client/authority-client.ts",
         "src/product/person-client/session-store.ts"
       ],
       "allowed_workspace_packages": [],

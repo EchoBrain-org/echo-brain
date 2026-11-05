@@ -6,6 +6,7 @@ import { once } from 'node:events';
 import { join } from 'node:path';
 import { setImmediate, setTimeout } from 'node:timers/promises';
 import { expect, it, vi } from 'vitest';
+import type { PersonContextMutationError } from '../../src/product/person-client/authority-client.js';
 import { PersonClient } from '../../src/product/person-client/client.js';
 import { PersonClientSessionUnavailableError, PersonSessionStore } from '../../src/product/person-client/session-store.js';
 import { signedInHome } from './signed-in-home.js';
@@ -393,4 +394,26 @@ it('ends a refresh that waited for a read while the person signed out as signed 
     await expect(new PersonClient({ home_directory: home, now: () => now, fetch }).refresh())
       .rejects.toThrow('Person session is unavailable; sign in again');
   } finally { release(); await settled; rmSync(home, { recursive: true, force: true }); }
+});
+
+it('reports a wait that runs out as ECHO unavailable, not as a sign-in requirement', async () => {
+  const now = '2026-11-05T07:00:00.000Z';
+  const home = signedInHome({ prefix: 'echo-refresh-wait-deadline-', now });
+  const directory = new PersonSessionStore(home).paths.directory;
+  let sent = false;
+  const client = new PersonClient({ home_directory: home, now: () => now, fetch: async () => { sent = true; return records(); } });
+  try {
+    await new PersonSessionOperations(directory).read(async () => undefined); // Prepare the private directory.
+    // Another live process's refresh, still pending when this request's wait runs out.
+    writeFileSync(join(directory, 'operations', `refresh-${process.pid}-${randomUUID()}`), '', { mode: 0o600 });
+    const create = client.createProject({ schema_version: 1, kind: 'echo-project-create-v1', request_id: randomUUID(), name: 'Waiting project' });
+    const failed = create.then(() => undefined, (error: unknown) => error as PersonContextMutationError);
+    await setTimeout(50);
+    const realNow = Date.now.bind(Date);
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 11.5 * 60_000);
+    const error = await failed;
+    expect({ name: error?.name, code: error?.code, outcome: error?.mutation_outcome })
+      .toEqual({ name: 'PersonContextMutationError', code: 'unavailable', outcome: 'not_submitted' });
+    expect(sent).toBe(false);
+  } finally { vi.restoreAllMocks(); rmSync(home, { recursive: true, force: true }); }
 });

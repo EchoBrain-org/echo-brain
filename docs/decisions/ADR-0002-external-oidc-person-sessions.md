@@ -487,7 +487,9 @@ parallel. An entry whose process is gone, including one whose process ID now
 belongs to another user, or that is older than any operation runs, is removed
 by its unique path. Files no client wrote are ignored. Unsafe entries fail
 closed until signing in again or signing out, which clears every entry.
-Waiting is bounded and queued reads are cancellable.
+Waiting is bounded and queued reads are cancellable. A wait that runs out
+reports ECHO unavailable, to try again, never a sign-in requirement: the
+session still stands.
 An interrupted token claim still requires sign-in; an ambiguous refresh is
 never replayed. New requests reserve their transport deadline before using a
 credential, refreshing first if it would expire during the request. Document

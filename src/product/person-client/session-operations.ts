@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { closeSync, lstatSync, openSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
+import { PersonAuthorityClientError } from './authority-client.js';
 import { ensurePrivateDirectory, PERSON_SESSION_OPERATIONS_DIRECTORY, PersonClientSessionUnavailableError } from './session-store.js';
 
 // Files contain no credentials. Their immutable, unique names identify a local
@@ -76,7 +77,11 @@ export class PersonSessionOperations {
 
   private async wait(deadline: number, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
-    if (Date.now() >= deadline) throw new PersonClientSessionUnavailableError('Person session operations did not finish before refresh; retry when the other operation ends');
+    // The session still stands while another operation holds it: ECHO is busy, and nothing was sent.
+    if (Date.now() >= deadline) {
+      throw new PersonAuthorityClientError('unavailable', null,
+        'Person session operations did not finish before refresh; retry when the other operation ends', { unsent: true });
+    }
     await setTimeout(WAIT_MS, undefined, { signal });
   }
 
