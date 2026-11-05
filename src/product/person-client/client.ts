@@ -1,3 +1,4 @@
+import { PERSON_DOCUMENT_TRANSFER_DEADLINE_MS } from '@echo-brain/organization-api';
 import type { PersonAnswerPreviousV1, PersonDiagnosticCaptureIdV1, PersonDiagnosticsRequestV1, PersonDiagnosticsResultsV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentIdV1, validatePersonDocumentSearchV2, type PersonDocumentSearchV2 } from '@echo-brain/organization-api';
@@ -29,6 +30,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { isCanonicalPersonEmail, isExpectedPersonEmail, validateOrganizationPersonSession, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
 import {
   PersonAuthorityClient,
+  DEFAULT_TIMEOUT_MS, ASK_TIMEOUT_MS, ASK_CHECK_TIMEOUT_MS,
   PersonAuthorityClientError,
   PersonContextMutationError,
   unknownContextMutation,
@@ -55,6 +57,7 @@ import {
   preflightPersonOnboardingInvitationOutput,
   writePersonOnboardingInvitation,
 } from "./onboarding-invitation.js";
+import { PersonSessionOperations } from './session-operations.js';
 
 interface PersonOidcLoopbackHandoff {
   readonly url: string;
@@ -253,12 +256,14 @@ function assertRefreshIdentity(
 
 export class PersonClient {
   private readonly store: PersonSessionStore;
+  private readonly operations: PersonSessionOperations;
   private readonly now: () => string;
   private readonly randomBytes: (size: number) => Uint8Array;
   private readonly randomUuid: () => string;
 
   constructor(private readonly options: PersonClientOptions) {
     this.store = new PersonSessionStore(options.home_directory);
+    this.operations = new PersonSessionOperations(this.store.paths.directory);
     this.now = options.now ?? (() => new Date().toISOString());
     this.randomBytes = options.random_bytes ?? randomBytes;
     this.randomUuid = options.random_uuid ?? randomUUID;
@@ -348,56 +353,67 @@ export class PersonClient {
   }
 
   async refresh(): Promise<PersonClientSessionSummary> {
-    const claimed = this.store.claimRefresh();
-    let next: OrganizationPersonSessionV2;
-    try {
-      if (
-        this.currentTime() >=
-        Date.parse(claimed.stored.session.hard_reauthentication_at)
-      ) {
-        throw new PersonClientSessionUnavailableError(
-          "Person session requires authentication again",
-          { code: "reauthentication_required" },
+    return this.operations.refresh(() => this.store.tryClaimRefresh(), async claimed => {
+      let next: OrganizationPersonSessionV2;
+      try {
+        if (
+          this.currentTime() >=
+          Date.parse(claimed.stored.session.hard_reauthentication_at)
+        ) {
+          throw new PersonClientSessionUnavailableError(
+            "Person session requires authentication again",
+            { code: "reauthentication_required" },
+          );
+        }
+        next = await this.authority(claimed.stored.authority_origin).refresh(
+          claimed.stored.session.refresh_token,
         );
+        assertRefreshIdentity(claimed.stored.session, next);
+      } catch (error) {
+        // Only a request that never left this machine (no connection at all,
+        // as when the network is not up yet) puts the claimed session back: the
+        // refresh token is certainly unused. Any other failure is ambiguous or
+        // final, and ADR-0002 never replays an ambiguous refresh: the claim is
+        // released and the store is left plainly signed out.
+        const refused =
+          error instanceof PersonAuthorityClientError &&
+          ((error.code === "unauthorized" && error.status === 401) ||
+            (error.code === "invalid_request" && error.status === 400));
+        const unsent = error instanceof PersonAuthorityClientError && error.unsent;
+        // The weekly sign-in passed, or the Authority refused or answered for
+        // another session: status says why until someone signs in or out.
+        const ended = refused ? "sign_in_required"
+          : error instanceof PersonClientSessionUnavailableError ? error.code : undefined;
+        this.store.releaseRefresh(claimed, unsent, ended);
+        if (refused) {
+          throw new PersonClientSessionUnavailableError(
+            "Person session refresh was refused; sign in again",
+            { cause: error, code: "sign_in_required" },
+          );
+        }
+        throw error;
       }
-      next = await this.authority(claimed.stored.authority_origin).refresh(
-        claimed.stored.session.refresh_token,
-      );
-      assertRefreshIdentity(claimed.stored.session, next);
-    } catch (error) {
-      // Only a request that never left this machine (no connection at all,
-      // as when the network is not up yet) puts the claimed session back: the
-      // refresh token is certainly unused. Any other failure is ambiguous or
-      // final, and ADR-0002 never replays an ambiguous refresh: the claim is
-      // released and the store is left plainly signed out.
-      const refused =
-        error instanceof PersonAuthorityClientError &&
-        ((error.code === "unauthorized" && error.status === 401) ||
-          (error.code === "invalid_request" && error.status === 400));
-      const unsent = error instanceof PersonAuthorityClientError && error.unsent;
-      // The weekly sign-in passed, or the Authority refused or answered for
-      // another session: status says why until someone signs in or out.
-      const ended = refused ? "sign_in_required"
-        : error instanceof PersonClientSessionUnavailableError ? error.code : undefined;
-      this.store.releaseRefresh(claimed, unsent, ended);
-      if (refused) {
-        throw new PersonClientSessionUnavailableError(
-          "Person session refresh was refused; sign in again",
-          { cause: error, code: "sign_in_required" },
-        );
-      }
-      throw error;
-    }
-    return summary(this.store.completeRefresh(claimed, next));
+      return summary(this.store.completeRefresh(claimed, next));
+    });
   }
 
-  private async accessSession(): Promise<StoredPersonClientSessionV1> {
-    const stored = this.store.read();
-    if (this.currentTime() < Date.parse(stored.session.access_expires_at)) {
-      return stored;
+  /** Keep the credential alive until the entire request (including its stream) ends. */
+  private async withSession<T>(operation: (stored: StoredPersonClientSessionV1) => Promise<T>, signal?: AbortSignal, headroomMs = DEFAULT_TIMEOUT_MS): Promise<T> {
+    let refreshed = false;
+    while (true) {
+      const result = await this.operations.read(async () => {
+        const stored = this.store.read();
+        if (Date.parse(stored.session.access_expires_at) - this.currentTime() < headroomMs) {
+          if (refreshed) throw new PersonClientSessionUnavailableError('Refreshed Person session is too short for this request');
+          return { kind: 'refresh' as const };
+        }
+        return { kind: 'result' as const, value: await operation(stored) };
+      }, signal);
+      if (result.kind === 'result') return result.value;
+      // Never wait for a refresh while holding our own read lease.
+      await this.refresh();
+      refreshed = true;
     }
-    await this.refresh();
-    return this.store.read();
   }
 
   private assertCurrentSession(stored: StoredPersonClientSessionV1): void {
@@ -406,21 +422,24 @@ export class PersonClient {
     }
   }
 
-  private async employeeManagementSession(): Promise<StoredPersonClientSessionV1> {
-    let stored: StoredPersonClientSessionV1;
+  private async withEmployeeSession<T>(operation: (stored: StoredPersonClientSessionV1) => Promise<T>): Promise<T> {
+    let started = false;
     try {
-      stored = await this.accessSession();
+      return await this.withSession(async stored => {
+        if (stored.session.membership_type !== "owner") {
+          throw new EmployeeMutationError(
+            "owner_access_required",
+            "not_submitted",
+            "Employee management requires owner access",
+          );
+        }
+        started = true;
+        return operation(stored);
+      });
     } catch (error) {
-      throw employeeSessionFailure(error);
+      if (!started) throw employeeSessionFailure(error);
+      throw error;
     }
-    if (stored.session.membership_type !== "owner") {
-      throw new EmployeeMutationError(
-        "owner_access_required",
-        "not_submitted",
-        "Employee management requires owner access",
-      );
-    }
-    return stored;
   }
 
   async logout(): Promise<void> {
@@ -451,33 +470,37 @@ export class PersonClient {
     operation: (authority: PersonAuthorityClient, accessToken: string) => Promise<T>,
     mutation?: { request_id: string; upload?: boolean },
   ): Promise<T> {
-    let stored: StoredPersonClientSessionV1;
+    let started = false;
     try {
-      stored = await this.accessSession();
+      return await this.withSession(async stored => {
+        started = true;
+        const result = await operation(this.authority(stored.authority_origin), stored.session.access_token);
+        try { this.assertCurrentSession(stored); }
+        catch {
+          if (mutation !== undefined) throw unknownContextMutation(mutation.request_id, mutation.upload === true, null);
+          throw new PersonAuthorityClientError('stale_access_state', null, 'Person account changed during the request');
+        }
+        return result;
+      });
     } catch (error) {
-      if (mutation === undefined) throw error;
+      if (started || mutation === undefined) throw error;
       throw new PersonContextMutationError(
         error instanceof PersonClientSessionUnavailableError ? 'sign_in_required' : 'unavailable',
         error instanceof PersonAuthorityClientError ? error.status : null,
         'Person request could not start. Retain the same request ID and draft.', mutation.request_id, 'not_submitted');
     }
-    const result = await operation(this.authority(stored.authority_origin), stored.session.access_token);
-    try {
-      this.assertCurrentSession(stored);
-    } catch {
-      if (mutation !== undefined) throw unknownContextMutation(mutation.request_id, mutation.upload === true, null);
-      throw new PersonAuthorityClientError('stale_access_state', null, 'Person account changed during the request');
-    }
-    return result;
   }
 
   private async withReadSession<T>(
     operation: (authority: PersonAuthorityClient, accessToken: string) => Promise<T>,
+    signal?: AbortSignal,
+    headroomMs = DEFAULT_TIMEOUT_MS,
   ): Promise<T> {
-    const stored = await this.accessSession();
-    const result = await operation(this.authority(stored.authority_origin), stored.session.access_token);
-    this.assertCurrentSession(stored);
-    return result;
+    return this.withSession(async stored => {
+      const result = await operation(this.authority(stored.authority_origin), stored.session.access_token);
+      this.assertCurrentSession(stored);
+      return result;
+    }, signal, headroomMs);
   }
 
   private documentBinding(stored: StoredPersonClientSessionV1): string {
@@ -508,16 +531,18 @@ export class PersonClient {
 
   async uploadDocumentV2(input: DocumentFileUploadV2) {
     validatePersonUpdateRequestId(input.request_id);
-    const stored = await this.accessSession();
-    this.assertDocumentAccount(stored, input.request_id, input);
-    return this.submitDocumentSnapshot(stored, prepareDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), input));
+    return this.withSession(async stored => {
+      this.assertDocumentAccount(stored, input.request_id, input);
+      return this.submitDocumentSnapshot(stored, prepareDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), input));
+    }, undefined, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS + 2 * DEFAULT_TIMEOUT_MS);
   }
 
   async retryDocument(requestId: string, expected: { expected_authority?: string; expected_membership_id?: string } = {}) {
     validatePersonUpdateRequestId(requestId);
-    const stored = await this.accessSession();
-    this.assertDocumentAccount(stored, requestId, expected);
-    return this.submitDocumentSnapshot(stored, resumeDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), requestId));
+    return this.withSession(async stored => {
+      this.assertDocumentAccount(stored, requestId, expected);
+      return this.submitDocumentSnapshot(stored, resumeDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), requestId));
+    }, undefined, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS + 2 * DEFAULT_TIMEOUT_MS);
   }
 
   pendingDocuments() {
@@ -541,21 +566,23 @@ export class PersonClient {
   async changeDocumentAssociation(value: PersonDocumentAssociateV1 | PersonDocumentDissociateV1,
     expected: { expected_authority?: string; expected_membership_id?: string } = {}) {
     const request = value.kind === 'echo-person-document-associate-v1' ? validatePersonDocumentAssociateV1(value) : validatePersonDocumentDissociateV1(value);
-    const stored = await this.accessSession();
-    this.assertDocumentAccount(stored, request.request_id, expected);
-    const result = await this.authority(stored.authority_origin).changeDocumentAssociation(stored.session.access_token, request);
-    try { this.assertCurrentSession(stored); } catch { throw unknownContextMutation(request.request_id, false, null); }
-    return result;
+    return this.withSession(async stored => {
+      this.assertDocumentAccount(stored, request.request_id, expected);
+      const result = await this.authority(stored.authority_origin).changeDocumentAssociation(stored.session.access_token, request);
+      try { this.assertCurrentSession(stored); } catch { throw unknownContextMutation(request.request_id, false, null); }
+      return result;
+    });
   }
 
   async documentStatusV2(requestId: string) {
     validatePersonUpdateRequestId(requestId);
-    const stored = await this.accessSession();
-    const receipt = await this.authority(stored.authority_origin).documentStatusV2(stored.session.access_token, requestId);
-    this.assertCurrentSession(stored);
-    try { reconcileDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), receipt); }
-    catch { /* Status remains useful even if local snapshot cleanup is unavailable. */ }
-    return receipt;
+    return this.withSession(async stored => {
+      const receipt = await this.authority(stored.authority_origin).documentStatusV2(stored.session.access_token, requestId);
+      this.assertCurrentSession(stored);
+      try { reconcileDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), receipt); }
+      catch { /* Status remains useful even if local snapshot cleanup is unavailable. */ }
+      return receipt;
+    });
   }
 
   async searchDocumentsV2(input: PersonDocumentSearchV2) {
@@ -565,13 +592,14 @@ export class PersonClient {
 
   async downloadDocumentV2(documentId: string, outputPath: string, projectId?: string) {
     validatePersonDocumentIdV1(documentId);
-    const stored = await this.accessSession();
-    const authority = this.authority(stored.authority_origin);
-    const metadata = await authority.documentMetadataV2(stored.session.access_token, documentId, projectId);
-    this.assertCurrentSession(stored);
-    const response = await authority.documentOriginalV2(stored.session.access_token, documentId, projectId);
-    const output = await saveDocumentDownload(response, outputPath, metadata, () => this.assertCurrentSession(stored));
-    return { document_id: documentId, output_path: output, content_length: metadata.content_length, sha256: metadata.sha256 };
+    return this.withSession(async stored => {
+      const authority = this.authority(stored.authority_origin);
+      const metadata = await authority.documentMetadataV2(stored.session.access_token, documentId, projectId);
+      this.assertCurrentSession(stored);
+      const response = await authority.documentOriginalV2(stored.session.access_token, documentId, projectId);
+      const output = await saveDocumentDownload(response, outputPath, metadata, () => this.assertCurrentSession(stored));
+      return { document_id: documentId, output_path: output, content_length: metadata.content_length, sha256: metadata.sha256 };
+    }, undefined, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS + 2 * DEFAULT_TIMEOUT_MS);
   }
 
   async projectsV2(value: ProjectPageRequestV2 = {}) {
@@ -674,19 +702,20 @@ export class PersonClient {
     query?: string,
     recordSha256?: `sha256:${string}`,
   ): Promise<PersonRecordListV1 | PersonRecordSearchV2> {
-    const stored = await this.accessSession();
-    if (query !== undefined) {
-      return await this.authority(stored.authority_origin).searchRecords(
+    return this.withSession(async stored => {
+      if (query !== undefined) {
+        return await this.authority(stored.authority_origin).searchRecords(
+          stored.session.access_token,
+          query,
+          limit,
+        );
+      }
+      return await this.authority(stored.authority_origin).records(
         stored.session.access_token,
-        query,
         limit,
+        recordSha256,
       );
-    }
-    return await this.authority(stored.authority_origin).records(
-      stored.session.access_token,
-      limit,
-      recordSha256,
-    );
+    });
   }
 
   /**
@@ -699,7 +728,7 @@ export class PersonClient {
   async askWithLiveSources(question: string, scope?: ProjectIdV1, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1,
     previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
     validateAskInput(question, scope);
-    return this.withReadSession((authority, token) => authority.askV7(token, question, scope, signal, captureId, previous));
+    return this.withReadSession((authority, token) => authority.askV7(token, question, scope, signal, captureId, previous), signal, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
   }
 
   /**
@@ -721,58 +750,59 @@ export class PersonClient {
     onProgress: PersonAskProgressSinkV3, expected: { readonly expected_authority?: string; readonly expected_membership_id?: string } = {},
     previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
     validateAskInput(question, scope);
-    const stored = await this.accessSession();
-    if ((expected.expected_authority !== undefined || expected.expected_membership_id !== undefined) &&
-        (expected.expected_authority !== stored.authority_origin || expected.expected_membership_id !== stored.session.membership_id)) {
-      throw new Error("Person tool operation did not match the current account");
-    }
-    const authority = this.authority(stored.authority_origin);
-    const token = stored.session.access_token;
-    const forward: PersonAskProgressSinkV3 = event => {
-      let current: StoredPersonClientSessionV1;
-      try { current = this.store.read(); } catch (error) {
-        if (error instanceof PersonClientSessionUnavailableError) return;
-        throw error;
+    return this.withSession(async stored => {
+      if ((expected.expected_authority !== undefined || expected.expected_membership_id !== undefined) &&
+          (expected.expected_authority !== stored.authority_origin || expected.expected_membership_id !== stored.session.membership_id)) {
+        throw new Error("Person tool operation did not match the current account");
       }
-      if (!sameAccount(current, stored)) throw new Error("Person tool operation did not match the current account");
-      onProgress(event);
-    };
-    const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous);
-    this.assertCurrentSession(stored);
-    return answer;
+      const authority = this.authority(stored.authority_origin);
+      const token = stored.session.access_token;
+      const forward: PersonAskProgressSinkV3 = event => {
+        let current: StoredPersonClientSessionV1;
+        try { current = this.store.read(); } catch (error) {
+          if (error instanceof PersonClientSessionUnavailableError) return;
+          throw error;
+        }
+        if (!sameAccount(current, stored)) throw new Error("Person tool operation did not match the current account");
+        onProgress(event);
+      };
+      const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous);
+      this.assertCurrentSession(stored);
+      return answer;
+    }, signal, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
   }
 
   /** Prepare before starting work so the capture remains readable even if the product response is lost. */
   async diagnostics<K extends PersonDiagnosticsRequestV1['operation']>(value: Extract<PersonDiagnosticsRequestV1, { readonly operation: K }>, signal?: AbortSignal): Promise<PersonDiagnosticsResultsV1[K]> {
-    return this.withReadSession((authority, token) => authority.diagnostics(token, value, signal));
+    return this.withReadSession((authority, token) => authority.diagnostics(token, value, signal), signal, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
   }
 
   /** Staging-only research evaluation (research loop evaluation v1); no CLI command exposes it. */
   async startResearchEval(value: PersonResearchEvalStartRequestV1, signal?: AbortSignal): Promise<PersonResearchEvalStartReceiptV1> {
-    return this.withReadSession((authority, token) => authority.startResearchEval(token, value, signal));
+    return this.withReadSession((authority, token) => authority.startResearchEval(token, value, signal), signal, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
   }
 
   async readResearchEval(runId: string, signal?: AbortSignal): Promise<PersonResearchEvalReadResponseV1> {
-    return this.withReadSession((authority, token) => authority.readResearchEval(token, runId, signal));
+    return this.withReadSession((authority, token) => authority.readResearchEval(token, runId, signal), signal, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
   }
 
   /** What moved in this person's own view, one fingerprint per area (ADR-0036). */
   async changes(signal?: AbortSignal): Promise<PersonChangesV1> {
-    return this.withReadSession((authority, token) => authority.changes(token, signal));
+    return this.withReadSession((authority, token) => authority.changes(token, signal), signal);
   }
 
   /** When each of this person's active projects last had news from someone else (Ask timeline v1, C2). */
   async projectActivity(signal?: AbortSignal): Promise<PersonProjectActivityV1> {
-    return this.withReadSession((authority, token) => authority.projectActivity(token, signal));
+    return this.withReadSession((authority, token) => authority.projectActivity(token, signal), signal);
   }
 
   async runs<K extends PersonRunsRequestV1['operation']>(value: Extract<PersonRunsRequestV1, { readonly operation: K }>, signal?: AbortSignal): Promise<PersonRunsResultsV1[K]> {
-    return this.withReadSession((authority, token) => authority.runs(token, value, signal));
+    return this.withReadSession((authority, token) => authority.runs(token, value, signal), signal);
   }
 
   /** Whether each source old answers cited is the same, changed, unreadable or unknown now (ADR-0047). */
   async askCheck(value: PersonAskCheckRequestV1, signal?: AbortSignal): Promise<PersonAskCheckV1> {
-    return this.withReadSession((authority, token) => authority.askCheck(token, value, signal));
+    return this.withReadSession((authority, token) => authority.askCheck(token, value, signal), signal, ASK_CHECK_TIMEOUT_MS);
   }
 
   /**
@@ -780,58 +810,61 @@ export class PersonClient {
    * evaluation finds approved meetings' record citations with it (tools/evals/research-loop/lib/bindings.mjs).
    */
   async evidenceSearch(value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    return this.withReadSession((authority, token) => authority.evidenceSearch(token, value, signal));
+    return this.withReadSession((authority, token) => authority.evidenceSearch(token, value, signal), signal);
   }
 
   /** One model-free list page under a fresh authenticated read (ADR-0024). */
   async list(value: PersonListRequestV1, signal?: AbortSignal): Promise<PersonListV1> {
     const request = validatePersonListRequestV1(value);
-    return this.withReadSession((authority, token) => authority.list(token, request, signal));
+    return this.withReadSession((authority, token) => authority.list(token, request, signal), signal);
   }
 
   /** Opens one ref from a list row or an Ask citation under the caller's current access. */
   async open(value: PersonOpenRequestV1, signal?: AbortSignal): Promise<PersonOpenV1> {
     const request = validatePersonOpenRequestV1(value);
-    return this.withReadSession((authority, token) => authority.open(token, request, signal));
+    return this.withReadSession((authority, token) => authority.open(token, request, signal), signal);
   }
 
   async askSourceEvidence(value: PersonSourceEvidenceReadRequestV1): Promise<PersonAskSourceEvidenceV1> {
     const request = validatePersonSourceEvidenceReadRequestV1(value);
-    return this.withReadSession((authority, token) => authority.askSourceEvidence(token, request));
+    return this.withReadSession((authority, token) => authority.askSourceEvidence(token, request), undefined, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
   }
 
   async withToolSession<T>(operation: (session: PersonToolSessionV1) => Promise<T>, signal?: AbortSignal): Promise<T> {
     signal?.throwIfAborted();
-    const stored = await this.accessSession();
-    signal?.throwIfAborted();
-    const result = await operation(Object.freeze({
-      identity: Object.freeze({ organization_id: stored.session.organization_id, membership_id: stored.session.membership_id }),
-      transport: this.authority(stored.authority_origin).toolTransport(stored.session.access_token, signal),
-      request_id: (prefix: string) => this.requestId(prefix),
-      random_bytes: (size: number) => this.randomBytes(size),
-    }));
-    signal?.throwIfAborted();
-    this.assertCurrentSession(stored);
-    return result;
+    return this.withSession(async stored => {
+      signal?.throwIfAborted();
+      const result = await operation(Object.freeze({
+        identity: Object.freeze({ organization_id: stored.session.organization_id, membership_id: stored.session.membership_id }),
+        transport: this.authority(stored.authority_origin).toolTransport(stored.session.access_token, signal),
+        request_id: (prefix: string) => this.requestId(prefix),
+        random_bytes: (size: number) => this.randomBytes(size),
+      }));
+      signal?.throwIfAborted();
+      this.assertCurrentSession(stored);
+      return result;
+    }, signal);
   }
 
   async tools() {
-    const stored = await this.accessSession();
-    const result = await this.authority(stored.authority_origin).tools(stored.session.access_token);
-    const current = this.store.read();
-    if (result.organization_id !== stored.session.organization_id || result.membership_id !== stored.session.membership_id ||
-        current.authority_origin !== stored.authority_origin || current.session.membership_id !== stored.session.membership_id ||
-        current.session.session_family_id !== stored.session.session_family_id) {
-      throw new Error("Connected tools did not match the current account");
-    }
-    return result;
+    return this.withSession(async stored => {
+      const result = await this.authority(stored.authority_origin).tools(stored.session.access_token);
+      const current = this.store.read();
+      if (result.organization_id !== stored.session.organization_id || result.membership_id !== stored.session.membership_id ||
+          current.authority_origin !== stored.authority_origin || current.session.membership_id !== stored.session.membership_id ||
+          current.session.session_family_id !== stored.session.session_family_id) {
+        throw new Error("Connected tools did not match the current account");
+      }
+      return result;
+    });
   }
 
   async employees(): Promise<EmployeeRosterV1> {
-    const stored = await this.accessSession();
-    return await this.authority(stored.authority_origin).employees(
-      stored.session.access_token,
-    );
+    return this.withSession(async stored => {
+      return await this.authority(stored.authority_origin).employees(
+        stored.session.access_token,
+      );
+    });
   }
 
   async inviteEmployee(input: {
@@ -848,16 +881,17 @@ export class PersonClient {
       );
     }
     const outputPath = invitationOutputPath(input.output_path);
-    const stored = await this.employeeManagementSession();
-    try {
-      return await this.issueEmployeeInvitation(outputPath, input.email, "invite", () =>
-        this.authority(stored.authority_origin).inviteEmployee(
-          { name: input.name, email: input.email },
-          stored.session.access_token,
-        ), stored.authority_origin);
-    } catch (error) {
-      throw employeeRequestFailure(error, "employee_already_exists");
-    }
+    return this.withEmployeeSession(async stored => {
+      try {
+        return await this.issueEmployeeInvitation(outputPath, input.email, "invite", () =>
+          this.authority(stored.authority_origin).inviteEmployee(
+            { name: input.name, email: input.email },
+            stored.session.access_token,
+          ), stored.authority_origin);
+      } catch (error) {
+        throw employeeRequestFailure(error, "employee_already_exists");
+      }
+    });
   }
 
   async reissueEmployee(input: {
@@ -872,22 +906,23 @@ export class PersonClient {
       );
     }
     const outputPath = invitationOutputPath(input.output_path);
-    const stored = await this.employeeManagementSession();
-    try {
-      return await this.issueEmployeeInvitation(
-        outputPath,
-        input.email,
-        "reissue",
-        () =>
-          this.authority(stored.authority_origin).reissueEmployee(
-            { email: input.email },
-            stored.session.access_token,
-          ),
-        stored.authority_origin,
-      );
-    } catch (error) {
-      throw employeeRequestFailure(error, "employee_onboarding_complete");
-    }
+    return this.withEmployeeSession(async stored => {
+      try {
+        return await this.issueEmployeeInvitation(
+          outputPath,
+          input.email,
+          "reissue",
+          () =>
+            this.authority(stored.authority_origin).reissueEmployee(
+              { email: input.email },
+              stored.session.access_token,
+            ),
+          stored.authority_origin,
+        );
+      } catch (error) {
+        throw employeeRequestFailure(error, "employee_onboarding_complete");
+      }
+    });
   }
 
   async revokeEmployee(email: string): Promise<void> {
@@ -898,15 +933,16 @@ export class PersonClient {
         "Employee email must be a canonical durable identity",
       );
     }
-    const stored = await this.employeeManagementSession();
-    try {
-      await this.authority(stored.authority_origin).revokeEmployee(
-        { email },
-        stored.session.access_token,
-      );
-    } catch (error) {
-      throw employeeRequestFailure(error, undefined);
-    }
+    return this.withEmployeeSession(async stored => {
+      try {
+        await this.authority(stored.authority_origin).revokeEmployee(
+          { email },
+          stored.session.access_token,
+        );
+      } catch (error) {
+        throw employeeRequestFailure(error, undefined);
+      }
+    });
   }
 
   private async issueEmployeeInvitation(

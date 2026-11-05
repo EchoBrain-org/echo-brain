@@ -475,3 +475,18 @@ schema recorded by this ADR. Those executable migrations were retired by the
 physical lean V1 closure.
 Documentation validation is evidence only that this record and its relations
 are well formed; it is not behavior or deployment evidence.
+
+### Local readers and access-token rotation (2026-11-05)
+
+Person clients sharing a private session directory coordinate authenticated
+operations across processes. Private, token-free operation entries hold read
+leases through response decoding, streams and account checks. Refresh intent
+blocks new readers and waits for current readers to finish before the existing
+single-use refresh claim can rotate the credential. Reads normally run in
+parallel. Verified dead-process entries are removed by their unique path;
+unsafe entries fail closed. Waiting is bounded and queued reads are cancellable.
+An interrupted token claim still requires sign-in; an ambiguous refresh is
+never replayed. New requests reserve their transport deadline before using a
+credential, refreshing first if it would expire during the request. Document
+transfers also reserve time for metadata and local preparation. This changes
+local coordination, not Authority access policy or credential-revocation rules.

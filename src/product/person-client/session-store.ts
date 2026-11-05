@@ -133,7 +133,7 @@ function assertPrivateDirectory(path: string): void {
   }
 }
 
-function ensurePrivateDirectory(path: string): void {
+export function ensurePrivateDirectory(path: string): void {
   const existed = existsSync(path);
   mkdirSync(path, { recursive: true, mode: 0o700 });
   if (!existed) fsyncDirectory(resolve(path, '..'));
@@ -460,22 +460,30 @@ export class PersonSessionStore {
   }
 
   claimRefresh(): PersonSessionRefreshClaim {
+    const claimed = this.tryClaimRefresh();
+    if (claimed === undefined) {
+      throw new PersonClientSessionUnavailableError(
+        'Person session refresh is already claimed; sign in again if it was interrupted',
+      );
+    }
+    return claimed;
+  }
+
+  /** A busy claim has not used a refresh token and may be waited out by the local coordinator. */
+  tryClaimRefresh(): PersonSessionRefreshClaim | undefined {
+    let claimId: string;
     try {
-      const claimId = this.createClaim(this.paths.refresh_claim);
-      renameSync(this.paths.live, this.paths.refreshing);
-      fsyncDirectory(this.paths.directory);
-      return Object.freeze({
-        claim_id: claimId,
-        stored: parseStoredSession(readPrivateFile(this.paths.refreshing)),
-      });
+      claimId = this.createClaim(this.paths.refresh_claim);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-        throw new PersonClientSessionUnavailableError(
-          'Person session refresh is already claimed; sign in again if it was interrupted',
-        );
-      }
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return undefined;
       throw error;
     }
+    renameSync(this.paths.live, this.paths.refreshing);
+    fsyncDirectory(this.paths.directory);
+    return Object.freeze({
+      claim_id: claimId,
+      stored: parseStoredSession(readPrivateFile(this.paths.refreshing)),
+    });
   }
 
   private ownsRefresh(claimed: PersonSessionRefreshClaim): boolean {
