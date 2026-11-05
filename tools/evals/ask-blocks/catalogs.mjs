@@ -419,7 +419,7 @@ const BLOCK_PROMPT = [
   "- Write a date in a date field or a table cell as YYYY-MM-DD.",
   "- Put in a block only what the evidence says.",
   "",
-  "Reply with ONLY a JSON object in exactly this shape:",
+  "With layout, reply with ONLY a JSON object in exactly this shape instead:",
   "{\"blocks\":[{\"block\":\"answer\",\"sentences\":[{\"text\":\"<the conclusion>\",\"evidence\":[\"E1\"]}]},{\"block\":\"<a block from block_catalog>\",\"<its params>\":\"...\"}],\"not_found\":[]}",
 ].join("\n");
 const TEMPLATE_PROMPT = [
@@ -432,7 +432,7 @@ const TEMPLATE_PROMPT = [
   "- Write a date in a date field or a table cell as YYYY-MM-DD.",
   "- Put in a template only what the evidence says.",
   "",
-  "Reply with ONLY a JSON object in exactly this shape:",
+  "With layout, reply with ONLY a JSON object in exactly this shape instead:",
   "{\"template\":{\"name\":\"<a template from template_catalog>\",\"answer\":[{\"text\":\"<the conclusion>\",\"evidence\":[\"E1\"]}],\"<its other params>\":\"...\"},\"not_found\":[]}",
 ].join("\n");
 const COMPONENT_PROMPT = [
@@ -446,7 +446,7 @@ const COMPONENT_PROMPT = [
   "- Write a date as YYYY-MM-DD.",
   "- Write only what the evidence says.",
   "",
-  "Reply with ONLY a JSON object in exactly this shape:",
+  "With layout, reply with ONLY a JSON object in exactly this shape instead:",
   "{\"root\":\"main\",\"components\":[{\"id\":\"main\",\"component\":\"Column\",\"children\":[\"answer\"]},{\"id\":\"answer\",\"component\":\"Text\",\"variant\":\"body\",\"text\":\"<the conclusion>\",\"evidence\":[\"E1\"]}],\"not_found\":[]}",
 ].join("\n");
 
