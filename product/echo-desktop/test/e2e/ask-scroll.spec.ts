@@ -29,6 +29,15 @@ async function firstWhole(turn: Locator): Promise<number> {
   });
 }
 
+/**
+ * Lets the Ask view take a resize before the test acts again. The view reads a size change in its ResizeObserver callback,
+ * which runs after the frame's animation callbacks; a scroll or click scripted before that callback can be undone by it.
+ * A slow CI runner shows this, while a person cannot act inside that one frame.
+ */
+async function settled(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve))));
+}
+
 test('a short latest answer stays in view below long history when its source opens and closes', async () => {
   run = await launch('ask-scroll');
   const { page } = run;
@@ -53,6 +62,7 @@ test('a short latest answer stays in view below long history when its source ope
   }
   await expect.poll(() => page.getByTestId('ask-view').evaluate(view => view.clientWidth)).toBe(widthBefore);
   await expect.poll(bottom).toBeLessThan(1);
+  await settled(page);
   const heightBefore = await latest.evaluate(turn => turn.getBoundingClientRect().height);
   await latest.getByTestId('citation').click();
   await expect(page.getByTestId('source-pane')).toBeVisible();
@@ -182,6 +192,7 @@ for (const place of ['latest', 'earlier'] as const) {
     }
     await expect.poll(() => page.getByTestId('ask-view').evaluate(view => view.clientWidth)).toBe(widthBefore);
     await expect.poll(async () => Math.abs(await offset(paragraph) - before)).toBeLessThanOrEqual(1);
+    await settled(page);
     // A manual scroll must not measure every statement in the accumulated history.
     const measurements = await page.getByTestId('ask-view').evaluate(async view => {
       const measure = Element.prototype.getBoundingClientRect;
@@ -220,6 +231,7 @@ for (const narrower of [0, 100]) {
       await run.app.evaluate(({ BrowserWindow }, next) => BrowserWindow.getAllWindows()[0]!.setBounds(next), { ...bounds, width: bounds.width - narrower });
       await expect.poll(() => page.getByTestId('ask-view').evaluate(view => view.clientWidth)).toBe(widthBefore - narrower);
       await expect.poll(bottom).toBeLessThan(1);
+      await settled(page);
     }
     // From the end, an earlier turn's citation in view opens its source; closing it brings the view back to the end.
     const cited = earlier.getByTestId('citation').last();
@@ -269,6 +281,7 @@ test('a view a restore brings back to the end follows it again, and a latest cit
   }
   await expect.poll(() => page.getByTestId('ask-view').evaluate(view => view.clientHeight)).toBe(heightBefore);
   await expect.poll(bottom).toBeLessThan(1);
+  await settled(page);
   // A little short of the end still reads to the end. The earlier citation there returns the view to the same place, a
   // little short; the latest citation from there keeps the end.
   await page.getByTestId('ask-view').evaluate(view => { view.scrollTop -= 12; });
@@ -348,6 +361,7 @@ test('a sentence held by scrolling stays held when a wider window brings the vie
   const widen = async (by: number) => {
     await run.app.evaluate(({ BrowserWindow }, next) => BrowserWindow.getAllWindows()[0]!.setBounds(next), { ...bounds, width: bounds.width + by });
     await expect.poll(() => view.evaluate(element => element.clientWidth)).toBe(widthBefore + by);
+    await settled(page);
   };
   try {
     // At the end of a window 100px wider, the first sentence that starts in view, and where it reads there.
