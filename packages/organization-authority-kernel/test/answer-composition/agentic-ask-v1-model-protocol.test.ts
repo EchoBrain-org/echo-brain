@@ -511,7 +511,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
 
   it("pins Ask again's prompt and schema with shared unbounded selections", () => {
     expect([ANSWER_SINCE_PROMPT, answerBlocksSinceSchema].map(value => canonicalSha256(value))).toEqual([
-      "sha256:520c7b5aaae4fa05e1cf362dd3341675ba8fa803b5c00eefa563cf4d6d86a80c", "sha256:106ae31c965ea38de88ae3d9364cb031644e9753ee1211571978e7b3b03ac932",
+      "sha256:520c7b5aaae4fa05e1cf362dd3341675ba8fa803b5c00eefa563cf4d6d86a80c", "sha256:9a0778330ad9981ba2a94c6e344c8793a89494ada7510d9ecf6b7df5bd27cd46",
     ]);
   });
 
@@ -559,11 +559,10 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     // Its nothing-found example is a blocks reply: an answer that cites nothing, which code leaves out (W1), and not_found.
     const nothingFound = /If neither the evidence nor a list answers the question, return (\{.*?\})\. Do not attach/u.exec(ANSWER_PROMPT)?.[1];
     expect(parseBlocksAnswer(JSON.parse(nothingFound!))).toMatchObject({ lists: [], sentences: [{ evidence: [] }], not_found: ["<the requested fact>"] });
-    // The writer every Ask gets, whether or not its answer is released in blocks: its prompt, follow-up guidance, layout
-    // part and schema, with the selection contract they share, pinned.
+    // The writer every Ask gets: its prompt, follow-up guidance, layout part and schema, with the selection contract they share, pinned.
     expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, ANSWER_BLOCKS_PROMPT, answerBlocksSchema].map(value => canonicalSha256(value))).toEqual([
       "sha256:badf426531d3b408a8b134858216787f147e493948cbbd249f1ffc0bf1cfc8e9", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
-      "sha256:1b55accb6d7ce3ff2a1ac95baeb0380c180af2576402786dae12f57beb1a2c05", "sha256:d98f36e779f815407f6ddecdffedfa592bac6faff7c01383356f05c7c5f17864",
+      "sha256:1b55accb6d7ce3ff2a1ac95baeb0380c180af2576402786dae12f57beb1a2c05", "sha256:8d5d4b50ffbba9580067126dd95c5a59b0db6bfb569c78bb243c512e5168d32c",
     ]);
   });
 

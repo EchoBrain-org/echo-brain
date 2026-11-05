@@ -68,8 +68,8 @@ export type Scenario = {
 type Said = { readonly text: string; readonly evidence: readonly string[] };
 /**
  * The Ask writer's reply (answer layout v2, ADR-0051) that says `sentences`: the first as its answer block, any others as
- * one text block after it, so an answer released without blocks states them in this order. Beside them, the lists it
- * uses (ADR-0041), what it did not find, and for an Ask again what is different since (ADR-0047).
+ * one text block after it, so the answer states them in the order given. Beside them, the lists it uses (ADR-0041),
+ * what it did not find, and for an Ask again what is different since (ADR-0047).
  */
 export function writerReply(sentences: readonly Said[], fields: { readonly lists?: readonly unknown[]; readonly not_found?: readonly string[]; readonly since?: unknown } = {}) {
   return {
