@@ -323,21 +323,21 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           .map(id => ({ id, members: [...new Set(need.evidence.flatMap(short => membership.in(id, short) ?? []))] }));
         return [{ cited, declares: cited.every(list => list.members.length === 0) }];
       });
-      const requestedByList = new Map(lists.map(list => [list.id, { members: [] as string[], inventoryFallback: false }]));
+      /** The members research requests of each list, as the writer is told them. */
+      const requestedByList = new Map(lists.map(list => [list.id, [] as string[]]));
       for (const need of listNeeds) {
         const placed = new Set<string>();
         for (const { id, members } of need.cited) {
-          const request = requestedByList.get(id)!;
-          if (need.declares) request.inventoryFallback = true;
+          const requested = requestedByList.get(id)!;
           for (const member of members) {
             if (placed.has(member)) continue;
             placed.add(member);
-            if (!request.members.includes(member)) request.members.push(member);
+            if (!requested.includes(member)) requested.push(member);
           }
         }
       }
       const viewOf = (list: (typeof lists)[number], cap?: number) => ({ ...agenticWriterListV1(list, rows.get(list.id)!, stated.includes(list.id), cap),
-        ...(requestedByList.get(list.id)!.members.length === 0 ? {} : { requested_members: requestedByList.get(list.id)!.members }),
+        ...(requestedByList.get(list.id)!.length === 0 ? {} : { requested_members: requestedByList.get(list.id)! }),
       });
       /** Every list as code reads it: code states, notes and filters each list the plan's kinds read, past the writer's bound too. */
       const views = new Map(lists.map(list => [list.id, viewOf(list)]));
