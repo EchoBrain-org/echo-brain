@@ -554,8 +554,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     // An answer in blocks has no count limit, whatever the answer prompt's usual length says (ADR-0051).
     expect(lines).toContain("- An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds: the \"up to 10\" above does not apply.");
     expect(ANSWER_PROMPT).toContain("use up to 10 when the question asks several things");
-    // The writer every Ask gets, whether or not its answer is released in blocks: its prompt, follow-up guidance, layout
-    // part and schema, with the selection contract they share, pinned.
+    // The writer every Ask gets: its prompt, follow-up guidance, layout part and schema, with the selection contract they share, pinned.
     expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, ANSWER_BLOCKS_PROMPT, answerBlocksSchema].map(value => canonicalSha256(value))).toEqual([
       "sha256:d2b59da4d440a6cb896b648ba6a19d2232e67ce1d89299d120fd4e5be8a988f6", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
       "sha256:674fec93f1972242e5f661c6fa56f81803f4ef1e274fb3e9cfc3632a4c48497d", "sha256:8d5d4b50ffbba9580067126dd95c5a59b0db6bfb569c78bb243c512e5168d32c",

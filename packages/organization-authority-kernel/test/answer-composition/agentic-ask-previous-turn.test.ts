@@ -77,11 +77,11 @@ function desk(overrides: Partial<EvidenceDeskPortV2> = {}) {
     ...overrides,
   } satisfies EvidenceDeskPortV2;
 }
-function askV8(port: EvidenceDeskPortV2, run: ReturnType<typeof scripted>, options: { readonly answer_layout?: 2 } = {}) {
+function askV8(port: EvidenceDeskPortV2, run: ReturnType<typeof scripted>) {
   const audits: AgenticAskAuditEntryV1[] = [];
   const ask = createAgenticAskV5({
     desk: port, model: run.model, generation, audit: { append: entry => { audits.push(entry); } }, today: () => "2026-10-25",
-    time_context: { now: "2026-10-25T17:00:00.000Z", time_zone: "America/Los_Angeles" }, ...options,
+    time_context: { now: "2026-10-25T17:00:00.000Z", time_zone: "America/Los_Angeles" },
   });
   return { ask, audits };
 }
@@ -238,9 +238,9 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
 });
 
 describe("Ask again on the V8 Ask (ADR-0047)", () => {
-  const again = (writer: unknown, options: { readonly answer_layout?: 2; readonly steps?: readonly unknown[] } = {}) => {
+  const again = (writer: unknown, options: { readonly steps?: readonly unknown[] } = {}) => {
     const run = scripted({ steps: options.steps ?? [searchFor(ASK_AGAIN.question, "THERM-482 owner"), finishOn(ASK_AGAIN.question, ["E1"])], writer: [writer] });
-    return { run, ...askV8(desk(), run, options.answer_layout === undefined ? {} : { answer_layout: options.answer_layout }) };
+    return { run, ...askV8(desk(), run) };
   };
 
   it("researches the question as asked, shows the writer the earlier answer, and releases what is different since, each cited", async () => {
@@ -292,8 +292,8 @@ describe("Ask again on the V8 Ask (ADR-0047)", () => {
     expect(JSON.parse(run.of("writer")[0]!.user_prompt)).not.toHaveProperty("earlier");
   });
 
-  it("arranges the answer in blocks and keeps since beside it when the client asked for layout v2", async () => {
-    const { run, ask } = again({ lists: [], blocks: [{ block: "answer", sentences: [{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"] }] }], since: [{ text: "The owner changed to Dev Patel.", evidence: ["E1"] }], not_found: [] }, { answer_layout: 2 });
+  it("arranges the answer in blocks and keeps since beside it", async () => {
+    const { run, ask } = again({ lists: [], blocks: [{ block: "answer", sentences: [{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"] }] }], since: [{ text: "The owner changed to Dev Patel.", evidence: ["E1"] }], not_found: [] });
     const response = await ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN });
     expect(run.of("writer")[0]!.schema).toBe(answerBlocksSinceSchema);
     expect(run.of("writer")[0]!.max_output_tokens).toBe(2_500);
