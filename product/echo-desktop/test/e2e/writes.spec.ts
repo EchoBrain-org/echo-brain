@@ -60,6 +60,13 @@ test('if the host dies mid-save the note is unconfirmed, and check status finds 
   await page.getByTestId('compose-body').fill('Hiring plan');
   await page.getByTestId('compose-send').click();
   await expect.poll(() => posts().length).toBe(1);
+  // The fixture Authority lives in the host this test kills. Its request log
+  // precedes storage, so wait for the committed receipt before losing its reply.
+  const requestId = String(posts()[0]!.body?.request_id);
+  await expect(() => {
+    const receipt = JSON.parse(readFileSync(join(run.home, `saved-${requestId}.json`), 'utf8'));
+    expect(receipt).toMatchObject({ request_id: requestId, state: 'received' });
+  }).toPass({ timeout: 10_000 });
   await emit(app, 'echo-test:kill-host');
   await expect(page.getByTestId('compose-error')).toHaveText('This may not have been saved.');
   await expect(page.getByTestId('compose-body')).toHaveAttribute('readonly', '');

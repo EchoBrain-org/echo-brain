@@ -85,6 +85,15 @@ completion rule found A4 and its completion date; the actor question explicitly
 reported that the person who changed its status was not recorded. These are
 local native model replays, not deployment evidence for the new commits.
 
+The Linux desktop CI run also failed the interrupted-save recovery test. That
+fixture logs a request before storing its receipt, and runs inside the host
+that the test kills. The test now verifies the stored receipt before killing
+the host, so it exercises loss of the reply after storage. The corrected case
+passed ten consecutive Mac runs. The failed run did not preserve the fixture's
+files, so its exact interleaving was not independently proved; the updated
+Linux CI run must qualify the corrected scenario. Existing failure artifacts
+and logs are retained privately.
+
 ## Remaining limits
 
 - Upstream Jira/Confluence responses reported HTTP 429, allowance 120 and
