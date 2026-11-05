@@ -21,7 +21,7 @@ afterAll(() => { if (templateHome !== undefined) rmSync(templateHome, { recursiv
 function setup(bytes = Buffer.from('# SCOUT PRD\n' + 'robot requirements\n'.repeat(750))) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-document-cli-'))); homes.push(home);
   if (templateHome === undefined) {
-    templateHome = signedInHome({ prefix: 'echo-document-cli-template-', now: NOW, authority: 'https://authority.example', display_name: 'Document Fixture' });
+    templateHome = signedInHome({ prefix: 'echo-document-cli-template-', now: NOW, authority: 'https://authority.example', display_name: 'Document Fixture', access_minutes: 60 });
   }
   const template = new PersonSessionStore(templateHome);
   const store = new PersonSessionStore(home);

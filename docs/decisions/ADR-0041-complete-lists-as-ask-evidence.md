@@ -938,3 +938,13 @@ is unchanged. No tools, access scope, research budgets, or stop rules change.
 adds, for Ask, refused filters, `unchecked` counts and any-date windows, and
 raises Ask's limit of 4 actions per step, which "Safety rules kept" and the
 considered options above name, to 10.
+
+### Empty filtered inventories and text evidence (2026-11-05)
+
+When an Ask has found no items and has read only filtered inventories, those
+empty lists cannot establish absence across other available sources. Before
+accepting `not_found`, research must observe a completed search across the
+catalog or in a source outside those inventories. A failed, truncated or
+unobserved search does not qualify. An unfiltered empty inventory retains its
+existing source-specific meaning. Code checks read coverage; the model still
+chooses relevant queries and distinguishes completion from an unknown actor.

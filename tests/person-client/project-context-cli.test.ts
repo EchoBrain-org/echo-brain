@@ -67,7 +67,8 @@ afterEach(() => {
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
   if (shared === undefined) return;
   const store = new PersonSessionStore(shared.home);
-  expect(readdirSync(store.paths.directory)).toEqual(['session.v1.json']);
+  expect(readdirSync(store.paths.directory).sort()).toEqual(['operations', 'session.v1.json']);
+  expect(readdirSync(join(store.paths.directory, 'operations'))).toEqual([]);
   expect(readFileSync(store.paths.live, 'utf8')).toBe(shared.session);
 });
 afterAll(() => { if (shared !== undefined) rmSync(shared.home, { recursive: true, force: true }); });

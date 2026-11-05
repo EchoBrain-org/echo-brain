@@ -227,6 +227,12 @@ function namesMember(text: string, member: AgenticWriterListMemberV1, members: r
     && memberNames(other).some(name => holdsName(text, name) && said.some(own => holdsName(name, own))));
 }
 
+/** A whole table cell may abbreviate a title, if that label names exactly one listed member. */
+function labelsMember(cells: readonly string[], member: AgenticWriterListMemberV1, members: readonly AgenticWriterListMemberV1[]): boolean {
+  return cells.some(cell => /\p{L}/u.test(cell) && holdsName(member.title, cell)
+    && !members.some(other => other.id !== member.id && memberNames(other).some(name => holdsName(name, cell))));
+}
+
 /**
  * A completed answer can report source coverage separately from a requested
  * fact gap. A limited open matters when it requested or returned a cited body;
@@ -577,7 +583,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           for (const list of lists) {
             const member = membership.in(list.id, sentence.member);
             const row = member === undefined ? undefined : rows.get(list.id)!.find(value => value.id === member);
-            if (row === undefined || !(sentence.cites ?? []).some(short => membership.in(list.id, short) === member) || !namesMember(sentence.text, row, rows.get(list.id)!)) continue;
+            if (row === undefined || !(sentence.cites ?? []).some(short => membership.in(list.id, short) === member) ||
+                !(namesMember(sentence.text, row, rows.get(list.id)!) || (sentence.item.kind === "row" && labelsMember(sentence.item.cells, row, rows.get(list.id)!)))) continue;
             const members = presented.get(list.id) ?? new Set<string>();
             members.add(row.id); presented.set(list.id, members);
           }

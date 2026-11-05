@@ -96,10 +96,10 @@ import { canonicalJson } from "@echo-brain/federation-protocol";
 import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_REQUEST_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 import { MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH, ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, isOrganizationApiValidationError, validateOrganizationApiError, validateOrganizationAuthorityDescriptorResponse, validateOrganizationPersonOidcBeginRequest, validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, type OrganizationAuthorityDescriptorResponseV1, type OrganizationPersonOidcBeginRequestV2, type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
 
-const DEFAULT_TIMEOUT_MS = 15_000;
-const ASK_TIMEOUT_MS = 135_000;
+export const DEFAULT_TIMEOUT_MS = 15_000;
+export const ASK_TIMEOUT_MS = 135_000;
 /** The Ask source check answers within its own 15 seconds; the client waits twice that. */
-const ASK_CHECK_TIMEOUT_MS = 30_000;
+export const ASK_CHECK_TIMEOUT_MS = 30_000;
 const MAXIMUM_ORDINARY_RESPONSE_BYTES = 64 * 1024;
 const MAXIMUM_RECORDS_RESPONSE_BYTES = 512 * 1024;
 export type { EmployeeRosterV1, PersonRecordListItemV1, PersonRecordListV1, PersonRecordSearchItemV1, PersonRecordSearchV2 } from '@echo-brain/organization-api';

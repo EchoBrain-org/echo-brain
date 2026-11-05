@@ -13,6 +13,7 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -83,6 +84,9 @@ export class PersonClientSessionUnavailableError extends Error {
   }
 }
 
+/** Where, inside the session directory, the clients sharing it coordinate their operations (session-operations.ts). */
+export const PERSON_SESSION_OPERATIONS_DIRECTORY = 'operations';
+
 export function personSessionStorePaths(
   homeDirectory: string,
 ): PersonSessionStorePaths {
@@ -133,7 +137,7 @@ function assertPrivateDirectory(path: string): void {
   }
 }
 
-function ensurePrivateDirectory(path: string): void {
+export function ensurePrivateDirectory(path: string): void {
   const existed = existsSync(path);
   mkdirSync(path, { recursive: true, mode: 0o700 });
   if (!existed) fsyncDirectory(resolve(path, '..'));
@@ -386,10 +390,24 @@ export class PersonSessionStore {
       authority_id: authorityId,
       session,
     });
+    // Before the new session exists, so no operation on it loses its entry.
+    this.clearOperations();
     this.writeLive(value);
     this.cleanupTransitions();
     this.forgetEnded();
     return value;
+  }
+
+  /**
+   * Signing in or out ends every operation on the old session, so it also clears what crashed operations left. An
+   * entry nothing can prove stale, such as an unsafe file, would otherwise block every operation until removed by hand.
+   */
+  private clearOperations(): void {
+    try {
+      rmSync(join(this.paths.directory, PERSON_SESSION_OPERATIONS_DIRECTORY), { recursive: true, force: true });
+    } catch {
+      // Only a cleanup: signing in or out never fails on it.
+    }
   }
 
   /** Why the last refresh here ended the session, until someone signs in or out; null otherwise. */
@@ -438,6 +456,15 @@ export class PersonSessionStore {
     return this.readStoredSession(this.paths.live);
   }
 
+  /** A signed-out command must not create local coordination state. A live
+   * refresh claim may temporarily hold the credential outside `live`; its
+   * coordinator will wait for that transition before reading it. */
+  assertSessionPresent(): void {
+    if (!existsSync(this.paths.live) && !existsSync(this.paths.refresh_claim)) {
+      throw new PersonClientSessionUnavailableError();
+    }
+  }
+
   private createClaim(path: string): string {
     ensurePrivateDirectory(this.paths.directory);
     const claimId = randomUUID();
@@ -460,22 +487,45 @@ export class PersonSessionStore {
   }
 
   claimRefresh(): PersonSessionRefreshClaim {
+    const claimed = this.tryClaimRefresh();
+    if (claimed === undefined) {
+      throw new PersonClientSessionUnavailableError(
+        'Person session refresh is already claimed; sign in again if it was interrupted',
+      );
+    }
+    return claimed;
+  }
+
+  /** A busy claim has not used a refresh token and may be waited out by the local coordinator. */
+  tryClaimRefresh(): PersonSessionRefreshClaim | undefined {
+    let claimId: string;
     try {
-      const claimId = this.createClaim(this.paths.refresh_claim);
-      renameSync(this.paths.live, this.paths.refreshing);
-      fsyncDirectory(this.paths.directory);
-      return Object.freeze({
-        claim_id: claimId,
-        stored: parseStoredSession(readPrivateFile(this.paths.refreshing)),
-      });
+      claimId = this.createClaim(this.paths.refresh_claim);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-        throw new PersonClientSessionUnavailableError(
-          'Person session refresh is already claimed; sign in again if it was interrupted',
-        );
-      }
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return undefined;
       throw error;
     }
+    try {
+      renameSync(this.paths.live, this.paths.refreshing);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      // Signed out, or another refresh ended the session, while this one waited
+      // its turn: nothing is left to refresh, and the claim must not outlive it.
+      try {
+        if (readPrivateFile(this.paths.refresh_claim) === `${claimId}\n` && removeIfPresent(this.paths.refresh_claim)) {
+          fsyncDirectory(this.paths.directory);
+        }
+      } catch {
+        // Already cleaned up by a sign-in.
+      }
+      const ended = this.readEnded();
+      throw new PersonClientSessionUnavailableError(undefined, ended === null ? undefined : { code: ended.reason });
+    }
+    fsyncDirectory(this.paths.directory);
+    return Object.freeze({
+      claim_id: claimId,
+      stored: parseStoredSession(readPrivateFile(this.paths.refreshing)),
+    });
   }
 
   private ownsRefresh(claimed: PersonSessionRefreshClaim): boolean {
@@ -592,5 +642,6 @@ export class PersonSessionStore {
       changed = removeIfPresent(path) || changed;
     }
     if (changed) fsyncDirectory(this.paths.directory);
+    this.clearOperations();
   }
 }
