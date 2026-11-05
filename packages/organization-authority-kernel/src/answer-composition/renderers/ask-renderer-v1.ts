@@ -203,6 +203,25 @@ function privateItem(item: Entry["item"]): boolean {
   return item.visibility === "only_me" || item.visibility === "approver_only";
 }
 
+/** Lowercase, each run of spaces one space: how a member's name is matched in a statement. */
+function folded(value: string): string { return value.toLowerCase().replace(/\s+/gu, " ").trim(); }
+/**
+ * Whether a statement's text names a list member as the writer saw it listed: its key, its title, or the key its title
+ * leads with ("THERM-2: Fixture work 2"), whole and in any case, never inside a longer word or number ("THERM-12").
+ */
+function namesMember(text: string, member: Pick<AgenticWriterListMemberV1, "title" | "key">): boolean {
+  const said = folded(text);
+  const leading = /^([^\s:]*\d[^\s:]*): /u.exec(member.title)?.[1];
+  return [member.key, member.title, leading].some(name => {
+    const wanted = name === undefined ? "" : folded(name);
+    if (wanted.length === 0) return false;
+    for (let at = said.indexOf(wanted); at >= 0; at = said.indexOf(wanted, at + 1)) {
+      if (!/[\p{L}\p{N}]/u.test(said[at - 1] ?? " ") && !/[\p{L}\p{N}]/u.test(said[at + wanted.length] ?? " ")) return true;
+    }
+    return false;
+  });
+}
+
 /**
  * A completed answer can report source coverage separately from a requested
  * fact gap. A limited open matters when it requested or returned a cited body;
@@ -521,17 +540,21 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         };
         /** How a v2 item reads: one whose sentence carries code's note reads as text when its block shows other fields than its sentence, so the note shows. */
         const itemShape = (item: AnswerItem, noted: boolean): AnswerItem => !noted || item.kind === "answer" || item.kind === "text" || item.kind === "point" ? item : textItem(item);
-        type Laid = { text: string; shorts: readonly string[]; read?: readonly string[]; shape: DraftShape; item?: AnswerItem; member?: string };
+        /** A statement as code lays it out; a writer's item also keeps the ids it cites that the writer saw, text or rows, and the member it declares. */
+        type Laid = { text: string; shorts: readonly string[]; read?: readonly string[]; cites?: readonly string[]; shape: DraftShape; item?: AnswerItem; member?: string };
         const writerSentences: Laid[] = sentences.flatMap(given => {
           // Only a v2 reply's sentences are items.
           const sentence = verified(given);
           const kept = drafted(sentence);
-          return kept === undefined ? [] : [{ text: kept.text, shorts: kept.shorts, read: kept.read, shape: shapeOf(sentence, kept.noted),
+          return kept === undefined ? [] : [{ text: kept.text, shorts: kept.shorts, read: kept.read, cites: sentence.evidence.filter(id => textGiven.has(id) || shownRows.has(id)), shape: shapeOf(sentence, kept.noted),
             ...(sentence.item === undefined ? {} : { item: itemShape(sentence.item, kept.noted) }), ...(sentence.member === undefined ? {} : { member: sentence.member }) }];
         });
 
         const statementKeyOf = (sentence: Laid) => JSON.stringify([sentence.text, [...new Set(sentence.shorts.map(keyOf))].sort(), sentence.shorts.some(short => privateItem(byShort.get(short)!.item))]);
-        // Only retained, grounded structured items can present a member. A citation alone is not a declaration.
+        // Only retained, grounded structured items can present a member. A citation alone is not a declaration. An item
+        // presents member M of a list when the member it declares is M (an opened body or section is the member it is part
+        // of), it cites one of M's ids, and its text names M as the writer saw M listed. It may cite other members too, as a
+        // comparison or a dependency does; an item about another member names that one, not M.
         // Blocks have no count bound; an oversized whole answer is recomposed without these bindings before its
         // legacy presentation bounds apply, so a dropped item can never suppress the research member floor.
         const presented = new Map<string, Set<string>>();
@@ -542,9 +565,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           presentationKeys.add(key);
           if (sentence.member === undefined || (sentence.item?.kind !== "row" && sentence.item?.kind !== "point")) continue;
           for (const list of lists) {
-            if (!list.members.includes(sentence.member) || !sentence.read?.some(short => membership.in(list.id, short) === sentence.member)) continue;
+            const member = membership.in(list.id, sentence.member);
+            const row = member === undefined ? undefined : rows.get(list.id)!.find(value => value.id === member);
+            if (row === undefined || !(sentence.cites ?? []).some(short => membership.in(list.id, short) === member) || !namesMember(sentence.text, row)) continue;
             const members = presented.get(list.id) ?? new Set<string>();
-            members.add(sentence.member); presented.set(list.id, members);
+            members.add(row.id); presented.set(list.id, members);
           }
         }
         // Research's which_items needs, found or still open when research stopped, preserve the requested member set. Their

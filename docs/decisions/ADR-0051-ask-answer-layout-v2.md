@@ -292,8 +292,13 @@ does not erase an omitted L-only declaration.
 A v2 table row or points item may declare an optional internal `member` E id
 for the inventory member it presents, independently of its supporting
 `evidence`. This allows abbreviated display labels without guessing membership
-from wording. Code accepts the declaration only for an actual inventory member
-whose own text (or mapped opened body) grounds that retained item. Unknown or
+from wording. Code accepts the declaration for member M only when the declared
+id is M or an opened body or section of M, the retained item cites one of M's
+ids, and its text names M as the writer saw it listed: M's key, its title, or
+the key its title leads with ("THERM-2" of "THERM-2: Fixture work 2"), whole
+and in any case. The item may cite other members too, as a comparison or a
+dependency row does; an item about another member names that member, not M,
+so it cannot hide M. A declaration that fails is ignored. Unknown or
 mismatched ids, a citation without a declaration, downgraded rows, and statements
 dropped by grounding or per-statement citation limits do not cover a requested
 member. Code restores the uncovered members, avoiding duplicate enumeration
