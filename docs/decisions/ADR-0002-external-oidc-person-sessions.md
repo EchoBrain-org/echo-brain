@@ -483,9 +483,11 @@ operations across processes. Private, token-free operation entries hold read
 leases through response decoding, streams and account checks. Refresh intent
 blocks new readers and waits for current readers to finish before the existing
 single-use refresh claim can rotate the credential. Reads normally run in
-parallel. An entry whose process is gone, including one whose process ID now
-belongs to another user, or that is older than any operation runs, is removed
-by its unique path. Files no client wrote are ignored. Unsafe entries fail
+parallel. Each client renews its own entries while their operations run. An
+entry whose process is gone, or that nobody has renewed for three minutes, is
+removed by its unique path. A process the client may not signal, such as one
+outside its sandbox, keeps its entry until it goes unrenewed. Files no client
+wrote are ignored. Unsafe entries fail
 closed until signing in again or signing out, which clears every entry.
 Waiting is bounded and queued reads are cancellable. A wait that runs out
 reports ECHO unavailable, to try again, never a sign-in requirement: the

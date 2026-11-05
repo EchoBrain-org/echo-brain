@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -241,28 +241,39 @@ it('finishes an already submitted refresh after cancellation without sending the
 
 const records = () => Response.json({ schema_version: 1, kind: 'echo-clean-person-record-list-v1', records: [] });
 
-it('removes an entry whose process ID now belongs to another user', async () => {
-  const home = signedInHome({ prefix: 'echo-refresh-reused-pid-', now: '2026-11-05T07:00:00.000Z' });
+it('keeps an entry whose process it may not signal until nobody renews it', async () => {
+  const home = signedInHome({ prefix: 'echo-refresh-unsignalled-', now: '2026-11-05T07:00:00.000Z' });
   const directory = new PersonSessionStore(home).paths.directory;
   const gate = new PersonSessionOperations(directory);
-  // A crashed client's PID, reused by another user's process: kill(pid, 0) answers EPERM.
-  const reused = 999_999;
+  // A sandboxed client is refused (EPERM) even a live process of the same user, as it is another user's process.
+  const unsignalled = 999_999;
   const kill = process.kill.bind(process);
   const spy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
-    if (pid === reused) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    if (pid === unsignalled) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
     return kill(pid, signal);
   }) as typeof process.kill);
+  const controller = new AbortController();
   try {
     await gate.read(async () => undefined); // Prepare the private directory.
     const operations = join(directory, 'operations');
-    writeFileSync(join(operations, `read-${reused}-${randomUUID()}`), '', { mode: 0o600 });
-    await gate.refresh(() => true, async () => undefined);
+    const entry = join(operations, `read-${unsignalled}-${randomUUID()}`);
+    writeFileSync(entry, '', { mode: 0o600 });
+    let refreshed = false;
+    const refresh = gate.refresh(() => true, async () => { refreshed = true; }, controller.signal);
+    refresh.catch(() => undefined);
+    await setTimeout(200);
+    expect(refreshed).toBe(false);
+    expect(existsSync(entry)).toBe(true);
+    const unrenewed = new Date(Date.now() - 4 * 60_000);
+    utimesSync(entry, unrenewed, unrenewed);
+    await refresh;
+    expect(refreshed).toBe(true);
     expect(readdirSync(operations)).toEqual([]);
-  } finally { spy.mockRestore(); rmSync(home, { recursive: true, force: true }); }
+  } finally { controller.abort(); spy.mockRestore(); rmSync(home, { recursive: true, force: true }); }
 });
 
-it('removes an entry older than any operation runs, whatever process has its ID now', async () => {
-  const home = signedInHome({ prefix: 'echo-refresh-old-entry-', now: '2026-11-05T07:00:00.000Z' });
+it('removes an entry nobody renews, whatever process has its ID now', async () => {
+  const home = signedInHome({ prefix: 'echo-refresh-unrenewed-', now: '2026-11-05T07:00:00.000Z' });
   const directory = new PersonSessionStore(home).paths.directory;
   const gate = new PersonSessionOperations(directory);
   const controller = new AbortController();
@@ -272,13 +283,58 @@ it('removes an entry older than any operation runs, whatever process has its ID 
     // This test's own process stands in for a live process that reused a crashed client's PID.
     const left = join(operations, `read-${process.pid}-${randomUUID()}`);
     writeFileSync(left, '', { mode: 0o600 });
-    const created = new Date(Date.now() - 13 * 60_000);
-    utimesSync(left, created, created);
+    const unrenewed = new Date(Date.now() - 4 * 60_000);
+    utimesSync(left, unrenewed, unrenewed);
     const refresh = gate.refresh(() => true, async () => 'refreshed', controller.signal);
     refresh.catch(() => undefined);
     await expect(Promise.race([refresh, setTimeout(1_000, 'still waiting')])).resolves.toBe('refreshed');
     expect(readdirSync(operations)).toEqual([]);
   } finally { controller.abort(); rmSync(home, { recursive: true, force: true }); }
+});
+
+it('lets the first refresh after a crash proceed once the left entry goes unrenewed', async () => {
+  const home = signedInHome({ prefix: 'echo-refresh-after-crash-', now: '2026-11-05T07:00:00.000Z' });
+  const directory = new PersonSessionStore(home).paths.directory;
+  const gate = new PersonSessionOperations(directory);
+  try {
+    await gate.read(async () => undefined); // Prepare the private directory.
+    const operations = join(directory, 'operations');
+    // Left by a crash a moment ago; this test's own live process stands in for whatever has its PID now.
+    writeFileSync(join(operations, `read-${process.pid}-${randomUUID()}`), '', { mode: 0o600 });
+    const refresh = gate.refresh(() => true, async () => 'refreshed');
+    await setTimeout(100);
+    // Three and a half minutes pass: the left entry missed its renewals, and the refresh's own entry stays.
+    const realNow = Date.now.bind(Date);
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 3.5 * 60_000);
+    await expect(refresh).resolves.toBe('refreshed');
+    expect(readdirSync(operations)).toEqual([]);
+  } finally { vi.restoreAllMocks(); rmSync(home, { recursive: true, force: true }); }
+});
+
+it('renews its own entries while their operations run', async () => {
+  const home = signedInHome({ prefix: 'echo-refresh-renewed-', now: '2026-11-05T07:00:00.000Z' });
+  const directory = new PersonSessionStore(home).paths.directory;
+  const gate = new PersonSessionOperations(directory);
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void;
+  const reading = new Promise<void>(resolve => { started = resolve; });
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  const read = gate.read(async () => { started(); await held; });
+  try {
+    await reading;
+    const operations = join(directory, 'operations');
+    const [name] = readdirSync(operations);
+    const unrenewed = new Date(Date.now() - 10 * 60_000);
+    utimesSync(join(operations, name!), unrenewed, unrenewed);
+    vi.advanceTimersByTime(30_000);
+    expect(lstatSync(join(operations, name!)).mtimeMs).toBeGreaterThan(Date.now() - 5_000);
+  } finally {
+    release();
+    await read;
+    vi.useRealTimers();
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 it('ignores a file in the operations directory that no client wrote', async () => {
@@ -402,10 +458,15 @@ it('reports a wait that runs out as ECHO unavailable, not as a sign-in requireme
   const directory = new PersonSessionStore(home).paths.directory;
   let sent = false;
   const client = new PersonClient({ home_directory: home, now: () => now, fetch: async () => { sent = true; return records(); } });
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void;
+  const refreshing = new Promise<void>(resolve => { started = resolve; });
+  // Another client's refresh, still running when this request's wait runs out.
+  const refresh = new PersonSessionOperations(directory).refresh(() => true, async () => { started(); await held; });
+  await refreshing;
+  const settled = Promise.allSettled([refresh]);
   try {
-    await new PersonSessionOperations(directory).read(async () => undefined); // Prepare the private directory.
-    // Another live process's refresh, still pending when this request's wait runs out.
-    writeFileSync(join(directory, 'operations', `refresh-${process.pid}-${randomUUID()}`), '', { mode: 0o600 });
     const create = client.createProject({ schema_version: 1, kind: 'echo-project-create-v1', request_id: randomUUID(), name: 'Waiting project' });
     const failed = create.then(() => undefined, (error: unknown) => error as PersonContextMutationError);
     await setTimeout(50);
@@ -415,5 +476,5 @@ it('reports a wait that runs out as ECHO unavailable, not as a sign-in requireme
     expect({ name: error?.name, code: error?.code, outcome: error?.mutation_outcome })
       .toEqual({ name: 'PersonContextMutationError', code: 'unavailable', outcome: 'not_submitted' });
     expect(sent).toBe(false);
-  } finally { vi.restoreAllMocks(); rmSync(home, { recursive: true, force: true }); }
+  } finally { vi.restoreAllMocks(); release(); await settled; rmSync(home, { recursive: true, force: true }); }
 });

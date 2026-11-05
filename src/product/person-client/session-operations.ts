@@ -1,24 +1,57 @@
 import { randomUUID } from 'node:crypto';
-import { closeSync, lstatSync, openSync, readdirSync, unlinkSync } from 'node:fs';
+import { closeSync, lstatSync, openSync, readdirSync, unlinkSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { PersonAuthorityClientError } from './authority-client.js';
 import { ensurePrivateDirectory, PERSON_SESSION_OPERATIONS_DIRECTORY, PersonClientSessionUnavailableError } from './session-store.js';
 
 // Files contain no credentials. Their immutable, unique names identify a local
-// process and operation. An entry whose process is gone, or that is older than
-// any operation runs, was left by a crash: it is removed by its own path, never
-// touching a new owner's entry. A file no client wrote is ignored. An unsafe
-// entry fails closed until signing in or out clears the directory.
+// process and operation, and their owners renew them while the operation runs.
+// An entry whose process is gone, or that nobody renews any more, was left by a
+// crash: it is removed by its own path, never touching a new owner's entry. A
+// file no client wrote is ignored. An unsafe entry fails closed until signing
+// in or out clears the directory.
 const ENTRY = /^(read|refresh)-(\d+)-[0-9a-f-]{36}$/u;
 const WAIT_MS = 25;
 const DEADLINE_MS = 11 * 60_000; // Longer than the client's longest (document) transfer.
-/** Longer than any entry's operation runs, so whatever has the entry's process ID now did not write it. */
-const STALE_MS = DEADLINE_MS + 60_000;
+const RENEW_MS = 30_000;
+/** Several renewals missed: the entry's owner has stopped, whatever process has its ID now. */
+const STALE_MS = 3 * 60_000;
+
+/** This process's entries, by path, renewed until their operations end. */
+const live = new Set<string>();
+let renewal: ReturnType<typeof setInterval> | undefined;
+
+function renew(): void {
+  const now = new Date();
+  for (const path of live) {
+    try {
+      utimesSync(path, now, now);
+    } catch {
+      // Signing in or out cleared it; its operation still ends normally.
+    }
+  }
+}
+
+function hold(path: string): void {
+  live.add(path);
+  if (renewal === undefined) {
+    renewal = setInterval(renew, RENEW_MS);
+    renewal.unref();
+  }
+}
+
+function release(path: string): void {
+  live.delete(path);
+  if (live.size === 0 && renewal !== undefined) {
+    clearInterval(renewal);
+    renewal = undefined;
+  }
+}
 
 /**
- * Whether the process that wrote an entry may still run. Entries are this user's own files, so a process ID that now
- * belongs to another user (EPERM) was reused after its writer ended, as one with no process at all (ESRCH) was.
+ * Whether the process that wrote an entry may still run. Only "no such process" (ESRCH) proves it gone: a sandboxed
+ * client is refused (EPERM) even a live process of the same user, so that answer leaves the entry to its renewals.
  */
 function running(pid: number): boolean {
   try {
@@ -26,7 +59,8 @@ function running(pid: number): boolean {
     return true;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ESRCH' || code === 'EPERM') return false;
+    if (code === 'EPERM') return true;
+    if (code === 'ESRCH') return false;
     throw error;
   }
 }
@@ -49,7 +83,7 @@ export class PersonSessionOperations {
         const state = lstatSync(path);
         if (!state.isFile() || state.isSymbolicLink() || state.size !== 0 || (state.mode & 0o777) !== 0o600 ||
             (process.getuid !== undefined && state.uid !== process.getuid())) throw new Error('Unsafe Person session operation entry');
-        if (Date.now() - state.mtimeMs < STALE_MS && running(Number(match[2]))) return [{ name, kind: match[1]! }];
+        if (live.has(path) || (Date.now() - state.mtimeMs < STALE_MS && running(Number(match[2])))) return [{ name, kind: match[1]! }];
         unlinkSync(path);
         return [];
       } catch (error) {
@@ -62,13 +96,17 @@ export class PersonSessionOperations {
   private enter(kind: 'read' | 'refresh'): string {
     ensurePrivateDirectory(this.directory);
     const name = `${kind}-${process.pid}-${randomUUID()}`;
-    closeSync(openSync(join(this.directory, name), 'wx', 0o600));
+    const path = join(this.directory, name);
+    closeSync(openSync(path, 'wx', 0o600));
+    hold(path);
     return name;
   }
 
   private leave(name: string): void {
+    const path = join(this.directory, name);
+    release(path);
     try {
-      unlinkSync(join(this.directory, name));
+      unlinkSync(path);
     } catch (error) {
       // Signing in or out clears every entry, this one included.
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
