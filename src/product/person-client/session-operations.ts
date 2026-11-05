@@ -114,13 +114,10 @@ export class PersonSessionOperations {
   private enter(kind: 'read' | 'refresh'): string {
     const name = `${kind}-${process.pid}-${randomUUID()}`;
     const path = join(this.directory, name);
-    this.prepared(() => {
-      closeSync(openSync(path, 'wx', 0o600));
-      // Dated by this machine's clock, as renewals are, not by a network file server's.
-      const now = new Date();
-      utimesSync(path, now, now);
-    });
+    this.prepared(() => closeSync(openSync(path, 'wx', 0o600)));
     hold(path);
+    // Dated by this machine's clock, as renewals are, not by a network file server's.
+    renew();
     return name;
   }
 
