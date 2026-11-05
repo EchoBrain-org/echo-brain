@@ -287,7 +287,11 @@ the list answers, and code states nothing of it, unless research requested
 specific members of it, which code still states. As for a `where` that
 matches nothing, only a complete list, read to its end with every item tested,
 confirms that absence; over any other list the writer's `not_found` stays
-untyped and the answer partial. Other inventories do not
+untyped and the answer partial. When code states research's selection of a
+list the writer selected none of, through no use, an empty or invalid
+selection, or an explicit none, the writer's `not_found` stays untyped too: it
+has no per-list provenance and may concern the very members code states.
+Other inventories do not
 enter the answer merely because research read them. Each need retains that
 fallback independently: another need's precise subset of the same inventory
 does not erase an omitted L-only declaration. Within one need that cites

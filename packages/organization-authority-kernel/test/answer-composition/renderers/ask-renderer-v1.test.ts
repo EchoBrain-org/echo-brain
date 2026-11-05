@@ -1078,6 +1078,18 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.cited).toEqual([]);
       expect(rendered.result.response.parts[0]).toMatchObject({ status: "not_found", statements: [], gap: "Not found: tickets assigned to Casey." });
     });
+    it.each([
+      { name: "an explicit none", lists: [{ id: "L1", members: [] }], needs: [WI(["L1", "E2"])], says: /^1 of the 50 tickets created on October 4, 2026: THERM-2: / },
+      { name: "an invalid selection", lists: [{ id: "L1", members: ["E999"] }], needs: [WI(["L1", "E2"])], says: /^1 of the 50 tickets created on October 4, 2026: THERM-2: / },
+      { name: "no selection", lists: [], needs: [WI(["L1", "E2"])], says: /^1 of the 50 tickets created on October 4, 2026: THERM-2: / },
+      { name: "no selection of a declared list", lists: [], needs: [WI(["L1"])], says: /^50 tickets created on October 4, 2026: / },
+    ])("leaves the writer's not_found untyped beside the research members code states over $name", async ({ lists, needs, says }) => {
+      const rendered = await alone({ bundle: listBundle(50, 0, [list("L1", ids(1, 50))], needs), layout: 2, replies: [{ lists, blocks: [], not_found: ["tickets assigned to Casey"] }] })
+        .render("Which tickets are assigned to Casey?");
+      const part = rendered.result.response.parts[0]!;
+      expect(part.statements[0]!.text).toMatch(says);
+      expect(part).not.toHaveProperty("gap_details");
+    });
     it("still states the members research requested when the writer selects their list explicitly empty beside not_found", async () => {
       const rendered = await alone({ bundle: listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1", "E2"])]), layout: 2, replies: [{
         lists: [{ id: "L1", members: [] }], blocks: [], not_found: ["tickets assigned to Casey"],

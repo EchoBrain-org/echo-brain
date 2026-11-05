@@ -614,6 +614,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             else added.set(id, [...new Set([...(added.get(id) ?? []), ...fresh])]);
           }
         }
+        // The lists the writer selected members of, by id, in full or by a where, before code adds research's.
+        const writerSelected = new Set<string>(uses.filter(use => use.members === undefined || use.members.length > 0).map(use => use.id));
         const restored = new Set<string>();
         for (const id of stated) {
           if (whole.has(id)) { uses.push({ id }); restored.add(id); continue; }
@@ -625,6 +627,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           else uses[at] = { id, members: [...new Set([...uses[at]!.members!, ...missing])] };
           restored.add(id);
         }
+        // Code states research's selection of a list the writer selected none of: the writer's not_found, which has no
+        // per-list provenance, may be about those very members, so it stays untyped.
+        const overridden = [...restored].some(id => !writerSelected.has(id));
         const usedLists = [...new Set(uses.map(use => use.id).filter(id => writerById.has(id) || restored.has(id)))].map(id => views.get(id)!);
         // A list whose date filter could not test some items (research tool contract v1) supports neither "none" nor "all" of
         // them: the part says how many were not checked, and is partial, even when the list is empty.
@@ -795,7 +800,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const outcome = researchIncomplete ? "partial" as const : !anyEvidence ? (incomplete || unsupportedAction || unconfirmedAbsence || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
         // Preserve reason provenance before diagnostic gap strings are combined. Desktop actions never classify prose.
         // Only finished research confirms the writer's missing text: an interrupted search keeps its retry reason alone.
-        const confirmedMissing = [...(researchIncomplete || unconfirmedAbsence || selectionNotFound.some(gap => !gap.confirmed) || explicitNones.includes(false) ? [] : reply?.not_found ?? []),
+        const confirmedMissing = [...(researchIncomplete || unconfirmedAbsence || overridden || selectionNotFound.some(gap => !gap.confirmed) || explicitNones.includes(false) ? [] : reply?.not_found ?? []),
           ...selectionNotFound.filter(gap => gap.confirmed).map(gap => gap.text)];
         const missing = confirmedMissing.length > 0 ? boundedBytes(cleanLine(`Not found: ${confirmedMissing.join("; ")}.`, 600), 2 * 1024)
           : outcome === "not_found" || (unsupportedAction && !anyEvidence && !incomplete && !unconfirmedAbsence && !listGaps.some(gap => gap.partial)
