@@ -371,3 +371,13 @@ no longer holds:
   paragraphs.
 - The block evaluation no longer runs layout v1 as its `today` arm; its other
   catalogs start from the v2 writer's prompt.
+
+### Shortened member labels in tables (2026-11-05)
+
+A bound row may name its member with a whole cell containing an unambiguous
+whole-word phrase from that member's title. For example, `Ledger 01` may
+present `Atlas ledger 01`. The cell must contain a letter and match no other
+member's title or key. Shared labels and numeric amounts cannot suppress the
+member floor. The declared member ID and matching citation remain required.
+Points keep the existing full-title/key check. This removes the ticket-only
+assumption from shortened table labels without inferring identity from prose.
