@@ -698,7 +698,7 @@ describe("agentic Ask: research loop", () => {
     expect(audit[0]).toMatchObject({ outcome: 'partial', model_calls: 2, repairs: 1, fallbacks: 1 });
   });
 
-  it('keeps planner hypotheses out of the writer and permits a fully supported answer after bounded research', async () => {
+  it('keeps planner hypotheses out of the writer and retains supported facts when research cannot finish', async () => {
     const question = 'What did we decide about launch?';
     const plan = [{ question, needs: [{ need: 'decision' }, { need: 'speculative vendor biography' }], notes: 'Speculative planner claim: the vendor resigned.' }];
     const script = scripted([
@@ -713,7 +713,8 @@ describe("agentic Ask: research loop", () => {
       },
     ]);
     const result = await ask({ desk: desk({ search: () => [item('launch', 'We approved launch on Tuesday.')] }), model: script.model }).answer({ question });
-    expect(result).toMatchObject({ outcome: 'answered', parts: [{ status: 'answered' }] });
+    expect(result).toMatchObject({ outcome: 'partial', parts: [{ status: 'partial', statements: [{ text: 'We approved launch on Tuesday.' }] }] });
+    expect(result.notice).toContain('Research stopped before it finished');
     expect(result.parts[0]).not.toHaveProperty('gap');
   });
 
@@ -727,6 +728,21 @@ describe("agentic Ask: research loop", () => {
       expect(result.outcome).toBe('partial');
       expect(script.prompt(2).validation_error).toContain('completed list');
     }
+  });
+
+  it('leaves a not_found need unconfirmed after a source could not be read, so the reader is asked to try again', async () => {
+    const evidence = desk();
+    // Documents could not be searched just now; the two searches across the other sources came back clean and empty.
+    evidence.search.mockImplementation(async (request: { readonly source?: string; readonly query?: string }) => request.source === 'document'
+      ? { items: [], truncated: false, receipt_digests: [], notice: 'Live pages could not be searched just now, so these results leave them out.', notice_kind: 'availability' }
+      : { items: [], truncated: false, receipt_digests: [canonicalSha256({ query: request.query ?? null })] });
+    const script = scripted([step([{}], [{ tool: 'search', args: { query: 'launch date', source: 'documents' } }, search('launch date'), search('launch schedule')]), finish([missing()])]);
+    const result = await createAgenticAskV5({ desk: evidence, model: script.model, generation, audit: { append: () => undefined }, today: () => '2026-09-28', include_gap_details: true })
+      .answer({ question: 'When is launch?' });
+    expect(script.inputs).toHaveLength(2);
+    expect(result.outcome).toBe('partial');
+    expect(result.parts[0]).toMatchObject({ gap: "I couldn't complete the search. Please try again.", gap_details: { interrupted: true } });
+    expect(result.parts[0]?.gap_details).not.toHaveProperty('not_found');
   });
 
   it('stops at an exhaustive empty catalog without waiting for a planner finish', async () => {
@@ -843,7 +859,8 @@ describe("agentic Ask: research loop", () => {
     const result = await ask({ desk: evidence, model: script.model }).answer({ question: 'When is launch?' });
     expect(evidence.search).toHaveBeenCalledTimes(4);
     expect(script.inputs).toHaveLength(5);
-    expect(result.outcome).toBe('answered');
+    expect(result).toMatchObject({ outcome: 'partial', parts: [{ statements: [{ text: 'Launch is Tuesday.' }] }] });
+    expect(result.notice).toContain('Research stopped before it finished');
   });
 
   it('preserves an availability gap across list pages, while normal pagination can complete', async () => {
@@ -1060,9 +1077,9 @@ describe("agentic Ask: failures never lose found evidence", () => {
     ]);
     const audit: AgenticAskAuditEntryV1[] = [];
     const result = await ask({ desk: desk({ search: () => [item("a")] }), model: script.model, audit }).answer({ question: "When is launch?" });
-    expect(result.outcome).toBe("answered");
+    expect(result).toMatchObject({ outcome: "partial", parts: [{ statements: [{ text: "Tuesday." }] }] });
     expect(script.inputs[2]!.system_prompt).toBe(script.inputs[1]!.system_prompt);
-    expect(audit[0]).toMatchObject({ outcome: "answered", fallbacks: 1, repairs: 1, model_calls: 4 });
+    expect(audit[0]).toMatchObject({ outcome: "partial", fallbacks: 1, repairs: 1, model_calls: 4 });
   });
 
   it.each([
@@ -1201,7 +1218,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
     ]);
     const audit: AgenticAskAuditEntryV1[] = [];
     const result = await ask({ desk: evidence, model: script.model, now: () => clock, audit }).answer({ question: "When is launch?" });
-    expect(result.outcome).toBe("answered");
+    expect(result).toMatchObject({ outcome: "partial", parts: [{ statements: [{ text: "Tuesday." }] }] });
     expect(script.inputs).toHaveLength(3);
     expect(audit[0]).toMatchObject({ model_calls: 3, repairs: 0 });
   });
@@ -1237,10 +1254,10 @@ describe("agentic Ask: failures never lose found evidence", () => {
     };
     const audit: AgenticAskAuditEntryV1[] = [];
     const result = await ask({ desk: desk({ search: () => [item("a")] }), model, audit, now: () => clock }).answer({ question: "When is launch?" });
-    expect(result.outcome).toBe("answered");
+    expect(result).toMatchObject({ outcome: "partial", parts: [{ statements: [{ text: "Tuesday." }] }] });
     for (const call of timeouts.filter(value => value.role === "step")) expect(call.at + call.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_RESEARCH_LIVE_BUDGET_V1.writer_reserve_ms);
     expect(timeouts.at(-1)!.role).toBe("answer");
-    expect(audit[0]!.outcome).toBe("answered");
+    expect(audit[0]!.outcome).toBe("partial");
   });
 
   it("keeps fractional-clock research and answer budgets valid for an integer-only adapter", async () => {

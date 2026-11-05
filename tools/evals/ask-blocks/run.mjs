@@ -2,14 +2,14 @@
 /**
  * Opt-in real-model evaluation of Ask block catalogs (README.md, pre-registered).
  *
- * For each case in cases.json, Ask runs as the kernel runs it for a client that asks for answer layout v1 (ADR-0045),
- * over a scripted desk, with a writer that answers nothing: that records production's exact writer prompts with no
- * network call. Then each catalog in catalogs.mjs writes every case three times through the shipped OpenRouter bundle and
- * its answer model, with one repair for a reply its catalog refuses, and grade.mjs grades every trial. A model judge on
- * the same route ranks each case's trial-1 answers twice. The arm `built` grades the shipped writer instead (README.md,
- * "Gate on the built writer"): each of its trials runs Ask through the kernel end to end with answer layout v2
- * (ADR-0051), only the writer's call going to the model, and grade.mjs grades the answer the kernel releases. The report
- * keeps full traces: all data is synthetic.
+ * For each case in cases.json, Ask runs as the kernel runs it for a client that asks for answer layout v2 (ADR-0051),
+ * over a scripted desk, with a writer that answers nothing: that records the built writer's exact prompts with no network
+ * call, and each catalog in catalogs.mjs swaps in its own layout part and entries. Then each catalog writes every case
+ * three times through the shipped OpenRouter bundle and its answer model, with one repair for a reply its catalog
+ * refuses, and grade.mjs grades every trial. A model judge on the same route ranks each case's trial-1 answers twice. The
+ * arm `built` grades the shipped writer instead (README.md, "Gate on the built writer"): each of its trials runs Ask
+ * through the kernel end to end, only the writer's call going to the model, and grade.mjs grades the answer the kernel
+ * releases. The report keeps full traces: all data is synthetic.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -45,7 +45,7 @@ export function help() {
     `  --catalogs id,id    Select catalogs (default: ${CATALOG_IDS.join(",")}), or ${BUILT.id}: the shipped writer,`,
     "                      Ask through the kernel with answer layout v2, graded on the answer it releases.",
     `  --trials N          Trials per case and catalog, 1 through ${TRIALS} (default: ${TRIALS}).`,
-    `  --judge on|off      Run the model judge on the four catalogs (default: on; --catalogs ${BUILT.id} alone needs off).`,
+    `  --judge on|off      Run the model judge on the catalogs (default: on; --catalogs ${BUILT.id} alone needs off).`,
     `  --case-set SET      main (default: the ${CASE_COUNT} pre-registered cases) or held-out: the quick-lead check's ${HELD_OUT_COUNT}`,
     `                      held-out questions, for --catalogs ${BUILT.id} --judge off only; such a run decides nothing alone.`,
     "  --concurrency N     Model calls at once, 1 through 6 (default: 4).",
@@ -92,7 +92,7 @@ export function parseArgs(argv) {
   const once = (values) => new Set(values).size === values.length;
   if (options.caseIds !== null && (options.caseIds.length === 0 || !once(options.caseIds) || options.caseIds.some((id) => !known.has(id)))) throw new Error("--cases must select known cases, each once");
   if (options.catalogIds !== null && (options.catalogIds.length === 0 || !once(options.catalogIds) || options.catalogIds.some((id) => !ARM_IDS.includes(id)))) throw new Error("--catalogs must select known catalogs, each once");
-  // The judge ranks the four catalogs' answers, never the built writer's.
+  // The judge ranks the catalogs' answers, never the built writer's.
   if (options.judge && options.catalogIds?.every((id) => id === BUILT.id)) throw new Error(`--catalogs ${BUILT.id} has nothing for the judge to rank: add --judge off`);
   const calls = (options.caseIds?.length ?? known.size) * ((options.catalogIds?.length ?? CATALOG_IDS.length) * options.trials * 2 + (options.judge ? 4 : 0));
   if (calls > MAX_TOTAL_MODEL_CALLS) throw new Error(`requested model-call budget exceeds ${MAX_TOTAL_MODEL_CALLS}`);
@@ -124,14 +124,14 @@ export function evidenceIdsOf(citations, items) {
 
 /**
  * Production's writer prompts and reply schema for one case, recorded through the kernel with a writer that answers
- * nothing: for answer layout 1 (ADR-0045), which the four catalogs start from, or 2 (ADR-0051), the built writer's.
+ * nothing, for `answerLayout`: the built writer's, answer layout 2 (ADR-0051), which every catalog starts from.
  */
 export async function captureWriterPrompts(caseDefinition, document, generation, answerLayout) {
   let captured = null;
   const { model } = scriptedModel(caseDefinition, (input) => {
     captured ??= Object.freeze({ system_prompt: input.system_prompt, user_prompt: input.user_prompt, schema: input.schema });
-    // A reply that says nothing, in either layout's shape.
-    return { value: { lists: [], tables: [], sentences: [], blocks: [], not_found: [caseDefinition.research.need] }, finish_reason: "stop", usage: null, provider_latency_ms: null };
+    // A reply that says nothing, in layout v2's shape.
+    return { value: { lists: [], blocks: [], not_found: [caseDefinition.research.need] }, finish_reason: "stop", usage: null, provider_latency_ms: null };
   }, "the capture runs only research and the Ask writer");
   await caseAsk(itemsOf(caseDefinition), document, document.asked_at, model, generation, answerLayout).answer({ question: caseDefinition.question, signal: AbortSignal.timeout(30_000) });
   if (captured === null) throw new Error(`case ${caseDefinition.id}: research never reached the writer`);
@@ -291,19 +291,19 @@ export async function run(options, dependencies = {}) {
   const document = loadCases(set.file, set.count);
   const cases = options.caseIds === null ? document.cases : options.caseIds.map((id) => document.cases.find((entry) => entry.id === id));
   const catalogs = options.catalogIds === null ? CATALOGS : ARMS.filter((catalog) => options.catalogIds.includes(catalog.id));
-  // The four catalogs the judge and the founder rank; the built writer is graded alone.
+  // The catalogs the judge and the founder rank; the built writer is graded alone.
   const ranked = catalogs.filter((catalog) => catalog !== BUILT);
   const built = catalogs.includes(BUILT);
   const identityBefore = codeIdentity(ROOT, codeFiles());
   const { route, loaded } = writerRoute(options, dependencies.loaded);
   const model = Object.freeze({ route, adapter_id: loaded.generation.generation_adapter_id, answer_model: loaded.generation.answer_model });
   const progress = dependencies.progress ?? ((line) => process.stderr.write(line));
-  // Each arm's writer prompts: the four catalogs' from layout v1's, the built writer's as the kernel asks with layout v2.
+  // Each arm's writer prompts, from one capture a case with layout v2: the built writer's as the kernel asks, and each
+  // catalog's from them.
   const prompts = new Map();
   for (const caseDefinition of cases) {
-    const v1 = ranked.length === 0 ? null : await captureWriterPrompts(caseDefinition, document, loaded.generation, 1);
-    const v2 = built ? await captureWriterPrompts(caseDefinition, document, loaded.generation, BUILT.answer_layout) : null;
-    prompts.set(caseDefinition.id, new Map(catalogs.map((catalog) => [catalog.id, catalog === BUILT ? v2 : writerPrompts(catalog, v1)])));
+    const captured = await captureWriterPrompts(caseDefinition, document, loaded.generation, BUILT.answer_layout);
+    prompts.set(caseDefinition.id, new Map(catalogs.map((catalog) => [catalog.id, catalog === BUILT ? captured : writerPrompts(catalog, captured)])));
   }
   // Every arm is graded against the evidence its writer was given.
   const evidence = new Map(cases.map((caseDefinition) => [caseDefinition.id, new Map(catalogs.map((catalog) => [catalog.id, evidenceOf(prompts.get(caseDefinition.id).get(catalog.id).user_prompt)]))]));
@@ -332,7 +332,7 @@ export async function run(options, dependencies = {}) {
   }
   const trials = await pooled(tasks, options.concurrency);
 
-  // The judge ranks each case's trial-1 answers of the four catalogs in the page's order, then reversed.
+  // The judge ranks each case's trial-1 answers of the catalogs in the page's order, then reversed.
   const judged = {};
   if (options.judge && ranked.length > 0) {
     const judgeTasks = cases.flatMap((caseDefinition) => {
@@ -356,7 +356,7 @@ export async function run(options, dependencies = {}) {
   }));
 
   const identityAfter = codeIdentity(ROOT, codeFiles());
-  // A complete run is the four-catalog comparison, as pre-registered, or the gate: the built writer alone, judge off.
+  // A complete run is the comparison of every catalog, as pre-registered, or the gate: the built writer alone, judge off.
   const everyTrial = cases.length === set.count && options.trials === TRIALS;
   const gate = built && ranked.length === 0;
   const complete = everyTrial && (gate ? !options.judge : !built && ranked.length === CATALOG_IDS.length && options.judge);

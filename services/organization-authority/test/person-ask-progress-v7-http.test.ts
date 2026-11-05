@@ -118,7 +118,7 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     expect(audits(f, 'echo-person-agentic-ask-audit-v1').at(-1)).toMatchObject({ outcome: 'answered', named_citation_digests: expect.arrayContaining([canonicalSha256(project.citation)]) });
   });
 
-  it('asks the V8 Ask for the layout the client sends in the layout header, streamed or not, and refuses any other value before the Ask runs', async () => {
+  it('asks the V8 Ask for layout v2 when the client sends it in the layout header, and for none with retired layout v1\'s value, streamed or not, and refuses any other value before the Ask runs', async () => {
     const f = await sentFixture();
     const planner = leadsAndTasks();
     const base = await origin(f, planner.model);
@@ -132,8 +132,8 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
         await response.text();
       }
     }
-    // ADR-0045 and ADR-0051: the header's value is the layout asked for, its absence none, for the JSON answer and the stream alike.
-    expect(created.mock.calls.map(([options]) => options.answer_layout)).toEqual([1, 2, undefined, 1, 2, undefined]);
+    // ADR-0051: 2 asks for layout v2, and retired layout v1's 1 (ADR-0045), like the header's absence, for none, for the JSON answer and the stream alike.
+    expect(created.mock.calls.map(([options]) => options.answer_layout)).toEqual([undefined, 2, undefined, undefined, 2, undefined]);
     const asked = audits(f, 'echo-person-agentic-ask-audit-v1').length;
     const planned = planner.catalogs.length;
     for (const progress of [null, PERSON_ASK_PROGRESS_HEADER_VALUE_V3]) {

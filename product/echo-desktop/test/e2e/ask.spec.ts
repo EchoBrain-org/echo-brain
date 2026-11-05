@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emit, launch, type Launched } from './launch.js';
 import { captureOpenExternal } from './native.js';
@@ -90,6 +90,7 @@ test('an approved record opens beside the answer: who approved it, who was there
   // The original's verified evidence, in the same pane.
   await chips.nth(1).click();
   await expect(pane.getByTestId('evidence-text')).toHaveText('We agreed to ship.');
+  await expect(pane.getByTestId('source-review-state')).toHaveCount(0);
   await expect(chips.nth(1)).toHaveAttribute('aria-pressed', 'true');
 
   // × closes the pane; a sentence's number opens it again on that source, and lights the sentence.
@@ -117,6 +118,58 @@ test('an approved record opens beside the answer: who approved it, who was there
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('ask-view')).toHaveCount(0);
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+});
+
+test('a saved imported-note citation opens with a neutral title and refreshes its review badge without changing the citation', async () => {
+  run = await launch('ask-imported-meeting');
+  const { page } = run;
+  const question = 'What do the pilot notes say?';
+  await askFromHome(page, question);
+  await expect(page.getByTestId('answer')).toBeVisible();
+  const folder = join(run.home, '.local', 'share', 'echo-brain', 'person', 'ask-timeline-v1');
+  let files: string[] = [];
+  await expect.poll(() => { files = existsSync(folder) ? readdirSync(folder) : []; return files; }).toEqual([expect.stringMatching(/^[0-9a-f]{64}\.json$/u)]);
+  expect(readFileSync(join(folder, files[0]!), 'utf8')).toContain('Imported meeting (unapproved): Pilot');
+  // Open that saved answer from Home; opening a citation uses the current proof, not its saved label.
+  await page.keyboard.press('Escape');
+  await page.getByTestId('ask-field').click();
+  await page.getByTestId('suggestion').filter({ hasText: question }).click();
+  await page.getByTestId('citation').click();
+  const pane = page.getByTestId('source-pane');
+  await expect(pane.locator('h2')).toHaveText('Imported meeting: Pilot');
+  await expect(pane.getByTestId('source-review-state')).toHaveText('Not reviewed yet');
+  await expect(pane.getByTestId('evidence-text')).toHaveText('The notes propose shipping the pilot.');
+  await expect(pane).not.toContainText('(unapproved)');
+  await expect(pane.getByTestId('source-error')).toHaveCount(0);
+  const originalCitation = evidenceReads()[0]!.body!.citation;
+  // The fixture records a completed review elsewhere. Reopening reads it afresh through the real client.
+  writeFileSync(join(run.home, 'imported-reviewed'), '');
+  await pane.getByTestId('source-close').click();
+  await page.getByTestId('citation').click();
+  await expect(pane.getByTestId('source-review-state')).toHaveText('Reviewed');
+  await expect(pane.locator('h2')).toHaveText('Imported meeting: Pilot');
+  await expect(pane.getByTestId('evidence-text')).toHaveText('The notes propose shipping the pilot.');
+  await expect(pane).not.toContainText('(unapproved)');
+  expect(evidenceReads().map(call => call.body!.citation)).toEqual([originalCitation, originalCitation]);
+});
+
+test('one source pane keeps review badges with their exact revisions while loading and when reviewed and unreviewed notes are cited together', async () => {
+  run = await launch('ask-imported-mixed', { 'hold-imported-newer': '' });
+  const { page } = run;
+  await askFromHome(page, 'What do the pilot notes say?');
+  await page.getByTestId('citation').click();
+  const pane = page.getByTestId('source-pane');
+  await expect(pane.getByTestId('evidence-text')).toHaveText('The notes propose shipping the pilot.');
+  await expect(pane.getByTestId('source-review-state')).toHaveText('Reviewed');
+  await expect(pane.getByTestId('source-review-summary')).toHaveCount(0);
+  await expect(pane).toContainText('Loading verified evidence…');
+  unlinkSync(join(run.home, 'hold-imported-newer'));
+  await expect(pane.getByTestId('evidence-text')).toHaveText(['The notes propose shipping the pilot.', 'The updated notes defer the pilot.']);
+  await expect(pane.getByTestId('source-review-state')).toHaveText(['Reviewed', 'Not reviewed yet']);
+  await expect(pane.getByTestId('source-review-summary')).toHaveCount(0);
+  await expect(pane.locator('h2')).toHaveText('Imported meeting: Pilot');
+  await expect(pane).not.toContainText('(unapproved)');
+  expect(evidenceReads().map(call => (call.body!.citation as { revision_id: string }).revision_id)).toEqual(['rev-1', 'rev-2']);
 });
 
 test('Copy answer copies the answer as Markdown and says so, and main takes no more than an answer holds', async () => {

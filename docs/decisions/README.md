@@ -67,7 +67,7 @@ separately.
 | [ADR-0042](ADR-0042-research-tool-contract.md) | Ask reads every source by what it declares, and reaches the asker's workspace | accepted |
 | [ADR-0043](ADR-0043-ask-receipt-counts-what-research-looked-through.md) | The Ask receipt counts every item research looked through | accepted |
 | [ADR-0044](ADR-0044-search-rebuilds-make-no-model-call.md) | Search rebuilds make no model call; the related-atom projection is removed | accepted |
-| [ADR-0045](ADR-0045-ask-answer-layout.md) | An Ask answer carries its layout, and the desktop sets its type | accepted |
+| [ADR-0045](ADR-0045-ask-answer-layout.md) | An Ask answer carries its layout, and the desktop sets its type | superseded |
 | [ADR-0046](ADR-0046-private-meetings-and-item-routing.md) | Meetings stay private until each item is approved to its destination | accepted |
 | [ADR-0047](ADR-0047-ask-timeline.md) | Ask keeps a device-only timeline that says what changed, and answers follow-ups | accepted |
 | [ADR-0048](ADR-0048-retire-older-person-routes.md) | Retire the older Person routes and fallbacks kept only for compatibility | accepted |

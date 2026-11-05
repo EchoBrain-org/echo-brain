@@ -9,7 +9,7 @@ import {
 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
 import { createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
-import { ANSWER_SINCE_PROMPT, answerLayoutSinceSchema, answerSchema, answerSinceSchema } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
+import { ANSWER_SINCE_PROMPT, answerBlocksSinceSchema, answerSchema, answerSinceSchema } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { agenticAskAnswerSha256V1, compactAndValidateAgenticAskResponseV1 } from "../../src/answer-composition/agentic-ask-v1-response.js";
 import { FOLLOW_UP_RESOLVER_PROMPT, followUpResolutionSchema } from "../../src/answer-composition/agentic-follow-up-resolver-v1.js";
 import { AgenticAskDeadlineErrorV1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
@@ -77,7 +77,7 @@ function desk(overrides: Partial<EvidenceDeskPortV2> = {}) {
     ...overrides,
   } satisfies EvidenceDeskPortV2;
 }
-function askV8(port: EvidenceDeskPortV2, run: ReturnType<typeof scripted>, options: { readonly answer_layout?: 1 | 2 } = {}) {
+function askV8(port: EvidenceDeskPortV2, run: ReturnType<typeof scripted>, options: { readonly answer_layout?: 2 } = {}) {
   const audits: AgenticAskAuditEntryV1[] = [];
   const ask = createAgenticAskV5({
     desk: port, model: run.model, generation, audit: { append: entry => { audits.push(entry); } }, today: () => "2026-10-25",
@@ -238,7 +238,7 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
 });
 
 describe("Ask again on the V8 Ask (ADR-0047)", () => {
-  const again = (writer: unknown, options: { readonly answer_layout?: 1 | 2; readonly steps?: readonly unknown[] } = {}) => {
+  const again = (writer: unknown, options: { readonly answer_layout?: 2; readonly steps?: readonly unknown[] } = {}) => {
     const run = scripted({ steps: options.steps ?? [searchFor(ASK_AGAIN.question, "THERM-482 owner"), finishOn(ASK_AGAIN.question, ["E1"])], writer: [writer] });
     return { run, ...askV8(desk(), run, options.answer_layout === undefined ? {} : { answer_layout: options.answer_layout }) };
   };
@@ -292,12 +292,12 @@ describe("Ask again on the V8 Ask (ADR-0047)", () => {
     expect(JSON.parse(run.of("writer")[0]!.user_prompt)).not.toHaveProperty("earlier");
   });
 
-  it("lays out the answer and keeps since beside it when the client asked for layout", async () => {
-    const { run, ask } = again({ lists: [], sentences: [{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"], form: "lead" }], since: [{ text: "The owner changed to Dev Patel.", evidence: ["E1"] }], not_found: [] }, { answer_layout: 1 });
+  it("arranges the answer in blocks and keeps since beside it when the client asked for layout v2", async () => {
+    const { run, ask } = again({ lists: [], blocks: [{ block: "answer", sentences: [{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"] }] }], since: [{ text: "The owner changed to Dev Patel.", evidence: ["E1"] }], not_found: [] }, { answer_layout: 2 });
     const response = await ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN });
-    expect(run.of("writer")[0]!.schema).toBe(answerLayoutSinceSchema);
+    expect(run.of("writer")[0]!.schema).toBe(answerBlocksSinceSchema);
     expect(run.of("writer")[0]!.max_output_tokens).toBe(2_500);
-    expect(response.parts[0]!.layout).toEqual([{ kind: "lead", statements: [0] }]);
+    expect(response.parts[0]!.blocks).toEqual([{ kind: "answer", statements: [0] }]);
     expect(response.since).toEqual({ statements: [{ text: "The owner changed to Dev Patel.", citation_indexes: [0], private: false }] });
   });
 });
@@ -330,6 +330,18 @@ describe("fitting an Ask again's answer to its byte bound (ADR-0047)", () => {
     schema_version: 8, kind: "echo-clean-person-answer-v8", scope: { kind: "global" }, outcome: "answered", citations: [citation],
     parts: [{ question: "Q", status: "answered", statements: Array.from({ length: 10 }, (_, index) => statement(index)) }],
     question: "Who owns the THERM-482 fix?", since: { statements: Array.from({ length: since }, (_, index) => statement(100 + index)) },
+  });
+
+  it("preserves typed actionable reasons when byte compaction removes the since list", () => {
+    const base = response(6);
+    const gap_details = { unsupported_action: true as const, interrupted: true as const, not_found: "Not found: the reviewer." };
+    const over: PersonAnswerResponseV8 = { ...base, outcome: "partial", parts: [{ ...base.parts[0]!, status: "partial", gap: "Some list rows did not fit.", gap_details }] };
+    expect(canonicalJsonBytes(over).byteLength).toBeGreaterThan(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
+    const fitted = compactAndValidateAgenticAskResponseV1(over);
+    expect(fitted).not.toHaveProperty("since");
+    expect(fitted.outcome).toBe("partial");
+    expect(fitted.parts[0]!.gap_details).toEqual(gap_details);
+    expect(canonicalJsonBytes(fitted).byteLength).toBeLessThanOrEqual(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
   });
 
   it("drops since first and whole, keeping the answer, its outcome and its question", () => {

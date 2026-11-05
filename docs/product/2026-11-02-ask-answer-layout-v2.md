@@ -33,8 +33,9 @@ rank of 1.40 against production's 2.33, and best in 10 of 15 cases.
 ## How it works
 
 1. **The desktop asks for it.** The person client sends
-   `x-echo-answer-layout: 2`. A client that sends `1` keeps layout v1 exactly as
-   today, and one that sends nothing keeps plain sentences. An Authority that
+   `x-echo-answer-layout: 2`, and a client that sends nothing keeps plain
+   sentences. Since layout v1 was retired on 2026-11-04, a client from before
+   layout v2, which sends `1`, gets plain sentences too. An Authority that
    predates v2 refuses `2`, as it refuses any value it does not know, so the
    Authority is released before the desktop that asks for it
    ([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md): no older
@@ -44,8 +45,10 @@ rank of 1.40 against production's 2.33, and best in 10 of 15 cases.
    name, what it shows, and each field it takes with its limits
    ([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)'s shape). The
    entries, prompt and reply shape are the evaluation's, with two lines
-   production needs: the reply also names the lists it uses, and the writer
-   never writes items for a list's members, because code states them.
+   production needs: the reply returns in `lists` the members that answer the
+   question, which code states, and a table row or point that presents one of
+   them declares it as its `member` and names it, so code does not state that
+   member again (ADR-0051, amended 2026-11-04).
 3. **Every item is one cited claim.** An answer or text sentence, a point, a
    table row, a timeline event, a card fact and a quote are each one statement
    with its own citations. Code writes the statement for a row, an event, a
@@ -64,19 +67,20 @@ rank of 1.40 against production's 2.33, and best in 10 of 15 cases.
 5. **Everything else stays.** Code still writes list members as tables, right
    after the answer; an answer too large for its byte bound is released
    without layout; the writer's one repair, and the writer's prompt and reply
-   shape for v1 and for no layout, are unchanged byte for byte.
+   shape for no layout, are unchanged byte for byte.
 6. **No count of blocks, items, statements or citations.** The founder
    lifted them for an answer in blocks (ADR-0051, both amended 2026-11-02):
    what bounds it is its 64 KiB, the writer's output room, the 25 members a
    list's statement names, and what one statement may hold, 4 KiB and 40
-   citations. Layout v1, no layout, and a v2 answer released without its
-   blocks keep ADR-0041's 10 statements and 40 citations.
+   citations. An answer without layout, and a v2 answer released without its
+   blocks, keep ADR-0041's 10 statements and 40 citations.
 7. **The desktop draws each block in its own style**, light and dark: the
    answer as today's lead, titles as section headings, bullets, numbered
    steps, tables as today, a timeline with dates down the side, a card with
    its kind's icon and label and value rows, a quote with its source under it.
    It numbers, shows and checks every source of an answer in blocks, however
-   many. Answers saved before this change still draw with layout v1.
+   many. An answer saved with layout v1 before it was retired reads as
+   paragraphs.
 
 ## Gates
 
@@ -94,7 +98,8 @@ rank of 1.40 against production's 2.33, and best in 10 of 15 cases.
   gate-blockers, review-multi and workstreams-status, and to a card or
   timeline in person-profile and trap-undated: that is prompt work, measured
   by the block evaluation.
-- Retiring layout v1 once every installed desktop asks for v2.
+- Retiring layout v1, which followed on 2026-11-04 once every desktop asked
+  for v2 ([ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md), amended).
 - People annotating block choices, and any staging release, which follows
   the [operator playbook](../operations/PB-OPERATIONS-001-authority-operator-lane.md)
   after the founder validates on the desktop.

@@ -9,9 +9,10 @@ component_ids:
 created_at: 2026-10-23
 reviewed_at: 2026-10-23
 reviewed_ref: 56461ffc1f79ae9facb39cd198bf0bead76efa27
-status: accepted
+status: superseded
 supersedes: []
-superseded_by: []
+superseded_by:
+  - ADR-0051
 updates:
   - ADR-0041
   - ADR-0042
@@ -98,3 +99,18 @@ parallel items, or which named a list's members.
 On 2026-10-25 [ADR-0047](ADR-0047-ask-timeline.md) dropped the coverage note
 above. On 2026-10-26 [ADR-0049](ADR-0049-only-me-is-a-lock.md) shows a
 table's caption only when the table opens the answer.
+
+## Lifecycle update
+
+Superseded on 2026-11-04 by
+[ADR-0051](ADR-0051-ask-answer-layout-v2.md), and layout v1 is retired. Every
+desktop and CLI has asked for layout v2 since its release. The writer's forms,
+sections and declared tables, a part's `layout`, and the desktop's drawing of
+it are removed. An Ask that still sends `x-echo-answer-layout: 1`, from a
+desktop or CLI older than layout v2, is answered as one without the header, in
+paragraphs. A desktop drops the layout of an Ask timeline turn saved before
+layout v2 and shows its statements as paragraphs. What this record set and
+layout v2 kept continues under ADR-0051: the statements stay the claims, a
+table's rows cite what its statements cite, code tabulates lists, the desktop
+owns typography, Copy answer writes Markdown, and an answer that would pass its
+byte bound is released without its layout.

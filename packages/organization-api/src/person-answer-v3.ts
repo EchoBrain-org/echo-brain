@@ -18,7 +18,23 @@ import {
  * path keeps its V2 name because installed clients open citations there.
  */
 export const PERSON_SOURCE_EVIDENCE_PATH_V1 = '/v2/person/ask/source';
+/** New source readers opt into review metadata; the unchanged response stays valid for installed exact-key clients. */
+export const PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1 = 'x-echo-source-review';
+export const PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_VALUE_V1 = '1';
 const PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1 = 3 * 1024;
+
+export function validatePersonSourceEvidenceReviewHeaderV1(value: unknown): true | undefined {
+  if (value === undefined) return undefined;
+  if (value === PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_VALUE_V1) return true;
+  fail('Ask source review header is invalid');
+}
+
+/**
+ * An imported meeting revision's review, as its source pane shows it: not reviewed yet, reviewed, or nothing to
+ * review (its notes hold no decision or action, so no card is ever made). No state approves the source notes themselves.
+ */
+export const PERSON_IMPORTED_MEETING_REVIEWS_V1 = Object.freeze(['not_reviewed', 'reviewed', 'nothing_to_review'] as const);
+export type PersonImportedMeetingReviewV1 = (typeof PERSON_IMPORTED_MEETING_REVIEWS_V1)[number];
 
 export type PersonAnswerScopeV3 =
   | { readonly kind: 'global' }
@@ -72,6 +88,8 @@ export interface PersonSourceEvidenceV1 {
   readonly citation: PersonSourceEvidenceCitationV1 & { readonly label: string };
   /** Bounded canonical evidence packet, not the original file or a mutable latest version. */
   readonly text: string;
+  /** Present for imported meeting notes only when the reader opts in. Review does not approve the source notes themselves. */
+  readonly imported_meeting_review?: PersonImportedMeetingReviewV1;
 }
 
 /** An Ask or evidence-desk scope, as an answer, a desk or a cited original's read names it: global or one project. */
@@ -156,16 +174,19 @@ export function validatePersonSourceEvidenceReadRequestV1(value: unknown): Perso
 
 export function validatePersonSourceEvidenceV1(value: unknown): PersonSourceEvidenceV1 {
   const input = object(value, 'Ask source evidence response');
-  assertExactKeys(input, ['schema_version', 'kind', 'scope', 'citation', 'text'], 'Ask source evidence response');
+  const imported = Object.hasOwn(input, 'imported_meeting_review');
+  assertExactKeys(input, ['schema_version', 'kind', 'scope', 'citation', 'text', ...(imported ? ['imported_meeting_review'] : [])], 'Ask source evidence response');
   if (input.schema_version !== 1 || input.kind !== 'echo-person-source-evidence-v1') {
     fail('Ask source evidence response is invalid');
   }
+  if (imported && !PERSON_IMPORTED_MEETING_REVIEWS_V1.includes(input.imported_meeting_review as PersonImportedMeetingReviewV1)) fail('Ask source evidence imported meeting review is invalid');
   const result: PersonSourceEvidenceV1 = {
     schema_version: 1,
     kind: 'echo-person-source-evidence-v1',
     scope: validatePersonAnswerScopeV3(input.scope),
     citation: validatePersonSourceRevisionCitationV1(input.citation, 'required', 'Ask source evidence citation') as PersonSourceEvidenceCitationV1 & { readonly label: string },
     text: input.text as string,
+    ...(imported ? { imported_meeting_review: input.imported_meeting_review as PersonImportedMeetingReviewV1 } : {}),
   };
   assertEvidenceText(result.text, 'Ask source evidence text', PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1);
   if (canonicalJsonBytes(result).byteLength > PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1 + 2048) {

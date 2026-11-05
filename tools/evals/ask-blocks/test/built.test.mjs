@@ -6,7 +6,7 @@ import test from "node:test";
 import { citationOfAgenticEvidenceItemV8 } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-evidence-bundle-v1.js";
 import { ANSWER_BLOCK_CATALOG, ANSWER_BLOCKS_PROMPT, answerBlocksSchema } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { sha256 } from "../../shared/runner.mjs";
-import { ARM_IDS, BUILT, CATALOG_IDS, readReleased } from "../catalogs.mjs";
+import { ARM_IDS, BUILT, CATALOGS, CATALOG_IDS, TEMPLATE_CATALOG, readReleased } from "../catalogs.mjs";
 import { decideGate, evidenceOf, gradeTrial, loadCases } from "../grade.mjs";
 import { captureWriterPrompts, deskItem, evidenceIdsOf, parseArgs, run } from "../run.mjs";
 
@@ -89,8 +89,6 @@ test("is not valid when the answer was released without blocks or fails the V8 c
   const { blocks: _blocks, ...plain } = released().parts[0];
   const without = readReleased({ ...released(), parts: [plain] }, ids);
   assert.deepEqual([without.valid, without.problems, without.blocks], [false, ["the answer was released without blocks"], []]);
-  const laidOut = readReleased({ ...released(), parts: [{ ...plain, layout: [{ kind: "lead", statements: [0] }, { kind: "paragraph", statements: [1, 2, 3, 4, 5, 6, 7, 8, 9] }] }] }, ids);
-  assert.deepEqual(laidOut.problems, ["the answer was released without blocks"]);
   const broken = readReleased(released({ blocks: released().parts[0].blocks.slice(0, 6) }), ids);
   assert.deepEqual([broken.valid, broken.problems], [false, ["organization API: Ask answer blocks leave a statement out"]]);
   assert.equal(readReleased(null, ids).valid, false);
@@ -106,12 +104,12 @@ test("decides the gate only on a complete gate run, by rules 1 to 5", () => {
   assert.deepEqual(decideGate(undefined, true), { complete: true, arm: "built", passes: null, rules: null });
 });
 
-test("selects the built arm beside the four catalogs, and never asks the judge to rank it", () => {
+test("selects the built arm beside the three catalogs, and never asks the judge to rank it", () => {
   const directory = mkdtempSync(join(tmpdir(), "ask-blocks-built-args-"));
   const credential = join(directory, "credential");
   writeFileSync(credential, "not read", { mode: 0o600 });
   const base = ["--run", "--credential-file", credential, "--out", join(directory, "out")];
-  assert.deepEqual([CATALOG_IDS, ARM_IDS], [["today", "templates", "balanced", "primitives"], ["today", "templates", "balanced", "primitives", "built"]]);
+  assert.deepEqual([CATALOG_IDS, ARM_IDS], [["templates", "balanced", "primitives"], ["templates", "balanced", "primitives", "built"]]);
   const gate = parseArgs([...base, "--catalogs", "built", "--judge", "off"]);
   assert.deepEqual([gate.catalogIds, gate.judge, gate.trials, gate.caseIds], [["built"], false, 3, null]);
   assert.throws(() => parseArgs([...base, "--catalogs", "built"]), /nothing for the judge to rank: add --judge off/u);
@@ -172,6 +170,24 @@ test("runs the built writer through the kernel end to end, keeping each call and
   assert.deepEqual(report.catalogs.built, { modeled_on: BUILT.modeled_on, answer_layout: 2, catalog_key: "block_catalog", catalog: ANSWER_BLOCK_CATALOG, can_show: BUILT.can_show, schema: answerBlocksSchema });
   assert.deepEqual([report.complete, report.decision, report.judge, report.errors], [false, { complete: false, arm: "built", passes: null, rules: report.summary.built.rules }, {},
     { writer_calls: 0, trials_without_reply: 0, judge_orders_without_ranks: 0 }]);
+});
+
+test("starts each catalog from the built writer's prompts: only the layout part and the block catalog differ", async () => {
+  const out = mkdtempSync(join(tmpdir(), "ask-blocks-built-catalog-"));
+  const filled = { template: { name: "fact", answer: [{ text: "It is a High priority Jira issue.", evidence: ["E1"] }] }, not_found: [] };
+  const writer = route((input) => (Object.hasOwn(input.schema.properties, "template") ? filled : TICKET_REPLY));
+  const { report } = await run(options(out, { catalogIds: ["templates", "built"] }), { loaded: { structured_output: writer, generation }, progress: () => undefined });
+  const prompts = report.prompts["ticket-profile"];
+  const [templates, built] = [JSON.parse(prompts.templates.user_prompt), JSON.parse(prompts.built.user_prompt)];
+  // The same input, the catalog's entries in the block catalog's place.
+  assert.deepEqual(Object.keys(templates), Object.keys(built).map((key) => (key === "block_catalog" ? "template_catalog" : key)));
+  const { template_catalog: templateCatalog, ...templatesRest } = templates;
+  const { block_catalog: blockCatalog, ...builtRest } = built;
+  assert.deepEqual([templatesRest, templateCatalog, blockCatalog], [builtRest, TEMPLATE_CATALOG, ANSWER_BLOCK_CATALOG]);
+  // The same system prompt, the catalog's layout part in place of the kernel's.
+  const system = (arm) => report.system_prompts[prompts[arm].system_prompt_sha256];
+  const layout = CATALOGS.find((entry) => entry.id === "templates").layout_prompt;
+  assert.equal(system("templates"), `${system("built").slice(0, -ANSWER_BLOCKS_PROMPT.length)}${layout}`);
 });
 
 test("lets the kernel's own reading, repair and downgrades decide what is released; the harness adds no repair", async () => {

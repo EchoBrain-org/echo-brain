@@ -8,14 +8,16 @@ export interface AgenticResearchDriverV1 {
 }
 
 /** Native harness notes are not constrained by the old step protocol's numerical caps. */
-export function parseAgenticDriverFinishV1(value: unknown, question: boolean): { readonly completed: boolean; readonly parts: readonly StepPart[] } {
+export function parseAgenticDriverFinishV1(value: unknown, question: boolean): { readonly completed: boolean; readonly parts: readonly StepPart[]; readonly unsupported_action?: true } {
   const body = object(value);
-  if (body === null || typeof body.completed !== 'boolean' || !Array.isArray(body.parts) || body.parts.length === 0) throw new AgenticAskOutputErrorV1('finish requires completed and nonempty parts');
+  if (body === null || typeof body.completed !== 'boolean' || !Array.isArray(body.parts)) throw new AgenticAskOutputErrorV1('finish requires completed and parts');
+  if (body.unsupported_action !== undefined && (body.unsupported_action !== true || !question)) throw new AgenticAskOutputErrorV1('unsupported_action is true only for an Ask request to change data or send a message');
+  if (body.parts.length === 0 && body.unsupported_action !== true) throw new AgenticAskOutputErrorV1('finish requires factual parts unless the request is only an unsupported action');
   const text = (value: unknown, field: string): string => {
     if (typeof value !== 'string' || !value.trim()) throw new AgenticAskOutputErrorV1(`${field} must be nonempty text`);
     return value;
   };
-  return { completed: body.completed, parts: body.parts.map(raw => {
+  return { completed: body.completed, ...(body.unsupported_action === true ? { unsupported_action: true as const } : {}), parts: body.parts.map(raw => {
     const part = object(raw);
     if (part === null || !Array.isArray(part.needs) || part.needs.length === 0 || typeof part.notes !== 'string') throw new AgenticAskOutputErrorV1('Each part needs notes and nonempty needs');
     return { question: text(part.question, 'question'), notes: part.notes, needs: part.needs.map(raw => {

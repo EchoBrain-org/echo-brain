@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, failureView, homeView, invitationView, isRecordRef, listView, membersView, noteMatchesView,
+  abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView, membersView, noteMatchesView,
   noteTitle, openItemsView, openItemView, openView, revokedView, projectActivityView, projectMatchesView, projectSettingsView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
@@ -8,7 +8,7 @@ import { personCitedRecordV1, personRecordAtomIdV1, validatePersonRecordListV1 }
 import type { ApprovedRecord } from '../../src/shared/protocol.js';
 import { checkOf } from '../../src/shared/protocol.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
-import { blocksAnswer, layoutAnswer } from '../fixtures/authority.js';
+import { blocksAnswer } from '../fixtures/authority.js';
 
 // The store reads the preload's bridge when it loads; its record join needs none.
 (globalThis as { window?: unknown }).window = { echo: {} };
@@ -28,6 +28,19 @@ const AT = '2026-09-21T22:01:00.000Z';
 const visible = (sources: readonly Record<string, unknown>[]) => sources.map(({ cited: _cited, ...rest }) => rest);
 
 describe('view models copy only what the renderer may see', () => {
+  it('presents imported notes with the server label and review state, independently of the canonical packet heading', () => {
+    const text = 'Imported meeting (unapproved): Pilot\nShip the pilot.\n\nKeep its rollout small.';
+    const label = 'Imported meeting: Pilot';
+    const packet = { schema_version: 1, kind: 'echo-person-source-evidence-v1', scope: { kind: 'global' },
+      citation: { kind: 'source_revision', source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
+        representation_sha256: sha('5'), anchor_sha256: sha('6'), label }, text };
+    for (const imported_meeting_review of ['not_reviewed', 'reviewed', 'nothing_to_review'] as const) {
+      expect(evidenceView({ ok: true, result: { ...packet, imported_meeting_review } }))
+        .toEqual({ label, text: 'Ship the pilot.\n\nKeep its rollout small.', imported_meeting_review });
+    }
+    // The same words in an ordinary note are content; its title cannot imply a review badge or strip a line.
+    expect(evidenceView({ ok: true, result: packet })).toEqual({ label, text });
+  });
   it.each(['confluence', 'notion', 'knowledge-base'])('preserves %s page identity without provider coordinates', tool_id => {
     const permalink = 'https://wiki.example.test/pages/view?pageId=12345';
     const source = (tool: unknown) => ({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
@@ -769,45 +782,6 @@ describe('a streamed answer\'s receipt (ADR-0039, ADR-0040, ADR-0043)', () => {
   });
 });
 
-describe('a laid-out answer (answer layout v1, ADR-0045)', () => {
-  const scope = { kind: 'global' } as const;
-  const question = 'Can DVT-R2 run on the reduced test scope?';
-
-  it('carries the fixture\'s layout as the client validated it; an answer to an Ask that did not ask for it has none, and reads the same', () => {
-    const laid = answerView({ ok: true, result: layoutAnswer(question, scope, true) }, scope);
-    const layout = laid.parts[0]!.layout!;
-    expect(layout.map(block => block.kind)).toEqual(['lead', 'heading', 'bullets', 'heading', 'table']);
-    expect(layout[4]).toMatchObject({ kind: 'table', statements: [5, 6, 7, 8], columns: ['Action', 'Owner', 'Due', 'Status'] });
-    const plain = answerView({ ok: true, result: layoutAnswer(question, scope, false) }, scope);
-    expect(plain.parts[0]).not.toHaveProperty('layout');
-    expect(plain.parts[0]!.statements).toEqual(laid.parts[0]!.statements);
-    // The plain reading, for Copy answer, stays the statements, in order, without what research did not cover.
-    expect(laid.text).toBe(plain.text);
-    expect(laid.text).not.toContain('THERM meetings in range');
-  });
-
-  it('marks a cited item only you or the approver can read as private, for the lock on a table row that cites it', () => {
-    const laid = answerView({ ok: true, result: layoutAnswer(question, scope, true) }, scope);
-    // Three team pages, then three tickets only you can read.
-    expect(laid.sources.map(source => source.private ?? false)).toEqual([false, false, false, true, true, true]);
-    const approver = answerView({ ok: true, result: v8([{ ...named, visibility: 'approver_only' }]) }, scope);
-    expect(approver.sources[0]).toMatchObject({ kind: 'record', private: true });
-    // A progress row's items and a receipt's never carry it: only an answer's sources do.
-    expect(askStepView({ ok: true, progress: { type: 'read', items: [ticket] } })).toEqual({ type: 'read', items: [
-      { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7' }] });
-  });
-
-  it('refuses a layout that leaves a statement out, or a row that cites what its statements do not', () => {
-    const answer = layoutAnswer(question, scope, true) as { parts: { layout: Record<string, unknown>[] }[] };
-    const [part] = answer.parts;
-    const dropped = { ...answer, parts: [{ ...part, layout: part!.layout.slice(0, 3) }] };
-    expect(() => answerView({ ok: true, result: dropped }, scope)).toThrow(ViewError);
-    const table = part!.layout[4] as { rows: { cells: string[]; citation_indexes: number[] }[] };
-    const wrong = { ...answer, parts: [{ ...part, layout: [...part!.layout.slice(0, 4), { ...table, rows: [{ ...table.rows[0], citation_indexes: [0] }, ...table.rows.slice(1)] }] }] };
-    expect(() => answerView({ ok: true, result: wrong }, scope)).toThrow(ViewError);
-  });
-});
-
 describe('an answer arranged in blocks (answer layout v2, ADR-0051)', () => {
   const scope = { kind: 'global' } as const;
   const question = 'Can THERM start PVT?';
@@ -825,13 +799,31 @@ describe('an answer arranged in blocks (answer layout v2, ADR-0051)', () => {
     expect(arranged.text).toBe(plain.text);
   });
 
-  it('refuses blocks beside a layout, or blocks that leave a statement out', () => {
+  it('marks a cited item only you or the approver can read as private, for the lock on its source row', () => {
+    const arranged = answerView({ ok: true, result: blocksAnswer(question, scope, true) }, scope);
+    // Three team pages, then three tickets only you can read.
+    expect(arranged.sources.map(source => source.private ?? false)).toEqual([false, false, false, true, true, true]);
+    const approver = answerView({ ok: true, result: v8([{ ...named, visibility: 'approver_only' }]) }, scope);
+    expect(approver.sources[0]).toMatchObject({ kind: 'record', private: true });
+    // A progress row's items and a receipt's never carry it: only an answer's sources do.
+    expect(askStepView({ ok: true, progress: { type: 'read', items: [ticket] } })).toEqual({ type: 'read', items: [
+      { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7' }] });
+  });
+
+  it('refuses a part laid out by retired layout v1, with blocks or without, blocks that leave a statement out, and a row that cites what its statements do not', () => {
     const answer = blocksAnswer(question, scope, true) as { parts: { blocks: Record<string, unknown>[] }[] };
     const [part] = answer.parts;
-    const both = { ...answer, parts: [{ ...part, layout: [{ kind: 'paragraph', statements: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] }] }] };
-    expect(() => answerView({ ok: true, result: both }, scope)).toThrow(ViewError);
+    const plain = blocksAnswer(question, scope, false) as { parts: Record<string, unknown>[] };
+    const layout = [{ kind: 'paragraph', statements: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] }];
+    for (const laidOut of [{ ...plain, parts: [{ ...plain.parts[0], layout }] }, { ...answer, parts: [{ ...part, layout }] }]) {
+      expect(() => answerView({ ok: true, result: laidOut }, scope)).toThrow(ViewError);
+    }
     const dropped = { ...answer, parts: [{ ...part, blocks: part!.blocks.slice(0, 6) }] };
     expect(() => answerView({ ok: true, result: dropped }, scope)).toThrow(ViewError);
+    const table = part!.blocks[1] as { rows: { cells: string[]; citation_indexes: number[] }[] };
+    const wrong = { ...answer, parts: [{ ...part, blocks: part!.blocks.map((block, at) => at === 1 ? { ...table, rows: [{ ...table.rows[0], citation_indexes: [0] }, table.rows[1]] }
+      : block) }] };
+    expect(() => answerView({ ok: true, result: wrong }, scope)).toThrow(ViewError);
   });
 });
 

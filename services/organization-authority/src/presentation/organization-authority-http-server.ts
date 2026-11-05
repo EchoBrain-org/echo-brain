@@ -1,6 +1,6 @@
 import {
-  PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
-  validatePersonAskAnswerLayoutHeaderV2, validatePersonAskTimeContextV1, type PersonAskAnswerLayoutV2, type PersonAskTimeContextV1,
+  PERSON_ASK_GAP_DETAILS_HEADER_V1, PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
+  validatePersonAskGapDetailsHeaderV1, validatePersonAskAnswerLayoutHeaderV2, validatePersonAskTimeContextV1, type PersonAskAnswerLayoutV2, type PersonAskTimeContextV1,
 } from "@echo-brain/organization-api";
 import {
   PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
@@ -66,6 +66,8 @@ import {
   PERSON_RESEARCH_EVAL_START_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
+  PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1,
+  validatePersonSourceEvidenceReviewHeaderV1,
   validatePersonAnswerRequestV3,
   validatePersonRunsRequestV1,
   validatePersonDiagnosticsRequestV1,
@@ -471,15 +473,15 @@ interface PersonReadGetApplication {
 }
 
 /** Original-source reads validate the body before checking the bearer, then release synchronously. */
-function personSourcePost<Application, Request>(
-  application: Application,
-  validate: (value: unknown) => Request,
-  read: (application: Application, input: { readonly access_token: string; readonly request: Request }) => unknown,
-): PersonPostHandler {
+function personSourcePost(application: PersonSourceEvidenceHttpApplicationV1): PersonPostHandler {
   return async (request, response) => {
-    const requestBody = await personBody(request, validate);
-    json(response, 200, read(application, {
+    const requestBody = await personBody(request, validatePersonSourceEvidenceReadRequestV1);
+    let review: true | undefined;
+    try { review = validatePersonSourceEvidenceReviewHeaderV1(request.headers[PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1]); }
+    catch { throw new AuthorityOperationError('invalid_request', 'Ask source review header is invalid'); }
+    json(response, 200, application.readSource({
       access_token: accessToken(request.headers.authorization), request: requestBody,
+      ...(review === undefined ? {} : { include_imported_meeting_review: review }),
     }));
   };
 }
@@ -490,17 +492,27 @@ function askTimeContext(request: IncomingMessage): PersonAskTimeContextV1 | unde
   catch { throw new AuthorityOperationError('invalid_request', 'Ask time context is invalid'); }
 }
 
-/** Which answer layout the client asked for, v1 (ADR-0045) or v2 (ADR-0051), if any; only a V8 answer reads it. */
+/**
+ * Which answer layout the client asked for: v2 (ADR-0051), if any; only a V8 answer reads it. Retired layout v1's value
+ * (ADR-0045) asks for none, so a desktop or CLI from before layout v2 gets the answer without a layout, as paragraphs.
+ */
 function askAnswerLayout(request: IncomingMessage): PersonAskAnswerLayoutV2 | undefined {
   try { return validatePersonAskAnswerLayoutHeaderV2(request.headers[PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]); }
   catch { throw new AuthorityOperationError('invalid_request', 'Ask answer layout is invalid'); }
 }
 
-/** An Ask's optional headers as its options: the client's time context, and answer layout when asked for. An invalid one is `invalid_request`. */
-function askOptions(request: IncomingMessage): { readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: PersonAskAnswerLayoutV2 } {
+/** Only explicitly opted-in clients can receive the additional V8 part field. */
+function askGapDetails(request: IncomingMessage): true | undefined {
+  try { return validatePersonAskGapDetailsHeaderV1(request.headers[PERSON_ASK_GAP_DETAILS_HEADER_V1]); }
+  catch { throw new AuthorityOperationError('invalid_request', 'Ask gap details header is invalid'); }
+}
+
+/** An Ask's optional client headers as its options. An invalid one is `invalid_request`. */
+function askOptions(request: IncomingMessage): { readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: PersonAskAnswerLayoutV2; readonly include_gap_details?: true } {
   const time_context = askTimeContext(request);
   const answer_layout = askAnswerLayout(request);
-  return { ...(time_context === undefined ? {} : { time_context }), ...(answer_layout === undefined ? {} : { answer_layout }) };
+  const include_gap_details = askGapDetails(request);
+  return { ...(time_context === undefined ? {} : { time_context }), ...(answer_layout === undefined ? {} : { answer_layout }), ...(include_gap_details === undefined ? {} : { include_gap_details }) };
 }
 
 /** Ask, desk and list reads check the bearer and install cancellation before reading any body bytes. */
@@ -508,7 +520,7 @@ function personCancellablePost<Application, Request>(
   application: Application,
   validate: (value: unknown) => Request,
   read: (application: Application, input: {
-    readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: PersonAskAnswerLayoutV2; readonly signal: AbortSignal;
+    readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: PersonAskAnswerLayoutV2; readonly include_gap_details?: true; readonly signal: AbortSignal;
   }) => Promise<unknown>,
   ask = false,
 ): PersonPostHandler {
@@ -782,7 +794,7 @@ export function createOrganizationAuthorityHttpServer(
         }
       }
     })],
-    [PERSON_SOURCE_EVIDENCE_PATH_V1, personSourcePost(options.person_source_evidence, validatePersonSourceEvidenceReadRequestV1, (application, input) => application.readSource(input))],
+    [PERSON_SOURCE_EVIDENCE_PATH_V1, personSourcePost(options.person_source_evidence)],
     [PERSON_LIST_PATH_V1, personCancellablePost(options.person_list, validatePersonListRequestV1, (application, input) => application.list(input))],
     [PERSON_OPEN_PATH_V1, personCancellablePost(options.person_list, validatePersonOpenRequestV1, (application, input) => application.open(input))],
   ]);

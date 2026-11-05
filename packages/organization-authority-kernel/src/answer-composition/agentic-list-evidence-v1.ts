@@ -1,3 +1,4 @@
+import { PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4 } from "@echo-brain/organization-api";
 import type { EvidenceDeskDateKindV1 } from "../shared/evidence-desk-v1.js";
 import type { EvidenceDeskItemV2 } from "../shared/evidence-desk-v2.js";
 import { evidenceDayV1, matchesEvidenceDateV1, type EvidenceDateFieldV1, type EvidenceDateSelectionV1, type EvidenceDatesV1 } from "../shared/temporal-query-v1.js";
@@ -440,8 +441,10 @@ export interface AgenticWriterListV1 {
   /** Members research checked, out of `count`. */
   readonly checked: number;
   readonly read_at: string;
-  /** Code states it: a which_items need research has not given up on cites it (ADR-0041). */
+  /** A which_items need research has not given up on cites this inventory; selection remains separate from presentation. */
   readonly stated: boolean;
+  /** Exact requested members from which_items needs research has not given up on, mapped from any opened bodies to inventory row ids. */
+  readonly requested_members?: readonly string[];
   /** Members that fit the writer prompt, in list order. */
   readonly members: readonly AgenticWriterListMemberV1[];
   /** Members past the writer's bound; present only when some were left out. */
@@ -507,7 +510,7 @@ export type AgenticListSelectionV1 =
 export interface AgenticAnswerListUseV1 {
   readonly id: AgenticListIdV1;
   readonly where?: AgenticListSelectionV1;
-  /** Members selected by their E ids, at most AGENTIC_LIST_NAMED_MAX_V1; set instead of `where`. */
+  /** Members selected by their E ids; v1 names at most AGENTIC_LIST_NAMED_MAX_V1, blocks keep all. A `where` beside them selects only when they name no member. */
   readonly members?: readonly string[];
 }
 
@@ -714,6 +717,12 @@ export function agenticListSelectV1<T extends AgenticListNamedMemberV1>(members:
   }));
 }
 
+/** Whether every row records the fact needed to decide the selection; missing facts cannot prove an empty subset. */
+export function agenticListSelectionVerifiedV1(members: readonly AgenticListNamedMemberV1[], where: AgenticListSelectionV1, timeZone?: string): boolean {
+  return members.every(member => "value" in where ? member[where.field] !== undefined
+    : evidenceDayV1(memberDate(member, where.field) ?? "", timeZone ?? "UTC") !== undefined);
+}
+
 /** A selection as a statement says it: "have owner Dana Lee", "are due from October 18 to October 24, 2026", "were updated since October 11, 2026". */
 function selectionWords(where: AgenticListSelectionV1, one: boolean): string {
   if ("value" in where) return `${one ? "has" : "have"} ${where.field} ${line(where.value, 120)}`;
@@ -763,23 +772,36 @@ export interface AgenticListStatementInputV1 {
  * covers the first member: with `share` 0, a first member no other statement
  * takes costs one name past the share, which buys no other member. `cited`
  * are the indexes in `selected` of the members the names cover, in order,
- * which the caller cites; "and N more" counts the rest. For answer layout v1
- * (ADR-0045), `caption` is the statement without its names ("60 Jira tickets
- * ...; and 35 more") and `names` the indexes each name covers, in order.
+ * which the caller cites; "and N more" counts the rest.
  */
-export function agenticListStatementV1(input: AgenticListStatementInputV1): { readonly text: string; readonly cited: readonly number[]; readonly caption: string; readonly names: readonly (readonly number[])[] } {
+type ListStatement = { readonly text: string; readonly cited: readonly number[] };
+/**
+ * A list's statement in blocks (agenticListStatementsV2): its text and what it cites, and also its `caption`, the
+ * statement without its names ("60 Jira tickets created on October 4, 2026"), and `names`, the indexes each name covers,
+ * in order, as its table reads them.
+ */
+type ListBlockStatement = { readonly text: string; readonly cited: readonly number[]; readonly caption: string; readonly names: readonly (readonly number[])[] };
+
+/** The count and selection describe the whole logical list, even when blocks need several cited statements for it. */
+function listCaption(input: Omit<AgenticListStatementInputV1, "share" | "free">): string {
   const { count, complete, where, selected, noun } = input;
-  if (selected.length === 0 || !Number.isSafeInteger(input.share) || input.share < 0) throw new RangeError("A list statement names at least one member, with a whole, non-negative share");
   const phrase = phraseAfter(noun, input.filter);
   const k = selected.length;
-  const byId = input.by_id === true;
-  const lead = where !== undefined
+  return where !== undefined
     ? complete
       ? `${k} of the ${count} ${counted(noun, count)}${phrase} ${selectionWords(where, k === 1)}`
       : `At least ${k} ${counted(noun, k)}${phrase} ${selectionWords(where, k === 1)} (${count} listed so far)`
-    : byId && input.which !== true
+    : input.by_id === true && input.which !== true
       ? `${k} of ${complete ? "the" : "at least"} ${count} ${counted(noun, count)}${phrase}`
       : `${complete ? "" : "At least "}${count} ${counted(noun, count)}${phrase}`;
+}
+
+export function agenticListStatementV1(input: AgenticListStatementInputV1): ListStatement {
+  const { selected } = input;
+  if (selected.length === 0 || !Number.isSafeInteger(input.share) || input.share < 0) throw new RangeError("A list statement names at least one member, with a whole, non-negative share");
+  const k = selected.length;
+  const byId = input.by_id === true;
+  const lead = listCaption(input);
   const namesOf = (named: readonly (readonly number[])[]) => byId ? named.map(([index]) => factsName(selected[index!]!, input.filter.time_zone)) : groupNames(selected, named);
   const free = input.free ?? new Set<number>();
   // Each statement names at least its first member (W6): free, or for one name past a spent share that buys nothing else.
@@ -796,13 +818,40 @@ export function agenticListStatementV1(input: AgenticListStatementInputV1): { re
     const more = covered < k ? `; and ${k - covered} more` : "";
     const text = `${lead}: ${namesOf(named).join("; ")}${more}.`;
     if (Buffer.byteLength(text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1 || shown === 1) {
-      return Object.freeze({
-        text, cited: Object.freeze(named.flat().sort((left, right) => left - right)),
-        caption: `${lead}${more}`, names: Object.freeze(named.map(group => Object.freeze([...group]))),
-      });
+      return Object.freeze({ text, cited: Object.freeze(named.flat().sort((left, right) => left - right)) });
     }
   }
   throw new RangeError("unreachable");
+}
+
+/**
+ * A blocks answer keeps every selected member. Split only at statement byte/citation boundaries; the renderer
+ * groups these statements as one table with one caption. No chunk changes the selected set or counts its tail as omitted.
+ */
+export function agenticListStatementsV2(input: Omit<AgenticListStatementInputV1, "share" | "free">): readonly ListBlockStatement[] {
+  if (input.selected.length === 0) throw new RangeError("A list statement names at least one member");
+  const caption = listCaption(input);
+  const groups = (input.by_id ? input.selected.map((_, index) => [index]) : nameGroups(input.selected)).flatMap(group => {
+    const parts: number[][] = [];
+    for (let at = 0; at < group.length; at += PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4) parts.push(group.slice(at, at + PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4));
+    return parts;
+  });
+  const textOf = (names: readonly (readonly number[])[]) => `${caption}: ${(input.by_id
+    ? names.map(([index]) => factsName(input.selected[index!]!, input.filter.time_zone))
+    : groupNames(input.selected, names)).join("; ")}.`;
+  const statements: ListBlockStatement[] = [];
+  let names: number[][] = [];
+  const flush = () => {
+    statements.push(Object.freeze({ caption, text: textOf(names), cited: Object.freeze(names.flat().sort((a, b) => a - b)), names: Object.freeze(names.map(group => Object.freeze(group))) }));
+    names = [];
+  };
+  for (const group of groups) {
+    const next = [...names, group];
+    if (names.length > 0 && (next.flat().length > PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4 || Buffer.byteLength(textOf(next), "utf8") > AGENTIC_LIST_STATEMENT_BYTES_V1)) flush();
+    names.push(group);
+  }
+  flush();
+  return Object.freeze(statements);
 }
 
 /** Columns a list's table may hold, in order: its names, then the row facts and dates they state. */
@@ -815,11 +864,11 @@ export interface AgenticListTableV1 {
 }
 
 /**
- * A list statement's names as a table (answer layout v1, ADR-0045): one row per name (agenticListStatementV1's `names`),
+ * A list statement's names as a table (answer layout v2, ADR-0051): one row per name (agenticListStatementsV2's `names`),
  * an Item column, then Status, Owner and Due when any named member records them. Members selected by id are named with
  * every row fact they record, so their table also has a column for each date they state, each day in the list's time
  * zone. Undefined, so the statement stays prose, for one name, for names with nothing beside their titles, or for more
- * columns than a table holds.
+ * than six columns, as many as a table of retired layout v1 (ADR-0045) held.
  */
 export function agenticListTableV1(input: { readonly selected: readonly AgenticListNamedMemberV1[]; readonly names: readonly (readonly number[])[]; readonly by_id?: boolean; readonly time_zone?: string }): AgenticListTableV1 | undefined {
   if (input.names.length < 2) return undefined;

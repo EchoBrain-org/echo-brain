@@ -51,7 +51,12 @@ export type AgenticResearchAdmissionV1 = "post_revalidation_no_time";
 export const AGENTIC_RESEARCH_NEED_KINDS_V1 = Object.freeze(["which_items", "which_say", "content"] as const);
 export type AgenticResearchNeedKindV1 = (typeof AGENTIC_RESEARCH_NEED_KINDS_V1)[number];
 
-/** `evidence` holds item ids (`E4`) and, for Ask, list ids (`L1`, ADR-0041). A need without `kind` is content. */
+/**
+ * `evidence` holds item ids (`E4`) and, for Ask, list ids (`L1`, ADR-0041). A found which_items need records its
+ * inventory L ids and every requested member E id, preserving selection independently of answer presentation.
+ * An L-only found need declares the list as its fallback when the writer supplies no selection. Supporting facts
+ * unrelated to the requested membership belong in a separate content need. A need without `kind` is content.
+ */
 export interface AgenticResearchNeedV1 { readonly need: string; readonly kind?: AgenticResearchNeedKindV1; readonly status: "open" | "found" | "not_found"; readonly evidence: readonly string[] }
 export interface AgenticResearchPartV1 { readonly part: number; readonly question: string; readonly notes: string; readonly needs: readonly AgenticResearchNeedV1[] }
 
@@ -139,6 +144,8 @@ export interface AgenticResearchResultV1 {
     readonly reason: AgenticResearchStopReasonV1;
     readonly completed: boolean;
     readonly admission?: AgenticResearchAdmissionV1;
+    /** Ask only: the request includes a change or message that its read-only tools cannot execute. */
+    readonly unsupported_action?: true;
   };
   readonly cost: {
     readonly rounds: number;

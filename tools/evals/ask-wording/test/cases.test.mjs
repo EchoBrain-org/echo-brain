@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { ANSWER_BLOCKS_PROMPT, ANSWER_LAYOUT_PROMPT } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
+import { ANSWER_BLOCKS_PROMPT } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { CASES_FILE, caseProblems, loadCases } from "../grade.mjs";
 
 const document = loadCases();
@@ -30,10 +30,10 @@ function phrases(text) {
   return new Set(words.slice(3).map((_, index) => words.slice(index, index + 4).join(" ")));
 }
 
-test("asks nothing the layout prompts' examples quote, so the eval measures its rules, not recall of an example", () => {
-  // Every quoted example in the rules of layout v1's and v2's prompts (not their reply shapes): no name and no run of four
-  // words of any case question.
-  const rules = [ANSWER_LAYOUT_PROMPT, ANSWER_BLOCKS_PROMPT].flatMap((prompt) => prompt.split("\n").filter((line) => line.startsWith("- ")));
+test("asks nothing the layout prompt's examples quote, so the eval measures its rules, not recall of an example", () => {
+  // Every quoted example in the rules of layout v2's prompt (not its reply shape): no name and no run of four words of any
+  // case question.
+  const rules = ANSWER_BLOCKS_PROMPT.split("\n").filter((line) => line.startsWith("- "));
   const examples = rules.flatMap((line) => [...line.matchAll(/"([^"]+)"/gu)].map((match) => match[1]));
   assert.ok(examples.length > 6);
   const [exampleNames, examplePhrases] = [new Set(examples.flatMap((text) => [...names(text)])), new Set(examples.flatMap((text) => [...phrases(text)]))];

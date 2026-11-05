@@ -1,11 +1,15 @@
 // The Ask timeline (ADR-0047), in the store and on the page: which turns show
 // in full and which fold, the timeline kept through navigation and read again
-// at sign-in; one check of the newest turns' sources when Ask opens, kept five
-// minutes, quiet when it fails, turned into Changed tags, lit sentences and
-// sentences left out; the earlier turn a follow-up or Ask again carries, and
-// how it is trimmed; "Which one?"; the sidebar's dots with a project's New
-// rows; and the earlier questions past the newest three folded into one line,
-// with the sidebar's Ask going back to where you left Ask.
+// at sign-in, a turn saved with answer layout v1 as paragraphs; one check of
+// the newest turns' sources when Ask opens, kept five minutes, quiet when it
+// fails, turned into Changed tags, lit sentences and sentences left out; the
+// earlier turn a follow-up or Ask again carries, and how it is trimmed; "Which
+// one?"; the sidebar's dots with a project's New rows; and the earlier
+// questions past the newest three folded into one line, with the sidebar's Ask
+// going back to where you left Ask.
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, AskScope, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
@@ -16,9 +20,10 @@ import {
 } from '../../src/renderer/timeline.js';
 import { suggestedQuestions } from '../../src/renderer/bar.js';
 import { askedWhen } from '../../src/renderer/format.js';
+import { readTimeline, timelinePath } from '../../src/host/timeline.js';
 import {
-  ACCOUNT, byTestId, classes, click, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text,
-  timelineFiles, wake,
+  ACCOUNT, byClass, byTestId, classes, click, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore,
+  storeLifecycle, text, timelineFiles, wake,
 } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -473,6 +478,32 @@ describe('Ask on the timeline', () => {
     expect(calls('ask.source')).toHaveLength(1);
   });
 
+  it.each([
+    [['nothing_to_review'], []],
+    [['reviewed'], ['Reviewed']],
+    [['reviewed', 'nothing_to_review'], ['Reviewed']],
+    [['nothing_to_review', 'not_reviewed'], ['Not reviewed yet']],
+  ] as const)('badges imported notes cited from revisions reviewed %j as %j: one with nothing to review has no badge', async (reviews, badges) => {
+    const label = 'Imported meeting: Pilot';
+    const revision = (at: number) => ({
+      source_id: `source:${'3'.repeat(64)}`, revision_id: `r${at + 1}`, source_sha256: sha(`4${at}`), representation_sha256: sha(`5${at}`), anchor_sha256: sha(`6${at}`),
+    } as const);
+    const notes = reviews.map((_, at): AnswerSource => ({ kind: 'original', label, ref: revision(at),
+      cited: { kind: 'imported_meeting', label, visibility: 'only_me', citation: { kind: 'source_revision', ...revision(at) } } }));
+    const one = turn('One?', DAY, answerOf('One?', notes, [['The notes propose shipping the pilot.', notes.map((_, at) => at)]]));
+    seed(one);
+    const reads = reviews.map(() => held.hold('ask.source'));
+    const store = await startStore();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    store.chooseSource(0, null, one.id);
+    reviews.forEach((imported_meeting_review, at) => reads[at]!(ok({ label, text: `Passage ${at + 1}.`, imported_meeting_review })));
+    await flush();
+    const { SourcePane } = await import('../../src/renderer/screens/ask.js');
+    const pane = render(SourcePane({ state: store.getState() }));
+    expect(byTestId(pane, 'evidence-text').map(text)).toEqual(reviews.map((_, at) => `Passage ${at + 1}.`));
+    expect(byTestId(pane, 'source-review-state').map(text)).toEqual(badges);
+  });
+
   it('says nothing when nothing changed (ADR-0049), and with every sentence left out shows only Ask again', async () => {
     const [one, two] = [turn('One?', 2 * DAY, status()), turn('Two?', DAY, status())];
     seed(one, two);
@@ -492,6 +523,31 @@ describe('Ask on the timeline', () => {
     expect(byTestId(opened, 'answer')).toEqual([]);
     expect(byTestId(opened, 'changed-since')).toEqual([]);
     expect(byTestId(opened, 'ask-again')).toHaveLength(1);
+  });
+
+  it.each([false, true])('keeps fixed actionable messages visible and copyable after every source becomes unreadable (earlier: %s)', async earlier => {
+    const base = status();
+    const answer: Answer = { ...base, outcome: 'partial', parts: [{ ...base.parts[0]!, status: 'partial',
+      gap: 'Not found: the confidential reviewer. Unchecked entries did not fit.',
+      gap_details: { unsupported_action: true, interrupted: true, not_found: 'Not found: the confidential reviewer.' } }] };
+    const one = turn('One?', 2 * DAY, answer);
+    checks = items => ok({ items: items.map(() => ({ state: 'unreadable' })) });
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.check': params => checks!(params.items as never), 'clipboard.writeText': () => ok(null),
+    }, () => ({ active: [apollo], archived: [] })));
+    seed(one, ...(earlier ? [turn('Two?', DAY, status())] : []));
+    const store = await startStore();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    await flush();
+    const shown = (await view())(store);
+    const messages = ["Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.", "I couldn't complete the search. Please try again."];
+    expect(byTestId(shown, 'answer-gap').map(text)).toEqual(messages);
+    expect(text(shown)).not.toContain('confidential reviewer');
+    expect(byTestId(shown, 'statement-text')).toHaveLength(0);
+    expect(byTestId(shown, 'sources-toggle')).toHaveLength(0);
+    click(byTestId(shown, 'copy-answer')[0]);
+    await flush();
+    expect(calls('clipboard.writeText').at(-1)).toEqual({ text: messages.join('\n\n') });
   });
 
   it('says nothing changed only when every source its sentences cite was checked and is the same, and nothing when the check could not tell', async () => {
@@ -604,6 +660,29 @@ describe('Ask on the timeline', () => {
     expect(store.checksOf(one)).toEqual({ 2: 'unreadable' });
   });
 
+  it('opens a turn saved with answer layout v1 (ADR-0045), retired since, as the host reads it back: a paragraph per sentence', async () => {
+    const old = turn('What is open on THERM?', DAY, status());
+    const part = old.answer.parts[0]!;
+    // The account's file as a desktop from before layout v2 wrote it: how the part read, beside its sentences.
+    const saved = { ...old, answer: { ...old.answer, parts: [{ ...part, layout: [
+      { kind: 'lead', statements: [0] }, { kind: 'heading', text: 'Still to do' }, { kind: 'bullets', statements: [1, 2] }] }] } };
+    const person = mkdtempSync(join(tmpdir(), 'echo-person-'));
+    try {
+      mkdirSync(join(person, 'ask-timeline-v1'), { mode: 0o700 });
+      writeFileSync(timelinePath(person, ACCOUNT), JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [saved] }), { mode: 0o600 });
+      seed(...readTimeline(person, ACCOUNT));
+    } finally {
+      rmSync(person, { recursive: true, force: true });
+    }
+    const store = await startStore();
+    store.pickSuggestion({ question: old.question, turn: old.id });
+    await flush();
+    const shown = byTestId((await view())(store), 'answer')[0]!;
+    expect(byClass(shown, 'answer-layout')).toEqual([]);
+    expect(byTestId(shown, 'statement').map(node => [node.type, classes(node)[0], text(byTestId(node, 'statement-text'))]))
+      .toEqual(part.statements.map(statement => ['p', 'answer-statement', statement.text]));
+  });
+
   it('clears what a check said when it goes stale, so the page stops showing it then', async () => {
     seed(turn('One?', 2 * DAY, status()), turn('Two?', DAY, status()));
     checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'changed' : 'same' })) });
@@ -639,14 +718,14 @@ describe('Ask on the timeline', () => {
     const sources = [ticket('THERM-482', '20482'), followUp('itm_timeline-1'), page('31010')];
     const base = answerOf('What is open on THERM?', sources, [['THERM-482, Sensor drift, is open.', [0]], ['Confirm the trace is still open.', [1]],
       ['The DVT plan moved the retest to Oct 30.', [2]]]);
-    const laidOut: Answer = { ...base, parts: [{ ...base.parts[0]!, layout: [
-      { kind: 'lead', statements: [0] }, { kind: 'heading', text: 'Still to do' }, { kind: 'bullets', statements: [1] },
-      { kind: 'table', statements: [0, 1, 2], columns: ['Item', 'Status'], rows: [{ cells: ['THERM-482', 'Open'], citation_indexes: [0] },
+    const arranged: Answer = { ...base, parts: [{ ...base.parts[0]!, blocks: [
+      { kind: 'answer', statements: [0] }, { kind: 'points', title: 'Still to do', ordered: false, statements: [1] },
+      { kind: 'table', statements: [2], columns: ['Item', 'Status'], rows: [{ cells: ['THERM-482', 'Open'], citation_indexes: [0] },
         { cells: ['Trace', 'Open'], citation_indexes: [1] }, { cells: ['DVT plan', 'Moved'], citation_indexes: [2] }] },
     ] }] };
     const long = 'x'.repeat(11_990);
     const plain = answerOf('Long?', sources, [[long, [0]], ['Confirm the trace is still open.', [1]]]);
-    const [one, two] = [turn('What is open on THERM?', 2 * DAY, laidOut), turn('Long?', DAY, plain)];
+    const [one, two] = [turn('What is open on THERM?', 2 * DAY, arranged), turn('Long?', DAY, plain)];
     // The follow-up is no longer yours to read; the DVT plan changed.
     checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : item.citation.kind === 'page' ? 'changed' : 'same' })) });
     const copied: string[] = [];
@@ -698,6 +777,32 @@ describe('Ask on the timeline', () => {
     ].join('\n'));
     expect(await store.copyAnswer(quiet.id)).toBe(true);
     expect(copied[1]!.startsWith(`Nothing changed since ${when}\n\nTHERM-482, Sensor drift, is open. [1]`)).toBe(true);
+  });
+
+  it('copies an Ask again whose every answer sentence a check left out as the page shows it, past what Copy answer takes: its "Since", then that nothing you can see matched', async () => {
+    const sources = [followUp('itm_timeline-1'), page('31010')];
+    const long = 'x'.repeat(11_990);
+    const answer = answerOf('What is open on THERM?', sources, [['Confirm the trace is still open.', [0]]]);
+    const earlier = turn('What is open on THERM?', 3 * DAY, answer);
+    const again = turn('What is open on THERM?', 2 * DAY, answer, { again_of: earlier.id, since: [said(long, [1], sources)] });
+    // The follow-up is no longer yours to read: the answer's one sentence is left out, and the "Since" beside it stays.
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
+    const copied: string[] = [];
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.check': params => checks!(params.items as never),
+      'clipboard.writeText': params => { copied.push(String(params.text)); return ok(null); },
+      'ask.record': () => fail('not_found'),
+    }, () => ({ active: [apollo], archived: [] })));
+    seed(earlier, again);
+    const store = await startStore();
+    store.pickSuggestion({ question: again.question, turn: again.id });
+    await flush();
+    const shown = (await view())(store);
+    expect(byTestId(shown, 'since-text').map(text)).toEqual([long]);
+    expect(byTestId(shown, 'statement-text')).toHaveLength(0);
+    expect(byTestId(shown, 'answer-empty').map(text)).toEqual(['Nothing you can see matched.']);
+    expect(await store.copyAnswer(again.id)).toBe(true);
+    expect(copied).toEqual([`Since ${askedWhen(earlier.asked_at, NOW.getTime())}\n${long}\nNothing you can see matched.`]);
   });
 
   it('keeps of a turn only what the page reads back: its full question and "since" once, no receipt, and each source\'s citation once', async () => {
@@ -1473,6 +1578,26 @@ describe('follow-ups from the bar', () => {
     expect(store.getState().ask?.failed).toBeFalsy();
   });
 
+  it.each([false, true])('says and copies that nothing in the project matched when a project question found nothing and nothing explains it (earlier: %s)', async earlier => {
+    const question = 'What did we agree on pricing?';
+    const nothing = turn(question, 2 * DAY, answerOf(question, [], [], { scope: inApollo, outcome: 'not_found',
+      parts: [{ question, status: 'not_found', statements: [] }] }));
+    rpc.mockImplementation(rpcFor(held, { 'clipboard.writeText': () => ok(null), 'ask.record': () => fail('not_found') }, () => ({ active: [apollo], archived: [] })));
+    seed(nothing, ...(earlier ? [turn('Two?', DAY, status())] : []));
+    const store = await startStore();
+    store.pickSuggestion({ question, turn: nothing.id });
+    await flush();
+    const shown = (await view())(store);
+    // In full, the project's own line under the answer says it; opened later from its line, the answer says it.
+    const where = earlier ? byTestId(shown, 'opened-turn')[0]! : byTestId(shown, 'turn')[0]!;
+    expect(byTestId(where, 'project-empty').map(text).map(line => line.startsWith('Nothing in Apollo matched.'))).toEqual(earlier ? [] : [true]);
+    expect(byTestId(where, 'answer-empty').map(text)).toEqual(earlier ? ['Nothing in Apollo matched.'] : []);
+    expect(byTestId(where, 'answer-gap')).toHaveLength(0);
+    click(byTestId(where, 'copy-answer')[0]);
+    await flush();
+    expect(calls('clipboard.writeText').at(-1)).toEqual({ text: 'Nothing in Apollo matched.' });
+  });
+
   it('offers, never makes, one ask across everything when a project question finds nothing', async () => {
     rpc.mockImplementation(rpcFor(held, {
       'ask.run': params => (params.scope as AskScope).kind === 'project'
@@ -1490,7 +1615,7 @@ describe('follow-ups from the bar', () => {
     expect(text(byTestId(shown, 'project-empty'))).toContain('Nothing in Apollo matched.');
     expect(byTestId(shown, 'answer-empty')).toHaveLength(0);
     expect(byTestId(shown, 'sources-toggle')).toHaveLength(0);
-    expect(text(shown)).not.toContain('Not found.');
+    expect(text(byTestId(shown, 'answer-gap'))).toBe('Not found.');
     expect(calls('ask.run').map(call => call.scope)).toEqual([inApollo]);
     click(byTestId(shown, 'ask-everywhere')[0]);
     await flush();
@@ -1502,4 +1627,73 @@ describe('follow-ups from the bar', () => {
     expect(byTestId(show(store), 'ask-everywhere')).toHaveLength(0);
     expect(kept().map(turn => turn.text)).toEqual([question, question]);
   });
+  it.each([
+    { message: "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.", details: { unsupported_action: true as const } },
+    { message: "I couldn't complete the search. Please try again.", details: { interrupted: true as const } },
+    { message: '', details: undefined },
+  ])('does not offer wider scope for an empty partial project answer: $message', async ({ message, details }) => {
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.run': params => ok(answerOf(String(params.question), [], [], { scope: inApollo, outcome: 'partial',
+        parts: [{ question: String(params.question), status: 'not_found', statements: [], gap: 'Unchecked rows did not fit.', ...(details === undefined ? {} : { gap_details: details }) }] })),
+    }, () => ({ active: [apollo], archived: [] })));
+    const store = await startStore();
+    await store.openProject(apollo);
+    await store.ask('Mark action A1 Done.');
+    await flush();
+    const shown = (await view())(store);
+    expect(text(byTestId(shown, 'answer-gap'))).toBe(message);
+    expect(byTestId(shown, 'project-empty')).toHaveLength(0);
+    expect(byTestId(shown, 'ask-everywhere')).toHaveLength(0);
+    store.askEverywhere(latestTurn(store)!.id);
+    await flush();
+    expect(calls('ask.run')).toHaveLength(1);
+  });
+
+  it.each([false, true])('offers an explicit wider search for partial factual absence without calling the whole project empty (other citations: %s)', async cited => {
+    const question = 'What was approved, and who handles Harbor?';
+    const missing = 'Not found: the Harbor owner.';
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.run': params => ok(answerOf(String(params.question), cited ? [ticket('THERM-482', '20482')] : [], [], { scope: params.scope as AskScope, outcome: 'partial',
+        parts: [{ question, status: cited ? 'partial' : 'not_found', statements: cited ? [{ text: 'THERM-482 was approved.', citation_indexes: [0], private: false }] : [],
+          gap: `${missing} An unchecked row did not fit.`, gap_details: { not_found: missing } }] })),
+    }, () => ({ active: [apollo], archived: [] })));
+    const store = await startStore();
+    await store.openProject(apollo);
+    await store.ask(question);
+    await flush();
+    const shown = (await view())(store);
+    expect(text(byTestId(shown, 'answer-gap'))).toBe(missing);
+    expect(byTestId(shown, 'project-empty')).toHaveLength(0);
+    expect(byTestId(shown, 'ask-everywhere')).toHaveLength(1);
+    expect(calls('ask.run').map(call => call.scope)).toEqual([inApollo]);
+    if (cited) {
+      // Component decisions must follow its supplied snapshot, not the store's still-readable global state.
+      const current = store.getState();
+      const hidden = { ...latestTurn(store)!, unreadable: [0] };
+      const snapshot = { ...current, timeline: { ...current.timeline, turns: [hidden] } };
+      expect(store.canAskEverywhere(hidden, snapshot)).toBe(false);
+      const hiddenView = (await view())({ getState: () => snapshot });
+      expect(byTestId(hiddenView, 'answer-gap')).toHaveLength(0);
+      expect(byTestId(hiddenView, 'ask-everywhere')).toHaveLength(0);
+    }
+    click(byTestId(shown, 'ask-everywhere')[0]);
+    await flush();
+    expect(calls('ask.run')[1]).toMatchObject({ question, scope: { kind: 'global' } });
+  });
+
+  it('does not widen a partial factual absence while the research remains unfinished', async () => {
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.run': params => ok(answerOf(String(params.question), [], [], { scope: inApollo, outcome: 'partial',
+        parts: [{ question: String(params.question), status: 'not_found', statements: [], gap: 'Not found: the owner.',
+          gap_details: { not_found: 'Not found: the owner.', interrupted: true } }] })),
+    }, () => ({ active: [apollo], archived: [] })));
+    const store = await startStore();
+    await store.openProject(apollo);
+    await store.ask('Who owns Harbor?');
+    await flush();
+    const shown = (await view())(store);
+    expect(byTestId(shown, 'project-empty')).toHaveLength(0);
+    expect(byTestId(shown, 'ask-everywhere')).toHaveLength(0);
+  });
+
 });

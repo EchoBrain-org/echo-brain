@@ -128,11 +128,39 @@ an edit.
 
 Folder listing pages with `offset` up to 200 folders.
 
-### 1.3 Who reads unapproved notes
+### 1.3 Who reads imported notes
 
 Only the importing person, in global and Mine scope. Project scope never
-includes unapproved imported notes. The suggestion tables stay as they are and
-feed the card's pre-ticks only.
+includes imported notes. The suggestion tables stay as they are and feed the
+card's pre-ticks only. The source label is `Imported meeting: <title>` before
+and after review. Approval publishes separate records; it does not turn the
+source notes into an approved record or change their audience. The source pane
+shows `Not reviewed yet` until the importer completes an approve or reject
+decision on the card that reviews that exact source revision, then `Reviewed`.
+A revision whose title, participants and items match the card current when it
+arrives is coalesced and queues no card of its own; that card reviews it. A
+revision with no decision or action (§1.4) never gets a card: its state is
+`nothing_to_review`, and the pane shows no badge. A pending proposal, an
+incomplete review, or a newer revision that changes what a review covers is not
+a completed review; publishing the decision's records does not change its
+review state.
+
+Imported-note citations retain the `imported-meeting-notes-v1` representation
+and its historical canonical packet heading, `Imported meeting (unapproved):
+<title>`, derived from the source revision's immutable title. The display label
+and review badge are separate: neither changes packet boundaries or hashes.
+Citations saved before the neutral label therefore still open. The source pane
+shows the current label from its proof read instead of the historical packet
+heading or a saved answer's label. Research and the answer writer receive the
+`imported_meeting` kind with `source_revision` provenance, so the source notes
+cannot establish approval merely because their label, badge, or text says so.
+
+Review metadata is opt-in on the existing source read through
+`x-echo-source-review: 1`. Older clients keep their exact prior response shape;
+older servers ignore the header and return their existing packet. When one
+source pane cites multiple revisions, it shares a badge only after every
+passage is verified and agrees. Otherwise each passage shows its own review
+state, including while other passages are still loading or cannot be read.
 
 ### 1.4 No card without decisions or actions
 

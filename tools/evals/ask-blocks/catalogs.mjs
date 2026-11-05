@@ -1,26 +1,21 @@
 /**
- * The four catalogs of the Ask block evaluation (README.md, "Catalogs"): each catalog's entries, the layout part of the
+ * The three catalogs of the Ask block evaluation (README.md, "Catalogs"): each catalog's entries, the layout part of the
  * writer's instructions, its reply schema, and how a reply is checked and read into common blocks and a view the page
- * draws. `today` is production's own prompt, schema and reading (ADR-0045). Every other catalog's entries follow the
- * research tool contract (ADR-0042): a name, a description that says only what the entry shows, and params with their
- * meanings; its schema and checks are built from the same entries. Beside them, the arm `built` grades the shipped
- * writer (README.md, "Gate on the built writer"): the answer the kernel releases, read into the same common blocks.
+ * draws. Each catalog's entries follow the research tool contract (ADR-0042): a name, a description that says only what
+ * the entry shows, and params with their meanings; its schema and checks are built from the same entries. Beside them,
+ * the arm `built` grades the shipped writer (README.md, "Gate on the built writer"): the answer the kernel releases, read
+ * into the same common blocks.
  */
 import { validatePersonAnswerResponseV8 } from "@echo-brain/organization-api";
 import {
-  ANSWER_LAYOUT_PROMPT, answerLayoutSchema, cleanModelLine, parseAnswer, stripEvidenceIds,
+  ANSWER_BLOCKS_PROMPT, LONG_IDS_ONCE_RULE, NO_RESTATING_RULE, cleanModelLine, stripEvidenceIds,
 } from "../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
-import { buildAskLayoutV1, orderAskLayoutV1 } from "../../../packages/organization-authority-kernel/dist/answer-composition/renderers/ask-layout-v1.js";
 
 const TEXT_CHARS = 400;
 const LABEL_CHARS = 120;
 
 /** Production's two wording rules, word for word, which every catalog's layout part keeps (README.md, "Catalogs"). */
-export const WORDING_RULES = Object.freeze(["- The app shows the answer right under the question", "- Write a long identifier"].map((prefix) => {
-  const line = ANSWER_LAYOUT_PROMPT.split("\n").find((entry) => entry.startsWith(prefix));
-  if (line === undefined) throw new Error(`the production layout prompt has no rule starting "${prefix}"`);
-  return line;
-}));
+export const WORDING_RULES = Object.freeze([NO_RESTATING_RULE, LONG_IDS_ONCE_RULE]);
 
 // ---- schema pieces ----------------------------------------------------------------------------------------------
 const STRING = Object.freeze({ type: "string" });
@@ -116,36 +111,6 @@ export function viewOfBlocks(blocks) {
       default: return [];
     }
   });
-}
-
-// ---- today: production ------------------------------------------------------------------------------------------
-/** A laid-out production reply read as production reads it (parseAnswer, then code's order and blocks), as common blocks. */
-function readToday(value) {
-  let parsed;
-  try { parsed = parseAnswer(value, { layout: true }); } catch (error) {
-    return { valid: false, problems: [error instanceof Error ? error.message : "the reply could not be read"], blocks: [], not_found: [] };
-  }
-  const tables = parsed.tables ?? [];
-  const sentences = parsed.sentences.map((sentence) => {
-    const section = sentence.section === undefined ? {} : { section: sentence.section };
-    const columns = tables.find((table) => table.section === sentence.section)?.columns;
-    const shape = sentence.form === "row" && columns !== undefined && sentence.cells !== undefined
-      ? { kind: "row", ...section, columns, cells: sentence.cells }
-      : { kind: sentence.form === "row" ? "bullet" : (sentence.form ?? "text"), ...section };
-    return { text: sentence.text, evidence: [...sentence.evidence], shape };
-  });
-  if (sentences.length === 0) return { valid: false, problems: ["the reply has no sentence"], blocks: [], not_found: [...parsed.not_found] };
-  const ordered = orderAskLayoutV1([], sentences, sentences.some((sentence) => sentence.shape.kind === "lead"));
-  const layout = buildAskLayoutV1(ordered.map((sentence) => ({ citation_indexes: [], shape: sentence.shape })));
-  const claim = (at) => ({ text: ordered[at].text, evidence: ordered[at].evidence });
-  const blocks = layout.map((block) => {
-    if (block.kind === "heading") return { kind: "heading", text: block.text };
-    if (block.kind === "lead") return { kind: "answer", claims: block.statements.map(claim) };
-    if (block.kind === "paragraph") return { kind: "prose", claims: block.statements.map(claim) };
-    if (block.kind === "bullets") return { kind: "list", ordered: false, claims: block.statements.map(claim) };
-    return { kind: "table", columns: [...block.columns], rows: block.rows.map((row, at) => ({ cells: [...row.cells], evidence: ordered[block.statements[at]].evidence })) };
-  });
-  return { valid: true, problems: [], blocks, not_found: [...parsed.not_found] };
 }
 
 // ---- templates: one whole-answer template, filled ---------------------------------------------------------------
@@ -489,12 +454,10 @@ const COMPONENT_PROMPT = [
 const EVERY_SHAPE = Object.freeze(["single", "prose", "parallel", "ordered", "grid", "sequence", "profile", "verbatim", "sections"]);
 
 /**
- * The catalogs, in the page's and the report's order. `catalog_key` names the entries' place in the writer's input
- * (beside `source_catalog`); `today` adds none and keeps production's prompt and schema byte for byte.
+ * The catalogs, in the page's and the report's order. `catalog_key` names the entries' place in the writer's input:
+ * beside `source_catalog`, where the built writer's input has `block_catalog`.
  */
 export const CATALOGS = Object.freeze([
-  Object.freeze({ id: "today", modeled_on: "production (ADR-0045)", catalog_key: null, catalog: null, layout_prompt: ANSWER_LAYOUT_PROMPT, schema: answerLayoutSchema, read: readToday,
-    can_show: Object.freeze(["single", "prose", "parallel", "grid", "sequence", "verbatim", "sections"]) }),
   Object.freeze({ id: "templates", modeled_on: "OpenAI ChatKit widget templates, Microsoft Adaptive Card templates", catalog_key: "template_catalog", catalog: TEMPLATE_CATALOG, layout_prompt: TEMPLATE_PROMPT, schema: templateSchema, read: readTemplates,
     can_show: Object.freeze(["single", "prose", "parallel", "grid", "sequence", "profile", "verbatim"]) }),
   Object.freeze({ id: "balanced", modeled_on: "Vercel json-render style meaning-sized components", catalog_key: "block_catalog", catalog: BLOCK_CATALOG, layout_prompt: BLOCK_PROMPT, schema: blockSchema, read: readBalanced,
@@ -510,7 +473,7 @@ export const CATALOG_IDS = Object.freeze(CATALOGS.map((entry) => entry.id));
  * kernel's, recorded from its writer's calls, and what is graded is the answer the kernel releases (`readReleased`).
  */
 export const BUILT = Object.freeze({ id: "built", modeled_on: "the built writer: answer layout v2 in the kernel (ADR-0051)", catalog_key: "block_catalog", answer_layout: 2, can_show: EVERY_SHAPE });
-/** Every arm a run may select: the four catalogs, then `built`. */
+/** Every arm a run may select: the catalogs, then `built`. */
 export const ARMS = Object.freeze([...CATALOGS, BUILT]);
 export const ARM_IDS = Object.freeze(ARMS.map((entry) => entry.id));
 
@@ -545,15 +508,21 @@ export function readReleased(response, ids) {
   return Object.freeze({ valid: true, problems: [], blocks, view: viewOfBlocks(blocks) });
 }
 
-/** One catalog's writer prompts, from production's captured ones: the system prompt's layout part swapped, the catalog added as data. */
+/**
+ * One catalog's writer prompts, from the built writer's captured ones (answer layout v2, ADR-0051): the system prompt's
+ * layout part swapped for the catalog's, and the captured block catalog for the catalog's own entries, right after
+ * `source_catalog`.
+ */
 export function writerPrompts(catalog, captured) {
-  const suffix = `\n\n${ANSWER_LAYOUT_PROMPT}`;
-  if (!captured.system_prompt.endsWith(suffix)) throw new Error("the captured writer prompt does not end with the production layout part");
-  if (catalog.catalog_key === null) return { system_prompt: captured.system_prompt, user_prompt: captured.user_prompt };
-  const base = captured.system_prompt.slice(0, -ANSWER_LAYOUT_PROMPT.length);
+  const suffix = `\n\n${ANSWER_BLOCKS_PROMPT}`;
+  if (!captured.system_prompt.endsWith(suffix)) throw new Error("the captured writer prompt does not end with the v2 layout part");
   const user = JSON.parse(captured.user_prompt);
-  if (!Object.hasOwn(user, "source_catalog")) throw new Error("the captured writer input has no source_catalog");
-  const entries = Object.entries(user).flatMap(([key, entry]) => (key === "source_catalog" ? [[key, entry], [catalog.catalog_key, catalog.catalog]] : [[key, entry]]));
+  for (const key of ["source_catalog", "block_catalog"]) if (!Object.hasOwn(user, key)) throw new Error(`the captured writer input has no ${key}`);
+  const base = captured.system_prompt.slice(0, -ANSWER_BLOCKS_PROMPT.length);
+  const entries = Object.entries(user).flatMap(([key, entry]) => {
+    if (key === "block_catalog") return [];
+    return key === "source_catalog" ? [[key, entry], [catalog.catalog_key, catalog.catalog]] : [[key, entry]];
+  });
   return { system_prompt: `${base}${catalog.layout_prompt}`, user_prompt: JSON.stringify(Object.fromEntries(entries)) };
 }
 

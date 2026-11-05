@@ -308,8 +308,8 @@ export function isRecordRef(value: unknown): value is RecordRef {
  * research tool contract v1). An answer to an Ask that carried `previous`
  * (ADR-0047) also says the full question it answers, Ask again's "since" (its
  * citations among the answer's), or, asking which one (`clarify`), the
- * choices and no part. Its notice and its parts' gaps stay out of its plain
- * reading: the page shows neither.
+ * choices and no part. Its diagnostic notice and gaps stay out of the plain
+ * reading; the desktop and Copy derive actionable explanations from gap_details.
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const { result, receipt } = validated(validatePersonAskProgressResultLineV3, raw);
@@ -331,10 +331,10 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
 const PRIVATE_VISIBILITY: ReadonlySet<string> = new Set(['only_me', 'approver_only']);
 
 /**
- * An answer's cited item, and whether only you can read it: a table row that
- * cites it shows the lock (ADR-0045). It keeps the citation as the response
- * carried it, for a later follow-up's `previous` and, when it can change or
- * go, a later check (ADR-0047).
+ * An answer's cited item, and whether only you can read it: its source row
+ * shows the lock when ECHO keeps it for you alone (ADR-0049). It keeps the
+ * citation as the response carried it, for a later follow-up's `previous`
+ * and, when it can change or go, a later check (ADR-0047).
  */
 function citedSource(citation: PersonAnswerCitationV8): AnswerSource {
   const source = { ...answerSource(citation), cited: citation };
@@ -606,7 +606,11 @@ function meetingRecord(page: PersonOpenMeetingV1, item: ListItem, first: boolean
 
 export function evidenceView(raw: unknown): SourceEvidence {
   const evidence = validated(validatePersonSourceEvidenceV1, unwrap(raw));
-  return { label: evidence.citation.label, text: evidence.text };
+  // Imported v1 packets keep their historical first-line heading for citation identity. The pane
+  // presents the current server label separately; it never interprets the heading as review state.
+  const review = evidence.imported_meeting_review;
+  return { label: evidence.citation.label, text: review === undefined ? evidence.text : evidence.text.slice(evidence.text.indexOf('\n') + 1),
+    ...(review === undefined ? {} : { imported_meeting_review: review }) };
 }
 
 /** Connected tools: each tool's id, name and your connection. External workspace and account ids stay behind. */

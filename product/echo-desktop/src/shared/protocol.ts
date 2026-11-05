@@ -1,6 +1,6 @@
 import type {
-  PersonAnswerBlockV1, PersonAnswerBlockV2, PersonAnswerCardEntityV2, PersonAnswerChoiceV1, PersonAnswerCitationV8, PersonAnswerEventV2, PersonAnswerEvidenceCitationV8,
-  PersonAnswerFactV2, PersonAnswerPreviousV1, PersonAnswerTableRowV1,
+  PersonAnswerBlockV2, PersonAnswerCardEntityV2, PersonAnswerChoiceV1, PersonAnswerCitationV8, PersonAnswerEventV2, PersonAnswerEvidenceCitationV8,
+  PersonAnswerFactV2, PersonAnswerGapDetailsV1, PersonAnswerPreviousV1, PersonAnswerTableRowV1,
   PersonAskCheckCitationKindV1, PersonAskCheckItemV1, PersonAskCheckRequestItemV1, PersonAskCheckStateV1, PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2,
   PersonMeetingResultsV2, PersonReviewRequestV1, PersonReviewResultsV1, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonProjectActivityItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
@@ -266,7 +266,8 @@ export type AnswerSource = (
 ) & {
   /**
    * Only you can read it (cited as yours alone, or the approver's): only on an
-   * answer's sources, so a table row that cites it shows the lock (ADR-0045).
+   * answer's sources, so its source row shows the lock when ECHO keeps it for
+   * you alone (ADR-0049).
    */
   readonly private?: true;
   /**
@@ -339,14 +340,7 @@ export interface AnswerStatement {
   readonly private: boolean;
 }
 
-/**
- * How a part reads (answer layout v1, ADR-0045): blocks that group its
- * statements, in their order, into a lead, headings, paragraphs, bullets and
- * tables. It adds no claim and no citation: a table's rows each cite only
- * what its statements cite. The contract's own type, as the host validated it.
- */
-export type AnswerBlock = PersonAnswerBlockV1;
-/** One table row of a laid-out part: its cells, in its table's column order, and the citations of what it shows. */
+/** One row of a table block: its cells, in its table's column order, and the citations of what it shows. */
 export type AnswerTableRow = PersonAnswerTableRowV1;
 
 /**
@@ -354,8 +348,9 @@ export type AnswerTableRow = PersonAnswerTableRowV1;
  * blocks that group its statements, in their order, into the answer, text,
  * points, a table, a timeline, a card or a quote. Every item a block shows is
  * one of its statements and cites what that statement cites (a point, an
- * event, a fact, a quote); a table is layout v1's. It adds no claim and no
- * citation. The contract's own type, as the host validated it.
+ * event, a fact, a quote); a table's rows each cite only what its statements
+ * cite. It adds no claim and no citation. The contract's own type, as the
+ * host validated it.
  */
 export type ArrangedBlock = PersonAnswerBlockV2;
 /** One event of a timeline block: the day it happened (YYYY-MM-DD), what happened, and who, when the evidence says. */
@@ -370,10 +365,9 @@ export interface AnswerPart {
   readonly status: 'answered' | 'partial' | 'not_found' | 'records_only';
   readonly statements: readonly AnswerStatement[];
   readonly gap?: string;
+  readonly gap_details?: PersonAnswerGapDetailsV1;
   readonly records?: readonly AnswerStatement[];
-  /** Only on a V8 answer to an Ask that asked for it: how its statements read. Without it, each is a paragraph. */
-  readonly layout?: readonly AnswerBlock[];
-  /** Only on a V8 answer to an Ask that asked for answer layout v2, never beside `layout`: the blocks its statements read as. */
+  /** Only on a V8 answer to an Ask that asked for answer layout v2: the blocks its statements read as. Without them, each is a paragraph. */
   readonly blocks?: readonly ArrangedBlock[];
 }
 
@@ -476,6 +470,8 @@ export type ProjectActivity = PersonProjectActivityItemV1;
 export interface SourceEvidence {
   readonly label: string;
   readonly text: string;
+  /** Imported notes alone have a review state; it never makes them an approved record. Nothing to review shows no badge. */
+  readonly imported_meeting_review?: 'not_reviewed' | 'reviewed' | 'nothing_to_review';
 }
 
 /** One approved decision, action or rationale, with up to three excerpts that support it. */

@@ -6,6 +6,8 @@ import {
 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { createPersonLiveAnswerRouteV1 } from '../src/composition/person-live-answer-route-v1.js';
+import { SqlitePersonImportedMeetingsV1 } from '../src/adapters/persistence/sqlite/person-imported-meetings-v1.js';
+import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
 import { askClient, auditBodies, closeAskServers, decodeAll, liveAskOptions, myOpenTasksPlanner, serveAsk } from './fixtures/ask-over-http.js';
 import { CLOUD, sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
@@ -40,12 +42,14 @@ function withResolver(replies: unknown[], inner: StructuredGenerationPort) {
   return { model, resolver };
 }
 /** Research that finishes on what it was given opened; the writer states one sentence from it. */
-function fromOpened(): StructuredGenerationPort & { readonly steps: Record<string, unknown>[] } {
+function fromOpened(text = 'ECHO-12 ships on Oct 30.'): StructuredGenerationPort & { readonly steps: Record<string, unknown>[]; readonly writer: StructuredGenerationInput[] } {
   const steps: Record<string, unknown>[] = [];
-  return { steps, async generate(input: StructuredGenerationInput) {
+  const writer: StructuredGenerationInput[] = [];
+  return { steps, writer, async generate(input: StructuredGenerationInput) {
     const prompt = JSON.parse(input.user_prompt) as { readonly question?: string; readonly opened?: readonly { readonly id: string }[]; readonly evidence?: readonly { readonly id: string }[] };
     if ((input.schema.properties as Readonly<Record<string, unknown>>).sentences !== undefined) {
-      return { lists: [], sentences: [{ text: 'ECHO-12 ships on Oct 30.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+      writer.push(input);
+      return { lists: [], sentences: [{ text, evidence: [prompt.evidence![0]!.id] }], not_found: [] };
     }
     steps.push(prompt);
     const [opened] = prompt.opened ?? [];
@@ -58,6 +62,32 @@ const ask = askClient({ path: PERSON_ANSWER_PATH_V7, progress: PERSON_ASK_PROGRE
 const body = (previous: unknown = PREVIOUS, question = QUESTION) => ({ schema_version: 3, question, previous });
 
 describe('the previous turn on /v7 (ADR-0047)', () => {
+  it('reopens a saved imported-note citation for a follow-up after its display label changes', async () => {
+    const f = await sentFixture();
+    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.openItemsOptions.sessions, f.person.organization_id);
+    const saved = originals.deskSearch({ access_token: 'ari', scope: { kind: 'global' }, kinds: ['imported_meeting'] }).items[0]!;
+    const previous = { purpose: 'follow_up', question: 'What did the pilot notes say?', asked_at: PREVIOUS.asked_at,
+      statements: [{ text: 'The pilot notes discuss the rollout.', citation_indexes: [0] }],
+      citations: [{ citation: saved.citation, kind: 'imported_meeting', label: saved.label.replace('Imported meeting:', 'Imported meeting (unapproved):'), visibility: saved.visibility, ref: saved.ref }] };
+    const rows = SqlitePersonImportedMeetingsV1.prototype.rows;
+    const label = vi.spyOn(SqlitePersonImportedMeetingsV1.prototype, 'rows').mockImplementation(function (this: SqlitePersonImportedMeetingsV1, ...args) {
+      return rows.apply(this, args).map(row => ({ ...row, title: `Meeting source: ${row.title}` }));
+    });
+    try {
+      const research = fromOpened('The imported notes discuss the pilot rollout.');
+      const resolved = 'What are the details in the pilot notes?';
+      const { model } = withResolver([{ resolution: 'resolved', question: resolved, about: [1] }], research);
+      const response = await ask(await v7(f, model), { token: 'ari', progress: null, body: body(previous, 'what are the details?') });
+      expect(response.status).toBe(200);
+      const answer = validatePersonAnswerResponseV8(await response.json());
+      expect(answer.outcome).toBe('answered');
+      expect(research.steps[0]).toMatchObject({ opened: [expect.objectContaining({ kind: 'imported_meeting', provenance: { kind: 'source_revision' } })] });
+      expect(JSON.parse(research.writer[0]!.user_prompt)).toMatchObject({ evidence: [expect.objectContaining({ kind: 'imported_meeting', provenance: { kind: 'source_revision' } })] });
+      expect(research.writer[0]!.system_prompt).toContain('Imported meeting notes (kind "imported_meeting", provenance.kind "source_revision")');
+      expect(answer.citations).toEqual([expect.objectContaining({ citation: expect.objectContaining(saved.citation), label: `Meeting source: ${saved.label}` })]);
+    } finally { label.mockRestore(); }
+  });
+
   it('resolves a follow-up before research, starts from the ticket it points to, and names the question it answered', async () => {
     const f = await sentFixture();
     const research = fromOpened();

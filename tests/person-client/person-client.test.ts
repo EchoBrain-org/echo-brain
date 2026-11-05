@@ -841,6 +841,7 @@ describe("Person client", () => {
       const arranged = { ...answer, parts: [{ ...answer.parts[0]!, blocks: [{ kind: 'answer', statements: [0] }] }] };
       const client = await signedInClient(home, async (_input, init) => {
         expect(new Headers(init?.headers).get('x-echo-answer-layout')).toBe('2');
+        expect(new Headers(init?.headers).get('x-echo-ask-gap-details')).toBe('1');
         return json(arranged);
       });
       await expect(client.askWithLiveSources('Is EVT ready?')).resolves.toMatchObject({ parts: [{ blocks: [{ kind: 'answer', statements: [0] }] }] });
@@ -951,6 +952,7 @@ describe("Person client", () => {
         now: () => NOW,
         fetch: async (input, init) => {
           expect(new URL(String(input)).pathname).toBe("/v2/person/ask/source");
+          expect(new Headers(init?.headers).get('x-echo-source-review')).toBe('1');
           expect(JSON.parse(String(init?.body))).toEqual({
             schema_version: 1,
             scope: { kind: "global" },

@@ -1,22 +1,12 @@
 import { assertExactKeys, asEnumerableRecord as object, fail, utf8ByteLength } from './validation.js';
 
 /**
- * What answer layouts v1 (ADR-0045) and v2 (ADR-0051) check alike: a text, a
- * block's statements, and a table over its statements. Internal: the index
- * exports each layout's own validator, never these.
+ * What answer layout v2 (ADR-0051) checks of its blocks: a text, a block's
+ * statements, and a table over its statements. Internal: the index exports
+ * the layout's own validator, never these.
  */
 
 const TABLE_MIN_COLUMNS = 2;
-/**
- * How many rows and columns a table may have: layout v1's at most 6 columns, and 25 rows, since a list names at most 25
- * members (ADR-0041). Layout v2's tables have no cap of their own (ADR-0051).
- */
-export interface LayoutTableCounts {
-  readonly minimumRows: number;
-  readonly maximumColumns: number;
-  readonly maximumRows: number;
-}
-const V1_TABLE_COUNTS: LayoutTableCounts = Object.freeze({ minimumRows: 1, maximumColumns: 6, maximumRows: 25 });
 export const LAYOUT_COLUMN_MAX_BYTES = 100;
 export const LAYOUT_CELL_MAX_BYTES = 300;
 export const LAYOUT_CAPTION_MAX_BYTES = 600;
@@ -43,8 +33,8 @@ export function layoutIndexes(value: unknown, label: string, bound: number, mini
 
 /**
  * A table's columns, rows and caption, against the statements it shows (`own`, indexes into `statements`) and the
- * answer's citation count: at least 2 distinct columns and `counts`' rows, of one cell per column, none empty, within
- * `counts`, and rows that together cite exactly what its statements cite.
+ * answer's citation count: at least 2 distinct columns and `minimumRows` rows, as many of each as its statements hold,
+ * of one cell per column, none empty, and rows that together cite exactly what its statements cite.
  */
 export function layoutTable(
   input: Record<string, unknown>,
@@ -52,14 +42,14 @@ export function layoutTable(
   statements: readonly { readonly citation_indexes: readonly number[] }[],
   citationCount: number,
   label: string,
-  counts: LayoutTableCounts = V1_TABLE_COUNTS,
+  minimumRows: number,
 ): {
   readonly columns: readonly string[]; readonly rows: readonly { readonly cells: readonly string[]; readonly citation_indexes: readonly number[] }[]; readonly caption?: string;
 } {
-  if (!Array.isArray(input.columns) || input.columns.length < TABLE_MIN_COLUMNS || input.columns.length > counts.maximumColumns) fail(`${label} columns is invalid`);
+  if (!Array.isArray(input.columns) || input.columns.length < TABLE_MIN_COLUMNS) fail(`${label} columns is invalid`);
   const columns = Object.freeze((input.columns as unknown[]).map(column => layoutLine(column, `${label} column`, LAYOUT_COLUMN_MAX_BYTES)));
   if (new Set(columns).size !== columns.length) fail(`${label} columns contains duplicates`);
-  if (!Array.isArray(input.rows) || input.rows.length < counts.minimumRows || input.rows.length > counts.maximumRows) fail(`${label} rows is invalid`);
+  if (!Array.isArray(input.rows) || input.rows.length < minimumRows) fail(`${label} rows is invalid`);
   const cited = new Set(own.flatMap(index => statements[index]!.citation_indexes));
   const rowCited = new Set<number>();
   const rows = Object.freeze((input.rows as unknown[]).map((rawRow) => {

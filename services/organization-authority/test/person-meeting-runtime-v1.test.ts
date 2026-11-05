@@ -1,6 +1,7 @@
 import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
 import { SqlitePersonOriginalItemsV1 } from '../src/adapters/persistence/sqlite/person-original-items-v1.js';
 import { createPersonListRouteV1 } from '../src/composition/person-list-v1-route.js';
+import { createPersonSourceEvidenceRouteV1 } from '../src/composition/person-source-evidence-route.js';
 import { SqlitePersonListDirectoryV1 } from '../src/adapters/persistence/sqlite/person-list-directory-v1.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
@@ -385,6 +386,15 @@ describe('personal meeting intake uses the shared processing path', () => {
     await expect(f.call(runtime, { operation: 'review_open', approval_id: a[0]!.approval_id }, 'other')).rejects.toMatchObject({ code: 'not_found' });
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
     for (const token of ['owner', 'other']) expect(originals.deskSearch({ access_token: token, scope: { kind: 'global' }, query: 'cohort' }).items).toHaveLength(1);
+    const opened = await f.call(runtime, { operation: 'review_open', approval_id: a[0]!.approval_id });
+    await f.call(runtime, { operation: 'review', approval_id: a[0]!.approval_id, snapshot_sha256: opened.snapshot_sha256,
+      command_id: 'review-first-importer', action: 'reject', routes: [], owners: [] });
+    const scope = { kind: 'global' } as const;
+    for (const token of ['owner', 'other']) {
+      const citation = originals.deskSearch({ access_token: token, scope, kinds: ['imported_meeting'] }).items[0]!.citation;
+      expect(originals.read({ access_token: token, scope, citation }).imported_meeting_review).toBe(token === 'owner' ? 'reviewed' : 'not_reviewed');
+      expect(() => originals.read({ access_token: token === 'owner' ? 'other' : 'owner', scope, citation })).toThrow();
+    }
   });
 
   it('browses without retention; imports once across clients/restart and approves without Slack', async () => {
@@ -432,7 +442,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const list = f.listRoute();
     // Only me lists it (ADR-0049), filed in no project.
     const page = await list.list({ access_token: 'owner', request: { schema_version: 1, only_me: true } });
-    expect(page.items).toHaveLength(1); expect(page.items[0]).toMatchObject({ kind: 'imported_meeting', visibility: 'only_me', projects: [] });
+    expect(page.items).toHaveLength(1); expect(page.items[0]).toMatchObject({ kind: 'imported_meeting', title: 'Imported meeting: Test meeting', visibility: 'only_me', projects: [] });
     // A suggested project's list holds no unapproved note either.
     expect((await list.list({ access_token: 'owner', request: { schema_version: 1, project_id: project } })).items).toEqual([]);
     const opened = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } });
@@ -442,7 +452,7 @@ describe('personal meeting intake uses the shared processing path', () => {
       expect(originals.deskSearch({ access_token: token, scope: { kind: 'project', project_id: project }, query: 'cohort', kinds: ['imported_meeting'] }).items).toEqual([]);
     }
     const search = originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'cohort', kinds: ['imported_meeting'] });
-    expect(search.items).toHaveLength(1); expect(search.items[0]?.kind).toBe('imported_meeting');
+    expect(search.items).toHaveLength(1); expect(search.items[0]).toMatchObject({ kind: 'imported_meeting', label: 'Imported meeting: Test meeting' });
     expect(originals.deskOpen({ access_token: 'owner', scope: { kind: 'global' }, citation: search.items[0]!.citation }).items[0]?.text).toContain('Ship the cohort');
     for (const token of ['other', 'reader-a']) {
       expect(originals.deskSearch({ access_token: token, scope: { kind: 'global' }, query: 'cohort' }).items).toEqual([]);
@@ -555,6 +565,11 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect([f.extracted(), source!.pending_imports, source!.error, f.proposals(source!.source_key)]).toEqual([1, [], null, 0]);
     expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([]);
     expect(await f.readers()).toEqual(['owner']);
+    // With no card to wait for, its notes have nothing to review rather than staying "Not reviewed yet".
+    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
+    const scope = { kind: 'global' } as const;
+    const citation = originals.deskSearch({ access_token: 'owner', scope, kinds: ['imported_meeting'] }).items[0]!.citation;
+    expect(originals.read({ access_token: 'owner', scope, citation }).imported_meeting_review).toBe('nothing_to_review');
   });
   it('keeps a private import with the importer even while a folder is watched', async () => {
     const f = await fixture(); f.grantProject(); f.join(project, 'reader-a');
@@ -1178,8 +1193,24 @@ describe('personal meeting intake uses the shared processing path', () => {
   it('approves into the chosen project through the route', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
     const { pending, opened } = await f.pendingReview(runtime, project);
+    const list = f.listRoute();
+    const imported = (await list.list({ access_token: 'owner', request: { schema_version: 1, only_me: true } })).items;
+    expect(imported).toEqual([expect.objectContaining({ kind: 'imported_meeting', title: 'Imported meeting: Test meeting', visibility: 'only_me', projects: [] })]);
+    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
+    const scope = { kind: 'global' } as const;
+    const citation = originals.deskSearch({ access_token: 'owner', scope, kinds: ['imported_meeting'] }).items[0]!.citation;
+    const evidence = createPersonSourceEvidenceRouteV1({ originals });
+    const read = () => evidence.readSource({ access_token: 'owner', include_imported_meeting_review: true, request: { schema_version: 1, scope, citation } as never });
+    const before = read();
+    expect(before).toMatchObject({ citation: { label: 'Imported meeting: Test meeting' }, imported_meeting_review: 'not_reviewed' });
+    // A partial item selection is not a completed review; the core refuses it atomically.
+    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256,
+      command_id: 'partial-b', action: 'approve', routes: f.routes(opened, [projectB]).slice(1), owners: [] })).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(read()).toEqual(before);
     await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-b', action: 'approve', routes: f.routes(opened, [projectB]), owners: [] }))
       .resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
+    expect(read()).toEqual({ ...before, imported_meeting_review: 'reviewed' });
+    expect(originals.checkSourceRevisions({ access_token: 'owner', citations: [citation] })).toEqual(['same']);
     const body = JSON.parse(f.db.prepare('SELECT body_json FROM authority_approval_decisions_v1').pluck().get() as string);
     expect(body).toMatchObject({ surface: 'desktop', request: { routes: f.routes(opened, [projectB]), owners: [] }, evidence: { kind: 'person-session' } });
     expect(Object.keys(body.request).sort()).toEqual(['action', 'approval_id', 'command_id', 'owners', 'routes', 'snapshot_sha256']);
@@ -1188,6 +1219,20 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(envelope.body.human_act_resolution_ref.audience_project_ids).toEqual([projectB]);
     expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]).toMatchObject({ status: 'approved', project_ids: [projectB], decided_on: 'desktop',
       records: [{ approval_id: approvalRecordIdV2(pending!.approval_id, [projectB]), project_ids: [projectB] }] });
+    // Approval publishes a separate record; the source keeps its neutral provenance label and private audience.
+    expect((await list.list({ access_token: 'owner', request: { schema_version: 1, only_me: true } })).items).toEqual(imported);
+    const source = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: imported[0]!.ref } });
+    expect(source).toMatchObject({ item: imported[0] });
+    expect(JSON.stringify(source)).toContain('Ship the cohort');
+    expect(JSON.stringify(source)).not.toContain('TRANSCRIPT_SECRET');
+    expect(read()).toEqual({ ...before, imported_meeting_review: 'reviewed' });
+    f.revise(' (edited)');
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    await f.processUntilIdle(runtime);
+    const newer = originals.deskSearch({ access_token: 'owner', scope, kinds: ['imported_meeting'] }).items[0]!.citation;
+    expect(newer.revision_id).not.toBe(citation.revision_id);
+    expect(originals.read({ access_token: 'owner', scope, citation: newer }).imported_meeting_review).toBe('not_reviewed');
+    expect(read()).toEqual({ ...before, imported_meeting_review: 'reviewed' });
   });
   it('opens a pending review as items with their suggested destinations and proposed owners, and a decided one as chosen', async () => {
     const f = await fixture({ ownedAction: true, actions: 1 }), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
@@ -1278,6 +1323,11 @@ describe('personal meeting intake uses the shared processing path', () => {
     const rejected = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
     expect(rejected.items.map(item => [item.project_ids, item.owner, item.owner_editable])).toEqual([[null, null, false], [null, null, false]]);
     expect(rejected).toMatchObject({ suggested_projects: [], records: [], review: { status: 'rejected', project_ids: [], records: [] } });
+    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
+    const scope = { kind: 'global' } as const;
+    const citation = originals.deskSearch({ access_token: 'owner', scope, kinds: ['imported_meeting'] }).items[0]!.citation;
+    expect(originals.read({ access_token: 'owner', scope, citation })).toMatchObject({ imported_meeting_review: 'reviewed', atom: { label: 'Imported meeting: Test meeting' } });
+    expect(f.record.prepare('SELECT count(*) FROM organization_record_log').pluck().get()).toBe(0);
   });
   it('forwards after_record hooks from the runtime passthrough', async () => {
     const calls: AfterApprovedRecordEventV1[] = [];

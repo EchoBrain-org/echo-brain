@@ -88,13 +88,9 @@ export function parseArgs(argv) {
  */
 const codeFiles = () => Object.freeze(["tools/evals/ask-wording/cases.json", ...importedModules(ROOT, ["tools/evals/ask-wording/run.mjs"])]);
 
-/**
- * The answer layout the writer was given, from its input: 2 when it carries the block catalog (ADR-0051), 1 when its
- * reply schema declares tables (ADR-0045), else none.
- */
+/** The answer layout the writer was given, from its input: 2 when it carries the block catalog (ADR-0051), else none. */
 export function writerLayout(input) {
-  if (Object.hasOwn(JSON.parse(input.user_prompt), "block_catalog")) return 2;
-  return Object.hasOwn(input.schema?.properties ?? {}, "tables") ? 1 : null;
+  return Object.hasOwn(JSON.parse(input.user_prompt), "block_catalog") ? 2 : null;
 }
 
 /**

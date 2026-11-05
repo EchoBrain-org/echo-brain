@@ -2,6 +2,7 @@
 // fixture Authority behind the real person client. Every request is logged to
 // <home>/calls.jsonl so tests can assert what the app actually sent.
 import * as organizationApi from '@echo-brain/organization-api';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -68,10 +69,11 @@ interface Contract {
    */
   PERSON_ASK_PROGRESS_HEADER_VALUE_V3: string;
   formatPersonAskProgressEventV3(event: unknown): string;
-  /** Answer layout v1 (ADR-0045): the header an Ask asks for it with, and its value; and layout v2's value (ADR-0051). */
+  /** Answer layout v2 (ADR-0051): the header an Ask asks for it with, and its value. */
   PERSON_ASK_ANSWER_LAYOUT_HEADER_V1: string;
-  PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1: string;
   PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2: string;
+  PERSON_ASK_GAP_DETAILS_HEADER_V1: string;
+  PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1: string;
 }
 const api = organizationApi as unknown as Contract;
 
@@ -227,55 +229,6 @@ const thermPage = (id: string, title: string) => ({ kind: 'page', label: title, 
   permalink: `https://example.atlassian.net/wiki/pages/viewpage.action?pageId=${id}`, text_sha256: digestOf(title) } });
 const thermTicket = (key: string, title: string, id: string) => ({ kind: 'ticket', label: `${key} · ${title}`, visibility: 'only_me', citation: {
   kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD, ticket_id: id, permalink: `https://example.atlassian.net/browse/${key}`, text_sha256: digestOf(`${key}: ${title}`) } });
-/** What `ask-layout`'s THERM answer cites and its Ask reads: three pages, then three tickets. */
-const THERM_CITATIONS = [
-  thermPage('31001', 'DVT failure review'), thermPage('31002', 'Traceability'), thermPage('31003', 'Gate reviews'),
-  thermTicket('TRACE-01', 'Confirm TC-D-03 traces to MRD-01', '20001'), thermTicket('HW-11', 'Fix BUG-412 on the board', '20002'),
-  thermTicket('DVT-R2', 'Run DVT-R2', '20003'),
-];
-
-/**
- * `ask-layout`'s V8 answer (answer layout v1, ADR-0045), THERM's: a lead,
- * the decisions as bullets, and what has to happen first as a table, whose
- * row of yours is late. Research stopped short, so it says what it did not
- * cover. Its layout comes only to an Ask that asked for it (`layout`); without
- * it the statements are the same, in the same order.
- */
-export function layoutAnswer(question: string, scope: Record<string, unknown>, layout: boolean): Record<string, unknown> {
-  const said = (text: string, cited: number) => ({ text, citation_indexes: [cited], private: THERM_CITATIONS[cited]!.visibility === 'only_me' });
-  const row = (cells: string[], cited: number) => ({ cells, citation_indexes: [cited] });
-  return {
-    schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'partial', citations: THERM_CITATIONS,
-    notice: 'One of three THERM meetings in range was not read before the time limit.',
-    parts: [{
-      question, status: 'partial', gap: 'Who proposed the reduced scope was not found in the evidence read.',
-      statements: [
-        said('No, the reduced test scope was rejected.', 1),
-        said('DVT-R2 retests TC-D-03 and TC-D-01, plus the regression subset QA approves.', 1),
-        said('A narrower run cannot exit DVT: the retest must cover the failed bar TC-D-03, TC-D-01 and a QA-approved regression subset.', 2),
-        said('Hardware owns the BUG-412 fix (HW-11); the failure review made sensor self-heating the likely cause.', 0),
-        said('TC-D-06 reruns too: its pass predates the approved two-decimal display.', 2),
-        said('TRACE-01, confirming TC-D-03 traces to MRD-01, is yours, To Do, due 2026-10-14.', 3),
-        said('Rafael Moreno owes the PM the regression-scope proposal, due 2026-10-09.', 2),
-        said('Tomas Okafor\'s board fix for BUG-412 (HW-11) is In Progress, due 2026-10-28.', 4),
-        said('DVT-R2 is To Do with QA, due 2026-10-30.', 5),
-      ],
-      ...(layout ? { layout: [
-        { kind: 'lead', statements: [0, 1] },
-        { kind: 'heading', text: 'Decisions' },
-        { kind: 'bullets', statements: [2, 3, 4] },
-        { kind: 'heading', text: 'What has to happen first' },
-        { kind: 'table', statements: [5, 6, 7, 8], columns: ['Action', 'Owner', 'Due', 'Status'], rows: [
-          row(['Confirm TC-D-03 traces to MRD-01 (TRACE-01)', 'You', '2026-10-14', 'To Do'], 3),
-          row(['Send the regression-scope proposal to the PM', 'Rafael Moreno', '2026-10-09', 'Open'], 2),
-          row(['Fix BUG-412 on the board (HW-11)', 'Tomas Okafor', '2026-10-28', 'In Progress'], 4),
-          row(['Run DVT-R2 and publish the report', 'QA', '2026-10-30', 'To Do'], 5),
-        ] },
-      ] } : {}),
-    }],
-  };
-}
-
 /** What `ask-blocks`'s THERM answer cites: the soak's plan and report and the PVT readiness review, then three tickets. */
 const THERM_BLOCK_CITATIONS = [
   thermPage('31020', 'Soak test plan'), thermPage('31021', 'Soak test report'), thermPage('31022', 'PVT readiness review'),
@@ -405,6 +358,27 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   }).operations;
   const desktop = JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
+  const importedNotes = mode === 'ask-imported-meeting' || mode === 'ask-imported-mixed';
+  if (importedNotes) {
+    // A pre-deploy answer keeps the historical label and v1 packet coordinates. The proof read below
+    // returns the current neutral label and live review state without changing those coordinates.
+    const label = 'Imported meeting (unapproved): Pilot';
+    const text = 'The notes propose shipping the pilot.';
+    desktop.evidence_text = `${label}\n${text}`;
+    desktop.evidence_label = 'Imported meeting: Pilot';
+    const citation = { kind: 'source_revision', source_id: `source:${'1'.repeat(64)}`, revision_id: 'rev-1', source_sha256: `sha256:${'2'.repeat(64)}`,
+      representation_sha256: canonicalSha256({ kind: 'imported-meeting-notes-v1', text }),
+      anchor_sha256: canonicalSha256({ kind: 'text', context_id: `cap_${'3'.repeat(64)}`, segment: 0, text: desktop.evidence_text }) };
+    desktop.answer.citations = [{ kind: 'imported_meeting', label, citation: { ...citation, label }, visibility: 'only_me' }];
+    desktop.answer.parts = [{ question: 'What do the pilot notes say?', status: 'answered', statements: [{ text, citation_indexes: [0], private: true }] }];
+    if (mode === 'ask-imported-mixed') {
+      const updated = 'The updated notes defer the pilot.';
+      (desktop.answer.citations as unknown[]).push({ kind: 'imported_meeting', label, visibility: 'only_me', citation: { ...citation,
+        revision_id: 'rev-2', source_sha256: `sha256:${'4'.repeat(64)}`, representation_sha256: canonicalSha256({ kind: 'imported-meeting-notes-v1', text: updated }),
+        anchor_sha256: canonicalSha256({ kind: 'text', context_id: `cap_${'5'.repeat(64)}`, segment: 0, text: `${label}\n${updated}` }) } });
+      desktop.answer.parts = [{ question: 'What do the pilot notes say?', status: 'answered', statements: [{ text: 'The original notes propose shipping; the updated notes defer the pilot.', citation_indexes: [0, 1], private: true }] }];
+    }
+  }
   const syntheticReview = mode === 'synthetic-review';
   let granolaImported = syntheticReview, granolaApproved = false, granolaBaselineHomeReads = 0;
   // The automatic import granola-preparing saved: what it watches and the project it suggests.
@@ -1060,7 +1034,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const metadata = new Headers(init?.headers).get('x-echo-document-metadata');
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown>
       : metadata ? JSON.parse(Buffer.from(metadata, 'base64url').toString('utf8')) as Record<string, unknown> : undefined;
-    // An Ask that asked for its progress says so (ADR-0039), and one that asked for its answer's layout (ADR-0045).
+    // An Ask that asked for its progress says so (ADR-0039), and one that asked for its answer's layout (ADR-0051).
     const progress = new Headers(init?.headers).get('x-echo-ask-progress');
     const layout = new Headers(init?.headers).get('x-echo-answer-layout');
     appendFileSync(join(home, 'calls.jsonl'), `${JSON.stringify({ method, path: url.pathname, query: url.search, body, ...(progress === null ? {} : { progress }),
@@ -1850,6 +1824,21 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (mode === 'ask-progress' && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V3) {
         return progressStream(question, scope, init?.signal ?? undefined);
       }
+      if (mode === 'ask-completion') {
+        const noMatch = question === 'Find the missing launch note.';
+        const interrupted = question === 'What changed during the unavailable search?';
+        const mixed = question === 'What was decided? Mark action A1 Done.';
+        const partialMissing = question === 'Who owns Harbor?' || question === 'What was decided, and who owns Harbor?';
+        const hasFacts = mixed || question === 'What was decided, and who owns Harbor?';
+        const [original] = desktop.answer.parts as Record<string, unknown>[];
+        const missing = noMatch ? "I couldn't find this in the sources you can access." : 'Not found: the Harbor owner.';
+        return json({ ...answer, scope, outcome: noMatch ? 'not_found' : 'partial', citations: hasFacts ? desktop.answer.citations : [],
+          parts: [{ question, status: hasFacts ? 'partial' : 'not_found', statements: hasFacts ? original!.statements : [],
+            gap: 'The list did not reach the end. Unchecked entries and sentences did not fit.',
+            ...(new Headers(init?.headers).get(api.PERSON_ASK_GAP_DETAILS_HEADER_V1) === api.PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1
+              ? { gap_details: noMatch || partialMissing ? { not_found: missing } : interrupted ? { interrupted: true } : { unsupported_action: true } } : {}) }],
+        });
+      }
       if (mode === 'ask-ticket') {
         const included = scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null);
         return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
@@ -1871,12 +1860,20 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             : [], ...(included ? {} : { gap: 'No accessible Confluence page was found.' }) }],
         });
       }
-      // `ask-blocks` answers in the layout the Ask asked for: THERM's blocks for layout v2 (ADR-0051), layout v1's THERM answer for 1,
-      // and the blocks' plain statements for none.
+      // `ask-blocks` answers in the layout the Ask asked for: THERM's blocks for layout v2 (ADR-0051), and the blocks' plain statements
+      // for any other Ask, as the Authority answers one without the header or with retired layout v1's 1.
       if (mode === 'ask-blocks') {
         const layout = new Headers(init?.headers).get(api.PERSON_ASK_ANSWER_LAYOUT_HEADER_V1);
-        return json(layout === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2 ? blocksAnswer(question, scope, true)
-          : layout === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1 ? layoutAnswer(question, scope, true) : blocksAnswer(question, scope, false));
+        return json(blocksAnswer(question, scope, layout === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2));
+      }
+      if (mode === 'ask-scroll') {
+        const statements = question === 'Quick status' ? [{ text: 'The release remains scheduled for Friday, and the team has confirmed the owner and the remaining checks.', citation_indexes: [0], private: false }] : Array.from({ length: 12 }, (_, index) => ({
+          text: `${question} Item ${index + 1}: The team reviewed the supplier report, the manufacturing checklist, and the latest test results. The next review will compare those results with the release requirements before confirming the schedule and assigning the remaining follow-ups.`,
+          citation_indexes: [0], private: false,
+        }));
+        return json({ ...answer, scope, citations: THERM_BLOCK_CITATIONS.slice(0, 1), parts: [{ question, status: 'answered', statements,
+          blocks: [{ kind: 'text', statements: statements.map((_, index) => index) }],
+        }] });
       }
       // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
       const [part] = desktop.answer.parts as Record<string, unknown>[];
@@ -1884,9 +1881,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
     if (method === 'POST' && path === '/v2/person/ask/source') {
       const citation = body?.citation as Record<string, unknown>;
+      const newer = mode === 'ask-imported-mixed' && citation.revision_id === 'rev-2';
+      // The mixed-revision pane must not infer a shared review state before both proofs arrive.
+      for (let waited = 0; newer && existsSync(join(home, 'hold-imported-newer')) && waited < 10_000; waited += 25) await new Promise(resolve => setTimeout(resolve, 25));
+      const review = new Headers(init?.headers).get(organizationApi.PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1) === organizationApi.PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_VALUE_V1;
       return json({
         schema_version: 1, kind: 'echo-person-source-evidence-v1', scope: body?.scope,
-        citation: { ...citation, label: desktop.evidence_label }, text: desktop.evidence_text,
+        citation: { ...citation, label: desktop.evidence_label }, text: newer ? 'Imported meeting (unapproved): Pilot\nThe updated notes defer the pilot.' : desktop.evidence_text,
+        ...(importedNotes && review ? { imported_meeting_review: newer ? 'not_reviewed' : mode === 'ask-imported-mixed' || existsSync(join(home, 'imported-reviewed')) ? 'reviewed' : 'not_reviewed' } : {}),
       });
     }
     // One approved record, by the digest an answer cited. A record the person

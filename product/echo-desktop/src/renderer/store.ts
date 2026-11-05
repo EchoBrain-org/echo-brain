@@ -12,7 +12,7 @@ import type {
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
-import { answerMarkdown, answerSentences, answerText, documentName, numberedSources, type SourceGroup } from './answer.js';
+import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, numberedSources, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
   answeredNow, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, checksHiding, followedTurn, foundUnreadable, freshChecks, freshStates, knownStates,
@@ -4019,12 +4019,30 @@ export function askProgress(notice: AskProgressNotice): void {
 }
 
 /**
- * A project question whose answer cites nothing: nothing in the project
- * matched. Ask never widens on its own (ADR-0015); the reader may ask the same
- * question across everything they can read, with one tap.
+ * A completed not-found project answer with no sources: nothing in the project
+ * matched. An incomplete search or unsupported action is not absence. Ask never
+ * widens on its own (ADR-0015); the reader may ask the same question across
+ * everything they can read, with one tap.
  */
 export function foundNothingInProject(turn: TimelineTurn): turn is TimelineTurn & { readonly scope: ProjectScope } {
-  return turn.scope.kind === 'project' && turn.answer.sources.length === 0;
+  return turn.scope.kind === 'project' && turn.answer.outcome === 'not_found' && turn.answer.sources.length === 0;
+}
+
+/**
+ * What a turn says when its answer says nothing and shows no explanation, on
+ * the page and in Copy answer alike: nothing in its project matched, for a
+ * project question that found nothing; otherwise as the answer's outcome
+ * words it (nothingMatched).
+ */
+export function nothingLine(turn: TimelineTurn, current: State = state): string {
+  return foundNothingInProject(turn) ? `Nothing in ${scopeName(turn.scope, current)} matched.` : nothingMatched(turn.answer);
+}
+
+/** A completed factual gap can be searched more widely even when other parts were answered. */
+export function canAskEverywhere(turn: TimelineTurn, current: State = state): boolean {
+  if (turn.scope.kind !== 'project' || !showsOf(shownChecks(turn, current))(turn.answer.sources.map((_, index) => index))) return false;
+  return foundNothingInProject(turn) || (turn.answer.parts.some(part => part.gap_details?.not_found !== undefined)
+    && !turn.answer.parts.some(part => part.gap_details?.interrupted));
 }
 
 /**
@@ -4035,7 +4053,7 @@ export function foundNothingInProject(turn: TimelineTurn): turn is TimelineTurn 
  */
 export function askEverywhere(id: string): void {
   const turn = turnOf(id);
-  if (!turn || state.ask?.asking || !foundNothingInProject(turn)) return;
+  if (!turn || state.ask?.asking || !canAskEverywhere(turn)) return;
   widenScope();
   void ask(turn.question, { kind: 'global' }, { previous: null });
 }
@@ -4187,8 +4205,9 @@ export function cancelAsk(): void {
 /**
  * Copy answer: a turn's answer as Markdown (ADR-0045), as the page shows it:
  * without what the check it shows left out, its sources numbered and named
- * as the page shows them (ADR-0047). Onto the clipboard; its plain text when
- * the Markdown is longer than Copy answer takes. Says whether it got there.
+ * as the page shows them (ADR-0047), and the turn's line (nothingLine) when
+ * it says and explains nothing. Onto the clipboard; its plain text when the
+ * Markdown is longer than Copy answer takes. Says whether it got there.
  */
 export async function copyAnswer(id: string | null): Promise<boolean> {
   const turn = turnOf(id);
@@ -4200,8 +4219,9 @@ export async function copyAnswer(id: string | null): Promise<boolean> {
   // Ask again's "Since" (ADR-0047), named by the day the earlier answer was asked, as the page names it.
   const earlier = turn.again_of === undefined ? undefined : turnOf(turn.again_of)?.asked_at;
   const since = turn.since === undefined ? undefined : { statements: turn.since, when: earlier === undefined ? 'then' : askedWhen(earlier) };
-  const markdown = answerMarkdown(answer, groups.map(group => sourceName(answer.sources[group.indexes[0]!]!, state.sources)), groups, shows, since);
-  const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : checks === undefined && since === undefined ? answer.text : answerText(answer, shows, since);
+  const nothing = nothingLine(turn);
+  const markdown = answerMarkdown(answer, groups.map(group => sourceName(answer.sources[group.indexes[0]!]!, state.sources)), groups, shows, since, nothing);
+  const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : answerText(answer, shows, since, nothing);
   return text !== '' && (await rpc('clipboard.writeText', { text })).ok;
 }
 

@@ -150,24 +150,25 @@ describe('Ask research tool contract v1', () => {
   });
 });
 
-describe('Ask answer layout v1 (ADR-0045)', () => {
-  it('lays a V8 answer out only when the client asked for it', async () => {
+describe('Ask answer layout v2 (ADR-0051)', () => {
+  it('arranges a V8 answer in blocks only when the client asked for them, a list the writer uses as its table', async () => {
     const projects = [1, 2].map((n): EvidenceDeskItemV2 => Object.freeze({
       id: `project-${n}`, kind: 'project', citation: { kind: 'project' as const, project_id: `prj_00000000-0000-4000-8000-00000000000${n}` as const }, label: `Project ${n}`, visibility: 'project',
       attributes: { status: 'active' }, text: `Project ${n}.`, receipt_sha256: canonicalSha256(`project-${n}`),
     }));
-    const answer = async (answer_layout?: 1 | 2) => {
-      const run = scripted([step([{ tool: 'list', args: { source: 'projects', status: 'active' } }]), finish(), { lists: [{ id: 'L1' }], sentences: [], not_found: [] }]);
+    const answer = async (answer_layout?: 2) => {
+      const run = scripted([step([{ tool: 'list', args: { source: 'projects', status: 'active' } }]), finish(),
+        { lists: [{ id: 'L1' }], ...(answer_layout === undefined ? { sentences: [] } : { blocks: [] }), not_found: [] }]);
       const port = desk({ live_sources: [PROJECTS_SOURCE_DESCRIPTOR_V1], list: vi.fn(async () => result(projects)) });
       const response = await createAgenticAskV5({ desk: port, model: run.model, audit: { append: () => undefined }, generation, today: () => '2026-10-19', ...(answer_layout === undefined ? {} : { answer_layout }) })
         .answer({ question: 'What are the current projects?' });
       expect(validatePersonAnswerResponseV8(response)).toEqual(response);
       return response.parts[0]!;
     };
-    expect((await answer(1)).layout).toEqual([{ kind: 'table', statements: [0], columns: ['Item', 'Status'], caption: expect.stringMatching(/^2 projects/u), rows: [
+    expect((await answer(2)).blocks).toEqual([{ kind: 'table', statements: [0], columns: ['Item', 'Status'], caption: expect.stringMatching(/^2 projects/u), rows: [
       { cells: ['Project 1', 'active'], citation_indexes: [0] }, { cells: ['Project 2', 'active'], citation_indexes: [1] },
     ] }]);
-    expect(await answer()).not.toHaveProperty('layout');
+    expect(await answer()).not.toHaveProperty('blocks');
   });
 });
 

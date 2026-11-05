@@ -103,7 +103,7 @@ function fixture(options: { readonly membership?: (id: string) => Membership | u
 const auditRow = (database: Database.Database) => database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE context_kind = 'answer_composition'").get() as { body_json: string } | undefined;
 
 describe("Agentic Ask with stored source evidence", () => {
-  it("answers globally from unread project search passages without releasing another member's private text", async () => {
+  it("retains global search facts after an unfinished absence claim without releasing another member's private text", async () => {
     const software = `SCOUT Software Review. ${"Background for this proposal. ".repeat(20)}Software needs an explicit transition table.`;
     const hardware = `SCOUT Hardware Review. ${"Background for this proposal. ".repeat(20)}Hardware needs battery endurance measurements.`;
     const f = fixture({ generate: async input => {
@@ -130,7 +130,8 @@ describe("Agentic Ask with stored source evidence", () => {
     f.upload("SCOUT confidential review", "SCOUT Software Hardware Review. Private marker 97531.", "only_me");
     const answer = await f.route.ask({ access_token: "member", request: { schema_version: 3, question: "Compare the SCOUT Software Review and Hardware Review" } });
     expect(answer.scope).toEqual({ kind: "global" });
-    expect(answer.outcome).toBe("answered");
+    expect(answer.outcome).toBe("partial");
+    expect(answer.notice).toContain("Research stopped before it finished");
     expect(answer.citations).toHaveLength(2);
     expect(f.prompts.join("\n")).not.toContain("97531");
     expect(f.prompts.join("\n")).not.toContain("SCOUT confidential review");
@@ -139,7 +140,7 @@ describe("Agentic Ask with stored source evidence", () => {
       expect(f.originals.read({ access_token: "member", scope: { kind: "global" }, citation: citation.citation }).atom.text).toMatch(/SCOUT (Software|Hardware) Review/);
     }
     const body = JSON.parse(auditRow(f.database)!.body_json) as Record<string, unknown>;
-    expect(body).toMatchObject({ principal_id: MEMBER.principal_id, outcome: "answered" });
+    expect(body).toMatchObject({ principal_id: MEMBER.principal_id, outcome: "partial" });
     expect(body.response_sha256).toBe(canonicalSha256(answer));
     expect(auditRow(f.database)!.body_json).not.toContain("transition table");
   });
@@ -274,5 +275,28 @@ describe("Agentic Ask combined request-local sources", () => {
     const route = liveRoute(f, { generate: async () => { throw new Error("model must not run"); } }, [{ ...CONFLUENCE_LIVE_CONNECTOR_V1, application: { source: denied } }]);
     await expect(route.ask({ access_token: "owner", request: { schema_version: 3, question: "When does EVT start?" } })).rejects.toMatchObject({ code: "unauthorized" });
     expect(denied).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for a retry when meeting records could not be searched, though live tickets came back empty", async () => {
+    const f = fixture();
+    const empty = Object.freeze({ items: Object.freeze([]), truncated: false, receipt_digests: Object.freeze([]) });
+    const tickets: PersonLiveEvidenceSourceV1<PersonTicketCitationV1> = Object.freeze({ tool_id: "jira", search: vi.fn(async () => empty), list: vi.fn(async () => empty),
+      open: vi.fn(async () => empty), revalidate: vi.fn(async () => {}), assertCurrent: vi.fn(() => {}) });
+    // The planner searches meeting records, whose index is behind its log, and live tickets twice, and finds nothing.
+    const model: StructuredGenerationPort = { async generate(input) {
+      const prompt = JSON.parse(input.user_prompt) as Prompt;
+      const parts = (status: string) => [{ question: prompt.question!, notes: "", needs: [{ need: "Harbor owner", status, evidence: [] }] }];
+      return prompt.step === 1
+        ? { parts: parts("open"), actions: [{ tool: "search", args: { source: "meetings", query: "Harbor owner" } },
+          { tool: "search", args: { source: "tickets", query: "Harbor owner" } }, { tool: "search", args: { source: "tickets", query: "Harbor lead" } }] }
+        : { parts: parts("not_found"), actions: [{ tool: "finish", args: {} }] };
+    } };
+    const route = liveRoute(f, model, [{ ...JIRA_LIVE_CONNECTOR_V1, application: { source: async () => tickets } }]);
+    const answer = await route.ask({ access_token: "owner", request: { schema_version: 3, question: "Who owns Harbor?" } });
+    expect(tickets.search).toHaveBeenCalledTimes(2);
+    expect(answer.notice).toContain("Meeting records were unavailable when this request began.");
+    // Two clean ticket searches cannot show the meetings hold nothing: a retry once the index catches up can.
+    expect(answer.outcome).toBe("partial");
+    expect(answer.parts[0]).toMatchObject({ status: "not_found", gap: "I couldn't complete the search. Please try again." });
   });
 });

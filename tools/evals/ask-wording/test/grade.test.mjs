@@ -9,11 +9,13 @@ const ID = "clean-v1-20261026-ask-timeline-aa79d90";
 /** The answer the founder saw on staging on 2026-10-26, as one laid-out part citing the follow-up. */
 const SCREENSHOT = `Noor Haddad owns the follow-up "Approve release ${ID} and choose who can read it."`;
 
-function answer(statements, { lead = [0], outcome = "answered", kinds = ["follow_up"] } = {}) {
+/** `statements` as one part in blocks, each citing the first source: the first is the answer block, the rest one text block. */
+function answer(statements, { outcome = "answered", kinds = ["follow_up"] } = {}) {
+  const rest = statements.slice(1).map((_, index) => index + 1);
   return {
     outcome, citations: kinds.map((kind) => ({ kind })),
     parts: [{ status: "answered", statements: statements.map((text) => ({ text, citation_indexes: [0], private: false })),
-      layout: lead.length === 0 ? [{ kind: "paragraph", statements: statements.map((_, index) => index) }] : [{ kind: "lead", statements: lead }] }],
+      blocks: [{ kind: "answer", statements: [0] }, ...(rest.length === 0 ? [] : [{ kind: "text", statements: rest }])] }],
   };
 }
 
@@ -59,21 +61,16 @@ test("loses nothing only when the answer is answered, cited, from the expected s
   assert.deepEqual(gradeTrial(founder, null).rules, { no_restating: false, long_ids_once: false, nothing_lost: false });
 });
 
-test("takes the lead from the lead block, or else from the first statement", () => {
-  assert.equal(leadOf(answer(["First.", "Second."], { lead: [0, 1] })), "First. Second.");
-  assert.equal(leadOf(answer(["First.", "Second."], { lead: [] })), "First.");
-  assert.equal(leadOf({ parts: [] }), "");
-});
-
-test("takes layout v2's lead from its answer block, or else from the first statement", () => {
+test("takes the lead from the answer block, or else from the first statement", () => {
   const facts = [{ label: "Status", value: "Open" }, { label: "Owner", value: "You" }];
   const card = (title) => ({ kind: "card", title, entity: "decision", statements: [2, 3], facts });
   const answered = blocksAnswer([{ kind: "answer", statements: [0, 1] }, card("The follow-up")],
     ["You own it.", "It is still open.", "Decision: The follow-up; Status: Open.", "Decision: The follow-up; Owner: You."]);
   assert.equal(leadOf(answered), "You own it. It is still open.");
   assert.deepEqual(gradeTrial(founder, answered).rules, { no_restating: true, long_ids_once: true, nothing_lost: true });
-  // With no answer block, the first statement leads, as it does in an answer without layout.
+  // With no answer block, the first statement leads, as it does in an answer without layout; with no part, nothing does.
   assert.equal(leadOf(blocksAnswer([{ kind: "points", ordered: false, statements: [0, 1] }], ["You own it.", "It is still open."])), "You own it.");
+  assert.equal(leadOf({ parts: [] }), "");
   // The answer's text is its statements, as the audit reads them: a long identifier that titles a card is written in each of its facts.
   const titled = gradeTrial(founder, blocksAnswer([{ kind: "answer", statements: [0, 1] }, card(ID)],
     ["You own it.", "It is still open.", `Decision: ${ID}; Status: Open.`, `Decision: ${ID}; Owner: You.`]));

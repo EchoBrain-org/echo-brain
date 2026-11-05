@@ -32,10 +32,11 @@ flowchart LR
   ([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)).
 - **Request headers:** `x-echo-ask-progress: 3` streams progress as server-sent
   events ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md));
-  `x-echo-answer-layout: 1` asks for a laid-out answer
-  ([ADR-0045](../decisions/ADR-0045-ask-answer-layout.md)), and `2` for one
-  the writer arranges from a catalog of seven blocks, which the person client
-  sends ([ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md));
+  `x-echo-answer-layout: 2` asks for an answer the writer arranges from a
+  catalog of seven blocks, which the person client sends
+  ([ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md)); `1`, retired
+  layout v1's value ([ADR-0045](../decisions/ADR-0045-ask-answer-layout.md)),
+  is answered as an Ask without the header, in paragraphs;
   `x-echo-client-now` and `x-echo-time-zone` anchor dates. A follow-up carries
   the previous turn ([ADR-0047](../decisions/ADR-0047-ask-timeline.md)).
 - **Scopes:** the whole organization, or one project. The `mine` scope is
@@ -75,7 +76,7 @@ The engine lives in `packages/organization-authority-kernel/src/answer-compositi
 | `agentic-ask-v1-model-protocol.ts` | Prompts and JSON schemas for the model |
 | `agentic-model-gate-v1.ts` | The access check before every model call |
 | `agentic-list-evidence-v1.ts` | Complete lists as evidence |
-| `renderers/ask-renderer-v1.ts`, `ask-layout-v1.ts`, `ask-layout-v2.ts` | The written answer, its layout and its blocks |
+| `renderers/ask-renderer-v1.ts`, `ask-layout-v2.ts` | The written answer and its blocks |
 | `agentic-ask-progress-recorder-v1.ts` | Progress steps and the receipt of what was looked through ([ADR-0043](../decisions/ADR-0043-ask-receipt-counts-what-research-looked-through.md)) |
 | `agentic-release-v1.ts` | The release step: final access check, audit, second check |
 
@@ -113,6 +114,26 @@ source is admitted, so changing it needs fresh state. On staging, the connector
 profile can select the Claude Agent SDK research engine, and one member can use
 their own Claude account; that code lives in
 `providers/openrouter/src/claude-research/`.
+
+The native research finish contract distinguishes a finished investigation from
+finding an answer. Closed Ask needs, including `not_found`, pass the existing
+observed-read and coverage checks before research is considered complete, even
+when the driver supplied `completed=false`. Open needs and interrupted reads
+remain incomplete. For Ask requests to change data or send messages, the driver
+can set `unsupported_action=true`: an action-only request has no factual parts
+and needs no search; mixed requests still validate their factual needs normally.
+Clients opt into typed `gap_details` with `x-echo-ask-gap-details: 1`; older
+requests keep the exact V8 part shape. The renderer supplies them separately
+from the diagnostic `gap`:
+unsupported action, unfinished research, and a bounded not-found explanation.
+The desktop and Copy use only these actionable reasons; coverage and formatting
+diagnostics stay hidden. The response stays partial for unsupported requests,
+and internal researcher notes are never published. Background task goals do not
+accept this Ask capability signal. Completion checks prove observed reads and
+coverage, not query relevance or command intent; those remain model judgments
+covered by negative evaluation cases and live rehearsal. A list selection
+becomes actionable absence only after complete, verified coverage of the
+selection facts; empty subsets of incomplete or unchecked lists do not qualify.
 
 ## Side routes
 

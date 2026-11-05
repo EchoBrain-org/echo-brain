@@ -48,7 +48,11 @@ export interface PersonLiveEvidencePageV1<C extends PersonLiveEvidenceCitationV1
   readonly truncated: boolean;
   /** Provider-owned list continuation, kept inside the request. */
   readonly next_cursor?: string;
-  /** Bounded adapter-authored availability or representation notice, never a raw provider error. */
+  /**
+   * Bounded adapter-authored representation notice, never a raw provider error: research reads it as informational. A
+   * reader reports an outage, a rate limit or a quota by failing, which a search across sources turns into an
+   * availability notice.
+   */
   readonly notice?: string;
   /** List only: the raw vendor page, before the adapter's own filtering, held its full page size (ADR-0041). */
   readonly page_full?: boolean;

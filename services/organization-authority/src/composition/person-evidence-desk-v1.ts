@@ -45,7 +45,7 @@ export interface PersonEvidenceDeskExclusionsV1 {
   /** Original sources by source_id: the notes of every revision. */
   readonly sources: readonly string[];
   /**
-   * Every item only this reader may see: Only-me records, and private notes, documents and unapproved imported meetings.
+   * Every item only this reader may see: Only-me records, and private notes, documents and imported meeting notes.
    * For research whose words reach a wider audience than the reader (an impact run of a shared record).
    */
   readonly private?: boolean;
@@ -254,7 +254,9 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     readNotices.clear();
     const unchecked = readUnchecked;
     readUnchecked = undefined;
-    return Object.freeze({ items: Object.freeze(items), truncated, receipt_digests: Object.freeze(all), ...(notices.length > 0 ? { notice: notices.join(" ") } : {}), ...(unchecked === undefined ? {} : { unchecked }) });
+    // With the record index behind its log, meeting records could not be searched in this request: absence over them is
+    // unproven until a retry after the index catches up, so the notice is an availability one.
+    return Object.freeze({ items: Object.freeze(items), truncated, receipt_digests: Object.freeze(all), ...(notices.length > 0 ? { notice: notices.join(" "), notice_kind: recordsUnavailableAtStart ? "availability" as const : "informational" as const } : {}), ...(unchecked === undefined ? {} : { unchecked }) });
   };
   /** A record open's result, with whether the anchor's own text was cut (ADR-0041). */
   const opened = (value: PersonEvidenceDeskResultV1, expanded: { readonly anchor_truncated?: boolean }): PersonEvidenceDeskResultV1 =>

@@ -1,13 +1,13 @@
 import { Fragment, type ComponentChildren } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type {
-  Answer, AnswerBlock, AnswerEvent, AnswerFact, AnswerPart, AnswerSource, ArrangedBlock, AskReceipt, AskSearched, CardEntity, ExternalAnswerSource, AnswerStatement,
+  Answer, AnswerEvent, AnswerFact, AnswerPart, AnswerSource, ArrangedBlock, AskReceipt, AskSearched, CardEntity, ExternalAnswerSource, AnswerStatement,
   ApprovedRecord, Match, OpenItemView, RecordItem, TimelineTurn, ToolContainerKind,
 } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import {
-  answerSentences, blockTitle, CARD_WORDS, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownArranged,
-  shownBlocks, shownItems, statementGroups, tableDay, yoursIn, type AnswerTable, type Inline, type Shows, type SourceGroup,
+  answerGaps, answerSays, answerSentences, blockTitle, CARD_WORDS, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownArranged,
+  shownItems, statementGroups, tableDay, yoursIn, type AnswerTable, type Inline, type Sentence, type Shows, type SourceGroup,
 } from '../answer.js';
 import { askedToday, askedWhen, identity, initial, marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
@@ -18,8 +18,8 @@ import {
   type LiveRow, type NamedPlace,
 } from '../progress.js';
 import {
-  activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
-  fullPageOffered, litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
+  activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
+  fullPageOffered, litAtoms, matchesShown, nothingLine, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, searchAgain, setBarText, sourceName, submitBar, suggestionsShown, toggleEarlier, toggleSourceList, toggleTurn, turnOf, widenScope,
   UNTITLED,
   type AskClarify, type AskTook, type PaneTarget, type Read, type RecordSectionKey, type State,
@@ -204,7 +204,7 @@ function Marker({ state, view, group, focus }: { state: State; view: TurnView; g
   const on = paneOn(state, view) && state.sources?.open === group && state.sources.focus === focus;
   const name = sourceName(firstSource(view, view.groups[group]!), state.sources);
   return (
-    <button type="button" class={`marker${on ? ' on' : ''}`} data-testid="citation" aria-pressed={on} aria-label={`Source ${group + 1}: ${name}`}
+    <button type="button" class={`marker${on ? ' on' : ''}`} data-testid="citation" data-reading-focus={focus} aria-pressed={on} aria-label={`Source ${group + 1}: ${name}`}
       title={name} onClick={() => chooseSource(group, focus, view.id)}>{group + 1}</button>
   );
 }
@@ -214,7 +214,7 @@ function Marker({ state, view, group, focus }: { state: State; view: TurnView; g
  * pointer is on the sentence, or one of them has focus (ADR-0049); a lock
  * shows only on a source's row.
  */
-function Markers({ state, view, statement, id }: { state: State; view: TurnView; statement: AnswerStatement; id: string }) {
+function Markers({ state, view, statement, id }: { state: State; view: TurnView; statement: Sentence; id: string }) {
   return <>{statementGroups(statement.citation_indexes, view.groups).map(group => <Marker key={group} state={state} view={view} group={group} focus={id} />)}</>;
 }
 
@@ -240,7 +240,7 @@ function markClass(base: string, on: boolean, mark: Mark): string {
  */
 function statementProps(state: State, view: TurnView, statement: AnswerStatement, id: string, base = '') {
   const mark = markIn(view, statement.citation_indexes);
-  return { class: markClass(base, lit(state, view, id), mark) || undefined, 'data-testid': 'statement', 'data-mark': mark ?? undefined };
+  return { class: markClass(base, lit(state, view, id), mark) || undefined, 'data-testid': 'statement', 'data-reading-anchor': id, 'data-mark': mark ?? undefined };
 }
 
 /** A sentence's words as its item reads them (`text`), then the numbers of its sources. */
@@ -264,7 +264,7 @@ function Found({ state, view, statement, id }: { state: State; view: TurnView; s
   if (mark === 'omitted') return null;
   const source = view.answer.sources[statement.citation_indexes[0]!];
   return (
-    <div class={markClass('passage selectable', false, mark)} data-testid="found" data-mark={mark ?? undefined}>
+    <div class={markClass('passage selectable', false, mark)} data-testid="found" data-reading-anchor={id} data-mark={mark ?? undefined}>
       <Passage text={statement.text} label={source?.label ?? ''} />
       <div><Markers state={state} view={view} statement={statement} id={id} /></div>
     </div>
@@ -326,9 +326,9 @@ function Cell({ cell, late, you }: { cell: string; late: boolean; you: boolean }
 }
 
 /**
- * A table of a laid-out part, in its own box that scrolls when the window is
- * narrow; the page never does. Its caption shows above it only when the table
- * opens the answer (`opens`): after a lead it would say the lead again
+ * A table block, in its own box that scrolls when the window is narrow; the
+ * page never does. Its caption shows above it only when the table opens the
+ * answer (`opens`): after the answer it would say the answer again
  * (ADR-0049), so it only names the table. Each row's numbers are in its first
  * cell, and a row is lit on its own. Only your row's late due date is in the
  * signal colour, but for a row whose sources changed since.
@@ -350,9 +350,9 @@ function Table({ state, view, index, block, place, opens, label }: {
             const id = rowId(index, place, at);
             const late = lateForYou(block.columns, row.cells, me);
             return (
-              <tr key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="answer-row" data-mark={mark ?? undefined}>
+              <tr key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="answer-row" data-reading-anchor={id} data-mark={mark ?? undefined}>
                 {row.cells.map((cell, column) => column === 0
-                  ? <td key={column}><span class="first">{cell}<Markers state={state} view={view} statement={rowStatement(row, view.answer.sources)} id={id} /></span></td>
+                  ? <td key={column}><span class="first">{cell}<Markers state={state} view={view} statement={rowStatement(row)} id={id} /></span></td>
                   : <Cell key={column} cell={cell} late={late && column === due} you={yoursIn(block.columns[column]!, cell, me)} />)}
               </tr>
             );
@@ -361,34 +361,6 @@ function Table({ state, view, index, block, place, opens, label }: {
       </table>
     </div>
   </>;
-}
-
-/**
- * A laid-out part (answer layout v1, ADR-0045), in the desktop's own type:
- * the lead, its first sentence heavier; headings; paragraphs; bullets; and
- * tables. Every sentence and row keeps its own numbers and is lit on its own.
- * `opening`: the part opens the answer, so a table first has no lead above it.
- * A block a check leaves empty goes, and so does a heading with nothing under it.
- */
-function LaidOut({ state, view, part, index, layout, opening }: {
-  state: State; view: TurnView; part: AnswerPart; index: number; layout: readonly AnswerBlock[]; opening: boolean;
-}) {
-  // A table without a caption is named by the heading above it.
-  let heading = 'Table';
-  const showing = shownBlocks(part, layout, view.shows);
-  return (
-    <div class="answer-layout">
-      {layout.map((block, place) => {
-        if (!showing[place]) return null;
-        if (block.kind === 'heading') { heading = block.text; return <h3 key={place} class="answer-heading">{block.text}</h3>; }
-        if (block.kind === 'lead' || block.kind === 'paragraph') {
-          return <Prose key={place} state={state} view={view} part={part} index={index} statements={block.statements} lead={block.kind === 'lead'} />;
-        }
-        if (block.kind === 'bullets') return <Points key={place} state={state} view={view} part={part} index={index} statements={block.statements} ordered={false} />;
-        return <Table key={place} state={state} view={view} index={index} block={block} place={place} opens={opening && place === 0} label={heading} />;
-      })}
-    </div>
-  );
 }
 
 /** A card's kind, as its icon: a person, a project's folder, a ticket's stub, or a decision's diamond, as Home marks one. */
@@ -438,8 +410,8 @@ function Quote({ state, view, statement, text, from, id }: { state: State; view:
 /**
  * One block of an arranged part, as its kind reads: the answer in the lead's
  * type; text as a paragraph; points as bullets, or numbered steps when their
- * order matters; a table as a laid-out part's (`opens`: it opens the answer,
- * so its caption shows above it); a timeline, its days down the side; a card,
+ * order matters; a table in its own box (`opens`: it opens the answer, so its
+ * caption shows above it); a timeline, its days down the side; a card,
  * headed by its kind's icon, its kind and its title, its facts as label and
  * value rows; and a quote. Each item is a sentence, by its place in the part
  * (`${index}.${place}`), or a table's row.
@@ -491,9 +463,9 @@ function ArrangedItems({ state, view, part, index, block, place, opens }: {
  * A part the writer arranged in blocks (answer layout v2, ADR-0051), in the
  * desktop's own type, each block under its title as a section heading (a
  * card's names the card). Every item keeps its own numbers and is lit on its
- * own, as a laid-out part's sentences are. `opening`: the part opens the
- * answer, so a table first has no answer above it. A block a check leaves
- * with nothing to show goes, and its title with it.
+ * own. `opening`: the part opens the answer, so a table first has no answer
+ * above it. A block a check leaves with nothing to show goes, and its title
+ * with it.
  */
 function Arranged({ state, view, part, index, blocks, opening }: {
   state: State; view: TurnView; part: AnswerPart; index: number; blocks: readonly ArrangedBlock[]; opening: boolean;
@@ -516,19 +488,20 @@ function Arranged({ state, view, part, index, blocks, opening }: {
 }
 
 /**
- * The answer: each part, laid out when it carries a layout, in its blocks
- * when the writer arranged it (ADR-0051), and a paragraph per sentence when
- * neither. A part with nothing to show is left out, and so is a sentence
- * citing a source you can no longer read; one whose source changed is lit in
- * the signal (ADR-0047). What research did not cover is not shown; an answer
- * with nothing to say says nothing matched, unless the project's own line
- * says so.
+ * The answer: each part in its blocks when the writer arranged it
+ * (ADR-0051), and a paragraph per sentence when not. A part with nothing to
+ * show is left out, and so is a sentence citing a source you can no longer
+ * read; one whose source changed is lit in the signal (ADR-0047). Only typed
+ * actionable explanations are shown. An answer that says nothing and shows no
+ * explanation says `empty`, its turn's line (nothingLine), unless the
+ * project's own line under it says so (null): no answer is left blank.
  */
-function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: State; view: TurnView; dimmed?: boolean; empty?: boolean }) {
+function AgenticAnswer({ state, view, empty, dimmed = false }: { state: State; view: TurnView; empty: string | null; dimmed?: boolean }) {
   const answer = view.answer;
+  const gaps = answerGaps(answer, view.shows);
   // A part opens the answer when it is the first and no direct answer is above it.
   const parts = answer.parts.map((part, index) => ({ part, index, opening: index === 0 && !answer.direct })).filter(({ part }) => partShows(part, view.shows));
-  const said = parts.length > 0 || (answer.direct !== undefined && view.shows(answer.direct.citation_indexes));
+  const said = answerSays(answer, view.shows);
   return (
     <div class={`agentic-answer${dimmed ? ' dimmed' : ''}`} data-testid="answer">
       {answer.direct && <Statement state={state} view={view} statement={answer.direct} id="direct" />}
@@ -536,15 +509,14 @@ function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: S
         <section class="answer-part" key={index}>
           {/* One part answers the question itself: its label would repeat it. */}
           {answer.parts.length > 1 && <div class="section-label">{part.question}</div>}
-          {part.layout
-            ? <LaidOut state={state} view={view} part={part} index={index} layout={part.layout} opening={opening} />
-            : part.blocks
-              ? <Arranged state={state} view={view} part={part} index={index} blocks={part.blocks} opening={opening} />
-              : part.statements.map((statement, place) => <Statement key={place} state={state} view={view} statement={statement} id={`${index}.${place}`} />)}
+          {part.blocks
+            ? <Arranged state={state} view={view} part={part} index={index} blocks={part.blocks} opening={opening} />
+            : part.statements.map((statement, place) => <Statement key={place} state={state} view={view} statement={statement} id={`${index}.${place}`} />)}
           {part.records?.map((statement, place) => <Found key={`record-${place}`} state={state} view={view} statement={statement} id={`${index}.r${place}`} />)}
         </section>
       ))}
-      {!said && empty && <p class="answer-empty" data-testid="answer-empty">Nothing you can see matched.</p>}
+      {gaps.map(gap => <p key={gap} class="answer-empty" data-testid="answer-gap">{gap}</p>)}
+      {!said && gaps.length === 0 && empty !== null && <p class="answer-empty" data-testid="answer-empty">{empty}</p>}
     </div>
   );
 }
@@ -571,7 +543,7 @@ function SinceList({ state, view, since, at }: { state: State; view: TurnView; s
       <ChangedSince at={at} />
       <ul class="since-items selectable">
         {shown.map(({ statement, place }) => (
-          <li key={place} class={lit(state, view, `since.${place}`) ? 'on' : undefined} data-testid="since-item">
+          <li key={place} class={lit(state, view, `since.${place}`) ? 'on' : undefined} data-testid="since-item" data-reading-anchor={`since.${place}`}>
             <span><span data-testid="since-text">{statement.text}</span><Markers state={state} view={view} statement={statement} id={`since.${place}`} /></span>
           </li>
         ))}
@@ -736,24 +708,25 @@ function againAt(state: State, turn: TimelineTurn): string | null {
  */
 function FullTurn({ state, turn, took, current, last }: { state: State; turn: TimelineTurn; took: AskTook | undefined; current: boolean; last: boolean }) {
   const view = turnView(turn, shownChecks(turn, state));
-  const omitted = allOmitted(turn, view.checks);
+  const omitted = allOmitted(turn, view.checks) && answerGaps(turn.answer, view.shows).length === 0;
   const changed = !current && !omitted && turnNote(turn, view.checks) === 'changed';
+  const widen = !omitted && !state.ask?.failed && last && canAskEverywhere(turn, state);
   return (
     <div class="turn" data-testid="turn" data-turn={turn.id}>
       <div class="question selectable" data-testid="question">{turn.text}</div>
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
       {changed && <ChangedSince at={turn.asked_at} />}
-      {!omitted && <AgenticAnswer state={state} view={view} empty={!foundNothingInProject(turn)} />}
-      {foundNothingInProject(turn) && (
-        <div class="project-empty" data-testid="project-empty">
-          <span>Nothing in {scopeName(turn.scope, state)} matched.</span>
+      {!omitted && <AgenticAnswer state={state} view={view} empty={foundNothingInProject(turn) ? null : nothingLine(turn, state)} />}
+      {(foundNothingInProject(turn) || widen) && (
+        <div class="project-empty" data-testid={foundNothingInProject(turn) ? 'project-empty' : undefined}>
+          {foundNothingInProject(turn) && <span>{nothingLine(turn, state)}</span>}
           {/* Offered on the thread's latest turn only, as the next step; never under a question that failed. */}
-          {!state.ask?.failed && last && (
+          {widen && (
             <button type="button" class="link-button" data-testid="ask-everywhere" onClick={() => askEverywhere(turn.id)}>Ask across everything you can see</button>
           )}
         </div>
       )}
-      {/* With every sentence left out, its sources go too: only Ask again shows. */}
+      {/* With every sentence left out, its sources go too; a fixed capability or retry explanation can still be copied. */}
       <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={took} again={!current} copy={!omitted} />
     </div>
   );
@@ -793,12 +766,12 @@ function FoldedTurn({ state, turn, opened, again, quiet }: { state: State; turn:
  */
 function OpenedTurn({ state, turn, checks }: { state: State; turn: TimelineTurn; checks: TurnChecks | undefined }) {
   const view = turnView(turn, checks);
-  const omitted = allOmitted(turn, checks);
+  const omitted = allOmitted(turn, checks) && answerGaps(turn.answer, view.shows).length === 0;
   return (
     <div class="opened" data-testid="opened-turn">
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
       {!omitted && turnNote(turn, checks) === 'changed' && <ChangedSince at={turn.asked_at} />}
-      {!omitted && <AgenticAnswer state={state} view={view} dimmed />}
+      {!omitted && <AgenticAnswer state={state} view={view} empty={nothingLine(turn, state)} dimmed />}
       <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={undefined} again copy={!omitted} />
     </div>
   );
@@ -852,33 +825,124 @@ export function AskView({ state }: { state: State }) {
   // The thread of the bar's place, each question once (ADR-0049).
   const turns = askThread(state);
   const scroller = useRef<HTMLElement>(null);
-  // Whether the person was at the bottom when they last scrolled, or the timeline last took them there.
-  const atBottom = useRef(true);
   // Where the timeline last put the view: the scroll event that records a person's scroll can arrive after a new row.
   const placedAt = useRef<number | null>(null);
+  // Reading follows the bottom until the person scrolls away or chooses a specific citation. A held sentence that prefers
+  // the end (a latest citation chosen at the end, or a sentence held with the view back at the end) follows the end only
+  // while the end keeps it wholly in view.
+  type Anchor = { kind: 'anchor'; element: Element; offset: number; preferBottom: boolean };
+  type Position = { kind: 'bottom' } | Anchor;
+  const reading = useRef<{ width: number; height: number; position: Position } | null>(null);
+  const anchors = useRef<NodeListOf<Element> | null>(null);
+  const savePosition = (position: Position) => {
+    const view = scroller.current;
+    if (view) reading.current = { width: view.clientWidth, height: view.clientHeight, position };
+  };
+  const anchorPosition = (element: Element, preferBottom = false): Position => ({
+    kind: 'anchor', element, offset: element.getBoundingClientRect().top - scroller.current!.getBoundingClientRect().top, preferBottom,
+  });
+  const rememberReading = () => {
+    const view = scroller.current;
+    if (!view) return;
+    if (view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX) { savePosition({ kind: 'bottom' }); return; }
+    // Anchors follow document order. Locate the first visible one with logarithmic layout reads, only when the person
+    // actually scrolls; streaming progress neither scans the thread nor replaces a citation they chose to read.
+    const items = anchors.current ??= view.querySelectorAll('[data-reading-anchor], .question, .folded');
+    const bounds = view.getBoundingClientRect();
+    let low = 0, high = items.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (items[mid]!.getBoundingClientRect().top < bounds.top) low = mid + 1;
+      else high = mid;
+    }
+    const next = items[low];
+    const element = next && next.getBoundingClientRect().top < bounds.bottom ? next : items[low - 1];
+    if (element) savePosition(anchorPosition(element));
+  };
+  // Where a held sentence puts the view once the view or what is below it changes. One that prefers the end goes there
+  // while the end keeps the sentence wholly in view, and reads from where it is then; a long answer or rows coming in
+  // can push it out of view there, and then the sentence stays where it was, as any other held one does. Held with
+  // nothing left below the view, it prefers the end again; one the end cuts short keeps its place for when there is room.
+  const hold = (position: Anchor): Anchor => {
+    const view = scroller.current!;
+    const bounds = position.element.getBoundingClientRect();
+    const top = bounds.top - view.getBoundingClientRect().top;
+    const atEnd = top - (view.scrollHeight - view.scrollTop - view.clientHeight);
+    if (position.preferBottom && atEnd >= 0 && atEnd + bounds.height <= view.clientHeight) {
+      view.scrollTop = view.scrollHeight;
+      return { ...position, offset: atEnd };
+    }
+    const target = view.scrollTop + top - position.offset;
+    view.scrollTop = target;
+    return { ...position, preferBottom: Math.abs(view.scrollHeight - view.clientHeight - target) < 1 };
+  };
+  const keepReading = () => {
+    const view = scroller.current, saved = reading.current;
+    if (!view || !saved || (view.clientWidth === saved.width && view.clientHeight === saved.height)) return;
+    let position = saved.position;
+    if (position.kind === 'anchor' && view.contains(position.element)) position = hold(position);
+    if (position.kind === 'bottom') view.scrollTop = view.scrollHeight;
+    placedAt.current = view.scrollTop;
+    savePosition(position);
+  };
+  const chooseReading = (event: MouseEvent) => {
+    // Capture the source's turn/focus before chooseSource changes the pane width. Pointer and keyboard activation both
+    // produce this click, and every block gives its sentence or row the same focus id the source pane uses.
+    const view = scroller.current;
+    const marker = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-reading-focus]') : null;
+    const turn = marker?.closest('[data-turn]');
+    const element = marker && turn?.querySelector(`[data-reading-anchor="${CSS.escape(marker.dataset.readingFocus!)}"]`);
+    // A latest citation chosen with the view at the end prefers the end: where the view is, not the position last recorded,
+    // which can still hold a sentence after the view came back to the end without the person scrolling there.
+    if (view && element) savePosition(anchorPosition(element,
+      view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX && turn?.getAttribute('data-turn') === turns.at(-1)?.id));
+  };
+  // Content changes invalidate only the cached node list; they do not measure the existing thread.
+  useLayoutEffect(() => { anchors.current = null; }, [thread.seq, turns.length, thread.opened, thread.earlier, state.timeline.turns, state.timeline.checks]);
   const toBottom = () => {
     const view = scroller.current;
     if (view) { view.scrollTop = view.scrollHeight; placedAt.current = view.scrollTop; }
-    atBottom.current = true;
+    savePosition({ kind: 'bottom' });
   };
   // A new question, answer, choice or failure scrolls to the bottom.
   useLayoutEffect(toBottom, [thread.seq, turns.length, thread.asking === null, thread.failed, thread.clarify]);
   // A suggestion opened Ask at a turn: that turn comes into view.
   useLayoutEffect(() => {
     if (thread.focus === null) return;
-    scroller.current?.querySelector(`[data-turn="${thread.focus}"]`)?.scrollIntoView({ block: 'start' });
-    atBottom.current = false;
+    const element = scroller.current?.querySelector(`[data-turn="${thread.focus}"]`);
+    if (element) {
+      element.scrollIntoView({ block: 'start' });
+      placedAt.current = scroller.current!.scrollTop;
+      savePosition(anchorPosition(element));
+    }
   }, [thread.focus]);
+  // Pane and sidebar changes restore before paint. Native window resizing can happen without a render.
+  const paneOpen = state.sources?.open != null || state.sources?.named != null;
+  useLayoutEffect(keepReading, [paneOpen, state.sidebarOpen]);
+  useLayoutEffect(() => {
+    const observer = new ResizeObserver(keepReading);
+    if (scroller.current) observer.observe(scroller.current);
+    return () => observer.disconnect();
+  }, []);
   // A row of the question on its way only when the person is there: one who scrolled up to read stays put, even before
   // their scroll event has arrived, because the view is no longer where the timeline left it.
   const follow = useCallback(() => {
     const view = scroller.current;
-    if (view && placedAt.current !== null && view.scrollTop < placedAt.current - FOLLOW_PX) atBottom.current = false;
-    if (atBottom.current) toBottom();
+    if (view && placedAt.current !== null && view.scrollTop < placedAt.current - FOLLOW_PX) rememberReading();
+    const position = reading.current?.position;
+    if (position?.kind === 'bottom') toBottom();
+    else if (view && position?.kind === 'anchor' && position.preferBottom && view.contains(position.element)) {
+      savePosition(hold(position));
+      placedAt.current = view.scrollTop;
+    }
   }, []);
   const onScroll = () => {
-    const view = scroller.current;
-    if (view) atBottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX;
+    const view = scroller.current, saved = reading.current;
+    // Ignore our own placement and browser scrolls caused by a resize. Only the person's new position changes intent.
+    if (view && view.scrollTop !== placedAt.current && view.clientWidth === saved?.width && view.clientHeight === saved.height) {
+      placedAt.current = null;
+      rememberReading();
+    }
   };
   // Which Ask's line is open, by the question on its way's seq: the next question's line starts closed.
   const [openFor, setOpenFor] = useState<number | null>(null);
@@ -892,7 +956,7 @@ export function AskView({ state }: { state: State }) {
   const again = askedAgain(state.timeline.turns);
   const behind = new Set(behindEarlierLine(turns, full));
   return (
-    <section class="ask timeline" data-testid="ask-view" aria-live="polite" ref={scroller} onScroll={onScroll}>
+    <section class="ask timeline" data-testid="ask-view" aria-live="polite" ref={scroller} onScroll={onScroll} onClickCapture={chooseReading}>
       {behind.size > 0 && <EarlierLine count={behind.size} open={thread.earlier} />}
       {turns.map((turn, index) => (thread.earlier || !behind.has(turn.id)) && (
         <Fragment key={turn.id}>
@@ -1152,6 +1216,14 @@ export function Passage({ text, label }: { text: string; label: string }) {
           : <ul key={index}>{block.items.map((item, at) => <li key={at}><Runs runs={item} /></li>)}</ul>)}</>;
 }
 
+/** Imported notes' review badge. Notes with no decision or action have nothing to review, and no badge. */
+function SourceReviewBadge({ review, shared = false }: { review: 'not_reviewed' | 'reviewed' | 'nothing_to_review'; shared?: boolean }) {
+  if (review === 'nothing_to_review') return null;
+  return <div class="meta" data-testid={shared ? 'source-review-summary' : undefined}><span class="tag" data-testid="source-review-state">
+    {review === 'reviewed' ? 'Reviewed' : 'Not reviewed yet'}
+  </span></div>;
+}
+
 /**
  * An original's cited passages, each its verified evidence at most 2,000
  * characters. A sentence's number lights the passages it cites, when it cites
@@ -1162,17 +1234,24 @@ function OriginalSource({ state, target, source }: { state: State; target: PaneT
   const reads = sources.evidence?.group === target.number ? sources.evidence.reads : {};
   const places = paneCitations(target);
   const count = places.length;
-  const meta = target.group ? originalMeta(source, target.group, 'passages cited') : documentName(source.label).version ?? '';
   const answer = activeTurn(state)?.answer;
   const focused = target.group && answer ? answerSentences(answer).find(([id]) => id === sources.focus)?.[1].citation_indexes ?? [] : [];
   const lit = places.filter(index => focused.includes(index));
   const light = lit.length > 0 && lit.length < count;
   const all = places.map(index => reads[index] ?? { loading: true } as const);
   const failure = all.find(read => !read.loading && 'failure' in read);
+  const verified = all.flatMap(read => !read.loading && 'value' in read ? [read.value] : [])[0];
+  // One source group can cite several revisions. Share a badge only once every proof agrees;
+  // while loading, after a refusal, or across different states, each passage keeps its own badge.
+  const review = verified?.imported_meeting_review;
+  const sharedReview = review !== undefined && all.every(read => !read.loading && 'value' in read && read.value.imported_meeting_review === review) ? review : undefined;
+  const label = verified?.label ?? source.label;
+  const meta = target.group ? originalMeta({ ...source, label }, target.group, 'passages cited') : documentName(label).version ?? '';
   return (
     <div class="source-detail">
-      <h2>{documentName(source.label).name}</h2>
+      <h2>{documentName(label).name}</h2>
       {meta && <div class="meta" data-testid="source-meta">{meta}</div>}
+      {sharedReview !== undefined && <SourceReviewBadge review={sharedReview} shared />}
       {failure && !failure.loading && 'failure' in failure && (
         <div class="source-failure">
           <div class="error" data-testid="source-error">{message(failure.failure)}</div>
@@ -1184,9 +1263,12 @@ function OriginalSource({ state, target, source }: { state: State; target: PaneT
         if (read.loading || !('value' in read)) return null;
         const text = read.value.text.length > MAX_EVIDENCE ? `${read.value.text.slice(0, MAX_EVIDENCE)}…` : read.value.text;
         return (
-          <div key={index} class={`passage selectable${light && lit.includes(index) ? ' on' : ''}`} data-testid="evidence-text">
-            <Passage text={text} label={source.label} />
-          </div>
+          <Fragment key={index}>
+            {sharedReview === undefined && read.value.imported_meeting_review !== undefined && <SourceReviewBadge review={read.value.imported_meeting_review} />}
+            <div class={`passage selectable${light && lit.includes(index) ? ' on' : ''}`} data-testid="evidence-text">
+              <Passage text={text} label={read.value.label} />
+            </div>
+          </Fragment>
         );
       })}
       {all.some(read => read.loading) && <div class="notice">Loading verified evidence…</div>}

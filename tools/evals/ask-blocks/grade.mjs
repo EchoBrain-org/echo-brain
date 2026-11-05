@@ -16,8 +16,11 @@ export const HELD_OUT_FILE = new URL("./held-out-cases.json", import.meta.url);
 export const HELD_OUT_COUNT = 5;
 export const TRIALS = 3;
 export const SHAPES = Object.freeze(["single", "prose", "parallel", "ordered", "grid", "sequence", "profile", "verbatim", "sections"]);
-/** The pre-registered thresholds, over 45 trials (rules 1 to 4) and 15 cases (rules 5 and 6). */
-export const RULES = Object.freeze({ valid: 43, grounded: 43, nothing_lost: 41, fit: 36, stable: 12, ranked: 9 });
+/**
+ * The pre-registered thresholds, over 45 trials (rules 1 to 4) and 15 cases (rule 5). Rule 6 compared `balanced` with a
+ * catalog that no longer runs (README.md, "Layout v1 retired, 2026-11-04").
+ */
+export const RULES = Object.freeze({ valid: 43, grounded: 43, nothing_lost: 41, fit: 36, stable: 12 });
 /** Mean founder ranks within this much of each other are a tie for block size. */
 const RANK_TIE = 0.1;
 const QUOTE_WORDS = 6;
@@ -95,7 +98,7 @@ export function loadCases(path = CASES_FILE, count = CASE_COUNT) {
   return document;
 }
 
-/** The page's fixed order of the four catalogs for a case (labels A to D), from the case id alone. */
+/** The page's fixed order of the catalogs for a case (labels A to C), from the case id alone. */
 export function caseOrder(caseId) {
   const key = (catalog) => createHash("sha256").update(`${caseId}:${catalog}`).digest("hex");
   return Object.freeze([...CATALOG_IDS].sort((left, right) => key(left).localeCompare(key(right))));
@@ -334,8 +337,8 @@ export function summarizeCatalogs(trials, catalogIds = CATALOG_IDS) {
 
 /**
  * The founder's and the judge's ranks over the cases (README.md, "Ranks" and "Pre-registered rules"): each catalog's
- * mean rank, rule 6, and how often the judge's top pick and its order of each pair of catalogs match the founder's.
- * `founder` and `judge` map case id to catalog id to rank (1 best); a case missing from either is left out of it.
+ * mean rank, and how often the judge's top pick and its order of each pair of catalogs match the founder's. `founder`
+ * and `judge` map case id to catalog id to rank (1 best); a case missing from either is left out of it.
  */
 export function summarizeRanks(founder, judge, catalogIds = CATALOG_IDS) {
   const mean = (ranks, catalog) => {
@@ -343,7 +346,6 @@ export function summarizeRanks(founder, judge, catalogIds = CATALOG_IDS) {
     return values.length === 0 ? null : hundredths(values.reduce((sum, value) => sum + value, 0) / values.length);
   };
   const cases = Object.keys(founder);
-  const ranked = cases.filter((caseId) => founder[caseId].balanced <= founder[caseId].today).length;
   let tops = 0;
   let topCases = 0;
   let pairs = 0;
@@ -364,27 +366,23 @@ export function summarizeRanks(founder, judge, catalogIds = CATALOG_IDS) {
     cases: cases.length,
     founder_mean_rank: Object.freeze(Object.fromEntries(catalogIds.map((catalog) => [catalog, mean(founder, catalog)]))),
     judge_mean_rank: Object.freeze(Object.fromEntries(catalogIds.map((catalog) => [catalog, mean(judge, catalog)]))),
-    balanced_at_least_today: ranked,
-    rule_ranked: cases.length === CASE_COUNT && ranked >= RULES.ranked,
     judge_top_pick_agrees: topCases === 0 ? null : Object.freeze({ cases: topCases, agreeing: tops }),
     judge_pairs_agree: pairs === 0 ? null : Object.freeze({ pairs, agreeing }),
   });
 }
 
 /**
- * The pre-registered decision: the direction is sound when `balanced` passes rules 1 to 6; the right block size is the
- * catalog with the lowest mean founder rank among those passing rules 1 to 3, a tie within 0.1 going to fewer repairs,
- * then to fewer output tokens. Undecided until every case is ranked.
+ * The pre-registered decision on block size: the catalog with the lowest mean founder rank among those passing rules 1
+ * to 3, a tie within 0.1 going to fewer repairs, then to fewer output tokens. Undecided until every case is ranked. The
+ * direction also needed rule 6, which no longer runs (README.md, "Layout v1 retired, 2026-11-04").
  */
 export function decide(catalogs, ranks) {
-  const balanced = catalogs.balanced;
   const complete = ranks !== null && ranks.cases === CASE_COUNT;
-  const sound = complete && balanced !== undefined && Object.values(balanced.rules).every(Boolean) && ranks.rule_ranked;
   const eligible = Object.entries(catalogs).filter(([, summary]) => summary.rules.valid && summary.rules.grounded && summary.rules.nothing_lost)
     .map(([catalog, summary]) => ({ catalog, rank: ranks?.founder_mean_rank?.[catalog] ?? null, repairs: summary.repairs, tokens: summary.output_tokens }))
     .filter((entry) => entry.rank !== null)
     .sort((left, right) => (Math.abs(left.rank - right.rank) > RANK_TIE ? left.rank - right.rank : left.repairs - right.repairs || left.tokens - right.tokens));
-  return Object.freeze({ complete, direction_sound: complete ? sound : null, right_size: complete ? (eligible[0]?.catalog ?? null) : null, eligible: Object.freeze(eligible) });
+  return Object.freeze({ complete, right_size: complete ? (eligible[0]?.catalog ?? null) : null, eligible: Object.freeze(eligible) });
 }
 
 /**

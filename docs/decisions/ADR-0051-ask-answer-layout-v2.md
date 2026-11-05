@@ -10,12 +10,12 @@ created_at: 2026-11-02
 reviewed_at: 2026-11-02
 reviewed_ref: 9e6bc8a356c826d77e2094a268340ba3fa848549
 status: accepted
-supersedes: []
+supersedes:
+  - ADR-0045
 superseded_by: []
 updates:
   - ADR-0041
   - ADR-0042
-  - ADR-0045
 ---
 
 # ADR-0051: The Ask writer arranges an answer from a catalog of seven blocks
@@ -243,3 +243,126 @@ never the note; and 40 citations, so an item whose list id would bring more of
 that list's private rows is left out whole, never cut short of them, the part
 saying some evidence could not fit. An Ask again's account of what is
 different since is left out whole for the same reason.
+
+## Amended 2026-11-04: preserve selection independently of presentation
+
+Live staging found 43 matching tickets, but the answer showed only 25. The
+writer supplied selected ids in two groups; the parser discarded the second
+group, and code also forced an unrelated unfiltered inventory into the answer.
+The founder asked to fix these deterministic failures and confirmed the
+selection and presentation behavior below in PR #400.
+
+Research's found `which_items` needs record the inventory L id and every
+requested member E id. These ids preserve the requested selection across
+writer and layout choices; supporting facts unrelated to membership belong in
+a separate content need. Opened bodies map back to the inventory's member
+identity. The writer receives this set as `requested_members`, independently
+of `stated`, which says that a membership need cites the inventory. A
+`which_items` need still open when research stopped requests its members, or
+declares its list, in the same way, as ADR-0041 states such a need's list; the
+answer stays partial.
+
+Every layout parses the whole selection before applying presentation bounds.
+A `members` array has no 25-item or evidence-array bound. Repeated groups for
+the same list merge by id, preserving every selected member once. A selected
+opened body or section names the member it is part of, as research's ids do;
+ids outside that inventory are removed. A `where` given beside `members` is
+kept, and selects when the members name no member of the list. Compound
+conditions can name every matching id without extending the one-field `where`
+language.
+
+What code states of a stated list is the writer's selection together with
+research's. The writer's selection is a use that names at least one member, or
+carries a `where`; code adds the precise members research's found membership
+needs request that it leaves out, so a selection that omits requested members
+never loses them. When the writer selects none of a list and a found
+membership need cites the list with no member ids, code states that whole
+declared list: all members for a complete list, or known members with
+`at least` and partial status for an incomplete list. A need that cites
+member E ids requests those members only: no other list it cites falls back to
+its whole inventory. A selection that names no member, given empty or left
+empty by that removal, is no selection, with one exception: an explicit empty
+`members` array in a reply that also has `not_found` says that no member of
+the list answers, and code states nothing of it, unless research requested
+specific members of it, which code still states. As for a `where` that
+matches nothing, only a complete list, read to its end with every item tested,
+confirms that absence; over any other list the writer's `not_found` stays
+untyped and the answer partial. When code states research's selection of a
+list the writer selected none of, through no use, an empty or invalid
+selection, or an explicit none, the writer's `not_found` stays untyped too: it
+has no per-list provenance and may concern the very members code states.
+Other inventories do not
+enter the answer merely because research read them. Each need retains that
+fallback independently: another need's precise subset of the same inventory
+does not erase an omitted L-only declaration. Within one need that cites
+several lists, each member it requests, by id or by declaring its lists, is
+stated once: where the writer selected it in a list the need cites, otherwise
+under the first of those lists, in the need's citation order, that holds it,
+which is also where the writer is told it is requested. Members that different
+needs request keep a statement under each need's list, and the writer's
+selections render where the writer put them.
+
+A v2 table row or points item may declare an optional internal `member` E id
+for the inventory member it presents, independently of its supporting
+`evidence`, so membership is never guessed from wording alone. Code accepts the declaration for member M only when the declared
+id is M or an opened body or section of M, the retained item cites one of M's
+ids, and its text names M as the writer saw it listed: M's whole title, or a
+ticket-style key (`[A-Z][A-Z0-9]+-\d+`), its own or the one its title leads
+with ("THERM-2" of "THERM-2: Fixture work 2"), as whole words in any case, so
+"THERM-12" never names THERM-1. A text that also names another member of the
+list whose name holds M's ("Launch checklist" beside "Launch") does not name
+M. The item may cite other members too, as a comparison or a dependency row
+does; an item about another member names that member, not M, so it cannot
+hide M. A declaration that fails is ignored, and code states M. Unknown or
+mismatched ids, a citation without a declaration, downgraded rows, and statements
+dropped by grounding or per-statement citation limits do not cover a member.
+Bindings never narrow a list: code states the selection above, less the
+members valid rows or points already present, so it never repeats a presented
+member and never drops an unpresented selected one. A declared list beside 22
+bound ledger rows therefore still states its 5 other documents, unless the
+writer selects the 22 in `lists`. The writer prompt asks for that selection
+in `lists`, and for each row or point that presents one member to declare it
+and name it. This writer field is internal; it does not extend the released
+answer API or apply to other block kinds.
+
+A v2 answer renders every selected member. Code divides a logical list into
+statements that each fit 4 KiB and 40 citations, then groups their rows into
+one table with one caption describing the whole selection. Columns are shared
+across chunks, and each row keeps its own citations. The 64 KiB answer bound
+and plain fallback remain. The fallback recomposes selection without structured
+member bindings before applying legacy limits, so lost rows cannot hide members.
+
+Layout v1 and answers without blocks retain 25 named members, 10 statements,
+and 40 answer citations. They first merge the complete selection, then show
+`and N more` for omitted names and report partial with an explicit fit notice.
+A v2 answer that falls back to these bounds follows the same rule. A response
+never reports a complete answer while silently dropping selected members.
+
+The research tool's 25-row page size is unchanged; research can continue paging.
+This amendment changes selection and presentation, not source access, research
+budgets, or what constitutes grounded evidence.
+
+## Amended 2026-11-04: layout v1 retired
+
+The founder retired layout v1 ([ADR-0045](ADR-0045-ask-answer-layout.md)),
+which this record now supersedes, once every desktop and CLI asked for `2`.
+What this record says of layout v1 above describes the two side by side and
+no longer holds:
+
+- `x-echo-answer-layout: 2` is the only layout. The header's `1`, which a
+  desktop or CLI older than layout v2 still sends, is answered as an Ask
+  without the header: the plain writer's prompt and schema, and statements
+  the client shows as paragraphs. Any other value is still refused.
+- The writer's layout v1 prompt and schema, its forms, sections and declared
+  tables, and code's v1 layout are removed. The retirement leaves the plain
+  writer, for an Ask without the header, byte for byte as it was, and with it
+  the answer an Ask in blocks falls back to when its blocks cannot be released.
+- A V8 part never carries `layout`, and the answer's validator refuses one.
+  A table keeps the bounds it had: a column's name 100 bytes, a cell 300 and
+  a caption 600. Code still builds a list's table only up to six columns,
+  layout v1's most, and states a list with more as text.
+- The desktop draws `blocks` or paragraphs. An Ask timeline turn saved with
+  a layout v1 `layout` loads with the layout dropped, its statements shown as
+  paragraphs.
+- The block evaluation no longer runs layout v1 as its `today` arm; its other
+  catalogs start from the v2 writer's prompt.
