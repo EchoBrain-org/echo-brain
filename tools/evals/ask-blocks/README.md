@@ -994,6 +994,18 @@ through the founder's Claude account (`claude-sonnet-5-5`): 45 gate trials and
   "Possible slip", in every trial, as at `e9ccc09`. This case is the whole of
   the answer block's rise; without it the mean is 26.7 words on both sides.
 - **Fit gains one trial:** `review-multi` gave titled sections once.
+- **Output tokens are the route's raw totals.** About 1 in 7 calls through
+  the Claude account route came back with about twice the input and output
+  tokens and twice the time, on different questions each run: 8 gate and 3
+  wording calls before, 4 and 7 after. Leaving those out and comparing each
+  question with itself, the change saves about 84 input tokens per answer,
+  under 1%. Output tokens and time per answer stay within a few percent, up
+  in some questions and down in others.
+
+### The decision, 2026-11-05
+
+The founder saw these results, `trap-disagree`'s answers before and after
+among them, and kept the change: "Keep the change".
 
 ## Limits
 

@@ -444,6 +444,8 @@ above leaves as it is ("Left as they are") no longer holds:
   case moved in every trial: asked when the PVT build is, the writer now puts
   the ticket's possible slip in the answer block, where before it gave the
   slip a paragraph of its own.
+- **Kept.** The founder saw these results, the PVT build's answers before and
+  after among them, and kept the change: "Keep the change".
 - **Not measured:** no case of either evaluation has nothing that answers it,
   and neither asks again, so the nothing-found example and the Ask again line
   are covered by unit tests only.
