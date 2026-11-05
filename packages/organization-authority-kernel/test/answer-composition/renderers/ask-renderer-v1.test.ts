@@ -650,6 +650,15 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.cited).toEqual(ids(1, 12));
       expect(blocksOf(rendered)).toMatchObject([{ kind: "table", caption: `${incomplete ? "At least " : ""}12 tickets created on October 4, 2026`, rows: Array.from({ length: 12 }, () => expect.any(Object)) }]);
     });
+    it("adds research's requested members to a writer selection that leaves some out", async () => {
+      const requested = ids(5, 43);
+      const rendered = await alone({ bundle: listBundle(100, 0, [list("L1", ids(1, 100))], [WI(["L1", ...requested])]), layout: 2, replies: [{
+        lists: [{ id: "L1", members: requested.slice(0, 25) }], blocks: [], not_found: [],
+      }] }).render("Which THERM tickets are To Do or In Progress?");
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.cited).toEqual(requested);
+      expect(blocksOf(rendered)).toMatchObject([{ kind: "table", caption: "43 of the 100 tickets created on October 4, 2026", rows: Array.from({ length: 43 }, () => expect.any(Object)) }]);
+    });
     it("keeps the precise members research found when the writer omits its list selection", async () => {
       const selected = ids(5, 43);
       const rendered = await alone({ bundle: listBundle(100, 0, [list("L1", ids(1, 100))], [WI(["L1", ...selected])]), layout: 2, replies: [{
@@ -668,11 +677,11 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.result.response.parts[0]!.statements).toHaveLength(1);
       expect(rendered.result.response.parts[0]!.statements[0]!.text).toMatch(/^3 tickets/u);
     });
-    it.each([{ members: [] }, { members: ["E3"] }])("keeps explicit selection behavior when an L-only need shares an inventory with a precise research need ($members)", async ({ members }) => {
+    it.each([{ members: [], cited: ids(1, 3) }, { members: ["E3"], cited: ["E2", "E3"] }])("states the writer's selection with research's requested members, or the declared list when the writer selects none, for a list an L-only need and a precise need share ($members)", async ({ members, cited }) => {
       const research = listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1"]), WI(["L1", "E2"])]);
       const rendered = await alone({ bundle: research, layout: 2, replies: [{ lists: [{ id: "L1", members }], blocks: [], not_found: [] }] }).render("Which tickets exist, and which one is assigned to Casey?");
       expect(rendered.outcome).toBe("answered");
-      expect(rendered.cited).toEqual(["E2", ...members]);
+      expect(rendered.cited).toEqual(cited);
     });
     /** Source notes with distinct identities, whose short display names need not repeat their source titles. */
     const document = (n: number): EvidenceDeskItemV2 => ({
@@ -805,11 +814,44 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(part.statements.every(statement => Buffer.byteLength(statement.text, "utf8") <= PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 && statement.citation_indexes.length <= 40)).toBe(true);
       expect(part.statements.map(statement => statement.text).join(" ")).not.toContain("and 99 more");
     });
-    it.each([{ members: [] }, { members: ["E999"] }])("does not turn an empty or unknown selection into the full inventory ($members)", async ({ members }) => {
+    it.each([{ members: [] }, { members: ["E999"] }])("states the declared inventory when a selection is empty or names no member of it ($members)", async ({ members }) => {
+      // The writer reports absence through not_found; a selection that names no member is no selection.
       const rendered = await alone({ bundle: listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1"])]), layout: 2, replies: [{ lists: [{ id: "L1", members }], blocks: [], not_found: [] }] }).render("Which tickets match?");
-      const part = rendered.result.response.parts[0]!;
-      expect(part.status).toBe("not_found");
-      expect(part.statements).toEqual([]);
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.cited).toEqual(ids(1, 3));
+      expect(blocksOf(rendered)).toMatchObject([{ kind: "table", caption: "3 tickets created on October 4, 2026" }]);
+    });
+    it("reads a member selected by its opened body as that body's listed row", async () => {
+      const research = listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1"])]);
+      const opened = { ...research, items: [...research.items, { short: "E4", source: "tickets", item: ticketRow(2, "THERM-2: the fixture passed."), full: true, opened: true, preloaded: false, touched: 4, cited_by_plan: false }] };
+      const { rendered, corrections } = await observed(() => alone({ bundle: opened, layout: 2, replies: [{ lists: [{ id: "L1", members: ["E4"] }], blocks: [], not_found: [] }] }).render("Which ticket passed?"));
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.cited).toEqual(["E2"]);
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([`1 of the 3 tickets created on October 4, 2026: ${facts(2)}.`]);
+      expect(corrections).not.toHaveProperty("writer_unknown_id_dropped");
+    });
+    it.each([{ members: [] }, { members: ["E999"] }])("selects by a where the writer gave beside members that name none of the list ($members)", async ({ members }) => {
+      const research = listBundle(5, 0, [list("L1", ids(1, 5))], [WI(["L1"])]);
+      const mixed = { ...research, items: research.items.map((entry, index) => index % 2 === 0 ? entry : { ...entry, item: { ...entry.item, attributes: { status: "Done", owner: "Dana Lee" } } }) };
+      const rendered = await alone({ bundle: mixed, layout: 2, replies: [{ lists: [{ id: "L1", where: { field: "status", value: "In Progress" }, members }], blocks: [], not_found: [] }] }).render("Which tickets are in progress?");
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.cited).toEqual(["E1", "E3", "E5"]);
+      expect(rendered.result.response.parts[0]!.statements[0]!.text).toMatch(/^3 of the 5 tickets created on October 4, 2026 have status In Progress: /u);
+    });
+    it("states nothing of a declared list the writer selects explicitly empty beside not_found, and says what was not found", async () => {
+      const rendered = await alone({ bundle: listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1"])]), layout: 2, replies: [{
+        lists: [{ id: "L1", members: [] }], blocks: [], not_found: ["tickets assigned to Casey"],
+      }] }).render("Which tickets are assigned to Casey?");
+      expect(rendered.outcome).toBe("not_found");
+      expect(rendered.cited).toEqual([]);
+      expect(rendered.result.response.parts[0]).toMatchObject({ status: "not_found", statements: [], gap: "Not found: tickets assigned to Casey." });
+    });
+    it("still states the members research requested when the writer selects their list explicitly empty beside not_found", async () => {
+      const rendered = await alone({ bundle: listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1", "E2"])]), layout: 2, replies: [{
+        lists: [{ id: "L1", members: [] }], blocks: [], not_found: ["tickets assigned to Casey"],
+      }] }).render("Which tickets are assigned to Casey?");
+      expect(rendered.cited).toEqual(["E2"]);
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([expect.stringMatching(/^1 of the 3 tickets created on October 4, 2026: THERM-2: /u)]);
     });
     it.each([{ members: [] }, { members: ["E999"] }])("restores precise research members despite an empty or invalid writer selection ($members)", async ({ members }) => {
       const rendered = await alone({ bundle: listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1", "E2"])]), layout: 2, replies: [{ lists: [{ id: "L1", members }], blocks: [], not_found: [] }] }).render("Which tickets match?");

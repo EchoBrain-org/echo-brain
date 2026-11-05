@@ -261,20 +261,28 @@ of `stated`, which says that a membership need cites the inventory.
 
 Every layout parses the whole selection before applying presentation bounds.
 A `members` array has no 25-item or evidence-array bound. Repeated groups for
-the same list merge by id, preserving every selected member once; ids outside
-that inventory are removed. An explicit empty selection never becomes the
-full inventory. It can select no members from an L-only inventory declaration;
-it cannot erase a nonempty precise research member set, which code restores. Compound conditions can name every matching id without
-extending the one-field `where` language.
+the same list merge by id, preserving every selected member once. A selected
+opened body or section names the member it is part of, as research's ids do;
+ids outside that inventory are removed. A `where` given beside `members` is
+kept, and selects when the members name no member of the list. Compound
+conditions can name every matching id without extending the one-field `where`
+language.
 
-A successful writer may not silently lose requested members. Code restores
-research's precise requested members absent from the writer's selection. If
-a found membership need cites only L and the writer supplies no selection,
-code states that declared list: all members for a complete list, or known
-members with `at least` and partial status for an incomplete list. Other
-inventories do not enter the answer merely because research read them.
-Each need retains that fallback independently: another need's precise subset
-of the same inventory does not erase an omitted L-only declaration.
+What code states of a stated list is the writer's selection together with
+research's. The writer's selection is a use that names at least one member, or
+carries a `where`; code adds the precise members research's found membership
+needs request that it leaves out, so a selection that omits requested members
+never loses them. When the writer selects none of a list and a found
+membership need cites the list with no member ids, code states that whole
+declared list: all members for a complete list, or known members with
+`at least` and partial status for an incomplete list. A selection that names
+no member, given empty or left empty by that removal, is no selection, with
+one exception: an explicit empty `members` array in a reply that also has
+`not_found` says that no member of the list answers, and code states nothing
+of it, unless research requested specific members of it, which code still
+states. Other inventories do not enter the answer merely because research read
+them. Each need retains that fallback independently: another need's precise
+subset of the same inventory does not erase an omitted L-only declaration.
 
 A v2 table row or points item may declare an optional internal `member` E id
 for the inventory member it presents, independently of its supporting

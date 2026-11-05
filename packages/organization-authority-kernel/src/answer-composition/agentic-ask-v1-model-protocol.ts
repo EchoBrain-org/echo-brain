@@ -621,8 +621,9 @@ function selectionOf(where: Record<string, unknown> | null): AgenticListSelectio
 /**
  * A list the answer uses: "L1", {"id": "L1"}, {"id": "L1", "where": {"field": "owner", "value": "Dana Lee"}},
  * {"id": "L1", "where": {"field": "due", "since": "2026-10-18", "until": "2026-10-24"}} or {"id": "L1", "members":
- * ["E5"]}; members, each once, take the place of a selection. Null for anything else. A where code cannot read uses
- * the list in full.
+ * ["E5"]}; members, each once, take the place of a selection, and a where beside them is kept, for code to use when
+ * they name no member of the list. Null for anything else, and for members none of which code can read with no where
+ * beside them. A where code cannot read uses the list in full.
  */
 function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
   const entry = object(raw);
@@ -642,11 +643,13 @@ function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
       if (short !== member) observeCoreModelCorrectionV1("model_id_respelled");
     }
   }
-  if (Array.isArray(entry?.members)) return Object.freeze({ id, members: Object.freeze(members) });
   const asked = entry === null ? null : object(entry.where);
   const where = selectionOf(asked);
   if (asked !== null && where === null) observeCoreModelCorrectionV1("model_entry_dropped");
-  return Object.freeze(where === null ? { id } : { id, where });
+  if (!Array.isArray(entry?.members)) return Object.freeze(where === null ? { id } : { id, where });
+  // Ids none of which code can read select nothing: the where beside them selects, or the list has no use.
+  if (members.length === 0 && named.length > 0) return where === null ? null : Object.freeze({ id, where });
+  return Object.freeze({ id, members: Object.freeze(members), ...(where === null ? {} : { where }) });
 }
 
 /**
@@ -710,7 +713,8 @@ function listUsesOf(body: Record<string, unknown>): readonly AgenticAnswerListUs
     if (use === null) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
     const repeat = uses.findIndex(existing => existing.id === use.id && (existing.members === undefined) === (use.members === undefined));
     if (repeat >= 0) {
-      if (use.members !== undefined) uses[repeat] = Object.freeze({ id: use.id, members: Object.freeze([...new Set([...uses[repeat]!.members!, ...use.members])]) });
+      const where = uses[repeat]!.where ?? use.where;
+      if (use.members !== undefined) uses[repeat] = Object.freeze({ id: use.id, members: Object.freeze([...new Set([...uses[repeat]!.members!, ...use.members])]), ...(where === undefined ? {} : { where }) });
       else observeCoreModelCorrectionV1("model_repeat_dropped");
       continue;
     }

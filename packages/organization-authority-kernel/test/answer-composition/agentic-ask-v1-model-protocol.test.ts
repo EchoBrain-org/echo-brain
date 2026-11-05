@@ -240,12 +240,18 @@ describe("agentic Ask model protocol parity", () => {
     expect([parsed.lists, parsed.sentences, parseAnswer({ sentences: [], not_found: [] }).lists]).toEqual([
       [{ id: "L2" }, { id: "L1" }, { id: "L3", where: { field: "owner", value: "Dana Lee" } }, { id: "L4" }, { id: "L5" }], [{ text: "Two pages mention BUG-412.", evidence: ["L1", "E4"] }], [],
     ]);
-    // Member intent is uncapped and takes the place of a filter; an empty selection never becomes a full inventory.
+    // Member intent is uncapped and takes the place of a filter, which is kept beside it for code to use when the ids name no
+    // member; ids none of which code can read are the filter, or no use; an empty members array stays an empty selection.
     const members = parseAnswer({ lists: [
       { id: "L1", members: ["e5", "E5", "[E7]", "L2", 9], where: { field: "owner", value: "Dana" } }, { id: "L2", members: ["x"], where: { field: "status", value: "open" } },
-      { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) },
+      { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) }, { id: "L4", members: [], where: { field: "status", value: "In Progress" } }, { id: "L5", members: [] },
     ], sentences: [], not_found: [] }).lists;
-    expect(members).toEqual([{ id: "L1", members: ["E5", "E7", "E9"] }, { id: "L2", members: [] }, { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) }]);
+    expect(members).toEqual([
+      { id: "L1", members: ["E5", "E7", "E9"], where: { field: "owner", value: "Dana" } }, { id: "L2", where: { field: "status", value: "open" } },
+      { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) }, { id: "L4", members: [], where: { field: "status", value: "In Progress" } }, { id: "L5", members: [] },
+    ]);
+    expect(parseAnswer({ lists: [{ id: "L1", members: ["x", "L2"] }, { id: "L2", members: ["E999"], where: { field: "status", value: "open" } }], sentences: [], not_found: [] }).lists)
+      .toEqual([{ id: "L2", members: ["E999"], where: { field: "status", value: "open" } }]);
     // A list may be used once in full or by a selection and once by id, in the writer's order; still at most 5 lists.
     expect(parseAnswer({ lists: [
       { id: "L1", members: ["E5"] }, { id: "L1" }, { id: "L1", where: { field: "owner", value: "Dana" } }, { id: "L1", members: ["E6"] },

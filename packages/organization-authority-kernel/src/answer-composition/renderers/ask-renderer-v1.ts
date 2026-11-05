@@ -366,11 +366,21 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       /** A sentence resting on list rows or list ids: it cites one the writer saw, and no evidence text it read. */
       const restsOnRows = (sentence: AnswerSentence) => !sentence.evidence.some(short => textGiven.has(short)) &&
         sentence.evidence.some(id => shownRows.has(id) || writerById.has(parseAgenticListIdV1(id) ?? "L0"));
-      /** Keep selection intent, including an empty selection, while removing ids outside its inventory. */
+      /**
+       * Each selection by id as the list members it names: an opened body or section is the member it is part of, as research
+       * and the bindings read it, and an id outside the list names none. One that names no member is its where, when it
+       * has one, and otherwise no selection, except an explicit empty one in a reply that says what it did not find: that
+       * says no member of the list answers.
+       */
       const withMembers = (answer: Answer): Answer => Object.freeze({ ...answer, lists: Object.freeze(answer.lists.flatMap(use => {
-        const kept = use.members?.filter(id => listById.get(use.id)?.members.includes(id) === true);
-        if (kept !== undefined && kept.length < use.members!.length) observeCoreModelCorrectionV1("writer_unknown_id_dropped", use.members!.length - kept.length);
-        return kept === undefined ? [use] : [Object.freeze({ id: use.id, members: Object.freeze(kept) })];
+        if (use.members === undefined) return [use];
+        const named = use.members.map(id => membership.in(use.id, id));
+        const unknown = named.filter(member => member === undefined).length;
+        if (unknown > 0) observeCoreModelCorrectionV1("writer_unknown_id_dropped", unknown);
+        const members = [...new Set(named.flatMap(member => member ?? []))];
+        if (members.length > 0) return [Object.freeze({ id: use.id, members: Object.freeze(members) })];
+        if (use.where !== undefined) return [Object.freeze({ id: use.id, where: use.where })];
+        return use.members.length === 0 && answer.not_found.length > 0 ? [Object.freeze({ id: use.id, members: Object.freeze([]) })] : [];
       })) });
       // A sentence resting on rows or list ids takes the writer's one repair when a repair can still run; the repaired
       // reply, or a first reply no repair can follow, is kept, and code leaves such a sentence out.
@@ -439,7 +449,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // ---- statements (W2, W3): each list's use that says which items exist, then its use by id ----
         /** One statement of a list; `which` when it says which items exist (a use in full or by `where`), never for a use by id alone. */
         type Naming = { readonly list: AgenticWriterListV1; readonly noun: AgenticListNounFormsV1; readonly selected: readonly AgenticWriterListMemberV1[]; readonly which: boolean; readonly where?: AgenticListSelectionV1; readonly by_id: boolean };
-        const uses = [...(reply?.lists ?? [])];
+        // Only a list the writer saw can carry its selection; a use of another is counted as unknown below.
+        const uses = (reply?.lists ?? []).filter(use => writerById.has(use.id));
         /** What the lists add to the gap, in order; `partial` when its rule makes the part partial whatever it names (W1, W2, W3). */
         const listGaps: { readonly text: string; readonly partial: boolean }[] = [];
         const writerGaps: { readonly text: string; readonly partial: boolean }[] = [];
@@ -527,7 +538,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         }
         // Research's found which_items needs preserve the requested member set. Their L ids are inventories;
         // their E ids identify the requested members, including opened bodies mapped back to listed rows.
-        // If a found need declares only L and the writer supplies no selection, that declared list is the fallback.
+        // A stated list shows the writer's valid selection, a use that names a member or carries a where, together with the
+        // requested members it leaves out. If a found need declares only L and the writer selects none of that list, that
+        // declared list is the fallback. A selection that names no member, given empty or left empty of ids outside the
+        // list, is no selection, except an explicit empty one beside not_found: that says no member answers, which holds
+        // only for a list research requested no member of, since its requested members are still stated.
         // Inventories unrelated to a found membership need never become answers merely because research read them.
         const restored = new Set<string>();
         for (const id of stated) {
