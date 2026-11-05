@@ -858,8 +858,11 @@ export function AskView({ state }: { state: State }) {
   const scroller = useRef<HTMLElement>(null);
   // Where the timeline last put the view: the scroll event that records a person's scroll can arrive after a new row.
   const placedAt = useRef<number | null>(null);
-  // Reading follows the bottom until the person scrolls away or chooses a specific citation.
-  type Position = { kind: 'bottom' } | { kind: 'anchor'; element: Element; offset: number; preferBottom: boolean };
+  // Reading follows the bottom until the person scrolls away or chooses a specific citation. A held sentence that prefers
+  // the end (a latest citation chosen at the end, or a sentence held with the view back at the end) follows the end only
+  // while the end keeps it wholly in view.
+  type Anchor = { kind: 'anchor'; element: Element; offset: number; preferBottom: boolean };
+  type Position = { kind: 'bottom' } | Anchor;
   const reading = useRef<{ width: number; height: number; position: Position } | null>(null);
   const anchors = useRef<NodeListOf<Element> | null>(null);
   const savePosition = (position: Position) => {
@@ -887,22 +890,28 @@ export function AskView({ state }: { state: State }) {
     const element = next && next.getBoundingClientRect().top < bounds.bottom ? next : items[low - 1];
     if (element) savePosition(anchorPosition(element));
   };
+  // Where a held sentence puts the view once the view or what is below it changes. One that prefers the end goes there
+  // while the end keeps the sentence wholly in view, and reads from where it is then; a long answer or rows coming in
+  // can push it out of view there, and then the sentence stays where it was, as any other held one does. Held with
+  // nothing left below the view, it prefers the end again; one the end cuts short keeps its place for when there is room.
+  const hold = (position: Anchor): Anchor => {
+    const view = scroller.current!;
+    const bounds = position.element.getBoundingClientRect();
+    const top = bounds.top - view.getBoundingClientRect().top;
+    const atEnd = top - (view.scrollHeight - view.scrollTop - view.clientHeight);
+    if (position.preferBottom && atEnd >= 0 && atEnd + bounds.height <= view.clientHeight) {
+      view.scrollTop = view.scrollHeight;
+      return { ...position, offset: atEnd };
+    }
+    const target = view.scrollTop + top - position.offset;
+    view.scrollTop = target;
+    return { ...position, preferBottom: Math.abs(view.scrollHeight - view.clientHeight - target) < 1 };
+  };
   const keepReading = () => {
     const view = scroller.current, saved = reading.current;
     if (!view || !saved || (view.clientWidth === saved.width && view.clientHeight === saved.height)) return;
     let position = saved.position;
-    if (position.kind === 'anchor' && view.contains(position.element)) {
-      const bounds = position.element.getBoundingClientRect();
-      const top = bounds.top - view.getBoundingClientRect().top;
-      const atEnd = top - (view.scrollHeight - view.scrollTop - view.clientHeight);
-      // Choosing a latest citation at the end keeps following the end only if that also keeps its statement readable.
-      // A long answer can push the chosen statement out of view there, in which case the explicit reading anchor wins.
-      if (position.preferBottom && atEnd >= 0 && atEnd + bounds.height <= view.clientHeight) position = { kind: 'bottom' };
-      else {
-        view.scrollTop += top - position.offset;
-        position = { ...position, preferBottom: false };
-      }
-    }
+    if (position.kind === 'anchor' && view.contains(position.element)) position = hold(position);
     if (position.kind === 'bottom') view.scrollTop = view.scrollHeight;
     placedAt.current = view.scrollTop;
     savePosition(position);
@@ -910,11 +919,14 @@ export function AskView({ state }: { state: State }) {
   const chooseReading = (event: MouseEvent) => {
     // Capture the source's turn/focus before chooseSource changes the pane width. Pointer and keyboard activation both
     // produce this click, and every block gives its sentence or row the same focus id the source pane uses.
+    const view = scroller.current;
     const marker = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-reading-focus]') : null;
     const turn = marker?.closest('[data-turn]');
     const element = marker && turn?.querySelector(`[data-reading-anchor="${CSS.escape(marker.dataset.readingFocus!)}"]`);
-    if (element) savePosition(anchorPosition(element,
-      reading.current?.position.kind === 'bottom' && turn?.getAttribute('data-turn') === turns.at(-1)?.id));
+    // A latest citation chosen with the view at the end prefers the end: where the view is, not the position last recorded,
+    // which can still hold a sentence after the view came back to the end without the person scrolling there.
+    if (view && element) savePosition(anchorPosition(element,
+      view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX && turn?.getAttribute('data-turn') === turns.at(-1)?.id));
   };
   // Content changes invalidate only the cached node list; they do not measure the existing thread.
   useLayoutEffect(() => { anchors.current = null; }, [thread.seq, turns.length, thread.opened, thread.earlier, state.timeline.turns, state.timeline.checks]);
@@ -948,7 +960,12 @@ export function AskView({ state }: { state: State }) {
   const follow = useCallback(() => {
     const view = scroller.current;
     if (view && placedAt.current !== null && view.scrollTop < placedAt.current - FOLLOW_PX) rememberReading();
-    if (reading.current?.position.kind === 'bottom') toBottom();
+    const position = reading.current?.position;
+    if (position?.kind === 'bottom') toBottom();
+    else if (view && position?.kind === 'anchor' && position.preferBottom && view.contains(position.element)) {
+      savePosition(hold(position));
+      placedAt.current = view.scrollTop;
+    }
   }, []);
   const onScroll = () => {
     const view = scroller.current, saved = reading.current;
