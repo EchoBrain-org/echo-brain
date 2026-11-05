@@ -34,7 +34,7 @@ describe('view models copy only what the renderer may see', () => {
     const packet = { schema_version: 1, kind: 'echo-person-source-evidence-v1', scope: { kind: 'global' },
       citation: { kind: 'source_revision', source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
         representation_sha256: sha('5'), anchor_sha256: sha('6'), label }, text };
-    for (const imported_meeting_review of ['not_reviewed', 'reviewed'] as const) {
+    for (const imported_meeting_review of ['not_reviewed', 'reviewed', 'nothing_to_review'] as const) {
       expect(evidenceView({ ok: true, result: { ...packet, imported_meeting_review } }))
         .toEqual({ label, text: 'Ship the pilot.\n\nKeep its rollout small.', imported_meeting_review });
     }

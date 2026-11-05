@@ -52,12 +52,14 @@ describe('cited original public contracts', () => {
   it('carries an imported meeting review state separately from the immutable packet and citation', () => {
     const packet = { schema_version: 1, kind: 'echo-person-source-evidence-v1', scope: { kind: 'global' },
       citation: { ...sourceCitation, label: 'Imported meeting: Pilot' }, text: 'Imported meeting (unapproved): Pilot\nShip the pilot.' };
-    for (const imported_meeting_review of ['not_reviewed', 'reviewed']) {
+    // A revision with no decision or action has nothing to review; a reader shows it no badge.
+    for (const imported_meeting_review of ['not_reviewed', 'reviewed', 'nothing_to_review']) {
       expect(validatePersonSourceEvidenceV1({ ...packet, imported_meeting_review })).toEqual({ ...packet, imported_meeting_review });
     }
-    for (const imported_meeting_review of ['approved', 'pending', null, undefined]) {
+    for (const imported_meeting_review of ['approved', 'pending', 'no_signals', null, undefined]) {
       expect(() => validatePersonSourceEvidenceV1({ ...packet, imported_meeting_review })).toThrow();
     }
+    // A server from before review metadata answers without the key, and stays valid.
     expect(validatePersonSourceEvidenceV1(packet)).not.toHaveProperty('imported_meeting_review');
   });
 });

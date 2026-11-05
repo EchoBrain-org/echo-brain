@@ -730,6 +730,21 @@ describe("agentic Ask: research loop", () => {
     }
   });
 
+  it('leaves a not_found need unconfirmed after a source could not be read, so the reader is asked to try again', async () => {
+    const evidence = desk();
+    // Documents could not be searched just now; the two searches across the other sources came back clean and empty.
+    evidence.search.mockImplementation(async (request: { readonly source?: string; readonly query?: string }) => request.source === 'document'
+      ? { items: [], truncated: false, receipt_digests: [], notice: 'Live pages could not be searched just now, so these results leave them out.', notice_kind: 'availability' }
+      : { items: [], truncated: false, receipt_digests: [canonicalSha256({ query: request.query ?? null })] });
+    const script = scripted([step([{}], [{ tool: 'search', args: { query: 'launch date', source: 'documents' } }, search('launch date'), search('launch schedule')]), finish([missing()])]);
+    const result = await createAgenticAskV5({ desk: evidence, model: script.model, generation, audit: { append: () => undefined }, today: () => '2026-09-28', include_gap_details: true })
+      .answer({ question: 'When is launch?' });
+    expect(script.inputs).toHaveLength(2);
+    expect(result.outcome).toBe('partial');
+    expect(result.parts[0]).toMatchObject({ gap: "I couldn't complete the search. Please try again.", gap_details: { interrupted: true } });
+    expect(result.parts[0]?.gap_details).not.toHaveProperty('not_found');
+  });
+
   it('stops at an exhaustive empty catalog without waiting for a planner finish', async () => {
     const script = scripted([step([{}], [
       { tool: 'list', args: { source: 'meetings' } }, { tool: 'list', args: { source: 'documents' } },

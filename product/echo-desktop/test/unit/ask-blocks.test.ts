@@ -491,11 +491,32 @@ describe('only actionable answer explanations are shown', () => {
     expect(byTestId(thread(), 'answer-empty')).toHaveLength(0);
   });
 
-  it('does not call an empty technical partial answer a completed no-match search', async () => {
+  // An answer is never blank: one that says nothing, whose only explanation is an untyped diagnostic the page hides, says
+  // that nothing matched in what was read, since a partial answer did not read everything, and Copy writes the same.
+  it.each([
+    { what: 'a status selection over a list not read to its end',
+      gap: 'Not found: tickets that have status Blocked. The list of tickets could not be read to its end, so more may exist.' },
+    { what: 'a due-date window over follow-ups some of which have no due date', gap: 'Not found: follow-ups due Oct 23–29. 2 follow-ups have no due date.' },
+    { what: 'an unfinished search answered by an Authority that sends no typed reasons', gap: "I couldn't complete the search. Please try again." },
+  ])('says and copies that nothing matched in what was read for an empty partial answer: $what', async ({ gap }) => {
     const base = therm(false);
-    const { thread } = await answered({ ...base, sources: [], outcome: 'partial', parts: [{ question: QUESTION, status: 'not_found', statements: [], gap: 'Some list rows did not fit.' }] });
+    const { thread } = await answered({ ...base, sources: [], outcome: 'partial', parts: [{ question: QUESTION, status: 'not_found', statements: [], gap }] });
     expect(byTestId(thread(), 'answer-gap')).toHaveLength(0);
-    expect(byTestId(thread(), 'answer-empty')).toHaveLength(0);
+    expect(text(thread())).not.toContain(gap);
+    expect(byTestId(thread(), 'answer-empty').map(text)).toEqual(['Nothing matched in what I could read.']);
+    click(byTestId(thread(), 'copy-answer')[0]);
+    await flush();
+    expect(rpc.mock.calls.filter(([name]) => name === 'clipboard.writeText').at(-1)?.[1]).toEqual({ text: 'Nothing matched in what I could read.' });
+  });
+
+  it('says and copies that nothing you can see matched for a completed answer that says and explains nothing', async () => {
+    const base = therm(false);
+    const { thread } = await answered({ ...base, sources: [], outcome: 'not_found', parts: [{ question: QUESTION, status: 'not_found', statements: [] }] });
+    expect(byTestId(thread(), 'answer-gap')).toHaveLength(0);
+    expect(byTestId(thread(), 'answer-empty').map(text)).toEqual(['Nothing you can see matched.']);
+    click(byTestId(thread(), 'copy-answer')[0]);
+    await flush();
+    expect(rpc.mock.calls.filter(([name]) => name === 'clipboard.writeText').at(-1)?.[1]).toEqual({ text: 'Nothing you can see matched.' });
   });
 });
 

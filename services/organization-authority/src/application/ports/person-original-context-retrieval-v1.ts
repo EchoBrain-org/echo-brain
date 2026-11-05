@@ -1,7 +1,7 @@
 import type { EvidenceDeskUncheckedV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v2";
 import type { EvidenceDateFilterV1, EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
-import type { PersonItemRefV1 } from "@echo-brain/organization-api";
+import type { PersonImportedMeetingReviewV1, PersonItemRefV1 } from "@echo-brain/organization-api";
 import type { ReleasedSourceContextAtomV1 } from "@echo-brain/organization-authority-kernel/shared/released-source-context-v1";
 
 /** The caller-selected boundary; global is still limited to the actor's ACL. */
@@ -46,7 +46,7 @@ export interface PersonOriginalContextRetrievalPortV1 {
     readonly scope: PersonAskScopeV2;
     readonly atom: ReleasedSourceContextAtomV1;
     /** Present for imported meeting notes only; presentation metadata, never evidence of an approved record. */
-    readonly imported_meeting_review?: 'not_reviewed' | 'reviewed';
+    readonly imported_meeting_review?: PersonImportedMeetingReviewV1;
   };
 }
 

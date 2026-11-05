@@ -70,13 +70,23 @@ export interface EvidenceDeskItemV1 {
   readonly ref?: PersonItemRefV1;
 }
 
+/**
+ * What a desk notice reports, for research alone: never released, audited or shown to a model. `availability`: a source
+ * could not be read during this request (an outage, a rate limit or a quota, or meeting records whose search index is
+ * behind their log), so absence there is unproven. `informational`: how results were narrowed or represented. A notice
+ * without a kind is informational.
+ */
+export type EvidenceDeskNoticeKindV1 = 'availability' | 'informational';
+
 export interface EvidenceDeskResultV1 {
   readonly items: readonly EvidenceDeskItemV1[];
   readonly truncated: boolean;
   /** Every audited release made by this call, including empty and metadata-only releases. */
   readonly receipt_digests: readonly `sha256:${string}`[];
-  /** Availability notice, for example when record evidence was unavailable at request start. */
+  /** A coverage notice, for example when record evidence was unavailable at request start. */
   readonly notice?: string;
+  /** What `notice` reports; research reads it, and it stays inside the kernel's desk contract. */
+  readonly notice_kind?: EvidenceDeskNoticeKindV1;
   /** Opaque continuation for `list`; absent when nothing more exists. */
   readonly next_cursor?: string;
   /**

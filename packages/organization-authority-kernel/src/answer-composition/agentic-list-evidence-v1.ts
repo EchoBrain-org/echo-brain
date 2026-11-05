@@ -443,7 +443,7 @@ export interface AgenticWriterListV1 {
   readonly read_at: string;
   /** A which_items need research has not given up on cites this inventory; selection remains separate from presentation. */
   readonly stated: boolean;
-  /** Exact requested members from found which_items needs, mapped from any opened bodies to inventory row ids. */
+  /** Exact requested members from which_items needs research has not given up on, mapped from any opened bodies to inventory row ids. */
   readonly requested_members?: readonly string[];
   /** Members that fit the writer prompt, in list order. */
   readonly members: readonly AgenticWriterListMemberV1[];
@@ -510,7 +510,7 @@ export type AgenticListSelectionV1 =
 export interface AgenticAnswerListUseV1 {
   readonly id: AgenticListIdV1;
   readonly where?: AgenticListSelectionV1;
-  /** Members selected by their E ids; v1 names at most AGENTIC_LIST_NAMED_MAX_V1, blocks keep all. Set instead of `where`. */
+  /** Members selected by their E ids; v1 names at most AGENTIC_LIST_NAMED_MAX_V1, blocks keep all. A `where` beside them selects only when they name no member. */
   readonly members?: readonly string[];
 }
 
