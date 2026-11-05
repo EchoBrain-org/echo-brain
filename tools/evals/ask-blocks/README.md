@@ -897,6 +897,120 @@ start from the v2 writer's captured prompt: each case is captured once,
 `block_catalog` beside `source_catalog`, for its own. The results above stay
 as they were run.
 
+## The writer prompt without the plain answer, 2026-11-05 (pre-registered)
+
+Written before any run. The plain answer is retired
+([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md),
+amended 2026-11-05): every Ask's writer replies in blocks. Its answer prompt
+still carried the plain writer's wording, a reply shape and an "up to 10" that
+the layout part then set aside. The founder asked for a prompt that says only
+what the block writer needs, measured before it ships.
+
+The change, to `ANSWER_PROMPT`, `ANSWER_BLOCKS_PROMPT` and
+`ANSWER_SINCE_PROMPT` only: no catalog, schema, check, reading or drawing
+changes.
+
+| Where | Before | After |
+| --- | --- | --- |
+| The answer prompt's opening line | Write a direct answer as a list of sentences: | Write a direct answer: |
+| The answer prompt's first rule | - Lead with the direct answer, ... Usually 2 to 6 sentences; use up to 10 when the question asks several things. Never leave out something the question asks for to stay short. | The same, without "Usually 2 to 6 sentences; use up to 10 when the question asks several things." |
+| The answer prompt's rule on search limitations | ... If neither the evidence nor a list answers the question, return `{"lists":[],"sentences":[],"not_found":["<the requested fact>"]}`. ... | ... If neither the evidence nor a list answers the question, return `{"lists":[],"blocks":[{"block":"answer","sentences":[{"text":"<what could not be found>","evidence":[]}]}],"not_found":["<the requested fact>"]}`. ... |
+| The answer prompt's last lines | Reply with ONLY a JSON object in exactly this shape: `{"lists":[],"sentences":[{"text":"<sentence>","evidence":["E1"]}],"not_found":[]}` | None |
+| The layout part's count line | - An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds: the "up to 10" above does not apply. | - An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds. |
+| The layout part's reply line | With layout, reply with ONLY a JSON object in exactly this shape instead: | Reply with ONLY a JSON object in exactly this shape: |
+| An Ask again's first rule | - Answer the question from the evidence exactly as you would otherwise, in "sentences". | - Answer the question from the evidence exactly as you would otherwise, in "blocks". |
+
+Every other line stays word for word. The blocks schema cannot carry the plain
+nothing-found reply: it needs one block, and the answer block one sentence.
+Code leaves out a sentence that cites nothing, so the new example is the reply
+it reads as not found.
+
+- **The comparison:** before is the writer on `main` and in PR #404, its
+  prompt at this commit; after is the change, at the commit that makes it.
+  Each side gets one complete gate run of the arm `built` (15 cases, 3 trials,
+  the judge off) and one complete run of the wording evaluation (10 cases, 3
+  trials), through the founder's Claude account (`claude-sonnet-5-5`), on the
+  same day: before first, then after. The gate and wording runs at `e9ccc09`
+  (2026-11-02) are reported beside them. They measured the writer before
+  PR #400 changed three of its prompt lines and its reply schema with no live
+  run, so before is the first measurement of today's writer.
+- **Rules.** The change is proposed only when both hold; otherwise the prompt
+  stays as it is:
+  1. **The gate:** after, `built` passes rules 1 to 5 at their pre-registered
+     thresholds.
+  2. **The wording:** after, the wording evaluation passes its three rules,
+     each in at least 27 of 30 trials.
+- **No ranking:** the change takes out wording the writer was told to set
+  aside, and is not meant to change the answers.
+- **Reported, never rules:** the answer block's mean words and the wording
+  lead's; statements per answer; the blocks used; repairs and output tokens;
+  fit in each case; and how many of the 15 cases' trial-1 answers changed,
+  where an answer changed when the kinds of its blocks, in order, differ
+  between before and after.
+- **Not measured here:** no case has nothing that answers it, so the
+  nothing-found example is checked by unit tests only; neither evaluation asks
+  again, so an Ask again's line is checked by unit tests only.
+
+### Result, 2026-11-05
+
+Before at `d257bd6` and after at `24101b2`, each with no uncommitted change,
+through the founder's Claude account (`claude-sonnet-5-5`): 45 gate trials and
+30 wording trials a side, no failed call and no repair.
+
+| | `e9ccc09` (2026-11-02) | Before | After |
+| --- | --- | --- | --- |
+| 1. Valid (43) | 45 | 45 | 45 |
+| 2. Grounded (43) | 45 | 44 | 45 |
+| 3. Nothing lost (41) | 44 | 45 | 45 |
+| 4. Fit (36) | 39 | 39 | 40 |
+| 5. Stable (12) | 15 | 15 | 15 |
+| Answer block, mean words | 25.0 | 25.7 | 27.2 |
+| The same, without `trap-disagree` | 25.9 | 26.7 | 26.7 |
+| Prose blocks | 24 | 27 | 26 |
+| Output tokens | 19,993 | 22,887 | 21,825 |
+| Wording rules 1, 2 and 3 (27 each) | 30, 30, 30 | 30, 30, 30 | 28, 30, 30 |
+| Wording lead, mean words | 15.2 | 15.3 | 13.9 |
+
+- **Both rules hold,** so the change is proposed: after, `built` passes rules
+  1 to 5, and the wording evaluation its three rules.
+- **Before is the first measurement of today's writer,** PR #400's prompt and
+  schema, and it passes too. Its one trial that is not grounded,
+  `workstreams-status` trial 1, says today is "Oct 30 per the request, or Nov
+  5 per the environment". The Claude account route shows the writer the real
+  date beside the case's own, as the ranking of 2026-11-03 found. Both sides
+  ran on the same day.
+- **The kinds of blocks barely moved:** 2 of the 15 cases' trial-1 answers
+  changed the kinds of their blocks between before and after. `week-events`
+  dropped a last paragraph, and `trap-undated` gave a timeline and a paragraph
+  instead of points. Between the run at `e9ccc09` and before, two runs of
+  nearly one prompt, 5 changed.
+- **One case moved in every trial:** `trap-disagree` ("When is the PVT
+  build?") puts the possible slip in the answer block after. Trial 1 leads
+  "The approved schedule review puts the PVT build on Nov 16, but it may slip
+  to Nov 20.", above a paragraph; trials 2 and 3 are one answer block whose
+  second sentence is "That date may slip: ticket THERM-493 ... says the
+  fixture vendor now expects the test fixtures on Nov 20, so the build may
+  move to Nov 20." Before led with Nov 16 alone, above a paragraph titled
+  "Possible slip", in every trial, as at `e9ccc09`. This case is the whole of
+  the answer block's rise; without it the mean is 26.7 words on both sides.
+- **Fit gains one trial:** `review-multi` gave titled sections once.
+- **Output tokens are the route's raw totals.** About 1 in 7 calls through
+  the Claude account route came back with about twice the input and output
+  tokens and twice the time, on different questions each run: 8 gate and 3
+  wording calls before, 4 and 7 after. Leaving those out and comparing each
+  question with itself, the change saves about 84 input tokens per answer,
+  under 1%. Output tokens and time per answer stay within a few percent, up
+  in some questions and down in others.
+- **Measured before #403's timeline wording.** PR #403 words a timeline's
+  `who` as the event's actor, in the block catalog and both reply schemas. It
+  reached `main` and this change after these runs, so neither side had it.
+  It touches none of the lines this change takes out.
+
+### The decision, 2026-11-05
+
+The founder saw these results, `trap-disagree`'s answers before and after
+among them, and kept the change: "Keep the change".
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model

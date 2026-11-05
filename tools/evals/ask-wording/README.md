@@ -234,6 +234,44 @@ first try") keeps all three rules too: 30, 30 and 30, as PR #394's writer at
 ranking preferred PR #394's writer in 4 of the 5 questions it changed, so it
 is reverted as well.
 
+## The writer prompt without the plain answer, 2026-11-05 (pre-registered)
+
+Written before any run. Taking the plain writer's wording out of the answer
+prompt, once every answer is in blocks, is pre-registered in the
+[block evaluation](../ask-blocks/README.md) ("The writer prompt without the
+plain answer"), and needs this evaluation's three rules to pass on the changed
+writer. The same cases (`sha256:6ad26dc1…6a2bfa`), rules and thresholds; one
+complete run on the writer before the change and one after, each 10 cases and
+3 trials through the founder's Claude account (`--writer claude-account`), on
+the same day. The run at `e9ccc09` above is reported beside them. The lead's
+length, its mean and per case, and the statements per answer are reported
+beside them; no rule measures them.
+
+## Result, the writer prompt without the plain answer, 2026-11-05
+
+Before at `d257bd6` and after at `24101b2`, through the founder's Claude
+account (`claude-sonnet-5-5`): 30 trials each, no errors and no repairs. All
+three rules pass on both sides, so this evaluation does not hold the change
+back; the block evaluation's README gives the decision.
+
+| | `e9ccc09` (2026-11-02) | Before | After |
+| --- | --- | --- | --- |
+| 1. Answer, don't restate (27 of 30 to pass) | 30 | 30 | 28 |
+| 2. Long identifiers once (27 of 30 to pass) | 30 | 30 | 30 |
+| 3. Nothing lost (27 of 30 to pass) | 30 | 30 | 30 |
+| Words shared with the question, mean and longest run | 2.4, 4 | 2.2, 4 | 2.5, 5 |
+| Lead length, mean words | 15.2 | 15.3 | 13.9 |
+| Statements per answer, mean | 2.0 | 2.0 | 2.0 |
+| Long identifiers written | 6 | 6 | 6 |
+
+- After's two misses are `blocker-plain`, whose leads say "Ticket THERM-482
+  is blocking the DVT gate", 5 words of the question, as layout v1's misses
+  and the run at `294bf37` did.
+- The lead shortens where the question asks one thing:
+  `follow-up-due-quoted-title` leads "It is due Oct 30, 2026." (5.7 words a
+  trial) where before added the owner and the latest check (23.0); after
+  gives them in the next statement.
+
 ## Limits
 
 - One model route and synthetic items only: a staging release and the
