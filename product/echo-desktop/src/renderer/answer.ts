@@ -364,6 +364,27 @@ export function answerGaps(answer: Answer, shows: Shows): string[] {
 }
 
 /**
+ * What an answer that says nothing and shows no explanation says, so that no
+ * answer is left blank: a partial one, which did not read everything, that
+ * nothing matched in what it read; any other, that nothing you can see
+ * matched. A project's own line can stand in for it (store's nothingLine).
+ */
+export function nothingMatched(answer: Pick<Answer, 'outcome'>): string {
+  return answer.outcome === 'partial' ? 'Nothing matched in what I could read.' : 'Nothing you can see matched.';
+}
+
+/** Whether the page shows anything an answer says: its direct answer, or a part with something to show. */
+export function answerSays(answer: Answer, shows: Shows): boolean {
+  return (answer.direct !== undefined && shows(answer.direct.citation_indexes)) || answer.parts.some(part => partShows(part, shows));
+}
+
+/** What Copy answer writes after what an answer says, as the page shows it: its explanations, or `nothing` when it has neither. */
+function answerEnd(answer: Answer, shows: Shows, nothing: string): string[] {
+  const gaps = answerGaps(answer, shows);
+  return gaps.length === 0 && !answerSays(answer, shows) ? [nothing] : gaps;
+}
+
+/**
  * Ask again's "Since" list (ADR-0047) as Copy answer writes it, with the day
  * the earlier answer was asked as the page names it ("Oct 14"): "Nothing
  * changed since" for an empty list, and nothing for one whose every item
@@ -384,9 +405,12 @@ interface CopiedSince {
  * bullets and tables, and an arranged one its blocks (ADR-0051); any other
  * is a paragraph per sentence. A part's question heads what it says when
  * there are several. A partial answer's explanations are copied as shown on
- * the page, including an explanation that is the whole answer.
+ * the page, including an explanation that is the whole answer; an answer
+ * that says nothing and shows no explanation says `nothing`, the line the
+ * page shows for it.
  */
-export function answerMarkdown(answer: Answer, names: readonly string[], groups: readonly SourceGroup[], shows: Shows, since?: CopiedSince): string {
+export function answerMarkdown(answer: Answer, names: readonly string[], groups: readonly SourceGroup[], shows: Shows, since?: CopiedSince,
+  nothing = nothingMatched(answer)): string {
   const numbers = (citations: readonly number[]) => statementGroups(citations, groups).map(group => `[${group + 1}]`).join('');
   /** Text, then the numbers of what it cites: they stay on their claim. */
   const cited = (text: string, citations: readonly number[]) => [markdownText(text), numbers(citations)].filter(Boolean).join(' ');
@@ -416,7 +440,7 @@ export function answerMarkdown(answer: Answer, names: readonly string[], groups:
     else blocks.push(...shown(part.statements).map(claim));
     blocks.push(...shown(part.records ?? []).map(claim));
   }
-  blocks.push(...answerGaps(answer, shows).map(markdownText));
+  blocks.push(...answerEnd(answer, shows, nothing).map(markdownText));
   if (groups.length > 0) blocks.push('Sources', groups.map((_, index) => `${index + 1}. ${markdownText(names[index] ?? '')}`.trimEnd()).join('\n'));
   return blocks.join('\n\n');
 }
@@ -425,13 +449,14 @@ export function answerMarkdown(answer: Answer, names: readonly string[], groups:
  * Copy answer's plain reading of what the page shows, for an answer whose
  * Markdown is longer than Copy answer takes: as the answer's own `text` reads
  * (its sentences one a line, each part's question first when there are
- * several), without what a check left out.
+ * several), without what a check left out, then its explanations, or
+ * `nothing`, as the Markdown ends.
  */
-export function answerText(answer: Answer, shows: Shows, since?: CopiedSince): string {
+export function answerText(answer: Answer, shows: Shows, since?: CopiedSince, nothing = nothingMatched(answer)): string {
   const said = (statements: readonly AnswerStatement[]) => statements.filter(statement => shows(statement.citation_indexes)).map(statement => statement.text);
   const listed = since === undefined ? [] : said(since.statements);
   const changes = since === undefined ? [] : since.statements.length === 0 ? [`Nothing changed since ${since.when}`] : listed.length > 0 ? [`Since ${since.when}`, ...listed] : [];
   return [...changes, ...said(answer.direct ? [answer.direct] : []), ...answer.parts.filter(part => partShows(part, shows))
-    .flatMap(part => [answer.parts.length > 1 ? part.question : '', ...said(part.statements), ...said(part.records ?? [])]), ...answerGaps(answer, shows)]
+    .flatMap(part => [answer.parts.length > 1 ? part.question : '', ...said(part.statements), ...said(part.records ?? [])]), ...answerEnd(answer, shows, nothing)]
     .filter(line => line !== '').join('\n');
 }

@@ -234,6 +234,24 @@ describe('Copy answer writes Markdown (ADR-0045)', () => {
     expect(copied).not.toContain(answer.parts[0]!.gap);
   });
 
+  it('writes that nothing matched, in Markdown and in the long-answer plain text alike, for an answer that says nothing and whose explanation is hidden', () => {
+    const answer: Answer = { ...plain([]), sources: [], outcome: 'partial', parts: [{ question: 'Which tickets are blocked?', status: 'not_found', statements: [],
+      gap: 'Not found: tickets that have status Blocked. The list of tickets could not be read to its end, so more may exist.' }] };
+    // A partial answer did not read everything: nothing matched in what it read.
+    expect(answerMarkdown(answer, [], [], () => true)).toBe('Nothing matched in what I could read.');
+    expect(answerText(answer, () => true)).toBe('Nothing matched in what I could read.');
+    // Any other: nothing you can see matched; and the line the page gives its turn, such as its project's, is written as given.
+    const completed: Answer = { ...answer, outcome: 'not_found', parts: [{ question: 'Which tickets are blocked?', status: 'not_found', statements: [] }] };
+    expect(answerMarkdown(completed, [], [], () => true)).toBe('Nothing you can see matched.');
+    expect(answerText(completed, () => true)).toBe('Nothing you can see matched.');
+    expect(answerMarkdown(completed, [], [], () => true, undefined, 'Nothing in Apollo matched.')).toBe('Nothing in Apollo matched.');
+    expect(answerText(completed, () => true, undefined, 'Nothing in Apollo matched.')).toBe('Nothing in Apollo matched.');
+    // A shown explanation, or anything said, takes its place.
+    const typed: Answer = { ...answer, parts: [{ ...answer.parts[0]!, gap_details: { interrupted: true } }] };
+    expect(answerText(typed, () => true)).toBe("I couldn't complete the search. Please try again.");
+    expect(answerText(plain([['Annual first.', [0]]]), () => true)).toBe('Annual first.');
+  });
+
   it('keeps a table cell\'s pipes and backslashes as text, and a line that would start a list as a sentence', () => {
     const base = plain([['- dash first', [0]], ['A | B', [1]]]);
     const answer: Answer = { ...base, parts: [{ ...base.parts[0]!, layout: [

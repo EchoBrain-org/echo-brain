@@ -12,7 +12,7 @@ import type {
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
-import { answerMarkdown, answerSentences, answerText, documentName, numberedSources, type SourceGroup } from './answer.js';
+import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, numberedSources, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
   answeredNow, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, checksHiding, followedTurn, foundUnreadable, freshChecks, freshStates, knownStates,
@@ -4028,6 +4028,16 @@ export function foundNothingInProject(turn: TimelineTurn): turn is TimelineTurn 
   return turn.scope.kind === 'project' && turn.answer.outcome === 'not_found' && turn.answer.sources.length === 0;
 }
 
+/**
+ * What a turn says when its answer says nothing and shows no explanation, on
+ * the page and in Copy answer alike: nothing in its project matched, for a
+ * project question that found nothing; otherwise as the answer's outcome
+ * words it (nothingMatched).
+ */
+export function nothingLine(turn: TimelineTurn, current: State = state): string {
+  return foundNothingInProject(turn) ? `Nothing in ${scopeName(turn.scope, current)} matched.` : nothingMatched(turn.answer);
+}
+
 /** A completed factual gap can be searched more widely even when other parts were answered. */
 export function canAskEverywhere(turn: TimelineTurn, current: State = state): boolean {
   if (turn.scope.kind !== 'project' || !showsOf(shownChecks(turn, current))(turn.answer.sources.map((_, index) => index))) return false;
@@ -4195,8 +4205,9 @@ export function cancelAsk(): void {
 /**
  * Copy answer: a turn's answer as Markdown (ADR-0045), as the page shows it:
  * without what the check it shows left out, its sources numbered and named
- * as the page shows them (ADR-0047). Onto the clipboard; its plain text when
- * the Markdown is longer than Copy answer takes. Says whether it got there.
+ * as the page shows them (ADR-0047), and the turn's line (nothingLine) when
+ * it says and explains nothing. Onto the clipboard; its plain text when the
+ * Markdown is longer than Copy answer takes. Says whether it got there.
  */
 export async function copyAnswer(id: string | null): Promise<boolean> {
   const turn = turnOf(id);
@@ -4208,8 +4219,9 @@ export async function copyAnswer(id: string | null): Promise<boolean> {
   // Ask again's "Since" (ADR-0047), named by the day the earlier answer was asked, as the page names it.
   const earlier = turn.again_of === undefined ? undefined : turnOf(turn.again_of)?.asked_at;
   const since = turn.since === undefined ? undefined : { statements: turn.since, when: earlier === undefined ? 'then' : askedWhen(earlier) };
-  const markdown = answerMarkdown(answer, groups.map(group => sourceName(answer.sources[group.indexes[0]!]!, state.sources)), groups, shows, since);
-  const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : answerText(answer, shows, since);
+  const nothing = nothingLine(turn);
+  const markdown = answerMarkdown(answer, groups.map(group => sourceName(answer.sources[group.indexes[0]!]!, state.sources)), groups, shows, since, nothing);
+  const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : answerText(answer, shows, since, nothing);
   return text !== '' && (await rpc('clipboard.writeText', { text })).ok;
 }
 

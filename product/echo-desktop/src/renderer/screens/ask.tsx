@@ -6,7 +6,7 @@ import type {
 } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import {
-  answerGaps, answerSentences, blockTitle, CARD_WORDS, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownArranged,
+  answerGaps, answerSays, answerSentences, blockTitle, CARD_WORDS, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownArranged,
   shownBlocks, shownItems, statementGroups, tableDay, yoursIn, type AnswerTable, type Inline, type Shows, type SourceGroup,
 } from '../answer.js';
 import { askedToday, askedWhen, identity, initial, marked, meetingTime, snippet, when } from '../format.js';
@@ -19,7 +19,7 @@ import {
 } from '../progress.js';
 import {
   activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
-  fullPageOffered, litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
+  fullPageOffered, litAtoms, matchesShown, nothingLine, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, searchAgain, setBarText, sourceName, submitBar, suggestionsShown, toggleEarlier, toggleSourceList, toggleTurn, turnOf, widenScope,
   UNTITLED,
   type AskClarify, type AskTook, type PaneTarget, type Read, type RecordSectionKey, type State,
@@ -520,16 +520,17 @@ function Arranged({ state, view, part, index, blocks, opening }: {
  * when the writer arranged it (ADR-0051), and a paragraph per sentence when
  * neither. A part with nothing to show is left out, and so is a sentence
  * citing a source you can no longer read; one whose source changed is lit in
- * the signal (ADR-0047). Only typed actionable explanations are shown.
- * A completed no-match answer without an explanation uses the empty line,
- * unless the project's own line says so.
+ * the signal (ADR-0047). Only typed actionable explanations are shown. An
+ * answer that says nothing and shows no explanation says `empty`, its turn's
+ * line (nothingLine), unless the project's own line under it says so (null):
+ * no answer is left blank.
  */
-function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: State; view: TurnView; dimmed?: boolean; empty?: boolean }) {
+function AgenticAnswer({ state, view, empty, dimmed = false }: { state: State; view: TurnView; empty: string | null; dimmed?: boolean }) {
   const answer = view.answer;
   const gaps = answerGaps(answer, view.shows);
   // A part opens the answer when it is the first and no direct answer is above it.
   const parts = answer.parts.map((part, index) => ({ part, index, opening: index === 0 && !answer.direct })).filter(({ part }) => partShows(part, view.shows));
-  const said = parts.length > 0 || (answer.direct !== undefined && view.shows(answer.direct.citation_indexes));
+  const said = answerSays(answer, view.shows);
   return (
     <div class={`agentic-answer${dimmed ? ' dimmed' : ''}`} data-testid="answer">
       {answer.direct && <Statement state={state} view={view} statement={answer.direct} id="direct" />}
@@ -546,7 +547,7 @@ function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: S
         </section>
       ))}
       {gaps.map(gap => <p key={gap} class="answer-empty" data-testid="answer-gap">{gap}</p>)}
-      {!said && gaps.length === 0 && empty && answer.outcome === 'not_found' && <p class="answer-empty" data-testid="answer-empty">Nothing you can see matched.</p>}
+      {!said && gaps.length === 0 && empty !== null && <p class="answer-empty" data-testid="answer-empty">{empty}</p>}
     </div>
   );
 }
@@ -746,10 +747,10 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
       <div class="question selectable" data-testid="question">{turn.text}</div>
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
       {changed && <ChangedSince at={turn.asked_at} />}
-      {!omitted && <AgenticAnswer state={state} view={view} empty={!foundNothingInProject(turn)} />}
+      {!omitted && <AgenticAnswer state={state} view={view} empty={foundNothingInProject(turn) ? null : nothingLine(turn, state)} />}
       {(foundNothingInProject(turn) || widen) && (
         <div class="project-empty" data-testid={foundNothingInProject(turn) ? 'project-empty' : undefined}>
-          {foundNothingInProject(turn) && <span>Nothing in {scopeName(turn.scope, state)} matched.</span>}
+          {foundNothingInProject(turn) && <span>{nothingLine(turn, state)}</span>}
           {/* Offered on the thread's latest turn only, as the next step; never under a question that failed. */}
           {widen && (
             <button type="button" class="link-button" data-testid="ask-everywhere" onClick={() => askEverywhere(turn.id)}>Ask across everything you can see</button>
@@ -801,7 +802,7 @@ function OpenedTurn({ state, turn, checks }: { state: State; turn: TimelineTurn;
     <div class="opened" data-testid="opened-turn">
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
       {!omitted && turnNote(turn, checks) === 'changed' && <ChangedSince at={turn.asked_at} />}
-      {!omitted && <AgenticAnswer state={state} view={view} dimmed />}
+      {!omitted && <AgenticAnswer state={state} view={view} empty={nothingLine(turn, state)} dimmed />}
       <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={undefined} again copy={!omitted} />
     </div>
   );
