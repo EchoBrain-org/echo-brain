@@ -1,10 +1,11 @@
-import { mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { join } from 'node:path';
 import { setImmediate, setTimeout } from 'node:timers/promises';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { PersonClient } from '../../src/product/person-client/client.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 import { signedInHome } from './signed-in-home.js';
@@ -235,4 +236,99 @@ it('finishes an already submitted refresh after cancellation without sending the
     expect(paths).toEqual(['/v2/session/refresh']);
     expect(store.read().session.access_token).toBe('B'.repeat(43));
   } finally { release(); await Promise.allSettled([ask]); rmSync(home, { recursive: true, force: true }); }
+});
+
+const records = () => Response.json({ schema_version: 1, kind: 'echo-clean-person-record-list-v1', records: [] });
+
+it('removes an entry whose process ID now belongs to another user', async () => {
+  const home = signedInHome({ prefix: 'echo-refresh-reused-pid-', now: '2026-11-05T07:00:00.000Z' });
+  const directory = new PersonSessionStore(home).paths.directory;
+  const gate = new PersonSessionOperations(directory);
+  // A crashed client's PID, reused by another user's process: kill(pid, 0) answers EPERM.
+  const reused = 999_999;
+  const kill = process.kill.bind(process);
+  const spy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
+    if (pid === reused) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    return kill(pid, signal);
+  }) as typeof process.kill);
+  try {
+    await gate.read(async () => undefined); // Prepare the private directory.
+    const operations = join(directory, 'operations');
+    writeFileSync(join(operations, `read-${reused}-${randomUUID()}`), '', { mode: 0o600 });
+    await gate.refresh(() => true, async () => undefined);
+    expect(readdirSync(operations)).toEqual([]);
+  } finally { spy.mockRestore(); rmSync(home, { recursive: true, force: true }); }
+});
+
+it('removes an entry older than any operation runs, whatever process has its ID now', async () => {
+  const home = signedInHome({ prefix: 'echo-refresh-old-entry-', now: '2026-11-05T07:00:00.000Z' });
+  const directory = new PersonSessionStore(home).paths.directory;
+  const gate = new PersonSessionOperations(directory);
+  const controller = new AbortController();
+  try {
+    await gate.read(async () => undefined); // Prepare the private directory.
+    const operations = join(directory, 'operations');
+    // This test's own process stands in for a live process that reused a crashed client's PID.
+    const left = join(operations, `read-${process.pid}-${randomUUID()}`);
+    writeFileSync(left, '', { mode: 0o600 });
+    const created = new Date(Date.now() - 13 * 60_000);
+    utimesSync(left, created, created);
+    const refresh = gate.refresh(() => true, async () => 'refreshed', controller.signal);
+    refresh.catch(() => undefined);
+    await expect(Promise.race([refresh, setTimeout(1_000, 'still waiting')])).resolves.toBe('refreshed');
+    expect(readdirSync(operations)).toEqual([]);
+  } finally { controller.abort(); rmSync(home, { recursive: true, force: true }); }
+});
+
+it('ignores a file in the operations directory that no client wrote', async () => {
+  const now = '2026-11-05T07:00:00.000Z';
+  const home = signedInHome({ prefix: 'echo-refresh-foreign-file-', now });
+  const client = new PersonClient({ home_directory: home, now: () => now, fetch: async () => records() });
+  try {
+    await client.records();
+    const foreign = join(new PersonSessionStore(home).paths.directory, 'operations', '.DS_Store');
+    writeFileSync(foreign, 'x', { mode: 0o644 });
+    await client.records();
+    expect(existsSync(foreign)).toBe(true);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+it('clears every operation entry when someone signs in again or signs out', async () => {
+  const now = '2026-11-05T07:00:00.000Z';
+  const home = signedInHome({ prefix: 'echo-refresh-clear-', now });
+  const store = new PersonSessionStore(home);
+  const saved = store.read();
+  const operations = join(store.paths.directory, 'operations');
+  const client = new PersonClient({ home_directory: home, now: () => now, fetch: async input =>
+    new URL(String(input)).pathname === '/v2/session/revocations' ? new Response(null, { status: 204 }) : records() });
+  const unsafe = () => writeFileSync(join(operations, `read-${process.pid}-${randomUUID()}`), '', { mode: 0o644 });
+  try {
+    await client.records();
+    unsafe();
+    await expect(client.records()).rejects.toThrow('Unsafe Person session operation');
+    store.install(saved.authority_origin, saved.authority_id, saved.session);
+    expect(existsSync(operations)).toBe(false);
+    await client.records();
+    unsafe();
+    await client.logout();
+    expect(existsSync(operations)).toBe(false);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+it('returns a read\'s result after signing in again cleared its entry', async () => {
+  const home = signedInHome({ prefix: 'echo-refresh-cleared-read-', now: '2026-11-05T07:00:00.000Z' });
+  const store = new PersonSessionStore(home);
+  const saved = store.read();
+  const gate = new PersonSessionOperations(store.paths.directory);
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void;
+  const reading = new Promise<void>(resolve => { started = resolve; });
+  const read = gate.read(async () => { started(); await held; return 'result'; });
+  try {
+    await reading;
+    store.install(saved.authority_origin, saved.authority_id, saved.session);
+    release();
+    await expect(read).resolves.toBe('result');
+  } finally { release(); await Promise.allSettled([read]); rmSync(home, { recursive: true, force: true }); }
 });

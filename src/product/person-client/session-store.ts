@@ -13,6 +13,7 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -82,6 +83,9 @@ export class PersonClientSessionUnavailableError extends Error {
     this.code = options?.code;
   }
 }
+
+/** Where, inside the session directory, the clients sharing it coordinate their operations (session-operations.ts). */
+export const PERSON_SESSION_OPERATIONS_DIRECTORY = 'operations';
 
 export function personSessionStorePaths(
   homeDirectory: string,
@@ -388,8 +392,17 @@ export class PersonSessionStore {
     });
     this.writeLive(value);
     this.cleanupTransitions();
+    this.clearOperations();
     this.forgetEnded();
     return value;
+  }
+
+  /**
+   * Signing in or out ends every operation on the old session, so it also clears what crashed operations left. An
+   * entry nothing can prove stale, such as an unsafe file, would otherwise block every operation until removed by hand.
+   */
+  private clearOperations(): void {
+    rmSync(join(this.paths.directory, PERSON_SESSION_OPERATIONS_DIRECTORY), { recursive: true, force: true });
   }
 
   /** Why the last refresh here ended the session, until someone signs in or out; null otherwise. */
@@ -609,5 +622,6 @@ export class PersonSessionStore {
       changed = removeIfPresent(path) || changed;
     }
     if (changed) fsyncDirectory(this.paths.directory);
+    this.clearOperations();
   }
 }

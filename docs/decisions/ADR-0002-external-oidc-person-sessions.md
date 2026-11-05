@@ -483,8 +483,11 @@ operations across processes. Private, token-free operation entries hold read
 leases through response decoding, streams and account checks. Refresh intent
 blocks new readers and waits for current readers to finish before the existing
 single-use refresh claim can rotate the credential. Reads normally run in
-parallel. Verified dead-process entries are removed by their unique path;
-unsafe entries fail closed. Waiting is bounded and queued reads are cancellable.
+parallel. An entry whose process is gone, including one whose process ID now
+belongs to another user, or that is older than any operation runs, is removed
+by its unique path. Files no client wrote are ignored. Unsafe entries fail
+closed until signing in again or signing out, which clears every entry.
+Waiting is bounded and queued reads are cancellable.
 An interrupted token claim still requires sign-in; an ambiguous refresh is
 never replayed. New requests reserve their transport deadline before using a
 credential, refreshing first if it would expire during the request. Document
