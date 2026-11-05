@@ -8,8 +8,8 @@ restated the question, and the release name was written again. This opt-in
 evaluation measures how often Ask's writer does that, before and after a change
 to its wording rules.
 
-It measures only the writer of a laid-out answer, the answer every desktop and
-`person ask` gets: answer layout v2, since they send `x-echo-answer-layout: 2`
+It measures only the writer of a laid-out answer, the answer every Ask gets:
+answer layout v2
 ([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md)); the
 2026-10-26 result measured layout v1
 ([ADR-0045](../../../docs/decisions/ADR-0045-ask-answer-layout.md)). Each case is
@@ -35,8 +35,8 @@ The bundle reads the credential file; the runner only checks that it is a
 private file, and makes no request without `--run`. `--out` must be a private
 directory outside the repository; the report is written there with mode 0600.
 It keeps case ids, each trial's statements, lead and grade (synthetic text),
-the writer prompt's SHA-256, the layout the writer was given and model
-metadata; never prompts, raw replies, credentials or provider payloads.
+the writer prompt's SHA-256 and model metadata; never prompts, raw replies,
+credentials or provider payloads.
 `--cases` and `--trials` make a smaller diagnostic run, which never decides
 anything. Trials run four at a time by default (`--concurrency`, 1 to 6); the
 report keeps them in case order.
@@ -150,11 +150,11 @@ the desktop.
   claude-account`): `claude-sonnet-5-5` through the Claude Agent SDK and the
   signed-in `claude` binary, the route of the block evaluation's run of record
   and of its gate. The report names it under `model.route`.
-- **Decided by a complete run:** all 10 cases, 3 trials each, and every
-  trial's writer given the block catalog (each trial's `writer_layout` is 2).
-  The v2 writer passes when all three rules pass (the report's
-  `wording_ships`). A smaller run, or one whose writer was not given the block
-  catalog, decides nothing.
+- **Decided by a complete run:** all 10 cases, 3 trials each. The v2 writer
+  passes when all three rules pass (the report's `wording_ships`). A smaller
+  run decides nothing. Since the plain answer was retired on 2026-11-05 every
+  writer is given the block catalog, so a report no longer records
+  `writer_layout` or `answer_layout`.
 
 The 2026-10-26 results above measured layout v1 through OpenRouter and stay as
 they are.

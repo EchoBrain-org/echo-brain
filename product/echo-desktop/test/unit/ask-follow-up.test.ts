@@ -26,7 +26,8 @@ const row = (owner = mina): OpenItemView => ({
 const receipt: AskReceipt = { looked_through: 1, rows: [{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 1 }, { type: 'read', items: [followUp] }] };
 const answer: Answer = {
   text: 'The launch checklist is still open.', scope: { kind: 'global' }, sources: [followUp], outcome: 'answered', receipt,
-  parts: [{ question: 'What are my open tasks?', status: 'answered', statements: [{ text: 'The launch checklist is still open.', citation_indexes: [0], private: false }] }],
+  parts: [{ question: 'What are my open tasks?', status: 'answered', statements: [{ text: 'The launch checklist is still open.', citation_indexes: [0], private: false }],
+    blocks: [{ kind: 'text', statements: [0] }] }],
 };
 
 let held: Held;

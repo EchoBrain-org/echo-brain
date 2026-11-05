@@ -17,7 +17,7 @@ import type { StructuredGenerationInput } from "../../src/answer-composition/str
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
 import { JIRA, pager, tickets } from "./fixtures/agentic-lists.js";
-import { result } from "./fixtures/agentic-scenarios.js";
+import { result, writerReply } from "./fixtures/agentic-scenarios.js";
 import { deferred } from "./fixtures/deferred.js";
 
 /**
@@ -57,7 +57,7 @@ const replies = (prompt: { readonly evidence?: readonly { readonly id: string }[
   { parts: part("open"), actions: [{ tool: "search", args: { query: `launch ${CANARY.query}` } }] },
   { parts: part("open"), actions: [{ tool: "open", args: { id: "E2" } }, { tool: "search", args: { source: "tickets", query: "tuesday" } }] },
   { parts: part("found", ["E1", "E2"]), actions: [{ tool: "finish", args: {} }] },
-  { sentences: [{ text: "Launch is Tuesday.", evidence: [prompt.evidence?.[0]?.id ?? "E1"] }], not_found: [] },
+  writerReply([{ text: "Launch is Tuesday.", evidence: [prompt.evidence?.[0]?.id ?? "E1"] }]),
 ][index];
 
 /**
@@ -97,7 +97,7 @@ function fixture(options: {
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
     const index = calls++;
     prompts.push(input);
-    const writer = (input.schema.properties as Record<string, unknown>).sentences !== undefined;
+    const writer = (input.schema.properties as Record<string, unknown>).blocks !== undefined;
     log.push(`generate:${writer ? "answer" : "step"}`);
     const custom = options.generate?.(input, index);
     if (custom !== undefined) return custom;
@@ -290,7 +290,7 @@ describe("the receipt counts what research looked through (ADR-0043)", () => {
   function listOnly() {
     const replies = [
       { parts: need("open", true), actions: [LIST] }, { parts: need("open"), actions: [LIST] }, { parts: need("found"), actions: [{ tool: "finish", args: {} }] },
-      { lists: [{ id: "L1" }], sentences: [], not_found: [] },
+      writerReply([], { lists: [{ id: "L1" }] }),
     ];
     const list = pager(tickets(1, 30), 50, {}, { page_full: false });
     const desk: EvidenceDeskPortV2 = {
@@ -306,9 +306,9 @@ describe("the receipt counts what research looked through (ADR-0043)", () => {
   it("counts every row of an Ask that only listed rows, and finds each page research was given, never the rows fetched behind it", async () => {
     const run = listOnly();
     const { response, receipt } = await run.ask.answerWithReceipt({ question, on_progress: run.sink });
-    // Research saw all 30, while the legacy answer can name only 25 and must disclose the missing five.
-    expect(response.outcome).toBe("partial");
-    expect(response.parts[0]).toMatchObject({ status: "partial", gap: "Some evidence could not fit in this response." });
+    // Research saw all 30, and the answer names all 30.
+    expect(response.outcome).toBe("answered");
+    expect(response.parts[0]).toMatchObject({ status: "answered", statements: [{ citation_indexes: Array.from({ length: 30 }, (_, index) => index) }] });
     expect(run.generate).toHaveBeenCalledTimes(4);
     // One fetch returned all 30; the second page came from it.
     expect(run.list).toHaveBeenCalledTimes(1);

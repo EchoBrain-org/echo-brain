@@ -47,11 +47,11 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
     const prompt = JSON.parse(input.user_prompt) as { question: string; scope: string; source_catalog: { source: string; tool_id?: string }[]; last_results?: { results?: string[] }[]; opened?: { id: string }[]; evidence?: { id: string }[] };
     if (!prompt.source_catalog.some(source => source.source === 'tickets' && source.tool_id === 'jira')) {
-      if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [], not_found: ['Jira status is unavailable.'] };
+      if ((input.schema.properties as Record<string, unknown>).blocks !== undefined) return { blocks: [], not_found: ['Jira status is unavailable.'] };
       return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: prompt.last_results?.length ? 'not_found' : 'open', evidence: [] }], notes: '' }],
         actions: [{ tool: prompt.last_results?.length ? 'finish' : 'list', args: prompt.last_results?.length ? {} : { source: 'documents' } }] };
     }
-    if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [{ text: 'The ticket says ship on Friday.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+    if ((input.schema.properties as Record<string, unknown>).blocks !== undefined) return { blocks: [{ block: 'answer', sentences: [{ text: 'The ticket says ship on Friday.', evidence: [prompt.evidence![0]!.id] }] }], not_found: [] };
     const hit = prompt.opened?.[0]?.id ?? prompt.last_results?.[0]?.results?.[0];
     if (hit !== undefined) {
       const releases = audit.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE body_json LIKE '%echo-person-live-evidence-release-audit-v1%'").all();
@@ -125,7 +125,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(keywords.status).toBe(200);
     expect(validatePersonAnswerResponseV8(keywords.body)).toMatchObject({ outcome: 'answered', citations: [expect.objectContaining({ kind: 'ticket' })] });
     expect(jiraFetch.mock.calls.filter(([url]) => String(url).endsWith('/search/jql'))).toHaveLength(1);
-    const writerInput = generate.mock.calls.find(([input]) => (input.schema.properties as Record<string, unknown>).sentences !== undefined)![0];
+    const writerInput = generate.mock.calls.find(([input]) => (input.schema.properties as Record<string, unknown>).blocks !== undefined)![0];
     expect(JSON.parse(writerInput.user_prompt).evidence[0].attributes).toEqual({ status: 'Open', owner: 'Fixture Owner' });
     // Real ECHO project grants select the provider-owned mapping; the model receives no Jira selector.
     const created = await post('/v1/person/projects', { schema_version: 1, kind: 'echo-project-create-v1', request_id: randomUUID(), name: 'Project A' });

@@ -60,10 +60,10 @@ export function myOpenTasksPlanner(probes: readonly (readonly unknown[])[] = [],
   let mine: string | undefined;
   const model: StructuredGenerationPort = { async generate(input: StructuredGenerationInput) {
     const prompt = JSON.parse(input.user_prompt) as StepPrompt & { readonly evidence?: readonly { readonly id: string }[] };
-    if ((input.schema.properties as Readonly<Record<string, unknown>>).sentences !== undefined) {
+    if ((input.schema.properties as Readonly<Record<string, unknown>>).blocks !== undefined) {
       writer.push(input.user_prompt);
       options.on_answer?.();
-      return { sentences: [{ text: 'Your open follow-up is on the launch ticket.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+      return { blocks: [{ block: 'answer', sentences: [{ text: 'Your open follow-up is on the launch ticket.', evidence: [prompt.evidence![0]!.id] }] }], not_found: [] };
     }
     if (prompt.source_catalog !== undefined) catalogs.push(prompt.source_catalog.map(entry => entry.source));
     steps.push(prompt);

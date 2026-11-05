@@ -4,7 +4,7 @@ import { agenticDataSlotV1, agenticStartingSlotV1, fillAgenticTaskV1, type Agent
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
 import type { EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
-import { researchHarness as harness, listed, need, part, record, result, step } from "./fixtures/agentic-scenarios.js";
+import { researchHarness as harness, listed, need, part, record, result, step, writerReply } from "./fixtures/agentic-scenarios.js";
 
 const finish = (evidence: readonly string[]) => step([part("Part", [need("state", "found", evidence)])], [{ tool: "finish", args: {} }]);
 const search = (query: string) => step([part("Part", [need("state", "open")])], [{ tool: "search", args: { query } }]);
@@ -80,7 +80,7 @@ describe("brief: goals", () => {
     const h = harness([
       search("dashboard"),
       finish(["E1"]),
-      { sentences: [{ text: "Due September 11.", evidence: ["E1"] }], not_found: [] },
+      writerReply([{ text: "Due September 11.", evidence: ["E1"] }]),
     ], { search: vi.fn(async () => result([record("dashboard", "Approved: due September 11.")])) });
     const brief: AgenticBriefV1 = { goal: { kind: "question", question: "When is the dashboard due?" }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: {} };
     const view = await h.research.research({ trigger: "ask", brief });
@@ -154,7 +154,7 @@ describe("brief: 'skip' starting items, a follow-up's (ADR-0047)", () => {
   const deleted = record("deleted");
   const question = (starting: AgenticBriefV1["starting"]): AgenticBriefV1 =>
     ({ goal: { kind: "question", question: "How many decimals does SW-22b show?" }, starting, budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: {} });
-  const answer = { sentences: [{ text: "SW-22b formats two decimals.", evidence: ["E1"] }], not_found: [] };
+  const answer = writerReply([{ text: "SW-22b formats two decimals.", evidence: ["E1"] }]);
   /** Opens the readable record; `down` fails as `failure` says, and `deleted` is gone. */
   const opens = (failure: unknown) => async (input: { readonly citation: unknown }): Promise<EvidenceDeskResultV2> => {
     const key = JSON.stringify(input.citation);

@@ -6,6 +6,7 @@ import type { StructuredGenerationInput } from '../../src/answer-composition/str
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import { deferred } from './fixtures/deferred.js';
+import { writerReply } from './fixtures/agentic-scenarios.js';
 
 const checked = { checked_at: '2026-10-01T00:00:00.000Z' };
 const body = 'ECHO-1: Launch is Tuesday.';
@@ -20,7 +21,7 @@ const replies = [
   { parts: need('open', []), actions: [{ tool: 'list', args: { source: 'tickets' } }] },
   { parts: need('open', []), actions: [{ tool: 'open', args: { id: 'E1' } }] },
   { parts: need('found', ['E1']), actions: [{ tool: 'finish', args: {} }] },
-  { sentences: [{ text: 'The ticket reports launch is Tuesday.', evidence: ['E1'] }], not_found: [] },
+  writerReply([{ text: 'The ticket reports launch is Tuesday.', evidence: ['E1'] }]),
 ];
 
 function fixture(options: {

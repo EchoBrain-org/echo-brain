@@ -13,7 +13,8 @@ vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
 const apollo = project(1, 30, { name: 'Apollo' });
 const answer: Answer = {
   text: 'We ship on Friday.', scope: { kind: 'global' }, sources: [], outcome: 'answered',
-  parts: [{ question: 'When do we ship?', status: 'answered', statements: [{ text: 'We ship on Friday.', citation_indexes: [], private: false }] }],
+  parts: [{ question: 'When do we ship?', status: 'answered', statements: [{ text: 'We ship on Friday.', citation_indexes: [], private: false }],
+    blocks: [{ kind: 'text', statements: [0] }] }],
 };
 const decision = (title: string, approved_at: string) => ({
   approval_id: `apr_${title.length.toString(16).padStart(64, '0')}`, record_sha256: `sha256:${title.length.toString(16).padStart(64, '0')}`, title,

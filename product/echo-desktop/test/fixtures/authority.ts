@@ -69,9 +69,6 @@ interface Contract {
    */
   PERSON_ASK_PROGRESS_HEADER_VALUE_V3: string;
   formatPersonAskProgressEventV3(event: unknown): string;
-  /** Answer layout v2 (ADR-0051): the header an Ask asks for it with, and its value. */
-  PERSON_ASK_ANSWER_LAYOUT_HEADER_V1: string;
-  PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2: string;
   PERSON_ASK_GAP_DETAILS_HEADER_V1: string;
   PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1: string;
 }
@@ -243,11 +240,9 @@ const THERM_BLOCK_CITATIONS = [
  * titled text; and Noor's words as a quote. Each statement reads as the
  * Authority writes it from its block: an event from its day, who and what
  * happened, a fact from its card's kind and title and its label and value, a
- * quote from its source and words. Its blocks come only to an Ask that asked
- * for them (`blocks`); without them the statements are the same, in the same
- * order.
+ * quote from its source and words.
  */
-export function blocksAnswer(question: string, scope: Record<string, unknown>, blocks: boolean): Record<string, unknown> {
+export function blocksAnswer(question: string, scope: Record<string, unknown>): Record<string, unknown> {
   const said = (text: string, cited: number[]) => ({ text, citation_indexes: cited, private: cited.some(at => THERM_BLOCK_CITATIONS[at]!.visibility === 'only_me') });
   const row = (cells: string[], cited: number) => ({ cells, citation_indexes: [cited] });
   const events = [{ date: '2026-10-20', text: 'Approved the soak plan.', who: 'Noor Haddad' }, { date: '2026-10-23', text: 'The 72-hour soak passed.', who: 'Noor Haddad' }];
@@ -271,7 +266,7 @@ export function blocksAnswer(question: string, scope: Record<string, unknown>, b
         said('Sensor self-heating is still unexplained, so the soak report keeps it on the PVT watch list.', [1]),
         said(`${quote.from}: “${quote.text}”`, [2]),
       ],
-      ...(blocks ? { blocks: [
+      blocks: [
         { kind: 'answer', statements: [0] },
         { kind: 'table', statements: [1], columns: ['Item', 'Status', 'Owner', 'Due'], caption: '2 Jira tickets are open', rows: [
           row(['THERM-52 · Thermal pad supplier', 'In Progress', 'Tomas Okafor', '2026-11-04'], 4),
@@ -282,9 +277,18 @@ export function blocksAnswer(question: string, scope: Record<string, unknown>, b
         { kind: 'points', title: 'Before PVT', ordered: true, statements: [6, 7] },
         { kind: 'text', title: 'Open risk', statements: [8] },
         { kind: 'quote', statements: [9], ...quote },
-      ] } : {}),
+      ],
     }],
   };
+}
+
+/**
+ * Every other answer's blocks (answer layout v2, ADR-0051), which each part
+ * with statements carries: an untitled text block a statement, so each reads
+ * as its own paragraph.
+ */
+export function paragraphs(statements: readonly unknown[]): { kind: 'text'; statements: number[] }[] {
+  return statements.map((_, at) => ({ kind: 'text', statements: [at] }));
 }
 
 // ---- the Ask timeline (ADR-0047) --------------------------------------------------
@@ -313,9 +317,10 @@ function naming(question: string, key: string): string {
   return full.charAt(0).toUpperCase() + full.slice(1);
 }
 
-/** A V8 answer of one part, answering `question` from `citations`. */
+/** A V8 answer of one part, answering `question` from `citations`, a paragraph a statement. */
 function timelineV8(question: string, scope: Record<string, unknown>, citations: readonly TimelineCitation[], statements: readonly ReturnType<typeof cites>[]) {
-  return { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered', citations: [...citations], parts: [{ question, status: 'answered', statements: [...statements] }] };
+  return { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered', citations: [...citations],
+    parts: [{ question, status: 'answered', statements: [...statements], blocks: paragraphs(statements) }] };
 }
 
 /** A follow-up names the earlier answer's single ticket; an initial answer cites the ticket, plan and follow-up. */
@@ -370,13 +375,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       representation_sha256: canonicalSha256({ kind: 'imported-meeting-notes-v1', text }),
       anchor_sha256: canonicalSha256({ kind: 'text', context_id: `cap_${'3'.repeat(64)}`, segment: 0, text: desktop.evidence_text }) };
     desktop.answer.citations = [{ kind: 'imported_meeting', label, citation: { ...citation, label }, visibility: 'only_me' }];
-    desktop.answer.parts = [{ question: 'What do the pilot notes say?', status: 'answered', statements: [{ text, citation_indexes: [0], private: true }] }];
+    desktop.answer.parts = [{ question: 'What do the pilot notes say?', status: 'answered', statements: [{ text, citation_indexes: [0], private: true }],
+      blocks: [{ kind: 'text', statements: [0] }] }];
     if (mode === 'ask-imported-mixed') {
       const updated = 'The updated notes defer the pilot.';
       (desktop.answer.citations as unknown[]).push({ kind: 'imported_meeting', label, visibility: 'only_me', citation: { ...citation,
         revision_id: 'rev-2', source_sha256: `sha256:${'4'.repeat(64)}`, representation_sha256: canonicalSha256({ kind: 'imported-meeting-notes-v1', text: updated }),
         anchor_sha256: canonicalSha256({ kind: 'text', context_id: `cap_${'5'.repeat(64)}`, segment: 0, text: `${label}\n${updated}` }) } });
-      desktop.answer.parts = [{ question: 'What do the pilot notes say?', status: 'answered', statements: [{ text: 'The original notes propose shipping; the updated notes defer the pilot.', citation_indexes: [0, 1], private: true }] }];
+      desktop.answer.parts = [{ question: 'What do the pilot notes say?', status: 'answered', statements: [{ text: 'The original notes propose shipping; the updated notes defer the pilot.', citation_indexes: [0, 1], private: true }],
+        blocks: [{ kind: 'text', statements: [0] }] }];
     }
   }
   const syntheticReview = mode === 'synthetic-review';
@@ -1034,11 +1041,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const metadata = new Headers(init?.headers).get('x-echo-document-metadata');
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown>
       : metadata ? JSON.parse(Buffer.from(metadata, 'base64url').toString('utf8')) as Record<string, unknown> : undefined;
-    // An Ask that asked for its progress says so (ADR-0039), and one that asked for its answer's layout (ADR-0051).
+    // An Ask that asked for its progress says so (ADR-0039).
     const progress = new Headers(init?.headers).get('x-echo-ask-progress');
-    const layout = new Headers(init?.headers).get('x-echo-answer-layout');
-    appendFileSync(join(home, 'calls.jsonl'), `${JSON.stringify({ method, path: url.pathname, query: url.search, body, ...(progress === null ? {} : { progress }),
-      ...(layout === null ? {} : { layout }) })}\n`);
+    appendFileSync(join(home, 'calls.jsonl'), `${JSON.stringify({ method, path: url.pathname, query: url.search, body, ...(progress === null ? {} : { progress }) })}\n`);
     if (url.origin !== AUTHORITY) throw new Error('Unexpected authority');
     const path = url.pathname;
     // Kim signs in on this computer while the request named in `switch-on` is on its way; it is still answered.
@@ -1833,7 +1838,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         const [original] = desktop.answer.parts as Record<string, unknown>[];
         const missing = noMatch ? "I couldn't find this in the sources you can access." : 'Not found: the Harbor owner.';
         return json({ ...answer, scope, outcome: noMatch ? 'not_found' : 'partial', citations: hasFacts ? desktop.answer.citations : [],
-          parts: [{ question, status: hasFacts ? 'partial' : 'not_found', statements: hasFacts ? original!.statements : [],
+          parts: [{ question, status: hasFacts ? 'partial' : 'not_found', statements: hasFacts ? original!.statements : [], ...(hasFacts ? { blocks: original!.blocks } : {}),
             gap: 'The list did not reach the end. Unchecked entries and sentences did not fit.',
             ...(new Headers(init?.headers).get(api.PERSON_ASK_GAP_DETAILS_HEADER_V1) === api.PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1
               ? { gap_details: noMatch || partialMissing ? { not_found: missing } : interrupted ? { interrupted: true } : { unsupported_action: true } } : {}) }],
@@ -1845,7 +1850,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           citations: included ? [thermTicket('ECHO-7', 'Jira launch', '10007')] : [],
           parts: [{ question, status: included ? 'answered' : 'not_found', statements: included
             ? [{ text: 'ECHO-7 is titled Jira launch.', citation_indexes: [0], private: true }]
-            : [], ...(included ? {} : { gap: 'No accessible Jira ticket was found.' }) }],
+            : [], ...(included ? { blocks: [{ kind: 'text', statements: [0] }] } : { gap: 'No accessible Jira ticket was found.' }) }],
         });
       }
       if (mode === 'ask-confluence') {
@@ -1857,15 +1862,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           } }] : [],
           parts: [{ question, status: included ? 'answered' : 'not_found', statements: included
             ? [{ text: 'The Confluence EVT readiness page is current.', citation_indexes: [0], private: true }]
-            : [], ...(included ? {} : { gap: 'No accessible Confluence page was found.' }) }],
+            : [], ...(included ? { blocks: [{ kind: 'text', statements: [0] }] } : { gap: 'No accessible Confluence page was found.' }) }],
         });
       }
-      // `ask-blocks` answers in the layout the Ask asked for: THERM's blocks for layout v2 (ADR-0051), and the blocks' plain statements
-      // for any other Ask, as the Authority answers one without the header or with retired layout v1's 1.
-      if (mode === 'ask-blocks') {
-        const layout = new Headers(init?.headers).get(api.PERSON_ASK_ANSWER_LAYOUT_HEADER_V1);
-        return json(blocksAnswer(question, scope, layout === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2));
-      }
+      // `ask-blocks` answers THERM's question in every block of answer layout v2 (ADR-0051).
+      if (mode === 'ask-blocks') return json(blocksAnswer(question, scope));
       if (mode === 'ask-scroll') {
         const statements = question === 'Quick status' ? [{ text: 'The release remains scheduled for Friday, and the team has confirmed the owner and the remaining checks.', citation_indexes: [0], private: false }] : Array.from({ length: 12 }, (_, index) => ({
           text: `${question} Item ${index + 1}: The team reviewed the supplier report, the manufacturing checklist, and the latest test results. The next review will compare those results with the release requirements before confirming the schedule and assigning the remaining follow-ups.`,

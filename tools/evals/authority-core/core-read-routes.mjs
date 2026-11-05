@@ -91,7 +91,7 @@ function answerResponse(userPrompt) {
   const evidence = prompt?.evidence;
   const lists = Array.isArray(prompt?.lists) ? prompt.lists : [];
   if (!Array.isArray(evidence) || (evidence.length === 0 && lists.length === 0)) throw new Error("deterministic answerer received no released evidence");
-  if (evidence.length === 0) return Object.freeze({ lists: [], sentences: [], not_found: [] });
+  if (evidence.length === 0) return Object.freeze({ lists: [], blocks: [], not_found: [] });
   const first = record(evidence[0]);
   if (first === null || typeof first.id !== "string" || first.id.length === 0 || typeof first.text !== "string" || first.text.length === 0) {
     throw new Error("deterministic answerer received invalid released evidence");
@@ -99,7 +99,7 @@ function answerResponse(userPrompt) {
   // Return only released text and its released id.
   const text = first.text.slice(0, 500).trim();
   if (text.length === 0) throw new Error("deterministic answerer received empty released evidence");
-  return Object.freeze({ lists: [], sentences: [{ text, evidence: [first.id] }], not_found: [] });
+  return Object.freeze({ lists: [], blocks: [{ block: "answer", sentences: [{ text, evidence: [first.id] }] }], not_found: [] });
 }
 
 /**
@@ -115,7 +115,7 @@ export function createCoreDeterministicStructuredGenerationPort() {
         throw new Error("deterministic structured generation input is invalid");
       }
       if (Object.hasOwn(properties, "actions")) return stepResponse(input.user_prompt);
-      if (Object.hasOwn(properties, "sentences")) return answerResponse(input.user_prompt);
+      if (Object.hasOwn(properties, "blocks")) return answerResponse(input.user_prompt);
       throw new Error("deterministic structured generation schema is unsupported");
     },
   });

@@ -1,6 +1,6 @@
 import {
-  PERSON_ASK_GAP_DETAILS_HEADER_V1, PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
-  validatePersonAskGapDetailsHeaderV1, validatePersonAskAnswerLayoutHeaderV2, validatePersonAskTimeContextV1, type PersonAskAnswerLayoutV2, type PersonAskTimeContextV1,
+  PERSON_ASK_GAP_DETAILS_HEADER_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
+  validatePersonAskGapDetailsHeaderV1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1,
 } from "@echo-brain/organization-api";
 import {
   PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
@@ -492,15 +492,6 @@ function askTimeContext(request: IncomingMessage): PersonAskTimeContextV1 | unde
   catch { throw new AuthorityOperationError('invalid_request', 'Ask time context is invalid'); }
 }
 
-/**
- * Which answer layout the client asked for: v2 (ADR-0051), if any; only a V8 answer reads it. Retired layout v1's value
- * (ADR-0045) asks for none, so a desktop or CLI from before layout v2 gets the answer without a layout, as paragraphs.
- */
-function askAnswerLayout(request: IncomingMessage): PersonAskAnswerLayoutV2 | undefined {
-  try { return validatePersonAskAnswerLayoutHeaderV2(request.headers[PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]); }
-  catch { throw new AuthorityOperationError('invalid_request', 'Ask answer layout is invalid'); }
-}
-
 /** Only explicitly opted-in clients can receive the additional V8 part field. */
 function askGapDetails(request: IncomingMessage): true | undefined {
   try { return validatePersonAskGapDetailsHeaderV1(request.headers[PERSON_ASK_GAP_DETAILS_HEADER_V1]); }
@@ -508,11 +499,10 @@ function askGapDetails(request: IncomingMessage): true | undefined {
 }
 
 /** An Ask's optional client headers as its options. An invalid one is `invalid_request`. */
-function askOptions(request: IncomingMessage): { readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: PersonAskAnswerLayoutV2; readonly include_gap_details?: true } {
+function askOptions(request: IncomingMessage): { readonly time_context?: PersonAskTimeContextV1; readonly include_gap_details?: true } {
   const time_context = askTimeContext(request);
-  const answer_layout = askAnswerLayout(request);
   const include_gap_details = askGapDetails(request);
-  return { ...(time_context === undefined ? {} : { time_context }), ...(answer_layout === undefined ? {} : { answer_layout }), ...(include_gap_details === undefined ? {} : { include_gap_details }) };
+  return { ...(time_context === undefined ? {} : { time_context }), ...(include_gap_details === undefined ? {} : { include_gap_details }) };
 }
 
 /** Ask, desk and list reads check the bearer and install cancellation before reading any body bytes. */
@@ -520,7 +510,7 @@ function personCancellablePost<Application, Request>(
   application: Application,
   validate: (value: unknown) => Request,
   read: (application: Application, input: {
-    readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: PersonAskAnswerLayoutV2; readonly include_gap_details?: true; readonly signal: AbortSignal;
+    readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly include_gap_details?: true; readonly signal: AbortSignal;
   }) => Promise<unknown>,
   ask = false,
 ): PersonPostHandler {

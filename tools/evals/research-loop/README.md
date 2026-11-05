@@ -108,6 +108,17 @@ meaning across ADR-0041. The writer answers such a part by selecting the
 member, and code states its row facts, citing the row: Ask leaves out a
 writer's sentence that cites only rows or list ids.
 
+**Baselines across the plain answer's retirement (2026-11-05).** The eval
+endpoint's Ask asked for no answer layout, so until then it got the plain
+writer and its answer. It now gets the writer desktops get and its answer in
+blocks ([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md),
+amended): the writer's answer first, then code's list statements, which name
+every member in statements of at most 40 citations, with no count of
+statements. Research itself is unchanged, but the writer is handed less
+evidence, to make room for the block catalog and its longer reply. Take Ask
+baselines again on an endpoint built after it before comparing writer
+numbers. Approved-record and Sweep runs are unchanged.
+
 **Baselines across ADR-0041 (2026-10-17).** Ask's research and writer changed:
 a complete list is evidence, and code names its members. Ask baselines taken
 before it measure the old loop, and their saved runs carry no lists, so a list

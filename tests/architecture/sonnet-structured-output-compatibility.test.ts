@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { answerBlocksSchema, answerBlocksSinceSchema, answerSchema, answerSinceSchema, createStepSchema, parseStep } from '../../packages/organization-authority-kernel/src/answer-composition/agentic-ask-v1-model-protocol.js';
+import { answerBlocksSchema, answerBlocksSinceSchema, createStepSchema, parseStep } from '../../packages/organization-authority-kernel/src/answer-composition/agentic-ask-v1-model-protocol.js';
 import { followUpResolutionSchema } from '../../packages/organization-authority-kernel/src/answer-composition/agentic-follow-up-resolver-v1.js';
 import { createOpenRouterStructuredGenerationAdapter } from '../../providers/openrouter/src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js';
 
@@ -31,12 +31,10 @@ const sentSchema = (body: Record<string, unknown>) => (body.response_format as {
 describe('Sonnet receives supported schemas for the real Ask protocol', () => {
   it.each([
     ['research', createStepSchema(['meetings', 'pages'], ['E1', 'E2'], true, true, true)],
-    ['answer', answerSchema],
-    // Ask again's writer and the follow-up resolver (ADR-0047).
-    ['answer asked again', answerSinceSchema],
     // The writer's blocks (answer layout v2, ADR-0051).
-    ['answer in blocks', answerBlocksSchema],
-    ['answer in blocks asked again', answerBlocksSinceSchema],
+    ['answer', answerBlocksSchema],
+    // Ask again's writer and the follow-up resolver (ADR-0047).
+    ['answer asked again', answerBlocksSinceSchema],
     ['follow-up resolution', followUpResolutionSchema],
   ])('%s keeps the closed protocol without unsupported wire bounds', async (_role, schema) => {
     const before = JSON.stringify(schema);
@@ -82,12 +80,12 @@ describe('Sonnet receives supported schemas for the real Ask protocol', () => {
 
   // The provider test covers 1,500 tokens, medium reasoning, and no temperature.
   it.each([1, 256, 4_096])('leaves reasoning headroom even for a %i-token background or Ask call', async allowance => {
-    const body = await wireRequest(answerSchema, 'anthropic/claude-sonnet-5.5', allowance);
+    const body = await wireRequest(answerBlocksSchema, 'anthropic/claude-sonnet-5.5', allowance);
     expect(body.max_tokens).toBe(allowance + 4_096);
   });
 
   it('keeps local action bounds and the caller output ceiling enforced', async () => {
     expect(parseStep({ parts: [{ question: 'fixture', needs: [], notes: '' }], actions: Array.from({ length: 5 }, () => ({ tool: 'search', args: { query: 'fixture' } })) }).actions).toHaveLength(4);
-    await expect(wireRequest(answerSchema, 'anthropic/claude-sonnet-5.5', 4_097)).rejects.toThrow('output limit');
+    await expect(wireRequest(answerBlocksSchema, 'anthropic/claude-sonnet-5.5', 4_097)).rejects.toThrow('output limit');
   });
 });

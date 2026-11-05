@@ -64,6 +64,22 @@ export type Scenario = {
   readonly asker?: string;
 };
 
+/** A sentence as the writer gives it: its text and the ids it cites. */
+type Said = { readonly text: string; readonly evidence: readonly string[] };
+/**
+ * The Ask writer's reply (answer layout v2, ADR-0051) that says `sentences`: the first as its answer block, any others as
+ * one text block after it, so the answer states them in the order given. Beside them, the lists it uses (ADR-0041),
+ * what it did not find, and for an Ask again what is different since (ADR-0047).
+ */
+export function writerReply(sentences: readonly Said[], fields: { readonly lists?: readonly unknown[]; readonly not_found?: readonly string[]; readonly since?: unknown } = {}) {
+  return {
+    lists: fields.lists ?? [],
+    blocks: [...(sentences.length === 0 ? [] : [{ block: "answer", sentences: sentences.slice(0, 1) }]), ...(sentences.length < 2 ? [] : [{ block: "text", sentences: sentences.slice(1) }])],
+    not_found: fields.not_found ?? [],
+    ...(fields.since === undefined ? {} : { since: fields.since }),
+  };
+}
+
 export const need = (text: string, status: string, evidence: readonly string[] = []) => ({ need: text, status, evidence });
 export const part = (question: string, needs: readonly ReturnType<typeof need>[], notes = "") => ({ question, needs, notes });
 export const step = (parts: readonly ReturnType<typeof part>[], actions: readonly { tool: string; args: Record<string, string> }[]) => ({ parts, actions });
@@ -82,7 +98,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
       step([part("When does DVT start?", [need("approved DVT start date", "open")])], [{ tool: "search", args: { query: "DVT start" } }]),
       step([part("When does DVT start?", [need("approved DVT start date", "open")], "E1 looks relevant")], [{ tool: "open", args: { id: "E1" } }]),
       step([part("When does DVT start?", [need("approved DVT start date", "found", ["E1"])], "E1: Oct 12")], [{ tool: "finish", args: {} }]),
-      { sentences: [{ text: "DVT starts October 12, after the fixture arrives.", evidence: ["E1"] }], not_found: [] },
+      writerReply([{ text: "DVT starts October 12, after the fixture arrives.", evidence: ["E1"] }]),
     ],
   },
   not_found_after_two_searches: {
@@ -94,7 +110,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
     replies: [
       step([part("Who owns it?", [need("owner of enclosure supplier follow-up", "open")])], [{ tool: "search", args: { query: "enclosure supplier" } }, { tool: "search", args: { query: "supplier follow-up owner" } }]),
       step([part("Who owns it?", [need("owner of enclosure supplier follow-up", "not_found")])], [{ tool: "finish", args: {} }]),
-      { sentences: [], not_found: ["owner of the enclosure supplier follow-up"] },
+      writerReply([], { not_found: ["owner of the enclosure supplier follow-up"] }),
     ],
   },
   repair_after_invalid_step: {
@@ -108,7 +124,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
       { thoughts: "search first" },
       step([part("Battery reserve decision?", [need("battery reserve decision", "open")])], [{ tool: "search", args: { query: "battery reserve" } }]),
       step([part("Battery reserve decision?", [need("battery reserve decision", "found", ["E1"])])], [{ tool: "finish", args: {} }]),
-      { sentences: [{ text: "The review approved a 20% battery reserve for transport mode.", evidence: ["E1"] }], not_found: [] },
+      writerReply([{ text: "The review approved a 20% battery reserve for transport mode.", evidence: ["E1"] }]),
     ],
   },
   writer_fallback_to_records: {
@@ -137,7 +153,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
       step([part("Fixture vendor?", [need("latest fixture vendor status", "open")])], [{ tool: "search", args: { query: "fixture vendor" } }]),
       step([part("Fixture vendor?", [need("latest fixture vendor status", "open")])], [{ tool: "search", args: { query: "fixture vendor" } }]),
       step([part("Fixture vendor?", [need("latest fixture vendor status", "open")])], [{ tool: "search", args: { query: "fixture vendor" } }]),
-      { sentences: [], not_found: ["latest fixture vendor status"] },
+      writerReply([], { not_found: ["latest fixture vendor status"] }),
     ],
   },
   list_pages_and_owner_filter: {
@@ -153,7 +169,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
     replies: [
       step([part("Mara's actions?", [need("actions owned by Mara", "open")])], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]),
       step([part("Mara's actions?", [need("actions owned by Mara", "found", ["E1", "E2"])])], [{ tool: "finish", args: {} }]),
-      { sentences: [{ text: "Mara owns publishing the dashboard by October 9 and reviewing the PRD.", evidence: ["E1", "E2"] }], not_found: [] },
+      writerReply([{ text: "Mara owns publishing the dashboard by October 9 and reviewing the PRD.", evidence: ["E1", "E2"] }]),
     ],
   },
   budget_stop_with_slow_clock: {
@@ -169,7 +185,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
       step([part("On track?", [need("DVT status", "open")])], [{ tool: "search", args: { query: "DVT status" } }]),
       step([part("On track?", [need("DVT status", "open")])], [{ tool: "search", args: { query: "DVT schedule" } }]),
       step([part("On track?", [need("DVT status", "open")])], [{ tool: "search", args: { query: "DVT risk" } }]),
-      { sentences: [{ text: "The review decided hit-DVT status.", evidence: ["E1"] }], not_found: ["whether DVT is on track"] },
+      writerReply([{ text: "The review decided hit-DVT status.", evidence: ["E1"] }], { not_found: ["whether DVT is on track"] }),
     ],
   },
   unusable_step_stop: {
@@ -189,7 +205,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
     }),
     replies: [
       ...Array.from({ length: 10 }, (_, index) => step([part("Every DVT decision?", [need("all DVT decisions", "open")])], [{ tool: "search", args: { query: `DVT decision ${index + 1}` } }])),
-      { sentences: [{ text: "The review decided decision-DVT decision 1.", evidence: ["E1"] }], not_found: ["any further DVT decisions"] },
+      writerReply([{ text: "The review decided decision-DVT decision 1.", evidence: ["E1"] }], { not_found: ["any further DVT decisions"] }),
     ],
   },
   empty_catalog_stop: {
@@ -226,7 +242,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
       step([part("Why on hold?", [need("reason for DVT hold", "open")])], [{ tool: "list", args: { source: "tickets" } }, { tool: "search", args: { source: "pages", query: "DVT review hold" } }]),
       step([part("Why on hold?", [need("reason for DVT hold", "open")])], [{ tool: "open", args: { id: "E1" } }, { tool: "open", args: { id: "E2" } }]),
       step([part("Why on hold?", [need("reason for DVT hold", "found", ["E3", "E4"])])], [{ tool: "finish", args: {} }]),
-      { sentences: [{ text: "DVT is on hold until TC-D-03 and BUG-412 are resolved; BUG-412 observed 39.0 °C versus 37.2 °C under load.", evidence: ["E3", "E4"] }], not_found: [] },
+      writerReply([{ text: "DVT is on hold until TC-D-03 and BUG-412 are resolved; BUG-412 observed 39.0 °C versus 37.2 °C under load.", evidence: ["E3", "E4"] }]),
     ],
   },
 };

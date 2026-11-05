@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  PERSON_ASK_GAP_DETAILS_HEADER_V1, PERSON_ANSWER_PATH_V7, PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
+  PERSON_ASK_GAP_DETAILS_HEADER_V1, PERSON_ANSWER_PATH_V7, PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
   createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8,
   type OrganizationPersonToolV4,
 } from '@echo-brain/organization-api';
@@ -13,18 +13,19 @@ import { closeAskServers, decodeAll, liveAskOptions, serveAsk } from './fixtures
 import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 /**
- * Answer layouts over HTTP: `POST /v7/person/ask` with `x-echo-answer-layout: 2`
- * answers a V8 part that carries its blocks (ADR-0051), arranged by the writer
- * from the block catalog; without the header the same Ask has none. With `1`,
- * retired layout v1's value (ADR-0045), which a desktop or CLI from before
- * layout v2 still sends, it is answered as without the header. A header with
- * another value is refused before the Ask runs: see the V7 Ask's own HTTP test,
- * which refuses it for the JSON answer and the stream.
+ * The answer layout over HTTP: `POST /v7/person/ask` answers a V8 part that
+ * carries its blocks (ADR-0051), arranged by the writer from the block
+ * catalog, in JSON and in the progress stream alike. The Authority reads no
+ * layout header: a desktop or CLI that still sends `x-echo-answer-layout`,
+ * with retired layout v1's `1`, layout v2's `2` or a value it once refused,
+ * gets the same answer as an Ask without it.
  */
 
 afterEach(closeAskServers);
 
 const QUESTION = 'Who leads Project A, and what are my open tasks?';
+/** The layout header the Authority no longer reads, which older desktops and CLIs still send. */
+const LAYOUT_HEADER = 'x-echo-answer-layout';
 type StepPrompt = { readonly question?: string; readonly asked_by?: string;
   readonly last_results?: readonly { readonly tool: string; readonly args?: { readonly source?: string; readonly owner?: string }; readonly items?: readonly string[] }[] };
 
@@ -36,14 +37,12 @@ function leadAndSection(): StructuredGenerationPort {
   return { async generate(input: StructuredGenerationInput) {
     const prompt = JSON.parse(input.user_prompt) as StepPrompt & { readonly evidence?: readonly { readonly id: string; readonly kind: string }[] };
     const properties = input.schema.properties as Readonly<Record<string, unknown>>;
-    if (properties.blocks !== undefined || properties.sentences !== undefined) {
+    if (properties.blocks !== undefined) {
       const of = (kind: string) => prompt.evidence!.find(entry => entry.kind === kind)!.id;
       steps = 0; project = undefined; mine = undefined;
       const lead = { text: 'Ari leads Project A.', evidence: [of('project')] };
       const task = { text: 'Your open follow-up is on the launch ticket.', evidence: [of('follow_up')] };
-      return properties.blocks !== undefined
-        ? { lists: [], blocks: [{ block: 'answer', sentences: [lead] }, { block: 'text', title: 'Your tasks', sentences: [task] }], not_found: [] }
-        : { lists: [], sentences: [lead, task], not_found: [] };
+      return { lists: [], blocks: [{ block: 'answer', sentences: [lead] }, { block: 'text', title: 'Your tasks', sentences: [task] }], not_found: [] };
     }
     project ??= prompt.last_results?.find(result => result.tool === 'list' && result.args?.source === 'projects')?.items?.[0];
     mine ??= prompt.last_results?.find(result => result.tool === 'list' && result.args?.owner !== undefined)?.items?.[0];
@@ -80,7 +79,7 @@ function ask(base: string, headers: Readonly<Record<string, string>>) {
   });
 }
 
-describe('answer layouts on /v7 (ADR-0051)', () => {
+describe('the answer layout on /v7 (ADR-0051)', () => {
   it('sends typed gaps only to opted-in JSON and streaming clients, preserving the old exact part shape', async () => {
     const f = await sentFixture();
     const original = leadAndSection();
@@ -101,7 +100,7 @@ describe('answer layouts on /v7 (ADR-0051)', () => {
       };
       const old = await read({});
       const current = await read({ [PERSON_ASK_GAP_DETAILS_HEADER_V1]: '1' });
-      expect(Object.keys(old.parts[0]!).sort()).toEqual(['gap', 'question', 'statements', 'status']);
+      expect(Object.keys(old.parts[0]!).sort()).toEqual(['blocks', 'gap', 'question', 'statements', 'status']);
       const { gap_details, ...plain } = current.parts[0]!;
       expect(gap_details).toEqual({ not_found: 'Not found: the reviewer.' });
       expect(plain).toEqual(old.parts[0]);
@@ -109,21 +108,21 @@ describe('answer layouts on /v7 (ADR-0051)', () => {
     }
   });
 
-  it('arranges the V8 answer only when asked for layout v2, answers retired layout v1\'s value as without the header, the same in JSON and in the progress stream', async () => {
+  it('arranges the V8 answer in the writer\'s blocks without a layout header, and answers an Ask that still sends one the same, whatever its value, in JSON and in the progress stream', async () => {
     const f = await sentFixture();
     const base = await origin(f, leadAndSection());
-    const [plain] = validatePersonAnswerResponseV8(await (await ask(base, {})).json()).parts;
-    expect(plain!.statements.map(statement => statement.text)).toEqual(['Ari leads Project A.', 'Your open follow-up is on the launch ticket.']);
-    expect(plain).not.toHaveProperty('blocks');
-    for (const [value, blocks] of [
-      ['1', undefined],
-      ['2', [{ kind: 'answer', statements: [0] }, { kind: 'text', title: 'Your tasks', statements: [1] }]],
-    ] as const) {
-      const answered = validatePersonAnswerResponseV8(await (await ask(base, { [PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]: value })).json());
-      const [part] = answered.parts;
-      expect([part!.blocks, part!.statements]).toEqual([blocks, plain!.statements]);
-      expect(part).not.toHaveProperty('layout');
-      const streamed = await ask(base, { [PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]: value, [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 });
+    const answered = validatePersonAnswerResponseV8(await (await ask(base, {})).json());
+    const [part] = answered.parts;
+    expect(part!.statements.map(statement => statement.text)).toEqual(['Ari leads Project A.', 'Your open follow-up is on the launch ticket.']);
+    expect(part!.blocks).toEqual([{ kind: 'answer', statements: [0] }, { kind: 'text', title: 'Your tasks', statements: [1] }]);
+    expect(part).not.toHaveProperty('layout');
+    // Retired layout v1's 1, layout v2's 2, and the values once refused before the Ask ran are each read as no header at all.
+    for (const headers of [{}, ...['1', '2', '3', 'true', '1, 2'].map(value => ({ [LAYOUT_HEADER]: value }))]) {
+      const plain = await ask(base, headers);
+      expect(plain.status).toBe(200);
+      expect(validatePersonAnswerResponseV8(await plain.json())).toEqual(answered);
+      const streamed = await ask(base, { ...headers, [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 });
+      expect(streamed.status).toBe(200);
       const terminal = decodeAll(createPersonAskProgressDecoderV3(), await streamed.text()).at(-1)!;
       if (terminal.type !== 'answer') throw new Error('expected the answer event');
       expect(terminal.response).toEqual(answered);

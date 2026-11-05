@@ -5,6 +5,7 @@ import type { StructuredGenerationInput, StructuredGenerationPort } from '../../
 import type { EvidenceDeskItemV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from '../../src/shared/evidence-desk-v1.js';
 import { withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import { deferred } from './fixtures/deferred.js';
+import { writerReply } from './fixtures/agentic-scenarios.js';
 
 function item(id: string, text = `Evidence ${id}.`): EvidenceDeskItemV1 {
   return {
@@ -36,7 +37,7 @@ describe('agentic Ask concurrent reads', () => {
     const model: StructuredGenerationPort = {
       generate: vi.fn(async input => {
         inputs.push(input);
-        if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [{ text: 'Both found.', evidence: ['E1', 'E2'] }], not_found: [] };
+        if ((input.schema.properties as Record<string, unknown>).blocks !== undefined) return writerReply([{ text: 'Both found.', evidence: ['E1', 'E2'] }]);
         if (inputs.length === 1) return {
           parts: [{ question: 'Which?', needs: [{ need: 'both', status: 'open', evidence: [] }], notes: '' }],
           actions: [
@@ -141,7 +142,7 @@ describe('agentic Ask concurrent reads', () => {
     };
     let steps = 0;
     const model: StructuredGenerationPort = { generate: vi.fn(async input => {
-      if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [{ text: 'Both found.', evidence: ['E1', 'E2'] }], not_found: [] };
+      if ((input.schema.properties as Record<string, unknown>).blocks !== undefined) return writerReply([{ text: 'Both found.', evidence: ['E1', 'E2'] }]);
       steps += 1;
       if (steps === 1) return { parts: [{ question: 'Which?', needs: [{ need: 'both', status: 'open', evidence: [] }], notes: '' }], actions: [{ tool: 'search', args: { query: 'both' } }] };
       if (steps === 2) return { parts: [{ question: 'Which?', needs: [{ need: 'both', status: 'open', evidence: [] }], notes: '' }], actions: [{ tool: 'open', args: { id: 'E1' } }, { tool: 'open', args: { id: 'E2' } }] };

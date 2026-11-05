@@ -47,9 +47,9 @@ function fromOpened(text = 'ECHO-12 ships on Oct 30.'): StructuredGenerationPort
   const writer: StructuredGenerationInput[] = [];
   return { steps, writer, async generate(input: StructuredGenerationInput) {
     const prompt = JSON.parse(input.user_prompt) as { readonly question?: string; readonly opened?: readonly { readonly id: string }[]; readonly evidence?: readonly { readonly id: string }[] };
-    if ((input.schema.properties as Readonly<Record<string, unknown>>).sentences !== undefined) {
+    if ((input.schema.properties as Readonly<Record<string, unknown>>).blocks !== undefined) {
       writer.push(input);
-      return { lists: [], sentences: [{ text, evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+      return { lists: [], blocks: [{ block: 'answer', sentences: [{ text, evidence: [prompt.evidence![0]!.id] }] }], not_found: [] };
     }
     steps.push(prompt);
     const [opened] = prompt.opened ?? [];

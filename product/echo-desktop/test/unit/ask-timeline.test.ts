@@ -1,6 +1,6 @@
 // The Ask timeline (ADR-0047), in the store and on the page: which turns show
 // in full and which fold, the timeline kept through navigation and read again
-// at sign-in, a turn saved with answer layout v1 as paragraphs; one check of
+// at sign-in, a turn saved without blocks as paragraphs; one check of
 // the newest turns' sources when Ask opens, kept five minutes, quiet when it
 // fails, turned into Changed tags, lit sentences and sentences left out; the
 // earlier turn a follow-up or Ask again carries, and how it is trimmed; "Which
@@ -21,6 +21,7 @@ import {
 import { suggestedQuestions } from '../../src/renderer/bar.js';
 import { askedWhen } from '../../src/renderer/format.js';
 import { readTimeline, timelinePath } from '../../src/host/timeline.js';
+import { paragraphs } from '../fixtures/authority.js';
 import {
   ACCOUNT, byClass, byTestId, classes, click, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore,
   storeLifecycle, text, timelineFiles, wake,
@@ -66,11 +67,11 @@ const mara: AnswerSource = { kind: 'person', label: 'Mara Lind', membership_id: 
 const said = (text: string, citation_indexes: number[], sources: readonly AnswerSource[] = []): AnswerStatement =>
   ({ text, citation_indexes, private: citation_indexes.some(at => sources[at]?.private === true) });
 
-/** An answer citing `sources`, one sentence per `statements`. */
+/** An answer citing `sources`, one sentence per `statements`, each its own paragraph. */
 function answerOf(question: string, sources: readonly AnswerSource[], statements: readonly [string, number[]][], extra: Partial<Answer> = {}): Answer {
   const shown = statements.map(([words, cited]) => said(words, cited, sources));
   return { text: shown.map(statement => statement.text).join('\n'), scope: { kind: 'global' }, sources: [...sources], outcome: 'answered',
-    parts: [{ question, status: 'answered', statements: shown }], ...extra };
+    parts: [{ question, status: 'answered', statements: shown, ...(shown.length === 0 ? {} : { blocks: paragraphs(shown) }) }], ...extra };
 }
 
 let ids = 0;
@@ -388,7 +389,7 @@ describe('Ask on the timeline', () => {
     expect(turnGroups(one.answer, { 0: 'same', 1: 'changed', 2: 'unreadable' }).map(group => group.indexes)).toEqual([[0], [1]]);
     expect(turnGroups(one.answer, undefined)).toHaveLength(3);
     const twice = [ticket('THERM-482', '20482'), page('31010'), page('31010')];
-    expect(turnGroups({ sources: twice, parts: one.answer.parts }, { 1: 'unreadable', 2: 'same' }).map(group => group.indexes)).toEqual([[0], [1, 2]]);
+    expect(turnGroups({ sources: twice }, { 1: 'unreadable', 2: 'same' }).map(group => group.indexes)).toEqual([[0], [1, 2]]);
     seed(one, turn('Two?', DAY, status()));
     checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
     const store = await startStore();
@@ -660,12 +661,14 @@ describe('Ask on the timeline', () => {
     expect(store.checksOf(one)).toEqual({ 2: 'unreadable' });
   });
 
-  it('opens a turn saved with answer layout v1 (ADR-0045), retired since, as the host reads it back: a paragraph per sentence', async () => {
+  it.each([
+    { saved: 'its sentences alone', layout: undefined },
+    { saved: 'answer layout v1 (ADR-0045), retired since', layout: [{ kind: 'lead', statements: [0] }, { kind: 'heading', text: 'Still to do' }, { kind: 'bullets', statements: [1, 2] }] },
+  ])('opens a turn an older desktop saved with $saved as the host reads it back: a paragraph per sentence', async ({ layout }) => {
     const old = turn('What is open on THERM?', DAY, status());
-    const part = old.answer.parts[0]!;
-    // The account's file as a desktop from before layout v2 wrote it: how the part read, beside its sentences.
-    const saved = { ...old, answer: { ...old.answer, parts: [{ ...part, layout: [
-      { kind: 'lead', statements: [0] }, { kind: 'heading', text: 'Still to do' }, { kind: 'bullets', statements: [1, 2] }] }] } };
+    const { blocks: _blocks, ...part } = old.answer.parts[0]!;
+    // The account's file as a desktop from before layout v2 wrote it: the part's sentences, and how it read beside them.
+    const saved = { ...old, answer: { ...old.answer, parts: [layout === undefined ? part : { ...part, layout }] } };
     const person = mkdtempSync(join(tmpdir(), 'echo-person-'));
     try {
       mkdirSync(join(person, 'ask-timeline-v1'), { mode: 0o700 });
@@ -678,9 +681,10 @@ describe('Ask on the timeline', () => {
     store.pickSuggestion({ question: old.question, turn: old.id });
     await flush();
     const shown = byTestId((await view())(store), 'answer')[0]!;
-    expect(byClass(shown, 'answer-layout')).toEqual([]);
-    expect(byTestId(shown, 'statement').map(node => [node.type, classes(node)[0], text(byTestId(node, 'statement-text'))]))
-      .toEqual(part.statements.map(statement => ['p', 'answer-statement', statement.text]));
+    // Each sentence its own paragraph, with its own numbers.
+    expect(byClass(shown, 'answer-paragraph').map(node => byTestId(node, 'statement').map(sentence => text(byTestId(sentence, 'statement-text')))))
+      .toEqual(part.statements.map(statement => [statement.text]));
+    expect(byTestId(shown, 'citation').map(text)).toEqual(['1', '2', '3']);
   });
 
   it('clears what a check said when it goes stale, so the page stops showing it then', async () => {
@@ -1655,7 +1659,7 @@ describe('follow-ups from the bar', () => {
     rpc.mockImplementation(rpcFor(held, {
       'ask.run': params => ok(answerOf(String(params.question), cited ? [ticket('THERM-482', '20482')] : [], [], { scope: params.scope as AskScope, outcome: 'partial',
         parts: [{ question, status: cited ? 'partial' : 'not_found', statements: cited ? [{ text: 'THERM-482 was approved.', citation_indexes: [0], private: false }] : [],
-          gap: `${missing} An unchecked row did not fit.`, gap_details: { not_found: missing } }] })),
+          ...(cited ? { blocks: [{ kind: 'text' as const, statements: [0] }] } : {}), gap: `${missing} An unchecked row did not fit.`, gap_details: { not_found: missing } }] })),
     }, () => ({ active: [apollo], archived: [] })));
     const store = await startStore();
     await store.openProject(apollo);

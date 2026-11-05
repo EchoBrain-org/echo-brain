@@ -9,7 +9,7 @@ import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskOpenCitat
 import { SEARCH_ONLY_STEP_PROMPT, STEP_PROMPT, TASK_RULE_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
-import { listed, need, part, record, researchHarness as harness, result, step } from "./fixtures/agentic-scenarios.js";
+import { listed, need, part, record, researchHarness as harness, result, step, writerReply } from "./fixtures/agentic-scenarios.js";
 import { deferred } from "./fixtures/deferred.js";
 
 /**
@@ -649,7 +649,7 @@ describe("research loop: need ids", () => {
     id === undefined ? need(`approved decision about release ${release}`, "found", ["E1"]) : withId(id, need(`approved decision about release ${release}`, "found", ["E1"])),
     need("any associated action", "found", ["E2"]), need("rationale for the decision", "found", ["E3"]),
   ])], [{ tool: "finish", args: {} }]);
-  const answer = { sentences: [{ text: "The release must verify owner approval of a staged meeting.", evidence: ["E1"] }], not_found: [] };
+  const answer = writerReply([{ text: "The release must verify owner approval of a staged meeting.", evidence: ["E1"] }]);
   // An Ask need with the list tool declares its kind; one that names none is content (ADR-0041).
   const settled = [
     { need: planned, kind: "content", status: "found", evidence: ["E1"] },
@@ -807,7 +807,7 @@ describe("research loop: need kinds (ADR-0041)", () => {
   const withId = (id: string, value: ReturnType<typeof need>) => ({ id, ...value });
   const needSchema = (h: ReturnType<typeof harness>, index: number) => (h.inputs[index]!.schema as { properties: { parts: { items: { properties: { needs: { items: { required: string[]; properties: Record<string, unknown> } } } } } } }).properties.parts.items.properties.needs.items;
   const launch = record("launch", "Launch is approved for Tuesday.");
-  const writer = { lists: [], sentences: [{ text: "Launch is Tuesday.", evidence: ["E1"] }], not_found: [] };
+  const writer = writerReply([{ text: "Launch is Tuesday.", evidence: ["E1"] }]);
 
   it("shows each Ask need's kind in its plan and bundle, and never a task's", async () => {
     // Step 1 declares nothing, so its needs are content; step 2's proposal declares each need's kind again.

@@ -4,6 +4,7 @@ import { createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answe
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import type { EvidenceDeskItemV1, EvidenceDeskPortV1 } from "../../src/shared/evidence-desk-v1.js";
 import { deferred } from "./fixtures/deferred.js";
+import { writerReply } from "./fixtures/agentic-scenarios.js";
 
 const checked = { checked_at: "2026-09-29T00:00:00.000Z" };
 
@@ -20,7 +21,7 @@ function fixture(options: {
   const replies = [
     { parts: need("open", []), actions: [{ tool: "search", args: { query: "launch" } }] },
     { parts: need("found", ["E1"]), actions: [{ tool: "finish", args: {} }] },
-    { sentences: [{ text: "Launch is Tuesday.", evidence: ["E1"] }], not_found: [] },
+    writerReply([{ text: "Launch is Tuesday.", evidence: ["E1"] }]),
   ];
   let calls = 0;
   const generate = vi.fn(async () => {
@@ -93,7 +94,7 @@ describe("agentic Ask: final publication boundary", () => {
     const replies = [
       { parts: need("open", []), actions: [{ tool: "search", args: { query: "launch" } }] },
       { parts: need("found", ["E1"]), actions: [{ tool: "finish", args: {} }] },
-      { sentences: [{ text: "Launch is Tuesday.", evidence: ["E1"] }], not_found: [] },
+      writerReply([{ text: "Launch is Tuesday.", evidence: ["E1"] }]),
     ];
     let calls = 0;
     // The reader loses access after research finished, before the writer runs.

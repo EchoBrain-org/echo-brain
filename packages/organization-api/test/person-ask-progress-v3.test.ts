@@ -34,9 +34,9 @@ const container = {
 const workspace = [project, person, tool, container];
 const sources = [{ kind: 'projects' as const }, { kind: 'people' as const }, { kind: 'tools' as const }, { kind: 'containers' as const, tool_id: 'jira' }];
 const v8 = () => ({ schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const, citations: [project, container],
-  parts: [{ question: 'Where is the Jira project for Thermal recovery?', status: 'answered' as const, statements: [{ text: 'Thermal recovery uses the THERM Jira project.', citation_indexes: [0, 1], private: true }] }] });
+  parts: [{ question: 'Where is the Jira project for Thermal recovery?', status: 'answered' as const, statements: [{ text: 'Thermal recovery uses the THERM Jira project.', citation_indexes: [0, 1], private: true }], blocks: [{ kind: 'answer' as const, statements: [0] }] }] });
 const decided = () => ({ ...v8(), citations: [decision],
-  parts: [{ question: 'What did we decide?', status: 'answered' as const, statements: [{ text: 'The team chose the recovery plan.', citation_indexes: [0], private: false }] }] });
+  parts: [{ question: 'What did we decide?', status: 'answered' as const, statements: [{ text: 'The team chose the recovery plan.', citation_indexes: [0], private: false }], blocks: [{ kind: 'answer' as const, statements: [0] }] }] });
 const receipt = () => ({ looked_through: 4, elapsed_ms: 31_000, rows: [{ type: 'searched' as const, sources: [{ kind: 'meetings' as const }, ...sources], found: 9 },
   { type: 'read' as const, items: [...workspace] }] });
 const decidedReceipt = () => ({ looked_through: 3, elapsed_ms: 48_000, rows: [{ type: 'searched' as const, sources: [{ kind: 'meetings' as const }, { kind: 'tickets' as const, tool_id: 'jira' }], found: 22 }, { type: 'read' as const, items: [decision, ticket] }] });

@@ -1,5 +1,5 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
-import type { PersonAskAnswerLayoutV2, PersonAskTimeContextV1, PersonAnswerResponseV8, PersonAnswerPreviousV1, PersonAskReceiptV3 } from "@echo-brain/organization-api";
+import type { PersonAskTimeContextV1, PersonAnswerResponseV8, PersonAnswerPreviousV1, PersonAskReceiptV3 } from "@echo-brain/organization-api";
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
 import type { StructuredGenerationPort } from "./structured-generation-v1.js";
 import type { EvidenceDeskPortV2, EvidenceDeskSourceV2 } from "../shared/evidence-desk-v2.js";
@@ -100,8 +100,6 @@ export interface CreateAgenticAskOptions {
   readonly today?: () => string;
   /** Captured once by the calling client, used only to interpret temporal questions. */
   readonly time_context?: PersonAskTimeContextV1;
-  /** The client asked for answer layout v2 (ADR-0051): the answer's part carries its blocks. */
-  readonly answer_layout?: PersonAskAnswerLayoutV2;
   /** Typed actionable explanations are sent only to clients that explicitly request them. */
   readonly include_gap_details?: true;
   /**
@@ -471,7 +469,6 @@ function createAgenticAskCore(options: CreateAgenticAskOptions) {
         const writer = createAskRendererV1({
           answer_prompt: answerPrompt,
           source_catalog: sourceCatalog, scope, context: context(requestDay), desk_scope: options.desk.scope,
-          ...(options.answer_layout === undefined ? {} : { layout: options.answer_layout }),
           ...(options.include_gap_details === undefined ? {} : { include_gap_details: options.include_gap_details }),
           // An answer to an Ask that carried its previous turn names the question it answers, and an Ask again's writer also
           // says what is different since the earlier answer (ADR-0047). With none of its sentences left to compare with, an

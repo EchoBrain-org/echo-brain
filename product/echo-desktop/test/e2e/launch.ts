@@ -1,8 +1,8 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { UpdateState } from '../../src/shared/protocol.js';
 
 const root = resolve(import.meta.dirname, '..', '..');
@@ -13,8 +13,8 @@ export interface Launched {
   home: string;
   /** Chromium's data and ECHO's diagnostic log. */
   userData: string;
-  /** Requests the real person client sent to the fixture Authority, with the progress and answer layout an Ask asked for. */
-  calls(): { method: string; path: string; query: string; body?: Record<string, unknown>; progress?: string; layout?: string }[];
+  /** Requests the real person client sent to the fixture Authority, with the progress an Ask asked for. */
+  calls(): { method: string; path: string; query: string; body?: Record<string, unknown>; progress?: string }[];
   close(): Promise<void>;
 }
 
@@ -32,7 +32,10 @@ async function start(mode: string, files: Readonly<Record<string, string>>, env:
   for (let attempt = 1; ; attempt += 1) {
     // The session store requires a canonical private folder (macOS /var is a link).
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-desktop-home-')));
-    for (const [name, text] of Object.entries(files)) writeFileSync(join(home, name), text);
+    for (const [name, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(home, name)), { recursive: true, mode: 0o700 });
+      writeFileSync(join(home, name), text);
+    }
     const userData = mkdtempSync(join(tmpdir(), 'echo-desktop-data-'));
     try {
       const app = await electron.launch({
@@ -85,7 +88,8 @@ function xServerState(): string {
 
 /**
  * The real app with a private temporary home: never the founder's session. `files` are written into that home before the
- * app starts, such as the fixture Authority's switches (`hold-live` holds every live read until the test removes it).
+ * app starts, such as the fixture Authority's switches (`hold-live` holds every live read until the test removes it), or
+ * ECHO's own files in their owner-only folders.
  * `env` adds to the app's environment, such as `TZ` for the time zone it and its person client run in.
  */
 export async function launch(mode = '', files: Readonly<Record<string, string>> = {}, env: Readonly<Record<string, string>> = {}): Promise<Launched> {

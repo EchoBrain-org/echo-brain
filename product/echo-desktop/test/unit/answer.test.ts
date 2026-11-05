@@ -1,15 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, ArrangedBlock } from '../../src/shared/protocol.js';
 import {
-  answerMarkdown, answerSentences, answerText, documentName, externalSourceProvider, lateForYou, MAX_SOURCES, numberedSources, passageBlocks, sourceGroups, statementGroups,
-  tableDay,
+  answerMarkdown, answerSentences, answerText, documentName, externalSourceProvider, lateForYou, passageBlocks, sourceGroups, statementGroups, tableDay,
 } from '../../src/renderer/answer.js';
-import { blocksAnswer } from '../fixtures/authority.js';
+import { blocksAnswer, paragraphs } from '../fixtures/authority.js';
 import { answerView } from '../../src/host/views.js';
 
 const digest = (digit: string) => `sha256:${digit.repeat(64)}`;
-/** Copy answer's Markdown of an answer no check left anything out of: its first 32 sources numbered as the page numbers them. */
-const markdown = (answer: Answer, names: readonly string[]) => answerMarkdown(answer, names, sourceGroups(answer.sources.slice(0, MAX_SOURCES)), () => true);
+/** Copy answer's Markdown of an answer no check left anything out of: its sources numbered as the page numbers them. */
+const markdown = (answer: Answer, names: readonly string[]) => answerMarkdown(answer, names, sourceGroups(answer.sources), () => true);
 const original = (source: string, anchor: string, label = 'SCOUT-Hardware-Review-v0.1.md'): AnswerSource => ({
   kind: 'original', label,
   ref: { source_id: `source:${source.repeat(64)}`, revision_id: 'rev-1', source_sha256: digest('2'), representation_sha256: digest('3'), anchor_sha256: digest(anchor) },
@@ -43,15 +42,6 @@ describe('an answer cites sources, not passages', () => {
     expect(statementGroups([1], groups)).toEqual([1]);
     // An index the answer does not have is not a source.
     expect(statementGroups([9], groups)).toEqual([]);
-  });
-});
-
-describe('an answer in blocks numbers every source it cites (ADR-0051)', () => {
-  it('numbers all of an arranged answer\'s sources, and the first 32 of any other', () => {
-    const forty = Array.from({ length: 40 }, (_, at) => ({ kind: 'tool', tool_id: `tool-${at}`, label: `Tool ${at}` }) as unknown as AnswerSource);
-    const part = { question: 'q', status: 'answered' as const, statements: [{ text: 'All forty.', citation_indexes: [0], private: false }] };
-    expect(numberedSources({ sources: forty, parts: [{ ...part, blocks: [{ kind: 'answer', statements: [0] } as ArrangedBlock] }] })).toHaveLength(40);
-    expect(numberedSources({ sources: forty, parts: [part] })).toHaveLength(MAX_SOURCES);
   });
 });
 
@@ -109,10 +99,11 @@ describe('a passage reads as its document does', () => {
 
 const GLOBAL = { kind: 'global' } as const;
 const NOW = new Date(2026, 9, 23, 12).getTime();
-/** A plain answer of `statements`, each citing the sources given by place. */
-const plain = (statements: readonly [string, number[]][], extra: Partial<Answer> = {}): Answer => ({
+/** An answer of `statements`, each its own paragraph, citing the sources given by place. */
+const paragraphed = (statements: readonly [string, number[]][], extra: Partial<Answer> = {}): Answer => ({
   text: statements.map(([text]) => text).join('\n'), scope: GLOBAL, outcome: 'answered', sources: [page('1'), page('2'), page('3')],
-  parts: [{ question: 'Q?', status: 'answered', statements: statements.map(([text, citation_indexes]) => ({ text, citation_indexes, private: false })) }], ...extra,
+  parts: [{ question: 'Q?', status: 'answered', statements: statements.map(([text, citation_indexes]) => ({ text, citation_indexes, private: false })),
+    ...(statements.length === 0 ? {} : { blocks: paragraphs(statements) }) }], ...extra,
 });
 
 describe('a table\'s dates read as dates, and only your late row is marked', () => {
@@ -139,8 +130,8 @@ describe('a table\'s dates read as dates, and only your late row is marked', () 
 });
 
 describe('Copy answer writes Markdown', () => {
-  it('writes a part without blocks as a paragraph per sentence, numbered as the page numbers its sources', () => {
-    const answer = plain([['We ship annual plans first.', [0, 2]], ['Monthly plans follow.', [1]]], {
+  it('writes the direct answer, then each text block as a paragraph, numbered as the page numbers its sources', () => {
+    const answer = paragraphed([['We ship annual plans first.', [0, 2]], ['Monthly plans follow.', [1]]], {
       direct: { text: 'Yes.', citation_indexes: [2], private: false },
     });
     expect(markdown(answer, ['Launch plan', 'Pricing', 'Board'])).toBe(
@@ -148,8 +139,8 @@ describe('Copy answer writes Markdown', () => {
   });
 
   it('heads factual parts with their questions and includes partial explanations', () => {
-    const answer: Answer = { ...plain([['Annual first.', [0]]]), sources: [page('1')], outcome: 'partial', parts: [
-      { question: 'What did we agree?', status: 'answered', statements: [{ text: 'Annual first.', citation_indexes: [0], private: false }] },
+    const answer: Answer = { ...paragraphed([['Annual first.', [0]]]), sources: [page('1')], outcome: 'partial', parts: [
+      { question: 'What did we agree?', status: 'answered', statements: [{ text: 'Annual first.', citation_indexes: [0], private: false }], blocks: [{ kind: 'text', statements: [0] }] },
       { question: 'Who approved it?', status: 'not_found', statements: [], gap: 'This was not found. An unchecked row did not fit.', gap_details: { not_found: 'This was not found.' } },
     ] };
     expect(markdown(answer, ['Launch plan'])).toBe(
@@ -158,8 +149,8 @@ describe('Copy answer writes Markdown', () => {
 
   it('keeps fixed messages but hides source-derived absence when any cited source becomes unreadable', () => {
     const gap = "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.";
-    const answer: Answer = { ...plain([['Annual first.', [0]]]), sources: [page('1'), page('2')], outcome: 'partial', parts: [
-      { question: 'What was decided, and update it?', status: 'partial', statements: [{ text: 'Annual first.', citation_indexes: [0], private: false }], gap: `${gap} An unchecked row did not fit.`, gap_details: { unsupported_action: true, interrupted: true, not_found: 'Not found: the confidential reviewer.' } },
+    const answer: Answer = { ...paragraphed([['Annual first.', [0]]]), sources: [page('1'), page('2')], outcome: 'partial', parts: [
+      { question: 'What was decided, and update it?', status: 'partial', statements: [{ text: 'Annual first.', citation_indexes: [0], private: false }], blocks: [{ kind: 'text', statements: [0] }], gap: `${gap} An unchecked row did not fit.`, gap_details: { unsupported_action: true, interrupted: true, not_found: 'Not found: the confidential reviewer.' } },
     ] };
     expect(markdown(answer, ['Launch', 'Review'])).toContain(gap);
     expect(answerText(answer, () => true)).toBe(`Annual first.\n${gap}\nI couldn't complete the search. Please try again.\nNot found: the confidential reviewer.`);
@@ -171,8 +162,8 @@ describe('Copy answer writes Markdown', () => {
 
   it('copies only typed actionable explanations when diagnostic gaps also include formatting and coverage notes', () => {
     const notFound = 'Not found: the reviewer.';
-    const answer: Answer = { ...plain([['Annual first.', [0]]]), outcome: 'partial', parts: [{
-      question: 'Who reviewed this? Publish it.', status: 'partial', statements: [{ text: 'Annual first.', citation_indexes: [0], private: false }],
+    const answer: Answer = { ...paragraphed([['Annual first.', [0]]]), outcome: 'partial', parts: [{
+      question: 'Who reviewed this? Publish it.', status: 'partial', statements: [{ text: 'Annual first.', citation_indexes: [0], private: false }], blocks: [{ kind: 'text', statements: [0] }],
       gap: 'The list did not reach the end. Unchecked rows and sentences did not fit. Dropped a sentence.',
       gap_details: { unsupported_action: true, interrupted: true, not_found: notFound },
     }] };
@@ -185,7 +176,7 @@ describe('Copy answer writes Markdown', () => {
   });
 
   it('writes that nothing matched, in Markdown and in the long-answer plain text alike, for an answer that says nothing and whose explanation is hidden', () => {
-    const answer: Answer = { ...plain([]), sources: [], outcome: 'partial', parts: [{ question: 'Which tickets are blocked?', status: 'not_found', statements: [],
+    const answer: Answer = { ...paragraphed([]), sources: [], outcome: 'partial', parts: [{ question: 'Which tickets are blocked?', status: 'not_found', statements: [],
       gap: 'Not found: tickets that have status Blocked. The list of tickets could not be read to its end, so more may exist.' }] };
     // A partial answer did not read everything: nothing matched in what it read.
     expect(answerMarkdown(answer, [], [], () => true)).toBe('Nothing matched in what I could read.');
@@ -199,11 +190,11 @@ describe('Copy answer writes Markdown', () => {
     // A shown explanation, or anything said, takes its place.
     const typed: Answer = { ...answer, parts: [{ ...answer.parts[0]!, gap_details: { interrupted: true } }] };
     expect(answerText(typed, () => true)).toBe("I couldn't complete the search. Please try again.");
-    expect(answerText(plain([['Annual first.', [0]]]), () => true)).toBe('Annual first.');
+    expect(answerText(paragraphed([['Annual first.', [0]]]), () => true)).toBe('Annual first.');
   });
 
   it('keeps a table cell\'s pipes and backslashes as text, and a line that would start a list as a sentence', () => {
-    const base = plain([['- dash first', [0]], ['A | B', [1]]]);
+    const base = paragraphed([['- dash first', [0]], ['A | B', [1]]]);
     const answer: Answer = { ...base, parts: [{ ...base.parts[0]!, blocks: [
       { kind: 'text', statements: [0] },
       { kind: 'table', statements: [1], columns: ['Name', 'Path'], caption: 'Two paths', rows: [{ cells: ['A | B', 'C:\\temp'], citation_indexes: [1] }] },
@@ -232,7 +223,7 @@ describe('Copy answer\'s Markdown keeps the text as it was written', () => {
   const PROBE = 'Second | with pipe\nand a newline\n- not a list';
 
   it('keeps a sentence of several lines on one line, its punctuation as text, and its numbers on its claim', () => {
-    const answer = plain([[PROBE, [0]], ['1. step', [1]], ['Doc *one*', [2]]]);
+    const answer = paragraphed([[PROBE, [0]], ['1. step', [1]], ['Doc *one*', [2]]]);
     expect(markdown(answer, ['Doc *one*', '[draft] plan_v2', '# notes'])).toBe([
       'Second \\| with pipe and a newline - not a list [1]', '', '1\\. step [2]', '', 'Doc \\*one\\* [3]', '', 'Sources', '',
       '1. Doc \\*one\\*', '2. \\[draft\\] plan\\_v2', '3. \\# notes',
@@ -240,7 +231,7 @@ describe('Copy answer\'s Markdown keeps the text as it was written', () => {
   });
 
   it('escapes bullets, table cells, headings and captions alike', () => {
-    const base = plain([[PROBE, [0]], ['1. step', [1]], ['- item <b>', [2]], ['hidden', [1]]]);
+    const base = paragraphed([[PROBE, [0]], ['1. step', [1]], ['- item <b>', [2]], ['hidden', [1]]]);
     const answer: Answer = { ...base, parts: [{ ...base.parts[0]!, blocks: [
       { kind: 'text', statements: [0] },
       { kind: 'points', title: 'Steps `now`', ordered: false, statements: [1, 2] },
@@ -259,7 +250,7 @@ describe('Copy answer\'s Markdown keeps the text as it was written', () => {
 
 // Answer layout v2 (ADR-0051): the fixture's THERM answer in its blocks, as the host hands it to the page.
 const BLOCKS_QUESTION = 'Can THERM start PVT?';
-const arranged = (blocks = true): Answer => answerView({ ok: true, result: blocksAnswer(BLOCKS_QUESTION, GLOBAL, blocks) }, GLOBAL);
+const arranged = (): Answer => answerView({ ok: true, result: blocksAnswer(BLOCKS_QUESTION, GLOBAL) }, GLOBAL);
 /** The fixture's arranged answer with its blocks changed by `change`. */
 const rearranged = (change: (blocks: ArrangedBlock[]) => ArrangedBlock[]): Answer => {
   const base = arranged();
@@ -283,9 +274,8 @@ describe('an arranged answer (answer layout v2, ADR-0051)', () => {
     // An event, a fact and a quote are the part's own sentences, as the Authority wrote them from their blocks.
     expect(sentences.filter(([id]) => ['0.2', '0.4', '0.9'].includes(id)).map(([, statement]) => statement.text)).toEqual([
       '2026-10-20, Noor Haddad: Approved the soak plan.', 'Ticket: THERM-48; Status: In review.', 'Noor Haddad, Oct 23 review: “Start PVT once the soak passes.”']);
-    // Without its blocks there are no rows, and its plain reading is the same either way.
-    expect(answerSentences(arranged(false)).map(([id]) => id)).toHaveLength(10);
-    expect(answerText(arranged(), () => true)).toBe(answerText(arranged(false), () => true));
+    // Its plain reading is its sentences, one a line: a row is not read again.
+    expect(answerText(arranged(), () => true)).toBe(arranged().parts[0]!.statements.map(statement => statement.text).join('\n'));
   });
 
   it('writes its blocks as Markdown in the page\'s order, each item followed by its sentence\'s numbers', () => {

@@ -51,9 +51,9 @@ the session; the Authority owns everything organizational.
   [ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md),
   [ADR-0047](../decisions/ADR-0047-ask-timeline.md),
   [ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md). Answer layout v1
-  ([ADR-0045](../decisions/ADR-0045-ask-answer-layout.md)) is retired: the
-  desktop draws an answer's v2 blocks or a paragraph per sentence, and a
-  timeline turn saved with a v1 layout loads as paragraphs.
+  ([ADR-0045](../decisions/ADR-0045-ask-answer-layout.md)) and the plain
+  answer are retired: the desktop draws an answer's v2 blocks, and a timeline
+  turn saved with a v1 layout or without blocks loads as paragraphs.
 - Item routing on the decision page:
   [ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md),
   [ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md).

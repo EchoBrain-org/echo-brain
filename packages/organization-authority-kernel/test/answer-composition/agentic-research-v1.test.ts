@@ -9,7 +9,7 @@ import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../../src/shared/ev
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
 import type { PersonImpactCardV1 } from "@echo-brain/organization-api";
-import { checked, generation, researchHarness as harness, listed, need, part, record, result, step } from "./fixtures/agentic-scenarios.js";
+import { checked, generation, researchHarness as harness, listed, need, part, record, result, step, writerReply } from "./fixtures/agentic-scenarios.js";
 
 function importedMeeting(id: string, text: string): EvidenceDeskItemV2 {
   return Object.freeze({
@@ -50,7 +50,7 @@ describe("research result beside Ask", () => {
       step([part("Part", [need("DVT start", "open")])], [{ tool: "search", args: { query: "DVT start" } }]),
       step([part("Part", [need("DVT start", "open")])], [{ tool: "open", args: { id: "E1" } }]),
       step([part("Part", [need("DVT start", "found", ["E1"])])], [{ tool: "finish", args: {} }]),
-      { sentences: [{ text: "DVT starts October 12.", evidence: ["E1"] }], not_found: [] },
+      writerReply([{ text: "DVT starts October 12.", evidence: ["E1"] }]),
     ], { search: async () => result([listedDvt]), open: async () => result([record("dvt", "Approved: DVT starts October 12.")]) });
     const output = await research.answerWithResearch({ question: "When does DVT start?" });
     expect(output.response.outcome).toBe("answered");
@@ -73,7 +73,7 @@ describe("research result beside Ask", () => {
       { not: "a step" },
       step([part("Part", [need("battery reserve", "open")])], [{ tool: "search", args: { query: "battery" } }]),
       step([part("Part", [need("battery reserve", "found", ["E1"])])], [{ tool: "finish", args: {} }]),
-      { sentences: [{ text: "A 20% reserve was approved.", evidence: ["E1"] }], not_found: [] },
+      writerReply([{ text: "A 20% reserve was approved.", evidence: ["E1"] }]),
     ], { search: async () => result([record("battery", "Approved: 20% reserve.")]) });
     const { research: view } = await research.answerWithResearch({ question: "What battery reserve was approved?" });
     expect(view.rounds[0]!.rejected).toEqual([expect.stringContaining('"parts" must be an array')]);
@@ -87,7 +87,7 @@ describe("research result beside Ask", () => {
       step([part("DVT hold", [need("hold reason", "open")])], [{ tool: "search", args: { query: "DVT hold" } }]),
       step([part("DVT hold", [need("hold reason", "open")])], [{ tool: "open", args: { id: "E1" } }]),
       step([part("DVT hold", [need("hold reason", "found", ["E1"])])], [{ tool: "finish", args: {} }]),
-      { sentences: [{ text: "The released record describes the DVT hold.", evidence: ["E1"] }], not_found: [] },
+      writerReply([{ text: "The released record describes the DVT hold.", evidence: ["E1"] }]),
     ], {
       search: async () => result([discovered]),
       open: async () => result([record("notice-open", "DVT remains on hold pending review.")], { notice: "Some page sections could not be represented." }),
@@ -145,7 +145,7 @@ describe("research result beside Ask", () => {
     const askDesk = desk();
     const ask = harness([
       ...stepsFor("E1", "E2"),
-      { sentences: [{ text: "The DVT hold and the linked fault both require follow-up.", evidence: ["E1", "E2"] }], not_found: [] },
+      writerReply([{ text: "The DVT hold and the linked fault both require follow-up.", evidence: ["E1", "E2"] }]),
     ], askDesk.port);
     const askOutput = await ask.research.answerWithResearch({ question: "Why is DVT on hold and what must happen before PVT?" });
 
@@ -221,7 +221,7 @@ describe("research result beside Ask", () => {
     const h = harness([
       step([part("Part", [need("cohort ship date", "open")])], [{ tool: "search", args: { source: "meetings", query: "cohort ship" } }]),
       step([part("Part", [need("cohort ship date", "found", ["E1"])])], [{ tool: "finish", args: {} }]),
-      { sentences: [{ text: "The imported notes say the cohort ships Friday.", evidence: ["E1"] }], not_found: [] },
+      writerReply([{ text: "The imported notes say the cohort ships Friday.", evidence: ["E1"] }]),
     ], { search: async () => result([imported]) });
 
     const output = await h.research.answerWithResearch({ question: "When does the cohort ship?" });

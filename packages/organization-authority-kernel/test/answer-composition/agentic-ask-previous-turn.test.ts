@@ -9,7 +9,7 @@ import {
 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
 import { createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
-import { ANSWER_SINCE_PROMPT, answerBlocksSinceSchema, answerSchema, answerSinceSchema } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
+import { ANSWER_SINCE_PROMPT, answerBlocksSchema, answerBlocksSinceSchema } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { agenticAskAnswerSha256V1, compactAndValidateAgenticAskResponseV1 } from "../../src/answer-composition/agentic-ask-v1-response.js";
 import { FOLLOW_UP_RESOLVER_PROMPT, followUpResolutionSchema } from "../../src/answer-composition/agentic-follow-up-resolver-v1.js";
 import { AgenticAskDeadlineErrorV1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
@@ -17,7 +17,7 @@ import type { StructuredGenerationInput } from "../../src/answer-composition/str
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
-import { checked, generation, record, result } from "./fixtures/agentic-scenarios.js";
+import { checked, generation, record, result, writerReply } from "./fixtures/agentic-scenarios.js";
 
 /**
  * The previous turn on a V8 Ask (ADR-0047): a follow-up resolved before research and answered from where it points, or
@@ -77,11 +77,11 @@ function desk(overrides: Partial<EvidenceDeskPortV2> = {}) {
     ...overrides,
   } satisfies EvidenceDeskPortV2;
 }
-function askV8(port: EvidenceDeskPortV2, run: ReturnType<typeof scripted>, options: { readonly answer_layout?: 2 } = {}) {
+function askV8(port: EvidenceDeskPortV2, run: ReturnType<typeof scripted>) {
   const audits: AgenticAskAuditEntryV1[] = [];
   const ask = createAgenticAskV5({
     desk: port, model: run.model, generation, audit: { append: entry => { audits.push(entry); } }, today: () => "2026-10-25",
-    time_context: { now: "2026-10-25T17:00:00.000Z", time_zone: "America/Los_Angeles" }, ...options,
+    time_context: { now: "2026-10-25T17:00:00.000Z", time_zone: "America/Los_Angeles" },
   });
   return { ask, audits };
 }
@@ -99,7 +99,7 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
     const run = scripted({
       resolver: [{ resolution: "resolved", question: RESOLVED, about: [1] }],
       steps: [finishOn(RESOLVED, ["E1"])],
-      writer: [{ lists: [], sentences: [{ text: "THERM-482 is in progress, owned by Dev Patel: the heater controller overshoots.", evidence: ["E1"] }], not_found: [] }],
+      writer: [writerReply([{ text: "THERM-482 is in progress, owned by Dev Patel: the heater controller overshoots.", evidence: ["E1"] }])],
     });
     const openCitation = vi.fn(async (_input: Parameters<NonNullable<EvidenceDeskPortV2["openCitation"]>>[0]) => result([ticketItem]));
     const { ask, audits } = askV8(desk({ openCitation }), run);
@@ -115,7 +115,7 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
     expect(JSON.parse(firstStep!.user_prompt)).toMatchObject({ question: RESOLVED, opened: [expect.objectContaining({ id: "E1" })] });
     expect(JSON.parse(run.of("writer")[0]!.user_prompt)).toMatchObject({ question: RESOLVED });
     // The writer is today's: no earlier answer, no since.
-    expect(run.of("writer")[0]!.schema).toBe(answerSchema);
+    expect(run.of("writer")[0]!.schema).toBe(answerBlocksSchema);
     expect(JSON.parse(run.of("writer")[0]!.user_prompt)).not.toHaveProperty("earlier");
     // The audit records the resolver as one more answer-role generation of the request.
     expect(audits).toEqual([expect.objectContaining({ outcome: "answered", model_calls: 3, generations: [
@@ -154,7 +154,7 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
     for (const resolver of [[{ resolution: "same" }], [{ resolution: "guess" }, "still not an object"]]) {
       const run = scripted({
         resolver, steps: [searchFor(QUESTION, "THERM-482"), finishOn(QUESTION, ["E1"])],
-        writer: [{ lists: [], sentences: [{ text: "The DVT gate stays on hold until THERM-482 is fixed.", evidence: ["E1"] }], not_found: [] }],
+        writer: [writerReply([{ text: "The DVT gate stays on hold until THERM-482 is fixed.", evidence: ["E1"] }])],
       });
       const port = desk();
       const { ask } = askV8(port, run);
@@ -170,7 +170,7 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
     const run = scripted({
       resolver: [{ resolution: "resolved", question: RESOLVED, about: [1, 2] }],
       steps: [searchFor(RESOLVED, "THERM-482"), finishOn(RESOLVED, ["E1"])],
-      writer: [{ lists: [], sentences: [{ text: "The DVT gate stays on hold until THERM-482 is fixed.", evidence: ["E1"] }], not_found: [] }],
+      writer: [writerReply([{ text: "The DVT gate stays on hold until THERM-482 is fixed.", evidence: ["E1"] }])],
     });
     const openCitation = vi.fn(async (input: Parameters<NonNullable<EvidenceDeskPortV2["openCitation"]>>[0]) => {
       if ((input.citation as { kind: string }).kind === "ticket") throw Object.assign(new Error("gone"), { name: "AuthorityOperationError", code: "not_found" });
@@ -188,7 +188,7 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
     const replies = () => scripted({
       resolver: [{ resolution: "resolved", question: RESOLVED, about: [1] }],
       steps: [searchFor(RESOLVED, "THERM-482"), finishOn(RESOLVED, ["E1"])],
-      writer: [{ lists: [], sentences: [{ text: "The DVT gate stays on hold until THERM-482 is fixed.", evidence: ["E1"] }], not_found: [] }],
+      writer: [writerReply([{ text: "The DVT gate stays on hold until THERM-482 is fixed.", evidence: ["E1"] }])],
     });
     const promptsOf = (run: ReturnType<typeof scripted>) => run.inputs.map(({ signal: _signal, ...input }) => input);
     // The same follow-up with nothing to start from: a desk that cannot open an earlier citation is given no starting item.
@@ -238,16 +238,16 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
 });
 
 describe("Ask again on the V8 Ask (ADR-0047)", () => {
-  const again = (writer: unknown, options: { readonly answer_layout?: 2; readonly steps?: readonly unknown[] } = {}) => {
+  const again = (writer: unknown, options: { readonly steps?: readonly unknown[] } = {}) => {
     const run = scripted({ steps: options.steps ?? [searchFor(ASK_AGAIN.question, "THERM-482 owner"), finishOn(ASK_AGAIN.question, ["E1"])], writer: [writer] });
-    return { run, ...askV8(desk(), run, options.answer_layout === undefined ? {} : { answer_layout: options.answer_layout }) };
+    return { run, ...askV8(desk(), run) };
   };
 
   it("researches the question as asked, shows the writer the earlier answer, and releases what is different since, each cited", async () => {
-    const { run, ask } = again({ lists: [], sentences: [{ text: "Dev Patel owns the THERM-482 fix, due Oct 30.", evidence: ["E1"] }], since: [
+    const { run, ask } = again(writerReply([{ text: "Dev Patel owns the THERM-482 fix, due Oct 30.", evidence: ["E1"] }], { since: [
       { text: "The fix moved from Priya Nair to Dev Patel.", evidence: ["E1"] },
       { text: "Something no evidence shows.", evidence: [] },
-    ], not_found: [] });
+    ] }));
     const { value: response, corrections } = await observed(() => ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN }));
     expect(validatePersonAnswerResponseV8(response)).toEqual(response);
     expect(response.question).toBe(ASK_AGAIN.question);
@@ -258,8 +258,8 @@ describe("Ask again on the V8 Ask (ADR-0047)", () => {
     expect(JSON.parse(run.of("step")[0]!.user_prompt)).toMatchObject({ question: ASK_AGAIN.question });
     const [writer] = run.of("writer");
     expect(writer!.system_prompt.endsWith(`\n\n${ANSWER_SINCE_PROMPT}`)).toBe(true);
-    expect(writer!.schema).toBe(answerSinceSchema);
-    expect(writer!.max_output_tokens).toBe(2_000);
+    expect(writer!.schema).toBe(answerBlocksSinceSchema);
+    expect(writer!.max_output_tokens).toBe(2_500);
     const prompt = JSON.parse(writer!.user_prompt) as Record<string, unknown>;
     // The earlier answer, on its day where the asker is, right after the question.
     expect(prompt.earlier).toEqual({ asked_on: "2026-10-14", statements: [{ text: "Priya Nair owns the THERM-482 fix, due Oct 25.", sources: ["Meeting dvt-gate"] }] });
@@ -267,7 +267,7 @@ describe("Ask again on the V8 Ask (ADR-0047)", () => {
   });
 
   it("says nothing changed only when the writer compared and found nothing; never for a since it could not stand behind, or for no answer", async () => {
-    const answer = { lists: [], sentences: [{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"] }], not_found: [] };
+    const answer = writerReply([{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"] }]);
     const nothing = again({ ...answer, since: [] });
     expect((await nothing.ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN })).since).toEqual({ statements: [] });
     const uncited = again({ ...answer, since: [{ text: "Unsupported.", evidence: ["E9"] }] });
@@ -277,23 +277,23 @@ describe("Ask again on the V8 Ask (ADR-0047)", () => {
     expect(await blank.ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN })).not.toHaveProperty("since");
     const unasked = again(answer);
     expect(await unasked.ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN })).not.toHaveProperty("since");
-    const notFound = again({ lists: [], sentences: [], since: [{ text: "The owner changed.", evidence: ["E1"] }], not_found: ["the owner of the THERM-482 fix"] });
+    const notFound = again(writerReply([], { not_found: ["the owner of the THERM-482 fix"], since: [{ text: "The owner changed.", evidence: ["E1"] }] }));
     const empty = await notFound.ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN });
     expect(empty).toMatchObject({ outcome: "not_found", question: ASK_AGAIN.question });
     expect(empty).not.toHaveProperty("since");
   });
 
   it("answers an Ask again with no earlier sentence left as asked, naming its question and saying nothing of what changed", async () => {
-    const { run, ask } = again({ lists: [], sentences: [{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"] }], not_found: [] });
+    const { run, ask } = again(writerReply([{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"] }]));
     const response = await ask.answer({ question: ASK_AGAIN.question, previous: { ...ASK_AGAIN, statements: [], citations: [] } });
     expect(response).toMatchObject({ outcome: "answered", question: ASK_AGAIN.question });
     expect(response).not.toHaveProperty("since");
-    expect(run.of("writer")[0]!.schema).toBe(answerSchema);
+    expect(run.of("writer")[0]!.schema).toBe(answerBlocksSchema);
     expect(JSON.parse(run.of("writer")[0]!.user_prompt)).not.toHaveProperty("earlier");
   });
 
-  it("arranges the answer in blocks and keeps since beside it when the client asked for layout v2", async () => {
-    const { run, ask } = again({ lists: [], blocks: [{ block: "answer", sentences: [{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"] }] }], since: [{ text: "The owner changed to Dev Patel.", evidence: ["E1"] }], not_found: [] }, { answer_layout: 2 });
+  it("arranges the answer in blocks and keeps since beside it", async () => {
+    const { run, ask } = again({ lists: [], blocks: [{ block: "answer", sentences: [{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"] }] }], since: [{ text: "The owner changed to Dev Patel.", evidence: ["E1"] }], not_found: [] });
     const response = await ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN });
     expect(run.of("writer")[0]!.schema).toBe(answerBlocksSinceSchema);
     expect(run.of("writer")[0]!.max_output_tokens).toBe(2_500);
@@ -305,7 +305,7 @@ describe("Ask again on the V8 Ask (ADR-0047)", () => {
 describe("an Ask without the previous turn is today's, byte for byte (ADR-0047)", () => {
   it("makes no resolver call, and gives the same prompts, schemas and response with previous absent or undefined", async () => {
     const replies = () => scripted({ steps: [searchFor("Who owns the THERM-482 fix?", "THERM-482"), finishOn("Who owns the THERM-482 fix?", ["E1"])],
-      writer: [{ lists: [], sentences: [{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"] }], since: [{ text: "Ignored.", evidence: ["E1"] }], not_found: [] }] });
+      writer: [writerReply([{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"] }], { since: [{ text: "Ignored.", evidence: ["E1"] }] })] });
     const plain = replies();
     const absent = await askV8(desk(), plain).ask.answer({ question: "Who owns the THERM-482 fix?" });
     const undefinedRun = replies();
@@ -314,7 +314,7 @@ describe("an Ask without the previous turn is today's, byte for byte (ADR-0047)"
     expect(undefinedRun.inputs.map(({ signal: _signal, ...input }) => input)).toEqual(plain.inputs.map(({ signal: _signal, ...input }) => input));
     expect(plain.of("resolver")).toEqual([]);
     const [writer] = plain.of("writer");
-    expect(writer!.schema).toBe(answerSchema);
+    expect(writer!.schema).toBe(answerBlocksSchema);
     expect(writer!.system_prompt).not.toContain("Asked again");
     expect(JSON.parse(writer!.user_prompt)).not.toHaveProperty("earlier");
     for (const key of ["question", "since", "choices"]) expect(absent).not.toHaveProperty(key);
@@ -328,7 +328,7 @@ describe("fitting an Ask again's answer to its byte bound (ADR-0047)", () => {
   const statement = (index: number) => ({ text: long(index), citation_indexes: [0], private: false });
   const response = (since: number): PersonAnswerResponseV8 => ({
     schema_version: 8, kind: "echo-clean-person-answer-v8", scope: { kind: "global" }, outcome: "answered", citations: [citation],
-    parts: [{ question: "Q", status: "answered", statements: Array.from({ length: 10 }, (_, index) => statement(index)) }],
+    parts: [{ question: "Q", status: "answered", statements: Array.from({ length: 10 }, (_, index) => statement(index)), blocks: [{ kind: "answer", statements: [0] }, { kind: "text", statements: Array.from({ length: 9 }, (_, index) => index + 1) }] }],
     question: "Who owns the THERM-482 fix?", since: { statements: Array.from({ length: since }, (_, index) => statement(100 + index)) },
   });
 
@@ -341,6 +341,8 @@ describe("fitting an Ask again's answer to its byte bound (ADR-0047)", () => {
     expect(fitted).not.toHaveProperty("since");
     expect(fitted.outcome).toBe("partial");
     expect(fitted.parts[0]!.gap_details).toEqual(gap_details);
+    // A part compaction rebuilds reads as one text block (ADR-0051).
+    expect(fitted.parts[0]!.blocks).toEqual([{ kind: "text", statements: Array.from({ length: 10 }, (_, index) => index) }]);
     expect(canonicalJsonBytes(fitted).byteLength).toBeLessThanOrEqual(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
   });
 

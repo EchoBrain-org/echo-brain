@@ -191,7 +191,7 @@ describe('LangSmith projection of the shared observer', () => {
       { content: JSON.stringify({ parts: need('open', []), actions: [{ tool: 'search', args: { query: 'launch' } }] }), header: 'gen-1790820123-AbCdEfGhIjKlMnOpQrSt',
         body: { provider: 'Ignored', openrouter_metadata: { endpoints: { available: [{ provider: 'Mara', selected: false }, { provider: 'DeepInfra', selected: true }] } } } },
       { content: JSON.stringify({ parts: need('found', ['E1']), actions: [{ tool: 'finish', args: {} }] }), body: { id: 'gen-1790820124-UvWxYz0123456789AbCd', provider: 'Brand New Host' } },
-      { content: JSON.stringify({ sentences: [{ text: 'Launch is Tuesday.', evidence: ['E1'] }], not_found: [] }), body: { id: 'not-a-generation-id', provider: 'DeepSeek' } },
+      { content: JSON.stringify({ blocks: [{ block: 'answer', sentences: [{ text: 'Launch is Tuesday.', evidence: ['E1'] }] }], not_found: [] }), body: { id: 'not-a-generation-id', provider: 'DeepSeek' } },
     ];
     let index = 0;
     const model = createOpenRouterStructuredGenerationAdapter({ credential_ref: 'fixture', credential_resolver: () => 'fixture-credential', fetch_impl: async () => {

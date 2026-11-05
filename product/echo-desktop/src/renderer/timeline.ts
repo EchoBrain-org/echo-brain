@@ -8,7 +8,7 @@ import type {
 } from '../shared/protocol.js';
 import { checkOf, MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
-import { answerSentences, numberedSources, sourceGroups, type Sentence, type Shows, type SourceGroup } from './answer.js';
+import { answerSentences, sourceGroups, type Sentence, type Shows, type SourceGroup } from './answer.js';
 
 /** A follow-up continues the latest turn while it was asked this recently, and Ask is open. */
 const FOLLOW_UP_MS = 60 * 60_000;
@@ -99,9 +99,9 @@ export interface Checked {
   readonly markers: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
-/** The answer's sources a check can ask about, numbered as the page numbers them (numberedSources), each with what a check asks of it. */
+/** The answer's sources a check can ask about, numbered as the page numbers them, each with what a check asks of it. */
 function checkable(turn: TimelineTurn): { source: AnswerSource; at: number; citation: CheckCitation }[] {
-  return numberedSources(turn.answer).flatMap((source, at) => {
+  return turn.answer.sources.flatMap((source, at) => {
     const citation = checkOf(source);
     return citation === undefined ? [] : [{ source, at, citation }];
   });
@@ -113,9 +113,9 @@ function checkable(turn: TimelineTurn): { source: AnswerSource; at: number; cita
  * with when the turn was asked and a ticket's baseline marker, the first
  * turns' first, in as many requests as they take, each at most 100 items
  * within the route's 64 KiB. Every source is asked about, so a check never
- * speaks for part of a turn: an answer in blocks can cite more sources than
- * one request takes (ADR-0051). `only` narrows the sources, as a new
- * answer's tickets' baseline does.
+ * speaks for part of a turn: an answer can cite more sources than one request
+ * takes (ADR-0051). `only` narrows the sources, as a new answer's tickets'
+ * baseline does.
  */
 export function checkPlan(turns: readonly TimelineTurn[], only: (source: AnswerSource) => boolean = () => true): CheckPlan {
   const requests: { items: AskCheckItem[]; places: { turn: string; sources: number[] }[] }[] = [];
@@ -180,13 +180,13 @@ export function showsOf(checks: TurnChecks | undefined): Shows {
 }
 
 /**
- * A turn's answer's sources as its page numbers them (numberedSources), one per place,
- * without a place every citation of which a check found you can no longer
- * read, as the sentences citing it are left out. Each keeps its citations'
- * places among the answer's sources.
+ * A turn's answer's sources as its page numbers them, one per place, without
+ * a place every citation of which a check found you can no longer read, as
+ * the sentences citing it are left out. Each keeps its citations' places
+ * among the answer's sources.
  */
-export function turnGroups(answer: Pick<Answer, 'sources' | 'parts'>, checks: TurnChecks | undefined): SourceGroup[] {
-  const groups = sourceGroups(numberedSources(answer));
+export function turnGroups(answer: Pick<Answer, 'sources'>, checks: TurnChecks | undefined): SourceGroup[] {
+  const groups = sourceGroups(answer.sources);
   return checks === undefined ? groups : groups.filter(group => !group.indexes.every(at => checks[at] === 'unreadable'));
 }
 

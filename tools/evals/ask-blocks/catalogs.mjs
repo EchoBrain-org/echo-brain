@@ -472,7 +472,7 @@ export const CATALOG_IDS = Object.freeze(CATALOGS.map((entry) => entry.id));
  * layout v2 (ADR-0051), which is `balanced` built into the product. Its prompt, block catalog and schema are the
  * kernel's, recorded from its writer's calls, and what is graded is the answer the kernel releases (`readReleased`).
  */
-export const BUILT = Object.freeze({ id: "built", modeled_on: "the built writer: answer layout v2 in the kernel (ADR-0051)", catalog_key: "block_catalog", answer_layout: 2, can_show: EVERY_SHAPE });
+export const BUILT = Object.freeze({ id: "built", modeled_on: "the built writer: answer layout v2 in the kernel (ADR-0051)", catalog_key: "block_catalog", can_show: EVERY_SHAPE });
 /** Every arm a run may select: the catalogs, then `built`. */
 export const ARMS = Object.freeze([...CATALOGS, BUILT]);
 export const ARM_IDS = Object.freeze(ARMS.map((entry) => entry.id));

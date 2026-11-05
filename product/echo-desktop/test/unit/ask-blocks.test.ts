@@ -25,8 +25,8 @@ vi.mock('preact/hooks', original => plainHooks(original));
 
 const GLOBAL = { kind: 'global' } as const;
 const QUESTION = 'Can THERM start PVT?';
-/** The fixture's THERM answer, as the host hands it to the page: in its blocks, or as an Ask that did not ask for them gets it. */
-const therm = (blocks = true): Answer => answerView({ ok: true, result: blocksAnswer(QUESTION, GLOBAL, blocks) }, GLOBAL);
+/** The fixture's THERM answer in its blocks, as the host hands it to the page. */
+const therm = (): Answer => answerView({ ok: true, result: blocksAnswer(QUESTION, GLOBAL) }, GLOBAL);
 /** An answer in blocks citing `count` Confluence pages, past ADR-0041's 40 (ADR-0051): the answer, then a point for each other page. */
 function pagesAnswer(count: number): Answer {
   const citations = Array.from({ length: count }, (_, at) => ({ kind: 'page', label: `Page ${at + 1}`, visibility: 'team', citation: {
@@ -291,16 +291,6 @@ describe('an arranged part reads as its blocks', () => {
     const due = byTestId(await shownAnswer(answer), 'answer-row').map(row => byType(row, 'td')[3]!);
     expect(due.map(cell => classes(cell).includes('late'))).toEqual([true, false]);
   });
-
-  it('reads a part without blocks exactly as before: a paragraph per sentence', async () => {
-    const { thread } = await answered(therm(false));
-    const answer = byTestId(thread(), 'answer')[0]!;
-    expect(byClass(answer, 'answer-layout')).toEqual([]);
-    const statements = byTestId(answer, 'statement');
-    expect(statements).toHaveLength(10);
-    expect(statements.every(node => node.type === 'p' && classes(node).includes('answer-statement'))).toBe(true);
-    expect(statements.map(node => words(node))[2]).toBe('2026-10-20, Noor Haddad: Approved the soak plan.');
-  });
 });
 
 describe('a check of an arranged answer (ADR-0047)', () => {
@@ -415,7 +405,7 @@ describe('every answer\'s sources start closed, as the one quiet line under it (
   });
 
   it('keeps the source list choice when citations open, and the next answer\'s starts closed beside it', async () => {
-    const { store, thread } = await answered(therm(false));
+    const { store, thread } = await answered(therm());
     click(byTestId(thread(), 'citation')[0]);
     expect(byTestId(thread(), 'source-row')).toHaveLength(0);
     store.closeSources();
@@ -438,8 +428,9 @@ describe('every answer\'s sources start closed, as the one quiet line under it (
   });
 
   it('says "1 source" for one', async () => {
-    const base = therm(false);
-    const single: Answer = { ...base, sources: base.sources.slice(0, 1), parts: [{ ...base.parts[0]!, statements: [{ text: 'One.', citation_indexes: [0], private: false }] }] };
+    const base = therm();
+    const single: Answer = { ...base, sources: base.sources.slice(0, 1), parts: [{ ...base.parts[0]!, statements: [{ text: 'One.', citation_indexes: [0], private: false }],
+      blocks: [{ kind: 'text', statements: [0] }] }] };
     const { thread } = await answered(single);
     expect(text(byTestId(thread(), 'sources-toggle')[0])).toBe('1 source');
   });
@@ -447,7 +438,7 @@ describe('every answer\'s sources start closed, as the one quiet line under it (
 
 describe('only actionable answer explanations are shown', () => {
   it('hides legacy partial coverage prose after its blocks without adding a coverage banner or retry button', async () => {
-    const result = blocksAnswer(QUESTION, GLOBAL, true) as { parts: Record<string, unknown>[] };
+    const result = blocksAnswer(QUESTION, GLOBAL) as { parts: Record<string, unknown>[] };
     // Research stopped short: the answer says what it did not cover, and its part, as prose with no typed details, what was not found.
     const partial = answerView({ ok: true, result: { ...result, outcome: 'partial', notice: 'One of three THERM meetings in range was not read before the time limit.',
       parts: [{ ...result.parts[0], status: 'partial', gap: 'Who signs off PVT was not found in the evidence read.' }] } }, GLOBAL);
@@ -460,7 +451,7 @@ describe('only actionable answer explanations are shown', () => {
   });
 
   it('keeps typed missing-part explanations and heads the factual parts with their questions', async () => {
-    const base = therm(false);
+    const base = therm();
     const answer: Answer = { ...base, outcome: 'partial', parts: [base.parts[0]!, { question: 'Who signs off PVT?', status: 'not_found', statements: [],
       gap: 'Not found: its sign-off. Some sentences did not fit.', gap_details: { not_found: 'Not found: its sign-off.' } }] };
     const shown = await shownAnswer(answer);
@@ -474,7 +465,7 @@ describe('only actionable answer explanations are shown', () => {
     { message: "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.", details: { unsupported_action: true as const } },
     { message: "I couldn't complete the search. Please try again.", details: { interrupted: true as const } },
   ])('shows and copies an empty partial answer explanation: $message', async ({ message, details }) => {
-    const base = therm(false);
+    const base = therm();
     const { thread } = await answered({ ...base, sources: [], outcome: 'partial', parts: [{ question: QUESTION, status: 'not_found', statements: [],
       gap: 'Unchecked entries and sentences did not fit.', gap_details: details }] });
     expect(byTestId(thread(), 'answer-gap').map(text)).toEqual([message]);
@@ -485,7 +476,7 @@ describe('only actionable answer explanations are shown', () => {
   });
 
   it('shows a completed not-found explanation, including a saved answer without typed details', async () => {
-    const base = therm(false);
+    const base = therm();
     const { thread } = await answered({ ...base, sources: [], outcome: 'not_found', parts: [{ question: QUESTION, status: 'not_found', statements: [], gap: 'Not found.' }] });
     expect(byTestId(thread(), 'answer-gap').map(text)).toEqual(['Not found.']);
     expect(byTestId(thread(), 'answer-empty')).toHaveLength(0);
@@ -499,7 +490,7 @@ describe('only actionable answer explanations are shown', () => {
     { what: 'a due-date window over follow-ups some of which have no due date', gap: 'Not found: follow-ups due Oct 23–29. 2 follow-ups have no due date.' },
     { what: 'an unfinished search answered by an Authority that sends no typed reasons', gap: "I couldn't complete the search. Please try again." },
   ])('says and copies that nothing matched in what was read for an empty partial answer: $what', async ({ gap }) => {
-    const base = therm(false);
+    const base = therm();
     const { thread } = await answered({ ...base, sources: [], outcome: 'partial', parts: [{ question: QUESTION, status: 'not_found', statements: [], gap }] });
     expect(byTestId(thread(), 'answer-gap')).toHaveLength(0);
     expect(text(thread())).not.toContain(gap);
@@ -510,7 +501,7 @@ describe('only actionable answer explanations are shown', () => {
   });
 
   it('says and copies that nothing you can see matched for a completed answer that says and explains nothing', async () => {
-    const base = therm(false);
+    const base = therm();
     const { thread } = await answered({ ...base, sources: [], outcome: 'not_found', parts: [{ question: QUESTION, status: 'not_found', statements: [] }] });
     expect(byTestId(thread(), 'answer-gap')).toHaveLength(0);
     expect(byTestId(thread(), 'answer-empty').map(text)).toEqual(['Nothing you can see matched.']);
@@ -536,11 +527,11 @@ describe('Copy answer', () => {
   });
 
   it('keeps only visible typed explanations when long Markdown falls back to plain text', async () => {
-    const base = therm(false);
+    const base = therm();
     const long = 'x'.repeat(11_850);
     const missing = 'Not found: the person who approved the launch.';
     const { store, thread } = await answered({ ...base, text: long, outcome: 'partial', parts: [{ question: QUESTION, status: 'partial',
-      statements: [{ text: long, citation_indexes: [0], private: false }],
+      statements: [{ text: long, citation_indexes: [0], private: false }], blocks: [{ kind: 'text', statements: [0] }],
       gap: `${missing} Some unchecked entries did not fit.`, gap_details: { not_found: missing } }] });
     expect(byTestId(thread(), 'answer-gap').map(text)).toEqual([missing]);
     expect(await store.copyAnswer(paneTurn(store))).toBe(true);
@@ -548,9 +539,10 @@ describe('Copy answer', () => {
   });
 
   it('copies the plain text when the Markdown is past what Copy answer takes', async () => {
-    const base = therm(false);
+    const base = therm();
     const long = 'x'.repeat(11_990);
-    const { store } = await answered({ ...base, text: long, parts: [{ question: QUESTION, status: 'answered', statements: [{ text: long, citation_indexes: [0], private: false }] }] });
+    const { store } = await answered({ ...base, text: long, parts: [{ question: QUESTION, status: 'answered', statements: [{ text: long, citation_indexes: [0], private: false }],
+      blocks: [{ kind: 'text', statements: [0] }] }] });
     expect(await store.copyAnswer(paneTurn(store))).toBe(true);
     expect(copied()).toEqual([long]);
   });

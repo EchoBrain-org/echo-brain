@@ -19,7 +19,8 @@ export function agenticAskResponseFitsV1(response: unknown): boolean {
 /**
  * `candidate` with these parts and outcome, and only the citations they cite, renumbered in their order. Every other field
  * is kept, except the two others that index the citations: a direct statement, and an Ask again's `since` (ADR-0047),
- * whose citations dropping it frees.
+ * whose citations dropping it frees. A part with statements reads as one text block (ADR-0051): cut, they no longer hold
+ * the blocks they were arranged in.
  */
 function withParts(candidate: PersonAnswerResponseV8, parts: readonly Part[], outcome: PersonAnswerResponseV8["outcome"]): PersonAnswerResponseV8 {
   const usedIndexes = new Set(parts.flatMap(part => [...part.statements.flatMap(statement => statement.citation_indexes), ...(part.records?.flatMap(record => record.citation_indexes) ?? [])]));
@@ -30,7 +31,8 @@ function withParts(candidate: PersonAnswerResponseV8, parts: readonly Part[], ou
   });
   const remapItem = <T extends AnswerItem>(item: T): T => Object.freeze({ ...item, citation_indexes: Object.freeze(item.citation_indexes.map(index => remap.get(index)).filter((index): index is number => index !== undefined)) }) as T;
   const { outcome: _outcome, citations: _citations, parts: _parts, direct: _direct, since: _since, ...kept } = candidate;
-  return Object.freeze({ ...kept, outcome, citations: Object.freeze(citations), parts: Object.freeze(parts.map(part => Object.freeze({ question: part.question, status: part.status, statements: Object.freeze(part.statements.map(remapItem)), ...(part.gap === undefined ? {} : { gap: part.gap }), ...(part.gap_details === undefined ? {} : { gap_details: part.gap_details }), ...(part.records === undefined ? {} : { records: Object.freeze(part.records.map(remapItem)) }) }))) }) as PersonAnswerResponseV8;
+  return Object.freeze({ ...kept, outcome, citations: Object.freeze(citations), parts: Object.freeze(parts.map(part => Object.freeze({ question: part.question, status: part.status, statements: Object.freeze(part.statements.map(remapItem)), ...(part.gap === undefined ? {} : { gap: part.gap }), ...(part.gap_details === undefined ? {} : { gap_details: part.gap_details }), ...(part.records === undefined ? {} : { records: Object.freeze(part.records.map(remapItem)) }),
+    ...(part.statements.length === 0 ? {} : { blocks: Object.freeze([Object.freeze({ kind: "text", statements: Object.freeze(part.statements.map((_, at) => at)) })]) }) }))) }) as PersonAnswerResponseV8;
 }
 
 /** Removes whole least-priority evidence records until the packet fits. */

@@ -4,6 +4,7 @@ import { AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from '../../src/answer-composition/ag
 import { AuthorityOperationError } from '../../src/domain/errors.js';
 import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import { checked, need, part, record, replay, researchHarness, result, SCENARIOS, step } from './fixtures/agentic-scenarios.js';
+import { writerReply } from './fixtures/agentic-scenarios.js';
 
 type Lifecycle = Extract<CoreRuntimeDiagnosticObservationV1, { readonly kind: 'lifecycle' }>;
 const lifecycle = (events: readonly CoreRuntimeDiagnosticObservationV1[]) => events.filter((event): event is Lifecycle => event.kind === 'lifecycle');
@@ -20,7 +21,7 @@ describe('shared research diagnostics lifecycle', () => {
       ...(trigger === 'sweep' ? [] : [finish()]),
       trigger === 'approved_record' ? { decided: [{ id: 'E1', text: 'Show two decimals.' }], affected: [] }
         : trigger === 'sweep' ? { findings: [{ index: 0, verdict: 'landed', line: 'The decision shows two decimals.', cites: ['E1'] }] }
-          : { sentences: [{ text: 'Show two decimals.', evidence: ['E1'] }], not_found: [] },
+          : writerReply([{ text: 'Show two decimals.', evidence: ['E1'] }]),
     ], {
       search: async () => result([body]), openCitation: async () => result([body]),
     });
@@ -122,7 +123,7 @@ describe('shared research diagnostics lifecycle', () => {
     const metadata: CoreRuntimeObservationV1[] = [];
     let checks = 0;
     const failure = new AuthorityOperationError('stale_access_state', 'private membership details');
-    const h = researchHarness([finish('not_found', []), { sentences: [], not_found: ['current state'] }], {
+    const h = researchHarness([finish('not_found', []), writerReply([], { not_found: ['current state'] })], {
       revalidate: async () => { if (++checks === 4) throw failure; return checked; },
     });
     // The service owns the outer research_run root.

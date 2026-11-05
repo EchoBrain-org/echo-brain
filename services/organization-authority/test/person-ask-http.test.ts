@@ -165,8 +165,8 @@ function askFixture(nativeDriver = false) {
   // Searches once, finishes on what it found, and cites it.
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
     const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: string[] }[]; evidence?: { id: string }[] };
-    if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) {
-      return { sentences: [{ text: "You decided to launch on Tuesday.", evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+    if ((input.schema.properties as Record<string, unknown>).blocks !== undefined) {
+      return { blocks: [{ block: "answer", sentences: [{ text: "You decided to launch on Tuesday.", evidence: [prompt.evidence![0]!.id] }] }], not_found: [] };
     }
     const hit = prompt.last_results?.[0]?.results?.[0];
     return hit === undefined

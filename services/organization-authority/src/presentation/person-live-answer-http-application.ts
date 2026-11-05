@@ -1,5 +1,5 @@
 import type {
-  PersonAnswerRequestV3, PersonAnswerResponseV8, PersonAskAnswerLayoutV2, PersonAskTimeContextV1, PersonAskProgressStepEventV3, PersonAskReceiptV3,
+  PersonAnswerRequestV3, PersonAnswerResponseV8, PersonAskTimeContextV1, PersonAskProgressStepEventV3, PersonAskReceiptV3,
 } from '@echo-brain/organization-api';
 
 /** One Ask as the HTTP boundary hands it on, on the V3 request; the bearer and the cancellation signal stay in it. */
@@ -8,8 +8,6 @@ export interface PersonAnswerHttpInputV1 {
   /** May carry the asker's previous turn (ADR-0047). */
   readonly request: PersonAnswerRequestV3;
   readonly time_context?: PersonAskTimeContextV1;
-  /** The client asked for answer layout v2 (ADR-0051). */
-  readonly answer_layout?: PersonAskAnswerLayoutV2;
   /** The client can read typed actionable explanations. */
   readonly include_gap_details?: true;
   readonly signal?: AbortSignal;

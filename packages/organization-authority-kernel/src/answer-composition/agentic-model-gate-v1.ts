@@ -36,8 +36,8 @@ export type AgenticAskModelRoleV1 = "step" | "answer";
  * One model call as its caller names it: the role the audit records (research
  * steps are `step`, every renderer call is `answer`) and the runtime span the
  * call runs in (Ask uses `ask_planner` and `ask_answer`). `output_tokens` is
- * its own output allowance where it needs more than its role's (a v2 Ask's
- * writer, ADR-0051); without it the role's applies.
+ * its own output allowance where it needs more than its role's (Ask's writer,
+ * ADR-0051); without it the role's applies.
  */
 export interface AgenticModelCallV1 {
   readonly role: AgenticAskModelRoleV1;

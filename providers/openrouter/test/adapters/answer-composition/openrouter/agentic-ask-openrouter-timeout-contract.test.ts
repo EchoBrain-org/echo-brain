@@ -99,7 +99,7 @@ describe("Agentic Ask and OpenRouter timeout contract", () => {
         parts: [{ question: "When is launch?", notes: "", needs: [{ need: "launch date", status: "found", evidence: ["E1"] }] }],
         actions: [{ tool: "finish", args: {} }],
       },
-      { sentences: [{ text: "Launch is Tuesday.", evidence: ["E1"] }], not_found: [] },
+      { blocks: [{ block: "answer", sentences: [{ text: "Launch is Tuesday.", evidence: ["E1"] }] }], not_found: [] },
     ];
     const timeouts: number[] = [];
     const nativeTimeout = AbortSignal.timeout;

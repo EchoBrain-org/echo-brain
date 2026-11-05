@@ -3,7 +3,7 @@ import test from "node:test";
 import { createCoreDeterministicStructuredGenerationPort } from "../core-read-routes.mjs";
 
 const stepSchema = Object.freeze({ properties: Object.freeze({ parts: Object.freeze({}), actions: Object.freeze({}) }) });
-const answerSchema = Object.freeze({ properties: Object.freeze({ sentences: Object.freeze({}), not_found: Object.freeze({}) }) });
+const answerSchema = Object.freeze({ properties: Object.freeze({ blocks: Object.freeze({}), not_found: Object.freeze({}) }) });
 
 const step = (port, prompt) => port.generate({ schema: stepSchema, user_prompt: JSON.stringify(prompt) });
 const answer = (port, evidence, lists) => port.generate({ schema: answerSchema, user_prompt: JSON.stringify({ question: "What did the team decide?", ...(lists === undefined ? {} : { lists }), evidence }) });
@@ -51,8 +51,8 @@ test("deterministic answer output is grounded in the current released evidence a
   const port = createCoreDeterministicStructuredGenerationPort();
   const first = await answer(port, [{ id: "E1", text: "Use the durable checkpoint." }]);
   const second = await answer(port, [{ id: "E7", text: "Use the active release fence." }]);
-  assert.deepEqual(first, { lists: [], sentences: [{ text: "Use the durable checkpoint.", evidence: ["E1"] }], not_found: [] });
-  assert.deepEqual(second, { lists: [], sentences: [{ text: "Use the active release fence.", evidence: ["E7"] }], not_found: [] });
+  assert.deepEqual(first, { lists: [], blocks: [{ block: "answer", sentences: [{ text: "Use the durable checkpoint.", evidence: ["E1"] }] }], not_found: [] });
+  assert.deepEqual(second, { lists: [], blocks: [{ block: "answer", sentences: [{ text: "Use the active release fence.", evidence: ["E7"] }] }], not_found: [] });
   await assert.rejects(answer(port, []), /no released evidence/);
   await assert.rejects(answer(port, [], []), /no released evidence/);
   await assert.rejects(answer(port, [{ id: "", text: "unbound" }]), /invalid released evidence/);
@@ -63,7 +63,7 @@ test("deterministic answer chooses no list and never writes a list's names (ADR-
   const rows = [{ id: "E1", kind: "decision", title: "Checkpoint review", checked: false }];
   const list = (id) => ({ id, source: "meetings", complete: true, count: 1, checked: 0, members: rows });
   // Rows only: no sentence of its own, and no list, since its planner's content need rests on none.
-  assert.deepEqual(await answer(port, [], [list("L1"), list("L2")]), { lists: [], sentences: [], not_found: [] });
+  assert.deepEqual(await answer(port, [], [list("L1"), list("L2")]), { lists: [], blocks: [], not_found: [] });
   // Beside released text, it quotes only that text.
-  assert.deepEqual(await answer(port, [{ id: "E3", text: "Use the durable checkpoint." }], [list("L1")]), { lists: [], sentences: [{ text: "Use the durable checkpoint.", evidence: ["E3"] }], not_found: [] });
+  assert.deepEqual(await answer(port, [{ id: "E3", text: "Use the durable checkpoint." }], [list("L1")]), { lists: [], blocks: [{ block: "answer", sentences: [{ text: "Use the durable checkpoint.", evidence: ["E3"] }] }], not_found: [] });
 });

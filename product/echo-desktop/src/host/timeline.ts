@@ -150,7 +150,7 @@ type Json = Record<string, unknown>;
 const record = (value: unknown): value is Json => value !== null && typeof value === 'object' && !Array.isArray(value);
 const string = (value: unknown, maximum = 20_000): value is string => typeof value === 'string' && value.length <= maximum;
 const index = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
-/** How many statements, places or sources a stored answer may hold: far more than an answer's 64 KiB carries, as one in blocks has no count of its own (ADR-0051). */
+/** How many statements, places or sources a stored answer may hold: far more than an answer's 64 KiB carries, as an answer has no count of its own (ADR-0051). */
 const MOST = 1_000;
 const indexes = (value: unknown, maximum = MOST): value is number[] => Array.isArray(value) && value.length <= maximum && value.every(index);
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -248,19 +248,26 @@ function answer(value: unknown): value is TimelineAnswer {
     && (part.blocks === undefined || arranged(part.blocks, (part.statements as unknown[]).length)));
 }
 
+/** Whether the page draws a part as it was saved: its statements in blocks (answer layout v2, ADR-0051), or none to arrange, and no retired layout. */
+const inBlocks = (part: Json) => !Object.hasOwn(part, 'layout') && (part.blocks !== undefined || (part.statements as unknown[]).length === 0);
+
 /**
- * A turn without the layout an older desktop saved on its parts (answer
- * layout v1, ADR-0045, retired since): their statements read as paragraphs,
- * and what the layout held is never read. Any other turn is itself.
+ * A turn as the page draws it, every part with statements in blocks (answer
+ * layout v2, ADR-0051). A part saved without them, a plain answer's or one
+ * an older desktop saved with answer layout v1 (ADR-0045, retired since),
+ * reads as the plain answer did, a paragraph a statement: an untitled text
+ * block each. What a v1 layout held is never read, and the next put writes
+ * the turn so. Any other turn is itself.
  */
-function withoutLayout(turn: Json): TimelineTurn {
+function withBlocks(turn: Json): TimelineTurn {
   const kept = turn.answer as Json;
-  if (!(kept.parts as Json[]).some(part => Object.hasOwn(part, 'layout'))) return turn as unknown as TimelineTurn;
-  const parts = (kept.parts as Json[]).map(({ layout: _retired, ...part }) => part);
+  if ((kept.parts as Json[]).every(inBlocks)) return turn as unknown as TimelineTurn;
+  const parts = (kept.parts as Json[]).map(({ layout: _retired, ...part }) => inBlocks(part) ? part
+    : { ...part, blocks: (part.statements as unknown[]).map((_, at) => ({ kind: 'text', statements: [at] })) });
   return { ...turn, answer: { ...kept, parts } } as unknown as TimelineTurn;
 }
 
-/** A turn as a put writes it, or null for anything else. A part saved with answer layout v1 comes without it. */
+/** A turn as a put writes it, or null for anything else. A part saved without blocks comes in them. */
 export function timelineTurn(value: unknown): TimelineTurn | null {
   if (!record(value) || !string(value.id) || !ID.test(value.id) || !time(value.asked_at) || !string(value.text, 2_000) || !string(value.question, 2_000)
       || !scope(value.scope) || !answer(value.answer)) return null;
@@ -275,5 +282,5 @@ export function timelineTurn(value: unknown): TimelineTurn | null {
       && value.unreadable.every(at => at < sources))) {
     return null;
   }
-  return withoutLayout(value);
+  return withBlocks(value);
 }

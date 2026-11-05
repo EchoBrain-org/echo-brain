@@ -199,7 +199,7 @@ function v8Answer(input: { readonly scope?: unknown; readonly text?: string; rea
     citations,
     parts: [citations.length === 0
       ? { question: "Question", status: "not_found", statements: [], gap: "I couldn't find this in the sources you can access." }
-      : { question: "Question", status: "answered", statements: [{ text: input.text ?? "Answer.", citation_indexes: citations.map((_, index) => index), private: false }] }],
+      : { question: "Question", status: "answered", statements: [{ text: input.text ?? "Answer.", citation_indexes: citations.map((_, index) => index), private: false }], blocks: [{ kind: "answer", statements: [0] }] }],
   };
 }
 const RECORD_CITATION = {
@@ -239,7 +239,7 @@ function v8WorkspaceAnswer(input: { readonly scope?: unknown } = {}) {
       { citation: { kind: 'project', project_id: WORKSPACE_PROJECT }, kind: 'project', label: 'EVT', visibility: 'project', ref: `project:${WORKSPACE_PROJECT}` },
       { citation: { kind: 'tool_container', tool_id: 'jira', external_scope_id: '11111111-2222-4333-8444-555555555555', container: 'jira_project', container_id: '10001',
         permalink: 'https://example.atlassian.net/browse/EVT' }, kind: 'tool_container', label: 'EVT hardware', visibility: 'only_me', key: 'EVT' }],
-    parts: [{ question: 'Question', status: 'answered', statements: [{ text: 'EVT is ready, and its work is in the EVT Jira project.', citation_indexes: [0, 1, 2], private: true }] }],
+    parts: [{ question: 'Question', status: 'answered', statements: [{ text: 'EVT is ready, and its work is in the EVT Jira project.', citation_indexes: [0, 1, 2], private: true }], blocks: [{ kind: 'answer', statements: [0] }] }],
   };
 }
 
@@ -252,7 +252,7 @@ function v8PageAnswer(input: { readonly scope?: unknown } = {}) {
         permalink: 'https://example.atlassian.net/wiki/spaces/ECHO/pages/12345/EVT-readiness', text_sha256: `sha256:${'a'.repeat(64)}` },
       kind: 'page', label: 'EVT readiness', visibility: 'team',
     }],
-    parts: [{ question: 'Question', status: 'answered', statements: [{ text: 'EVT is ready.', citation_indexes: [0], private: false }] }],
+    parts: [{ question: 'Question', status: 'answered', statements: [{ text: 'EVT is ready.', citation_indexes: [0], private: false }], blocks: [{ kind: 'answer', statements: [0] }] }],
   };
 }
 
@@ -835,18 +835,17 @@ describe("Person client", () => {
       });
     });
   });
-  it("asks for the writer's blocks (ADR-0051) and returns them as the Authority arranged them, checked", async () => {
+  it("returns the writer's blocks (ADR-0051) as the Authority arranged them, checked, without asking for a layout", async () => {
     await withHome(async home => {
       const answer = v8PageAnswer();
-      const arranged = { ...answer, parts: [{ ...answer.parts[0]!, blocks: [{ kind: 'answer', statements: [0] }] }] };
       const client = await signedInClient(home, async (_input, init) => {
-        expect(new Headers(init?.headers).get('x-echo-answer-layout')).toBe('2');
+        expect(new Headers(init?.headers).get('x-echo-answer-layout')).toBeNull();
         expect(new Headers(init?.headers).get('x-echo-ask-gap-details')).toBe('1');
-        return json(arranged);
+        return json(answer);
       });
       await expect(client.askWithLiveSources('Is EVT ready?')).resolves.toMatchObject({ parts: [{ blocks: [{ kind: 'answer', statements: [0] }] }] });
       // Blocks the contract refuses, here a quote with no words, are refused, never shown.
-      const broken = await signedInClient(home, async () => json({ ...arranged, parts: [{ ...arranged.parts[0]!, blocks: [{ kind: 'quote', statements: [0], text: '' }] }] }));
+      const broken = await signedInClient(home, async () => json({ ...answer, parts: [{ ...answer.parts[0]!, blocks: [{ kind: 'quote', statements: [0], text: '' }] }] }));
       await expect(broken.askWithLiveSources('Is EVT ready?')).rejects.toMatchObject({ code: 'invalid_response' });
     });
   });
@@ -860,11 +859,11 @@ describe("Person client", () => {
         const headers = new Headers(init?.headers);
         expect(headers.get('x-echo-time-zone')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
         expect(Math.abs(Date.now() - Date.parse(headers.get('x-echo-client-now')!))).toBeLessThan(5_000);
-        expect(headers.get('x-echo-answer-layout')).toBe('2');
+        expect(headers.get('x-echo-answer-layout')).toBeNull();
         return json({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
           citations: [{ citation: { kind: 'approved_record', atom_id: digest, record_sha256: digest, policy_id: 'project-members-readable-person-v1' }, kind: 'decision', label: 'Planning meeting', visibility: 'team' }],
           direct: { text: 'The launch date moved.', citation_indexes: [0], private: false },
-          parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The launch date moved.', citation_indexes: [0], private: false }] }],
+          parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The launch date moved.', citation_indexes: [0], private: false }], blocks: [{ kind: 'answer', statements: [0] }] }],
         });
       });
       await expect(client.askWithLiveSources('What changed?')).resolves.toMatchObject({ kind: 'echo-clean-person-answer-v8', direct: { citation_indexes: [0] } });
@@ -877,7 +876,7 @@ describe("Person client", () => {
       const client = await signedInClient(home, async (input, init) => {
         expect(new URL(String(input)).pathname).toBe('/v7/person/ask');
         expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: 'Are we ready for EVT?', project_id: projectId });
-        expect(new Headers(init?.headers).get('x-echo-answer-layout')).toBe('2');
+        expect(new Headers(init?.headers).get('x-echo-answer-layout')).toBeNull();
         return json(v8WorkspaceAnswer({ scope: { kind: 'project', project_id: projectId } }));
       });
       await expect(client.askWithLiveSources('Are we ready for EVT?', projectId)).resolves.toMatchObject({

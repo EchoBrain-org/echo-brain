@@ -4,6 +4,7 @@ import { AuthorityOperationError } from '../../src/domain/errors.js';
 import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import type { EvidenceDeskItemV2 } from '../../src/shared/evidence-desk-v2.js';
 import { need, part, record, researchHarness, result, step } from './fixtures/agentic-scenarios.js';
+import { writerReply } from './fixtures/agentic-scenarios.js';
 
 function ticket(id: string, text?: string): EvidenceDeskItemV2 {
   return {
@@ -30,7 +31,7 @@ describe('request-owned research trace', () => {
       step(foundPlan, [{ tool: 'finish', args: {} }]), // Rejected: linked item has metadata only.
       step(openPlan, [{ tool: 'open', args: { id: 'E2' } }]),
       step(foundPlan, [{ tool: 'finish', args: {} }]),
-      { sentences: [{ text: 'DVT awaits the fixture; PVT needs the approved package and fixture readiness.', evidence: ['E1', 'E2'] }], not_found: [] },
+      writerReply([{ text: 'DVT awaits the fixture; PVT needs the approved package and fixture readiness.', evidence: ['E1', 'E2'] }]),
     ];
     const usage = { input_tokens: 100, output_tokens: 20, total_tokens: 120, cached_input_tokens: null, reasoning_tokens: null };
     const h = researchHarness((_input, index) => replies[index], {
@@ -87,7 +88,7 @@ describe('request-owned research trace', () => {
         { tool: 'search', args: { query: 'slow' } }, { tool: 'search', args: { query: 'fast' } },
       ]),
       step([part('Gates', [need('gate readiness', 'found', ['E1', 'E2'])])], [{ tool: 'finish', args: {} }]),
-      { sentences: [{ text: 'Both gates are ready.', evidence: ['E1', 'E2'] }], not_found: [] },
+      writerReply([{ text: 'Both gates are ready.', evidence: ['E1', 'E2'] }]),
     ], { search: async input => {
       if (input.query === 'slow') { await slow; completed.push('slow'); return result([first]); }
       completed.push('fast'); releaseSlow(); return result([second]);
@@ -115,7 +116,7 @@ describe('request-owned research trace', () => {
     const h = researchHarness([
       step([part('Fixture', [need('readiness', 'open')])], [{ tool: 'search', args: { query: 'fixture' } }]),
       step([part('Fixture', [need('readiness', 'found', ['E1'])])], [{ tool: 'finish', args: {} }]),
-      { sentences: [{ text: 'The fixture is ready.', evidence: ['E1'] }], not_found: [] },
+      writerReply([{ text: 'The fixture is ready.', evidence: ['E1'] }]),
     ], { search: async () => result([body]) });
     const output = await withCoreRuntimeDiagnosticsV1(event => {
       if (event.kind === 'model_request') (event.input.schema as Record<string, unknown>).type = 'mutated';

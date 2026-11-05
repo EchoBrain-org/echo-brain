@@ -1,10 +1,9 @@
+import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import {
-  PERSON_ASK_ANSWER_LAYOUT_HEADER_V1,
-  PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2,
+  PERSON_ANSWER_RESPONSE_MAX_BYTES_V4,
   validatePersonAnswerBlocksV2,
   validatePersonAnswerResponseV8,
-  validatePersonAskAnswerLayoutHeaderV2,
 } from '../src/index.js';
 
 const projectId = 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' as const;
@@ -49,14 +48,10 @@ const changed = (place: number, fields: Record<string, unknown>) => blocks.map((
 const two = [statement('One.', [0]), statement('Two.', [1])];
 
 describe('Answer layout v2 (ADR-0051)', () => {
-  it('reads the header: absent is none, 2 is layout v2, retired layout v1\'s 1 is none (ADR-0045), anything else is refused', () => {
-    expect(PERSON_ASK_ANSWER_LAYOUT_HEADER_V1).toBe('x-echo-answer-layout');
-    expect(PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2).toBe('2');
-    expect(validatePersonAskAnswerLayoutHeaderV2(undefined)).toBeUndefined();
-    // A desktop or CLI from before layout v2 still asks for layout v1: its Ask is answered as one without the header.
-    expect(validatePersonAskAnswerLayoutHeaderV2('1')).toBeUndefined();
-    expect(validatePersonAskAnswerLayoutHeaderV2('2')).toBe(2);
-    for (const value of ['0', '3', 'true', '', '1, 2', ['2'], 2]) expect(() => validatePersonAskAnswerLayoutHeaderV2(value)).toThrow();
+  it('carries blocks on every part with statements, answered or partial: there is no answer without them', () => {
+    const { blocks: _, ...plain } = response().parts[0]!;
+    expect(() => validatePersonAnswerResponseV8({ ...response(), parts: [plain] })).toThrow('Ask response part blocks are invalid');
+    expect(() => validatePersonAnswerResponseV8({ ...response(), outcome: 'partial', parts: [{ ...plain, status: 'partial', gap: 'The owner was not found.' }] })).toThrow('Ask response part blocks are invalid');
   });
 
   it('accepts a V8 part whose blocks show every statement once, in order, and freezes them', () => {
@@ -67,22 +62,23 @@ describe('Answer layout v2 (ADR-0051)', () => {
     expect(Object.isFrozen((accepted.parts[0]!.blocks![1] as { events: readonly object[] }).events[0])).toBe(true);
   });
 
-  it('lets an answer in blocks hold more than ten statements and forty citations, as no other answer may (ADR-0051)', () => {
+  it('lets a part hold more than ten statements and an answer more than forty citations, bounded only by its bytes (ADR-0051)', () => {
     const many = Array.from({ length: 45 }, (_, at) => ({ citation: { kind: 'tool' as const, tool_id: `tool-${at}` }, kind: 'tool' as const, label: `Tool ${at}`, visibility: 'team' as const, ref: `tool:tool-${at}` as const }));
     const said = Array.from({ length: 15 }, (_, at) => statement(`Tool ${at * 3} is set up.`, [at * 3, at * 3 + 1, at * 3 + 2]));
     const answer = (fields: Record<string, unknown>) => ({ schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const,
       citations: many, parts: [{ question: 'Which tools are set up?', status: 'answered' as const, statements: said, ...fields }] });
-    const arranged = validatePersonAnswerResponseV8(answer({ blocks: [{ kind: 'answer', statements: [0] }, { kind: 'points', ordered: false, statements: said.slice(1).map((_, at) => at + 1) }] }));
+    const answerAndPoints = { blocks: [{ kind: 'answer', statements: [0] }, { kind: 'points', ordered: false, statements: said.slice(1).map((_, at) => at + 1) }] };
+    const arranged = validatePersonAnswerResponseV8(answer(answerAndPoints));
     expect([arranged.citations.length, arranged.parts[0]!.statements.length]).toEqual([45, 15]);
-    // Without blocks, the same answer keeps ADR-0041's bounds, as every installed client checks.
-    expect(() => validatePersonAnswerResponseV8(answer({}))).toThrow('Ask response is invalid');
-    expect(() => validatePersonAnswerResponseV8({ ...answer({}), citations: many.slice(0, 40), parts: [{ question: 'q', status: 'answered', statements: said.slice(0, 11).map(value => ({ ...value, citation_indexes: [0] })) }] })).toThrow('Ask response part is invalid');
+    // ADR-0041's ten statements a part and forty citations an answer went with the answer without blocks: past its 64 KiB, the same answer is refused.
+    const long = answer({ ...answerAndPoints, statements: said.map(value => ({ ...value, text: `${value.text} ${'x'.repeat(4_050)}` })) });
+    expect(canonicalJsonBytes(long).byteLength).toBeGreaterThan(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
+    expect(() => validatePersonAnswerResponseV8(long)).toThrow('Ask response exceeds JSON byte bound');
   });
 
   it('refuses blocks on a part with no statements, and a part with retired layout v1\'s layout (ADR-0045)', () => {
     expect(() => validatePersonAnswerResponseV8({ ...response({ status: 'not_found', statements: [], gap: 'None.' }), outcome: 'not_found', citations: [] })).toThrow('Ask response part blocks are invalid');
-    const { blocks: _, ...plain } = response().parts[0]!;
-    expect(() => validatePersonAnswerResponseV8({ ...response(), parts: [{ ...plain, layout: [{ kind: 'paragraph', statements: statements.map((_, at) => at) }] }] })).toThrow('Ask response part');
+    expect(() => validatePersonAnswerResponseV8(response({ layout: [{ kind: 'paragraph', statements: statements.map((_, at) => at) }] }))).toThrow('Ask response part');
   });
 
   it('refuses no blocks, and blocks that leave out, repeat, reorder or go past the part\'s statements, and caps no count of blocks', () => {

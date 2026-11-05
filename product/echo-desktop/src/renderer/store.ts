@@ -12,7 +12,7 @@ import type {
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
-import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, numberedSources, type SourceGroup } from './answer.js';
+import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
   answeredNow, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, checksHiding, followedTurn, foundUnreadable, freshChecks, freshStates, knownStates,
@@ -4238,10 +4238,9 @@ export function activeTurn(current: State = state): TimelineTurn | undefined {
   return turnOf(current.sources?.turn, current);
 }
 
-/** The citations of that turn's answer the page numbers (numberedSources). */
+/** The citations of that turn's answer. */
 function answerSources(current: State = state): readonly AnswerSource[] {
-  const turn = activeTurn(current);
-  return turn === undefined ? [] : numberedSources(turn.answer);
+  return activeTurn(current)?.answer.sources ?? [];
 }
 
 /**
@@ -4437,7 +4436,7 @@ function sourcesAt(gen: number): SourcesState | null {
 
 /** The approved records and follow-ups' rows (each source row's "owner · status") of what Ask shows, read one after another. */
 async function readRecords(gen: number): Promise<void> {
-  for (const source of shownTurns().flatMap(turn => numberedSources(turn.answer))) {
+  for (const source of shownTurns().flatMap(turn => turn.answer.sources)) {
     const sources = sourcesAt(gen);
     if (!sources) return;
     if (source.kind === 'record' && !sources.records[source.record.record_sha256]) await readRecord(gen, source.record, true);
