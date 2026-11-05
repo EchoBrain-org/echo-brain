@@ -484,7 +484,7 @@ leases through response decoding, streams and account checks. Refresh intent
 blocks new readers and waits for current readers to finish before the existing
 single-use refresh claim can rotate the credential. Reads normally run in
 parallel. Each client renews its own entries while their operations run. An
-entry whose process is gone, or that nobody has renewed for three minutes, is
+entry whose process is gone, or that nobody has renewed for ten minutes, is
 removed by its unique path. A process the client may not signal, such as one
 outside its sandbox, keeps its entry until it goes unrenewed. Files no client
 wrote are ignored. Unsafe entries fail closed until signing in again or

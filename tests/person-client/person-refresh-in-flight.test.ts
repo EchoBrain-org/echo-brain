@@ -264,7 +264,7 @@ it('keeps an entry whose process it may not signal until nobody renews it', asyn
     await setTimeout(200);
     expect(refreshed).toBe(false);
     expect(existsSync(entry)).toBe(true);
-    const unrenewed = new Date(Date.now() - 4 * 60_000);
+    const unrenewed = new Date(Date.now() - 11 * 60_000);
     utimesSync(entry, unrenewed, unrenewed);
     await refresh;
     expect(refreshed).toBe(true);
@@ -283,12 +283,34 @@ it('removes an entry nobody renews, whatever process has its ID now', async () =
     // This test's own process stands in for a live process that reused a crashed client's PID.
     const left = join(operations, `read-${process.pid}-${randomUUID()}`);
     writeFileSync(left, '', { mode: 0o600 });
-    const unrenewed = new Date(Date.now() - 4 * 60_000);
+    const unrenewed = new Date(Date.now() - 11 * 60_000);
     utimesSync(left, unrenewed, unrenewed);
     const refresh = gate.refresh(() => true, async () => 'refreshed', controller.signal);
     refresh.catch(() => undefined);
     await expect(Promise.race([refresh, setTimeout(1_000, 'still waiting')])).resolves.toBe('refreshed');
     expect(readdirSync(operations)).toEqual([]);
+  } finally { controller.abort(); rmSync(home, { recursive: true, force: true }); }
+});
+
+it('keeps an entry whose owner stalled for minutes, as on a slow file', async () => {
+  const home = signedInHome({ prefix: 'echo-refresh-stalled-owner-', now: '2026-11-05T07:00:00.000Z' });
+  const directory = new PersonSessionStore(home).paths.directory;
+  const gate = new PersonSessionOperations(directory);
+  const controller = new AbortController();
+  try {
+    await gate.read(async () => undefined); // Prepare the private directory.
+    const operations = join(directory, 'operations');
+    // Another live client whose event loop has blocked its renewals for five minutes.
+    const stalled = join(operations, `read-${process.pid}-${randomUUID()}`);
+    writeFileSync(stalled, '', { mode: 0o600 });
+    const renewed = new Date(Date.now() - 5 * 60_000);
+    utimesSync(stalled, renewed, renewed);
+    let refreshed = false;
+    const refresh = gate.refresh(() => true, async () => { refreshed = true; }, controller.signal);
+    refresh.catch(() => undefined);
+    await setTimeout(200);
+    expect(refreshed).toBe(false);
+    expect(existsSync(stalled)).toBe(true);
   } finally { controller.abort(); rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -303,9 +325,9 @@ it('lets the first refresh after a crash proceed once the left entry goes unrene
     writeFileSync(join(operations, `read-${process.pid}-${randomUUID()}`), '', { mode: 0o600 });
     const refresh = gate.refresh(() => true, async () => 'refreshed');
     await setTimeout(100);
-    // Three and a half minutes pass: the left entry missed its renewals, and the refresh's own entry stays.
+    // Ten and a half minutes pass: the left entry missed its renewals, and the refresh's own entry stays.
     const realNow = Date.now.bind(Date);
-    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 3.5 * 60_000);
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 10.5 * 60_000);
     await expect(refresh).resolves.toBe('refreshed');
     expect(readdirSync(operations)).toEqual([]);
   } finally { vi.restoreAllMocks(); rmSync(home, { recursive: true, force: true }); }

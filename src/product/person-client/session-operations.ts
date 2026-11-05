@@ -15,8 +15,11 @@ const ENTRY = /^(read|refresh)-(\d+)-[0-9a-f-]{36}$/u;
 const WAIT_MS = 25;
 const DEADLINE_MS = 11 * 60_000; // Longer than the client's longest (document) transfer.
 const RENEW_MS = 30_000;
-/** Several renewals missed: the entry's owner has stopped, whatever process has its ID now. */
-const STALE_MS = 3 * 60_000;
+/**
+ * Twenty renewals missed: the entry's owner has stopped, whatever process has its ID now. An owner whose event loop
+ * stalls on a slow file is not taken for gone, and a waiting refresh outlives an entry left just before it began.
+ */
+const STALE_MS = 10 * 60_000;
 
 /** This process's entries, by path, renewed until their operations end. */
 const live = new Set<string>();
@@ -107,7 +110,12 @@ export class PersonSessionOperations {
   private enter(kind: 'read' | 'refresh'): string {
     const name = `${kind}-${process.pid}-${randomUUID()}`;
     const path = join(this.directory, name);
-    this.prepared(() => closeSync(openSync(path, 'wx', 0o600)));
+    this.prepared(() => {
+      closeSync(openSync(path, 'wx', 0o600));
+      // Dated by this machine's clock, as renewals are, not by a network file server's.
+      const now = new Date();
+      utimesSync(path, now, now);
+    });
     hold(path);
     return name;
   }
