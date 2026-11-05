@@ -37,7 +37,7 @@ const QUESTION = 'what are the details on that ticket?';
 const RESOLVED = 'What are the details on THERM-482?';
 const answered = (extra: Record<string, unknown> = {}) => ({
   schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const, citations: [ticket],
-  parts: [{ question: RESOLVED, status: 'answered' as const, statements: [{ text: 'THERM-482 is in progress, owned by Dev Patel.', citation_indexes: [0], private: true }] }], ...extra,
+  parts: [{ question: RESOLVED, status: 'answered' as const, statements: [{ text: 'THERM-482 is in progress, owned by Dev Patel.', citation_indexes: [0], private: true }], blocks: [{ kind: 'answer' as const, statements: [0] }] }], ...extra,
 });
 const clarified = {
   schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: { kind: 'global' as const }, outcome: 'clarify' as const, citations: [], parts: [], question: QUESTION,

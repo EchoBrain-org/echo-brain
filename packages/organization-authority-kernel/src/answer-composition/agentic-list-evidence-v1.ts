@@ -400,8 +400,6 @@ export function agenticListMembershipV1(
 
 // ---- the writer -------------------------------------------------------
 
-/** Members named across one answer; the rest are "and N more", N from the list itself (addition 5). */
-export const AGENTIC_LIST_NAMED_MAX_V1 = 25;
 /** Characters of a member's label in a code-written name. */
 export const AGENTIC_LIST_NAME_CHARS_V1 = 120;
 /** Lists the writer sees, the plan's first. */
@@ -510,38 +508,8 @@ export type AgenticListSelectionV1 =
 export interface AgenticAnswerListUseV1 {
   readonly id: AgenticListIdV1;
   readonly where?: AgenticListSelectionV1;
-  /** Members selected by their E ids; v1 names at most AGENTIC_LIST_NAMED_MAX_V1, blocks keep all. A `where` beside them selects only when they name no member. */
+  /** Members selected by their E ids, every one named. A `where` beside them selects only when they name no member. */
   readonly members?: readonly string[];
-}
-
-/**
- * What each statement of one answer may name (W6): at most AGENTIC_LIST_NAMED_MAX_V1 distinct members across the
- * answer, statements selecting by id first, round-robin between them, then the rest round-robin. Each turn a statement
- * takes its next member in the order its names take; a member another statement already took costs nothing, wherever
- * it is named again. `share` is how many members the statement takes and `free` the indexes of `selected` others took
- * (agenticListStatementV1); its statement ends "and N more" for the members neither reaches.
- */
-export function agenticListNameSharesV1(
-  statements: readonly { readonly selected: readonly (AgenticListNamedMemberV1 & { readonly id: string })[]; readonly by_id: boolean }[],
-): readonly { readonly share: number; readonly free: ReadonlySet<number> }[] {
-  const orders = statements.map(value => (value.by_id ? value.selected.map((_, index) => [index]) : nameGroups(value.selected)).flat().map(index => value.selected[index]!.id));
-  const taker = new Map<string, number>();
-  const next = statements.map(() => 0);
-  let left = AGENTIC_LIST_NAMED_MAX_V1;
-  for (const byId of [true, false]) for (let gave = true; left > 0 && gave;) {
-    gave = false;
-    for (let index = 0; index < statements.length && left > 0; index += 1) {
-      const order = orders[index]!;
-      if (statements[index]!.by_id !== byId) continue;
-      while (next[index]! < order.length && taker.has(order[next[index]!]!)) next[index] = next[index]! + 1;
-      if (next[index]! === order.length) continue;
-      taker.set(order[next[index]!]!, index); next[index] = next[index]! + 1; left -= 1; gave = true;
-    }
-  }
-  return Object.freeze(statements.map((value, index) => Object.freeze({
-    share: [...taker.values()].filter(at => at === index).length,
-    free: new Set(value.selected.flatMap((member, at) => taker.has(member.id) && taker.get(member.id) !== index ? [at] : [])),
-  })));
 }
 
 // ---- the statement code writes ----------------------------------------
@@ -746,44 +714,23 @@ export interface AgenticListStatementInputV1 {
   readonly which?: boolean;
   /** The selected members, in list order: every member without a selection. */
   readonly selected: readonly AgenticListNamedMemberV1[];
-  /** Members this statement may take that cost a name: the answer's share (agenticListNameSharesV1), 0 once its names are spent. */
-  readonly share: number;
-  /** Indexes of `selected` that cost no share: members another statement of the answer takes (agenticListNameSharesV1). */
-  readonly free?: ReadonlySet<number>;
 }
 
 /**
- * The statement code writes for a list the answer uses (ADR-0041): its count,
- * its filter and its names, then "and N more" with N from the list.
- * A complete list: "8 Confluence pages created on October 4, 2026: A; B; ...".
- * A selection: "3 of the 60 Jira tickets created ... have owner Dana Lee: A; B; C",
- * or "2 of the 12 follow-ups ... are due from October 18 to October 24, 2026: ...".
- * A list that is not complete: "At least 12 Jira tickets ...". Members the
- * writer selected by id: "1 of the 8 Confluence pages created ...: PRD (status
- * current, created October 4, 2026)", each named alone with every row fact it
- * records; however many it selects, such a statement gives row facts, never
- * which items exist, unless a use of the list in full (`which`) or by `where`
- * selects the same members. Otherwise members that share a label and row facts
- * are one name (nameGroups, groupNames). Names are taken in list order while
- * the members they cover fit `share`, and stop early when the statement would
- * pass AGENTIC_LIST_STATEMENT_BYTES_V1. A member in `free` costs no share. The
- * first name is always written, covering its free members and at most `share`
- * others: a name never covers a member the statement does not cite. It always
- * covers the first member: with `share` 0, a first member no other statement
- * takes costs one name past the share, which buys no other member. `cited`
- * are the indexes in `selected` of the members the names cover, in order,
- * which the caller cites; "and N more" counts the rest.
- */
-type ListStatement = { readonly text: string; readonly cited: readonly number[] };
-/**
- * A list's statement in blocks (agenticListStatementsV2): its text and what it cites, and also its `caption`, the
- * statement without its names ("60 Jira tickets created on October 4, 2026"), and `names`, the indexes each name covers,
- * in order, as its table reads them.
+ * A list's statement (ADR-0041): its text and what it cites, and also its `caption`, the statement without its names
+ * ("60 Jira tickets created on October 4, 2026"), and `names`, the indexes each name covers, in order, as its table reads
+ * them. A complete list: "8 Confluence pages created on October 4, 2026: A; B; ...". A selection: "3 of the 60 Jira
+ * tickets created ... have owner Dana Lee: A; B; C", or "2 of the 12 follow-ups ... are due from October 18 to October
+ * 24, 2026: ...". A list that is not complete: "At least 12 Jira tickets ...". Members the writer selected by id: "1 of
+ * the 8 Confluence pages created ...: PRD (status current, created October 4, 2026)", each named alone with every row
+ * fact it records; however many it selects, such a statement gives row facts, never which items exist, unless a use of
+ * the list in full (`which`) or by `where` selects the same members. Otherwise members that share a label and row facts
+ * are one name (nameGroups, groupNames).
  */
 type ListBlockStatement = { readonly text: string; readonly cited: readonly number[]; readonly caption: string; readonly names: readonly (readonly number[])[] };
 
 /** The count and selection describe the whole logical list, even when blocks need several cited statements for it. */
-function listCaption(input: Omit<AgenticListStatementInputV1, "share" | "free">): string {
+function listCaption(input: AgenticListStatementInputV1): string {
   const { count, complete, where, selected, noun } = input;
   const phrase = phraseAfter(noun, input.filter);
   const k = selected.length;
@@ -796,39 +743,12 @@ function listCaption(input: Omit<AgenticListStatementInputV1, "share" | "free">)
       : `${complete ? "" : "At least "}${count} ${counted(noun, count)}${phrase}`;
 }
 
-export function agenticListStatementV1(input: AgenticListStatementInputV1): ListStatement {
-  const { selected } = input;
-  if (selected.length === 0 || !Number.isSafeInteger(input.share) || input.share < 0) throw new RangeError("A list statement names at least one member, with a whole, non-negative share");
-  const k = selected.length;
-  const byId = input.by_id === true;
-  const lead = listCaption(input);
-  const namesOf = (named: readonly (readonly number[])[]) => byId ? named.map(([index]) => factsName(selected[index!]!, input.filter.time_zone)) : groupNames(selected, named);
-  const free = input.free ?? new Set<number>();
-  // Each statement names at least its first member (W6): free, or for one name past a spent share that buys nothing else.
-  const share = free.has(0) ? input.share : Math.max(1, input.share);
-  const cost = (group: readonly number[]) => group.filter(index => !free.has(index)).length;
-  const [head, ...others] = byId ? selected.map((_, index) => [index]) : nameGroups(selected);
-  const paid = head!.filter(index => !free.has(index)).slice(0, share);
-  const groups = [head!.filter(index => free.has(index) || paid.includes(index)), ...others];
-  let fit = 1;
-  for (let spent = cost(groups[0]!); fit < groups.length && spent + cost(groups[fit]!) <= share; fit += 1) spent += cost(groups[fit]!);
-  for (let shown = fit; shown >= 1; shown -= 1) {
-    const named = groups.slice(0, shown);
-    const covered = named.reduce((total, group) => total + group.length, 0);
-    const more = covered < k ? `; and ${k - covered} more` : "";
-    const text = `${lead}: ${namesOf(named).join("; ")}${more}.`;
-    if (Buffer.byteLength(text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1 || shown === 1) {
-      return Object.freeze({ text, cited: Object.freeze(named.flat().sort((left, right) => left - right)) });
-    }
-  }
-  throw new RangeError("unreachable");
-}
-
 /**
- * A blocks answer keeps every selected member. Split only at statement byte/citation boundaries; the renderer
- * groups these statements as one table with one caption. No chunk changes the selected set or counts its tail as omitted.
+ * The statements code writes for a list the answer uses: every selected member, named in list order, split only at a
+ * statement's byte and citation bounds; the renderer groups them as one table with one caption. No statement changes the
+ * selected set or counts its tail as omitted.
  */
-export function agenticListStatementsV2(input: Omit<AgenticListStatementInputV1, "share" | "free">): readonly ListBlockStatement[] {
+export function agenticListStatementsV2(input: AgenticListStatementInputV1): readonly ListBlockStatement[] {
   if (input.selected.length === 0) throw new RangeError("A list statement names at least one member");
   const caption = listCaption(input);
   const groups = (input.by_id ? input.selected.map((_, index) => [index]) : nameGroups(input.selected)).flatMap(group => {

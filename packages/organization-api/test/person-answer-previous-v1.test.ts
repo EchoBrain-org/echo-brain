@@ -89,7 +89,7 @@ describe('the previous turn on the Ask request (ADR-0047)', () => {
 /** A V8 answer to a request that carried the previous turn. */
 const answered = (extra: Record<string, unknown> = {}, outcome = 'answered') => ({
   schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome, citations: [ticket, decision],
-  parts: [{ question: 'What are the details on THERM-482?', status: 'answered', statements: [{ text: 'THERM-482 is in progress, owned by Dev.', citation_indexes: [0], private: true }] }],
+  parts: [{ question: 'What are the details on THERM-482?', status: 'answered', statements: [{ text: 'THERM-482 is in progress, owned by Dev.', citation_indexes: [0], private: true }], blocks: [{ kind: 'answer', statements: [0] }] }],
   question: 'What are the details on THERM-482?', ...extra,
 });
 const clarified = (extra: Record<string, unknown> = {}) => ({

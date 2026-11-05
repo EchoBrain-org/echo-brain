@@ -65,11 +65,11 @@ function fixture(options: { readonly membership?: (id: string) => Membership | u
     if (options.generate !== undefined) return options.generate(input);
     const prompt = JSON.parse(input.user_prompt) as Prompt;
     const properties = input.schema.properties as Readonly<Record<string, unknown>>;
-    if (properties?.sentences !== undefined) {
+    if (properties?.blocks !== undefined) {
       roles.push("answer");
       if (badAnswer) return { unsupported: "Invalid answer shape" };
       const first = prompt.evidence![0]!.id;
-      return { sentences: [{ text: "The launch window is October.", evidence: [first] }], not_found: [] };
+      return { blocks: [{ block: "answer", sentences: [{ text: "The launch window is October.", evidence: [first] }] }], not_found: [] };
     }
     roles.push("step");
     afterStep?.(prompt.step!);
@@ -109,14 +109,14 @@ describe("Agentic Ask with stored source evidence", () => {
     const f = fixture({ generate: async input => {
       const prompt = JSON.parse(input.user_prompt) as Prompt;
       const properties = input.schema.properties as Readonly<Record<string, unknown>>;
-      if (properties?.sentences !== undefined) {
+      if (properties?.blocks !== undefined) {
         const softwareItem = prompt.evidence?.find(item => item.title === "SCOUT Software Review.md");
         const hardwareItem = prompt.evidence?.find(item => item.title === "SCOUT Hardware Review.md");
         expect(softwareItem?.text).toBe(`SCOUT Software Review.md\n${software}`);
         expect(hardwareItem?.text).toBe(`SCOUT Hardware Review.md\n${hardware}`);
-        return { sentences: [
-          { text: "Software needs an explicit transition table.", evidence: [softwareItem!.id] },
-          { text: "Hardware needs battery endurance measurements.", evidence: [hardwareItem!.id] },
+        return { blocks: [
+          { block: "answer", sentences: [{ text: "Software needs an explicit transition table.", evidence: [softwareItem!.id] }] },
+          { block: "text", sentences: [{ text: "Hardware needs battery endurance measurements.", evidence: [hardwareItem!.id] }] },
         ], not_found: [] };
       }
       expect(prompt.opened).toEqual([]);
@@ -252,9 +252,9 @@ describe("Agentic Ask combined request-local sources", () => {
     const pageSource = live("confluence", page);
     const model: StructuredGenerationPort = { async generate(input) {
       const prompt = JSON.parse(input.user_prompt) as Prompt;
-      if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) {
+      if ((input.schema.properties as Record<string, unknown>).blocks !== undefined) {
         const ids = prompt.evidence!.map(item => item.id);
-        return { sentences: [{ text: "The meeting, work item and plan all place EVT on Tuesday.", evidence: ids }], not_found: [] };
+        return { blocks: [{ block: "answer", sentences: [{ text: "The meeting, work item and plan all place EVT on Tuesday.", evidence: ids }] }], not_found: [] };
       }
       const listed = prompt.last_results?.find(result => result.tool === "search")?.results ?? [];
       return listed.length === 0

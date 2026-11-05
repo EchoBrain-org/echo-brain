@@ -5,12 +5,13 @@ import {
 } from '@echo-brain/organization-api';
 import { describe, expect, it, vi } from 'vitest';
 import { createAgenticAskV5 } from '../../src/answer-composition/agentic-ask-v1.js';
-import { ANSWER_PROMPT, ASK_STEP_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, FOLLOW_UPS_STEP_GUIDANCE } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
+import { ANSWER_BLOCKS_PROMPT, ANSWER_PROMPT, ASK_STEP_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, FOLLOW_UPS_STEP_GUIDANCE } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
 import { citationOfAgenticEvidenceItemV1, describeAgenticEvidenceItemV1 } from '../../src/answer-composition/agentic-evidence-bundle-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import { evidenceDeskSourceV2, type EvidenceDeskItemV2, type EvidenceDeskPortV2 } from '../../src/shared/evidence-desk-v2.js';
 import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1, followUpDeskFieldsV1 } from '../../src/shared/follow-up-evidence-v1.js';
 import { result } from './fixtures/agentic-scenarios.js';
+import { writerReply } from './fixtures/agentic-scenarios.js';
 
 /**
  * Follow-ups in the research loop and the Ask writer (ADR-0040): the prompt
@@ -50,7 +51,7 @@ function scripted(replies: unknown[]) {
     inputs,
     steps: () => inputs.filter(input => input.system_prompt.startsWith("You are Echo's research agent")),
     writer: () => inputs.find(input => input.system_prompt.startsWith("You write Echo's final answer")),
-    model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); return replies.shift() ?? { sentences: [], not_found: [] }; } },
+    model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); return replies.shift() ?? writerReply([]); } },
   };
 }
 const userOf = (input: StructuredGenerationInput) => JSON.parse(input.user_prompt) as Record<string, unknown> & { last_results: Record<string, unknown>[]; seen: Record<string, unknown>[] };
@@ -65,11 +66,11 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     const followUpsOnly = scripted([
       step('open', [{ tool: 'list', args: { source: 'follow_ups', owner: 'Mara Lind', status: 'open' } }]),
       step('found', [{ tool: 'finish', args: {} }], ['E1']),
-      { sentences: [{ text: 'You own the open fan curve follow-up.', evidence: ['E1'] }], not_found: [] },
+      writerReply([{ text: 'You own the open fan curve follow-up.', evidence: ['E1'] }]),
     ]);
     await createAgenticAskV5({ desk: deskWith([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: followUpsOnly.model, audit: { append: () => undefined }, generation, asker }).answer({ question });
     expect(followUpsOnly.steps()[0]!.system_prompt).toBe(`${ASK_STEP_PROMPT}\n\n${FOLLOW_UPS_STEP_GUIDANCE}`);
-    expect(followUpsOnly.writer()!.system_prompt).toBe(`${ANSWER_PROMPT}\n\n${FOLLOW_UPS_ANSWER_GUIDANCE}`);
+    expect(followUpsOnly.writer()!.system_prompt).toBe(`${ANSWER_PROMPT}\n\n${FOLLOW_UPS_ANSWER_GUIDANCE}\n\n${ANSWER_BLOCKS_PROMPT}`);
     expect(listSources(followUpsOnly.steps()[0]!)).toEqual(['meetings', 'documents', 'follow_ups']);
     expect((userOf(followUpsOnly.steps()[0]!).source_catalog as { source: string }[]).at(-1)).toEqual({ source: 'follow_ups', kind: 'follow_up', description: FOLLOW_UPS_SOURCE_DESCRIPTOR_V1.description, metadata_only_list: false, capabilities: FOLLOW_UPS_SOURCE_DESCRIPTOR_V1.capabilities });
 
@@ -94,7 +95,7 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     const run = scripted([
       step('open', [{ tool: 'list', args: { source: 'follow_ups', owner: ' @Mara ', status: 'In progress', kind: 'action' } }]),
       step('found', [{ tool: 'finish', args: {} }], ['E1', 'E2']),
-      { sentences: [{ text: 'You have two open follow-ups: the fan curve, due Oct 20, and the alarm thresholds.', evidence: ['E1', 'E2'] }], not_found: [] },
+      writerReply([{ text: 'You have two open follow-ups: the fan curve, due Oct 20, and the alarm thresholds.', evidence: ['E1', 'E2'] }]),
     ]);
     const answer = await createAgenticAskV5({ desk, model: run.model, audit: { append: () => undefined }, generation, asker }).answer({ question });
 
@@ -167,7 +168,7 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     const run = scripted([
       step('open', [{ tool: 'list', args: { source: 'follow_ups', owner: 'Mara Lind', status: 'open' } }]),
       step('found', [{ tool: 'finish', args: {} }], ['E1']),
-      { sentences: [{ text: 'You own the open fan curve follow-up.', evidence: ['E1'] }], not_found: [] },
+      writerReply([{ text: 'You own the open fan curve follow-up.', evidence: ['E1'] }]),
     ]);
     const audits: Record<string, unknown>[] = [];
     const events: PersonAskProgressStepEventV3[] = [];

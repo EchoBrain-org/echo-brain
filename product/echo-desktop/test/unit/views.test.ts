@@ -46,7 +46,7 @@ describe('view models copy only what the renderer may see', () => {
     const source = (tool: unknown) => ({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
       citations: [{ kind: 'page', label: 'Launch plan', visibility: 'only_me', citation: { kind: 'page', tool_id: tool,
         external_scope_id: 'private-tenant', page_id: '12345', section_id: 'one', version: '7', permalink, text_sha256: sha('a') } }],
-      parts: [{ question: 'When?', status: 'answered', statements: [{ text: 'Tuesday.', citation_indexes: [0], private: true }] }],
+      parts: [{ question: 'When?', status: 'answered', statements: [{ text: 'Tuesday.', citation_indexes: [0], private: true }], blocks: [{ kind: 'text', statements: [0] }] }],
     });
     const answer = answerView({ ok: true, result: source(tool_id) }, { kind: 'global' });
     // Only you can read it: an answer's source says so (ADR-0045).
@@ -59,7 +59,8 @@ describe('view models copy only what the renderer may see', () => {
     const answer = answerView({ ok: true, result: { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
       citations: [{ kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: {
         kind: 'ticket', tool_id: 'jira', external_scope_id: 'private-tenant', ticket_id: '10007', permalink, text_sha256: sha('a'),
-      } }], parts: [{ question: 'Which ticket?', status: 'answered', statements: [{ text: 'ECHO-7 covers launch.', citation_indexes: [0], private: true }] }],
+      } }], parts: [{ question: 'Which ticket?', status: 'answered', statements: [{ text: 'ECHO-7 covers launch.', citation_indexes: [0], private: true }],
+        blocks: [{ kind: 'text', statements: [0] }] }],
     } }, { kind: 'global' });
     expect(visible(answer.sources)).toEqual([{ kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink, private: true }]);
     expect(JSON.stringify({ ...answer, sources: visible(answer.sources) })).not.toContain('private-tenant');
@@ -180,7 +181,8 @@ describe('view models copy only what the renderer may see', () => {
     const original = { kind: 'source_revision', source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
       representation_sha256: sha('5'), anchor_sha256: sha('6') };
     const answered = (citations: unknown[]) => ({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
-      citations, parts: [{ question: 'What did we ship?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0], private: false }] }] });
+      citations, parts: [{ question: 'What did we ship?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0], private: false }],
+        blocks: [{ kind: 'text', statements: [0] }] }] });
     const answer = answerView({ ok: true, result: answered([
       { citation: record, kind: 'decision', label: 'Tuesday sync', visibility: 'team' },
       { citation: { ...original, label: 'Pricing call' }, kind: 'document_passage', label: 'Pricing call', visibility: 'team' },
@@ -634,7 +636,7 @@ const namedSource = { kind: 'record', label: 'Tuesday sync', record: { record_sh
 /** A V8 answer whose one statement cites its first source, private as that source is. */
 const v8 = (citations: readonly Record<string, unknown>[]) => ({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered', citations,
   parts: [{ question: 'What did we ship?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0],
-    private: ['only_me', 'approver_only'].includes(String(citations[0]?.visibility)) }] }] });
+    private: ['only_me', 'approver_only'].includes(String(citations[0]?.visibility)) }], blocks: [{ kind: 'text', statements: [0] }] }] });
 
 describe('an Ask citation opens the exact item it cites', () => {
   const sources = (citations: readonly Record<string, unknown>[]) => answerView({ ok: true, result: v8(citations) }, { kind: 'global' }).sources;
@@ -786,21 +788,18 @@ describe('an answer arranged in blocks (answer layout v2, ADR-0051)', () => {
   const scope = { kind: 'global' } as const;
   const question = 'Can THERM start PVT?';
 
-  it('carries the fixture\'s blocks as the client validated them, every block; an answer to an Ask that did not ask for them has none, and reads the same', () => {
-    const arranged = answerView({ ok: true, result: blocksAnswer(question, scope, true) }, scope);
+  it('carries the fixture\'s blocks as the client validated them, every block, and reads its sentences one a line', () => {
+    const arranged = answerView({ ok: true, result: blocksAnswer(question, scope) }, scope);
     const blocks = arranged.parts[0]!.blocks!;
     expect(blocks.map(block => block.kind)).toEqual(['answer', 'table', 'timeline', 'card', 'points', 'text', 'quote']);
     expect(blocks[2]).toMatchObject({ kind: 'timeline', title: 'Soak test', statements: [2, 3], events: [{ date: '2026-10-20', who: 'Noor Haddad' }, { date: '2026-10-23' }] });
     expect(blocks[3]).toMatchObject({ kind: 'card', title: 'THERM-48', entity: 'ticket', facts: [{ label: 'Status', value: 'In review' }, { label: 'Owner', value: 'Tomas Okafor' }] });
     expect(arranged.parts[0]).not.toHaveProperty('layout');
-    const plain = answerView({ ok: true, result: blocksAnswer(question, scope, false) }, scope);
-    expect(plain.parts[0]).not.toHaveProperty('blocks');
-    expect(plain.parts[0]!.statements).toEqual(arranged.parts[0]!.statements);
-    expect(arranged.text).toBe(plain.text);
+    expect(arranged.text).toBe(arranged.parts[0]!.statements.map(statement => statement.text).join('\n'));
   });
 
   it('marks a cited item only you or the approver can read as private, for the lock on its source row', () => {
-    const arranged = answerView({ ok: true, result: blocksAnswer(question, scope, true) }, scope);
+    const arranged = answerView({ ok: true, result: blocksAnswer(question, scope) }, scope);
     // Three team pages, then three tickets only you can read.
     expect(arranged.sources.map(source => source.private ?? false)).toEqual([false, false, false, true, true, true]);
     const approver = answerView({ ok: true, result: v8([{ ...named, visibility: 'approver_only' }]) }, scope);
@@ -810,12 +809,17 @@ describe('an answer arranged in blocks (answer layout v2, ADR-0051)', () => {
       { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7' }] });
   });
 
-  it('refuses a part laid out by retired layout v1, with blocks or without, blocks that leave a statement out, and a row that cites what its statements do not', () => {
-    const answer = blocksAnswer(question, scope, true) as { parts: { blocks: Record<string, unknown>[] }[] };
+  it('refuses statements without blocks, blocks without statements, a part laid out by retired layout v1, blocks that leave a statement out, and a row that cites what its statements do not', () => {
+    const answer = blocksAnswer(question, scope) as { parts: { blocks: Record<string, unknown>[] }[] };
     const [part] = answer.parts;
-    const plain = blocksAnswer(question, scope, false) as { parts: Record<string, unknown>[] };
+    const { blocks: _blocks, ...bare } = part!;
+    // Every part with statements is arranged (ADR-0051): there is no answer without blocks, and a part with none has none.
+    expect(() => answerView({ ok: true, result: { ...answer, parts: [bare] } }, scope)).toThrow(ViewError);
+    const nothing = { ...answer, outcome: 'not_found', citations: [], parts: [{ question, status: 'not_found', statements: [] }] };
+    expect(answerView({ ok: true, result: nothing }, scope).parts[0]).not.toHaveProperty('blocks');
+    expect(() => answerView({ ok: true, result: { ...nothing, parts: [{ ...nothing.parts[0], blocks: [{ kind: 'text', statements: [] }] }] } }, scope)).toThrow(ViewError);
     const layout = [{ kind: 'paragraph', statements: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] }];
-    for (const laidOut of [{ ...plain, parts: [{ ...plain.parts[0], layout }] }, { ...answer, parts: [{ ...part, layout }] }]) {
+    for (const laidOut of [{ ...answer, parts: [{ ...bare, layout }] }, { ...answer, parts: [{ ...part, layout }] }]) {
       expect(() => answerView({ ok: true, result: laidOut }, scope)).toThrow(ViewError);
     }
     const dropped = { ...answer, parts: [{ ...part, blocks: part!.blocks.slice(0, 6) }] };

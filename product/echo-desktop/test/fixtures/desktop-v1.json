@@ -50,6 +50,14 @@
             ],
             "private": false
           }
+        ],
+        "blocks": [
+          {
+            "kind": "text",
+            "statements": [
+              0
+            ]
+          }
         ]
       }
     ]

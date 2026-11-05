@@ -23,7 +23,7 @@ const [decision, fan, certificate, soak] = itemsOf(blockers);
 const citations = [soak, fan, certificate, decision].map((item) => citationOfAgenticEvidenceItemV8(item, document.time_zone));
 /** What the v2 writer is given for gate-blockers, as the kernel asks it: the evidence its answers are graded against, captured once. */
 let captured;
-const given = () => (captured ??= captureWriterPrompts(blockers, document, generation, BUILT.answer_layout).then((prompts) => evidenceOf(prompts.user_prompt)));
+const given = () => (captured ??= captureWriterPrompts(blockers, document, generation).then((prompts) => evidenceOf(prompts.user_prompt)));
 /** A statement citing `citation_indexes`: private exactly when one of them is, as a Jira issue the asker reads alone is. */
 const statement = (text, citation_indexes) => ({ text, citation_indexes, private: citation_indexes.some((index) => citations[index].visibility === "only_me") });
 /** gate-blockers answered with every block layout v2 has, as the kernel releases it (ADR-0051). */
@@ -84,11 +84,11 @@ test("reads every block of a released answer into the common blocks, each claim 
   assert.deepEqual(grade.shapes, ["grid", "ordered", "profile", "prose", "sections", "sequence", "verbatim"]);
 });
 
-test("is not valid when the answer was released without blocks or fails the V8 contract, and passes nothing", async () => {
+test("is not valid when the answer fails the V8 contract, its blocks left off included, and passes nothing", async () => {
   const ids = evidenceIdsOf(citations, itemsOf(blockers));
   const { blocks: _blocks, ...plain } = released().parts[0];
   const without = readReleased({ ...released(), parts: [plain] }, ids);
-  assert.deepEqual([without.valid, without.problems, without.blocks], [false, ["the answer was released without blocks"], []]);
+  assert.deepEqual([without.valid, without.problems, without.blocks], [false, ["organization API: Ask response part blocks are invalid"], []]);
   const broken = readReleased(released({ blocks: released().parts[0].blocks.slice(0, 6) }), ids);
   assert.deepEqual([broken.valid, broken.problems], [false, ["organization API: Ask answer blocks leave a statement out"]]);
   assert.equal(readReleased(null, ids).valid, false);
@@ -167,7 +167,7 @@ test("runs the built writer through the kernel end to end, keeping each call and
   // The kernel reads its events oldest first.
   assert.deepEqual(trial.read.blocks[2].events.map((event) => [event.date, event.evidence]), [["2026-10-08", ["E1"]], ["2026-11-05", ["E2"]]]);
   assert.deepEqual([trial.grade.valid, trial.grade.grounded, trial.grade.nothing_lost, trial.grade.fit, trial.grade.main_shape], [true, true, true, true, "profile"]);
-  assert.deepEqual(report.catalogs.built, { modeled_on: BUILT.modeled_on, answer_layout: 2, catalog_key: "block_catalog", catalog: ANSWER_BLOCK_CATALOG, can_show: BUILT.can_show, schema: answerBlocksSchema });
+  assert.deepEqual(report.catalogs.built, { modeled_on: BUILT.modeled_on, catalog_key: "block_catalog", catalog: ANSWER_BLOCK_CATALOG, can_show: BUILT.can_show, schema: answerBlocksSchema });
   assert.deepEqual([report.complete, report.decision, report.judge, report.errors], [false, { complete: false, arm: "built", passes: null, rules: report.summary.built.rules }, {},
     { writer_calls: 0, trials_without_reply: 0, judge_orders_without_ranks: 0 }]);
 });

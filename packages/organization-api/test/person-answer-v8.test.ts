@@ -32,7 +32,8 @@ const isPrivate = (citation: { readonly visibility: string }) => citation.visibi
 /** One answered part whose one sentence cites every citation, marked private exactly when one of them is. */
 const response = (citations: readonly { readonly visibility: string }[] = [project]) => ({
   schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const, citations,
-  parts: [{ question: 'What are my current projects?', status: 'answered' as const, statements: [{ text: 'Thermal recovery is active, led by Mara.', citation_indexes: citations.map((_, index) => index), private: citations.some(isPrivate) }] }],
+  parts: [{ question: 'What are my current projects?', status: 'answered' as const, statements: [{ text: 'Thermal recovery is active, led by Mara.', citation_indexes: citations.map((_, index) => index), private: citations.some(isPrivate) }],
+    blocks: [{ kind: 'answer' as const, statements: [0] }] }],
 });
 
 describe('Workspace answer V8 (research tool contract v1)', () => {

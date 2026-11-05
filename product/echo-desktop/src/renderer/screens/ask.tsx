@@ -30,7 +30,7 @@ import {
 } from '../timeline.js';
 import { Check, Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
 
-/** What an original source may show: 2,000 characters. The store keeps at most 32 sources. */
+/** What an original source may show: 2,000 characters. */
 const MAX_EVIDENCE = 2_000;
 
 /** One match: its title with the query's words marked, or where in its text they are. */
@@ -488,13 +488,14 @@ function Arranged({ state, view, part, index, blocks, opening }: {
 }
 
 /**
- * The answer: each part in its blocks when the writer arranged it
- * (ADR-0051), and a paragraph per sentence when not. A part with nothing to
- * show is left out, and so is a sentence citing a source you can no longer
- * read; one whose source changed is lit in the signal (ADR-0047). Only typed
- * actionable explanations are shown. An answer that says nothing and shows no
- * explanation says `empty`, its turn's line (nothingLine), unless the
- * project's own line under it says so (null): no answer is left blank.
+ * The answer: each part in the blocks the writer arranged its sentences in
+ * (ADR-0051), or, when it could write none, what research found. A part with
+ * nothing to show is left out, and so is a sentence citing a source you can
+ * no longer read; one whose source changed is lit in the signal (ADR-0047).
+ * Only typed actionable explanations are shown. An answer that says nothing
+ * and shows no explanation says `empty`, its turn's line (nothingLine),
+ * unless the project's own line under it says so (null): no answer is left
+ * blank.
  */
 function AgenticAnswer({ state, view, empty, dimmed = false }: { state: State; view: TurnView; empty: string | null; dimmed?: boolean }) {
   const answer = view.answer;
@@ -509,9 +510,7 @@ function AgenticAnswer({ state, view, empty, dimmed = false }: { state: State; v
         <section class="answer-part" key={index}>
           {/* One part answers the question itself: its label would repeat it. */}
           {answer.parts.length > 1 && <div class="section-label">{part.question}</div>}
-          {part.blocks
-            ? <Arranged state={state} view={view} part={part} index={index} blocks={part.blocks} opening={opening} />
-            : part.statements.map((statement, place) => <Statement key={place} state={state} view={view} statement={statement} id={`${index}.${place}`} />)}
+          {part.blocks && <Arranged state={state} view={view} part={part} index={index} blocks={part.blocks} opening={opening} />}
           {part.records?.map((statement, place) => <Found key={`record-${place}`} state={state} view={view} statement={statement} id={`${index}.r${place}`} />)}
         </section>
       ))}

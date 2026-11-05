@@ -344,7 +344,7 @@ export interface AnswerStatement {
 export type AnswerTableRow = PersonAnswerTableRowV1;
 
 /**
- * How a part reads when the writer arranged it (answer layout v2, ADR-0051):
+ * How a part reads, as the writer arranged it (answer layout v2, ADR-0051):
  * blocks that group its statements, in their order, into the answer, text,
  * points, a table, a timeline, a card or a quote. Every item a block shows is
  * one of its statements and cites what that statement cites (a point, an
@@ -367,7 +367,7 @@ export interface AnswerPart {
   readonly gap?: string;
   readonly gap_details?: PersonAnswerGapDetailsV1;
   readonly records?: readonly AnswerStatement[];
-  /** Only on a V8 answer to an Ask that asked for answer layout v2: the blocks its statements read as. Without them, each is a paragraph. */
+  /** The blocks its statements read as (answer layout v2, ADR-0051): a part with statements has them, and one with none has nothing to arrange. */
   readonly blocks?: readonly ArrangedBlock[];
 }
 

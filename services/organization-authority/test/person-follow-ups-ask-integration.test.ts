@@ -16,8 +16,8 @@ function scripted(steps: readonly Step[]) {
   const model: StructuredGenerationPort = { async generate(input: StructuredGenerationInput) {
     prompts.push(input.user_prompt);
     const prompt = JSON.parse(input.user_prompt) as Prompt;
-    if ((input.schema.properties as Readonly<Record<string, unknown>>).sentences !== undefined) {
-      return { sentences: [{ text: 'The launch follow-up on the pilot decision is still open.', evidence: ['E1'] }], not_found: [] };
+    if ((input.schema.properties as Readonly<Record<string, unknown>>).blocks !== undefined) {
+      return { blocks: [{ block: 'answer', sentences: [{ text: 'The launch follow-up on the pilot decision is still open.', evidence: ['E1'] }] }], not_found: [] };
     }
     const step = queue.shift() ?? { actions: [{ tool: 'finish', args: {} }], found: true };
     return { parts: [{ question: prompt.question!, notes: '', needs: [{ need: 'Open follow-ups', status: step.found === true ? 'found' : 'open', evidence: step.found === true ? ['E1'] : [] }] }], actions: step.actions };

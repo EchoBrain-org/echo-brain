@@ -102,12 +102,12 @@ export function scriptedModel(caseDefinition, writer, refusal) {
 }
 
 /**
- * Ask over a desk of `items` (caseItems), as the kernel runs it for a client that asks for `answerLayout`: asked at
- * `askedAt` by the cases document's asker, in its time zone and on its today, with `model`.
+ * Ask over a desk of `items` (caseItems), as the kernel runs it: asked at `askedAt` by the cases document's asker, in its
+ * time zone and on its today, with `model`.
  */
-export function caseAsk(items, document, askedAt, model, generation, answerLayout) {
+export function caseAsk(items, document, askedAt, model, generation) {
   return createAgenticAskV5({
-    desk: caseDesk(items, askedAt), model, generation, audit: { append: () => undefined }, answer_layout: answerLayout,
+    desk: caseDesk(items, askedAt), model, generation, audit: { append: () => undefined },
     asker: { display_name: document.asker }, time_context: { now: askedAt, time_zone: document.time_zone },
     today: () => document.today, wall_ms: () => Date.parse(askedAt),
   });

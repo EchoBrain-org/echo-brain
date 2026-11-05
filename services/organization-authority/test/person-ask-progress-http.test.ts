@@ -53,8 +53,8 @@ function fixture(options: { readonly writer?: (attempt: number, written: () => u
   // Searches once, finishes on what it found, then writes one sentence.
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
     const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: string[] }[]; evidence?: { id: string }[] };
-    if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) {
-      const written = () => ({ sentences: [{ text: 'The PVT fixture is ready and Manufacturing approved it.', evidence: [prompt.evidence![0]!.id] }], not_found: [] });
+    if ((input.schema.properties as Record<string, unknown>).blocks !== undefined) {
+      const written = () => ({ blocks: [{ block: 'answer', sentences: [{ text: 'The PVT fixture is ready and Manufacturing approved it.', evidence: [prompt.evidence![0]!.id] }] }], not_found: [] });
       return options.writer === undefined ? written() : options.writer(attempt, written);
     }
     const id = prompt.last_results?.[0]?.results?.[0];
@@ -74,7 +74,7 @@ function fixture(options: { readonly writer?: (attempt: number, written: () => u
     restartAtCheck(call: number) { restartAt = call; },
     route: createPersonLiveAnswerRouteV1(options_),
     /** Access is revoked once `writers` answer writers have run, so that attempt's final check refuses it. */
-    revokeAtFinalCheck(writers = 1) { originals.revalidateDeskRelease.mockImplementation(() => { if (generate.mock.calls.filter(([input]) => (input.schema.properties as Record<string, unknown>).sentences !== undefined).length >= writers) revoked = true; return revalidate(); }); },
+    revokeAtFinalCheck(writers = 1) { originals.revalidateDeskRelease.mockImplementation(() => { if (generate.mock.calls.filter(([input]) => (input.schema.properties as Record<string, unknown>).blocks !== undefined).length >= writers) revoked = true; return revalidate(); }); },
   };
 }
 

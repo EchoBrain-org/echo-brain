@@ -9,6 +9,7 @@ import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1, followUpDeskFieldsV1 } from '../../src
 import { PEOPLE_SOURCE_DESCRIPTOR_V1, PROJECTS_SOURCE_DESCRIPTOR_V1 } from '../../src/shared/workspace-evidence-v1.js';
 import { agenticListMembersNounV1, agenticListNounV1 } from '../../src/answer-composition/agentic-list-evidence-v1.js';
 import { generation, listed, result } from './fixtures/agentic-scenarios.js';
+import { writerReply } from './fixtures/agentic-scenarios.js';
 
 /**
  * The research tool contract v1 in Ask's research loop: each read checked against its source's capabilities, a refused
@@ -31,7 +32,7 @@ function scripted(replies: unknown[]) {
   const inputs: StructuredGenerationInput[] = [];
   return {
     steps: () => inputs.filter(input => input.system_prompt.startsWith("You are Echo's research agent")),
-    model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); return replies.shift() ?? { lists: [], sentences: [], not_found: [] }; } },
+    model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); return replies.shift() ?? writerReply([]); } },
   };
 }
 type Prompt = Record<string, unknown> & { last_results: Record<string, unknown>[]; seen: Record<string, unknown>[]; lists: Record<string, unknown>[] };
@@ -111,7 +112,7 @@ describe('Ask research tool contract v1', () => {
     const run = scripted([
       step([{ tool: 'list', args: { source: 'meetings', kind: 'decision', date_field: 'occurred', since: '2026-10-18', until: '2026-10-18' } }]),
       finish(),
-      { lists: [{ id: 'L1' }], sentences: [], not_found: [] },
+      writerReply([], { lists: [{ id: 'L1' }] }),
     ]);
     const answer = await ask(port, run.model).answer({ question: 'Which decisions were made at meetings yesterday?' });
     const prompt = userOf(run.steps()[1]!);
@@ -138,7 +139,7 @@ describe('Ask research tool contract v1', () => {
       attributes: { status: 'active', role: 'member', leads: 'Mara Lind' }, text: 'THERM. Leads: Mara Lind. Members: Jules Park (member).', receipt_sha256: canonicalSha256('project-therm'),
     });
     const port = desk({ live_sources: [PROJECTS_SOURCE_DESCRIPTOR_V1], list: vi.fn(async () => result([project])) });
-    const run = scripted([step([{ tool: 'list', args: { source: 'projects', status: 'active' } }]), finish(), { lists: [{ id: 'L1' }], sentences: [], not_found: [] }]);
+    const run = scripted([step([{ tool: 'list', args: { source: 'projects', status: 'active' } }]), finish(), writerReply([], { lists: [{ id: 'L1' }] })]);
     const events: PersonAskProgressStepEventV3[] = [];
     const { response, receipt } = await createAgenticAskV5({ desk: port, model: run.model, audit: { append: () => undefined }, generation, today: () => '2026-10-19' })
       .answerWithReceipt({ question: 'What are the current projects, and who leads them?', on_progress: event => { events.push(event); } });
@@ -151,24 +152,19 @@ describe('Ask research tool contract v1', () => {
 });
 
 describe('Ask answer layout v2 (ADR-0051)', () => {
-  it('arranges a V8 answer in blocks only when the client asked for them, a list the writer uses as its table', async () => {
+  it('arranges every V8 answer in blocks, a list the writer uses as its table', async () => {
     const projects = [1, 2].map((n): EvidenceDeskItemV2 => Object.freeze({
       id: `project-${n}`, kind: 'project', citation: { kind: 'project' as const, project_id: `prj_00000000-0000-4000-8000-00000000000${n}` as const }, label: `Project ${n}`, visibility: 'project',
       attributes: { status: 'active' }, text: `Project ${n}.`, receipt_sha256: canonicalSha256(`project-${n}`),
     }));
-    const answer = async (answer_layout?: 2) => {
-      const run = scripted([step([{ tool: 'list', args: { source: 'projects', status: 'active' } }]), finish(),
-        { lists: [{ id: 'L1' }], ...(answer_layout === undefined ? { sentences: [] } : { blocks: [] }), not_found: [] }]);
-      const port = desk({ live_sources: [PROJECTS_SOURCE_DESCRIPTOR_V1], list: vi.fn(async () => result(projects)) });
-      const response = await createAgenticAskV5({ desk: port, model: run.model, audit: { append: () => undefined }, generation, today: () => '2026-10-19', ...(answer_layout === undefined ? {} : { answer_layout }) })
-        .answer({ question: 'What are the current projects?' });
-      expect(validatePersonAnswerResponseV8(response)).toEqual(response);
-      return response.parts[0]!;
-    };
-    expect((await answer(2)).blocks).toEqual([{ kind: 'table', statements: [0], columns: ['Item', 'Status'], caption: expect.stringMatching(/^2 projects/u), rows: [
+    const run = scripted([step([{ tool: 'list', args: { source: 'projects', status: 'active' } }]), finish(), writerReply([], { lists: [{ id: 'L1' }] })]);
+    const port = desk({ live_sources: [PROJECTS_SOURCE_DESCRIPTOR_V1], list: vi.fn(async () => result(projects)) });
+    const response = await createAgenticAskV5({ desk: port, model: run.model, audit: { append: () => undefined }, generation, today: () => '2026-10-19' })
+      .answer({ question: 'What are the current projects?' });
+    expect(validatePersonAnswerResponseV8(response)).toEqual(response);
+    expect(response.parts[0]!.blocks).toEqual([{ kind: 'table', statements: [0], columns: ['Item', 'Status'], caption: expect.stringMatching(/^2 projects/u), rows: [
       { cells: ['Project 1', 'active'], citation_indexes: [0] }, { cells: ['Project 2', 'active'], citation_indexes: [1] },
     ] }]);
-    expect(await answer()).not.toHaveProperty('blocks');
   });
 });
 
@@ -254,7 +250,7 @@ describe('Ask research tool contract v1: review fixes', () => {
 
   it('says a role filter in the list statement, and names the workspace and a tool\'s containers by what they are', async () => {
     const port = desk({ live_sources: [PROJECTS_SOURCE_DESCRIPTOR_V1], list: vi.fn(async () => result([project(1, 'lead'), project(2, 'lead')])) });
-    const run = scripted([step([{ tool: 'list', args: { source: 'projects', role: 'lead' } }]), finish(), { lists: [{ id: 'L1' }], sentences: [], not_found: [] }]);
+    const run = scripted([step([{ tool: 'list', args: { source: 'projects', role: 'lead' } }]), finish(), writerReply([], { lists: [{ id: 'L1' }] })]);
     const answer = await askV8(port, run.model).answer({ question: 'Which projects do I lead?' });
     expect(answer.parts[0]!.statements[0]!.text).toMatch(/^2 projects with your role lead: Project 1; Project 2\.?$/u);
     expect(agenticListNounV1({ selector: 'jira_projects', tool_id: 'jira' })).toBe('Jira projects');
@@ -269,7 +265,7 @@ describe('Ask research tool contract v1: review fixes', () => {
     const run = scripted([
       step([{ tool: 'list', args: { source: 'meetings', kind: 'action', owner: 'Dana Lee', date_field: 'due', since: '2026-10-19', until: '2026-10-25' } }]),
       finish(),
-      { lists: [{ id: 'L1' }], sentences: [], not_found: [] },
+      writerReply([], { lists: [{ id: 'L1' }] }),
     ]);
     const answer = await ask(port, run.model).answer({ question: 'What is Dana due to do this week?' });
     expect(port.list).toHaveBeenCalledWith(expect.not.objectContaining({ owner: expect.anything() }));

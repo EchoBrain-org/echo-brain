@@ -6,6 +6,7 @@ import type { StructuredGenerationInput } from '../../src/answer-composition/str
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
 import { observeCoreRuntimeV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import { deferred } from './fixtures/deferred.js';
+import { writerReply } from './fixtures/agentic-scenarios.js';
 
 const checked = { checked_at: '2026-10-05T00:00:00.000Z' };
 const text = 'The approved launch plan says EVT begins Tuesday.';
@@ -29,7 +30,7 @@ describe('Agentic Ask live pages', () => {
       { parts: [{ question: 'When does EVT start?', notes: '', needs: [{ need: 'EVT date', status: 'open', evidence: [] }] }], actions: [{ tool: 'search', args: { source: 'pages', query: 'EVT start' } }] },
       { parts: [{ question: 'When does EVT start?', notes: '', needs: [{ need: 'EVT date', status: 'open', evidence: [] }] }], actions: [{ tool: 'open', args: { id: 'E1' } }] },
       { parts: [{ question: 'When does EVT start?', notes: '', needs: [{ need: 'EVT date', status: 'found', evidence: ['E1'] }] }], actions: [{ tool: 'finish', args: {} }] },
-      { sentences: [{ text: 'EVT begins Tuesday.', evidence: ['E1'] }], not_found: [] },
+      writerReply([{ text: 'EVT begins Tuesday.', evidence: ['E1'] }]),
     ];
     const prompts: string[] = [];
     const answer = await createAgenticAskV5({ desk, model: { generate: async input => { prompts.push(input.user_prompt); return replies.shift()!; } }, audit: { append: () => undefined }, generation: fixtureGeneration }).answer({ question: 'When does EVT start?' });
@@ -63,7 +64,7 @@ describe('Agentic Ask live pages', () => {
       { parts: [{ question: 'When does EVT start?', notes: '', needs: [{ need: 'EVT date', status: 'open', evidence: [] }] }], actions: [{ tool: 'open', args: { id: 'E1' } }] },
       { parts: [{ question: 'When does EVT start?', notes: '', needs: [{ need: 'EVT date', status: 'open', evidence: [] }] }], actions: [{ tool: 'open', args: { id: 'E3' } }] },
       { parts: [{ question: 'When does EVT start?', notes: '', needs: [{ need: 'EVT date', status: 'found', evidence: ['E4'] }] }], actions: [{ tool: 'finish', args: {} }] },
-      { sentences: [{ text: 'EVT begins Tuesday.', evidence: ['E4'] }], not_found: [] },
+      writerReply([{ text: 'EVT begins Tuesday.', evidence: ['E4'] }]),
     ];
     const prompts: string[] = [];
     const answer = await createAgenticAskV5({ desk, model: { generate: async input => { prompts.push(input.user_prompt); return replies.shift()!; } }, audit: { append: () => undefined }, generation: fixtureGeneration }).answer({ question: 'When does EVT start?' });
@@ -98,7 +99,7 @@ it('plans two registered page providers without a provider-specific selector or 
     { parts: part('open'), actions: [{ tool: 'list', args: { source: 'handbook' } }, { tool: 'search', args: { source: 'runbooks', query: 'launch plan' } }] },
     { parts: part('open'), actions: [{ tool: 'open', args: { id: 'E1' } }, { tool: 'open', args: { id: 'E2' } }] },
     { parts: part('found'), actions: [{ tool: 'finish', args: {} }] },
-    { sentences: [{ text: 'Both plans say EVT begins Tuesday.', evidence: ['E1', 'E2'] }], not_found: [] },
+    writerReply([{ text: 'Both plans say EVT begins Tuesday.', evidence: ['E1', 'E2'] }]),
   ];
   const prompts: StructuredGenerationInput[] = [];
   const answer = await createAgenticAskV5({ desk, model: { generate: async input => { prompts.push(input); return replies.shift()!; } }, audit: { append: () => undefined }, generation: fixtureGeneration }).answer({ question: 'Compare the two plans.' });
@@ -130,7 +131,7 @@ it('concurrently reads same-kind registered sources and admits exact passages wi
   const replies = [
     { parts: comparisonParts(), actions: [{ tool: 'search', args: { source: 'handbook', query: 'EVT' } }, { tool: 'search', args: { source: 'runbooks', query: 'EVT' } }] },
     { parts: comparisonParts(['E1', 'E2']), actions: [{ tool: 'finish', args: {} }] },
-    { sentences: [{ text: 'Both plans establish the EVT date.', evidence: ['E1', 'E2'] }], not_found: [] },
+    writerReply([{ text: 'Both plans establish the EVT date.', evidence: ['E1', 'E2'] }]),
   ];
   const prompts: StructuredGenerationInput[] = [];
   const ask = createAgenticAskV5({ desk, audit: { append: () => undefined }, generation: fixtureGeneration,
@@ -168,7 +169,7 @@ it('serializes equivalent registered-source cursors while another source lists c
       { tool: 'list', args: { source: 'runbooks', since: '7d' } },
     ] },
     { parts: comparisonParts(['E1', 'E2', 'E3']), actions: [{ tool: 'finish', args: {} }] },
-    { sentences: [{ text: 'The plans establish the EVT date.', evidence: ['E1', 'E2', 'E3'] }], not_found: [] },
+    writerReply([{ text: 'The plans establish the EVT date.', evidence: ['E1', 'E2', 'E3'] }]),
   ];
   const today = vi.fn().mockReturnValueOnce('2026-10-05').mockReturnValue('2026-10-06');
   const pending = createAgenticAskV5({ desk, today, audit: { append: () => undefined }, generation: fixtureGeneration,

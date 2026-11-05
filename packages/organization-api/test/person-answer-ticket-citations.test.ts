@@ -15,7 +15,7 @@ function response() {
   return {
     schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
     citations: [cited],
-    parts: [{ question: 'When is launch?', status: 'answered', statements: [{ text: 'The ticket reports launch is Tuesday.', citation_indexes: [0], private: true }] }],
+    parts: [{ question: 'When is launch?', status: 'answered', statements: [{ text: 'The ticket reports launch is Tuesday.', citation_indexes: [0], private: true }], blocks: [{ kind: 'answer', statements: [0] }] }],
   };
 }
 
@@ -41,6 +41,6 @@ describe('Ticket citations', () => {
     expect(() => validatePersonAnswerResponseV8({ ...response(), citations: [{ ...cited, ref: `meeting:${canonicalSha256('record')}` }] })).toThrow();
     expect(() => validatePersonAnswerResponseV8({ ...response(), citations: [{ ...cited, citation: { ...ticket, permalink: 'https://fixture.atlassian.net/browse/ECHO-1?token=synthetic' } }] })).toThrow();
     expect(() => validatePersonAnswerResponseV8({ ...response(), citations: [cited, { ...cited, citation: { ...ticket, text_sha256: canonicalSha256('new revision') } }] })).toThrow('duplicate citations');
-    expect(() => validatePersonAnswerResponseV8({ ...response(), parts: [{ question: 'When is launch?', status: 'answered', statements: [{ text: 'Launch is Tuesday.', citation_indexes: [0], private: false }] }] })).toThrow();
+    expect(() => validatePersonAnswerResponseV8({ ...response(), parts: [{ question: 'When is launch?', status: 'answered', statements: [{ text: 'Launch is Tuesday.', citation_indexes: [0], private: false }], blocks: [{ kind: 'answer', statements: [0] }] }] })).toThrow();
   });
 });

@@ -124,16 +124,16 @@ export function evidenceIdsOf(citations, items) {
 
 /**
  * Production's writer prompts and reply schema for one case, recorded through the kernel with a writer that answers
- * nothing, for `answerLayout`: the built writer's, answer layout 2 (ADR-0051), which every catalog starts from.
+ * nothing: the built writer's (answer layout v2, ADR-0051), which every catalog starts from.
  */
-export async function captureWriterPrompts(caseDefinition, document, generation, answerLayout) {
+export async function captureWriterPrompts(caseDefinition, document, generation) {
   let captured = null;
   const { model } = scriptedModel(caseDefinition, (input) => {
     captured ??= Object.freeze({ system_prompt: input.system_prompt, user_prompt: input.user_prompt, schema: input.schema });
     // A reply that says nothing, in layout v2's shape.
     return { value: { lists: [], blocks: [], not_found: [caseDefinition.research.need] }, finish_reason: "stop", usage: null, provider_latency_ms: null };
   }, "the capture runs only research and the Ask writer");
-  await caseAsk(itemsOf(caseDefinition), document, document.asked_at, model, generation, answerLayout).answer({ question: caseDefinition.question, signal: AbortSignal.timeout(30_000) });
+  await caseAsk(itemsOf(caseDefinition), document, document.asked_at, model, generation).answer({ question: caseDefinition.question, signal: AbortSignal.timeout(30_000) });
   if (captured === null) throw new Error(`case ${caseDefinition.id}: research never reached the writer`);
   return captured;
 }
@@ -229,7 +229,7 @@ export async function runBuiltTrial(caseDefinition, trial, prompts, evidence, do
   let response = null;
   let error;
   try {
-    response = await caseAsk(itemsOf(caseDefinition), document, document.asked_at, model, generation, BUILT.answer_layout).answer({ question: caseDefinition.question, signal: AbortSignal.timeout(options.timeoutMs) });
+    response = await caseAsk(itemsOf(caseDefinition), document, document.asked_at, model, generation).answer({ question: caseDefinition.question, signal: AbortSignal.timeout(options.timeoutMs) });
   } catch (caught) {
     error = safeError(caught);
   }
@@ -302,7 +302,7 @@ export async function run(options, dependencies = {}) {
   // catalog's from them.
   const prompts = new Map();
   for (const caseDefinition of cases) {
-    const captured = await captureWriterPrompts(caseDefinition, document, loaded.generation, BUILT.answer_layout);
+    const captured = await captureWriterPrompts(caseDefinition, document, loaded.generation);
     prompts.set(caseDefinition.id, new Map(catalogs.map((catalog) => [catalog.id, catalog === BUILT ? captured : writerPrompts(catalog, captured)])));
   }
   // Every arm is graded against the evidence its writer was given.
@@ -388,7 +388,7 @@ export async function run(options, dependencies = {}) {
     limits: Object.freeze({ cases: cases.length, catalogs: catalogs.map((catalog) => catalog.id), trials: options.trials, judge: options.judge, writer_output_tokens: WRITER_OUTPUT_TOKENS,
       timeout_ms: options.timeoutMs, concurrency: options.concurrency, max_total_model_calls: MAX_TOTAL_MODEL_CALLS }),
     catalogs: Object.freeze(Object.fromEntries(catalogs.map((catalog) => [catalog.id, catalog === BUILT
-      ? { modeled_on: catalog.modeled_on, answer_layout: catalog.answer_layout, catalog_key: catalog.catalog_key, catalog: JSON.parse(builtPrompts.user_prompt)[catalog.catalog_key] ?? null, can_show: catalog.can_show, schema: builtPrompts.schema }
+      ? { modeled_on: catalog.modeled_on, catalog_key: catalog.catalog_key, catalog: JSON.parse(builtPrompts.user_prompt)[catalog.catalog_key] ?? null, can_show: catalog.can_show, schema: builtPrompts.schema }
       : { modeled_on: catalog.modeled_on, catalog_key: catalog.catalog_key, catalog: catalog.catalog, can_show: catalog.can_show, schema: catalog.schema }]))),
     summary,
     // The founder's ranks come from the page; until then the comparison's decision waits for them. The gate decides alone.

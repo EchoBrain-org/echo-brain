@@ -44,7 +44,7 @@ it('keeps staging Jira connections in the state directory and reuses each Person
   });
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
     const prompt = JSON.parse(input.user_prompt) as { question: string; source_catalog?: { tool_id?: string }[]; last_results?: { results?: string[] }[]; opened?: { id: string }[]; evidence?: { id: string }[] };
-    if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [{ text: 'The ticket says ship on Friday.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+    if ((input.schema.properties as Record<string, unknown>).blocks !== undefined) return { blocks: [{ block: 'answer', sentences: [{ text: 'The ticket says ship on Friday.', evidence: [prompt.evidence![0]!.id] }] }], not_found: [] };
     if (!prompt.source_catalog?.some(source => source.tool_id === 'jira')) return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
     const opened = prompt.opened?.[0]?.id;
     if (opened !== undefined) return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'found', evidence: [opened] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };

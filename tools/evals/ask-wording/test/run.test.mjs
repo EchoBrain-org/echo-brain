@@ -7,7 +7,7 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ANSWER_BLOCK_CATALOG, ANSWER_BLOCKS_PROMPT, answerBlocksSchema } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { loadCases } from "../grade.mjs";
-import { decides, help, parseArgs, run, runTrial, writerLayout } from "../run.mjs";
+import { decides, help, parseArgs, run, runTrial } from "../run.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const document = loadCases();
@@ -90,11 +90,11 @@ test("writes through the personal Claude account only with the signed-in claude 
   assert.deepEqual([options.writer, options.claudeExecutable], ["claude-account", executable]);
 });
 
-test("runs Ask with answer layout v2 over scripted research, sending only the writer to the model, and keeps no prompt", async () => {
+test("runs Ask over scripted research, sending only the writer to the model, and keeps no prompt", async () => {
   const structured = writer();
   const result = await runTrial(founder, 1, structured, generation, document, { timeoutMs: 15_000 });
-  assert.deepEqual([result.outcome, result.research_rounds, result.writer_calls, result.writer_layout, result.grade.rules], ["answered", 3, 1, 2, { no_restating: true, long_ids_once: true, nothing_lost: true }]);
-  // The writer read the v2 Ask's prompt, block catalog and schema, and both items, the follow-up first, as the asker sees them.
+  assert.deepEqual([result.outcome, result.research_rounds, result.writer_calls, result.grade.rules], ["answered", 3, 1, { no_restating: true, long_ids_once: true, nothing_lost: true }]);
+  // The writer read Ask's prompt, block catalog and schema, and both items, the follow-up first, as the asker sees them.
   const [input] = structured.inputs;
   const shown = JSON.parse(input.user_prompt);
   assert.ok(input.system_prompt.startsWith("You write Echo's final answer") && input.system_prompt.endsWith(`\n\n${ANSWER_BLOCKS_PROMPT}`));
@@ -107,23 +107,16 @@ test("runs Ask with answer layout v2 over scripted research, sending only the wr
   // A writer that cannot be reached keeps its safe error class only; code's fallback writes no statement, so it passes nothing.
   const broken = { async generate_with_observation() { throw Object.assign(new Error("secret provider detail"), { diagnostic: { failure_class: "adapter_http", http_status: 401 } }); } };
   const refused = await runTrial(founder, 2, broken, generation, document, { timeoutMs: 15_000 });
-  assert.deepEqual([refused.grade.statements, refused.grade.rules, refused.writer_layout], [[], { no_restating: false, long_ids_once: false, nothing_lost: false }, 2]);
+  assert.deepEqual([refused.grade.statements, refused.grade.rules], [[], { no_restating: false, long_ids_once: false, nothing_lost: false }]);
   assert.deepEqual(refused.model_calls[0], { attempt: 1, result: "rejected", error: { name: "Error", failure_class: "adapter_http", http_status: 401, finish_reason: null } });
   assert.ok(!JSON.stringify(refused).includes("secret provider detail"));
 });
 
-test("tells the layout a writer was given from its input: the block catalog, or none", () => {
-  const input = (user, properties) => ({ user_prompt: JSON.stringify(user), schema: { type: "object", properties } });
-  assert.equal(writerLayout(input({ source_catalog: [], block_catalog: [], evidence: [] }, { lists: {}, blocks: {}, not_found: {} })), 2);
-  assert.equal(writerLayout(input({ source_catalog: [], evidence: [] }, { lists: {}, sentences: {}, not_found: {} })), null);
-});
-
-test("decides only on every registered case three times, each trial's writer given the block catalog", () => {
-  const results = document.cases.flatMap((entry) => [1, 2, 3].map((trial) => ({ case_id: entry.id, trial, writer_layout: 2 })));
+test("decides only on every registered case three times", () => {
+  const results = document.cases.flatMap((entry) => [1, 2, 3].map((trial) => ({ case_id: entry.id, trial })));
   assert.equal(decides(results), true);
   assert.equal(decides(results.slice(1)), false);
   assert.equal(decides([...results.slice(1), results[3]]), false);
-  assert.equal(decides(results.map((entry, at) => (at === 7 ? { ...entry, writer_layout: null } : entry))), false);
 });
 
 test("writes a private report outside the repository that applies the three pre-registered rules", async (t) => {
@@ -134,7 +127,7 @@ test("writes a private report outside the repository that applies the three pre-
   assert.equal(statSync(passing.reportPath).mode & 0o777, 0o600);
   const report = JSON.parse(readFileSync(passing.reportPath, "utf8"));
   assert.deepEqual([report.kind, report.complete, report.wording_ships, report.results.length], ["echo-ask-wording-evaluation-v1", true, true, 30]);
-  assert.deepEqual([report.answer_layout, report.model, new Set(report.results.map((entry) => entry.writer_layout))], [2, { route: "openrouter", adapter_id: "fixture", answer_model: "fixture-model" }, new Set([2])]);
+  assert.deepEqual(report.model, { route: "openrouter", adapter_id: "fixture", answer_model: "fixture-model" });
   assert.deepEqual(report.groups.names_long_id, { trials: 18, no_restating: 18, long_ids_once: 18, nothing_lost: 18, errors: 0 });
   // The report fingerprints its cases and every module the run loads: among them layout v2's writer, checks and title
   // bound, and the kernel's shared modules on the writer's path.

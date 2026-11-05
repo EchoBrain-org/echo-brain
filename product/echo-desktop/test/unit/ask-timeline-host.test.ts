@@ -1,9 +1,9 @@
 // The Ask timeline on the host (ADR-0047): its file, on a real folder (one per
 // account, owner-only, written whole through a temporary file, at most 200
-// turns and 90 days, a bad file read as empty, a turn saved with answer layout
-// v1 read without it, our sign-out deleting it and an account change deleting
-// the last one's), and the checks of what the page sends with an Ask and a
-// source check before the client sees it.
+// turns and 90 days, a bad file read as empty, a turn an older desktop saved
+// without blocks read in them, our sign-out deleting it and an account change
+// deleting the last one's), and the checks of what the page sends with an Ask
+// and a source check before the client sees it.
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -44,7 +44,8 @@ function turn(daysAgo = 0, extra: Partial<TimelineTurn> = {}): TimelineTurn {
     answer: {
       text: 'THERM-482 is open.', scope: { kind: 'global' }, outcome: 'answered',
       sources: [{ kind: 'ticket', tool_id: 'jira', label: 'THERM-482 · Sensor drift', permalink: ticketCitation.permalink, private: true, cited }],
-      parts: [{ question: 'What is open on THERM?', status: 'answered', statements: [{ text: 'THERM-482 is open.', citation_indexes: [0], private: true }] }],
+      parts: [{ question: 'What is open on THERM?', status: 'answered', statements: [{ text: 'THERM-482 is open.', citation_indexes: [0], private: true }],
+        blocks: [{ kind: 'text', statements: [0] }] }],
     },
     ...extra,
   };
@@ -131,29 +132,38 @@ describe('the timeline file (C5)', () => {
     expect(readTimeline(person, ARI)).toEqual([fresh]);
   });
 
-  it('reads a turn saved with answer layout v1 (ADR-0045), retired since, without its layout, and the next put writes it so', () => {
-    const [older, laidOut, newer] = [turn(3), turn(2), turn(1)];
+  it('reads a part an older desktop saved without blocks, plain or with answer layout v1 (ADR-0045), as a paragraph a statement, and the next put writes it so', () => {
+    const [older, plain, laidOut, newer] = [turn(4), turn(3), turn(2), turn(1)];
     const said = (text: string) => ({ text, citation_indexes: [0], private: true });
-    const part = { ...laidOut.answer.parts[0]!, statements: [said('THERM-482 is open.'), said('Dev owns it.'), said('Its fix is due Oct 30.')] };
-    const plain = { ...laidOut, answer: { ...laidOut.answer, parts: [part] } };
-    // As a desktop from before layout v2 saved it: how the part read, beside its statements.
-    const saved = { ...plain, answer: { ...plain.answer, parts: [{ ...part, layout: [
-      { kind: 'lead', statements: [0] }, { kind: 'heading', text: 'Owner' }, { kind: 'bullets', statements: [1] },
-      { kind: 'table', statements: [2], columns: ['Ticket', 'Due'], rows: [{ cells: ['THERM-482', '2026-10-30'], citation_indexes: [0] }] },
-    ] }] } };
+    const { blocks: _blocks, ...part } = { ...plain.answer.parts[0]!, statements: [said('THERM-482 is open.'), said('Dev owns it.'), said('Its fix is due Oct 30.')] };
+    // What research found nothing for has nothing to arrange.
+    const nothing = { question: 'Who signs it off?', status: 'not_found' as const, statements: [] };
+    // As the page draws it now: an untitled text block a statement, each its own paragraph as before.
+    const arranged = { ...part, blocks: [0, 1, 2].map(at => ({ kind: 'text' as const, statements: [at] })) };
+    const drawn = (saved: TimelineTurn): TimelineTurn => ({ ...saved, answer: { ...saved.answer, outcome: 'partial', parts: [arranged, nothing] } });
+    // As a desktop from before layout v2 saved them: a part's statements alone, and with how the part read beside them.
+    const saved = [
+      { ...plain, answer: { ...plain.answer, outcome: 'partial', parts: [part, nothing] } },
+      { ...laidOut, answer: { ...laidOut.answer, outcome: 'partial', parts: [{ ...part, layout: [
+        { kind: 'lead', statements: [0] }, { kind: 'heading', text: 'Owner' }, { kind: 'bullets', statements: [1] },
+        { kind: 'table', statements: [2], columns: ['Ticket', 'Due'], rows: [{ cells: ['THERM-482', '2026-10-30'], citation_indexes: [0] }] },
+      ] }, nothing] } },
+    ];
     mkdirSync(folder(), { mode: 0o700 });
     const path = timelinePath(person, ARI);
-    writeFileSync(path, JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [older, saved, newer] }), { mode: 0o600 });
+    writeFileSync(path, JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [older, ...saved, newer] }), { mode: 0o600 });
     const read = readTimeline(person, ARI);
-    expect(read).toEqual([older, plain, newer]);
-    expect(read[1]!.answer.parts[0]).not.toHaveProperty('layout');
+    expect(read).toEqual([older, drawn(plain), drawn(laidOut), newer]);
+    expect(read[2]!.answer.parts[0]).not.toHaveProperty('layout');
+    // No turn is lost, and the next put writes every one in blocks.
     const fresh = turn();
     putTimeline(person, ARI, fresh, NOW);
     const { turns } = JSON.parse(readFileSync(path, 'utf8')) as { turns: TimelineTurn[] };
-    expect(turns).toEqual([older, plain, newer, fresh]);
-    expect(turns[1]!.answer.parts[0]).not.toHaveProperty('layout');
-    // What the layout held is never read: whatever it is, it goes.
-    expect(timelineTurn({ ...saved, answer: { ...saved.answer, parts: [{ ...part, layout: 'retired' }] } })).toEqual(plain);
+    expect(turns).toEqual([older, drawn(plain), drawn(laidOut), newer, fresh]);
+    expect(turns.flatMap(each => each.answer.parts).filter(each => each.statements.length > 0).every(each => each.blocks !== undefined)).toBe(true);
+    // What the layout held is never read: whatever it is, it goes. A turn in blocks already is itself.
+    expect(timelineTurn({ ...saved[1], answer: { ...saved[1]!.answer, parts: [{ ...part, layout: 'retired' }, nothing] } })).toEqual(drawn(laidOut));
+    expect(timelineTurn(older)).toBe(older);
   });
 
   it('never uses a folder that is a link, nor reads one open to others; a put makes it owner-only again', () => {
@@ -250,7 +260,7 @@ describe('the timeline file (C5)', () => {
       const { receipt: _receipt, question: _question, since: _since, choices: _choices, ...answer } = answerView({ ok: true, result }, scope);
       return answer;
     };
-    const arranged = turn(1, { answer: kept(blocksAnswer('Can THERM start PVT?', scope, true)) });
+    const arranged = turn(1, { answer: kept(blocksAnswer('Can THERM start PVT?', scope)) });
     putTimeline(person, ARI, arranged, NOW);
     const [readArranged] = readTimeline(person, ARI);
     expect(readArranged).toEqual(arranged);

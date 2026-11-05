@@ -4,17 +4,6 @@ import type {
 import { startOfDay } from './format.js';
 import { sourceKey } from './openers.js';
 
-/** What the pane may show of an answer not arranged in blocks: at most 32 sources. */
-export const MAX_SOURCES = 32;
-
-/**
- * The sources an answer's page numbers and shows: every one of an answer the writer arranged in blocks (ADR-0051),
- * which has no count of citations of its own, and the first 32 of any other.
- */
-export function numberedSources(answer: Pick<Answer, 'sources' | 'parts'>): readonly AnswerSource[] {
-  return answer.parts.some(part => part.blocks !== undefined) ? answer.sources : answer.sources.slice(0, MAX_SOURCES);
-}
-
 /**
  * One source as an answer shows it: a document, a meeting's approved record,
  * or a live item. An answer cites passages and record items; those of one
@@ -380,12 +369,11 @@ interface CopiedSince {
  * sources, numbered and named (`names`, one per number). The page's `groups`
  * number them; `shows` says which sentences and rows it shows, so what a
  * check left out is not written, nor a part or block left with nothing to
- * show (ADR-0047). An arranged part keeps its blocks (ADR-0051); any other is
- * a paragraph per sentence. A part's question heads what it says when there
- * are several. A partial answer's explanations are copied as shown on the
- * page, including an explanation that is the whole answer; an answer that
- * says nothing and shows no explanation says `nothing`, the line the page
- * shows for it.
+ * show (ADR-0047). A part keeps the blocks the writer arranged it in
+ * (ADR-0051), and its question heads what it says when there are several. A
+ * partial answer's explanations are copied as shown on the page, including an
+ * explanation that is the whole answer; an answer that says nothing and shows
+ * no explanation says `nothing`, the line the page shows for it.
  */
 export function answerMarkdown(answer: Answer, names: readonly string[], groups: readonly SourceGroup[], shows: Shows, since?: CopiedSince,
   nothing = nothingMatched(answer)): string {
@@ -405,7 +393,6 @@ export function answerMarkdown(answer: Answer, names: readonly string[], groups:
     if (!partShows(part, shows)) continue;
     if (answer.parts.length > 1) blocks.push(`## ${markdownText(part.question)}`);
     if (part.blocks) blocks.push(...arrangedMarkdown(part, part.blocks, shows, cited));
-    else blocks.push(...shown(part.statements).map(claim));
     blocks.push(...shown(part.records ?? []).map(claim));
   }
   blocks.push(...answerEnd(answer, shows, nothing).map(markdownText));

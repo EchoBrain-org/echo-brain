@@ -41,8 +41,6 @@ import {
   utf8ByteLength,
 } from './validation.js';
 
-/** Statements (and cited sentences) per answer part; raised from 5 by RFC-0003 so one-paragraph answers can cover multi-part questions. */
-const PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4 = 10;
 /** A statement's text: one claim, within 4 KiB. */
 export const PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 = 4 * 1024;
 /** The citations one statement may carry, in an answer of any length (ADR-0051 lifts only an answer's own count). */
@@ -135,7 +133,7 @@ export interface PersonAnswerPartV4 {
   readonly gap?: string;
   readonly gap_details?: PersonAnswerGapDetailsV1;
   readonly records?: readonly PersonAnswerEvidenceFallbackV4[];
-  /** Only for an Ask that asked for answer layout v2 (ADR-0051): the blocks its statements read as. */
+  /** The blocks its statements read as (answer layout v2, ADR-0051): on every part with statements, and on no other. */
   readonly blocks?: readonly PersonAnswerBlockV2[];
 }
 
@@ -346,13 +344,13 @@ function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): Per
   const input = object(value, 'Ask response part');
   assertExactKeys(input, ['question', 'status', 'statements', ...['gap', 'gap_details', 'records', 'blocks'].filter(key => Object.hasOwn(input, key))], 'Ask response part');
   text(input.question, 'Ask response part question', 1024);
-  // A part arranged in blocks (answer layout v2, ADR-0051) has no count of statements of its own; any other keeps ten.
-  if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements) || (!Object.hasOwn(input, 'blocks') && input.statements.length > PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4)) fail('Ask response part is invalid');
+  // A part's statements have no count of their own (ADR-0051): its blocks arrange them, and the answer's bytes bound them.
+  if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements)) fail('Ask response part is invalid');
   if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', 2 * 1024, true);
   if (Object.hasOwn(input, 'records') && (!Array.isArray(input.records) || input.records.length > 40)) fail('Ask response part records is invalid');
   const statements = Object.freeze(input.statements.map((item) => statement(item, citations, 'Ask response statement')));
-  // Blocks arrange written statements: a part with none has nothing to arrange.
-  if (Object.hasOwn(input, 'blocks') && statements.length === 0) fail('Ask response part blocks are invalid');
+  // Blocks arrange written statements (answer layout v2, ADR-0051): a part with statements has them, and one with none has nothing to arrange.
+  if (Object.hasOwn(input, 'blocks') !== statements.length > 0) fail('Ask response part blocks are invalid');
   return Object.freeze({
     question: input.question as string,
     status: input.status as PersonAnswerPartV4['status'],
@@ -484,10 +482,8 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   assertExactKeys(input, ['schema_version', 'kind', 'scope', 'outcome', 'citations', 'parts', ...(Object.hasOwn(input, 'direct') ? ['direct'] : []), ...(Object.hasOwn(input, 'notice') ? ['notice'] : []), ...previous], 'Ask response');
   // A clarify outcome (ADR-0047) asks which one instead of answering: no part and no citation.
   const clarify = input.outcome === 'clarify';
-  // An answer arranged in blocks (answer layout v2, ADR-0051) has no count of citations of its own, as ADR-0041 gives any
-  // other answer: its bytes bound it.
-  const arranged = Array.isArray(input.parts) && input.parts.some(item => item !== null && typeof item === 'object' && Object.hasOwn(item, 'blocks'));
-  if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || (!arranged && input.citations.length > 40) || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
+  // An answer has no count of citations of its own (ADR-0051): its bytes bound it.
+  if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
   if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', 2 * 1024, true);
   const citations = input.citations.map(item => answerCitation(item, 8));
   const citationKeys = new Set<string>();

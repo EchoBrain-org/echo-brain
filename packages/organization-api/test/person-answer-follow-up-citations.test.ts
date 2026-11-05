@@ -21,7 +21,7 @@ const record = `sha256:${'a'.repeat(64)}` as const;
 const meeting = { citation: { kind: 'approved_record' as const, atom_id: `sha256:${'b'.repeat(64)}` as const, record_sha256: record, policy_id: 'project-members-readable-person-v1' as const }, kind: 'decision' as const, label: 'Ship fan curve v2', visibility: 'team' as const, ref: `meeting:${record}` as const };
 const response = (citations: readonly unknown[] = [cited]) => ({
   schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const, citations,
-  parts: [{ question: 'What are my open tasks?', status: 'answered' as const, statements: [{ text: 'Mara owns the fan curve follow-up.', citation_indexes: [0], private: false }] }],
+  parts: [{ question: 'What are my open tasks?', status: 'answered' as const, statements: [{ text: 'Mara owns the fan curve follow-up.', citation_indexes: [0], private: false }], blocks: [{ kind: 'answer' as const, statements: [0] }] }],
 });
 const evidence = {
   item_id: itemId, kind: 'ticket' as const, title: 'THERM-48 Fan curve v2', owner: 'Mara Lind', status: 'open' as const, due_at: '2026-10-20',
@@ -81,7 +81,7 @@ describe('the Ask response citation key', () => {
     expect(personAnswerCitationKeyV8(followUp)).toBe(`follow_up:${itemId}`);
     const citation = (value: typeof page | typeof ticket) => ({ citation: value, kind: value.kind, label: 'x', visibility: 'only_me' as const });
     const response = (citations: readonly unknown[]) => ({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered', citations,
-      parts: [{ question: 'q', status: 'answered', statements: [{ text: 'x', citation_indexes: citations.map((_, index) => index), private: true }] }] });
+      parts: [{ question: 'q', status: 'answered', statements: [{ text: 'x', citation_indexes: citations.map((_, index) => index), private: true }], blocks: [{ kind: 'answer', statements: [0] }] }] });
     expect(() => validatePersonAnswerResponseV8(response([citation(ticket), citation({ ...ticket, text_sha256: `sha256:${'c'.repeat(64)}` })]))).toThrow(/duplicate citations/u);
   });
 });

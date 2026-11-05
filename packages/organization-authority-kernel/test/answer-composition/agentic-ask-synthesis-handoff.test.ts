@@ -3,6 +3,7 @@ import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { createAgenticAskV5 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from '../../src/shared/evidence-desk-v2.js';
 import { AuthorityOperationError } from '../../src/domain/errors.js';
+import { writerReply } from './fixtures/agentic-scenarios.js';
 
 const body = 'The gate decision is pending. A recorded Go decision is required.';
 const item: EvidenceDeskItemV2 = {
@@ -37,7 +38,7 @@ async function run(options: { truncated?: boolean; notice?: string; idle?: boole
       prompts.push(JSON.parse(input.user_prompt) as Record<string, unknown>);
       if (replies.length > 0) return replies.shift();
       writer = JSON.parse(input.user_prompt) as Record<string, unknown>;
-      return { sentences: [{ text: 'The gate decision is pending.', evidence: ['E1'] }], not_found: [] };
+      return writerReply([{ text: 'The gate decision is pending.', evidence: ['E1'] }]);
     } },
     audit: { append: entry => { audit.push(entry); } },
     generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30000 },

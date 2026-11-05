@@ -2,8 +2,8 @@
 /**
  * Opt-in real-model evaluation of how Ask's writer words a laid-out answer (README.md, pre-registered).
  *
- * Each case in cases.json is a question and the synthetic items that answer it. Ask runs as the kernel runs it for a
- * client that asks for answer layout v2 (ADR-0051), as every desktop does, over a synthetic desk. Research is scripted,
+ * Each case in cases.json is a question and the synthetic items that answer it. Ask runs as the kernel runs it, its
+ * answer arranged in blocks (answer layout v2, ADR-0051), over a synthetic desk. Research is scripted,
  * since this eval measures only the writer: one search returns the case's items, research opens them and finishes citing
  * them all. The writer is the product's: its prompt and schema, through the shipped generation bundle (its OpenRouter
  * answer model, ADR-0037, or the personal Claude account writer), three times per case, and grade.mjs grades every trial
@@ -22,8 +22,6 @@ const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(TOOL_DIRECTORY, "../../..");
 const MAX_TRIALS = 3;
 const ALL_CASES = Object.values(GROUPS).reduce((total, count) => total + count, 0);
-/** The answer layout every trial asks for: v2, the model-arranged blocks every desktop asks for (ADR-0051). */
-const ANSWER_LAYOUT = 2;
 /** The writer's call and its one repair per trial; research is scripted and calls no model. */
 const MAX_TOTAL_MODEL_CALLS = ALL_CASES * MAX_TRIALS * 2;
 const MIN_TIMEOUT_MS = 15_000;
@@ -47,13 +45,14 @@ export function help() {
     "  --claude-executable PATH  With --writer claude-account: the signed-in claude binary.",
     "  --help            Show this text without reading a credential or making a request.",
     "",
-    "Each trial asks one synthetic question with answer layout v2, as every desktop does. Research is scripted over the",
-    "case's synthetic items; the writer runs through the production generation bundle; nothing is read from any tool.",
+    "Each trial asks one synthetic question, its answer in blocks (answer layout v2) as every Ask's is. Research is",
+    "scripted over the case's synthetic items; the writer runs through the production generation bundle; nothing is read",
+    "from any tool.",
     "--out must be outside the repository and private; the report is written there with mode 0600. It keeps case ids,",
-    "each trial's statements, lead and grade (synthetic text), the writer prompt's digest, the layout the writer was given",
-    "and model metadata; never prompts, raw replies, credentials or provider payloads.",
+    "each trial's statements, lead and grade (synthetic text), the writer prompt's digest and model metadata; never",
+    "prompts, raw replies, credentials or provider payloads.",
     "",
-    "Exit 0 when a complete run (every case, three trials, every writer given the block catalog) passes all three rules",
+    "Exit 0 when a complete run (every case, three trials) passes all three rules",
     "(the wording ships); 1 when any rule fails or the run is not complete, which never ships; 2 on a usage error.",
   ].join("\n");
 }
@@ -88,34 +87,26 @@ export function parseArgs(argv) {
  */
 const codeFiles = () => Object.freeze(["tools/evals/ask-wording/cases.json", ...importedModules(ROOT, ["tools/evals/ask-wording/run.mjs"])]);
 
-/** The answer layout the writer was given, from its input: 2 when it carries the block catalog (ADR-0051), else none. */
-export function writerLayout(input) {
-  return Object.hasOwn(JSON.parse(input.user_prompt), "block_catalog") ? 2 : null;
-}
-
 /**
- * Whether a run decides (README.md, "Layout v2"): every registered case, three trials each, and every trial's writer
- * given the block catalog. Any other run keeps its scores and never ships the wording.
+ * Whether a run decides (README.md, "Layout v2"): every registered case, three trials each. Any other run keeps its
+ * scores and never ships the wording.
  */
 export function decides(results) {
   const trials = new Map();
   for (const result of results) trials.set(result.case_id, (trials.get(result.case_id) ?? 0) + 1);
-  return trials.size === ALL_CASES && [...trials.values()].every((count) => count === MAX_TRIALS) && results.every((result) => result.writer_layout === ANSWER_LAYOUT);
+  return trials.size === ALL_CASES && [...trials.values()].every((count) => count === MAX_TRIALS);
 }
 
 /**
- * One trial: Ask on one case with answer layout v2, research scripted and the writer through `structuredOutput` (the
- * production route, or a test's), with only model metadata, the writer prompt's digest and the layout the writer was given
- * recorded. A trial that throws is kept as its safe error and passes nothing.
+ * One trial: Ask on one case, research scripted and the writer through `structuredOutput` (the production route, or a
+ * test's), with only model metadata and the writer prompt's digest recorded. A trial that throws is kept as its safe
+ * error and passes nothing.
  */
 export async function runTrial(caseDefinition, trial, structuredOutput, generation, document, options) {
   const calls = [];
   const writerPrompts = new Set();
-  // The layout the first writer call was given; undefined until there is one.
-  let layout;
   const script = scriptedModel(caseDefinition, async (input) => {
     writerPrompts.add(sha256(input.system_prompt));
-    if (layout === undefined) layout = writerLayout(input);
     const attempt = calls.length + 1;
     try {
       const observed = await observedGeneration(structuredOutput, input);
@@ -127,7 +118,7 @@ export async function runTrial(caseDefinition, trial, structuredOutput, generati
       throw error;
     }
   }, "the eval runs only research and the Ask writer");
-  const ask = caseAsk(caseItems("wording", caseDefinition), document, ASKED_AT, script.model, generation, ANSWER_LAYOUT);
+  const ask = caseAsk(caseItems("wording", caseDefinition), document, ASKED_AT, script.model, generation);
   const started = performance.now();
   let response = null;
   let error = null;
@@ -144,8 +135,6 @@ export async function runTrial(caseDefinition, trial, structuredOutput, generati
     grade, gaps: Object.freeze((response?.parts ?? []).flatMap((part) => (part.gap === undefined ? [] : [part.gap]))),
     research_rounds: script.rounds(), writer_calls: calls.length,
     writer_prompt_sha256: Object.freeze([...writerPrompts]),
-    // The layout the writer was given: one run's calls are asked alike, so the first call's stands for the trial.
-    writer_layout: layout ?? null,
     elapsed_ms: Math.round(performance.now() - started),
     model_calls: Object.freeze(calls),
     ...(error === null ? {} : { error }),
@@ -164,11 +153,11 @@ export async function run(options, dependencies = {}) {
   const progress = dependencies.progress ?? ((line) => process.stderr.write(line));
   const results = await pooled(selected.flatMap((caseDefinition) => Array.from({ length: options.trials }, (_, at) => async () => {
     const result = await runTrial(caseDefinition, at + 1, loaded.structured_output, loaded.generation, document, options);
-    progress(`${JSON.stringify({ kind: "echo-ask-wording-evaluation-progress-v1", case_id: result.case_id, trial: result.trial, outcome: result.outcome, writer_layout: result.writer_layout, rules: result.grade.rules })}\n`);
+    progress(`${JSON.stringify({ kind: "echo-ask-wording-evaluation-progress-v1", case_id: result.case_id, trial: result.trial, outcome: result.outcome, rules: result.grade.rules })}\n`);
     return result;
   })), options.concurrency);
   const identityAfter = codeIdentity(ROOT, codeFiles());
-  // Only the whole pre-registered set, each case three times on the v2 writer, decides whether the wording ships.
+  // Only the whole pre-registered set, each case three times, decides whether the wording ships.
   const complete = decides(results);
   const summary = summarizeRules(results);
   const report = Object.freeze({
@@ -179,7 +168,6 @@ export async function run(options, dependencies = {}) {
     cases_sha256: sha256(readFileSync(CASES_FILE)),
     code: Object.freeze({ before: identityBefore, after: identityAfter, unchanged: sha256(JSON.stringify(identityBefore)) === sha256(JSON.stringify(identityAfter)) }),
     writer_prompt_sha256: Object.freeze([...new Set(results.flatMap((result) => result.writer_prompt_sha256))]),
-    answer_layout: ANSWER_LAYOUT,
     model: Object.freeze({ route, adapter_id: loaded.generation.generation_adapter_id, answer_model: loaded.generation.answer_model }),
     limits: Object.freeze({ cases: selected.length, trials: options.trials, timeout_ms: options.timeoutMs, concurrency: options.concurrency, max_total_model_calls: MAX_TOTAL_MODEL_CALLS }),
     // A smaller diagnostic run keeps its rule scores, and never ships the wording.

@@ -25,7 +25,7 @@ import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 afterEach(closeAskServers);
 
-// The V8 Ask runs as it is; the spy only shows which options each request created it with.
+// The V8 Ask runs as it is; the spy only counts the Asks the requests created.
 vi.mock('@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1')>();
   return { ...actual, createAgenticAskV5: vi.fn(actual.createAgenticAskV5) };
@@ -43,9 +43,9 @@ function leadsAndTasks() {
   let mine: string | undefined;
   const model: StructuredGenerationPort = { async generate(input: StructuredGenerationInput) {
     const prompt = JSON.parse(input.user_prompt) as StepPrompt & { readonly evidence?: readonly { readonly id: string; readonly kind: string }[] };
-    if ((input.schema.properties as Readonly<Record<string, unknown>>).sentences !== undefined) {
+    if ((input.schema.properties as Readonly<Record<string, unknown>>).blocks !== undefined) {
       const of = (kind: string) => prompt.evidence!.find(entry => entry.kind === kind)!.id;
-      return { sentences: [{ text: 'Ari leads Project A.', evidence: [of('project')] }, { text: 'Your open follow-up is on the launch ticket.', evidence: [of('follow_up')] }], not_found: [] };
+      return { blocks: [{ block: 'answer', sentences: [{ text: 'Ari leads Project A.', evidence: [of('project')] }] }, { block: 'text', sentences: [{ text: 'Your open follow-up is on the launch ticket.', evidence: [of('follow_up')] }] }], not_found: [] };
     }
     if (prompt.source_catalog !== undefined) catalogs.push(prompt.source_catalog.map(entry => entry.source));
     project ??= prompt.last_results?.find(result => result.tool === 'list' && result.args?.source === 'projects')?.items?.[0];
@@ -118,34 +118,22 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     expect(audits(f, 'echo-person-agentic-ask-audit-v1').at(-1)).toMatchObject({ outcome: 'answered', named_citation_digests: expect.arrayContaining([canonicalSha256(project.citation)]) });
   });
 
-  it('asks the V8 Ask for layout v2 when the client sends it in the layout header, and for none with retired layout v1\'s value, streamed or not, and refuses any other value before the Ask runs', async () => {
+  it('runs the V8 Ask whatever layout header an older client still sends, streamed or not, and refuses none of its values (ADR-0051)', async () => {
     const f = await sentFixture();
     const planner = leadsAndTasks();
     const base = await origin(f, planner.model);
     const created = vi.mocked(createAgenticAskV5);
     created.mockClear();
     for (const progress of [null, PERSON_ASK_PROGRESS_HEADER_VALUE_V3]) {
-      for (const headers of [{ 'x-echo-answer-layout': '1' }, { 'x-echo-answer-layout': '2' }, {}] as readonly Readonly<Record<string, string>>[]) {
+      // Retired layout v1's 1, layout v2's 2, and the values the Authority once refused before the Ask ran.
+      for (const headers of [...['1', '2', '3', 'true', '1, 2'].map(value => ({ 'x-echo-answer-layout': value })), {}] as readonly Readonly<Record<string, string>>[]) {
         planner.reset();
         const response = await ask(base, { progress, headers });
         expect(response.status).toBe(200);
         await response.text();
       }
     }
-    // ADR-0051: 2 asks for layout v2, and retired layout v1's 1 (ADR-0045), like the header's absence, for none, for the JSON answer and the stream alike.
-    expect(created.mock.calls.map(([options]) => options.answer_layout)).toEqual([undefined, 2, undefined, undefined, 2, undefined]);
-    const asked = audits(f, 'echo-person-agentic-ask-audit-v1').length;
-    const planned = planner.catalogs.length;
-    for (const progress of [null, PERSON_ASK_PROGRESS_HEADER_VALUE_V3]) {
-      for (const value of ['3', 'true', '1, 2']) {
-        const refused = await ask(base, { progress, headers: { 'x-echo-answer-layout': value } });
-        expect([refused.status, refused.headers.get('content-type')]).toEqual([400, 'application/json; charset=utf-8']);
-        await expect(refused.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'request failed' } });
-      }
-    }
-    // Refused before the Ask runs: no Ask created, nothing planned, nothing audited.
-    expect(created).toHaveBeenCalledTimes(6);
-    expect(planner.catalogs.length).toBe(planned);
-    expect(audits(f, 'echo-person-agentic-ask-audit-v1').length).toBe(asked);
+    // Each request created its Ask, for the JSON answer and the stream alike.
+    expect(created).toHaveBeenCalledTimes(12);
   });
 });

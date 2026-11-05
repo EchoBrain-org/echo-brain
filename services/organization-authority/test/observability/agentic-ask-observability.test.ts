@@ -62,9 +62,9 @@ function fixture() {
     fetch_impl: async (_url, init) => {
       const wire = JSON.parse(String(init?.body)) as { messages: { content: string }[]; response_format: { json_schema: { schema: { properties?: Record<string, unknown> } } } };
       const prompt = JSON.parse(wire.messages[1]!.content) as Prompt;
-      const isAnswer = wire.response_format.json_schema.schema.properties?.sentences !== undefined;
+      const isAnswer = wire.response_format.json_schema.schema.properties?.blocks !== undefined;
       let reply: unknown;
-      if (isAnswer) reply = { sentences: [{ text: "The launch window is October.", evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+      if (isAnswer) reply = { blocks: [{ block: "answer", sentences: [{ text: "The launch window is October.", evidence: [prompt.evidence![0]!.id] }] }], not_found: [] };
       else {
         if (revokeAtStep === prompt.step) revoked = true;
         const part = (status: string, evidence: string[] = []) => ({ question: prompt.question, needs: [{ need: "launch window", status, evidence }], notes: "" });

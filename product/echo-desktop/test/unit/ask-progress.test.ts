@@ -20,7 +20,8 @@ const receipt: AskReceipt = { looked_through: 3, rows: [
 ] };
 const answer = (withReceipt = true): Answer => ({
   text: 'Ship it.', scope: { kind: 'global' }, sources: [decision], outcome: 'answered',
-  parts: [{ question: 'What did we agree?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0], private: false }] }],
+  parts: [{ question: 'What did we agree?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0], private: false }],
+    blocks: [{ kind: 'text', statements: [0] }] }],
   ...(withReceipt ? { receipt } : {}),
 });
 const record = { title: 'Tuesday sync', all_day: false, participants: [], participants_more: false, visibility: 'project',
@@ -298,7 +299,7 @@ describe('the cited evidence as it reads now', () => {
     release(ok({ ...answer(false), sources: [decision, first, second], parts: [{ question: 'What did we agree?', status: 'answered', statements: [
       { text: 'We agreed to ship Apollo with annual plans first.', citation_indexes: [0, 1], private: false },
       { text: 'Monthly plans follow the launch.', citation_indexes: [2], private: false },
-    ] }] }));
+    ], blocks: [{ kind: 'text', statements: [0] }, { kind: 'text', statements: [1] }] }] }));
     await flush();
     store.chooseSource(1, '0.1', paneTurn(store));
     await flush();

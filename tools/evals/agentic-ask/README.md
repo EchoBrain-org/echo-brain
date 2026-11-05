@@ -39,6 +39,11 @@ search query or tool order. A fake-handle model reply remains a
 deterministic unit-test concern; this live-model evaluator only observes the
 real controller's desk operations.
 
+Since the plain answer was retired on 2026-11-05, every case's answer is the
+block writer's, in blocks
+([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md),
+amended), so a run from before that date measured a different writer.
+
 Use `--cases`, `--trials`, `--max-model-calls`, and `--timeout-ms` to make a
 small diagnostic run. Bounds are fixed at ten cases, three trials, twelve
 model calls per case, 72 calls per invocation, and 85 seconds per case. The

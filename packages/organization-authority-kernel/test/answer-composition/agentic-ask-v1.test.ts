@@ -16,6 +16,7 @@ import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/age
 import type { StructuredGenerationInput, StructuredGenerationPort } from "../../src/answer-composition/structured-generation-v1.js";
 import type { EvidenceDeskItemV1, EvidenceDeskListInputV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from "../../src/shared/evidence-desk-v1.js";
 import type { EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
+import { writerReply } from "./fixtures/agentic-scenarios.js";
 
 const generation = { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 30_000 };
 const checked = "2026-09-27T00:00:00.000Z";
@@ -88,7 +89,7 @@ const missing = (need = "launch date"): PartSpec => ({ needs: [{ need, status: "
 const finish = (parts: readonly PartSpec[]) => step(parts, [{ tool: "finish" }]);
 const search = (query: string): ActionSpec => ({ tool: "search", args: { query } });
 const open = (id: string): ActionSpec => ({ tool: "open", args: { id } });
-const answer = (sentences: readonly { text: string; evidence: readonly string[] }[], notFound: readonly string[] = []) => ({ sentences, not_found: notFound });
+const answer = (sentences: readonly { text: string; evidence: readonly string[] }[], notFound: readonly string[] = []) => writerReply(sentences, { not_found: notFound });
 
 function ask(options: { desk: Desk; model: StructuredGenerationPort; audit?: AgenticAskAuditEntryV1[]; now?: () => number; context_tokens?: number; asker?: string }) {
   const audit = options.audit ?? [];
@@ -264,7 +265,7 @@ describe("agentic Ask: research loop", () => {
     expect(evidence.search).toHaveBeenCalledTimes(2);
   });
 
-  it("searches, finishes, writes one answer, and lays out one cited paragraph", async () => {
+  it("searches, finishes, writes one answer, and arranges it in blocks", async () => {
     const launch = item("launch", "Launch is approved for Tuesday.");
     const evidence = desk({ search: () => [launch] });
     const audit: AgenticAskAuditEntryV1[] = [];
@@ -278,7 +279,7 @@ describe("agentic Ask: research loop", () => {
     expect(validatePersonAnswerResponseV8(result)).toEqual(result);
     expect(result.direct).toBeUndefined();
     expect(result).toMatchObject({ outcome: "answered" });
-    expect(result.parts).toEqual([{ question: "When is launch?", status: "answered", statements: [{ text: "Launch is Tuesday.", citation_indexes: [0], private: false }] }]);
+    expect(result.parts).toEqual([{ question: "When is launch?", status: "answered", statements: [{ text: "Launch is Tuesday.", citation_indexes: [0], private: false }], blocks: [{ kind: "answer", statements: [0] }] }]);
     expect(result.citations).toEqual([{ citation: launch.citation, kind: "decision", label: "Meeting launch", visibility: "team" }]);
     // Every model call is fenced by a cumulative revalidation, and the release by one before its audit and one after.
     expect(evidence.revalidate).toHaveBeenCalledTimes(5);
@@ -902,7 +903,7 @@ describe("agentic Ask: research loop", () => {
     const script = scripted([
       { parts: [{ question: "  When is launch?  ", needs: [" launch date "], notes: "" }], actions: [{ tool: "Search", input: " launch " }] },
       { parts: [{ question: "When is launch? ", needs: [{ need: "Launch date", status: "Answered", evidence: ["e1", "[E1]"] }], notes: "line one\nline two" }], actions: [{ tool: "finish" }] },
-      { sentences: [{ text: " Launch is Tuesday. ", evidence: ["1"] }], not_found: [""] },
+      answer([{ text: " Launch is Tuesday. ", evidence: ["1"] }], [""]),
     ]);
     const result = await ask({ desk: desk({ search: () => [item("a")] }), model: script.model }).answer({ question: "When is launch?" });
     expect(result).toMatchObject({ outcome: "answered", parts: [{ question: "When is launch?", status: "answered", statements: [{ text: "Launch is Tuesday." }] }] });
@@ -1155,7 +1156,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
   it("reports an incomplete search when research reaches the step limit and the writer cannot use its search passages", async () => {
     let queries = 0;
     const model: StructuredGenerationPort = { generate: vi.fn(async input =>
-      (input.schema.properties as Readonly<Record<string, unknown>>)?.sentences !== undefined
+      (input.schema.properties as Readonly<Record<string, unknown>>)?.blocks !== undefined
         ? { wrong: true }
         : step([{}], [search(`launch ${++queries}`)])) };
     const evidence = desk({ search: query => [item(query, "Unread background. ".repeat(200))] });

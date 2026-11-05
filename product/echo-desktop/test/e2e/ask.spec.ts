@@ -210,8 +210,6 @@ test('an answer the writer arranged in blocks draws its timeline, card, numbered
   await askFromHome(page, 'Can THERM start PVT?');
   const answer = page.getByTestId('answer');
   await expect(answer).toBeVisible();
-  // The person client asks for answer layout v2 (ADR-0051), and the fixture Authority answers in blocks.
-  expect(run.calls().filter(call => call.path === '/v7/person/ask').map(call => call.layout)).toEqual(['2']);
   await expect(answer.locator('.answer-lead').getByTestId('statement-text')).toHaveText('Yes, PVT can start: the 72-hour soak passed on Oct 23.');
   await expect(answer.locator('h3.answer-heading')).toHaveText(['Soak test', 'Before PVT', 'Open risk']);
   // A timeline: each event's day down the side, what happened, and who.

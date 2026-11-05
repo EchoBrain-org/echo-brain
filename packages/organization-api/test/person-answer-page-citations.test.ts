@@ -4,7 +4,7 @@ import { validatePersonAnswerCitationV6, validatePersonAnswerResponseV8 } from '
 
 const page = { kind: 'page' as const, tool_id: 'knowledge', external_scope_id: 'site-123', page_id: 'page-456', section_id: 's2', version: '42', permalink: 'https://knowledge.example.test/wiki/pages/viewpage.action?pageId=456', text_sha256: canonicalSha256('Launch is Tuesday.') };
 const cited = { citation: page, kind: 'page' as const, label: 'Launch plan', visibility: 'only_me' as const };
-const response = () => ({ schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const, citations: [cited], parts: [{ question: 'When is launch?', status: 'answered' as const, statements: [{ text: 'The page says launch is Tuesday.', citation_indexes: [0], private: true }] }] });
+const response = () => ({ schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const, citations: [cited], parts: [{ question: 'When is launch?', status: 'answered' as const, statements: [{ text: 'The page says launch is Tuesday.', citation_indexes: [0], private: true }], blocks: [{ kind: 'answer' as const, statements: [0] }] }] });
 
 describe('Live page citations', () => {
   it('cite a page section in an answer and on an impact card', () => {

@@ -37,7 +37,7 @@ const record = canonicalSha256('record');
 // Non-ASCII labels put multi-byte characters across chunk boundaries.
 const decision = { citation: { kind: 'approved_record' as const, atom_id: canonicalSha256('atom'), record_sha256: record, policy_id: 'project-members-readable-person-v1' as const }, kind: 'decision' as const, label: 'THERM DVT recovery sync — café', visibility: 'team' as const, ref: `meeting:${record}` as const };
 const ticket = { citation: { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: 'cloud-1', ticket_id: '10048', permalink: 'https://example.atlassian.net/browse/THERM-48', text_sha256: canonicalSha256('THERM-48') }, kind: 'ticket' as const, label: 'THERM-48: Fan curve ✓', visibility: 'only_me' as const };
-const answer = (scope: PersonAnswerScopeV3 = { kind: 'global' }) => ({ schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope, outcome: 'answered' as const, citations: [decision], parts: [{ question: 'What did we decide?', status: 'answered' as const, statements: [{ text: 'The team chose the recovery plan.', citation_indexes: [0], private: false }] }] });
+const answer = (scope: PersonAnswerScopeV3 = { kind: 'global' }) => ({ schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope, outcome: 'answered' as const, citations: [decision], parts: [{ question: 'What did we decide?', status: 'answered' as const, statements: [{ text: 'The team chose the recovery plan.', citation_indexes: [0], private: false }], blocks: [{ kind: 'answer' as const, statements: [0] }] }] });
 const receipt = () => ({ looked_through: 3, elapsed_ms: 48_000, rows: [{ type: 'searched' as const, sources: [{ kind: 'meetings' as const }, { kind: 'tickets' as const, tool_id: 'jira' }], found: 22 }, { type: 'read' as const, items: [decision, ticket] }] });
 const STEPS: readonly PersonAskProgressStepEventV3[] = [
   { type: 'stage', stage: 'searching' },
@@ -64,7 +64,7 @@ const container = {
   kind: 'tool_container' as const, label: 'Thermal — DVT ✓', visibility: 'only_me' as const, key: 'THERM',
 };
 const answerV8 = (scope: PersonAnswerScopeV3 = { kind: 'global' }) => ({ schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope, outcome: 'answered' as const, citations: [project, container, followUp],
-  parts: [{ question: 'Where is Thermal recovery tracked?', status: 'answered' as const, statements: [{ text: 'Thermal recovery is tracked in the THERM Jira project.', citation_indexes: [0, 1], private: true }] }] });
+  parts: [{ question: 'Where is Thermal recovery tracked?', status: 'answered' as const, statements: [{ text: 'Thermal recovery is tracked in the THERM Jira project.', citation_indexes: [0, 1], private: true }], blocks: [{ kind: 'answer' as const, statements: [0] }] }] });
 const receiptV3 = () => ({ looked_through: 2, elapsed_ms: 24_000, rows: [{ type: 'searched' as const, sources: [{ kind: 'projects' as const }, { kind: 'containers' as const, tool_id: 'jira' }], found: 5 }, { type: 'read' as const, items: [project, container] }] });
 const STEPS_V3: readonly PersonAskProgressStepEventV3[] = [
   { type: 'stage', stage: 'searching' },
@@ -161,7 +161,7 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       expect(headers.get('accept')).toBe('text/event-stream, application/json');
       expect(headers.get('authorization')).toBe('Bearer bearer');
       expect(headers.get('x-echo-time-zone')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
-      expect(headers.get('x-echo-answer-layout')).toBe('2');
+      expect(headers.get('x-echo-answer-layout')).toBeNull();
       expect(headers.get('x-echo-ask-gap-details')).toBe('1');
     }
   });
@@ -265,8 +265,8 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       await expect(new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch: refused }).askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event)))
         .rejects.toMatchObject({ code, status });
       expect(refused.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask']);
-      // Every Ask asks for answer layout v2 (ADR-0051), streamed or not.
-      expect(headersOf(refused.mock.calls[0]![1]).get('x-echo-answer-layout')).toBe('2');
+      // No Ask asks for an answer layout: every answer comes in blocks (ADR-0051), streamed or not.
+      expect(headersOf(refused.mock.calls[0]![1]).get('x-echo-answer-layout')).toBeNull();
       expect(headersOf(refused.mock.calls[0]![1]).get('x-echo-ask-gap-details')).toBe('1');
       expect(progress).toEqual([]);
     }
@@ -457,7 +457,7 @@ describe('person ask --progress', () => {
       await expect(run(argv)).resolves.toBe(0);
       expect(pathOf(fetch.mock.calls[0]![0])).toBe('/v7/person/ask');
       expect(headersOf(fetch.mock.calls[0]![1]).has(PERSON_ASK_PROGRESS_HEADER_V1)).toBe(false);
-      expect(headersOf(fetch.mock.calls[0]![1]).get('x-echo-answer-layout')).toBe('2');
+      expect(headersOf(fetch.mock.calls[0]![1]).get('x-echo-answer-layout')).toBeNull();
       expect(output.stdout).toBe(`${JSON.stringify({ ok: true, result: body })}\n`);
     }
   });

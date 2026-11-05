@@ -9,27 +9,9 @@ import { assertExactKeys, asEnumerableRecord as object, fail, isCalendarDay } fr
  * shows is a statement: a point, a table row, a timeline event, a card fact
  * and a quote each cite what their statement cites, and a table's rows cite
  * only what its statements cite. Layout never adds a claim or a citation.
- *
- * A client asks for it with `x-echo-answer-layout: 2`. An answer to any other
- * request never carries `blocks`, so an older client never meets them.
+ * Every part with statements carries its blocks: there is no answer without
+ * them.
  */
-export const PERSON_ASK_ANSWER_LAYOUT_HEADER_V1 = 'x-echo-answer-layout';
-export const PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2 = '2';
-/** The header's value for answer layout v1 (ADR-0045), now retired, which desktops and CLIs from before layout v2 still send. */
-const RETIRED_LAYOUT_V1 = '1';
-
-/** The answer layout an Ask asked for: 2 (ADR-0051), the only one. */
-export type PersonAskAnswerLayoutV2 = 2;
-
-/**
- * Which answer layout an Ask asked for: none when the header is absent, or asks for retired layout v1, so an older
- * client's Ask gets the answer a request without the header gets; 2 by its value; any other value is refused.
- */
-export function validatePersonAskAnswerLayoutHeaderV2(value: unknown): PersonAskAnswerLayoutV2 | undefined {
-  if (value === undefined || value === RETIRED_LAYOUT_V1) return undefined;
-  if (value === PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2) return 2;
-  return fail('Ask answer layout header is invalid');
-}
 
 /** The answer is the conclusion: one or two statements. How many blocks, and items in a block, has no cap of its own. */
 export const PERSON_ANSWER_BLOCKS_ANSWER_MAX_STATEMENTS_V2 = 2;

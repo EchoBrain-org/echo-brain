@@ -25,8 +25,8 @@ it('catalogs, connects, maps, cites, and disconnects Confluence page evidence th
   const confluenceFetch = fakeConfluenceCloudFetchV1();
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
     const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { items?: string[] }[]; opened?: { id: string }[]; evidence?: { id: string }[] };
-    if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) {
-      return { sentences: [{ text: 'The MRD says to start EVT after PRD approval.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+    if ((input.schema.properties as Record<string, unknown>).blocks !== undefined) {
+      return { blocks: [{ block: 'answer', sentences: [{ text: 'The MRD says to start EVT after PRD approval.', evidence: [prompt.evidence![0]!.id] }] }], not_found: [] };
     }
     const id = prompt.opened?.[0]?.id ?? prompt.last_results?.[0]?.items?.[0];
     if (prompt.opened?.length) return { parts: [{ question: prompt.question, needs: [{ need: 'release decision', status: 'found', evidence: [id] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };

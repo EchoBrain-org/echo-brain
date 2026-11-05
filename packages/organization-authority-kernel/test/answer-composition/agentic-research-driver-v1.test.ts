@@ -7,6 +7,7 @@ import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 
 import { AuthorityOperationError } from '../../src/domain/errors.js';
 import { observeCoreRuntimeV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import { checked, generation, listed, record, result } from './fixtures/agentic-scenarios.js';
+import { writerReply } from './fixtures/agentic-scenarios.js';
 
 const evidence = record('driver', 'Approved: calibrate every unit.');
 const packets = new WeakMap<AgenticResearchDriverSessionV1, unknown[]>();
@@ -16,7 +17,7 @@ function harness(run: (session: AgenticResearchDriverSessionV1) => Promise<void>
   const audit: AgenticAskAuditEntryV1[] = [];
   const revalidate = vi.fn(async () => checked);
   const desk: EvidenceDeskPortV2 = { scope: { kind: 'global' }, search: async () => result([evidence]), open: async () => result([evidence]), list: async () => result([evidence]), revalidate, ...overrides };
-  const generate = vi.fn(async () => ({ sentences: [{ text: 'Calibrate every unit.', evidence: ['E1'] }], not_found: [], lists: [] }));
+  const generate = vi.fn(async () => (writerReply([{ text: 'Calibrate every unit.', evidence: ['E1'] }])));
   const driver = { run: vi.fn(async (session: AgenticResearchDriverSessionV1) => {
     const released = [session.initial];
     const wrapped = { ...session, call: async (...args: Parameters<AgenticResearchDriverSessionV1['call']>) => { const value = await session.call(...args); released.push(value); return value; } };
@@ -244,7 +245,7 @@ describe('native research harness shares the real ECHO tool state', () => {
       expect(await session.call('finish', harborMissing)).toMatchObject({ accepted: true, completed: true });
     }, { search: documents(result([])), ...desk });
     // The writer, when anything it can read came back, finds no owner in it.
-    h.generate.mockResolvedValue({ sentences: [], not_found: ['the Harbor owner'], lists: [] } as never);
+    h.generate.mockResolvedValue(writerReply([], { not_found: ['the Harbor owner'] }) as never);
     const output = await createAgenticAskV5(h.options).answerWithResearch({ question: 'Who owns Harbor?' });
     expect(output.research.stop).toMatchObject({ reason: 'finished', completed: true });
     expect(output.response.outcome).toBe('not_found');
@@ -266,7 +267,7 @@ describe('native research harness shares the real ECHO tool state', () => {
       list: async input => input.cursor === undefined ? result(rows.slice(0, 2), { truncated: true, next_cursor: 'page-2' }) : result(rows.slice(2)),
       open: async () => result([record('harbor-1', 'Harbor note 1: the review is pending.')]),
     });
-    h.generate.mockResolvedValue({ sentences: [], not_found: ['documents that name the Harbor owner'], lists: [] } as never);
+    h.generate.mockResolvedValue(writerReply([], { not_found: ['documents that name the Harbor owner'] }) as never);
     const output = await createAgenticAskV5(h.options).answerWithResearch({ question: 'Which documents name the Harbor owner?' });
     expect(output.research.lists?.[0]).toMatchObject({ id: 'L1', complete: true });
     expect(output.response.outcome).toBe('not_found');

@@ -10,7 +10,7 @@ import { AuthorityOperationError } from "../../src/domain/errors.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
 import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1 } from "../../src/shared/follow-up-evidence-v1.js";
 import { CONFLUENCE, followUpItem, ids, JIRA, OCT4_TITLES, pageRow, PAGES, pager, section, ticketBody, ticketRow, tickets } from "./fixtures/agentic-lists.js";
-import { checked, generation, LIST_READ_AT, listed, record, researchHarness as harness, result } from "./fixtures/agentic-scenarios.js";
+import { checked, generation, LIST_READ_AT, listed, record, researchHarness as harness, result, writerReply } from "./fixtures/agentic-scenarios.js";
 
 /**
  * Ask's lists as evidence of which items exist (ADR-0041), as scenario rows: a question, a desk, research's scripted
@@ -48,13 +48,13 @@ const opens = (values: readonly string[]) => values.map(id => ({ tool: "open", a
 /** An unusable step and an unusable repair: research stops, its plan the last accepted step's. */
 const UNUSABLE = [{ wrong: true }, { still: "wrong" }];
 const BAD = ['"parts" must be an array (got keys "wrong")', '"parts" must be an array (got keys "still")'];
-const use = (...lists: readonly unknown[]) => ({ lists, sentences: [], not_found: [] });
-const say = (text: string, evidence: readonly string[], lists: readonly unknown[] = []) => ({ lists, sentences: [{ text, evidence }], not_found: [] });
-const sayAll = (sentences: readonly (readonly [string, readonly string[]])[]) => ({ lists: [], sentences: sentences.map(([text, evidence]) => ({ text, evidence })), not_found: [] });
-const nothing = (...not_found: string[]) => ({ lists: [], sentences: [], not_found });
+const use = (...lists: readonly unknown[]) => writerReply([], { lists });
+const say = (text: string, evidence: readonly string[], lists: readonly unknown[] = []) => writerReply([{ text, evidence }], { lists });
+const sayAll = (sentences: readonly (readonly [string, readonly string[]])[]) => writerReply(sentences.map(([text, evidence]) => ({ text, evidence })));
+const nothing = (...not_found: string[]) => writerReply([], { not_found });
 const EMPTY = use();
 const useL1 = use({ id: "L1" });
-const cite = (text: string, count: number, shared = false) => ({ text, citation_indexes: Array.from({ length: count }, (_, index) => index), private: !shared });
+const cite = (text: string, count: number, shared = false, from = 0) => ({ text, citation_indexes: Array.from({ length: count }, (_, index) => from + index), private: !shared });
 const noted = (text: string, note: string) => text.replace(/\.$/u, ` ${note}.`);
 const of8 = (count: number) => `(${count} of 8 checked so far)`;
 
@@ -63,7 +63,6 @@ const UNSUPPORTED = "Part of the answer was left out because no item's text supp
 const UNCHECKED = "Not every listed item was checked, so others may also match.";
 const WHICH = "I could not confirm the full list of items asked for.";
 const MISSING = "I couldn't find this in the sources you can access.";
-const FIT = "Some evidence could not fit in this response.";
 const STOPPED = "Research stopped before it finished, so relevant context may be missing.";
 const COVERAGE = "Some source coverage was incomplete, so relevant context may be missing.";
 const INCOMPLETE = "I couldn't complete the search. Please try again.";
@@ -195,7 +194,7 @@ describe("Ask research reads a list to its end, says its filters, and gives no i
     { id: "F2", name: "refuses a finish on an unfinished list with \"keep reading the list\", then accepts it read to its end", ...TIX,
       desk: () => jira(tickets(1, 30), { size: 25, more: { truncated: true, page_full: false }, last: { page_full: false } }), steps: [read([TICKETS_LIST]), fin(WI, "L1"), read([TICKETS_LIST]), fin(WI, "L1")], w: [useL1],
       rejected: ['need N1 "tickets created on 2026-10-04": list L1 is unfinished: keep reading the list (repeat list with {"date_field":"created","source":"tickets","since":"2026-10-04","until":"2026-10-04"})'],
-      out: "partial", gap: FIT, says: [`30 Jira tickets created on October 4, 2026: ${names(1, 25)}; and 5 more.`], listed: 2,
+      out: "answered", says: [`30 Jira tickets created on October 4, 2026: ${names(1, 30)}.`], listed: 2,
       step: [1, { lists: [{ id: "L1", members: ids(1, 25), more: true, complete: false, truncated: true }] }], lists: [{ id: "L1", members: ids(1, 30), shown: 30, ended: true, truncated: false, complete: true }] },
     { id: "addition 1", name: "never trusts an exactly full last page: the list is cited, and stated, for \"at least\" its count", ...TIX, desk: () => jira(tickets(1, 25), { last: { page_full: true } }),
       steps: [read([TICKETS_LIST]), fin(WI, "L1")], w: [useL1], out: "partial", says: [`At least 25 Jira tickets created on October 4, 2026: ${names(1, 25)}.`], gap: leg("Jira tickets"), wl: { complete: false, count: 25 },
@@ -204,7 +203,7 @@ describe("Ask research reads a list to its end, says its filters, and gives no i
     { id: "addition 1", name: "treats a page with as many rows as research asked for as full when the desk does not say", q: "Which actions does Dana own?", need: "actions owned by Dana",
       desk: () => meetings(Array.from({ length: 50 }, (_, index) => record(`action-${index + 1}`, `Action ${index + 1}.`, { kind: "action", attributes: { owner: "Dana Lee" } }))),
       steps: [read([{ tool: "list", args: { source: "meetings", owner: "Dana" } }]), read([{ tool: "list", args: { source: "meetings", owner: "Dana" } }]), fin(WI, "L1")], w: [useL1],
-      out: "partial", says: [expect.stringMatching(/^At least 50 actions with owner Dana: Meeting action-1; .*; and 25 more\.$/u)], gap: `${leg("actions")} ${FIT}`, listed: 1,
+      out: "partial", says: [expect.stringMatching(/^At least 50 actions with owner Dana: Meeting action-1; .*; Meeting action-40\.$/u), expect.stringMatching(/^At least 50 actions with owner Dana: Meeting action-41; .*; Meeting action-50\.$/u)], gap: leg("actions"), listed: 1,
       lists: [{ id: "L1", source: "meetings", filter: { kind: "action", owner: "Dana", time_zone: "UTC" }, filter_applied: { owner: "applied" }, shown: 50, unverified_end: true, complete: false }] },
     { id: "F4", name: "shows absence with a list read to a confirmed end", ...TIX, need: "a ticket about the fixture vendor", desk: () => jira(tickets(1, 25), { last: { page_full: false }, body: bodyText }),
       steps: [read([TICKETS_LIST]), read(opens(["E1"])), none()], w: [nothing("a ticket about the fixture vendor")], out: "not_found", says: [], gap: "Not found: a ticket about the fixture vendor.", stop: "finished" },
@@ -218,7 +217,7 @@ describe("Ask research reads a list to its end, says its filters, and gives no i
     { id: "progress", name: "counts list pages as progress after text was read, so a long list is read to its end", q: "Which tickets track DVT?", need: "every THERM ticket",
       desk: () => jira(tickets(1, 100), { more: { truncated: true, page_full: false }, last: { page_full: false }, search: launch() }),
       steps: [read([{ tool: "search", args: { query: "THERM DVT" } }]), ...Array.from({ length: 4 }, () => read([{ tool: "list", args: { source: "tickets" } }])), fin(WI, "L1")], w: [useL1],
-      stop: "finished", out: "partial", gap: FIT, says: [expect.stringMatching(/^100 Jira tickets: THERM-1: Fixture work 1; .*; and 75 more\.$/u)], lists: [{ id: "L1", shown: 100, ended: true, complete: true }] },
+      stop: "finished", out: "answered", says: [`100 Jira tickets: ${names(1, 40)}.`, `100 Jira tickets: ${names(41, 40)}.`, `100 Jira tickets: ${names(81, 20)}.`], lists: [{ id: "L1", shown: 100, ended: true, complete: true }] },
     { id: "W7", name: "records an owner filter tickets cannot apply as ignored, and the answer that states the list tells the person", q: "Which tickets does Dana own?", need: "Dana's tickets", desk: () => jira(tickets(1, 3)),
       steps: [read([{ tool: "list", args: { source: "tickets", owner: "Dana" } }]), fin(WI, "L1")], w: [useL1], out: "answered", says: [`3 Jira tickets: ${names(1, 3)}.`], notice: ownerNotice("Jira tickets"),
       step: [1, { last_results: [{ list: "L1", note: "owner applies to meeting actions only; ignored" }], lists: [{ id: "L1", notes: ["owner applies to meeting actions only; ignored"] }] }],
@@ -238,7 +237,7 @@ describe("Ask research reads a list to its end, says its filters, and gives no i
       w: [], out: "not_found", says: [], gap: MISSING, lists: [],
       step: [1, { last_results: [{ tool: "list", error: "This source supports date_field: created, updated" }], lists: [] }] },
     { id: "W4", name: "states a complete follow-up list the desk filtered by owner and status, and retains a differently worded status sentence", ...FU, q: "What are my open tasks?", desk: () => followUps(TWELVE.slice(0, 2)),
-      steps: [read([FOLLOW_UPS]), fin(WI, "L1")], w: [say("Both are open.", ["E1", "E2"], [{ id: "L1" }])], out: "answered", says: ["2 follow-ups with owner Mara Lind and status open: THERM-41 follow-up; THERM-42 follow-up.", "Both are open."],
+      steps: [read([FOLLOW_UPS]), fin(WI, "L1")], w: [say("Both are open.", ["E1", "E2"], [{ id: "L1" }])], out: "answered", says: ["Both are open.", "2 follow-ups with owner Mara Lind and status open: THERM-41 follow-up; THERM-42 follow-up."],
       step: [1, { lists: [{ id: "L1", args: { source: "follow_ups", status: "open", owner: "Mara Lind" }, members: ["E1", "E2"], shown_count: 2, more: false, complete: true, available: true, truncated: false, unverified_end: false }] }],
       check: ({ h, response }) => {
         expect(response.citations.map((citation: { kind: string }) => citation.kind)).toEqual(["follow_up", "follow_up"]);
@@ -383,10 +382,10 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     { id: "C2", name: "refuses a which_say finish on sections alone once, naming their list (F1)", ...B4, steps: [...READ4, fin(WS, "E11", "E12"), fin(WS, "L1", "E11", "E12")], w: [say(TWO, ["E11", "E12"])],
       rejected: [`need N1 "${BUG_NEED}" ${UNLISTED} (L1). `], out: "partial", says: [noted(TWO, of8(4))], gap: UNCHECKED },
     { id: "C2 (misdeclared)", name: "answers a which-say question declared content with no note, its list id carrying no meaning", ...B4, steps: [...READ4, fin(C, "L1", "E12")], w: [say(TRACE, ["L1", "E12"])], out: "answered", says: [cite(TRACE, 9)] },
-    { id: "CF4", name: "states the list the writer uses beside the noted sentence (path A)", ...B4, steps: [...READ4, fin(WS, "L1", "E12")], w: [say(TRACE, ["E12"], [{ id: "L1" }])], out: "partial", says: [FULL8, noted(TRACE, of8(4))], gap: UNCHECKED },
-    { id: "CF4", name: "reads a section beside its own page's row as the section: the row is no citation", ...B4, steps: [...READ4, fin(WS, "L1", "E12")], w: [say(TRACE, ["E12", "E4"], [{ id: "L1" }])], out: "partial", says: [FULL8, noted(TRACE, of8(4))], gap: UNCHECKED },
+    { id: "CF4", name: "states the list the writer uses beside the noted sentence (path A)", ...B4, steps: [...READ4, fin(WS, "L1", "E12")], w: [say(TRACE, ["E12"], [{ id: "L1" }])], out: "partial", says: [noted(TRACE, of8(4)), FULL8], gap: UNCHECKED },
+    { id: "CF4", name: "reads a section beside its own page's row as the section: the row is no citation", ...B4, steps: [...READ4, fin(WS, "L1", "E12")], w: [say(TRACE, ["E12", "E4"], [{ id: "L1" }])], out: "partial", says: [noted(TRACE, of8(4)), FULL8], gap: UNCHECKED },
     { id: "X14 (subset)", name: "notes the October 4 subset beside the list a which_say need checks: its members' text is never a restatement (Known limit)", ...B4,
-      steps: [...READ4, fin(WS, "L1", ...SECTIONS)], w: [say(FOUR, SECTIONS, [{ id: "L1" }])], out: "partial", says: [FULL8, noted(FOUR, of8(4))], gap: UNCHECKED },
+      steps: [...READ4, fin(WS, "L1", ...SECTIONS)], w: [say(FOUR, SECTIONS, [{ id: "L1" }])], out: "partial", says: [noted(FOUR, of8(4)), FULL8], gap: UNCHECKED },
     ...[fin(WS, "L1", "E11", "E12"), fin(C, "E11", "E12")].map((finish, index): Row => ({
       id: index === 0 ? "C2b, R2" : "R2 (content)", name: `answers which pages mention BUG-412 once every page was checked, ${index === 0 ? "a which_say need" : "declared content"}: the sentence stands, with no note and no list`, ...B4,
       steps: [...READ8, finish], w: [say(TWO, ["E11", "E12"])], out: "answered", says: [cite(TWO, 2)], wl: { count: 8, checked: 8, complete: true, stated: false },
@@ -403,15 +402,15 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     })),
     { id: "C3c (misdeclared)", name: "keeps the explicit follow-up selection and its facts for a due-date question declared which_items", q: "When is THERM-41 due?", need: "THERM-41's due date", asked: {}, desk: () => followUps(DUE_ITEMS),
       steps: [read([FOLLOW_UPS], WI), fin(WI, "L1"), read([FOLLOW_UPS], WI), fin(WI, "L1")], w: [say("THERM-41 follow-up is due October 9, 2026.", ["E1"], [{ id: "L1", members: ["E1"] }])],
-      rejected: [`need N1 "THERM-41's due date": ${KEEP_FOLLOW_UPS}`], out: "answered", says: [`1 ${LEAD12}: ${dueFacts(1)}.`, "THERM-41 follow-up is due October 9, 2026."], citations: 1, listed: 2 },
+      rejected: [`need N1 "THERM-41's due date": ${KEEP_FOLLOW_UPS}`], out: "answered", says: ["THERM-41 follow-up is due October 9, 2026.", `1 ${LEAD12}: ${dueFacts(1)}.`], citations: 1, listed: 2 },
     ...[say("THERM-46 is owned by Dana Lee.", ["E6"]), use({ id: "L1", members: ["E6"] })].map((writer): Row => ({
-      id: "C4", name: `opens one ticket for who owns it, a content need refused on its row, and answers from ${writer.sentences.length ? "its text" : "its row facts selected by id"}`, q: "Who owns THERM-46?", need: "THERM-46's owner",
+      id: "C4", name: `opens one ticket for who owns it, a content need refused on its row, and answers from ${writer.blocks.length ? "its text" : "its row facts selected by id"}`, q: "Who owns THERM-46?", need: "THERM-46's owner",
       desk: () => jira(tickets(41, 10), { body: n => `THERM-${n}: fixture work, assigned to Dana Lee.` }), steps: [read([ALL_TICKETS], C), fin(C, "E6"), read(opens(["E6"]), C), fin(C, "E6")], w: [writer],
       rejected: [`need N1 "THERM-46's owner" ${HINT}`], out: "answered",
-      says: [cite(writer.sentences.length ? "THERM-46 is owned by Dana Lee." : "1 of the 10 Jira tickets: THERM-46: Fixture work 46 (status In Progress, owner Dana Lee, created October 4, 2026).", 1)],
+      says: [cite(writer.blocks.length ? "THERM-46 is owned by Dana Lee." : "1 of the 10 Jira tickets: THERM-46: Fixture work 46 (status In Progress, owner Dana Lee, created October 4, 2026).", 1)],
     })),
     { id: "C5", name: "asks a which_items need to keep reading a follow-up list, then states all 12; exact-only dedup does not correct the writer's wrong count", ...FU, steps: [read([FOLLOW_UPS], WI), fin(WI, "L1"), read([FOLLOW_UPS], WI), fin(WI, "L1")],
-      w: [say("You have 10 open follow-ups.", ["L1", ...ids(1, 10)])], rejected: [`need N1 "my open follow-ups": ${KEEP_FOLLOW_UPS}`], out: "answered", says: [FU12, "You have 10 open follow-ups."], listed: 2, wl: { id: "L1", complete: true, count: 12, stated: true } },
+      w: [say("You have 10 open follow-ups.", ["L1", ...ids(1, 10)])], rejected: [`need N1 "my open follow-ups": ${KEEP_FOLLOW_UPS}`], out: "answered", says: ["You have 10 open follow-ups.", FU12], listed: 2, wl: { id: "L1", complete: true, count: 12, stated: true } },
     { id: "X8 (misdeclared)", name: "finishes a which-question declared content on ten follow-up rows without reading on, and states no list (Known limit)", ...FU, steps: [read([FOLLOW_UPS]), fin(C, ...ids(1, 10))], w: [say("You have 10 open follow-ups.", ["L1", ...ids(1, 10)])], out: "answered", says: ["You have 10 open follow-ups."], stop: "finished", listed: 1, wl: { id: "L1", complete: false, count: 10, stated: false } },
     { id: "C6, R1, R8", name: "states the plan's list beside a reply that found nothing, with no repair", ...O4, steps: [read([OCT4_LIST]), fin(WI, "L1")], w: [nothing("Confluence pages created on October 4, 2026")], out: "partial", says: [cite(FULL8, 8)], gap: "Not found: Confluence pages created on October 4, 2026." },
     { id: "C7a, CF6", name: "names one meeting's actions by their own lines, each with its own due date, though they share the meeting's label", ...MARA,
@@ -427,7 +426,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       id, name: kind === WI ? "states the complete meeting-action list beside the opened subset's sentence" : "notes the same sentence for a which_say need checking the list", ...MARA,
       ...(kind === WS ? { q: "Which of Mara's actions name a numbered task?" } : {}), desk: tasks, steps: [read([MARA_LIST]), read(opens(ids(1, 4))), kind === WI ? fin(WI, "L1") : fin(WS, "L1", ...ids(1, 4))],
       w: [say("Mara owns tasks 1, 2, 3 and 4.", ["L1", ...ids(1, 4)])], wl: { complete: true, count: 8, checked: 4, stated: kind === WI },
-      ...(kind === WI ? { out: "answered", says: [`8 actions with owner Mara: ${TASK_ROWS.map((_, index) => `Task ${index + 1} (DVT review, 2026-10-01)`).join("; ")}.`, "Mara owns tasks 1, 2, 3 and 4."] } : { out: "partial", says: [`Mara owns tasks 1, 2, 3 and 4 ${of8(4)}.`], gap: UNCHECKED }),
+      ...(kind === WI ? { out: "answered", says: ["Mara owns tasks 1, 2, 3 and 4.", `8 actions with owner Mara: ${TASK_ROWS.map((_, index) => `Task ${index + 1} (DVT review, 2026-10-01)`).join("; ")}.`] } : { out: "partial", says: [`Mara owns tasks 1, 2, 3 and 4 ${of8(4)}.`], gap: UNCHECKED }),
       // An opened meeting record keeps its row's id: research read the four members in full.
       check: ({ research }) => expect(research.items.filter((item: any) => item.read_in_full).map((item: any) => item.id)).toEqual(ids(1, 4)),
     })),
@@ -439,21 +438,21 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       steps: [read([{ tool: "list", args: { source: "meetings", since: "2026-10-04", until: "2026-10-04" } }]), fin(WI, "L1")], w: [useL1], out: "answered",
       says: [cite("4 items from meetings dated on October 4, 2026: THERM DVT sync (2026-10-04) (1 meeting); Keep the DVT gate on hold (THERM DVT sync, 2026-10-04) (1 decision); Send fixture drawings to vendor (THERM DVT sync, 2026-10-04) (1 action, owner Dana Lee); Accuracy fails at 42 °C (THERM DVT sync, 2026-10-04) (1 rationale).", 4, true)] },
     ...[say(FOUR, ids(1, 4)), useL1].map((repair): Row => ({
-      id: "CF5a", name: `sends a sentence naming 4 of the 8 pages by their rows back once; ${repair.sentences.length ? "repeated, code states all 8 and says a claim was left out" : "dropped, the list alone is answered"}`, ...O4,
-      steps: [read([OCT4_LIST]), fin(WI, "L1")], w: [say(FOUR, ids(1, 4)), repair.sentences.length ? repair : EMPTY], repaired: true,
-      ...(repair.sentences.length ? { out: "partial", gap: UNSUPPORTED, says: [cite(FULL8, 8)], check: ({ writer }: Run) => expect(writer[1]!.rejected_response).toContain("The pages are") } : { out: "answered", says: [FULL8] }),
+      id: "CF5a", name: `sends a sentence naming 4 of the 8 pages by their rows back once; ${repair.blocks.length ? "repeated, code states all 8 and says a claim was left out" : "dropped, the list alone is answered"}`, ...O4,
+      steps: [read([OCT4_LIST]), fin(WI, "L1")], w: [say(FOUR, ids(1, 4)), repair.blocks.length ? repair : EMPTY], repaired: true,
+      ...(repair.blocks.length ? { out: "partial", gap: UNSUPPORTED, says: [cite(FULL8, 8)], check: ({ writer }: Run) => expect(writer[1]!.rejected_response).toContain("The pages are") } : { out: "answered", says: [FULL8] }),
     })),
     { id: "CF9a", name: "refuses a which_items finish on opened sections alone once, then preserves their precise page selection beside the sentence", ...O4,
-      steps: [...READ4, fin(WI, ...SECTIONS), fin(WI, "L1", ...SECTIONS)], w: [say(FOUR, SECTIONS)], rejected: [`${UNLISTED} (L1). `], out: "answered", says: [cite(`4 of the 8 Confluence pages created on October 4, 2026: ${[pageFacts(OCT4_TITLES[0]!, "October 5, 2026"), ...OCT4_TITLES.slice(1, 4).map(title => pageFacts(title))].join("; ")}.`, 4), FOUR], wl: { id: "L1", count: 8, checked: 4, stated: true } },
+      steps: [...READ4, fin(WI, ...SECTIONS), fin(WI, "L1", ...SECTIONS)], w: [say(FOUR, SECTIONS)], rejected: [`${UNLISTED} (L1). `], out: "answered", says: [FOUR, cite(`4 of the 8 Confluence pages created on October 4, 2026: ${[pageFacts(OCT4_TITLES[0]!, "October 5, 2026"), ...OCT4_TITLES.slice(1, 4).map(title => pageFacts(title))].join("; ")}.`, 4, false, 4)], wl: { id: "L1", count: 8, checked: 4, stated: true } },
     ...[READ4, READ8].map((reads): Row => ({
       id: "R5, CF7", name: `keeps a sentence citing the list's id beside four opened sections, ${reads === READ4 ? "four" : "all eight"} pages opened: code still names all eight`, ...O4,
-      steps: [...reads, fin(WI, "L1")], w: [say(FOUR, ["L1", ...SECTIONS])], out: "answered", says: [cite(FULL8, 8), FOUR], wl: { checked: reads === READ4 ? 4 : 8, stated: true },
+      steps: [...reads, fin(WI, "L1")], w: [say(FOUR, ["L1", ...SECTIONS])], out: "answered", says: [FOUR, cite(FULL8, 8, false, 4)], wl: { checked: reads === READ4 ? 4 : 8, stated: true },
     })),
     { id: "R3, CF12c", name: "refuses a finish without its inventory, then preserves all 8 requested members beside the 4-name sentence", ...O4,
-      steps: [...READ4, fin(WI, ...ids(1, 12)), fin(WI, "L1", ...ids(1, 12))], w: [say(FOUR, SECTIONS)], rejected: [`${UNLISTED} (L1). `], out: "answered", says: [cite(FULL8, 8), FOUR], wl: { checked: 4, stated: true } },
+      steps: [...READ4, fin(WI, ...ids(1, 12)), fin(WI, "L1", ...ids(1, 12))], w: [say(FOUR, SECTIONS)], rejected: [`${UNLISTED} (L1). `], out: "answered", says: [FOUR, cite(FULL8, 8, false, 4)], wl: { checked: 4, stated: true } },
     { id: "R3", name: "states the complete Jira list beside a sentence naming four members from their bodies, opened under the rows' own ids", ...TIX, desk: () => jira(tickets(1, 12), { last: { page_full: false }, body: n => `THERM-${n}: created October 4 for fixture work.` }),
       steps: [read([TICKETS_LIST]), read(opens(ids(1, 4))), fin(WI, ...ids(1, 12)), fin(WI, "L1", ...ids(1, 12))], w: [say("The tickets created on October 4 are THERM-1, THERM-2, THERM-3 and THERM-4.", ids(1, 4))],
-      rejected: [`${UNLISTED} (L1). `], out: "answered", says: [`12 Jira tickets created on October 4, 2026: ${names(1, 12)}.`, "The tickets created on October 4 are THERM-1, THERM-2, THERM-3 and THERM-4."], wl: { count: 12, checked: 4, complete: true, stated: true } },
+      rejected: [`${UNLISTED} (L1). `], out: "answered", says: ["The tickets created on October 4 are THERM-1, THERM-2, THERM-3 and THERM-4.", `12 Jira tickets created on October 4, 2026: ${names(1, 12)}.`], wl: { count: 12, checked: 4, complete: true, stated: true } },
     { id: "CF8a", name: "refuses a content finish on the list with what each kind of support is, then answers from the page research opened", ...DVT, desk: () => oct4(),
       steps: [read([OCT4_LIST], C), fin(C, "L1"), read(opens(["E3"]), C), fin(C, "E9")], w: [say(HOLD, ["E9"])], rejected: [`need N1 "whether DVT is on hold" ${HINT}`], out: "answered", says: [HOLD] },
     ...([[[claim(["E3"], [{ id: "L1" }]), nothing("whether DVT is on hold")], "Not found: whether DVT is on hold."], [[claim(["E3"], [{ id: "L1" }]), claim(["E3"], [{ id: "L1" }])], UNSUPPORTED]] as const)
@@ -465,12 +464,12 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       id: "X28", name: `leaves out a repeated claim on a row after a content need was not found: the part names nothing, partial (${reply.not_found.length ? "with" : "without"} the writer's not_found)`, ...DVT, desk: () => oct4(),
       steps: [read([OCT4_LIST], C), read(opens(["E3"]), C), none(C)], w: [reply, reply], repaired: true, stop: "finished", out: "partial", status: "not_found", says: [], citations: 0, gap,
     })),
-    { id: "CF8c (misdeclared)", name: "keeps the section's answer beside its selected page for a question declared which_items", q: "What does the gate review page say about DVT?", need: "what the gate review page says about DVT", desk: () => oct4(), steps: [read([OCT4_LIST], WI), read(opens(["E3"]), WI), fin(WI, "L1", "E9")], w: [say(HOLD, ["E9"])], out: "answered", says: [`1 of the 8 Confluence pages created on October 4, 2026: ${pageFacts(OCT4_TITLES[2]!)}.`, HOLD] },
+    { id: "CF8c (misdeclared)", name: "keeps the section's answer beside its selected page for a question declared which_items", q: "What does the gate review page say about DVT?", need: "what the gate review page says about DVT", desk: () => oct4(), steps: [read([OCT4_LIST], WI), read(opens(["E3"]), WI), fin(WI, "L1", "E9")], w: [say(HOLD, ["E9"])], out: "answered", says: [HOLD, `1 of the 8 Confluence pages created on October 4, 2026: ${pageFacts(OCT4_TITLES[2]!)}.`] },
     { id: "CF8d (misdeclared)", name: "refuses a which_say finish until a page is read, then notes it", ...DVT, desk: () => oct4(), steps: [read([OCT4_LIST], WS), fin(WS, "L1"), read(opens(["E3"]), WS), fin(WS, "L1", "E9")], w: [say(HOLD, ["E9"])],
       rejected: [HINT], out: "partial", says: [noted(HOLD, of8(1))], gap: UNCHECKED },
     ...([["CF9b", SECTIONS, []], ["CF9c", ["L1", ...SECTIONS], []], ["CF9c", ["L1", ...SECTIONS], [{ id: "L1" }]]] as const).map(([id, plan, lists]): Row => ({
       id: `${id} (misdeclared)`, name: `answers the 4-name sentence of a content declaration${lists.length ? ", beside the list the writer uses" : ", stating no list"} (Known limit)`, ...O4,
-      steps: [read([OCT4_LIST], C), read(opens(ids(1, 4)), C), fin(C, ...plan)], w: [say(FOUR, SECTIONS, lists)], out: "answered", says: lists.length ? [FULL8, FOUR] : [FOUR],
+      steps: [read([OCT4_LIST], C), read(opens(ids(1, 4)), C), fin(C, ...plan)], w: [say(FOUR, SECTIONS, lists)], out: "answered", says: lists.length ? [FOUR, FULL8] : [FOUR],
     })),
     ...([["CF10b", ["L1", "E9"]], ["CF10a, CF12b", ["E3", "E9"]]] as const).map(([id, plan]): Row => ({
       id, name: `answers what one page says from its section when the content need cites ${plan[0] === "L1" ? "the list" : "the page's row"} too: no list, no note`, q: "What does the gate review page created on October 4 say about DVT?", need: "what the gate review page says about DVT",
@@ -479,7 +478,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     })),
     { id: "CF11 (i, iii)", name: "refuses a which_items finish on ten follow-up rows once; read to its end, all 12 are stated beside the writer's two names", ...FU,
       steps: [read([FOLLOW_UPS], WI), fin(WI, ...ids(1, 10)), read([FOLLOW_UPS], WI), fin(WI, "L1")], w: [say("Your open follow-ups are THERM-41 and THERM-42.", ["E1", "E2"])],
-      rejected: [`need N1 "my open follow-ups" ${UNLISTED} (L1); part 1 need N1 "my open follow-ups": ${KEEP_FOLLOW_UPS}`], out: "answered", says: [FU12, "Your open follow-ups are THERM-41 and THERM-42."] },
+      rejected: [`need N1 "my open follow-ups" ${UNLISTED} (L1); part 1 need N1 "my open follow-ups": ${KEEP_FOLLOW_UPS}`], out: "answered", says: ["Your open follow-ups are THERM-41 and THERM-42.", FU12] },
     { id: "CF11 (ii)", name: "stops research when the repair cites L1 alone, still unfinished: the writer's count stays, partial", ...FU, steps: [read([FOLLOW_UPS], WI), fin(WI, ...ids(1, 10)), fin(WI, "L1")], w: [say("You have 10 open follow-ups.", ids(1, 10))],
       rejected: [`need N1 "my open follow-ups" ${UNLISTED} (L1); part 1 need N1 "my open follow-ups": ${KEEP_FOLLOW_UPS}`, `need N1 "my open follow-ups": ${KEEP_FOLLOW_UPS}`],
       stop: "unusable_step", out: "partial", says: ["You have 10 open follow-ups."], gap: WHICH, listed: 1, wl: { id: "L1", stated: false } },
@@ -489,7 +488,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       stop: "finished", out: "answered", says: ["The PRD requires readings within 0.1 C."], listed: 1, lists: [{ id: "L1", ended: false }] },
     ...[[{ id: "L1", members: ["E5"] }, { id: "L1" }], [{ id: "L1" }, { id: "L1", members: ["E5"] }]].map((lists, index): Row => ({
       id: index === 0 ? "R4a, X2" : "R4c", name: "states a list in full and a member selected by id, in either order, the member one name, beside a content need's sentence", ...R4,
-      w: [{ lists, sentences: [{ text: UPDATED, evidence: ["E9"] }], not_found: [] }], out: "answered", says: [FULL8, PRD_FACTS, UPDATED], citations: 9,
+      w: [say(UPDATED, ["E9"], lists)], out: "answered", says: [UPDATED, FULL8, PRD_FACTS], citations: 9,
     })),
     { id: "R4b", name: "states the four pages explicitly selected by id without expanding to the inventory", ...R4, w: [use({ id: "L1", members: ids(1, 4) })], out: "answered", citations: 4,
       says: [`4 of the 8 Confluence pages created on October 4, 2026: ${[pageFacts(OCT4_TITLES[0]!, "October 5, 2026"), ...OCT4_TITLES.slice(1, 4).map(title => pageFacts(title))].join("; ")}.`] },
@@ -512,10 +511,11 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
         : { says: [], citations: 0, gap: "Not found: Jira tickets created on October 4, 2026 that have owner Mara Quinn." }),
     })),
     { id: "X3", name: "writes the list itself when the writer gives no usable reply", ...O4, steps: [read([OCT4_LIST]), fin(WI, "L1")], w: UNUSABLE, out: "partial", says: [FULL8], gap: "I found these items, but could not write the rest of the answer.", check: ({ part }) => expect(part).not.toHaveProperty("records") },
-    { id: "X4", name: "names 25 of a 60-ticket list and says 'and 35 more', the count from ECHO's own list", ...TIX, desk: () => jira(tickets(1, 60), { more: { page_full: false }, last: { page_full: false } }),
-      steps: [read([TICKETS_LIST]), read([TICKETS_LIST]), read([TICKETS_LIST]), fin(WI, "L1")], w: [useL1], out: "partial", gap: FIT, says: [cite(`60 Jira tickets created on October 4, 2026: ${names(1, 25)}; and 35 more.`, 25)],
+    { id: "X4", name: "names every member of a 60-ticket list, in statements of at most 40 citations, the count from ECHO's own list", ...TIX, desk: () => jira(tickets(1, 60), { more: { page_full: false }, last: { page_full: false } }),
+      steps: [read([TICKETS_LIST]), read([TICKETS_LIST]), read([TICKETS_LIST]), fin(WI, "L1")], w: [useL1], out: "answered",
+      says: [`60 Jira tickets created on October 4, 2026: ${names(1, 40)}.`, `60 Jira tickets created on October 4, 2026: ${names(41, 20)}.`],
       wl: { count: 60, complete: true }, lists: [{ id: "L1", members: ids(1, 60), complete: true }],
-      check: ({ writer, response }) => { expect(writer[0]!.lists[0].members).toHaveLength(60); expect(response.citations.map((value: { label: string }) => value.label)).toEqual(tickets(1, 25).map(item => item.label)); } },
+      check: ({ writer, response }) => { expect(writer[0]!.lists[0].members).toHaveLength(60); expect(response.citations.map((value: { label: string }) => value.label)).toEqual(tickets(1, 60).map(item => item.label)); } },
     { id: "X5", name: "makes a which_items need research left on rows partial when it stops: the writer's sentence stays, and no list is stated", ...O4,
       steps: [read([OCT4_LIST], WI), read(opens(ids(1, 4)), WI, "found", ids(1, 8)), ...UNUSABLE], w: [say(FOUR, SECTIONS)], rejected: BAD, stop: "unusable_step", out: "partial", says: [FOUR], gap: WHICH,
       check: ({ research }) => expect(research.plan[0].needs).toEqual([{ need: OCT4_NEED, kind: "which_items", status: "found", evidence: ids(1, 8) }]) },
@@ -523,13 +523,13 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       steps: [read([OCT4_LIST], WI), ...["updated", "created", "updated"].map(date_field => read([{ tool: "list", args: { ...OCT4_LIST.args, date_field } }], WI))],
       w: [nothing("Confluence pages created on October 4, 2026")], stop: "no_progress", out: "partial", status: "not_found", says: [], gap: `${INCOMPLETE} Missing context: Confluence pages created on October 4, 2026. ${WHICH}` },
     { id: "X6", name: "tells the person a list's filter when the writer chooses to state it", ...X6, w: [say("Dana will publish the dashboard.", ["E1"], [{ id: "L1" }])], out: "answered",
-      says: ["2 actions with status open: Meeting a1 (open); Meeting a2.", "Dana will publish the dashboard."], notice: partialNotice("Actions"),
+      says: ["Dana will publish the dashboard.", "2 actions with status open: Meeting a1 (open); Meeting a2."], notice: partialNotice("Actions"),
       lists: [{ id: "L1", filter: { kind: "action", status: "open", time_zone: "UTC" }, filter_applied: { status: "partial" }, members: ["E1", "E2"], complete: true }], check: ({ research }) => expect(research.coverage.notices).toEqual([]) },
     { id: "X6", name: "never tells the person the filter of a list nothing names", ...X6, w: [say("Dana will publish the dashboard.", ["E1"])], out: "answered", says: ["Dana will publish the dashboard."] },
     { id: "X7a", name: "refuses a which_say finish before any page was read with what each kind of support is, never a change of kind", ...B4,
       steps: [read([OCT4_LIST], WS), fin(WS, "L1"), UNUSABLE[0]!], w: [nothing(BUG_NEED)], rejected: [HINT, BAD[0]!], stop: "unusable_step", out: "partial", status: "not_found", gap: `${INCOMPLETE} Missing context: ${BUG_NEED}. ${WHICH}`,
       check: ({ h, research }) => { for (const word of ["which_items", "which_say", "kind"]) expect(research.rounds[1].rejected[0]).not.toContain(word); expect(h.port.open).not.toHaveBeenCalled(); } },
-    { id: "X7b (misdeclared)", name: "keeps the content beside the precise member for a which-say question declared which_items", ...B4, steps: [read([OCT4_LIST], WI), read(opens(ids(1, 4)), WI), fin(WI, "L1", "E12")], w: [say(TRACE, ["E12"])], out: "answered", says: [`1 of the 8 Confluence pages created on October 4, 2026: ${pageFacts(OCT4_TITLES[3]!)}.`, TRACE] },
+    { id: "X7b (misdeclared)", name: "keeps the content beside the precise member for a which-say question declared which_items", ...B4, steps: [read([OCT4_LIST], WI), read(opens(ids(1, 4)), WI), fin(WI, "L1", "E12")], w: [say(TRACE, ["E12"])], out: "answered", says: [TRACE, `1 of the 8 Confluence pages created on October 4, 2026: ${pageFacts(OCT4_TITLES[3]!)}.`] },
     // X9b's first finish is refused, then repaired to cite the list: one that cites nothing is asked for the list, one that cites the opened pages is told their list's id.
     ...([
       ["X9", "", [none(WS, "L1")], []],
@@ -564,21 +564,21 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       steps: [read([OCT4_LIST], WS), read(opens(ids(1, 4)), WS, "open", ["L1"]), read(opens(ids(5, 4)), WS, "open", ["L1"]), fin(WS, "L1", ...SECTIONS)], w: [say(FOUR, SECTIONS)], out: "answered", says: [cite(FOUR, 4)] },
     { id: "X15", name: "keeps both sentences, noted, when a which_items and a which_say need share a list (Known limit)", ...X15,
       steps: [bothOpen([OCT4_LIST], false), bothOpen(opens(ids(1, 4)), true), step([FINISH], ["found", ["L1"], WI], ["found", ["L1", "E12"], WS])], w: [sayAll([[TRACE, ["E12"]], [FOUR, SECTIONS]])],
-      out: "partial", says: [FULL8, noted(TRACE, of8(4)), noted(FOUR, of8(4))], gap: UNCHECKED },
+      out: "partial", says: [noted(TRACE, of8(4)), FULL8, noted(FOUR, of8(4))], gap: UNCHECKED },
     { id: "X15", name: "keeps both unqualified once all 8 were opened: the restated subset stands beside the 8 names (Known limit)", ...X15,
       steps: [bothOpen([OCT4_LIST], false), bothOpen(opens(ids(1, 4)), true), bothOpen(opens(ids(5, 4)), true), step([FINISH], ["found", ["L1"], WI], ["found", ["L1", "E12"], WS])], w: [sayAll([[TRACE, ["E12"]], [FOUR, SECTIONS]])],
-      out: "answered", says: [FULL8, TRACE, FOUR] },
+      out: "answered", says: [TRACE, FULL8, FOUR] },
     ...[sayAll([[TWO, ["L1", "E11", "E12"]]]), sayAll([[TWO, ["L1", "E11", "E12"]], ["The PRD and the verification plan were also created that day.", ["E5", "E6"]]])].map((repair): Row => ({
-      id: "X15 (W4, W1)", name: `keeps a sentence on a which_say list's members beside the stated list, and ${repair.sentences.length === 1 ? "accepts the repair that drops a rows sentence" : "leaves out a repeated rows sentence"}`, ...X15,
+      id: "X15 (W4, W1)", name: `keeps a sentence on a which_say list's members beside the stated list, and ${repair.blocks.length === 1 ? "accepts the repair that drops a rows sentence" : "leaves out a repeated rows sentence"}`, ...X15,
       steps: [bothOpen([OCT4_LIST], false), bothOpen(opens(ids(1, 4)), false), bothOpen(opens(ids(5, 4)), false), step([FINISH], ["found", ["L1"], WI], ["found", ["L1", "E11", "E12"], WS])],
       w: [sayAll([[TWO, ["L1", "E11", "E12"]], ["The PRD and the verification plan were also created that day.", ["E5", "E6"]]]), repair], repaired: true, wl: { id: "L1", count: 8, checked: 8, stated: true },
-      says: [FULL8, TWO], ...(repair.sentences.length === 1 ? { out: "answered" } : { out: "partial", gap: UNSUPPORTED }),
+      says: [TWO, FULL8], ...(repair.blocks.length === 1 ? { out: "answered" } : { out: "partial", gap: UNSUPPORTED }),
     })),
     { id: "X17a", name: "states a where date range with its condition, and keeps the writer's sentence beside a statement that names some members (Known limit)", ...WEEK,
-      w: [say("THERM-43 follow-up and THERM-47 follow-up are due this week.", ["E3", "E7"], [due("2026-10-18", "2026-10-24")])], out: "answered", says: [THIS_WEEK, "THERM-43 follow-up and THERM-47 follow-up are due this week."],
+      w: [say("THERM-43 follow-up and THERM-47 follow-up are due this week.", ["E3", "E7"], [due("2026-10-18", "2026-10-24")])], out: "answered", says: ["THERM-43 follow-up and THERM-47 follow-up are due this week.", THIS_WEEK],
       check: ({ writer }) => expect(writer[0]).toMatchObject({ today: "2026-10-18" }) },
     { id: "X17b", name: "states the same members selected by id with their facts and retains the writer's condition sentence", ...WEEK,
-      w: [say("THERM-43 follow-up and THERM-47 follow-up are due this week.", ["E3", "E7"], [{ id: "L1", members: ["E3", "E7"] }])], out: "answered", says: [`2 ${LEAD12}: ${dueFacts(3)}; ${dueFacts(7)}.`, "THERM-43 follow-up and THERM-47 follow-up are due this week."] },
+      w: [say("THERM-43 follow-up and THERM-47 follow-up are due this week.", ["E3", "E7"], [{ id: "L1", members: ["E3", "E7"] }])], out: "answered", says: ["THERM-43 follow-up and THERM-47 follow-up are due this week.", `2 ${LEAD12}: ${dueFacts(3)}; ${dueFacts(7)}.`] },
     { id: "X17c", name: "keeps a due-date no-match partial when some members have no due date", ...WEEK, w: [use(due("2026-10-23", "2026-10-29"))], out: "partial", status: "not_found", says: [], citations: 0, gap: `${NOT_DUE} Some list items do not record the fact used to select them.` },
     { id: "X17d", name: "selects the overdue by an open range through yesterday", ...WEEK, w: [use(due(undefined, "2026-10-17"))], out: "answered", says: [`1 ${LEAD12} is due through October 17, 2026: THERM-41 follow-up.`] },
     ...([["Asia/Tokyo", `3 of the 8 Confluence pages created on October 4, 2026 were updated since October 11, 2026: ${OCT4_TITLES.slice(0, 3).join("; ")}.`], ["America/Los_Angeles", `1 of the 8 Confluence pages created on October 4, 2026 was updated since October 11, 2026: ${OCT4_TITLES[2]}.`]] as const)
@@ -590,7 +590,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       out: "partial", says: [noted(HIT_NAMES, "(4 of at least 25 checked so far)")], gap: UNCHECKED },
     { id: "X19c (misdeclared)", name: "declared which_items, it reads the whole source and states it; the hits' sentence stays beside it", ...X19,
       steps: [read([SEARCH_412], WI), fin(WI, ...ids(1, 9)), ...Array.from({ length: 3 }, () => [read([ALL_TICKETS], WI), fin(WI, "L1")]).flat()], w: [say(HIT_NAMES, ids(1, 9))],
-      rejected: [`${UNLISTED} (from lists), or list them first`, "keep reading the list", "keep reading the list"], out: "partial", gap: FIT, says: [`60 Jira tickets: ${names(1, 25)}; and 35 more.`, HIT_NAMES], lists: [{ id: "L1", shown: 60, ended: true, complete: true }] },
+      rejected: [`${UNLISTED} (from lists), or list them first`, "keep reading the list", "keep reading the list"], out: "answered", says: [HIT_NAMES, `60 Jira tickets: ${names(1, 40)}.`, `60 Jira tickets: ${names(41, 20)}.`], lists: [{ id: "L1", shown: 60, ended: true, complete: true }] },
     { id: "X20", name: "answers with no note once research read every listed page for a which_say need", ...B4,
       steps: [read([OCT4_LIST], WS), read(opens(ids(1, 4)), WS, "open", ["L1"]), read(opens(ids(5, 4)), WS, "open", ["L1"]), fin(WS, "L1", ...ids(10, 7))],
       w: [say("Seven of the eight pages mention BUG-412: every page but ECHO Product Pipeline — Start Here.", ids(10, 7))], out: "answered", says: [cite("Seven of the eight pages mention BUG-412: every page but ECHO Product Pipeline — Start Here.", 7)] },
@@ -611,32 +611,32 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       ...(id === "X23c" ? { out: "not_found", gap: MISSING } : { out: "partial", gap: `${MISSING} ${leg("actions")}`, ...(id === "X23b" ? { notice: "Meetings are temporarily unavailable." } : {}) }),
     })),
     { id: "X26a", name: "states every list a which_items need reads past the writer's five, and the sixth list's filter notice", ...daily(6, WI, EMPTY, { owner: 6 }), out: "answered", notice: ownerNotice("Confluence pages"), says: [1, 2, 3, 4, 5, 6].map(dayStatement) },
-    { id: "X26b", name: "states the first ten of eleven lists, the response's ten statements, and says what did not fit", ...daily(11, WI, EMPTY), out: "partial", gap: FIT, says: Array.from({ length: 10 }, (_, index) => dayStatement(index + 1)) },
+    { id: "X26b", name: "states all eleven lists past the writer's five: an answer has no count of statements", ...daily(11, WI, EMPTY), out: "answered", says: Array.from({ length: 11 }, (_, index) => dayStatement(index + 1)) },
     { id: "X26c", name: "notes and gaps a which_say need checking a sixth list past the writer's five", out: "partial", says: ["Day 6 plan traces BUG-412 to TC-D-03 (1 of 2 checked so far)."], gap: UNCHECKED,
       ...daily(6, WS, say("Day 6 plan traces BUG-412 to TC-D-03.", ["E8"]), { pages: n => n === 6 ? [dayPage(6), dayPage(7)] : [dayPage(n)], opened: ["E6"], cited: ["E8"] }) },
     { id: "X27a", name: "keeps a sentence on a stated list member's text while a content need research left open cites nothing", ...X27,
-      steps: [X27_LIST, step(opens(["E3"]), ["found", ["L1"], WI], ["open", [], C]), ...UNUSABLE], w: [say(DVT_GATE, ["E9"])], rejected: BAD, stop: "unusable_step", out: "partial", notice: STOPPED, says: [FULL8, DVT_GATE] },
+      steps: [X27_LIST, step(opens(["E3"]), ["found", ["L1"], WI], ["open", [], C]), ...UNUSABLE], w: [say(DVT_GATE, ["E9"])], rejected: BAD, stop: "unusable_step", out: "partial", notice: STOPPED, says: [DVT_GATE, FULL8] },
     { id: "X27b", name: "keeps it, partial, while a which_say need research left without its list", ...X27,
-      steps: [X27_LIST, step(opens(["E4"]), ["found", ["L1"], WI], ["open", [], WS, BUG_NEED]), ...UNUSABLE], w: [say(TRACE, ["E9"])], rejected: BAD, stop: "unusable_step", out: "partial", says: [FULL8, TRACE], gap: WHICH },
+      steps: [X27_LIST, step(opens(["E4"]), ["found", ["L1"], WI], ["open", [], WS, BUG_NEED]), ...UNUSABLE], w: [say(TRACE, ["E9"])], rejected: BAD, stop: "unusable_step", out: "partial", says: [TRACE, FULL8], gap: WHICH },
     { id: "X27c", name: "keeps the fact even when the content need cites another item", ...X27,
-      steps: [X27_LIST, step(opens(["E3", "E4"]), ["found", ["L1"], WI], ["open", [], C]), step([FINISH], ["found", ["L1"], WI], ["found", ["E10"], C])], w: [say(DVT_GATE, ["E9"])], stop: "finished", out: "answered", says: [FULL8, DVT_GATE] },
+      steps: [X27_LIST, step(opens(["E3", "E4"]), ["found", ["L1"], WI], ["open", [], C]), step([FINISH], ["found", ["L1"], WI], ["found", ["E10"], C])], w: [say(DVT_GATE, ["E9"])], stop: "finished", out: "answered", says: [DVT_GATE, FULL8] },
     ...([["X27d", "open", ["E9"]], ["X27d", "found", ["E9"]], ["X27e", "found", ["L1"]], ["X27e", "open", []]] as const).map(([id, status, evidence]): Row => ({
       id, name: `keeps both facts when a content need is ${status} citing [${evidence.join(", ")}]`, ...X27,
       steps: [X27_LIST, step(opens(["E3", "E4"]), ["found", ["L1"], WI], [status, evidence, C]), ...UNUSABLE], w: [sayAll([[DVT_GATE, ["E9"]], [RESTATE, ["E10"]]])], rejected: BAD, stop: "unusable_step", out: "partial", notice: STOPPED,
-      says: [FULL8, DVT_GATE, RESTATE],
+      says: [DVT_GATE, FULL8, RESTATE],
     })),
     ...([["E9"], []] as const).map((evidence): Row => ({
       id: "X27f", name: `keeps both facts when a content need marked not_found cites: [${evidence.join(", ")}]`, ...X27, desk: () => oct4({ search: vi.fn(async () => result([]) as EvidenceDeskResultV2) }),
       steps: [step([OCT4_LIST, { tool: "search", args: { query: "DVT gate hold" } }, { tool: "search", args: { query: "DVT gate status" } }], ["open", [], WI], ["open", []]), step(opens(["E3", "E4"]), ["found", ["L1"], WI], ["open", [], C]), step([FINISH], ["found", ["L1"], WI], ["not_found", evidence, C])],
-      w: [sayAll([[DVT_GATE, ["E9"]], [RESTATE, ["E10"]]])], stop: "finished", out: "answered", says: [FULL8, DVT_GATE, RESTATE],
+      w: [sayAll([[DVT_GATE, ["E9"]], [RESTATE, ["E10"]]])], stop: "finished", out: "answered", says: [DVT_GATE, FULL8, RESTATE],
     })),
     { id: "X30", name: "names a page two stated lists hold once against the answer's 25 names, the writer using no list", ...X30, w: [EMPTY] },
     { id: "X30", name: "names it once whatever each list's use: a where selection of each", ...X30, w: [use({ id: "L1", where: { field: "status", value: "current" } }, { id: "L2", where: { field: "status", value: "current" } })] },
     { id: "X30", name: "names it once whatever each list's use: each list by id, merged with its use in full (W2)", ...X30, w: [use({ id: "L1", members: ids(1, 20) }, { id: "L2", members: ids(1, 20) })] },
-    { id: "X31a", name: "keeps a sentence on a member a where selection does not name beside that selection", ...WEEK, w: [say(UNSELECTED, ["E1"], [due("2026-10-18", "2026-10-24")])], out: "answered", says: [THIS_WEEK, UNSELECTED] },
+    { id: "X31a", name: "keeps a sentence on a member a where selection does not name beside that selection", ...WEEK, w: [say(UNSELECTED, ["E1"], [due("2026-10-18", "2026-10-24")])], out: "answered", says: [UNSELECTED, THIS_WEEK] },
     { id: "X31b", name: "keeps it beside a where selection naming none, partial with its not-found phrase", ...WEEK, w: [say(UNSELECTED, ["E1"], [due("2026-10-23", "2026-10-29")])], out: "partial", says: [UNSELECTED], gap: `${NOT_DUE} Some list items do not record the fact used to select them.` },
-    { id: "X31c", name: "keeps the detail beside the list stated in full", ...WEEK, w: [say(UNSELECTED, ["E1"])], out: "answered", says: [FULL12, UNSELECTED] },
-    { id: "X31d", name: "keeps the detail beside a where selection holding every member", ...WEEK, w: [say(UNSELECTED, ["E1"], [{ id: "L1", where: { field: "status", value: "open" } }])], out: "answered", says: [expect.stringMatching(/^12 of the 12 follow-ups with owner Mara Lind and status open have status open: /u), UNSELECTED] },
+    { id: "X31c", name: "keeps the detail beside the list stated in full", ...WEEK, w: [say(UNSELECTED, ["E1"])], out: "answered", says: [UNSELECTED, FULL12] },
+    { id: "X31d", name: "keeps the detail beside a where selection holding every member", ...WEEK, w: [say(UNSELECTED, ["E1"], [{ id: "L1", where: { field: "status", value: "open" } }])], out: "answered", says: [UNSELECTED, expect.stringMatching(/^12 of the 12 follow-ups with owner Mara Lind and status open have status open: /u)] },
     { id: "X33a", name: "checks no page whose sections the loop left out to fit an open, and tells research the open was cut (addition 4)", ...B4, desk: () => oct4({ open: gateOpen("BUG-412") }),
       steps: [read([OCT4_LIST], WS), read(opens(ids(1, 4)), WS, "open", ["L1"]), read(opens(ids(5, 4)), WS, "open", ["L1"]), fin(WS, "L1", "E19")], w: [say(TRACE, ["E19"])],
       out: "partial", says: [noted(TRACE, "(7 of 8 checked so far)")], gap: UNCHECKED, wl: { id: "L1", count: 8, checked: 7 },

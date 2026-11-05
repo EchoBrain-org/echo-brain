@@ -284,7 +284,7 @@ describe('person ask in a project', () => {
   };
   function answer(scope: unknown) {
     return { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered', citations: [citation],
-      parts: [{ question: 'Question', status: 'answered', statements: [{ text: 'Annual plans first.', citation_indexes: [0], private: false }] }] };
+      parts: [{ question: 'Question', status: 'answered', statements: [{ text: 'Annual plans first.', citation_indexes: [0], private: false }], blocks: [{ kind: 'answer', statements: [0] }] }] };
   }
 
   it('sends the project on the newest route and returns citations that carry refs', async () => {

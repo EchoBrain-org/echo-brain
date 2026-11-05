@@ -35,6 +35,7 @@ describe('Agentic Ask V1 public contracts', () => {
       parts: [{
         question: 'What changed?', status: 'answered',
         statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }],
+        blocks: [{ kind: 'answer', statements: [0] }],
       }, {
         question: 'What was released?', status: 'records_only', statements: [],
         records: [{ text: ' Launch decision\n', citation_indexes: [0], private: false }],
@@ -48,7 +49,7 @@ describe('Agentic Ask V1 public contracts', () => {
     const response = {
       schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
       citations: [{ citation, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
-      parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [1], private: false }] }],
+      parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [1], private: false }], blocks: [{ kind: 'answer', statements: [0] }] }],
     };
     expect(() => validatePersonAnswerResponseV8(response)).toThrow();
     response.parts[0]!.statements[0]!.citation_indexes = [];
@@ -59,7 +60,7 @@ describe('Agentic Ask V1 public contracts', () => {
     const response = {
       schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
       citations: [{ citation: { ...citation, policy_id: 'organization-member-readable-person-v2' }, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
-      parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }] }],
+      parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }], blocks: [{ kind: 'answer', statements: [0] }] }],
     };
     expect(() => validatePersonAnswerResponseV8(response)).toThrow('policy_id is invalid');
   });
@@ -88,7 +89,7 @@ describe('Agentic Ask V1 public contracts', () => {
     expect(() => validatePersonAnswerResponseV8({
       schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
       citations: [{ citation, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
-      parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: ' Prose is not trimmed.', citation_indexes: [0], private: false }] }],
+      parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: ' Prose is not trimmed.', citation_indexes: [0], private: false }], blocks: [{ kind: 'answer', statements: [0] }] }],
     })).toThrow();
   });
 
@@ -96,7 +97,7 @@ describe('Agentic Ask V1 public contracts', () => {
     const privateCitation = { citation, kind: 'note' as const, label: 'Private note', visibility: 'only_me' as const };
     const base = {
       schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const,
-      citations: [privateCitation], parts: [{ question: 'What changed?', status: 'answered' as const, statements: [{ text: 'Private evidence.', citation_indexes: [0], private: false }] }],
+      citations: [privateCitation], parts: [{ question: 'What changed?', status: 'answered' as const, statements: [{ text: 'Private evidence.', citation_indexes: [0], private: false }], blocks: [{ kind: 'answer', statements: [0] }] }],
     };
     expect(() => validatePersonAnswerResponseV8(base)).toThrow();
     base.parts[0]!.statements[0]!.private = true;
@@ -138,7 +139,7 @@ describe('Agentic Ask V1 public contracts', () => {
     const answer = (scope: unknown) => ({
       schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered',
       citations: [{ citation, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
-      parts: [{ question: 'What did I decide?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }] }],
+      parts: [{ question: 'What did I decide?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }], blocks: [{ kind: 'answer', statements: [0] }] }],
     });
     const desk = (scope: unknown) => ({ schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope, truncated: false, items: [] });
     for (const scope of [{ kind: 'mine' }, { kind: 'mine', project_id }]) {
@@ -160,7 +161,7 @@ describe('Agentic Ask V1 public contracts', () => {
     const answer = (value: Record<string, unknown>) => ({
       schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
       citations: [{ kind: 'decision', label: 'Launch decision', visibility: 'team', ...value }],
-      parts: [{ question: 'What did I decide?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }] }],
+      parts: [{ question: 'What did I decide?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }], blocks: [{ kind: 'answer', statements: [0] }] }],
     });
     const document_id = `doc_${'1'.repeat(64)}`;
     const source = {
@@ -199,13 +200,14 @@ describe('Agentic Ask V1 public contracts', () => {
     expect(() => validatePersonEvidenceDeskResponseV1(desk({ ...item, ref: `meeting:${citation.record_sha256}` }))).toThrow('Evidence desk item has an unexpected shape');
   });
 
-  it('allows up to ten statements in a part (RFC-0003) and rejects more', () => {
+  it('allows more than RFC-0003\'s ten statements in a part, which its blocks arrange (ADR-0051)', () => {
     const response = (count: number) => ({
       schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
       citations: [{ citation, kind: 'decision', label: 'Launch review', visibility: 'team' }],
-      parts: [{ question: 'What is the plan?', status: 'answered', statements: Array.from({ length: count }, (_, index) => ({ text: `Fact ${index}.`, citation_indexes: [0], private: false })) }],
+      parts: [{ question: 'What is the plan?', status: 'answered', statements: Array.from({ length: count }, (_, index) => ({ text: `Fact ${index}.`, citation_indexes: [0], private: false })),
+        blocks: [{ kind: 'answer', statements: [0] }, { kind: 'text', statements: Array.from({ length: count - 1 }, (_, index) => index + 1) }] }],
     });
     expect(validatePersonAnswerResponseV8(response(10)).parts[0]!.statements).toHaveLength(10);
-    expect(() => validatePersonAnswerResponseV8(response(11))).toThrow('Ask response part is invalid');
+    expect(validatePersonAnswerResponseV8(response(11)).parts[0]!.statements).toHaveLength(11);
   });
 });

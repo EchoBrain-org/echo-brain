@@ -30,7 +30,7 @@ const space: AnswerSource = { kind: 'container', tool_id: 'confluence', label: '
 const answering = (sources: readonly AnswerSource[], receipt?: AskReceipt): Answer => ({
   text: 'Thermal recovery is led by Mara.', scope: { kind: 'global' }, sources, outcome: 'answered', ...(receipt ? { receipt } : {}),
   parts: [{ question: 'Who leads Thermal recovery?', status: 'answered',
-    statements: [{ text: 'Thermal recovery is led by Mara.', citation_indexes: sources.map((_, index) => index), private: false }] }],
+    statements: [{ text: 'Thermal recovery is led by Mara.', citation_indexes: sources.map((_, index) => index), private: false }], blocks: [{ kind: 'text', statements: [0] }] }],
 });
 
 let held: Held;

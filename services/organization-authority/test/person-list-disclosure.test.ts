@@ -183,9 +183,10 @@ async function disclosureWorld() {
     async generate(input: StructuredGenerationInput) {
       const prompt = JSON.parse(input.user_prompt) as { readonly question: string; readonly step?: number; readonly last_results?: readonly { readonly tool: string; readonly items?: readonly string[] }[];
         readonly opened?: readonly { readonly id: string }[]; readonly evidence?: readonly { readonly id: string }[] };
-      if ((input.schema.properties as Readonly<Record<string, unknown>>).sentences !== undefined) {
+      if ((input.schema.properties as Readonly<Record<string, unknown>>).blocks !== undefined) {
         const ids = prompt.evidence!.map((entry) => entry.id);
-        return { sentences: Array.from({ length: Math.ceil(ids.length / 12) }, (_, index) => ({ text: `Group ${index + 1} of what I added.`, evidence: ids.slice(index * 12, index * 12 + 12) })), not_found: [] };
+        const groups = Array.from({ length: Math.ceil(ids.length / 12) }, (_, index) => ({ text: `Group ${index + 1} of what I added.`, evidence: ids.slice(index * 12, index * 12 + 12) }));
+        return { blocks: [{ block: "answer", sentences: groups.slice(0, 1) }, { block: "text", sentences: groups.slice(1) }].filter((block) => block.sentences.length > 0), not_found: [] };
       }
       const part = (status: string, evidence: readonly string[] = []) => [{ question: prompt.question, needs: [{ need: "what I added", status, evidence }], notes: "" }];
       if (prompt.step === 1) return { parts: part("open"), actions: [{ tool: "list", args: { source: "meetings" } }, { tool: "list", args: { source: "documents" } }] };
