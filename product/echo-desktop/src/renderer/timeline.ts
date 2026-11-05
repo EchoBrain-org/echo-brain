@@ -8,7 +8,7 @@ import type {
 } from '../shared/protocol.js';
 import { checkOf, MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
-import { answerSentences, numberedSources, sourceGroups, type Shows, type SourceGroup } from './answer.js';
+import { answerSentences, numberedSources, sourceGroups, type Sentence, type Shows, type SourceGroup } from './answer.js';
 
 /** A follow-up continues the latest turn while it was asked this recently, and Ask is open. */
 const FOLLOW_UP_MS = 60 * 60_000;
@@ -196,7 +196,7 @@ export function askedAgain(turns: readonly TimelineTurn[]): ReadonlySet<string> 
 }
 
 /** Every sentence a turn shows: its answer's, and Ask again's "since" list. */
-function sentences(turn: TimelineTurn): AnswerStatement[] {
+function sentences(turn: TimelineTurn): Sentence[] {
   return [...answerSentences(turn.answer).map(([, statement]) => statement), ...(turn.since ?? [])];
 }
 

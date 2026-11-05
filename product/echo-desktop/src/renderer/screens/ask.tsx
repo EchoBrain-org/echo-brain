@@ -7,7 +7,7 @@ import type {
 import { askText, queryTerms } from '../../shared/query.js';
 import {
   answerGaps, answerSays, answerSentences, blockTitle, CARD_WORDS, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownArranged,
-  shownItems, statementGroups, tableDay, yoursIn, type AnswerTable, type Inline, type Shows, type SourceGroup,
+  shownItems, statementGroups, tableDay, yoursIn, type AnswerTable, type Inline, type Sentence, type Shows, type SourceGroup,
 } from '../answer.js';
 import { askedToday, askedWhen, identity, initial, marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
@@ -214,7 +214,7 @@ function Marker({ state, view, group, focus }: { state: State; view: TurnView; g
  * pointer is on the sentence, or one of them has focus (ADR-0049); a lock
  * shows only on a source's row.
  */
-function Markers({ state, view, statement, id }: { state: State; view: TurnView; statement: AnswerStatement; id: string }) {
+function Markers({ state, view, statement, id }: { state: State; view: TurnView; statement: Sentence; id: string }) {
   return <>{statementGroups(statement.citation_indexes, view.groups).map(group => <Marker key={group} state={state} view={view} group={group} focus={id} />)}</>;
 }
 
@@ -352,7 +352,7 @@ function Table({ state, view, index, block, place, opens, label }: {
             return (
               <tr key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="answer-row" data-reading-anchor={id} data-mark={mark ?? undefined}>
                 {row.cells.map((cell, column) => column === 0
-                  ? <td key={column}><span class="first">{cell}<Markers state={state} view={view} statement={rowStatement(row, view.answer.sources)} id={id} /></span></td>
+                  ? <td key={column}><span class="first">{cell}<Markers state={state} view={view} statement={rowStatement(row)} id={id} /></span></td>
                   : <Cell key={column} cell={cell} late={late && column === due} you={yoursIn(block.columns[column]!, cell, me)} />)}
               </tr>
             );

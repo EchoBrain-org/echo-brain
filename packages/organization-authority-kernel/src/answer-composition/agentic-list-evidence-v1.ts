@@ -772,11 +772,15 @@ export interface AgenticListStatementInputV1 {
  * covers the first member: with `share` 0, a first member no other statement
  * takes costs one name past the share, which buys no other member. `cited`
  * are the indexes in `selected` of the members the names cover, in order,
- * which the caller cites; "and N more" counts the rest. `caption` is the
- * statement without its names ("60 Jira tickets ...; and 35 more") and `names`
- * the indexes each name covers, in order.
+ * which the caller cites; "and N more" counts the rest.
  */
-type ListStatement = { readonly text: string; readonly cited: readonly number[]; readonly caption: string; readonly names: readonly (readonly number[])[] };
+type ListStatement = { readonly text: string; readonly cited: readonly number[] };
+/**
+ * A list's statement in blocks (agenticListStatementsV2): its text and what it cites, and also its `caption`, the
+ * statement without its names ("60 Jira tickets created on October 4, 2026"), and `names`, the indexes each name covers,
+ * in order, as its table reads them.
+ */
+type ListBlockStatement = { readonly text: string; readonly cited: readonly number[]; readonly caption: string; readonly names: readonly (readonly number[])[] };
 
 /** The count and selection describe the whole logical list, even when blocks need several cited statements for it. */
 function listCaption(input: Omit<AgenticListStatementInputV1, "share" | "free">): string {
@@ -814,10 +818,7 @@ export function agenticListStatementV1(input: AgenticListStatementInputV1): List
     const more = covered < k ? `; and ${k - covered} more` : "";
     const text = `${lead}: ${namesOf(named).join("; ")}${more}.`;
     if (Buffer.byteLength(text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1 || shown === 1) {
-      return Object.freeze({
-        text, cited: Object.freeze(named.flat().sort((left, right) => left - right)),
-        caption: `${lead}${more}`, names: Object.freeze(named.map(group => Object.freeze([...group]))),
-      });
+      return Object.freeze({ text, cited: Object.freeze(named.flat().sort((left, right) => left - right)) });
     }
   }
   throw new RangeError("unreachable");
@@ -827,7 +828,7 @@ export function agenticListStatementV1(input: AgenticListStatementInputV1): List
  * A blocks answer keeps every selected member. Split only at statement byte/citation boundaries; the renderer
  * groups these statements as one table with one caption. No chunk changes the selected set or counts its tail as omitted.
  */
-export function agenticListStatementsV2(input: Omit<AgenticListStatementInputV1, "share" | "free">): readonly ListStatement[] {
+export function agenticListStatementsV2(input: Omit<AgenticListStatementInputV1, "share" | "free">): readonly ListBlockStatement[] {
   if (input.selected.length === 0) throw new RangeError("A list statement names at least one member");
   const caption = listCaption(input);
   const groups = (input.by_id ? input.selected.map((_, index) => [index]) : nameGroups(input.selected)).flatMap(group => {
@@ -838,7 +839,7 @@ export function agenticListStatementsV2(input: Omit<AgenticListStatementInputV1,
   const textOf = (names: readonly (readonly number[])[]) => `${caption}: ${(input.by_id
     ? names.map(([index]) => factsName(input.selected[index!]!, input.filter.time_zone))
     : groupNames(input.selected, names)).join("; ")}.`;
-  const statements: ListStatement[] = [];
+  const statements: ListBlockStatement[] = [];
   let names: number[][] = [];
   const flush = () => {
     statements.push(Object.freeze({ caption, text: textOf(names), cited: Object.freeze(names.flat().sort((a, b) => a - b)), names: Object.freeze(names.map(group => Object.freeze(group))) }));
