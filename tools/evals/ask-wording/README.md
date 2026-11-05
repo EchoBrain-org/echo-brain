@@ -234,6 +234,19 @@ first try") keeps all three rules too: 30, 30 and 30, as PR #394's writer at
 ranking preferred PR #394's writer in 4 of the 5 questions it changed, so it
 is reverted as well.
 
+## The writer prompt without the plain answer, 2026-11-05 (pre-registered)
+
+Written before any run. Taking the plain writer's wording out of the answer
+prompt, once every answer is in blocks, is pre-registered in the
+[block evaluation](../ask-blocks/README.md) ("The writer prompt without the
+plain answer"), and needs this evaluation's three rules to pass on the changed
+writer. The same cases (`sha256:6ad26dc1…6a2bfa`), rules and thresholds; one
+complete run on the writer before the change and one after, each 10 cases and
+3 trials through the founder's Claude account (`--writer claude-account`), on
+the same day. The run at `e9ccc09` above is reported beside them. The lead's
+length, its mean and per case, and the statements per answer are reported
+beside them; no rule measures them.
+
 ## Limits
 
 - One model route and synthetic items only: a staging release and the

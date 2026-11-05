@@ -897,6 +897,60 @@ start from the v2 writer's captured prompt: each case is captured once,
 `block_catalog` beside `source_catalog`, for its own. The results above stay
 as they were run.
 
+## The writer prompt without the plain answer, 2026-11-05 (pre-registered)
+
+Written before any run. The plain answer is retired
+([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md),
+amended 2026-11-05): every Ask's writer replies in blocks. Its answer prompt
+still carried the plain writer's wording, a reply shape and an "up to 10" that
+the layout part then set aside. The founder asked for a prompt that says only
+what the block writer needs, measured before it ships.
+
+The change, to `ANSWER_PROMPT`, `ANSWER_BLOCKS_PROMPT` and
+`ANSWER_SINCE_PROMPT` only: no catalog, schema, check, reading or drawing
+changes.
+
+| Where | Before | After |
+| --- | --- | --- |
+| The answer prompt's opening line | Write a direct answer as a list of sentences: | Write a direct answer: |
+| The answer prompt's first rule | - Lead with the direct answer, ... Usually 2 to 6 sentences; use up to 10 when the question asks several things. Never leave out something the question asks for to stay short. | The same, without "Usually 2 to 6 sentences; use up to 10 when the question asks several things." |
+| The answer prompt's rule on search limitations | ... If neither the evidence nor a list answers the question, return `{"lists":[],"sentences":[],"not_found":["<the requested fact>"]}`. ... | ... If neither the evidence nor a list answers the question, return `{"lists":[],"blocks":[{"block":"answer","sentences":[{"text":"<what could not be found>","evidence":[]}]}],"not_found":["<the requested fact>"]}`. ... |
+| The answer prompt's last lines | Reply with ONLY a JSON object in exactly this shape: `{"lists":[],"sentences":[{"text":"<sentence>","evidence":["E1"]}],"not_found":[]}` | None |
+| The layout part's count line | - An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds: the "up to 10" above does not apply. | - An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds. |
+| The layout part's reply line | With layout, reply with ONLY a JSON object in exactly this shape instead: | Reply with ONLY a JSON object in exactly this shape: |
+| An Ask again's first rule | - Answer the question from the evidence exactly as you would otherwise, in "sentences". | - Answer the question from the evidence exactly as you would otherwise, in "blocks". |
+
+Every other line stays word for word. The blocks schema cannot carry the plain
+nothing-found reply: it needs one block, and the answer block one sentence.
+Code leaves out a sentence that cites nothing, so the new example is the reply
+it reads as not found.
+
+- **The comparison:** before is the writer on `main` and in PR #404, its
+  prompt at this commit; after is the change, at the commit that makes it.
+  Each side gets one complete gate run of the arm `built` (15 cases, 3 trials,
+  the judge off) and one complete run of the wording evaluation (10 cases, 3
+  trials), through the founder's Claude account (`claude-sonnet-5-5`), on the
+  same day: before first, then after. The gate and wording runs at `e9ccc09`
+  (2026-11-02) are reported beside them. They measured the writer before
+  PR #400 changed three of its prompt lines and its reply schema with no live
+  run, so before is the first measurement of today's writer.
+- **Rules.** The change is proposed only when both hold; otherwise the prompt
+  stays as it is:
+  1. **The gate:** after, `built` passes rules 1 to 5 at their pre-registered
+     thresholds.
+  2. **The wording:** after, the wording evaluation passes its three rules,
+     each in at least 27 of 30 trials.
+- **No ranking:** the change takes out wording the writer was told to set
+  aside, and is not meant to change the answers.
+- **Reported, never rules:** the answer block's mean words and the wording
+  lead's; statements per answer; the blocks used; repairs and output tokens;
+  fit in each case; and how many of the 15 cases' trial-1 answers changed,
+  where an answer changed when the kinds of its blocks, in order, differ
+  between before and after.
+- **Not measured here:** no case has nothing that answers it, so the
+  nothing-found example is checked by unit tests only; neither evaluation asks
+  again, so an Ask again's line is checked by unit tests only.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model
