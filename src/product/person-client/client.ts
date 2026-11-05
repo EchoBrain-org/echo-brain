@@ -352,7 +352,9 @@ export class PersonClient {
     return ended === null ? null : Object.freeze({ reason: ended.reason, authority_origin: ended.authority_origin });
   }
 
-  async refresh(): Promise<PersonClientSessionSummary> {
+  async refresh(signal?: AbortSignal): Promise<PersonClientSessionSummary> {
+    signal?.throwIfAborted();
+    this.store.assertSessionPresent();
     return this.operations.refresh(() => this.store.tryClaimRefresh(), async claimed => {
       let next: OrganizationPersonSessionV2;
       try {
@@ -394,11 +396,12 @@ export class PersonClient {
         throw error;
       }
       return summary(this.store.completeRefresh(claimed, next));
-    });
+    }, signal);
   }
 
   /** Keep the credential alive until the entire request (including its stream) ends. */
   private async withSession<T>(operation: (stored: StoredPersonClientSessionV1) => Promise<T>, signal?: AbortSignal, headroomMs = DEFAULT_TIMEOUT_MS): Promise<T> {
+    this.store.assertSessionPresent();
     let refreshed = false;
     while (true) {
       const result = await this.operations.read(async () => {
@@ -411,7 +414,7 @@ export class PersonClient {
       }, signal);
       if (result.kind === 'result') return result.value;
       // Never wait for a refresh while holding our own read lease.
-      await this.refresh();
+      await this.refresh(signal);
       refreshed = true;
     }
   }

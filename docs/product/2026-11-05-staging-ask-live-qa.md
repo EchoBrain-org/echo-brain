@@ -71,7 +71,11 @@ completion-rule reproduction accepted false absence before the change and
 refuses it afterward, including unobserved results from a native tool batch.
 A separate-process session proof covers a terminal read versus desktop refresh;
 additional checks cover parallel readers, cancellation, expiry headroom, dead
-process cleanup and unsafe local operation files.
+process cleanup and unsafe local operation files. The first CI package smoke
+check found signed-out reads creating coordination folders; the follow-up
+rejects before writing. The posted review also found that early-refresh waits
+dropped Ask cancellation; pre-claim waits now release their intent on abort,
+while an already submitted refresh finishes safely before the Ask is withheld.
 
 Three exact live timeline-payload native Sonnet 5.5 replays changed from two
 bad actor attributions before the contract change to three correct results.

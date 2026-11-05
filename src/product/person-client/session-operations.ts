@@ -73,12 +73,14 @@ export class PersonSessionOperations {
     }
   }
 
-  async refresh<C, R>(claim: () => C | undefined, operation: (claimed: C) => Promise<R>): Promise<R> {
+  async refresh<C, R>(claim: () => C | undefined, operation: (claimed: C) => Promise<R>, signal?: AbortSignal): Promise<R> {
+    signal?.throwIfAborted();
     const name = this.enter('refresh');
     const deadline = Date.now() + DEADLINE_MS;
     try {
-      while (this.entries().some(entry => entry.kind === 'read')) await this.wait(deadline);
+      while (this.entries().some(entry => entry.kind === 'read')) await this.wait(deadline, signal);
       while (true) {
+        signal?.throwIfAborted();
         const claimed = claim();
         if (claimed !== undefined) return await operation(claimed);
         // Only an unclaimed attempt waits. A token already submitted is never
@@ -87,7 +89,7 @@ export class PersonSessionOperations {
         if (!this.entries().some(entry => entry.kind === 'refresh' && entry.name !== name)) {
           throw new PersonClientSessionUnavailableError('Person session refresh was interrupted; sign in again');
         }
-        await this.wait(deadline);
+        await this.wait(deadline, signal);
       }
     } finally { this.leave(name); }
   }

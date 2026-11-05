@@ -438,6 +438,15 @@ export class PersonSessionStore {
     return this.readStoredSession(this.paths.live);
   }
 
+  /** A signed-out command must not create local coordination state. A live
+   * refresh claim may temporarily hold the credential outside `live`; its
+   * coordinator will wait for that transition before reading it. */
+  assertSessionPresent(): void {
+    if (!existsSync(this.paths.live) && !existsSync(this.paths.refresh_claim)) {
+      throw new PersonClientSessionUnavailableError();
+    }
+  }
+
   private createClaim(path: string): string {
     ensurePrivateDirectory(this.paths.directory);
     const claimId = randomUUID();

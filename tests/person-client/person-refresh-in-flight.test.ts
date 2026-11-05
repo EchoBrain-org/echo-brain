@@ -1,13 +1,25 @@
-import { readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { join } from 'node:path';
-import { setImmediate } from 'node:timers/promises';
+import { setImmediate, setTimeout } from 'node:timers/promises';
 import { expect, it } from 'vitest';
 import { PersonClient } from '../../src/product/person-client/client.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 import { signedInHome } from './signed-in-home.js';
 import { PersonSessionOperations } from '../../src/product/person-client/session-operations.js';
+
+it('rejects a signed-out read without creating coordination files or sending a request', async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-signed-out-read-')));
+  let sent = false;
+  const client = new PersonClient({ home_directory: home, fetch: async () => { sent = true; throw new Error('Unexpected request'); } });
+  try {
+    await expect(client.records()).rejects.toThrow('Person session is unavailable; sign in again');
+    expect(sent).toBe(false);
+    expect(readdirSync(home)).toEqual([]);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
 
 it('waits for another client using the same session before rotating its access credential', async () => {
   const now = '2026-11-05T07:00:00.000Z';
@@ -170,4 +182,57 @@ it('removes only a verified dead process entry and rejects an unsafe entry', asy
     await expect(gate.read(async () => { sent = true; })).rejects.toThrow('Unsafe Person session operation');
     expect(sent).toBe(false);
   } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+it('cancels an early refresh waiting for another read without claiming or rotating a credential', async () => {
+  const home = signedInHome({ prefix: 'echo-refresh-wait-cancel-', now: '2026-11-05T07:00:00.000Z' });
+  const stored = new PersonSessionStore(home).read();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void;
+  const reading = new Promise<void>(resolve => { started = resolve; });
+  const paths: string[] = [];
+  const fetch: typeof globalThis.fetch = async input => {
+    const path = new URL(String(input)).pathname;
+    paths.push(path);
+    if (path === '/v2/session/refresh') return Response.json({ ...stored.session, access_token: 'B'.repeat(43), refresh_token: 'S'.repeat(43), access_expires_at: '2026-11-05T19:00:00.000Z' });
+    expect(path).toBe('/v1/person/records'); started(); await held;
+    return Response.json({ schema_version: 1, kind: 'echo-clean-person-record-list-v1', records: [] });
+  };
+  const read = new PersonClient({ home_directory: home, now: () => '2026-11-05T07:00:00.000Z', fetch }).records();
+  await reading;
+  const controller = new AbortController();
+  const ask = new PersonClient({ home_directory: home, now: () => '2026-11-05T07:09:00.000Z', fetch }).askWithLiveSources('What needs attention?', undefined, controller.signal);
+  const outcome = ask.then(() => 'answered', error => error.name);
+  try {
+    await setImmediate();
+    controller.abort();
+    expect(await Promise.race([outcome, setTimeout(200).then(() => 'still waiting')])).toBe('AbortError');
+    expect(paths).toEqual(['/v1/person/records']);
+    expect(readdirSync(join(new PersonSessionStore(home).paths.directory, 'operations')).every(name => name.startsWith('read-'))).toBe(true);
+  } finally {
+    release(); await Promise.allSettled([read, ask]); rmSync(home, { recursive: true, force: true });
+  }
+});
+
+it('finishes an already submitted refresh after cancellation without sending the cancelled Ask', async () => {
+  const home = signedInHome({ prefix: 'echo-refresh-submitted-cancel-', now: '2026-11-05T07:00:00.000Z' });
+  const store = new PersonSessionStore(home), stored = store.read();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void;
+  const submitted = new Promise<void>(resolve => { started = resolve; });
+  const paths: string[] = [];
+  const client = new PersonClient({ home_directory: home, now: () => '2026-11-05T07:09:00.000Z', fetch: async input => {
+    paths.push(new URL(String(input)).pathname); started(); await held;
+    return Response.json({ ...stored.session, access_token: 'B'.repeat(43), refresh_token: 'S'.repeat(43), access_expires_at: '2026-11-05T19:00:00.000Z' });
+  } });
+  const controller = new AbortController();
+  const ask = client.askWithLiveSources('What needs attention?', undefined, controller.signal);
+  const rejected = expect(ask).rejects.toMatchObject({ name: 'AbortError' });
+  try {
+    await submitted; controller.abort(); release(); await rejected;
+    expect(paths).toEqual(['/v2/session/refresh']);
+    expect(store.read().session.access_token).toBe('B'.repeat(43));
+  } finally { release(); await Promise.allSettled([ask]); rmSync(home, { recursive: true, force: true }); }
 });

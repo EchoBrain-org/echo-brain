@@ -490,3 +490,8 @@ never replayed. New requests reserve their transport deadline before using a
 credential, refreshing first if it would expire during the request. Document
 transfers also reserve time for metadata and local preparation. This changes
 local coordination, not Authority access policy or credential-revocation rules.
+
+Signed-out reads reject before creating operation files. Cancellation releases
+a waiting refresh intent before it claims a token. Once claimed, the existing
+refresh operation finishes its single-use transition; a cancelled Ask is then
+withheld rather than abandoning or replaying the submitted credential.
