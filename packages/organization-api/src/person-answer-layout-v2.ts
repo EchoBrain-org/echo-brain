@@ -1,5 +1,4 @@
-import { LAYOUT_CELL_MAX_BYTES, LAYOUT_COLUMN_MAX_BYTES, layoutIndexes, layoutLine, layoutTable } from './person-answer-layout-checks.js';
-import { PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1, PERSON_ANSWER_HEADING_MAX_BYTES_V1, type PersonAnswerTableRowV1 } from './person-answer-layout-v1.js';
+import { LAYOUT_CAPTION_MAX_BYTES, LAYOUT_CELL_MAX_BYTES, LAYOUT_COLUMN_MAX_BYTES, layoutIndexes, layoutLine, layoutTable } from './person-answer-layout-checks.js';
 import { assertExactKeys, asEnumerableRecord as object, fail, isCalendarDay } from './validation.js';
 
 /**
@@ -14,15 +13,20 @@ import { assertExactKeys, asEnumerableRecord as object, fail, isCalendarDay } fr
  * A client asks for it with `x-echo-answer-layout: 2`. An answer to any other
  * request never carries `blocks`, so an older client never meets them.
  */
+export const PERSON_ASK_ANSWER_LAYOUT_HEADER_V1 = 'x-echo-answer-layout';
 export const PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2 = '2';
+/** The header's value for answer layout v1 (ADR-0045), now retired, which desktops and CLIs from before layout v2 still send. */
+const RETIRED_LAYOUT_V1 = '1';
 
-/** The answer layout an Ask asked for: 1 (ADR-0045) or 2 (ADR-0051). */
-export type PersonAskAnswerLayoutV2 = 1 | 2;
+/** The answer layout an Ask asked for: 2 (ADR-0051), the only one. */
+export type PersonAskAnswerLayoutV2 = 2;
 
-/** Which answer layout an Ask asked for: none when the header is absent, 1 or 2 by its value; any other value is refused. */
+/**
+ * Which answer layout an Ask asked for: none when the header is absent, or asks for retired layout v1, so an older
+ * client's Ask gets the answer a request without the header gets; 2 by its value; any other value is refused.
+ */
 export function validatePersonAskAnswerLayoutHeaderV2(value: unknown): PersonAskAnswerLayoutV2 | undefined {
-  if (value === undefined) return undefined;
-  if (value === PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1) return 1;
+  if (value === undefined || value === RETIRED_LAYOUT_V1) return undefined;
   if (value === PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2) return 2;
   return fail('Ask answer layout header is invalid');
 }
@@ -31,7 +35,11 @@ export function validatePersonAskAnswerLayoutHeaderV2(value: unknown): PersonAsk
 export const PERSON_ANSWER_BLOCKS_ANSWER_MAX_STATEMENTS_V2 = 2;
 /** A points, table, timeline or card block shows at least two items; fewer read as text. */
 export const PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2 = 2;
-export const PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2 = PERSON_ANSWER_HEADING_MAX_BYTES_V1;
+export const PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2 = 200;
+/** A table's column, cell and caption, in bytes, as answer layout v1 (ADR-0045) bounded them. */
+export const PERSON_ANSWER_COLUMN_MAX_BYTES_V1 = LAYOUT_COLUMN_MAX_BYTES;
+export const PERSON_ANSWER_CELL_MAX_BYTES_V1 = LAYOUT_CELL_MAX_BYTES;
+export const PERSON_ANSWER_CAPTION_MAX_BYTES_V1 = LAYOUT_CAPTION_MAX_BYTES;
 export const PERSON_ANSWER_EVENT_TEXT_MAX_BYTES_V2 = 2_048;
 export const PERSON_ANSWER_WHO_MAX_BYTES_V2 = 200;
 export const PERSON_ANSWER_FACT_LABEL_MAX_BYTES_V2 = LAYOUT_COLUMN_MAX_BYTES;
@@ -57,10 +65,18 @@ export interface PersonAnswerFactV2 {
   readonly value: string;
 }
 
+/** One table row: its cells, in the table's column order, and the citations of what it shows. */
+export interface PersonAnswerTableRowV1 {
+  /** One per column; an empty cell is a fact the row does not record. */
+  readonly cells: readonly string[];
+  /** At least one, each among the citations of the table's statements. */
+  readonly citation_indexes: readonly number[];
+}
+
 /**
  * One block of a part's `blocks`. `statements` are indexes into the part's statements: a point, an event or a fact is
- * the statement in the same place, and a quote is its one statement. A table is layout v1's: a list statement as one
- * row per member it names, or one writer statement per row.
+ * the statement in the same place, and a quote is its one statement. A table shows a list statement as one row per
+ * member it names, captioned ("At least 12 Jira tickets updated since Monday"), or one writer statement per row.
  */
 export type PersonAnswerBlockV2 =
   | { readonly kind: 'answer'; readonly statements: readonly number[] }
@@ -76,9 +92,6 @@ export type PersonAnswerBlockV2 =
     readonly facts: readonly PersonAnswerFactV2[];
   }
   | { readonly kind: 'quote'; readonly statements: readonly number[]; readonly text: string; readonly from?: string };
-
-/** A v2 table shows two or more rows, and as many rows and columns as its statements hold. */
-const ARRANGED_TABLE_COUNTS = Object.freeze({ minimumRows: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, maximumColumns: Number.POSITIVE_INFINITY, maximumRows: Number.POSITIVE_INFINITY });
 
 /** A real calendar day, written YYYY-MM-DD: any day the kernel reads, years 0000 to 0099 too. */
 function calendarDay(value: unknown, label: string): string {
@@ -131,7 +144,8 @@ export function validatePersonAnswerBlocksV2(
         keys(['columns', 'rows'], ['title', 'caption']);
         const titled = title();
         const own = shown(1, all);
-        return Object.freeze({ kind: 'table', ...titled, statements: own, ...layoutTable(input, own, statements, citationCount, label, ARRANGED_TABLE_COUNTS) });
+        // Two or more rows, and as many rows and columns as its statements hold.
+        return Object.freeze({ kind: 'table', ...titled, statements: own, ...layoutTable(input, own, statements, citationCount, label, PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2) });
       }
       case 'timeline': {
         keys(['events'], ['title']);

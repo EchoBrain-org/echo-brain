@@ -1,8 +1,9 @@
 // The Ask timeline on the host (ADR-0047): its file, on a real folder (one per
 // account, owner-only, written whole through a temporary file, at most 200
-// turns and 90 days, a bad file read as empty, our sign-out deleting it and an
-// account change deleting the last one's), and the checks of what the page
-// sends with an Ask and a source check before the client sees it.
+// turns and 90 days, a bad file read as empty, a turn saved with answer layout
+// v1 read without it, our sign-out deleting it and an account change deleting
+// the last one's), and the checks of what the page sends with an Ask and a
+// source check before the client sees it.
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,7 +26,7 @@ import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protoco
 import { askArgv, askCheckArgv, askCheckRequest, askPrevious } from '../../src/host/ask.js';
 import { deleteOtherTimelines, deleteTimeline, pruneTurns, putTimeline, readTimeline, timelinePath, timelineTurn } from '../../src/host/timeline.js';
 import { answerView } from '../../src/host/views.js';
-import { blocksAnswer, layoutAnswer } from '../fixtures/authority.js';
+import { blocksAnswer } from '../fixtures/authority.js';
 
 const ARI: Expect = { authority: 'https://authority.example', membership_id: 'mem_11111111-1111-4111-8111-111111111111' };
 const MINA: Expect = { authority: 'https://authority.example', membership_id: 'mem_22222222-2222-4222-8222-222222222222' };
@@ -130,6 +131,31 @@ describe('the timeline file (C5)', () => {
     expect(readTimeline(person, ARI)).toEqual([fresh]);
   });
 
+  it('reads a turn saved with answer layout v1 (ADR-0045), retired since, without its layout, and the next put writes it so', () => {
+    const [older, laidOut, newer] = [turn(3), turn(2), turn(1)];
+    const said = (text: string) => ({ text, citation_indexes: [0], private: true });
+    const part = { ...laidOut.answer.parts[0]!, statements: [said('THERM-482 is open.'), said('Dev owns it.'), said('Its fix is due Oct 30.')] };
+    const plain = { ...laidOut, answer: { ...laidOut.answer, parts: [part] } };
+    // As a desktop from before layout v2 saved it: how the part read, beside its statements.
+    const saved = { ...plain, answer: { ...plain.answer, parts: [{ ...part, layout: [
+      { kind: 'lead', statements: [0] }, { kind: 'heading', text: 'Owner' }, { kind: 'bullets', statements: [1] },
+      { kind: 'table', statements: [2], columns: ['Ticket', 'Due'], rows: [{ cells: ['THERM-482', '2026-10-30'], citation_indexes: [0] }] },
+    ] }] } };
+    mkdirSync(folder(), { mode: 0o700 });
+    const path = timelinePath(person, ARI);
+    writeFileSync(path, JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [older, saved, newer] }), { mode: 0o600 });
+    const read = readTimeline(person, ARI);
+    expect(read).toEqual([older, plain, newer]);
+    expect(read[1]!.answer.parts[0]).not.toHaveProperty('layout');
+    const fresh = turn();
+    putTimeline(person, ARI, fresh, NOW);
+    const { turns } = JSON.parse(readFileSync(path, 'utf8')) as { turns: TimelineTurn[] };
+    expect(turns).toEqual([older, plain, newer, fresh]);
+    expect(turns[1]!.answer.parts[0]).not.toHaveProperty('layout');
+    // What the layout held is never read: whatever it is, it goes.
+    expect(timelineTurn({ ...saved, answer: { ...saved.answer, parts: [{ ...part, layout: 'retired' }] } })).toEqual(plain);
+  });
+
   it('never uses a folder that is a link, nor reads one open to others; a put makes it owner-only again', () => {
     const elsewhere = mkdtempSync(join(tmpdir(), 'echo-elsewhere-'));
     try {
@@ -202,7 +228,6 @@ describe('the timeline file (C5)', () => {
       { ...good, answer: { ...good.answer, outcome: 'clarify' } }, { ...good, answer: { ...good.answer, sources: [{ kind: 'ticket', label: 'T' }] } },
       { ...good, answer: { ...good.answer, sources: [{ ...good.answer.sources[0], cited: { ...cited, citation: undefined } }] } },
       { ...good, answer: { ...good.answer, sources: [{ ...good.answer.sources[0], cited: { ...cited, citation: { ...ticketCitation, kind: 7 } } }] } },
-      { ...good, answer: { ...good.answer, parts: [{ ...good.answer.parts[0], layout: [{ kind: 'lead', statements: [3] }] }] } },
     ]) expect(timelineTurn(bad)).toBeNull();
   });
 
@@ -218,7 +243,7 @@ describe('the timeline file (C5)', () => {
     }
   });
 
-  it('keeps an answer arranged in blocks (ADR-0051) and one laid out (ADR-0045) as the page wrote them, and refuses blocks the page could not draw', () => {
+  it('keeps an answer arranged in blocks (ADR-0051) as the page wrote it, and refuses blocks the page could not draw', () => {
     const scope = { kind: 'global' } as const;
     /** An answer as the page keeps it: what the host handed it, less what only its Ask reads. */
     const kept = (result: Record<string, unknown>): TimelineTurn['answer'] => {
@@ -226,14 +251,10 @@ describe('the timeline file (C5)', () => {
       return answer;
     };
     const arranged = turn(1, { answer: kept(blocksAnswer('Can THERM start PVT?', scope, true)) });
-    const laidOut = turn(0, { answer: kept(layoutAnswer('Can DVT-R2 run on the reduced test scope?', scope, true)) });
     putTimeline(person, ARI, arranged, NOW);
-    putTimeline(person, ARI, laidOut, NOW);
-    const [readArranged, readLaidOut] = readTimeline(person, ARI);
+    const [readArranged] = readTimeline(person, ARI);
     expect(readArranged).toEqual(arranged);
     expect(readArranged!.answer.parts[0]!.blocks!.map(block => block.kind)).toEqual(['answer', 'table', 'timeline', 'card', 'points', 'text', 'quote']);
-    expect(readLaidOut).toEqual(laidOut);
-    expect(readLaidOut!.answer.parts[0]!.layout).toHaveLength(5);
     // An answer in blocks has no count of statements of its own (ADR-0051): 70 read back as written.
     const wide = arranged.answer.parts[0]!;
     const seventy = Array.from({ length: 70 }, (_, at) => ({ text: `Step ${at + 1}.`, citation_indexes: [0], private: wide.statements[0]!.private }));
@@ -249,8 +270,6 @@ describe('the timeline file (C5)', () => {
       blocks: blocks.map((block, place) => place === at ? { ...block, ...fields } : block) }] } });
     expect(timelineTurn(changed(4, { ordered: false }))).not.toBeNull();
     for (const bad of [
-      // A part reads one way.
-      { ...arranged, answer: { ...arranged.answer, parts: [{ ...part, layout: [{ kind: 'paragraph', statements: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] }] }] } },
       changed(0, { kind: 'lead' }), changed(0, { statements: [10] }), changed(5, { title: 7 }), changed(4, { ordered: 'yes' }),
       changed(1, { rows: [{ cells: 'THERM-52', citation_indexes: [4] }] }),
       // An event, a fact and a quote are each one sentence: the page reads them by its place.

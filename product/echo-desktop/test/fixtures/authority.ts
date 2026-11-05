@@ -69,9 +69,8 @@ interface Contract {
    */
   PERSON_ASK_PROGRESS_HEADER_VALUE_V3: string;
   formatPersonAskProgressEventV3(event: unknown): string;
-  /** Answer layout v1 (ADR-0045): the header an Ask asks for it with, and its value; and layout v2's value (ADR-0051). */
+  /** Answer layout v2 (ADR-0051): the header an Ask asks for it with, and its value. */
   PERSON_ASK_ANSWER_LAYOUT_HEADER_V1: string;
-  PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1: string;
   PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2: string;
   PERSON_ASK_GAP_DETAILS_HEADER_V1: string;
   PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1: string;
@@ -230,55 +229,6 @@ const thermPage = (id: string, title: string) => ({ kind: 'page', label: title, 
   permalink: `https://example.atlassian.net/wiki/pages/viewpage.action?pageId=${id}`, text_sha256: digestOf(title) } });
 const thermTicket = (key: string, title: string, id: string) => ({ kind: 'ticket', label: `${key} · ${title}`, visibility: 'only_me', citation: {
   kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD, ticket_id: id, permalink: `https://example.atlassian.net/browse/${key}`, text_sha256: digestOf(`${key}: ${title}`) } });
-/** What `ask-layout`'s THERM answer cites and its Ask reads: three pages, then three tickets. */
-const THERM_CITATIONS = [
-  thermPage('31001', 'DVT failure review'), thermPage('31002', 'Traceability'), thermPage('31003', 'Gate reviews'),
-  thermTicket('TRACE-01', 'Confirm TC-D-03 traces to MRD-01', '20001'), thermTicket('HW-11', 'Fix BUG-412 on the board', '20002'),
-  thermTicket('DVT-R2', 'Run DVT-R2', '20003'),
-];
-
-/**
- * `ask-layout`'s V8 answer (answer layout v1, ADR-0045), THERM's: a lead,
- * the decisions as bullets, and what has to happen first as a table, whose
- * row of yours is late. Research stopped short, so it says what it did not
- * cover. Its layout comes only to an Ask that asked for it (`layout`); without
- * it the statements are the same, in the same order.
- */
-export function layoutAnswer(question: string, scope: Record<string, unknown>, layout: boolean): Record<string, unknown> {
-  const said = (text: string, cited: number) => ({ text, citation_indexes: [cited], private: THERM_CITATIONS[cited]!.visibility === 'only_me' });
-  const row = (cells: string[], cited: number) => ({ cells, citation_indexes: [cited] });
-  return {
-    schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'partial', citations: THERM_CITATIONS,
-    notice: 'One of three THERM meetings in range was not read before the time limit.',
-    parts: [{
-      question, status: 'partial', gap: 'Who proposed the reduced scope was not found in the evidence read.',
-      statements: [
-        said('No, the reduced test scope was rejected.', 1),
-        said('DVT-R2 retests TC-D-03 and TC-D-01, plus the regression subset QA approves.', 1),
-        said('A narrower run cannot exit DVT: the retest must cover the failed bar TC-D-03, TC-D-01 and a QA-approved regression subset.', 2),
-        said('Hardware owns the BUG-412 fix (HW-11); the failure review made sensor self-heating the likely cause.', 0),
-        said('TC-D-06 reruns too: its pass predates the approved two-decimal display.', 2),
-        said('TRACE-01, confirming TC-D-03 traces to MRD-01, is yours, To Do, due 2026-10-14.', 3),
-        said('Rafael Moreno owes the PM the regression-scope proposal, due 2026-10-09.', 2),
-        said('Tomas Okafor\'s board fix for BUG-412 (HW-11) is In Progress, due 2026-10-28.', 4),
-        said('DVT-R2 is To Do with QA, due 2026-10-30.', 5),
-      ],
-      ...(layout ? { layout: [
-        { kind: 'lead', statements: [0, 1] },
-        { kind: 'heading', text: 'Decisions' },
-        { kind: 'bullets', statements: [2, 3, 4] },
-        { kind: 'heading', text: 'What has to happen first' },
-        { kind: 'table', statements: [5, 6, 7, 8], columns: ['Action', 'Owner', 'Due', 'Status'], rows: [
-          row(['Confirm TC-D-03 traces to MRD-01 (TRACE-01)', 'You', '2026-10-14', 'To Do'], 3),
-          row(['Send the regression-scope proposal to the PM', 'Rafael Moreno', '2026-10-09', 'Open'], 2),
-          row(['Fix BUG-412 on the board (HW-11)', 'Tomas Okafor', '2026-10-28', 'In Progress'], 4),
-          row(['Run DVT-R2 and publish the report', 'QA', '2026-10-30', 'To Do'], 5),
-        ] },
-      ] } : {}),
-    }],
-  };
-}
-
 /** What `ask-blocks`'s THERM answer cites: the soak's plan and report and the PVT readiness review, then three tickets. */
 const THERM_BLOCK_CITATIONS = [
   thermPage('31020', 'Soak test plan'), thermPage('31021', 'Soak test report'), thermPage('31022', 'PVT readiness review'),
@@ -1084,7 +1034,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const metadata = new Headers(init?.headers).get('x-echo-document-metadata');
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown>
       : metadata ? JSON.parse(Buffer.from(metadata, 'base64url').toString('utf8')) as Record<string, unknown> : undefined;
-    // An Ask that asked for its progress says so (ADR-0039), and one that asked for its answer's layout (ADR-0045).
+    // An Ask that asked for its progress says so (ADR-0039), and one that asked for its answer's layout (ADR-0051).
     const progress = new Headers(init?.headers).get('x-echo-ask-progress');
     const layout = new Headers(init?.headers).get('x-echo-answer-layout');
     appendFileSync(join(home, 'calls.jsonl'), `${JSON.stringify({ method, path: url.pathname, query: url.search, body, ...(progress === null ? {} : { progress }),
@@ -1910,12 +1860,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             : [], ...(included ? {} : { gap: 'No accessible Confluence page was found.' }) }],
         });
       }
-      // `ask-blocks` answers in the layout the Ask asked for: THERM's blocks for layout v2 (ADR-0051), layout v1's THERM answer for 1,
-      // and the blocks' plain statements for none.
+      // `ask-blocks` answers in the layout the Ask asked for: THERM's blocks for layout v2 (ADR-0051), and the blocks' plain statements
+      // for any other Ask, as the Authority answers one without the header or with retired layout v1's 1.
       if (mode === 'ask-blocks') {
         const layout = new Headers(init?.headers).get(api.PERSON_ASK_ANSWER_LAYOUT_HEADER_V1);
-        return json(layout === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2 ? blocksAnswer(question, scope, true)
-          : layout === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1 ? layoutAnswer(question, scope, true) : blocksAnswer(question, scope, false));
+        return json(blocksAnswer(question, scope, layout === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2));
       }
       if (mode === 'ask-scroll') {
         const statements = question === 'Quick status' ? [{ text: 'The release remains scheduled for Friday, and the team has confirmed the owner and the remaining checks.', citation_indexes: [0], private: false }] : Array.from({ length: 12 }, (_, index) => ({

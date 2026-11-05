@@ -1,13 +1,13 @@
 import { Fragment, type ComponentChildren } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type {
-  Answer, AnswerBlock, AnswerEvent, AnswerFact, AnswerPart, AnswerSource, ArrangedBlock, AskReceipt, AskSearched, CardEntity, ExternalAnswerSource, AnswerStatement,
+  Answer, AnswerEvent, AnswerFact, AnswerPart, AnswerSource, ArrangedBlock, AskReceipt, AskSearched, CardEntity, ExternalAnswerSource, AnswerStatement,
   ApprovedRecord, Match, OpenItemView, RecordItem, TimelineTurn, ToolContainerKind,
 } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import {
   answerGaps, answerSays, answerSentences, blockTitle, CARD_WORDS, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownArranged,
-  shownBlocks, shownItems, statementGroups, tableDay, yoursIn, type AnswerTable, type Inline, type Shows, type SourceGroup,
+  shownItems, statementGroups, tableDay, yoursIn, type AnswerTable, type Inline, type Sentence, type Shows, type SourceGroup,
 } from '../answer.js';
 import { askedToday, askedWhen, identity, initial, marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
@@ -214,7 +214,7 @@ function Marker({ state, view, group, focus }: { state: State; view: TurnView; g
  * pointer is on the sentence, or one of them has focus (ADR-0049); a lock
  * shows only on a source's row.
  */
-function Markers({ state, view, statement, id }: { state: State; view: TurnView; statement: AnswerStatement; id: string }) {
+function Markers({ state, view, statement, id }: { state: State; view: TurnView; statement: Sentence; id: string }) {
   return <>{statementGroups(statement.citation_indexes, view.groups).map(group => <Marker key={group} state={state} view={view} group={group} focus={id} />)}</>;
 }
 
@@ -326,9 +326,9 @@ function Cell({ cell, late, you }: { cell: string; late: boolean; you: boolean }
 }
 
 /**
- * A table of a laid-out part, in its own box that scrolls when the window is
- * narrow; the page never does. Its caption shows above it only when the table
- * opens the answer (`opens`): after a lead it would say the lead again
+ * A table block, in its own box that scrolls when the window is narrow; the
+ * page never does. Its caption shows above it only when the table opens the
+ * answer (`opens`): after the answer it would say the answer again
  * (ADR-0049), so it only names the table. Each row's numbers are in its first
  * cell, and a row is lit on its own. Only your row's late due date is in the
  * signal colour, but for a row whose sources changed since.
@@ -352,7 +352,7 @@ function Table({ state, view, index, block, place, opens, label }: {
             return (
               <tr key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="answer-row" data-reading-anchor={id} data-mark={mark ?? undefined}>
                 {row.cells.map((cell, column) => column === 0
-                  ? <td key={column}><span class="first">{cell}<Markers state={state} view={view} statement={rowStatement(row, view.answer.sources)} id={id} /></span></td>
+                  ? <td key={column}><span class="first">{cell}<Markers state={state} view={view} statement={rowStatement(row)} id={id} /></span></td>
                   : <Cell key={column} cell={cell} late={late && column === due} you={yoursIn(block.columns[column]!, cell, me)} />)}
               </tr>
             );
@@ -361,34 +361,6 @@ function Table({ state, view, index, block, place, opens, label }: {
       </table>
     </div>
   </>;
-}
-
-/**
- * A laid-out part (answer layout v1, ADR-0045), in the desktop's own type:
- * the lead, its first sentence heavier; headings; paragraphs; bullets; and
- * tables. Every sentence and row keeps its own numbers and is lit on its own.
- * `opening`: the part opens the answer, so a table first has no lead above it.
- * A block a check leaves empty goes, and so does a heading with nothing under it.
- */
-function LaidOut({ state, view, part, index, layout, opening }: {
-  state: State; view: TurnView; part: AnswerPart; index: number; layout: readonly AnswerBlock[]; opening: boolean;
-}) {
-  // A table without a caption is named by the heading above it.
-  let heading = 'Table';
-  const showing = shownBlocks(part, layout, view.shows);
-  return (
-    <div class="answer-layout">
-      {layout.map((block, place) => {
-        if (!showing[place]) return null;
-        if (block.kind === 'heading') { heading = block.text; return <h3 key={place} class="answer-heading">{block.text}</h3>; }
-        if (block.kind === 'lead' || block.kind === 'paragraph') {
-          return <Prose key={place} state={state} view={view} part={part} index={index} statements={block.statements} lead={block.kind === 'lead'} />;
-        }
-        if (block.kind === 'bullets') return <Points key={place} state={state} view={view} part={part} index={index} statements={block.statements} ordered={false} />;
-        return <Table key={place} state={state} view={view} index={index} block={block} place={place} opens={opening && place === 0} label={heading} />;
-      })}
-    </div>
-  );
 }
 
 /** A card's kind, as its icon: a person, a project's folder, a ticket's stub, or a decision's diamond, as Home marks one. */
@@ -438,8 +410,8 @@ function Quote({ state, view, statement, text, from, id }: { state: State; view:
 /**
  * One block of an arranged part, as its kind reads: the answer in the lead's
  * type; text as a paragraph; points as bullets, or numbered steps when their
- * order matters; a table as a laid-out part's (`opens`: it opens the answer,
- * so its caption shows above it); a timeline, its days down the side; a card,
+ * order matters; a table in its own box (`opens`: it opens the answer, so its
+ * caption shows above it); a timeline, its days down the side; a card,
  * headed by its kind's icon, its kind and its title, its facts as label and
  * value rows; and a quote. Each item is a sentence, by its place in the part
  * (`${index}.${place}`), or a table's row.
@@ -491,9 +463,9 @@ function ArrangedItems({ state, view, part, index, block, place, opens }: {
  * A part the writer arranged in blocks (answer layout v2, ADR-0051), in the
  * desktop's own type, each block under its title as a section heading (a
  * card's names the card). Every item keeps its own numbers and is lit on its
- * own, as a laid-out part's sentences are. `opening`: the part opens the
- * answer, so a table first has no answer above it. A block a check leaves
- * with nothing to show goes, and its title with it.
+ * own. `opening`: the part opens the answer, so a table first has no answer
+ * above it. A block a check leaves with nothing to show goes, and its title
+ * with it.
  */
 function Arranged({ state, view, part, index, blocks, opening }: {
   state: State; view: TurnView; part: AnswerPart; index: number; blocks: readonly ArrangedBlock[]; opening: boolean;
@@ -516,14 +488,13 @@ function Arranged({ state, view, part, index, blocks, opening }: {
 }
 
 /**
- * The answer: each part, laid out when it carries a layout, in its blocks
- * when the writer arranged it (ADR-0051), and a paragraph per sentence when
- * neither. A part with nothing to show is left out, and so is a sentence
- * citing a source you can no longer read; one whose source changed is lit in
- * the signal (ADR-0047). Only typed actionable explanations are shown. An
- * answer that says nothing and shows no explanation says `empty`, its turn's
- * line (nothingLine), unless the project's own line under it says so (null):
- * no answer is left blank.
+ * The answer: each part in its blocks when the writer arranged it
+ * (ADR-0051), and a paragraph per sentence when not. A part with nothing to
+ * show is left out, and so is a sentence citing a source you can no longer
+ * read; one whose source changed is lit in the signal (ADR-0047). Only typed
+ * actionable explanations are shown. An answer that says nothing and shows no
+ * explanation says `empty`, its turn's line (nothingLine), unless the
+ * project's own line under it says so (null): no answer is left blank.
  */
 function AgenticAnswer({ state, view, empty, dimmed = false }: { state: State; view: TurnView; empty: string | null; dimmed?: boolean }) {
   const answer = view.answer;
@@ -538,11 +509,9 @@ function AgenticAnswer({ state, view, empty, dimmed = false }: { state: State; v
         <section class="answer-part" key={index}>
           {/* One part answers the question itself: its label would repeat it. */}
           {answer.parts.length > 1 && <div class="section-label">{part.question}</div>}
-          {part.layout
-            ? <LaidOut state={state} view={view} part={part} index={index} layout={part.layout} opening={opening} />
-            : part.blocks
-              ? <Arranged state={state} view={view} part={part} index={index} blocks={part.blocks} opening={opening} />
-              : part.statements.map((statement, place) => <Statement key={place} state={state} view={view} statement={statement} id={`${index}.${place}`} />)}
+          {part.blocks
+            ? <Arranged state={state} view={view} part={part} index={index} blocks={part.blocks} opening={opening} />
+            : part.statements.map((statement, place) => <Statement key={place} state={state} view={view} statement={statement} id={`${index}.${place}`} />)}
           {part.records?.map((statement, place) => <Found key={`record-${place}`} state={state} view={view} statement={statement} id={`${index}.r${place}`} />)}
         </section>
       ))}

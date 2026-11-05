@@ -7,7 +7,9 @@ many blocks the model chooses from against how flexible each one is. This
 opt-in evaluation answers that offline, before any product change.
 
 It measures only the writer of a laid-out answer
-([ADR-0045](../../../docs/decisions/ADR-0045-ask-answer-layout.md)). Research is
+([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md), and
+[ADR-0045](../../../docs/decisions/ADR-0045-ask-answer-layout.md) until it was
+retired). Research is
 scripted, as in the [wording evaluation](../ask-wording/README.md): for each
 case one search returns its synthetic items and research opens them all, so
 every trial hands the writer the same evidence. The writer is the product's
@@ -41,7 +43,7 @@ holds. The entries are in [`catalogs.mjs`](catalogs.mjs).
 
 | Catalog | Modeled on | What the writer picks |
 | --- | --- | --- |
-| `today` | Production (ADR-0045) | A form for each sentence (lead, prose, bullet, table row), sections and tables, in the production prompt and schema, unchanged |
+| `today` | Production layout v1 (ADR-0045), retired on 2026-11-04 | A form for each sentence (lead, prose, bullet, table row), sections and tables, in the production prompt and schema, unchanged |
 | `templates` | OpenAI ChatKit widget templates, Microsoft Adaptive Card templates | One whole-answer template of 5 (`fact`, `list`, `report`, `story`, `profile`), filled |
 | `balanced` | Vercel json-render style meaning-sized components | Any sequence of 7 blocks: `answer`, `text`, `points`, `table`, `timeline`, `card`, `quote` |
 | `primitives` | Google A2UI's basic catalog, without its media and input components | A flat tree of 7 components: `Column`, `Row`, `List`, `Card`, `Tabs`, `Divider`, `Text` |
@@ -51,7 +53,7 @@ production writer prompt with its layout part replaced by the catalog's. Each
 catalog's layout part keeps production's two wording rules word for word
 (answer without restating the question; a long identifier at most once), says
 that every item cites its evidence, and asks for the conclusion first. Every
-catalog, `today` included, gets up to 3,000 output tokens.
+catalog gets up to 3,000 output tokens, as `today` did.
 
 ## Cases (pre-registered)
 
@@ -80,8 +82,8 @@ people it may name, and, for two cases, a trap.
 
 ## Procedure
 
-1. For each case, Ask runs as the kernel runs it with answer layout, over the
-   scripted desk, with a writer that answers nothing; this records the
+1. For each case, Ask runs as the kernel runs it with answer layout v2, over
+   the scripted desk, with a writer that answers nothing; this records the
    writer's exact prompts without a network call.
 2. Each catalog writes every case three times. A reply that fails its
    catalog's checks gets one repair, with the production repair instruction
@@ -92,11 +94,11 @@ people it may name, and, for two cases, a trap.
    structure, as an app drawing them would have to: a `Column` of two or more
    `Row`s of `Text` is a table, a `Card` holding label and value pairs is a
    card, a `Text` that is a quotation is a quote.
-4. A model judge on the same route ranks each case's four trial-1 answers,
+4. A model judge on the same route ranks each case's three trial-1 answers,
    shown as text with the evidence, once in the page's order and once
    reversed. It is reported beside the founder's ranking and decides nothing.
-5. The founder ranks the same four answers per case on a private page, blind:
-   labels A to D in a fixed random order per case, every catalog drawn in one
+5. The founder ranks the same three answers per case on a private page, blind:
+   labels A to C in a fixed random order per case, every catalog drawn in one
    style. After ranking, the page reveals the catalogs, the judge's ranks, the
    grades and every trial's full trace.
 
@@ -108,7 +110,7 @@ list item, a table row, a timeline event, a card fact, a quote. A `primitives`
 not a table's header row. Headings, titles, column names and labels are not.
 
 - **Valid:** the reply passes its catalog's checks, at once or after its one
-  repair. `today` uses production's own reading of the reply.
+  repair. `today` used production's own reading of the reply.
 - **Grounded:** every claim cites at least one evidence id, and every cited id
   is one the writer was given; each date a claim writes (`YYYY-MM-DD`, or a
   month name with a day, read in 2026 unless it names a year) is today or a
@@ -132,7 +134,7 @@ not a table's header row. Headings, titles, column names and labels are not.
   the answer has the same shape (or there is none in both).
 - **Ranks:** the founder's rank for each catalog's trial-1 answer per case, 1
   best, ties allowed; a trial with no valid answer is shown as having none and
-  ranks 4. The judge's rank is the mean of its two orders.
+  ranks last. The judge's rank is the mean of its two orders.
 
 Shapes: **single** as above; **prose** a prose block; **parallel** a list of two
 or more items; **ordered** a list marked ordered (only `balanced` and
@@ -144,10 +146,10 @@ two or more facts; **verbatim** a quote, or a quoted span, that passes the
 word-for-word check; **sections** two or more headings or titles, each with a
 claim under it.
 
-What each catalog can show, for the fallback rule: `today` single, prose,
-parallel, grid, sequence, verbatim, sections; `templates` single, prose,
+What each catalog can show, for the fallback rule: `templates` single, prose,
 parallel, grid, sequence, profile, verbatim; `balanced` and `primitives` all
-nine.
+nine. `today` could show single, prose, parallel, grid, sequence, verbatim and
+sections.
 
 Reported beside them, never as rules: valid at once, repairs, blocks and
 claims per answer, which blocks each catalog used, output tokens and latency.
@@ -170,6 +172,10 @@ that pass rules 1 to 3; a tie (mean ranks within 0.1) goes to fewer repairs,
 then to fewer output tokens. The judge's mean ranks, and how often its top
 pick and its order of each pair of catalogs match the founder's, are reported
 beside it.
+
+Rule 6 compares `balanced` with `today`, which no longer runs ("Layout v1
+retired, 2026-11-04"): the code counts rules 1 to 5, and its decision gives
+the right block size only.
 
 ## Changes after the diagnostic run
 
@@ -876,6 +882,20 @@ On seeing this result the founder closed the tuning: "no further tuning
 needed. i want to use it live". ADR-0051 lists this change beside the check
 among its rejected options. This record, the held-out questions and
 `--case-set held-out` stay.
+
+## Layout v1 retired, 2026-11-04
+
+Answer layout v1
+([ADR-0045](../../../docs/decisions/ADR-0045-ask-answer-layout.md)) is
+retired: every desktop and CLI asks for layout v2, and the kernel no longer
+has v1's prompt, schema or reading. The `today` arm, that layout unchanged,
+was removed with it, and so was rule 6's comparison of `balanced` with
+`today`: the code no longer counts rule 6, its decision gives only the right
+block size, and the judge ranks three answers a case. The other catalogs now
+start from the v2 writer's captured prompt: each case is captured once,
+`built` is given it as it is, and each catalog swaps its layout part, and the
+`block_catalog` beside `source_catalog`, for its own. The results above stay
+as they were run.
 
 ## Limits
 

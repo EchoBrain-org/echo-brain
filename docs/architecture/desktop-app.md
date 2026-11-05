@@ -90,13 +90,16 @@ copy that a unit test proves equivalent.
   it. Nothing runs once the app quits; see
   [impact checks and open items](impact-checks-and-open-items.md).
 - **Ask** ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md),
-  [ADR-0045](../decisions/ADR-0045-ask-answer-layout.md),
-  [ADR-0047](../decisions/ADR-0047-ask-timeline.md)). `ask.run` builds
+  [ADR-0047](../decisions/ADR-0047-ask-timeline.md),
+  [ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md)). `ask.run` builds
   `person ask --question … --progress --expected-membership-id …
   --expected-authority …`, forwards each progress line tagged with the page's
-  cancel id, renders the laid-out answer and keeps each turn with
-  `timeline.put`. Opening an old turn runs `ask.check`, a content-free check
-  that its sources are still readable.
+  cancel id, renders the answer in the blocks the writer arranged it in, or a
+  paragraph per sentence, and keeps each turn with `timeline.put`. Answer
+  layout v1 ([ADR-0045](../decisions/ADR-0045-ask-answer-layout.md)) is
+  retired: `timeline.read` loads a turn saved with a v1 layout without it, so
+  its sentences show as paragraphs. Opening an old turn runs `ask.check`, a
+  content-free check that its sources are still readable.
 
 ## Updates
 

@@ -424,7 +424,8 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
 .answer-statement { margin: 0; font-size: 15px; line-height: 1.65; }
 .answer-statement > span:first-child { white-space: pre-wrap; }
 .answer-statement.on { margin: -4px -8px; padding: 4px 8px; border-radius: 8px; background: var(--selected); }
-/* A laid-out answer (ADR-0045): the lead, then sections of paragraphs, bullets and tables. The desktop sets every size, not the writer. */
+/* An answer the writer arranged in blocks (ADR-0051): the answer as the lead, a title as a section heading, text as paragraphs and points as
+   bullets. The desktop sets every size, not the writer. */
 .answer-layout { display: flex; flex-direction: column; gap: 10px; }
 .answer-layout .marker { min-width: 16px; height: 16px; padding: 0 4px; margin-left: 6px; border-radius: 4px; font-size: 10px; vertical-align: 2px; }
 .answer-layout .marker + .marker { margin-left: 3px; }
@@ -465,10 +466,9 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
 .answer-table td.late time::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 3px; background: var(--signal); vertical-align: 1px; }
 .answer-table tr.on td { background: var(--selected); }
 .answer-table .marker { vertical-align: 1px; }
-/* An answer the writer arranged (ADR-0051), in the same type: the answer as the lead, a title as a section heading, points as
-   bullets or numbered steps, tables as above. A timeline keeps each event's day down the side, beside a dot on one rail; a card is a
-   box headed by its kind's icon, its kind and its title, then its facts as label and value rows; a quote is set apart by a rule,
-   its source under it. Each item is lit on its own, and lit in the signal when a source it cites changed. */
+/* Numbered steps, a timeline, a card and a quote, in the same type. A timeline keeps each event's day down the side, beside a dot on
+   one rail; a card is a box headed by its kind's icon, its kind and its title, then its facts as label and value rows; a quote is set
+   apart by a rule, its source under it. Each item is lit on its own, and lit in the signal when a source it cites changed. */
 .answer-bullets.answer-steps { counter-reset: answer-step; }
 .answer-bullets.answer-steps li { counter-increment: answer-step; }
 .answer-bullets.answer-steps li::before {

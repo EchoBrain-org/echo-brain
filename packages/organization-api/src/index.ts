@@ -56,7 +56,6 @@ export * from './person-ticket-citation-v1.js';
 export * from './person-page-citation-v1.js';
 
 export * from './person-answer-v8.js';
-export * from './person-answer-layout-v1.js';
 export * from './person-answer-layout-v2.js';
 export * from './person-answer-previous-v1.js';
 export * from './person-follow-up-evidence-v1.js';

@@ -32,10 +32,11 @@ flowchart LR
   ([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)).
 - **Request headers:** `x-echo-ask-progress: 3` streams progress as server-sent
   events ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md));
-  `x-echo-answer-layout: 1` asks for a laid-out answer
-  ([ADR-0045](../decisions/ADR-0045-ask-answer-layout.md)), and `2` for one
-  the writer arranges from a catalog of seven blocks, which the person client
-  sends ([ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md));
+  `x-echo-answer-layout: 2` asks for an answer the writer arranges from a
+  catalog of seven blocks, which the person client sends
+  ([ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md)); `1`, retired
+  layout v1's value ([ADR-0045](../decisions/ADR-0045-ask-answer-layout.md)),
+  is answered as an Ask without the header, in paragraphs;
   `x-echo-client-now` and `x-echo-time-zone` anchor dates. A follow-up carries
   the previous turn ([ADR-0047](../decisions/ADR-0047-ask-timeline.md)).
 - **Scopes:** the whole organization, or one project. The `mine` scope is
@@ -75,7 +76,7 @@ The engine lives in `packages/organization-authority-kernel/src/answer-compositi
 | `agentic-ask-v1-model-protocol.ts` | Prompts and JSON schemas for the model |
 | `agentic-model-gate-v1.ts` | The access check before every model call |
 | `agentic-list-evidence-v1.ts` | Complete lists as evidence |
-| `renderers/ask-renderer-v1.ts`, `ask-layout-v1.ts`, `ask-layout-v2.ts` | The written answer, its layout and its blocks |
+| `renderers/ask-renderer-v1.ts`, `ask-layout-v2.ts` | The written answer and its blocks |
 | `agentic-ask-progress-recorder-v1.ts` | Progress steps and the receipt of what was looked through ([ADR-0043](../decisions/ADR-0043-ask-receipt-counts-what-research-looked-through.md)) |
 | `agentic-release-v1.ts` | The release step: final access check, audit, second check |
 

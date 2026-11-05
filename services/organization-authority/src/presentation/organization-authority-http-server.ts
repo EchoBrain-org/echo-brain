@@ -492,7 +492,10 @@ function askTimeContext(request: IncomingMessage): PersonAskTimeContextV1 | unde
   catch { throw new AuthorityOperationError('invalid_request', 'Ask time context is invalid'); }
 }
 
-/** Which answer layout the client asked for, v1 (ADR-0045) or v2 (ADR-0051), if any; only a V8 answer reads it. */
+/**
+ * Which answer layout the client asked for: v2 (ADR-0051), if any; only a V8 answer reads it. Retired layout v1's value
+ * (ADR-0045) asks for none, so a desktop or CLI from before layout v2 gets the answer without a layout, as paragraphs.
+ */
 function askAnswerLayout(request: IncomingMessage): PersonAskAnswerLayoutV2 | undefined {
   try { return validatePersonAskAnswerLayoutHeaderV2(request.headers[PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]); }
   catch { throw new AuthorityOperationError('invalid_request', 'Ask answer layout is invalid'); }

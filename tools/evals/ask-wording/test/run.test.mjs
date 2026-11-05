@@ -112,10 +112,9 @@ test("runs Ask with answer layout v2 over scripted research, sending only the wr
   assert.ok(!JSON.stringify(refused).includes("secret provider detail"));
 });
 
-test("tells the layout a writer was given from its input: the block catalog, layout v1's tables, or none", () => {
+test("tells the layout a writer was given from its input: the block catalog, or none", () => {
   const input = (user, properties) => ({ user_prompt: JSON.stringify(user), schema: { type: "object", properties } });
   assert.equal(writerLayout(input({ source_catalog: [], block_catalog: [], evidence: [] }, { lists: {}, blocks: {}, not_found: {} })), 2);
-  assert.equal(writerLayout(input({ source_catalog: [], evidence: [] }, { lists: {}, tables: {}, sentences: {}, not_found: {} })), 1);
   assert.equal(writerLayout(input({ source_catalog: [], evidence: [] }, { lists: {}, sentences: {}, not_found: {} })), null);
 });
 
@@ -124,7 +123,7 @@ test("decides only on every registered case three times, each trial's writer giv
   assert.equal(decides(results), true);
   assert.equal(decides(results.slice(1)), false);
   assert.equal(decides([...results.slice(1), results[3]]), false);
-  for (const layout of [1, null]) assert.equal(decides(results.map((entry, at) => (at === 7 ? { ...entry, writer_layout: layout } : entry))), false);
+  assert.equal(decides(results.map((entry, at) => (at === 7 ? { ...entry, writer_layout: null } : entry))), false);
 });
 
 test("writes a private report outside the repository that applies the three pre-registered rules", async (t) => {
@@ -142,7 +141,7 @@ test("writes a private report outside the repository that applies the three pre-
   const fingerprinted = Object.keys(report.code.before.files_sha256);
   assert.deepEqual(fingerprinted, ["tools/evals/ask-wording/cases.json", ...loadedModules("tools/evals/ask-wording/run.mjs")]);
   for (const file of ["packages/organization-authority-kernel/dist/answer-composition/renderers/ask-layout-v2.js", "packages/organization-api/dist/person-answer-layout-checks.js",
-    "packages/organization-api/dist/person-answer-layout-v1.js", "packages/organization-authority-kernel/dist/shared/core-runtime-observation-v1.js"]) assert.ok(fingerprinted.includes(file), file);
+    "packages/organization-api/dist/person-answer-layout-v2.js", "packages/organization-authority-kernel/dist/shared/core-runtime-observation-v1.js"]) assert.ok(fingerprinted.includes(file), file);
   // Restating the question, as the founder's staging answer did, keeps the wording from shipping.
   const restating = await run({ ...options, caseIds: [founder.id, "owner-plain"], trials: 1 },
     { loaded: { structured_output: writer((entry) => `${entry.expect.facts[0].at(-1)} answers: ${entry.question}`), generation }, progress: () => undefined });

@@ -427,27 +427,28 @@ describe("the statement code writes for a list (ADR-0041)", () => {
   it("names members that share a label and their row facts once, with their kinds counted, and cites every member it names (W6)", () => {
     // A meeting's records all carry the meeting's label; its action records an owner the others do not.
     expect(statement({ noun: agenticListMembersNounV1({ selector: "meetings" }, meeting.map(value => value.kind)), filter: { since: "2026-10-04", until: "2026-10-04" }, selected: meeting }))
-      .toEqual({ text: `5 items from meetings dated on October 4, 2026: ${sync} (1 meeting, 1 decision and 1 rationale); Vendor review (2026-10-04) (1 action, owner Dana); ${sync} (1 action, owner Dana).`, cited: [0, 1, 2, 3, 4], caption: "5 items from meetings dated on October 4, 2026", names: [[0, 1, 4], [2], [3]] });
+      .toEqual({ text: `5 items from meetings dated on October 4, 2026: ${sync} (1 meeting, 1 decision and 1 rationale); Vendor review (2026-10-04) (1 action, owner Dana); ${sync} (1 action, owner Dana).`, cited: [0, 1, 2, 3, 4] });
     // A share smaller than a name's members names as many of them as it cites; "and N more" counts the rest, from the list.
-    expect(statement({ noun: DECISIONS, count: 4, share: 2, selected: [...decisions, { title: "Other (2026-10-05)", kind: "decision" }] })).toEqual({ text: `4 decisions: ${sync} (2 decisions); and 2 more.`, cited: [0, 1], caption: "4 decisions; and 2 more", names: [[0, 1]] });
+    expect(statement({ noun: DECISIONS, count: 4, share: 2, selected: [...decisions, { title: "Other (2026-10-05)", kind: "decision" }] })).toEqual({ text: `4 decisions: ${sync} (2 decisions); and 2 more.`, cited: [0, 1] });
     // A merged group names its free members and at most `share` of the others; members another statement named by id cost no share.
-    expect(statement({ noun: DECISIONS, count: 4, share: 1, free: new Set([2, 3]), selected: Array.from({ length: 4 }, () => ({ title: sync, kind: "decision" })) })).toEqual({ text: `4 decisions: ${sync} (3 decisions); and 1 more.`, cited: [0, 2, 3], caption: "4 decisions; and 1 more", names: [[0, 2, 3]] });
+    expect(statement({ noun: DECISIONS, count: 4, share: 1, free: new Set([2, 3]), selected: Array.from({ length: 4 }, () => ({ title: sync, kind: "decision" })) })).toEqual({ text: `4 decisions: ${sync} (3 decisions); and 1 more.`, cited: [0, 2, 3] });
     expect(statement({ noun: TICKETS, complete: false, share: 15, free: new Set(Array.from({ length: 10 }, (_, index) => index)), selected: reviewed }))
-      .toEqual({ text: `At least 25 Jira tickets: ${reviewed.map(value => value.title).join("; ")}.`, cited: Array.from({ length: 25 }, (_, index) => index), caption: "At least 25 Jira tickets", names: Array.from({ length: 25 }, (_, index) => [index]) });
+      .toEqual({ text: `At least 25 Jira tickets: ${reviewed.map(value => value.title).join("; ")}.`, cited: Array.from({ length: 25 }, (_, index) => index) });
     expect(statement({ noun: TICKETS, complete: false, share: 15, selected: reviewed }).cited).toEqual(Array.from({ length: 15 }, (_, index) => index));
     expect(statement({ noun: TICKETS, filter: OCTOBER_4.filter, count: 60, selected: sixty }))
-      .toEqual({ text: `60 Jira tickets created on October 4, 2026: ${sixty.slice(0, 25).map(value => value.title).join("; ")}; and 35 more.`, cited: Array.from({ length: 25 }, (_, index) => index), caption: "60 Jira tickets created on October 4, 2026; and 35 more", names: Array.from({ length: 25 }, (_, index) => [index]) });
+      .toEqual({ text: `60 Jira tickets created on October 4, 2026: ${sixty.slice(0, 25).map(value => value.title).join("; ")}; and 35 more.`, cited: Array.from({ length: 25 }, (_, index) => index) });
     const long = statement({ selected: [{ title: `${"x".repeat(200)}\nsecond line` }] }).text.slice("1 item: ".length, -1);
     expect([[...long].length, long.endsWith("…")]).toEqual([120, true]);
   });
 
-  it("takes the noun as the renderer builds it, and gives the text, the members it cites, its caption and its names, all the renderer reads", () => {
+  it("takes the noun as the renderer builds it, and gives the text and the members it cites, in blocks with its caption and its names: all the renderer reads", () => {
     expectTypeOf<AgenticListStatementInputV1["noun"]>().toEqualTypeOf<AgenticListNounFormsV1>();
     expectTypeOf<Parameters<typeof agenticListSelectionNotFoundV1>[0]>().toEqualTypeOf<AgenticListNounFormsV1>();
-    expectTypeOf<ReturnType<typeof agenticListStatementV1>>().toEqualTypeOf<{ readonly text: string; readonly cited: readonly number[]; readonly caption: string; readonly names: readonly (readonly number[])[] }>();
+    expectTypeOf<ReturnType<typeof agenticListStatementV1>>().toEqualTypeOf<{ readonly text: string; readonly cited: readonly number[] }>();
+    expectTypeOf<ReturnType<typeof agenticListStatementsV2>[number]>().toEqualTypeOf<{ readonly text: string; readonly cited: readonly number[]; readonly caption: string; readonly names: readonly (readonly number[])[] }>();
   });
 
-  it("tabulates a statement's names: one row per name, an Item column, then the status, owner and due date any of them records (ADR-0045)", () => {
+  it("tabulates a statement's names: one row per name, an Item column, then the status, owner and due date any of them records (ADR-0051)", () => {
     // A name covering several members is one row; with several kinds among the members, each name says its kinds.
     expect(agenticListTableV1({ selected: meeting, names: [[0, 1, 4], [2], [3]] })).toEqual({ columns: ["Item", "Owner"], rows: [
       { cells: [`${sync} (1 meeting, 1 decision and 1 rationale)`, ""], members: [0, 1, 4] },

@@ -68,6 +68,17 @@ describe("Ask answer layout v2 (ADR-0051)", () => {
     expect(arranged([quote(1), quote(2)]).map(block => block.kind)).toEqual(["quote", "quote"]);
   });
 
+  it("keeps every text a table shows within the contract's bytes, and a cell per column", () => {
+    const wide = "𝔸".repeat(120);
+    const tables = arranged([
+      at({ kind: "list", caption: "𝔸".repeat(200), columns: ["Item", "Owner"], rows: [{ cells: [wide, "Dana"], citation_indexes: [0] }, { cells: ["x", ""], citation_indexes: [0] }] }),
+      at({ block: 1, kind: "row", title: wide, columns: ["𝔸".repeat(40), "B"], cells: [wide] }), at({ block: 1, kind: "row", title: wide, columns: ["𝔸".repeat(40), "B"], cells: ["y"] }),
+    ]);
+    const bytes = (value: string) => Buffer.byteLength(value, "utf8");
+    expect(tables.map(block => block.kind === "table" && bytes(block.title ?? "") <= 200 && bytes(block.caption ?? "") <= 600 && block.columns.every(column => bytes(column) <= 100)
+      && block.rows.every(value => value.cells.length === block.columns.length && value.cells.every(cell => bytes(cell) <= 300)))).toEqual([true, true]);
+  });
+
   describe("reading order", () => {
     type Sentence = { readonly id: string; readonly item: AnswerItem };
     const sentence = (id: string, item: AnswerItem): Sentence => ({ id, item });

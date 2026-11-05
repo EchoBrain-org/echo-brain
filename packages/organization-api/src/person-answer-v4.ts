@@ -12,7 +12,6 @@ import { validatePersonQueryText } from './person-query.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import { validatePersonAnswerScopeV3, validatePersonSourceRevisionCitationV1, type PersonAnswerCitationV3, type PersonAnswerScopeV3 } from './person-answer-v3.js';
 import { validatePersonItemRefV1, type PersonItemRefV1 } from './person-list-v1.js';
-import { validatePersonAnswerLayoutV1, type PersonAnswerBlockV1 } from './person-answer-layout-v1.js';
 import { validatePersonAnswerBlocksV2, type PersonAnswerBlockV2 } from './person-answer-layout-v2.js';
 import {
   PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1,
@@ -136,9 +135,7 @@ export interface PersonAnswerPartV4 {
   readonly gap?: string;
   readonly gap_details?: PersonAnswerGapDetailsV1;
   readonly records?: readonly PersonAnswerEvidenceFallbackV4[];
-  /** Only for an Ask that asked for it (answer layout v1, ADR-0045): how its statements read. */
-  readonly layout?: readonly PersonAnswerBlockV1[];
-  /** Only for an Ask that asked for answer layout v2 (ADR-0051), never beside `layout`: the blocks its statements read as. */
+  /** Only for an Ask that asked for answer layout v2 (ADR-0051): the blocks its statements read as. */
   readonly blocks?: readonly PersonAnswerBlockV2[];
 }
 
@@ -347,16 +344,15 @@ function answerCitation(value: unknown, version: 6 | 8): PersonAnswerCitationV8 
 
 function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): PersonAnswerPartV4 {
   const input = object(value, 'Ask response part');
-  assertExactKeys(input, ['question', 'status', 'statements', ...['gap', 'gap_details', 'records', 'layout', 'blocks'].filter(key => Object.hasOwn(input, key))], 'Ask response part');
+  assertExactKeys(input, ['question', 'status', 'statements', ...['gap', 'gap_details', 'records', 'blocks'].filter(key => Object.hasOwn(input, key))], 'Ask response part');
   text(input.question, 'Ask response part question', 1024);
   // A part arranged in blocks (answer layout v2, ADR-0051) has no count of statements of its own; any other keeps ten.
   if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements) || (!Object.hasOwn(input, 'blocks') && input.statements.length > PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4)) fail('Ask response part is invalid');
   if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', 2 * 1024, true);
   if (Object.hasOwn(input, 'records') && (!Array.isArray(input.records) || input.records.length > 40)) fail('Ask response part records is invalid');
   const statements = Object.freeze(input.statements.map((item) => statement(item, citations, 'Ask response statement')));
-  // A layout arranges written statements; a part with none has nothing to arrange, and a part reads one way.
-  if (Object.hasOwn(input, 'layout') && statements.length === 0) fail('Ask response part layout is invalid');
-  if (Object.hasOwn(input, 'blocks') && (statements.length === 0 || Object.hasOwn(input, 'layout'))) fail('Ask response part blocks are invalid');
+  // Blocks arrange written statements: a part with none has nothing to arrange.
+  if (Object.hasOwn(input, 'blocks') && statements.length === 0) fail('Ask response part blocks are invalid');
   return Object.freeze({
     question: input.question as string,
     status: input.status as PersonAnswerPartV4['status'],
@@ -364,7 +360,6 @@ function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): Per
     ...(Object.hasOwn(input, 'gap') ? { gap: input.gap as string } : {}),
     ...(Object.hasOwn(input, 'gap_details') ? { gap_details: validatePersonAnswerGapDetailsV1(input.gap_details) } : {}),
     ...(Object.hasOwn(input, 'records') ? { records: Object.freeze((input.records as unknown[]).map((item) => statement(item, citations, 'Ask response fallback record', true))) } : {}),
-    ...(Object.hasOwn(input, 'layout') ? { layout: validatePersonAnswerLayoutV1(input.layout, statements, citations.length) } : {}),
     ...(Object.hasOwn(input, 'blocks') ? { blocks: validatePersonAnswerBlocksV2(input.blocks, statements, citations.length) } : {}),
   });
 }

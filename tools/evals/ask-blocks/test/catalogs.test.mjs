@@ -1,36 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ANSWER_LAYOUT_PROMPT } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
-import { CATALOGS, WORDING_RULES, readReply, writerPrompts } from "../catalogs.mjs";
+import { ANSWER_BLOCK_CATALOG, ANSWER_BLOCKS_PROMPT } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
+import { BLOCK_CATALOG, CATALOGS, TEMPLATE_CATALOG, WORDING_RULES, readReply, writerPrompts } from "../catalogs.mjs";
 
 const catalog = (id) => CATALOGS.find((entry) => entry.id === id);
+/** The built writer's prompts as the capture records them: its layout part last, its block catalog after source_catalog. */
 const captured = {
-  system_prompt: `You write Echo's final answer.\n\n${ANSWER_LAYOUT_PROMPT}`,
-  user_prompt: JSON.stringify({ question: "Who owns it?", source_catalog: [], research: {}, evidence: [{ id: "E1" }] }),
+  system_prompt: `You write Echo's final answer.\n\n${ANSWER_BLOCKS_PROMPT}`,
+  user_prompt: JSON.stringify({ question: "Who owns it?", source_catalog: [], block_catalog: ANSWER_BLOCK_CATALOG, research: {}, evidence: [{ id: "E1" }] }),
 };
 
-test("keeps production's prompt for today and swaps only the layout part, with the catalog as data beside source_catalog", () => {
-  assert.deepEqual(writerPrompts(catalog("today"), captured), captured);
+test("swaps only the built writer's layout part and block catalog for the catalog's, beside source_catalog", () => {
   const balanced = writerPrompts(catalog("balanced"), captured);
   assert.ok(balanced.system_prompt.startsWith("You write Echo's final answer.\n\nLayout: the person's app shows the answer as a short document made of blocks."));
-  assert.ok(!balanced.system_prompt.includes(ANSWER_LAYOUT_PROMPT));
-  for (const rule of WORDING_RULES) assert.ok(balanced.system_prompt.includes(rule) && ANSWER_LAYOUT_PROMPT.includes(rule));
-  assert.deepEqual(Object.keys(JSON.parse(balanced.user_prompt)), ["question", "source_catalog", "block_catalog", "research", "evidence"]);
-  assert.throws(() => writerPrompts(catalog("balanced"), { ...captured, system_prompt: "You write Echo's final answer." }), /production layout part/u);
-});
-
-test("reads a today reply as production lays it out: the lead, a section's table and bullets", () => {
-  const read = readReply(catalog("today"), { lists: [], tables: [{ section: "Owners", columns: ["Action", "Owner"] }], not_found: [], sentences: [
-    { text: "Two follow-ups are open.", evidence: ["E1"], form: "lead" },
-    { text: "", evidence: ["E1"], form: "row", section: "Owners", cells: ["Approve budget", "Noor Haddad"] },
-    { text: "", evidence: ["E2"], form: "row", section: "Owners", cells: ["Update plan", "Priya Raman"] },
-    { text: "The budget comes first.", evidence: ["E1"], form: "bullet", section: "Order" },
-    { text: "The plan follows.", evidence: ["E2"], form: "bullet", section: "Order" },
-  ] });
-  assert.equal(read.valid, true);
-  assert.deepEqual(read.blocks.map((block) => block.kind), ["answer", "heading", "table", "heading", "list"]);
-  assert.deepEqual(read.blocks[2].rows.map((row) => row.evidence), [["E1"], ["E2"]]);
-  assert.deepEqual(readReply(catalog("today"), { lists: [], sentences: [], not_found: [] }).problems, ["the reply has no sentence"]);
+  assert.ok(!balanced.system_prompt.includes(ANSWER_BLOCKS_PROMPT));
+  for (const rule of WORDING_RULES) assert.ok(balanced.system_prompt.includes(rule) && ANSWER_BLOCKS_PROMPT.includes(rule));
+  const input = (prompts) => JSON.parse(prompts.user_prompt);
+  assert.deepEqual(Object.keys(input(balanced)), ["question", "source_catalog", "block_catalog", "research", "evidence"]);
+  assert.deepEqual(input(balanced).block_catalog, BLOCK_CATALOG);
+  const templates = input(writerPrompts(catalog("templates"), captured));
+  assert.deepEqual([Object.keys(templates), templates.template_catalog], [["question", "source_catalog", "template_catalog", "research", "evidence"], TEMPLATE_CATALOG]);
+  assert.throws(() => writerPrompts(catalog("balanced"), { ...captured, system_prompt: "You write Echo's final answer." }), /v2 layout part/u);
+  const { block_catalog: _blocks, ...plain } = input(captured);
+  assert.throws(() => writerPrompts(catalog("balanced"), { ...captured, user_prompt: JSON.stringify(plain) }), /no block_catalog/u);
 });
 
 test("checks balanced blocks against their entries and names each problem", () => {

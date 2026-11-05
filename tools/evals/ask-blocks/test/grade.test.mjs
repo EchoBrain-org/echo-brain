@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CATALOGS } from "../catalogs.mjs";
+import { CATALOGS, CATALOG_IDS } from "../catalogs.mjs";
 import { HELD_OUT_COUNT, HELD_OUT_FILE, caseOrder, caseProblems, datesIn, decide, evidenceOf, factsOf, fits, groundingOf, loadCases, mainShape, shapesOf, summarizeRanks } from "../grade.mjs";
 
 const document = loadCases();
@@ -21,7 +21,7 @@ test("registers exactly the fifteen cases, each with facts its items say", () =>
   assert.deepEqual(caseProblems(broken), ["case soak-owner: no item says Lena Brandt"]);
   // The page's order is fixed by the case id alone.
   assert.deepEqual(caseOrder("soak-owner"), caseOrder("soak-owner"));
-  assert.equal(new Set(caseOrder("soak-owner")).size, 4);
+  assert.deepEqual([...caseOrder("soak-owner")].sort(), [...CATALOG_IDS].sort());
 });
 
 test("registers the quick-lead check's five held-out questions on another program, apart from the fifteen", () => {
@@ -98,25 +98,26 @@ test("tells the shapes an answer shows", () => {
 test("fits within the catalog's own blocks, falling back only when it can show none of the case's shapes", () => {
   const steps = caseOf("ship-steps");
   const parallel = new Set(["parallel"]);
-  assert.equal(fits(steps, catalog("today"), parallel), false);
-  assert.equal(fits(caseOf("ticket-profile"), catalog("today"), new Set(["prose"])), true);
+  assert.equal(fits(steps, catalog("templates"), parallel), false);
+  // Templates cannot show sections, so review-multi falls back to its fallback shapes there, and only there.
+  assert.equal(fits(caseOf("review-multi"), catalog("templates"), parallel), true);
+  assert.equal(fits(caseOf("review-multi"), catalog("balanced"), parallel), false);
   assert.equal(fits(caseOf("ticket-profile"), catalog("balanced"), new Set(["prose"])), false);
   assert.equal(fits(caseOf("soak-owner"), catalog("balanced"), new Set(["prose"])), false);
   assert.equal(fits(caseOf("trap-disagree"), catalog("templates"), new Set()), true);
 });
 
 test("summarizes the ranks and decides only when every case is ranked", () => {
-  const ranks = (balanced, today) => ({ balanced, today, templates: 3, primitives: 4 });
+  const ranks = (balanced, templates) => ({ balanced, templates, primitives: 3 });
   const founder = Object.fromEntries(document.cases.map((entry, at) => [entry.id, at < 10 ? ranks(1, 2) : ranks(2, 1)]));
   const judge = Object.fromEntries(document.cases.map((entry) => [entry.id, ranks(1, 2)]));
   const summary = summarizeRanks(founder, judge);
-  assert.equal(summary.balanced_at_least_today, 10);
-  assert.equal(summary.rule_ranked, true);
-  assert.deepEqual(summary.judge_top_pick_agrees, { cases: 15, agreeing: 10 });
+  assert.deepEqual([summary.cases, summary.founder_mean_rank, summary.judge_mean_rank], [15, { templates: 1.67, balanced: 1.33, primitives: 3 }, { templates: 2, balanced: 1, primitives: 3 }]);
+  // The judge's top pick is the founder's in the ten cases the founder put balanced first; its order of balanced and
+  // templates is the founder's there too, and of each with primitives everywhere.
+  assert.deepEqual([summary.judge_top_pick_agrees, summary.judge_pairs_agree], [{ cases: 15, agreeing: 10 }, { pairs: 45, agreeing: 40 }]);
   const passing = { valid: true, grounded: true, nothing_lost: true, fit: true, stable: true };
-  const catalogs = Object.fromEntries(["today", "templates", "balanced", "primitives"].map((id) => [id, { rules: passing, repairs: 0, output_tokens: 1 }]));
-  assert.deepEqual(decide(catalogs, null), { complete: false, direction_sound: null, right_size: null, eligible: [] });
-  const decided = decide(catalogs, summary);
-  assert.equal(decided.direction_sound, true);
-  assert.equal(decided.right_size, "balanced");
+  const catalogs = Object.fromEntries(CATALOG_IDS.map((id) => [id, { rules: passing, repairs: 0, output_tokens: 1 }]));
+  assert.deepEqual(decide(catalogs, null), { complete: false, right_size: null, eligible: [] });
+  assert.equal(decide(catalogs, summary).right_size, "balanced");
 });

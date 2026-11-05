@@ -100,7 +100,7 @@ export interface CreateAgenticAskOptions {
   readonly today?: () => string;
   /** Captured once by the calling client, used only to interpret temporal questions. */
   readonly time_context?: PersonAskTimeContextV1;
-  /** The client asked for answer layout v1 (ADR-0045) or v2 (ADR-0051): the answer's part carries its layout or its blocks. */
+  /** The client asked for answer layout v2 (ADR-0051): the answer's part carries its blocks. */
   readonly answer_layout?: PersonAskAnswerLayoutV2;
   /** Typed actionable explanations are sent only to clients that explicitly request them. */
   readonly include_gap_details?: true;

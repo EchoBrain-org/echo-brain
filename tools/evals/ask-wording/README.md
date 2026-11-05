@@ -72,8 +72,9 @@ deterministic: no model judge.
 - **Words** are runs of letters and digits, joined across an inner hyphen, dot,
   underscore or apostrophe, ignoring case: a release name is one word, quotes
   and punctuation are none.
-- **The lead** is the statements of the answer's first part's lead block, or,
-  without one, its first statement.
+- **The lead** is the statements of the answer's first part's `answer` block
+  (layout v1's `lead` block in the 2026-10-26 result), or, without one, its
+  first statement.
 - **The answer's text** is every part's statements and gap.
 
 1. **Answer, don't restate:** in at least 90% of trials, the lead shares at
@@ -140,12 +141,11 @@ the desktop.
 - **The same cases:** `cases.json` is unchanged (`sha256:6ad26dc1…6a2bfa`).
 - **The same three rules and thresholds,** each at least 27 of 30 trials,
   graded as above. The lead is the statements of the first part's `answer`
-  block, layout v2's lead, or, without one, its first statement; a layout v1
-  answer is still read by its lead block. The answer's text is still every
-  part's statements and gap, as the audit reads them, so it includes the
-  statements code writes for a table row, a timeline event, a card fact and a
-  quote: a long identifier that titles a card is written once in each of its
-  facts.
+  block, layout v2's lead, or, without one, its first statement. The answer's
+  text is still every part's statements and gap, as the audit reads them, so
+  it includes the statements code writes for a table row, a timeline event, a
+  card fact and a quote: a long identifier that titles a card is written once
+  in each of its facts.
 - **The writer route:** the personal Claude account writer (`--writer
   claude-account`): `claude-sonnet-5-5` through the Claude Agent SDK and the
   signed-in `claude` binary, the route of the block evaluation's run of record
