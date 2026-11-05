@@ -284,7 +284,14 @@ its whole inventory. A selection that names no member, given empty or left
 empty by that removal, is no selection, with one exception: an explicit empty
 `members` array in a reply that also has `not_found` says that no member of
 the list answers, and code states nothing of it, unless research requested
-specific members of it, which code still states. Other inventories do not
+specific members of it, which code still states. As for a `where` that
+matches nothing, only a complete list, read to its end with every item tested,
+confirms that absence; over any other list the writer's `not_found` stays
+untyped and the answer partial. When code states research's selection of a
+list the writer selected none of, through no use, an empty or invalid
+selection, or an explicit none, the writer's `not_found` stays untyped too: it
+has no per-list provenance and may concern the very members code states.
+Other inventories do not
 enter the answer merely because research read them. Each need retains that
 fallback independently: another need's precise subset of the same inventory
 does not erase an omitted L-only declaration. Within one need that cites
@@ -299,11 +306,14 @@ A v2 table row or points item may declare an optional internal `member` E id
 for the inventory member it presents, independently of its supporting
 `evidence`, so membership is never guessed from wording alone. Code accepts the declaration for member M only when the declared
 id is M or an opened body or section of M, the retained item cites one of M's
-ids, and its text names M as the writer saw it listed: M's key, its title, or
-the key its title leads with ("THERM-2" of "THERM-2: Fixture work 2"), whole
-and in any case. The item may cite other members too, as a comparison or a
-dependency row does; an item about another member names that member, not M,
-so it cannot hide M. A declaration that fails is ignored. Unknown or
+ids, and its text names M as the writer saw it listed: M's whole title, or a
+ticket-style key (`[A-Z][A-Z0-9]+-\d+`), its own or the one its title leads
+with ("THERM-2" of "THERM-2: Fixture work 2"), as whole words in any case, so
+"THERM-12" never names THERM-1. A text that also names another member of the
+list whose name holds M's ("Launch checklist" beside "Launch") does not name
+M. The item may cite other members too, as a comparison or a dependency row
+does; an item about another member names that member, not M, so it cannot
+hide M. A declaration that fails is ignored, and code states M. Unknown or
 mismatched ids, a citation without a declaration, downgraded rows, and statements
 dropped by grounding or per-statement citation limits do not cover a member.
 Bindings never narrow a list: code states the selection above, less the

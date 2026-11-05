@@ -199,21 +199,32 @@ function privateItem(item: Entry["item"]): boolean {
 
 /** Lowercase, each run of spaces one space: how a member's name is matched in a statement. */
 function folded(value: string): string { return value.toLowerCase().replace(/\s+/gu, " ").trim(); }
+/** A ticket-style key ("THERM-2", "OPS-17"): only such a key names a member short of its whole title. */
+const TICKET_KEY = /^[A-Z][A-Z0-9]+-\d+$/u;
+/** The names a list member goes by as the writer saw it listed: its whole title, and a ticket-style key, its own or the one its title leads with ("THERM-2: Fixture work 2"). */
+function memberNames(member: Pick<AgenticWriterListMemberV1, "title" | "key">): readonly string[] {
+  const leading = /^([^\s:]+): /u.exec(member.title)?.[1];
+  return [member.title, ...[member.key, leading].filter((name): name is string => name !== undefined && TICKET_KEY.test(name))];
+}
+/** Whether `text` holds `name` whole, in any case: never inside a longer word or number ("THERM-12" holds no "THERM-1"). */
+function holdsName(text: string, name: string): boolean {
+  const said = folded(text), wanted = folded(name);
+  if (wanted.length === 0) return false;
+  for (let at = said.indexOf(wanted); at >= 0; at = said.indexOf(wanted, at + 1)) {
+    if (!/[\p{L}\p{N}]/u.test(said[at - 1] ?? " ") && !/[\p{L}\p{N}]/u.test(said[at + wanted.length] ?? " ")) return true;
+  }
+  return false;
+}
 /**
- * Whether a statement's text names a list member as the writer saw it listed: its key, its title, or the key its title
- * leads with ("THERM-2: Fixture work 2"), whole and in any case, never inside a longer word or number ("THERM-12").
+ * Whether a statement's text names list member `member`: it holds one of the member's names whole, and names no other
+ * member of the list (`members`) whose name holds that one. A text naming "Launch checklist" or "Q4: Budget" may be about
+ * that member, not "Launch" or "Q4: Planning", so it names neither of those: the binding is ignored, and code states the
+ * member, never hides it.
  */
-function namesMember(text: string, member: Pick<AgenticWriterListMemberV1, "title" | "key">): boolean {
-  const said = folded(text);
-  const leading = /^([^\s:]*\d[^\s:]*): /u.exec(member.title)?.[1];
-  return [member.key, member.title, leading].some(name => {
-    const wanted = name === undefined ? "" : folded(name);
-    if (wanted.length === 0) return false;
-    for (let at = said.indexOf(wanted); at >= 0; at = said.indexOf(wanted, at + 1)) {
-      if (!/[\p{L}\p{N}]/u.test(said[at - 1] ?? " ") && !/[\p{L}\p{N}]/u.test(said[at + wanted.length] ?? " ")) return true;
-    }
-    return false;
-  });
+function namesMember(text: string, member: AgenticWriterListMemberV1, members: readonly AgenticWriterListMemberV1[]): boolean {
+  const said = memberNames(member).filter(name => holdsName(text, name));
+  return said.length > 0 && !members.some(other => other.id !== member.id
+    && memberNames(other).some(name => holdsName(text, name) && said.some(own => holdsName(name, own))));
 }
 
 /**
@@ -304,21 +315,21 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           .map(id => ({ id, members: [...new Set(need.evidence.flatMap(short => membership.in(id, short) ?? []))] }));
         return [{ cited, declares: cited.every(list => list.members.length === 0) }];
       });
-      const requestedByList = new Map(lists.map(list => [list.id, { members: [] as string[], inventoryFallback: false }]));
+      /** The members research requests of each list, as the writer is told them. */
+      const requestedByList = new Map(lists.map(list => [list.id, [] as string[]]));
       for (const need of listNeeds) {
         const placed = new Set<string>();
         for (const { id, members } of need.cited) {
-          const request = requestedByList.get(id)!;
-          if (need.declares) request.inventoryFallback = true;
+          const requested = requestedByList.get(id)!;
           for (const member of members) {
             if (placed.has(member)) continue;
             placed.add(member);
-            if (!request.members.includes(member)) request.members.push(member);
+            if (!requested.includes(member)) requested.push(member);
           }
         }
       }
       const viewOf = (list: (typeof lists)[number], cap?: number) => ({ ...agenticWriterListV1(list, rows.get(list.id)!, stated.includes(list.id), cap),
-        ...(requestedByList.get(list.id)!.members.length === 0 ? {} : { requested_members: requestedByList.get(list.id)!.members }),
+        ...(requestedByList.get(list.id)!.length === 0 ? {} : { requested_members: requestedByList.get(list.id)! }),
       });
       /** Every list as code reads it: code states, notes and filters each list the plan's kinds read, past the writer's bound too. */
       const views = new Map(lists.map(list => [list.id, viewOf(list)]));
@@ -487,6 +498,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const listGaps: { readonly text: string; readonly partial: boolean }[] = [];
         const writerGaps: { readonly text: string; readonly partial: boolean }[] = [];
         const selectionNotFound: { readonly text: string; readonly confirmed: boolean }[] = [];
+        /** Each explicit empty selection the answer keeps, and whether its list confirms that no member answers. */
+        const explicitNones: boolean[] = [];
         // ---- the writer's sentences (W1, W3, W4, W5) ---------------------------
         // A which_say list whose members were not all checked qualifies every sentence citing its members' text (W5).
         const unchecked = checking.map(id => views.get(id)!).filter(list => agenticListCheckedNoteV1(list) !== undefined);
@@ -549,8 +562,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const statementKeyOf = (sentence: Laid) => JSON.stringify([sentence.text, [...new Set(sentence.shorts.map(keyOf))].sort(), sentence.shorts.some(short => privateItem(byShort.get(short)!.item))]);
         // Only retained, grounded structured items can present a member. A citation alone is not a declaration. An item
         // presents member M of a list when the member it declares is M (an opened body or section is the member it is part
-        // of), it cites one of M's ids, and its text names M as the writer saw M listed. It may cite other members too, as a
-        // comparison or a dependency does; an item about another member names that one, not M.
+        // of), it cites one of M's ids, and its text names M as the writer saw M listed: its whole title or its ticket-style
+        // key, and no other member whose name holds M's (namesMember). It may cite other members too, as a comparison or a
+        // dependency does; an item about another member names that one, not M.
         // Blocks have no count bound; an oversized whole answer is recomposed without these bindings before its
         // legacy presentation bounds apply, so a dropped item can never suppress the research member floor.
         const presented = new Map<string, Set<string>>();
@@ -563,7 +577,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           for (const list of lists) {
             const member = membership.in(list.id, sentence.member);
             const row = member === undefined ? undefined : rows.get(list.id)!.find(value => value.id === member);
-            if (row === undefined || !(sentence.cites ?? []).some(short => membership.in(list.id, short) === member) || !namesMember(sentence.text, row)) continue;
+            if (row === undefined || !(sentence.cites ?? []).some(short => membership.in(list.id, short) === member) || !namesMember(sentence.text, row, rows.get(list.id)!)) continue;
             const members = presented.get(list.id) ?? new Set<string>();
             members.add(row.id); presented.set(list.id, members);
           }
@@ -598,6 +612,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             else added.set(id, [...new Set([...(added.get(id) ?? []), ...fresh])]);
           }
         }
+        // The lists the writer selected members of, by id, in full or by a where, before code adds research's.
+        const writerSelected = new Set<string>(uses.filter(use => use.members === undefined || use.members.length > 0).map(use => use.id));
         const restored = new Set<string>();
         for (const id of stated) {
           if (whole.has(id)) { uses.push({ id }); restored.add(id); continue; }
@@ -609,6 +625,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           else uses[at] = { id, members: [...new Set([...uses[at]!.members!, ...missing])] };
           restored.add(id);
         }
+        // Code states research's selection of a list the writer selected none of: the writer's not_found, which has no
+        // per-list provenance, may be about those very members, so it stays untyped.
+        const overridden = [...restored].some(id => !writerSelected.has(id));
         const usedLists = [...new Set(uses.map(use => use.id).filter(id => writerById.has(id) || restored.has(id)))].map(id => views.get(id)!);
         // A list whose date filter could not test some items (research tool contract v1) supports neither "none" nor "all" of
         // them: the part says how many were not checked, and is partial, even when the list is empty.
@@ -633,8 +652,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const given = uses.find(use => use.id === id && use.members === undefined);
           const where = given?.where;
           const chosen = given === undefined ? undefined : agenticListSelectV1(all, where, list.filter.time_zone);
+          // An explicit empty selection says no member answers, as a where that matches nothing does: only a complete list,
+          // read to its end with every item tested, confirms it.
+          const none = byId !== undefined && byId.members!.length === 0;
+          if (none) explicitNones.push(list.complete && !list.unchecked?.count);
           // A use that says which items exist of a list that is not complete reads "at least", whatever it selects, and the part says so.
-          if ((chosen !== undefined || (picked !== undefined && stated.includes(id))) && !list.complete) listGaps.push({ text: listEndGap(noun.plural), partial: true });
+          if ((chosen !== undefined || none || (picked !== undefined && stated.includes(id))) && !list.complete) listGaps.push({ text: listEndGap(noun.plural), partial: true });
           // A use that says which items exist names them all; with some presented, it names the rest by id.
           const rest = (selected: readonly AgenticWriterListMemberV1[], which: Omit<Naming, "list" | "noun" | "selected">): Naming[] => {
             const left = unshown(selected);
@@ -778,7 +801,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const outcome = researchIncomplete ? "partial" as const : !anyEvidence ? (incomplete || unsupportedAction || unconfirmedAbsence || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
         // Preserve reason provenance before diagnostic gap strings are combined. Desktop actions never classify prose.
         // Only finished research confirms the writer's missing text: an interrupted search keeps its retry reason alone.
-        const confirmedMissing = [...(researchIncomplete || unconfirmedAbsence || selectionNotFound.some(gap => !gap.confirmed) ? [] : reply?.not_found ?? []), ...selectionNotFound.filter(gap => gap.confirmed).map(gap => gap.text)];
+        const confirmedMissing = [...(researchIncomplete || unconfirmedAbsence || overridden || selectionNotFound.some(gap => !gap.confirmed) || explicitNones.includes(false) ? [] : reply?.not_found ?? []),
+          ...selectionNotFound.filter(gap => gap.confirmed).map(gap => gap.text)];
         const missing = confirmedMissing.length > 0 ? boundedBytes(cleanLine(`Not found: ${confirmedMissing.join("; ")}.`, 600), 2 * 1024)
           : outcome === "not_found" || (unsupportedAction && !anyEvidence && !incomplete && !unconfirmedAbsence && !listGaps.some(gap => gap.partial)
             && needs.length > 0 && needs.every(need => need.status === "not_found")) ? NOT_FOUND_GAP : undefined;
