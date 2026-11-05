@@ -495,6 +495,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const listGaps: { readonly text: string; readonly partial: boolean }[] = [];
         const writerGaps: { readonly text: string; readonly partial: boolean }[] = [];
         const selectionNotFound: { readonly text: string; readonly confirmed: boolean }[] = [];
+        /** Each explicit empty selection the answer keeps, and whether its list confirms that no member answers. */
+        const explicitNones: boolean[] = [];
         // ---- the writer's sentences (W1, W3, W4, W5) ---------------------------
         // A which_say list whose members were not all checked qualifies every sentence citing its members' text (W5).
         const unchecked = checking.map(id => views.get(id)!).filter(list => agenticListCheckedNoteV1(list) !== undefined);
@@ -647,8 +649,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const given = uses.find(use => use.id === id && use.members === undefined);
           const where = given?.where;
           const chosen = given === undefined ? undefined : agenticListSelectV1(all, where, list.filter.time_zone);
+          // An explicit empty selection says no member answers, as a where that matches nothing does: only a complete list,
+          // read to its end with every item tested, confirms it.
+          const none = byId !== undefined && byId.members!.length === 0;
+          if (none) explicitNones.push(list.complete && !list.unchecked?.count);
           // A use that says which items exist of a list that is not complete reads "at least", whatever it selects, and the part says so.
-          if ((chosen !== undefined || (picked !== undefined && stated.includes(id))) && !list.complete) listGaps.push({ text: listEndGap(noun.plural), partial: true });
+          if ((chosen !== undefined || none || (picked !== undefined && stated.includes(id))) && !list.complete) listGaps.push({ text: listEndGap(noun.plural), partial: true });
           // A use that says which items exist names them all; with some presented, it names the rest by id.
           const rest = (selected: readonly AgenticWriterListMemberV1[], which: Omit<Naming, "list" | "noun" | "selected">): Naming[] => {
             const left = unshown(selected);
@@ -789,7 +795,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const outcome = researchIncomplete ? "partial" as const : !anyEvidence ? (incomplete || unsupportedAction || unconfirmedAbsence || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
         // Preserve reason provenance before diagnostic gap strings are combined. Desktop actions never classify prose.
         // Only finished research confirms the writer's missing text: an interrupted search keeps its retry reason alone.
-        const confirmedMissing = [...(researchIncomplete || unconfirmedAbsence || selectionNotFound.some(gap => !gap.confirmed) ? [] : reply?.not_found ?? []), ...selectionNotFound.filter(gap => gap.confirmed).map(gap => gap.text)];
+        const confirmedMissing = [...(researchIncomplete || unconfirmedAbsence || selectionNotFound.some(gap => !gap.confirmed) || explicitNones.includes(false) ? [] : reply?.not_found ?? []),
+          ...selectionNotFound.filter(gap => gap.confirmed).map(gap => gap.text)];
         const missing = confirmedMissing.length > 0 ? boundedBytes(cleanLine(`Not found: ${confirmedMissing.join("; ")}.`, 600), 2 * 1024)
           : outcome === "not_found" || (unsupportedAction && !anyEvidence && !incomplete && !unconfirmedAbsence && !listGaps.some(gap => gap.partial)
             && needs.length > 0 && needs.every(need => need.status === "not_found")) ? NOT_FOUND_GAP : undefined;

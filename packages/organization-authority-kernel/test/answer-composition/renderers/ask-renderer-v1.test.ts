@@ -392,6 +392,24 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     if (state === "complete") expect(rendered.result.response.parts[0]!.gap_details?.not_found).toContain("Blocked");
     else expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
   });
+  it.each([
+    ["complete", {}], ["truncated", { ended: false, truncated: true }], ["unverified end", { unverified_end: true }], ["notice", { available: false }],
+    ["unshown members", { shown: 40 }], ["untested dates", { unchecked: { count: 2, dates: ["updated" as const] } }],
+  ] as const)("types an explicit none's absence like a no-match selection's, only over a complete list: %s", async (state, extra) => {
+    const rendered = await alone({ bundle: listBundle(50, 0, [list("L1", ids(1, 50), extra)], [WI(["L1"])]), replies: [{ ...use({ id: "L1", members: [] }), not_found: ["tickets assigned to Casey"] }] })
+      .render("Which tickets are assigned to Casey?");
+    expect(rendered.outcome).toBe(state === "complete" ? "not_found" : "partial");
+    if (state === "complete") expect(rendered.result.response.parts[0]!.gap_details).toEqual({ not_found: "Not found: tickets assigned to Casey." });
+    else expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
+  });
+  it("leaves an explicit none's absence untyped over an incomplete list no which_items need cites", async () => {
+    const research = listBundle(50, 1, [list("L1", ids(1, 50), { unverified_end: true })], [C(["E51"])]);
+    const rendered = await alone({ bundle: research, replies: [{ lists: [{ id: "L1", members: [] }], sentences: [{ text: "The review approved the plan.", evidence: ["E51"] }], not_found: ["tickets assigned to Casey"] }] })
+      .render("What did the review approve, and which tickets are Casey's?");
+    expect(rendered.outcome).toBe("partial");
+    expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual(["The review approved the plan."]);
+    expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
+  });
 
   it("keeps a selected no-match over a list read to its end typed beside the retry line when research stopped", async () => {
     const research: AgenticEvidenceBundleV1 = { ...listBundle(2, 0, [list("L1", ids(1, 2))], [WI(["L1"])]), stop: { reason: "budget", completed: false } };

@@ -284,7 +284,10 @@ its whole inventory. A selection that names no member, given empty or left
 empty by that removal, is no selection, with one exception: an explicit empty
 `members` array in a reply that also has `not_found` says that no member of
 the list answers, and code states nothing of it, unless research requested
-specific members of it, which code still states. Other inventories do not
+specific members of it, which code still states. As for a `where` that
+matches nothing, only a complete list, read to its end with every item tested,
+confirms that absence; over any other list the writer's `not_found` stays
+untyped and the answer partial. Other inventories do not
 enter the answer merely because research read them. Each need retains that
 fallback independently: another need's precise subset of the same inventory
 does not erase an omitted L-only declaration. Within one need that cites
