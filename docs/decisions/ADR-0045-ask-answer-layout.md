@@ -114,3 +114,7 @@ layout v2 kept continues under ADR-0051: the statements stay the claims, a
 table's rows cite what its statements cite, code tabulates lists, the desktop
 owns typography, Copy answer writes Markdown, and an answer that would pass its
 byte bound is released without its layout.
+
+On 2026-11-05 the plain answer was retired too (ADR-0051, amended): the header
+is no longer read, so a client that still sends `1` gets an answer in blocks,
+and an answer past its byte bound is cut in its blocks.

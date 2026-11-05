@@ -94,11 +94,12 @@ copy that a unit test proves equivalent.
   [ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md)). `ask.run` builds
   `person ask --question … --progress --expected-membership-id …
   --expected-authority …`, forwards each progress line tagged with the page's
-  cancel id, renders the answer in the blocks the writer arranged it in, or a
-  paragraph per sentence, and keeps each turn with `timeline.put`. Answer
-  layout v1 ([ADR-0045](../decisions/ADR-0045-ask-answer-layout.md)) is
-  retired: `timeline.read` loads a turn saved with a v1 layout without it, so
-  its sentences show as paragraphs. Opening an old turn runs `ask.check`, a
+  cancel id, renders the answer in the blocks the writer arranged it in, and
+  keeps each turn with `timeline.put`. Answer layout v1
+  ([ADR-0045](../decisions/ADR-0045-ask-answer-layout.md)) and the plain
+  answer are retired: `timeline.read` loads a turn saved with a v1 layout
+  without it, and one saved without blocks with its sentences in text blocks,
+  so its sentences show as paragraphs. Opening an old turn runs `ask.check`, a
   content-free check that its sources are still readable.
 
 ## Updates

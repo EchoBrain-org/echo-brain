@@ -366,3 +366,46 @@ no longer holds:
   paragraphs.
 - The block evaluation no longer runs layout v1 as its `today` arm; its other
   catalogs start from the v2 writer's prompt.
+
+## Amended 2026-11-05: the plain answer retired
+
+The founder retired the plain writer and the plain answer, which answered an
+Ask without the header, once layout v1's retirement had landed, with no
+compatibility kept for clients older than layout v2: "no need to have
+backward compatibility and support the plain answer. remove completely".
+Every Ask answer is written and released in blocks. What this record says
+above of a request without the header, of the header itself, and of an
+answer released without its blocks no longer holds:
+
+- **No header.** The Authority no longer reads `x-echo-answer-layout`, and
+  the person client no longer sends it. A value it used to refuse is ignored
+  like any other header. A desktop or CLI older than layout v2, which sends
+  no header or `1`, gets an answer in blocks, which its answer validator
+  refuses.
+- **One writer.** Every Ask's writer is given the answer prompt and its
+  guidance, then the layout part, the block catalog beside `source_catalog`,
+  the blocks schema and the blocks writer's output room (2,000 tokens, 2,500
+  for an Ask again). Their bytes are unchanged. The plain writer's schema, its
+  Ask again schema and its reader are removed.
+- **Blocks in the contract.** A V8 part carries `blocks` exactly when it has
+  statements. The bounds kept for an answer without blocks go with it: 10
+  statements to a part, 40 citations to an answer, and a list statement
+  sharing 25 named members with "and N more". Every selected member is
+  named, in as many statements as their 4 KiB and 40 citations need.
+- **The 64 KiB bound cuts, in blocks.** An answer past it, an Ask again's
+  after its `since` goes, keeps the most statements, from its start as it
+  reads, that fit, with its blocks rebuilt from them; it binds no row or point
+  to a member, so a member a cut item presented is still stated; and it says
+  some evidence could not fit. Blocks code cannot build read as one text
+  block. The last compaction step, for an answer still too large, reads a
+  part it cuts as one text block.
+- **The desktop** draws only blocks. A timeline turn saved with statements
+  and no blocks loads with a text block for each statement, so it reads as it
+  did.
+- **Evaluations.** The research-loop endpoint, the agentic Ask evaluation and
+  the block and wording evaluations all measure answers in blocks; an Ask
+  baseline taken before this change measured the plain writer.
+- **Left as they are.** The answer prompt keeps its plain reply shape and its
+  "up to 10", which the layout part replaces. They are the words the block
+  evaluation measured the writer with, so they stay until another evaluation
+  says otherwise.

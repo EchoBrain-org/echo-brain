@@ -32,12 +32,10 @@ flowchart LR
   ([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)).
 - **Request headers:** `x-echo-ask-progress: 3` streams progress as server-sent
   events ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md));
-  `x-echo-answer-layout: 2` asks for an answer the writer arranges from a
-  catalog of seven blocks, which the person client sends
-  ([ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md)); `1`, retired
-  layout v1's value ([ADR-0045](../decisions/ADR-0045-ask-answer-layout.md)),
-  is answered as an Ask without the header, in paragraphs;
-  `x-echo-client-now` and `x-echo-time-zone` anchor dates. A follow-up carries
+  `x-echo-client-now` and `x-echo-time-zone` anchor dates. Every answer is
+  arranged by the writer from a catalog of seven blocks and released in them
+  ([ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md)); no header asks
+  for it, and `x-echo-answer-layout`, which older clients send, is not read. A follow-up carries
   the previous turn ([ADR-0047](../decisions/ADR-0047-ask-timeline.md)).
 - **Scopes:** the whole organization, or one project. The `mine` scope is
   retired; a request that names it is refused.

@@ -35,7 +35,9 @@ rank of 1.40 against production's 2.33, and best in 10 of 15 cases.
 1. **The desktop asks for it.** The person client sends
    `x-echo-answer-layout: 2`, and a client that sends nothing keeps plain
    sentences. Since layout v1 was retired on 2026-11-04, a client from before
-   layout v2, which sends `1`, gets plain sentences too. An Authority that
+   layout v2, which sends `1`, gets plain sentences too. Since the plain answer
+   was retired on 2026-11-05, every answer is in blocks and the header is not
+   read (ADR-0051, amended). An Authority that
    predates v2 refuses `2`, as it refuses any value it does not know, so the
    Authority is released before the desktop that asks for it
    ([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md): no older
@@ -67,7 +69,8 @@ rank of 1.40 against production's 2.33, and best in 10 of 15 cases.
 5. **Everything else stays.** Code still writes list members as tables, right
    after the answer; an answer too large for its byte bound is released
    without layout; the writer's one repair, and the writer's prompt and reply
-   shape for no layout, are unchanged byte for byte.
+   shape for no layout, are unchanged byte for byte, until the plain answer's
+   retirement on 2026-11-05 gave every Ask this writer and its blocks.
 6. **No count of blocks, items, statements or citations.** The founder
    lifted them for an answer in blocks (ADR-0051, both amended 2026-11-02):
    what bounds it is its 64 KiB, the writer's output room, the 25 members a
@@ -100,6 +103,9 @@ rank of 1.40 against production's 2.33, and best in 10 of 15 cases.
   by the block evaluation.
 - Retiring layout v1, which followed on 2026-11-04 once every desktop asked
   for v2 ([ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md), amended).
+- Retiring the plain answer, which followed on 2026-11-05: this writer writes
+  every answer, every answer is released in blocks, and the header is gone
+  (ADR-0051, amended).
 - People annotating block choices, and any staging release, which follows
   the [operator playbook](../operations/PB-OPERATIONS-001-authority-operator-lane.md)
   after the founder validates on the desktop.
