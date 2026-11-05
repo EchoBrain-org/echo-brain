@@ -511,7 +511,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
 
   it("pins Ask again's prompt and schema with shared unbounded selections", () => {
     expect([ANSWER_SINCE_PROMPT, answerBlocksSinceSchema].map(value => canonicalSha256(value))).toEqual([
-      "sha256:2384ac104f117a119bb97beaf99415a0c1b6b411d33b013204ec09ac985be48e", "sha256:106ae31c965ea38de88ae3d9364cb031644e9753ee1211571978e7b3b03ac932",
+      "sha256:520c7b5aaae4fa05e1cf362dd3341675ba8fa803b5c00eefa563cf4d6d86a80c", "sha256:106ae31c965ea38de88ae3d9364cb031644e9753ee1211571978e7b3b03ac932",
     ]);
   });
 
@@ -551,14 +551,19 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(ASK_STEP_PROMPT).not.toContain("names every member");
     expect(lines[0]).toContain("\"block_catalog\" lists the blocks it can show");
     expect(Object.keys(JSON.parse(lines.at(-1)!))).toEqual(["lists", "blocks", "not_found"]);
-    // An answer in blocks has no count limit, whatever the answer prompt's usual length says (ADR-0051).
-    expect(lines).toContain("- An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds: the \"up to 10\" above does not apply.");
-    expect(ANSWER_PROMPT).toContain("use up to 10 when the question asks several things");
+    // Every answer is in blocks (ADR-0051): the writer is shown one reply shape, the blocks', and no count of sentences.
+    expect(lines).toContain("- An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds.");
+    const writer = [ANSWER_PROMPT, ANSWER_BLOCKS_PROMPT, ANSWER_SINCE_PROMPT].join("\n\n");
+    expect(writer.match(/Reply with ONLY a JSON object/gu)).toHaveLength(1);
+    expect(writer).not.toMatch(/up to 10|list of sentences|\{"lists":\[\],"sentences"|this shape instead|in "sentences"/u);
+    // Its nothing-found example is a blocks reply: an answer that cites nothing, which code leaves out (W1), and not_found.
+    const nothingFound = /If neither the evidence nor a list answers the question, return (\{.*?\})\. Do not attach/u.exec(ANSWER_PROMPT)?.[1];
+    expect(parseBlocksAnswer(JSON.parse(nothingFound!))).toMatchObject({ lists: [], sentences: [{ evidence: [] }], not_found: ["<the requested fact>"] });
     // The writer every Ask gets, whether or not its answer is released in blocks: its prompt, follow-up guidance, layout
     // part and schema, with the selection contract they share, pinned.
     expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, ANSWER_BLOCKS_PROMPT, answerBlocksSchema].map(value => canonicalSha256(value))).toEqual([
-      "sha256:d2b59da4d440a6cb896b648ba6a19d2232e67ce1d89299d120fd4e5be8a988f6", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
-      "sha256:674fec93f1972242e5f661c6fa56f81803f4ef1e274fb3e9cfc3632a4c48497d", "sha256:d98f36e779f815407f6ddecdffedfa592bac6faff7c01383356f05c7c5f17864",
+      "sha256:badf426531d3b408a8b134858216787f147e493948cbbd249f1ffc0bf1cfc8e9", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
+      "sha256:1b55accb6d7ce3ff2a1ac95baeb0380c180af2576402786dae12f57beb1a2c05", "sha256:d98f36e779f815407f6ddecdffedfa592bac6faff7c01383356f05c7c5f17864",
     ]);
   });
 
