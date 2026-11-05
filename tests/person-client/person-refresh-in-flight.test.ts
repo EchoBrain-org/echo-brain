@@ -390,6 +390,41 @@ it('returns a read\'s result after signing in again cleared its entry', async ()
   } finally { release(); await Promise.allSettled([read]); rmSync(home, { recursive: true, force: true }); }
 });
 
+it('registers a refresh again when signing in or out cleared its intent, and waits for reads begun since', async () => {
+  const home = signedInHome({ prefix: 'echo-refresh-cleared-intent-', now: '2026-11-05T07:00:00.000Z' });
+  const directory = new PersonSessionStore(home).paths.directory;
+  const operations = join(directory, 'operations');
+  const order: string[] = [];
+  // Another client's refresh holds the single-use claim; this one waits its turn.
+  let releaseOther!: () => void;
+  const otherHeld = new Promise<void>(resolve => { releaseOther = resolve; });
+  let otherStarted!: () => void;
+  const otherRefreshing = new Promise<void>(resolve => { otherStarted = resolve; });
+  const other = new PersonSessionOperations(directory).refresh(() => true, async () => { otherStarted(); await otherHeld; });
+  await otherRefreshing;
+  let free = false;
+  const refresh = new PersonSessionOperations(directory).refresh(() => (free ? true : undefined), async () => { order.push('rotated'); });
+  let releaseRead!: () => void;
+  const readHeld = new Promise<void>(resolve => { releaseRead = resolve; });
+  let read: Promise<void> | undefined;
+  try {
+    await setTimeout(100); // The refresh waits for the claim.
+    rmSync(operations, { recursive: true, force: true }); // Signing in or out clears every entry.
+    read = new PersonSessionOperations(directory).read(async () => { order.push('read-started'); await readHeld; order.push('read-finished'); });
+    free = true;
+    await setTimeout(100);
+    expect(order).toEqual(['read-started']);
+    expect(readdirSync(operations).some(name => name.startsWith('refresh-'))).toBe(true);
+    releaseRead();
+    await refresh;
+    expect(order).toEqual(['read-started', 'read-finished', 'rotated']);
+  } finally {
+    releaseRead(); releaseOther();
+    await Promise.allSettled([other, refresh, read]);
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 it('ends a refresh queued behind one the Authority refused as signed out, leaving no claim', async () => {
   const now = '2026-11-05T07:00:00.000Z';
   const home = signedInHome({ prefix: 'echo-refresh-queued-refused-', now });

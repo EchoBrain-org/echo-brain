@@ -487,12 +487,12 @@ parallel. Each client renews its own entries while their operations run. An
 entry whose process is gone, or that nobody has renewed for three minutes, is
 removed by its unique path. A process the client may not signal, such as one
 outside its sandbox, keeps its entry until it goes unrenewed. Files no client
-wrote are ignored. Unsafe entries fail
-closed until signing in again or signing out, which clears every entry.
-Waiting is bounded and queued reads are cancellable. A wait that runs out
-reports ECHO unavailable, to try again, never a sign-in requirement: the
-session still stands.
-An interrupted token claim still requires sign-in; an ambiguous refresh is
+wrote are ignored. Unsafe entries fail closed until signing in again or
+signing out, which clears every entry; a refresh whose intent that cleared
+registers again and waits for reads begun since before it claims. Waiting is
+bounded and queued reads are cancellable. A wait that runs out reports ECHO
+unavailable, to try again, never a sign-in requirement: the session still
+stands. An interrupted token claim still requires sign-in; an ambiguous refresh is
 never replayed. New requests reserve their transport deadline before using a
 credential, refreshing first if it would expire during the request. Document
 transfers also reserve time for metadata and local preparation. This changes

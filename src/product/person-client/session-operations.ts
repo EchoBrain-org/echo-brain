@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { closeSync, lstatSync, openSync, readdirSync, unlinkSync, utimesSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, openSync, readdirSync, unlinkSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { PersonAuthorityClientError } from './authority-client.js';
@@ -73,9 +73,20 @@ export class PersonSessionOperations {
     this.directory = join(directory, PERSON_SESSION_OPERATIONS_DIRECTORY);
   }
 
+  /** Runs `step` in the operations directory, preparing it again if signing in or out removed it meanwhile. */
+  private prepared<T>(step: () => T): T {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        ensurePrivateDirectory(this.directory);
+        return step();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || attempt === 3) throw error;
+      }
+    }
+  }
+
   private entries(): { name: string; kind: string }[] {
-    ensurePrivateDirectory(this.directory);
-    return readdirSync(this.directory).flatMap(name => {
+    return this.prepared(() => readdirSync(this.directory)).flatMap(name => {
       const match = ENTRY.exec(name);
       if (match === null) return [];
       const path = join(this.directory, name);
@@ -94,10 +105,9 @@ export class PersonSessionOperations {
   }
 
   private enter(kind: 'read' | 'refresh'): string {
-    ensurePrivateDirectory(this.directory);
     const name = `${kind}-${process.pid}-${randomUUID()}`;
     const path = join(this.directory, name);
-    closeSync(openSync(path, 'wx', 0o600));
+    this.prepared(() => closeSync(openSync(path, 'wx', 0o600)));
     hold(path);
     return name;
   }
@@ -140,11 +150,14 @@ export class PersonSessionOperations {
 
   async refresh<C, R>(claim: () => C | undefined, operation: (claimed: C) => Promise<R>, signal?: AbortSignal): Promise<R> {
     signal?.throwIfAborted();
-    const name = this.enter('refresh');
+    let name = this.enter('refresh');
     const deadline = Date.now() + DEADLINE_MS;
     try {
-      while (this.entries().some(entry => entry.kind === 'read')) await this.wait(deadline, signal);
       while (true) {
+        // Signing in or out clears every entry, this intent included, and reads
+        // that began since never saw it: register again and wait for them.
+        if (!existsSync(join(this.directory, name))) { this.leave(name); name = this.enter('refresh'); }
+        if (this.entries().some(entry => entry.kind === 'read')) { await this.wait(deadline, signal); continue; }
         signal?.throwIfAborted();
         const claimed = claim();
         if (claimed !== undefined) return await operation(claimed);

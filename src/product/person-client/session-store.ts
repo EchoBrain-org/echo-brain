@@ -390,9 +390,10 @@ export class PersonSessionStore {
       authority_id: authorityId,
       session,
     });
+    // Before the new session exists, so no operation on it loses its entry.
+    this.clearOperations();
     this.writeLive(value);
     this.cleanupTransitions();
-    this.clearOperations();
     this.forgetEnded();
     return value;
   }
@@ -402,7 +403,11 @@ export class PersonSessionStore {
    * entry nothing can prove stale, such as an unsafe file, would otherwise block every operation until removed by hand.
    */
   private clearOperations(): void {
-    rmSync(join(this.paths.directory, PERSON_SESSION_OPERATIONS_DIRECTORY), { recursive: true, force: true });
+    try {
+      rmSync(join(this.paths.directory, PERSON_SESSION_OPERATIONS_DIRECTORY), { recursive: true, force: true });
+    } catch {
+      // Only a cleanup: signing in or out never fails on it.
+    }
   }
 
   /** Why the last refresh here ended the session, until someone signs in or out; null otherwise. */
