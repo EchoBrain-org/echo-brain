@@ -1001,6 +1001,10 @@ through the founder's Claude account (`claude-sonnet-5-5`): 45 gate trials and
   question with itself, the change saves about 84 input tokens per answer,
   under 1%. Output tokens and time per answer stay within a few percent, up
   in some questions and down in others.
+- **Measured before #403's timeline wording.** PR #403 words a timeline's
+  `who` as the event's actor, in the block catalog and both reply schemas. It
+  reached `main` and this change after these runs, so neither side had it.
+  It touches none of the lines this change takes out.
 
 ### The decision, 2026-11-05
 
