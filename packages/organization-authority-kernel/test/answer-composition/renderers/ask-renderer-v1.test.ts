@@ -727,6 +727,50 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.result.response.parts[0]!.statements).toHaveLength(2);
       expect(rendered.result.response.parts[0]!.statements[0]!.text).not.toContain("ledger 2");
     });
+    it("states the rest of a declared list beside members bound to rows, whether a need requests them or not", async () => {
+      // E2 answers the precise need and no need requests E1: bindings never narrow the declared list, so code states E3.
+      const original = fullListBundle("documents", [document(1), document(2), document(3)], ["E2"]);
+      const rendered = await alone({ bundle: { ...original, plan: planOf([WI(["L1"]), WI(["L1", "E2"])]) }, layout: 2, replies: [{
+        lists: [], not_found: [], blocks: [{ block: "points", ordered: false, items: [
+          { text: "LIVE-QA-20261104-A Atlas ledger 1 is closed.", member: "E1", evidence: ["E1"] }, { text: "LIVE-QA-20261104-A Atlas ledger 2 is open.", member: "E2", evidence: ["E2"] },
+        ] }],
+      }] }).render("Which ledger entries exist, and which one is open?");
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.cited).toEqual(["E3", "E1", "E2"]);
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([
+        expect.stringMatching(/^1 of the 3 documents created on October 4, 2026: LIVE-QA-20261104-A Atlas ledger 3/u), "LIVE-QA-20261104-A Atlas ledger 1 is closed.", "LIVE-QA-20261104-A Atlas ledger 2 is open.",
+      ]);
+    });
+    it("states the rest of a declared list beside a point bound to one member that a content need cites", async () => {
+      const original = fullListBundle("documents", Array.from({ length: 5 }, (_, index) => document(index + 1)), []);
+      const rendered = await alone({ bundle: { ...original, plan: planOf([WI(["L1"]), C(["E3"])]) }, layout: 2, replies: [{
+        lists: [], not_found: [], blocks: [{ block: "points", ordered: false, items: [{ text: "LIVE-QA-20261104-A Atlas ledger 3 is open.", member: "E3", evidence: ["E3"] }] }],
+      }] }).render("Which ledger entries exist, and is ledger 3 open?");
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.cited).toEqual(["E1", "E2", "E4", "E5", "E3"]);
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([expect.stringMatching(/^4 of the 5 documents created on October 4, 2026: /u), "LIVE-QA-20261104-A Atlas ledger 3 is open."]);
+    });
+    describe("27 documents, 22 of them ledger entries, each bound to a row of the writer's table", () => {
+      // List-only research: E3 to E24 are ledger entries; the other five are checklists.
+      const ledger = ids(3, 22);
+      const items = Array.from({ length: 27 }, (_, index) => ledger.includes(`E${index + 1}`) ? document(index + 1)
+        : { ...document(index + 1), label: `LIVE-QA-20261104-A Atlas checklist ${index + 1}`, text: `Checklist ${index + 1}: release steps.` });
+      const table = { block: "table", title: "Open ledger", columns: ["Entry", "Owner"], rows: ledger.map(id => ({ member: id, cells: [`LIVE-QA-20261104-A Atlas ledger ${id.slice(1)}`, "Casey"], evidence: [id] })) };
+      it("states the five other documents when the writer selects none of the list", async () => {
+        const rendered = await alone({ bundle: fullListBundle("documents", items, []), layout: 2, replies: [{ lists: [], not_found: [], blocks: [table] }] }).render("Show every open Atlas ledger entry and its owner.");
+        expect(rendered.outcome).toBe("answered");
+        expect(rendered.cited).toEqual([...["E1", "E2", "E25", "E26", "E27"], ...ledger]);
+        expect(rendered.result.response.parts[0]!.statements[0]!.text).toMatch(/^5 of the 27 documents created on October 4, 2026: LIVE-QA-20261104-A Atlas checklist 1/u);
+        expect(blocksOf(rendered)).toMatchObject([{ kind: "text", statements: [0] }, { kind: "table", title: "Open ledger", rows: Array.from({ length: 22 }, () => expect.any(Object)) }]);
+      });
+      it("states nothing more when the writer selects the 22 entries in lists", async () => {
+        const rendered = await alone({ bundle: fullListBundle("documents", items, []), layout: 2, replies: [{ lists: [{ id: "L1", members: ledger }], not_found: [], blocks: [table] }] }).render("Show every open Atlas ledger entry and its owner.");
+        expect(rendered.outcome).toBe("answered");
+        expect(rendered.cited).toEqual(ledger);
+        expect(blocksOf(rendered)).toMatchObject([{ kind: "table", title: "Open ledger", rows: Array.from({ length: 22 }, () => expect.any(Object)) }]);
+        expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text).join(" ")).not.toMatch(/documents|checklist/u);
+      });
+    });
     it("keeps the precise 22 ledger rows through explicit member bindings without adding the 27-document inventory", async () => {
       const selected = ids(3, 22);
       const run = alone({ bundle: fullListBundle("documents", Array.from({ length: 27 }, (_, index) => document(index + 1)), selected), layout: 2, replies: [{

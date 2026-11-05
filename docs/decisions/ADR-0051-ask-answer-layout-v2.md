@@ -291,8 +291,7 @@ does not erase an omitted L-only declaration.
 
 A v2 table row or points item may declare an optional internal `member` E id
 for the inventory member it presents, independently of its supporting
-`evidence`. This allows abbreviated display labels without guessing membership
-from wording. Code accepts the declaration for member M only when the declared
+`evidence`, so membership is never guessed from wording alone. Code accepts the declaration for member M only when the declared
 id is M or an opened body or section of M, the retained item cites one of M's
 ids, and its text names M as the writer saw it listed: M's key, its title, or
 the key its title leads with ("THERM-2" of "THERM-2: Fixture work 2"), whole
@@ -300,10 +299,15 @@ and in any case. The item may cite other members too, as a comparison or a
 dependency row does; an item about another member names that member, not M,
 so it cannot hide M. A declaration that fails is ignored. Unknown or
 mismatched ids, a citation without a declaration, downgraded rows, and statements
-dropped by grounding or per-statement citation limits do not cover a requested
-member. Code restores the uncovered members, avoiding duplicate enumeration
-when valid rows or points already present them. This writer field is internal;
-it does not extend the released answer API or apply to other block kinds.
+dropped by grounding or per-statement citation limits do not cover a member.
+Bindings never narrow a list: code states the selection above, less the
+members valid rows or points already present, so it never repeats a presented
+member and never drops an unpresented selected one. A declared list beside 22
+bound ledger rows therefore still states its 5 other documents, unless the
+writer selects the 22 in `lists`. The writer prompt asks for that selection
+in `lists`, and for each row or point that presents one member to declare it
+and name it. This writer field is internal; it does not extend the released
+answer API or apply to other block kinds.
 
 A v2 answer renders every selected member. Code divides a logical list into
 statements that each fit 4 KiB and 40 citations, then groups their rows into

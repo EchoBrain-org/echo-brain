@@ -437,7 +437,7 @@ describe("agentic Ask model protocol parity", () => {
     expect(rules[lead + 2]).toBe("- Write a long identifier, such as a release or build name, at most once in the answer, and only where a short reference would not be clear.");
     // Pin the shared selection contract; layout-only wording does not leak into the base writer.
     expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, answerSchema].map(value => canonicalSha256(value))).toEqual([
-      "sha256:15ac24d938855d0c79fc5e650821b9cb59447274e366863a6335964121fdf12d", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
+      "sha256:dd9c8e6b9315a91ecc009a724c14d81085a8ee75ed5e36556c3c035ac4069b04", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
       "sha256:0c8157fa3082e4ccf8db8f2bff7c6ee648d3fac7093e54dce29b0ddcfb0f01ee",
     ]);
   });
@@ -637,7 +637,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
 
   it("pins layout v1 and Ask again prompts and schemas with shared unbounded selections", () => {
     expect([ANSWER_LAYOUT_PROMPT, answerLayoutSchema, answerLayoutSinceSchema, ANSWER_SINCE_PROMPT, answerSinceSchema].map(value => canonicalSha256(value))).toEqual([
-      "sha256:dafa440a7ab2a603c6d15b8a8af7845a33bdc6856a6e7801e91cdfaa21f04ba3", "sha256:87fff6b1e25f8b7acc3c0965dfd3051380054f225908e806b9cfe979f9c583a3",
+      "sha256:15c1430876642c08a14a0b7187c09e8efa3461bc7d4de600999e8f4aeb20061e", "sha256:87fff6b1e25f8b7acc3c0965dfd3051380054f225908e806b9cfe979f9c583a3",
       "sha256:c09a0624c08d571ddfd63bcf5cd1a814198363b7302ceec3b49f887614df971d", "sha256:2384ac104f117a119bb97beaf99415a0c1b6b411d33b013204ec09ac985be48e",
       "sha256:008a40c8dd292900600330aef6083e274dc1531cca7bc3de625d146e644e01b0",
     ]);
@@ -664,6 +664,17 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(ANSWER_BLOCKS_PROMPT).toContain("The member id identifies what the item presents; evidence alone does not.");
     expect(ANSWER_PROMPT).toContain("If you omit a found membership need's list, code restores its requested_members");
     expect(ANSWER_BLOCKS_PROMPT).not.toContain("Never write items, rows, events or facts for a list's members");
+    // A member is shown once: by code through a selection, or by a row or point that declares it, which is then the selection.
+    // The writer's lists selection decides what code states; a v2 row or point that declares and names a member shows it once.
+    expect(ANSWER_PROMPT).toContain("Return the members that answer the question in lists: that is your selection. Preserve every requested member; code adds any your selection leaves out.");
+    expect(ANSWER_PROMPT).not.toContain("replaces research's");
+    expect(ANSWER_PROMPT).toContain("Code states the members your selection names, with their grounded names and row facts.");
+    expect(ANSWER_PROMPT).toContain("To say that no member of a list answers, give it an empty members array and put the missing fact in not_found; code still states that list's requested_members.");
+    expect(ANSWER_PROMPT).not.toContain("never present those members again yourself");
+    expect(ANSWER_BLOCKS_PROMPT).toContain("A table row or points item that presents one member must declare member as that member's E id and name it by its title or key as its list shows it; code states the selected members you do not present that way, and never repeats one you do.");
+    expect(ANSWER_BLOCKS_PROMPT).not.toMatch(/never also select a member shown that way|no other member's|are your selection of their list/u);
+    expect(ANSWER_LAYOUT_PROMPT).toContain("Never write bullets or rows for a list's members: select them in \"lists\", and code states the members you select.");
+    expect(ASK_STEP_PROMPT).not.toContain("names every member");
     expect(lines[0]).toContain("\"block_catalog\" lists the blocks it can show");
     expect(Object.keys(JSON.parse(lines.at(-1)!))).toEqual(["lists", "blocks", "not_found"]);
     // An answer in blocks has no count limit, whatever the answer prompt's usual length says (ADR-0051).

@@ -579,19 +579,19 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // declared list is the fallback. A selection that names no member, given empty or left empty of ids outside the
         // list, is no selection, except an explicit empty one beside not_found: that says no member answers, which holds
         // only for a list research requested no member of, since its requested members are still stated.
-        // Inventories unrelated to a membership need never become answers merely because research read them.
+        // Bindings never narrow a selection: a member the writer presents through a bound row or point is only not stated
+        // again (naming, below). Inventories unrelated to a membership need never become answers merely because research
+        // read them.
         const restored = new Set<string>();
         for (const id of stated) {
           const list = views.get(id)!;
           const request = requestedByList.get(id)!;
           const requested = new Set(request.members);
           const given = uses.filter(use => use.id === id);
-          if (given.length === 0 && request.inventoryFallback) {
-            if (!presented.get(id)?.size) { uses.push({ id }); restored.add(id); continue; }
-            for (const member of rows.get(id)!) requested.add(member.id);
-          }
+          // The declared list, when the writer selects none of it; it holds every requested member too.
+          if (given.length === 0 && request.inventoryFallback) { uses.push({ id }); restored.add(id); continue; }
           const selected = new Set(given.flatMap(use => use.members ?? agenticListSelectV1(rows.get(id)!, use.where, list.filter.time_zone).map(member => member.id)));
-          const missing = [...requested].filter(member => !selected.has(member) && !presented.get(id)?.has(member));
+          const missing = [...requested].filter(member => !selected.has(member));
           if (missing.length > 0) {
             const at = uses.findIndex(use => use.id === id && use.members !== undefined);
             if (given.length === 0 && missing.length === list.count) uses.push({ id });
@@ -616,6 +616,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         if (unseen > 0) correct("writer_unknown_id_dropped", unseen);
         const naming: Naming[] = usedLists.flatMap(list => {
           const id = list.id, all = rows.get(id)!, noun = nounOf(list);
+          // Code never states again a member the writer presents through a bound row or point; it states the rest of the selection.
+          const shown = presented.get(id);
+          const unshown = (members: readonly AgenticWriterListMemberV1[]) => shown === undefined ? members : members.filter(member => !shown.has(member.id));
           const byId = uses.find(use => use.id === id && use.members !== undefined);
           const picked = byId === undefined ? undefined : all.filter(member => byId.members!.includes(member.id));
           const given = uses.find(use => use.id === id && use.members === undefined);
@@ -623,8 +626,13 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const chosen = given === undefined ? undefined : agenticListSelectV1(all, where, list.filter.time_zone);
           // A use that says which items exist of a list that is not complete reads "at least", whatever it selects, and the part says so.
           if ((chosen !== undefined || (picked !== undefined && stated.includes(id))) && !list.complete) listGaps.push({ text: listEndGap(noun.plural), partial: true });
+          // A use that says which items exist names them all; with some presented, it names the rest by id.
+          const rest = (selected: readonly AgenticWriterListMemberV1[], which: Omit<Naming, "list" | "noun" | "selected">): Naming[] => {
+            const left = unshown(selected);
+            return left.length === 0 ? [] : left.length === selected.length ? [{ list, noun, selected, ...which }] : [{ list, noun, selected: left, which: false, by_id: true }];
+          };
           // Two uses that select the same members are one statement, named by id, with the lead of the one that says which items exist.
-          if (chosen !== undefined && chosen.length > 0 && picked !== undefined && chosen.length === picked.length && chosen.every(member => picked.includes(member))) return [{ list, noun, selected: picked, which: true, ...(where === undefined ? {} : { where }), by_id: true }];
+          if (chosen !== undefined && chosen.length > 0 && picked !== undefined && chosen.length === picked.length && chosen.every(member => picked.includes(member))) return rest(picked, { which: true, ...(where === undefined ? {} : { where }), by_id: true });
           // A selection that names nothing is its not_found phrase (K); an empty list keeps the plain not-found answer.
           if (chosen?.length === 0 && where !== undefined) {
             const verified = agenticListSelectionVerifiedV1(all, where, list.filter.time_zone);
@@ -633,8 +641,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
               confirmed: list.complete && !list.unchecked?.count && verified });
           }
           return [
-            ...(chosen === undefined || chosen.length === 0 ? [] : [{ list, noun, selected: chosen, which: true, ...(where === undefined ? {} : { where }), by_id: false }]),
-            ...(picked === undefined || picked.length === 0 ? [] : [{ list, noun, selected: picked, which: stated.includes(id) && picked.length === all.length, by_id: true }]),
+            ...(chosen === undefined || chosen.length === 0 ? [] : rest(chosen, { which: true, ...(where === undefined ? {} : { where }), by_id: false })),
+            ...(picked === undefined || picked.length === 0 ? [] : rest(picked, { which: stated.includes(id) && picked.length === all.length, by_id: true })),
           ];
         });
         // Legacy answers share at most 25 names (W6). Blocks keep every member across bounded statements instead.
