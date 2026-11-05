@@ -76,14 +76,18 @@ export class PersonSessionOperations {
     this.directory = join(directory, PERSON_SESSION_OPERATIONS_DIRECTORY);
   }
 
-  /** Runs `step` in the operations directory, preparing it again if signing in or out removed it meanwhile. */
+  /**
+   * Runs `step` in the operations directory, preparing it again if signing in or out removed it meanwhile. macOS
+   * answers a file opened in a directory as it is removed with EINVAL, not ENOENT.
+   */
   private prepared<T>(step: () => T): T {
     for (let attempt = 1; ; attempt += 1) {
       try {
         ensurePrivateDirectory(this.directory);
         return step();
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || attempt === 3) throw error;
+        const code = (error as NodeJS.ErrnoException).code;
+        if ((code !== 'ENOENT' && code !== 'EINVAL') || attempt === 3) throw error;
       }
     }
   }
