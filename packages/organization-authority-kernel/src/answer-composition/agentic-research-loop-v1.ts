@@ -704,7 +704,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       report?.returned('search', source, result.items);
       const complete = !result.truncated && result.notice === undefined;
       if (!repeat && result.notice !== undefined) noticedSearches.add(fingerprint);
-      researchObservations.push({ operation: 'search', fingerprint, complete });
+      researchObservations.push({ operation: 'search', fingerprint, complete, source: source ?? null });
       if (complete) searchedSources.add(source ?? null);
       retrievalProgress += 1;
       const found = result.items.map(item => register(item));
@@ -1281,6 +1281,17 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       ? questionCompletionProblems(completionPlan, observations)
       : askResearchCompletionProblemsV1(completionPlan, observations, citable, listAvailable))];
     if (completionPlan.some(part => part.needs.some(need => need.status === 'not_found'))) {
+      // Empty filtered inventories establish only that no structured rows
+      // matched. Facts may still be written in another available source.
+      // Do not classify intent from question wording or hardcode providers.
+      const fetched = [...lists.values()].filter(state => state.fetched);
+      const listedSources = new Set(fetched.map(state => state.source));
+      if (ask && entries.size === 0 && fetched.length > 0 && fetched.every(state => !state.unfiltered) &&
+          [...sourcesById.keys()].some(source => !listedSources.has(source)) &&
+          !observations.some(value => value.operation === 'search' && value.complete &&
+            (value.source === null || (value.source !== undefined && !listedSources.has(value.source))))) {
+        problems.unshift('empty filtered lists establish no matching structured entries, not absence of facts in other sources; search across available sources for the requested fact before concluding not_found');
+      }
       if (entries.size > 0 && [...entries.values()].every(entry => entry.item.text === undefined)) {
         problems.unshift('discovered items have metadata only; open potentially relevant discovered items before concluding that it is absent');
       }

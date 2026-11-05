@@ -511,7 +511,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
 
   it("pins Ask again's prompt and schema with shared unbounded selections", () => {
     expect([ANSWER_SINCE_PROMPT, answerBlocksSinceSchema].map(value => canonicalSha256(value))).toEqual([
-      "sha256:2384ac104f117a119bb97beaf99415a0c1b6b411d33b013204ec09ac985be48e", "sha256:106ae31c965ea38de88ae3d9364cb031644e9753ee1211571978e7b3b03ac932",
+      "sha256:2384ac104f117a119bb97beaf99415a0c1b6b411d33b013204ec09ac985be48e", "sha256:9a0778330ad9981ba2a94c6e344c8793a89494ada7510d9ecf6b7df5bd27cd46",
     ]);
   });
 
@@ -558,7 +558,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     // part and schema, with the selection contract they share, pinned.
     expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, ANSWER_BLOCKS_PROMPT, answerBlocksSchema].map(value => canonicalSha256(value))).toEqual([
       "sha256:d2b59da4d440a6cb896b648ba6a19d2232e67ce1d89299d120fd4e5be8a988f6", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
-      "sha256:674fec93f1972242e5f661c6fa56f81803f4ef1e274fb3e9cfc3632a4c48497d", "sha256:d98f36e779f815407f6ddecdffedfa592bac6faff7c01383356f05c7c5f17864",
+      "sha256:674fec93f1972242e5f661c6fa56f81803f4ef1e274fb3e9cfc3632a4c48497d", "sha256:8d5d4b50ffbba9580067126dd95c5a59b0db6bfb569c78bb243c512e5168d32c",
     ]);
   });
 

@@ -832,6 +832,24 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.cited).toEqual(selected);
       expect(rendered.result.response.parts[0]!.statements.every(statement => statement.citation_indexes.length === 1)).toBe(true);
     });
+    it("uses unambiguous shortened note titles in bound cells without duplicating the selected ledger", async () => {
+      const selected = ids(1, 22);
+      const items = Array.from({ length: 22 }, (_, index) => ({ ...document(index + 1), label: `LIVE-QA-20261104-A Atlas ledger ${String(index + 1).padStart(2, "0")}` }));
+      const rendered = await alone({ bundle: fullListBundle("documents", items, selected), replies: [{
+        lists: [{ id: "L1", members: selected }], not_found: [], blocks: [{ block: "table", columns: ["Entry", "Amount USD"],
+          rows: selected.map((member, index) => ({ member, evidence: [member], cells: [`Ledger ${String(index + 1).padStart(2, "0")}`, String(index + 1)] })) }],
+      }] }).render("List every Atlas ledger entry and its amount.");
+      expect(blocksOf(rendered)).toMatchObject([{ kind: "table", rows: Array.from({ length: 22 }, () => expect.any(Object)) }]);
+      expect(blocksOf(rendered)).toHaveLength(1);
+      expect(rendered.result.response.parts[0]!.statements).toHaveLength(22);
+      expect(rendered.cited).toEqual(selected);
+    });
+    it.each(["Ledger", "Atlas", "1"])("does not treat the ambiguous or numeric cell %s as a member label", async label => {
+      const rendered = await alone({ bundle: fullListBundle("documents", [document(1), document(2)], ["E1"]), replies: [{
+        lists: [], not_found: [], blocks: [{ block: "table", columns: ["Entry", "Owner"], rows: [{ member: "E1", evidence: ["E1"], cells: [label, "Casey"] }] }],
+      }] }).render("Which ledger entry is open?");
+      expect(rendered.result.response.parts[0]!.statements[0]!.text).toContain("LIVE-QA-20261104-A Atlas ledger 1");
+    });
     it.each([
       { name: "a citation without a member declaration", member: undefined, evidence: ["E1"], cells: ["Unrelated conclusion", "Casey"] },
       { name: "an unknown member", member: "E999", evidence: ["E1"], cells: ["Ledger", "Casey"] },

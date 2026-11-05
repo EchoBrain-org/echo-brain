@@ -475,3 +475,32 @@ schema recorded by this ADR. Those executable migrations were retired by the
 physical lean V1 closure.
 Documentation validation is evidence only that this record and its relations
 are well formed; it is not behavior or deployment evidence.
+
+### Local readers and access-token rotation (2026-11-05)
+
+Person clients sharing a private session directory coordinate authenticated
+operations across processes. Private, token-free operation entries hold read
+leases through response decoding, streams and account checks. Refresh intent
+blocks new readers and waits for current readers to finish before the existing
+single-use refresh claim can rotate the credential. Reads normally run in
+parallel. Each client renews its own entries while their operations run. An
+entry whose process is gone, or that nobody has renewed for ten minutes, is
+removed by its unique path. A process the client may not signal, such as one
+outside its sandbox, keeps its entry until it goes unrenewed. Files no client
+wrote are ignored. Unsafe entries fail closed until signing in again or
+signing out, which clears every entry; a refresh whose intent that cleared
+registers again and waits for reads begun since before it claims. Waiting is
+bounded and queued reads are cancellable. A wait that runs out reports ECHO
+unavailable, to try again, never a sign-in requirement: the session still
+stands. An interrupted token claim still requires sign-in; an ambiguous refresh is
+never replayed. New requests reserve their transport deadline before using a
+credential, refreshing first if it would expire during the request. Document
+transfers also reserve time for metadata and local preparation. This changes
+local coordination, not Authority access policy or credential-revocation rules.
+
+Signed-out reads reject before creating operation files. A refresh that waited
+while the person signed out, or while another refresh ended the session,
+releases its claim and reports the session ended. Cancellation releases
+a waiting refresh intent before it claims a token. Once claimed, the existing
+refresh operation finishes its single-use transition; a cancelled Ask is then
+withheld rather than abandoning or replaying the submitted credential.

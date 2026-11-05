@@ -75,6 +75,23 @@ describe('native research harness shares the real ECHO tool state', () => {
     expect((await h.ask()).response.outcome).toBe('not_found');
   });
 
+  it('requires research outside empty filtered inventories before declaring a fact absent', async () => {
+    const h = harness(async session => {
+      await admit(session);
+      await session.call('list', { source: 'meetings', kind: 'action', status: 'done' });
+      await admit(session, 'empty structured actions');
+      const absent = { completed: true, parts: [{ question: 'Completed actions', notes: '', needs: [{ need: 'completed actions', kind: 'which_items', status: 'not_found', evidence: ['L1'] }] }] };
+      expect(await session.call('finish', absent)).toMatchObject({ error: expect.stringContaining('empty filtered lists') });
+      // A search returned in the same tool batch still has not been observed
+      // by a model request and cannot authorize an absence conclusion.
+      await session.call('search', { source: 'documents', query: 'completed actions' });
+      expect(await session.call('finish', absent)).toHaveProperty('error');
+      await admit(session, 'observed cross-source search');
+      expect(await session.call('finish', absent)).toMatchObject({ accepted: true });
+    }, { search: async () => result([]), list: async () => result([]) });
+    expect((await h.ask()).response.outcome).toBe('not_found');
+  });
+
   it('treats validated absence as completed even when the driver reports completed false', async () => {
     const h = harness(async session => {
       await admit(session);

@@ -61,6 +61,7 @@ const COLUMN_CHARS = 40;
 const CELL_CHARS = 120;
 const CARD_TITLE_CHARS = 120;
 const WHO_CHARS = 80;
+const EVENT_ACTOR = "the person explicitly recorded as performing or reporting this particular event. A current owner, assignee or participant does not establish who created, updated or completed an item. Omit who when the event's actor is not recorded; show current ownership separately as a fact";
 const LABEL_CHARS = COLUMN_CHARS;
 const VALUE_CHARS = 200;
 const FROM_CHARS = 120;
@@ -260,7 +261,7 @@ export const answerBlocksSchema: StructuredGenerationJsonSchema = Object.freeze(
       }),
       blockShape("timeline", ["events"], { title: blockTitle, events: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, items: {
         type: "object", additionalProperties: false, required: ["date", "text", "evidence"],
-        properties: { date: eventDate, text: { type: "string", maxLength: SENTENCE_CHARS }, who: { type: "string", maxLength: WHO_CHARS }, evidence: ids },
+        properties: { date: eventDate, text: { type: "string", maxLength: SENTENCE_CHARS }, who: { type: "string", maxLength: WHO_CHARS, description: EVENT_ACTOR }, evidence: ids },
       } } }),
       blockShape("card", ["title", "kind", "facts"], {
         title: { type: "string", maxLength: CARD_TITLE_CHARS }, kind: closedString(PERSON_ANSWER_CARD_ENTITIES_V2),
@@ -1054,7 +1055,7 @@ export const ANSWER_BLOCK_CATALOG = Object.freeze([
   { block: "text", description: "A short paragraph that explains, qualifies or connects facts.", params: { title: BLOCK_TITLE, sentences: "1 or more sentences, each with its text and evidence" } },
   { block: "points", description: "Parallel items, one sentence each, such as blockers, conditions, decisions or steps.", params: { title: BLOCK_TITLE, ordered: "true when the order matters, such as steps taken in turn; false otherwise", items: "2 or more items, each with text and evidence; optional member is the inventory E id this item explicitly presents" } },
   { block: "table", description: "Items that share the same fields, one row each, under columns you name, such as each action's owner, due date and status, or two options compared on the same points.", params: { title: BLOCK_TITLE, columns: "2 or more column names", rows: "2 or more rows, each with cells (one per column, in the columns' order, empty where the evidence does not say) and evidence; optional member is the inventory E id this row explicitly presents" } },
-  { block: "timeline", description: "Events in date order, oldest first: each event's date and what happened, and who was involved when the evidence says.", params: { title: BLOCK_TITLE, events: "2 or more events, each with date (YYYY-MM-DD, as the evidence dates the event), text (what happened, in one sentence), who (optional: a person's name as the evidence records it) and evidence" } },
+  { block: "timeline", description: "Events in date order, oldest first: each event's date, what happened, and its actor when explicitly recorded.", params: { title: BLOCK_TITLE, events: `2 or more events, each with date (YYYY-MM-DD, as the evidence dates the event), text (what happened, in one sentence), who (optional: ${EVENT_ACTOR}) and evidence` } },
   { block: "card", description: "One person, project, ticket or decision, with its key facts as label and value.", params: { title: "its name", kind: "person, project, ticket or decision", facts: "2 or more facts, each with label, value and evidence" } },
   { block: "quote", description: "The exact words of one source, such as an approved decision's text or what someone said, with where they come from.", params: { text: "words copied exactly from the cited evidence", from: "who said or recorded it, and when", evidence: "the one id it is copied from" } },
 ].map(entry => Object.freeze({ ...entry, params: Object.freeze(entry.params) })));

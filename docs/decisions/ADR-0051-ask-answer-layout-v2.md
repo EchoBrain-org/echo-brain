@@ -162,6 +162,11 @@ against the evidence the writer read:
   dates in the request's time zone, or a date its title, text or attributes
   write. Otherwise the event reads as a text sentence without that date, after
   its timeline's other events.
+- **A timeline's `who` attributes that event.** It names a person the evidence
+  explicitly records as performing or reporting the event. Current ownership,
+  assignment or participation alone does not establish its creator, updater or
+  completer; when that actor is unknown, the writer omits `who` and may show
+  current ownership separately.
 
 Then code reads the kept statements in order: the answer block first, then
 the list statements code writes, then the writer's other blocks in its order,
@@ -366,6 +371,16 @@ no longer holds:
   paragraphs.
 - The block evaluation no longer runs layout v1 as its `today` arm; its other
   catalogs start from the v2 writer's prompt.
+
+### Shortened member labels in tables (2026-11-05)
+
+A bound row may name its member with a whole cell containing an unambiguous
+whole-word phrase from that member's title. For example, `Ledger 01` may
+present `Atlas ledger 01`. The cell must contain a letter and match no other
+member's title or key. Shared labels and numeric amounts cannot suppress the
+member floor. The declared member ID and matching citation remain required.
+Points keep the existing full-title/key check. This removes the ticket-only
+assumption from shortened table labels without inferring identity from prose.
 
 ## Amended 2026-11-05: the plain answer retired
 
