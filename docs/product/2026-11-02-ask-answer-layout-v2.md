@@ -45,8 +45,10 @@ rank of 1.40 against production's 2.33, and best in 10 of 15 cases.
    name, what it shows, and each field it takes with its limits
    ([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)'s shape). The
    entries, prompt and reply shape are the evaluation's, with two lines
-   production needs: the reply also names the lists it uses, and the writer
-   never writes items for a list's members, because code states them.
+   production needs: the reply returns in `lists` the members that answer the
+   question, which code states, and a table row or point that presents one of
+   them declares it as its `member` and names it, so code does not state that
+   member again (ADR-0051, amended 2026-11-04).
 3. **Every item is one cited claim.** An answer or text sentence, a point, a
    table row, a timeline event, a card fact and a quote are each one statement
    with its own citations. Code writes the statement for a row, an event, a

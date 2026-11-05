@@ -579,8 +579,9 @@ function selectionOf(where: Record<string, unknown> | null): AgenticListSelectio
 /**
  * A list the answer uses: "L1", {"id": "L1"}, {"id": "L1", "where": {"field": "owner", "value": "Dana Lee"}},
  * {"id": "L1", "where": {"field": "due", "since": "2026-10-18", "until": "2026-10-24"}} or {"id": "L1", "members":
- * ["E5"]}; members, each once, take the place of a selection. Null for anything else. A where code cannot read uses
- * the list in full.
+ * ["E5"]}; members, each once, take the place of a selection, and a where beside them is kept, for code to use when
+ * they name no member of the list. Null for anything else, and for members none of which code can read with no where
+ * beside them. A where code cannot read uses the list in full.
  */
 function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
   const entry = object(raw);
@@ -600,11 +601,13 @@ function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
       if (short !== member) observeCoreModelCorrectionV1("model_id_respelled");
     }
   }
-  if (Array.isArray(entry?.members)) return Object.freeze({ id, members: Object.freeze(members) });
   const asked = entry === null ? null : object(entry.where);
   const where = selectionOf(asked);
   if (asked !== null && where === null) observeCoreModelCorrectionV1("model_entry_dropped");
-  return Object.freeze(where === null ? { id } : { id, where });
+  if (!Array.isArray(entry?.members)) return Object.freeze(where === null ? { id } : { id, where });
+  // Ids none of which code can read select nothing: the where beside them selects, or the list has no use.
+  if (members.length === 0 && named.length > 0) return where === null ? null : Object.freeze({ id, where });
+  return Object.freeze({ id, members: Object.freeze(members), ...(where === null ? {} : { where }) });
 }
 
 /**
@@ -661,7 +664,8 @@ function listUsesOf(body: Record<string, unknown>): readonly AgenticAnswerListUs
     if (use === null) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
     const repeat = uses.findIndex(existing => existing.id === use.id && (existing.members === undefined) === (use.members === undefined));
     if (repeat >= 0) {
-      if (use.members !== undefined) uses[repeat] = Object.freeze({ id: use.id, members: Object.freeze([...new Set([...uses[repeat]!.members!, ...use.members])]) });
+      const where = uses[repeat]!.where ?? use.where;
+      if (use.members !== undefined) uses[repeat] = Object.freeze({ id: use.id, members: Object.freeze([...new Set([...uses[repeat]!.members!, ...use.members])]), ...(where === undefined ? {} : { where }) });
       else observeCoreModelCorrectionV1("model_repeat_dropped");
       continue;
     }
@@ -947,7 +951,7 @@ function stepPrompt(list: boolean): string { return [
  * example step's, name nothing the research-loop evaluation asks about, so the evaluation's declared-kind score measures
  * the rule, not recall of an example.
  */
-const ASK_KIND_RULE = "5. Give each need a kind. \"which_items\": which or how many items exist in a source, or in a set of its items picked by a date, owner, status, kind or channel (\"tickets updated since Monday\", \"my open follow-ups\", \"my open tasks due this week\"); a list answers it, and the answer names every member with its title, dates, status and owner. \"which_say\": which members of such a picked set say something (\"which of the tickets updated since Monday mention the recall\"); open its members, and the answer says how many of them you read. \"content\": anything else: what items say; which items say something when the question picks no set by a date, owner, status, kind or channel (\"which pages mention the recall\": search finds them); or a fact about one particular item, its title, dates, status or owner included (\"is the beta on hold\", \"who owns OPS-17\", \"when was the onboarding guide created\"). Mark a which_items need \"found\" with its inventory L id and every requested member E id. The E ids preserve the requested set; an L id alone identifies an inventory, not which subset answers the question. Put supporting facts unrelated to that membership in a separate content need. Give a which_say need the id of the list whose members it checks, whatever its status, and mark it \"found\" with that id and ids whose full text you have seen. Mark a content need \"found\" only with ids whose full text you have seen: items under \"opened\", or items under \"seen\" marked \"full\": true. Mark a need \"not_found\" after at least two different completed searches, or a completed list, fail to provide it. Do not keep searching the same exhausted source with minor wording changes. An error, availability notice, or an unfinished page is incomplete research, not absence.";
+const ASK_KIND_RULE = "5. Give each need a kind. \"which_items\": which or how many items exist in a source, or in a set of its items picked by a date, owner, status, kind or channel (\"tickets updated since Monday\", \"my open follow-ups\", \"my open tasks due this week\"); a list answers it, and the answer names each requested member with its title, dates, status and owner. \"which_say\": which members of such a picked set say something (\"which of the tickets updated since Monday mention the recall\"); open its members, and the answer says how many of them you read. \"content\": anything else: what items say; which items say something when the question picks no set by a date, owner, status, kind or channel (\"which pages mention the recall\": search finds them); or a fact about one particular item, its title, dates, status, owner or lead included (\"is the beta on hold\", \"who owns OPS-17\", \"when was the onboarding guide created\"), even when you list items to find that one item. Mark a which_items need \"found\" with its inventory L id and every requested member E id. The E ids preserve the requested set; an L id alone identifies an inventory, not which subset answers the question. Put supporting facts unrelated to that membership in a separate content need. Give a which_say need the id of the list whose members it checks, whatever its status, and mark it \"found\" with that id and ids whose full text you have seen. Mark a content need \"found\" only with ids whose full text you have seen: items under \"opened\", or items under \"seen\" marked \"full\": true. Mark a need \"not_found\" after at least two different completed searches, or a completed list, fail to provide it. Do not keep searching the same exhausted source with minor wording changes. An error, availability notice, or an unfinished page is incomplete research, not absence.";
 /** Ask's stop rule (addition 6, ADR-0041): early stopping never applies to which items exist, and a which_say need reads what its list has shown. */
 const STOP_RULE = "Stop as soon as every requested fact is supported: for a which_items need, once each list it cites has more false; for a which_say need, once you have seen the full text of every member its list has shown, or no other member can be opened.";
 
@@ -1040,7 +1044,7 @@ export const ANSWER_PROMPT = [
   "- source_catalog describes source capabilities, not extra questions to answer. Do not report an unrequested discussion, document or approval as missing when the requested fact is already supported.",
   "- Search limitations such as \"I couldn't find a matching decision\" belong in \"not_found\", not in cited \"sentences\". If neither the evidence nor a list answers the question, return {\"lists\":[],\"sentences\":[],\"not_found\":[\"<the requested fact>\"]}. Do not attach unrelated citations just because those sources were retrieved.",
   "- \"lists\" holds each list research read: its id (L1, L2, ...), source, the filter it applied (filter_applied says how each requested filter applied; \"ignored\" means the list is not limited by it), complete, count, checked, read_at, stated and its members. A member is a row: id, title, dates, status, owner and due date, never its text. When complete is true, count is exactly how many items match the filter; otherwise at least count exist. read_at is when the list was read; a source's search can lag recent edits.",
-  "- List selection is separate from presentation. A list marked stated is evidence for a requested membership need; it does not mean its whole inventory answers the question. requested_members, when present, are the exact members research found for that need. Preserve every requested member. In lists return {\"id\":\"L1\"} only when every member is relevant, {\"id\":\"L1\",\"where\":{\"field\":\"status\",\"value\":\"Open\"}} for one exact row field, a date-field where with since/until for a range, or {\"id\":\"L1\",\"members\":[\"E5\",\"E7\"]} for any other selection. Include every matching id in one members array; repeated groups are merged. Code writes grounded names and row facts from these selections. If you omit a found membership need's list, code restores its requested_members; if research declared only the list and you provide no selection, code states that declared inventory. Selection arrays have no presentation-size limit; only the released answer can be shortened, with an explicit partial notice.",
+  "- List selection is separate from presentation. Return lists only when the question asks which or how many items exist: answer a question about one named item, such as who leads it or when it is due, with sentences citing its text, and return no list. A list marked stated is evidence for a requested membership need; it does not mean its whole inventory answers the question. requested_members, when present, are the exact members research found for that need. Return the members that answer the question in lists: that is your selection. Preserve every requested member; code adds any your selection leaves out. In lists return {\"id\":\"L1\"} only when every member is relevant, {\"id\":\"L1\",\"where\":{\"field\":\"status\",\"value\":\"Open\"}} for one exact row field, a date-field where with since/until for a range, or {\"id\":\"L1\",\"members\":[\"E5\",\"E7\"]} for any other selection. Include every matching id in one members array; repeated groups are merged. Code states the members your selection names, with their grounded names and row facts. If you omit a found membership need's list, code restores its requested_members; if research declared only the list and you provide no selection, code states that declared inventory. To say that no member of a list answers, give it an empty members array and put the missing fact in not_found; code still states that list's requested_members. Selection arrays have no presentation-size limit; only the released answer can be shortened, with an explicit partial notice.",
   "- A list shows which items exist and each member's title, dates, status and owner, never what an item says. Each of your sentences cites evidence text; rows and list ids are not evidence for a sentence, and a sentence that cites no evidence text is left out. For which members of a list say something, write what the evidence text you have says; code adds how many of the list's members were checked.",
   "- Add the requested details beyond the list code states, without repeating its enumeration. Sharing a source does not make two facts duplicates: keep each requested owner, status, date or explanation that the evidence supports.",
   "- Keep each fact's owner, date and status with it.",
@@ -1092,8 +1096,8 @@ export const ANSWER_BLOCK_CATALOG = Object.freeze([
  * What a v2 Ask's writer is told after ANSWER_PROMPT and its guidance (answer layout v2, ADR-0051): how to arrange the
  * answer from block_catalog, how to word an answer the app shows right under its question (never restating it, and a
  * long identifier at most once), and the reply shape answerBlocksSchema holds.
- * Structured rows and points may explicitly present a listed member; supporting citations alone never establish
- * that presentation. An Ask without v2 never sees these bindings.
+ * A structured row or point that presents a selected member declares and names it, and code does not state that member
+ * again; supporting citations alone never establish that presentation. An Ask without v2 never sees these bindings.
  */
 export const ANSWER_BLOCKS_PROMPT = [
   "Layout: the person's app shows the answer as a short document made of blocks. \"block_catalog\" lists the blocks it can show:",
@@ -1103,7 +1107,7 @@ export const ANSWER_BLOCKS_PROMPT = [
   NO_RESTATING_RULE,
   LONG_IDS_ONCE_RULE,
   "- Every sentence, item, row, event, fact and quote cites the evidence that supports it in \"evidence\", and only that evidence. Never write ids such as E4 in the text.",
-  "- Use lists for code-written member names and metadata. A table row or points item presenting a listed member from its text may instead declare member as that inventory E id, alongside the evidence supporting its contents. The member id identifies what the item presents; evidence alone does not. Only grounded retained items satisfy this declaration. Do not declare a member on an aggregate or unrelated claim.",
+  "- Return the members that answer the question in lists, as your selection; code writes their names and row facts. A table row or points item that presents one member must declare member as that member's E id and name it by its title or key as its list shows it; code states the selected members you do not present that way, and never repeats one you do. The member id identifies what the item presents; evidence alone does not. Do not declare a member on an aggregate or unrelated claim.",
   "- Write a date in a date field or a table cell as YYYY-MM-DD.",
   "- Put in a block only what the evidence says.",
   "- An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds: the \"up to 10\" above does not apply.",

@@ -1,4 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { launch, type Launched } from './launch.js';
 
 let run: Launched;
@@ -14,6 +16,17 @@ async function ask(page: Page, question: string): Promise<void> {
 /** A paragraph's location inside the reading viewport; fractional layout and scroll rounding allow one CSS pixel. */
 async function offset(paragraph: Locator): Promise<number> {
   return paragraph.evaluate(element => element.getBoundingClientRect().top - element.closest('.ask')!.getBoundingClientRect().top);
+}
+
+/** The first of a turn's sentences wholly inside the reading viewport, by its place. */
+async function firstWhole(turn: Locator): Promise<number> {
+  return turn.getByTestId('statement-text').evaluateAll(elements => {
+    const view = elements[0]!.closest('.ask')!.getBoundingClientRect();
+    return elements.findIndex(element => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.top >= view.top && bounds.bottom <= view.bottom;
+    });
+  });
 }
 
 test('a short latest answer stays in view below long history when its source opens and closes', async () => {
@@ -189,3 +202,218 @@ for (const place of ['latest', 'earlier'] as const) {
     }
   });
 }
+
+for (const narrower of [0, 100]) {
+  test(`back at the end after an earlier citation, a latest citation keeps the end (window ${narrower}px narrower)`, async () => {
+    run = await launch('ask-scroll');
+    const { page } = run;
+    await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+    await ask(page, 'Long readout');
+    await ask(page, 'Quick status');
+    const earlier = page.getByTestId('turn').first();
+    const latest = page.getByTestId('turn').last();
+    const bottom = () => page.getByTestId('ask-view').evaluate(view => view.scrollHeight - view.scrollTop - view.clientHeight);
+    await expect.poll(bottom).toBeLessThan(1);
+    if (narrower > 0) {
+      const bounds = await run.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getBounds());
+      const widthBefore = await page.getByTestId('ask-view').evaluate(view => view.clientWidth);
+      await run.app.evaluate(({ BrowserWindow }, next) => BrowserWindow.getAllWindows()[0]!.setBounds(next), { ...bounds, width: bounds.width - narrower });
+      await expect.poll(() => page.getByTestId('ask-view').evaluate(view => view.clientWidth)).toBe(widthBefore - narrower);
+      await expect.poll(bottom).toBeLessThan(1);
+    }
+    // From the end, an earlier turn's citation in view opens its source; closing it brings the view back to the end.
+    const cited = earlier.getByTestId('citation').last();
+    await expect(cited).toBeInViewport({ ratio: 1 });
+    await cited.click();
+    await expect(page.getByTestId('source-pane')).toBeVisible();
+    await page.getByTestId('source-close').click();
+    await expect(page.getByTestId('source-pane')).toHaveCount(0);
+    await expect.poll(bottom).toBeLessThan(1);
+    // Back at the end, the latest turn's citation keeps the end: its foot is not clipped by the narrower view.
+    await latest.getByTestId('citation').click();
+    await expect(page.getByTestId('source-pane')).toBeVisible();
+    await expect.poll(bottom).toBeLessThan(1);
+    await expect(latest.getByTestId('statement-text')).toBeInViewport({ ratio: 1 });
+    await expect(latest.getByTestId('turn-foot')).toBeInViewport({ ratio: 1 });
+    await page.getByTestId('source-close').click();
+    await expect(page.getByTestId('source-pane')).toHaveCount(0);
+    await expect.poll(bottom).toBeLessThan(1);
+  });
+}
+
+test('a view a restore brings back to the end follows it again, and a latest citation chosen a little short of the end keeps it', async () => {
+  run = await launch('ask-scroll');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await ask(page, 'Long readout');
+  await ask(page, 'Quick status');
+  const cited = page.getByTestId('turn').first().getByTestId('citation').last();
+  const latest = page.getByTestId('turn').last();
+  const bottom = () => page.getByTestId('ask-view').evaluate(view => view.scrollHeight - view.scrollTop - view.clientHeight);
+  await expect.poll(bottom).toBeLessThan(1);
+  await expect(cited).toBeInViewport({ ratio: 1 });
+  await cited.click();
+  await expect(page.getByTestId('source-pane')).toBeVisible();
+  await page.getByTestId('source-close').click();
+  await expect(page.getByTestId('source-pane')).toHaveCount(0);
+  await expect.poll(bottom).toBeLessThan(1);
+  // Back at the end, the view follows the end again while the earlier sentence stays in view there: a shorter window keeps the end.
+  const bounds = await run.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getBounds());
+  const heightBefore = await page.getByTestId('ask-view').evaluate(view => view.clientHeight);
+  try {
+    await run.app.evaluate(({ BrowserWindow }, next) => BrowserWindow.getAllWindows()[0]!.setBounds(next), { ...bounds, height: bounds.height - 100 });
+    await expect.poll(() => page.getByTestId('ask-view').evaluate(view => view.clientHeight)).toBe(heightBefore - 100);
+    await expect.poll(bottom).toBeLessThan(1);
+  } finally {
+    await run.app.evaluate(({ BrowserWindow }, original) => BrowserWindow.getAllWindows()[0]!.setBounds(original), bounds);
+  }
+  await expect.poll(() => page.getByTestId('ask-view').evaluate(view => view.clientHeight)).toBe(heightBefore);
+  await expect.poll(bottom).toBeLessThan(1);
+  // A little short of the end still reads to the end. The earlier citation there returns the view to the same place, a
+  // little short; the latest citation from there keeps the end.
+  await page.getByTestId('ask-view').evaluate(view => { view.scrollTop -= 12; });
+  await expect.poll(async () => Math.abs(await bottom() - 12)).toBeLessThanOrEqual(1);
+  await expect(cited).toBeInViewport({ ratio: 1 });
+  await cited.click();
+  await expect(page.getByTestId('source-pane')).toBeVisible();
+  await page.getByTestId('source-close').click();
+  await expect(page.getByTestId('source-pane')).toHaveCount(0);
+  await expect.poll(async () => Math.abs(await bottom() - 12)).toBeLessThanOrEqual(1);
+  await latest.getByTestId('citation').click();
+  await expect(page.getByTestId('source-pane')).toBeVisible();
+  await expect.poll(bottom).toBeLessThan(1);
+  await expect(latest.getByTestId('turn-foot')).toBeInViewport({ ratio: 1 });
+});
+
+for (const sidebar of [false, true]) {
+  test(`a sentence a long latest answer holds stays held when the view, back at the end, narrows${sidebar ? ' after the sidebar is hidden and shown' : ''}`, async () => {
+    run = await launch('ask-scroll');
+    const { page } = run;
+    await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+    await ask(page, 'Long readout');
+    const latest = page.getByTestId('turn').last();
+    const view = page.getByTestId('ask-view');
+    const bottom = () => view.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight);
+    await expect.poll(bottom).toBeLessThan(1);
+    const index = await firstWhole(latest);
+    expect(index).toBeGreaterThanOrEqual(0);
+    const sentence = latest.getByTestId('statement-text').nth(index);
+    const before = await offset(sentence);
+    // Its pane would push the sentence out of view at the end, so it is held there; closing the pane brings the view back
+    // to the end with it.
+    await latest.getByTestId('citation').nth(index).click();
+    await expect(page.getByTestId('source-pane')).toBeVisible();
+    await expect.poll(async () => Math.abs(await offset(sentence) - before)).toBeLessThanOrEqual(1);
+    await page.getByTestId('source-close').click();
+    await expect(page.getByTestId('source-pane')).toHaveCount(0);
+    await expect.poll(async () => Math.abs(await offset(sentence) - before)).toBeLessThanOrEqual(1);
+    await expect.poll(bottom).toBeLessThan(1);
+    if (sidebar) {
+      // Wider, then as it was: the end keeps the sentence in view each time, so the view follows the end.
+      for (const shown of [false, true]) {
+        await page.getByTestId('sidebar-toggle').click();
+        await expect(page.getByTestId('sidebar-toggle')).toHaveAttribute('aria-pressed', String(shown));
+        await expect.poll(bottom).toBeLessThan(1);
+        await expect(sentence).toBeInViewport({ ratio: 1 });
+      }
+      await expect.poll(async () => Math.abs(await offset(sentence) - before)).toBeLessThanOrEqual(1);
+    }
+    // Narrower, the end would take the sentence out of view: it stays where it is held.
+    const bounds = await run.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getBounds());
+    const widthBefore = await view.evaluate(element => element.clientWidth);
+    try {
+      await run.app.evaluate(({ BrowserWindow }, next) => BrowserWindow.getAllWindows()[0]!.setBounds(next), { ...bounds, width: bounds.width - 100 });
+      await expect.poll(() => view.evaluate(element => element.clientWidth)).toBe(widthBefore - 100);
+      await expect(sentence).toBeInViewport({ ratio: 1 });
+      await expect.poll(async () => Math.abs(await offset(sentence) - before)).toBeLessThanOrEqual(1);
+    } finally {
+      await run.app.evaluate(({ BrowserWindow }, original) => BrowserWindow.getAllWindows()[0]!.setBounds(original), bounds);
+    }
+    await expect.poll(() => view.evaluate(element => element.clientWidth)).toBe(widthBefore);
+    await expect.poll(async () => Math.abs(await offset(sentence) - before)).toBeLessThanOrEqual(1);
+    await expect.poll(bottom).toBeLessThan(1);
+  });
+}
+
+test('a sentence held by scrolling stays held when a wider window brings the view to the end and the window then narrows', async () => {
+  run = await launch('ask-scroll');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await ask(page, 'Long readout');
+  const view = page.getByTestId('ask-view');
+  const bottom = () => view.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight);
+  await expect.poll(bottom).toBeLessThan(1);
+  const bounds = await run.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getBounds());
+  const widthBefore = await view.evaluate(element => element.clientWidth);
+  const widen = async (by: number) => {
+    await run.app.evaluate(({ BrowserWindow }, next) => BrowserWindow.getAllWindows()[0]!.setBounds(next), { ...bounds, width: bounds.width + by });
+    await expect.poll(() => view.evaluate(element => element.clientWidth)).toBe(widthBefore + by);
+  };
+  try {
+    // At the end of a window 100px wider, the first sentence that starts in view, and where it reads there.
+    await widen(100);
+    await expect.poll(bottom).toBeLessThan(1);
+    const anchor = await view.evaluate(element => {
+      const top = element.getBoundingClientRect().top;
+      return [...element.querySelectorAll('[data-reading-anchor]')].find(item => item.getBoundingClientRect().top >= top)!.getAttribute('data-reading-anchor')!;
+    });
+    const held = view.locator(`[data-reading-anchor="${anchor}"]`);
+    const at = await offset(held);
+    await widen(0);
+    await expect.poll(bottom).toBeLessThan(1);
+    // Scrolled to read it there in the window as it was: short of the end by what the wider window takes off below it.
+    await held.evaluate((element, top) => {
+      const reading = element.closest('.ask')!;
+      reading.scrollTop += element.getBoundingClientRect().top - reading.getBoundingClientRect().top - top;
+    }, at);
+    await expect.poll(async () => Math.abs(await offset(held) - at)).toBeLessThanOrEqual(1);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    expect(await bottom()).toBeGreaterThanOrEqual(40);
+    // Wider again, the sentence held where it is leaves nothing below the view.
+    await widen(100);
+    await expect.poll(async () => Math.abs(await offset(held) - at)).toBeLessThanOrEqual(1);
+    await expect.poll(bottom).toBeLessThan(1);
+    // Narrower than at first, the end would take the sentence out of view: it stays where it is held.
+    await widen(-100);
+    await expect(held).toBeInViewport({ ratio: 1 });
+    await expect.poll(async () => Math.abs(await offset(held) - at)).toBeLessThanOrEqual(1);
+  } finally {
+    await run.app.evaluate(({ BrowserWindow }, original) => BrowserWindow.getAllWindows()[0]!.setBounds(original), bounds);
+  }
+});
+
+test('rows of a question on its way follow the end under a latest citation chosen there while the end keeps its sentence in view', async () => {
+  run = await launch('ask-progress');
+  const { page, home } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  const view = page.getByTestId('ask-view');
+  const bottom = () => view.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight);
+  // Answers first, more than the view holds: the fixture holds each answer until the test releases it.
+  for (const question of ['What did we agree?', 'Who owns pricing?', 'When is the review?', 'What is still open?', 'Who signed off?', 'What changed?']) {
+    await page.getByTestId('ask-field').fill(question);
+    await page.getByTestId('ask-field').press('Enter');
+    writeFileSync(join(home, 'release-ask'), '');
+    await expect(page.getByTestId('turn').last().getByTestId('question')).toHaveText(question);
+    await expect(page.getByTestId('asking')).toHaveCount(0);
+    rmSync(join(home, 'release-ask'));
+  }
+  await expect.poll(() => view.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(100);
+  // With another question on its way, the latest answer's citation, chosen at the end, opens its source beside it.
+  await page.getByTestId('ask-field').fill('And the pricing?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('asking')).toBeVisible();
+  await expect.poll(bottom).toBeLessThan(1);
+  const latest = page.getByTestId('turn').last();
+  await latest.getByTestId('citation').first().click();
+  await expect(page.getByTestId('source-pane')).toBeVisible();
+  await expect.poll(bottom).toBeLessThan(1);
+  // Its rows, opened, come in below; the end still keeps the cited sentence wholly in view, so the view follows them.
+  const line = page.getByTestId('ask-line');
+  await expect(line).toHaveAttribute('aria-expanded', 'false', { timeout: 10_000 });
+  await line.click();
+  await expect(page.getByTestId('ask-steps').getByTestId('ask-step')).toHaveCount(2);
+  await expect.poll(bottom).toBeLessThan(1);
+  await expect(latest.getByTestId('statement-text')).toBeInViewport({ ratio: 1 });
+  writeFileSync(join(home, 'release-ask'), '');
+  await expect(page.getByTestId('asking')).toHaveCount(0);
+});

@@ -216,6 +216,8 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       }
       const notices = [...pages.flatMap(page => page.result.notice === undefined ? [] : [page.result.notice]),
         ...unavailable.map(value => value.notice)];
+      // A source that could not be searched just now (an outage or a rate limit) makes the joined notice an availability one.
+      const noticeKind = unavailable.length > 0 || pages.some(page => page.result.notice_kind === 'availability') ? 'availability' as const : 'informational' as const;
       // Items released beside the kept rows come through once each, as their sources gave them; those beside rows left out,
       // and those kept as rows, stay out. Unchecked counts are summed (research tool contract v1).
       const rows = new Set(selected.map(item => item.id));
@@ -226,7 +228,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
         items: Object.freeze(selected),
         truncated: pages.some(page => page.result.truncated) || pages.reduce((count, page) => count + page.result.items.length, 0) > maximum,
         receipt_digests: Object.freeze([...new Set(pages.flatMap(page => page.result.receipt_digests))]),
-        ...(notices.length === 0 ? {} : { notice: notices.join(' ') }),
+        ...(notices.length === 0 ? {} : { notice: notices.join(' '), notice_kind: noticeKind }),
         ...(linked === undefined ? {} : { linked }), ...(unchecked === undefined ? {} : { unchecked }),
       });
     },

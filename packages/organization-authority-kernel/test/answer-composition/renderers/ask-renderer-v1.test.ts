@@ -112,6 +112,15 @@ describe("Ask renderer", () => {
     expect(rendered.result.response.parts[0]).toMatchObject({ status: "partial", gap_details: { interrupted: true } });
   });
 
+  it.each([false, true])("types only the retry reason when interrupted research leaves a writer's missing fact (with facts: %s)", async withFacts => {
+    const rendered = await alone({ bundle: { ...records(1), stop: { reason: "budget", completed: false } }, replies: [{ lists: [],
+      sentences: withFacts ? [{ text: "The rule applies.", evidence: ["E1"] }] : [], not_found: ["the Harbor owner"] }] }).render("Who owns Harbor, and what is the rule?");
+    const part = rendered.result.response.parts[0]!;
+    expect(rendered.outcome).toBe("partial");
+    expect(part.gap).toBe("I couldn't complete the search. Please try again. Missing context: the Harbor owner.");
+    expect(part.gap_details).toEqual({ interrupted: true });
+  });
+
   it.each([false, true])("keeps both project leads when both needs are which_items (extra person citation: %s)", async extraPerson => {
     const question = "What are the active projects, and who leads them?";
     const projects: EvidenceDeskItemV2[] = ["Alpha", "Beta"].map((label, index) => ({
@@ -383,11 +392,60 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     else expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
   });
 
+  it("keeps a selected no-match over a list read to its end typed beside the retry line when research stopped", async () => {
+    const research: AgenticEvidenceBundleV1 = { ...listBundle(2, 0, [list("L1", ids(1, 2))], [WI(["L1"])]), stop: { reason: "budget", completed: false } };
+    const rendered = await alone({ bundle: research, replies: [{ ...use({ id: "L1", where: { field: "status", value: "Blocked" } }), not_found: ["the Harbor owner"] }] })
+      .render("Which tickets are blocked, and who owns Harbor?");
+    const part = rendered.result.response.parts[0]!;
+    expect(rendered.outcome).toBe("partial");
+    expect(part.gap).toMatch(/^I couldn't complete the search\. Please try again\./u);
+    // Code checked the selection against every row of a list read to its end; only the writer's own absence waits for research.
+    expect(part.gap_details).toEqual({ interrupted: true, not_found: "Not found: tickets created on October 4, 2026 that have status Blocked." });
+  });
+
   it("withholds writer absence for a declared text list whose members were not all checked", async () => {
     const rendered = await alone({ bundle: eightAnd1([WS(["L1", "E9"])]), replies: [{ lists: [], sentences: [], not_found: ["the requested topic"] }] }).render("Which tickets mention the topic?");
     expect(rendered.outcome).toBe("partial");
     expect(rendered.result.response.parts[0]!.gap).toContain("Not every listed item was checked");
     expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
+  });
+
+  // The writer's free text says what a where selection would: over a list not read to its end, or one whose filter could
+  // not test every item, it is no more a confirmed absence.
+  it.each(["complete", "truncated", "unverified", "unchecked"] as const)("types a writer's no-match over a which_items need's list only after verified complete coverage: %s", async state => {
+    const extra = state === "truncated" ? { ended: false, truncated: true } : state === "unverified" ? { unverified_end: true }
+      : state === "unchecked" ? { unchecked: { count: 1, dates: ["created" as const] } } : {};
+    const research: AgenticEvidenceBundleV1 = { ...listBundle(25, 0, [list("L1", ids(1, 25), extra)], []),
+      plan: [{ part: 1, question: "Which tickets are blocked?", notes: "", needs: [{ need: "blocked tickets", kind: "which_items", status: "not_found", evidence: ["L1"] }] }] };
+    const rendered = await alone({ bundle: research, replies: [{ lists: [], sentences: [], not_found: ["blocked tickets"] }] }).render("Which tickets are blocked?");
+    expect(rendered.outcome).toBe(state === "complete" ? "not_found" : "partial");
+    if (state === "complete") expect(rendered.result.response.parts[0]!.gap_details).toEqual({ not_found: "Not found: blocked tickets." });
+    else expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
+  });
+
+  // A not_found which_items need that cites no list covers every list research read: one not read to its end leaves the
+  // writer's absence unconfirmed, as it would if the need cited it.
+  it.each(["complete", "truncated"] as const)("types a writer's no-match for a which_items need citing no list only when every list is complete: %s", async state => {
+    const research: AgenticEvidenceBundleV1 = { ...listBundle(25, 0, [list("L1", ids(1, 25), state === "truncated" ? { ended: false, truncated: true } : {})], []),
+      plan: [{ part: 1, question: "Which tickets are blocked?", notes: "", needs: [{ need: "blocked tickets", kind: "which_items", status: "not_found", evidence: [] }] }] };
+    const rendered = await alone({ bundle: research, replies: [{ lists: [], sentences: [], not_found: ["blocked tickets"] }] }).render("Which tickets are blocked?");
+    expect(rendered.outcome).toBe(state === "complete" ? "not_found" : "partial");
+    if (state === "complete") expect(rendered.result.response.parts[0]!.gap_details).toEqual({ not_found: "Not found: blocked tickets." });
+    else expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
+  });
+
+  it("types an unrelated missing fact beside a found need's list that was not read to its end", async () => {
+    // The found need's list reads "at least"; it says nothing about who owns Harbor.
+    const research: AgenticEvidenceBundleV1 = { ...listBundle(25, 0, [list("L1", ids(1, 25), { ended: false, truncated: true })], []),
+      plan: [{ part: 1, question: "Which tickets were created on October 4, and who owns Harbor?", notes: "", needs: [
+        { need: "tickets created on October 4", kind: "which_items", status: "found", evidence: ["L1"] },
+        { need: "the Harbor owner", status: "not_found", evidence: [] },
+      ] }] };
+    const rendered = await alone({ bundle: research, replies: [{ lists: [{ id: "L1" }], sentences: [], not_found: ["the Harbor owner"] }] })
+      .render("Which tickets were created on October 4, and who owns Harbor?");
+    expect(rendered.outcome).toBe("partial");
+    expect(rendered.result.response.parts[0]!.statements[0]!.text).toMatch(/^At least 25 tickets created on October 4, 2026/u);
+    expect(rendered.result.response.parts[0]!.gap_details).toEqual({ not_found: "Not found: the Harbor owner." });
   });
 
   it("gives the writer final list coverage instead of superseded page truncation", async () => {
@@ -590,6 +648,29 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.cited).toEqual(ids(1, 12));
       expect(blocksOf(rendered)).toMatchObject([{ kind: "table", caption: `${incomplete ? "At least " : ""}12 tickets created on October 4, 2026`, rows: Array.from({ length: 12 }, () => expect.any(Object)) }]);
     });
+    it("adds research's requested members to a writer selection that leaves some out", async () => {
+      const requested = ids(5, 43);
+      const rendered = await alone({ bundle: listBundle(100, 0, [list("L1", ids(1, 100))], [WI(["L1", ...requested])]), layout: 2, replies: [{
+        lists: [{ id: "L1", members: requested.slice(0, 25) }], blocks: [], not_found: [],
+      }] }).render("Which THERM tickets are To Do or In Progress?");
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.cited).toEqual(requested);
+      expect(blocksOf(rendered)).toMatchObject([{ kind: "table", caption: "43 of the 100 tickets created on October 4, 2026", rows: Array.from({ length: 43 }, () => expect.any(Object)) }]);
+    });
+    it.each([
+      { evidence: ["L1"], caption: "12 tickets created on October 4, 2026", cited: ids(1, 12) },
+      { evidence: ["L1", "E2", "E3"], caption: "2 of the 12 tickets created on October 4, 2026", cited: ["E2", "E3"] },
+    ])("states the list of a which_items need still open when research stopped, and stays partial ($evidence)", async ({ evidence, caption, cited }) => {
+      const found = listBundle(12, 0, [list("L1", ids(1, 12))], [WI(evidence)]);
+      const stopped: AgenticEvidenceBundleV1 = { ...found, stop: { reason: "budget", completed: false },
+        plan: [{ part: 1, question: "Which tickets are open?", notes: "", needs: [{ need: "open tickets", kind: "which_items", status: "open", evidence }] }] };
+      const rendered = await alone({ bundle: stopped, layout: 2, replies: [{
+        lists: [], blocks: [{ block: "answer", sentences: [{ text: "Here are the open tickets.", evidence: [] }] }], not_found: [],
+      }] }).render("Which tickets are open?");
+      expect(rendered.outcome).toBe("partial");
+      expect(rendered.cited).toEqual(cited);
+      expect(blocksOf(rendered)).toMatchObject([{ kind: "table", caption }]);
+    });
     it("keeps the precise members research found when the writer omits its list selection", async () => {
       const selected = ids(5, 43);
       const rendered = await alone({ bundle: listBundle(100, 0, [list("L1", ids(1, 100))], [WI(["L1", ...selected])]), layout: 2, replies: [{
@@ -608,11 +689,56 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.result.response.parts[0]!.statements).toHaveLength(1);
       expect(rendered.result.response.parts[0]!.statements[0]!.text).toMatch(/^3 tickets/u);
     });
-    it.each([{ members: [] }, { members: ["E3"] }])("keeps explicit selection behavior when an L-only need shares an inventory with a precise research need ($members)", async ({ members }) => {
+    describe("lists that overlap: each member a need requests is stated once for that need", () => {
+      const open = { filter: { status: "open" as const }, filter_applied: { status: "applied" as const } };
+      const statementsOf = (rendered: Rendering) => rendered.result.response.parts[0]!.statements.map(statement => statement.text);
+      const reply = (lists: readonly unknown[] = []) => ({ lists, blocks: [], not_found: [] });
+      // L1 holds THERM-1 to THERM-3, and L2, the open ones, THERM-2 to THERM-4: THERM-2 and THERM-3 are in both.
+      const both = (needs: Parameters<typeof listBundle>[3]) => listBundle(4, 0, [list("L1", ids(1, 3)), list("L2", ids(2, 3), open)], needs);
+      it("states a member one need requests of two lists under the first list the need cites, and tells the writer it is requested there", async () => {
+        const run = alone({ bundle: both([WI(["L1", "L2", "E2"])]), layout: 2, replies: [reply()] });
+        const rendered = await run.render("Which open tickets are mine?");
+        expect(rendered.cited).toEqual(["E2"]);
+        expect(statementsOf(rendered)).toEqual([expect.stringMatching(/^1 of the 3 tickets created on October 4, 2026: THERM-2: /u)]);
+        expect(run.prompt(0).lists.map((value: { requested_members?: string[] }) => value.requested_members)).toEqual([["E2"], undefined]);
+      });
+      it("states it where the writer selected it, and adds it nowhere else for that need", async () => {
+        const rendered = await alone({ bundle: both([WI(["L1", "L2", "E2"])]), layout: 2, replies: [reply([{ id: "L2", members: ["E2"] }])] }).render("Which open tickets are mine?");
+        expect(rendered.cited).toEqual(["E2"]);
+        expect(statementsOf(rendered)).toEqual([expect.stringMatching(/^1 of the 3 tickets with status open: THERM-2: /u)]);
+      });
+      it("renders the writer's selections where the writer put them, both of them", async () => {
+        const rendered = await alone({ bundle: both([WI(["L1", "L2", "E2"])]), layout: 2, replies: [reply([{ id: "L1", members: ["E2"] }, { id: "L2", members: ["E2"] }])] }).render("Which open tickets are mine?");
+        expect(statementsOf(rendered)).toEqual([expect.stringMatching(/^1 of the 3 tickets created on October 4, 2026: THERM-2: /u), expect.stringMatching(/^1 of the 3 tickets with status open: THERM-2: /u)]);
+      });
+      it("keeps a statement under each need's list for a member two needs request", async () => {
+        const rendered = await alone({ bundle: both([WI(["L1", "E2"]), WI(["L2", "E2"])]), layout: 2, replies: [reply()] }).render("Which tickets are mine, and which open ones?");
+        expect(statementsOf(rendered)).toEqual([expect.stringMatching(/^1 of the 3 tickets created on October 4, 2026: THERM-2: /u), expect.stringMatching(/^1 of the 3 tickets with status open: THERM-2: /u)]);
+      });
+      it("states a need's two declared lists once each member: the first whole, the second's other members by id", async () => {
+        const rendered = await alone({ bundle: both([WI(["L1", "L2"])]), layout: 2, replies: [reply()] }).render("Which tickets were created or are open?");
+        expect(rendered.cited).toEqual(["E1", "E2", "E3", "E4"]);
+        expect(statementsOf(rendered)).toEqual([expect.stringMatching(/^3 tickets created on October 4, 2026: /u), expect.stringMatching(/^1 of the 3 tickets with status open: THERM-4: /u)]);
+      });
+      it("states both declared lists whole for two needs, whatever they share", async () => {
+        const rendered = await alone({ bundle: both([WI(["L1"]), WI(["L2"])]), layout: 2, replies: [reply()] }).render("Which tickets were created, and which are open?");
+        expect(statementsOf(rendered)).toEqual([expect.stringMatching(/^3 tickets created on October 4, 2026: /u), expect.stringMatching(/^3 tickets with status open: /u)]);
+      });
+    });
+    it.each([undefined, 2] as const)("states only the members a need cites by id, never the whole of another list it cites (layout: %s)", async layout => {
+      // E2 and E3 are members of L1 only: the need requests them, and L2's ten tickets are no answer.
+      const research = listBundle(13, 0, [list("L1", ids(1, 3)), list("L2", ids(4, 10), { filter: { status: "open" }, filter_applied: { status: "applied" } })], [WI(["L1", "L2", "E2", "E3"])]);
+      const rendered = await alone({ bundle: research, ...(layout === undefined ? {} : { layout }), replies: [layout === 2
+        ? { lists: [], blocks: [], not_found: [] } : { lists: [], sentences: [], not_found: [] }] }).render("Which of the tickets are open?");
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.cited).toEqual(["E2", "E3"]);
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([expect.stringMatching(/^2 of the 3 tickets created on October 4, 2026: /u)]);
+    });
+    it.each([{ members: [], cited: ids(1, 3) }, { members: ["E3"], cited: ["E2", "E3"] }])("states the writer's selection with research's requested members, or the declared list when the writer selects none, for a list an L-only need and a precise need share ($members)", async ({ members, cited }) => {
       const research = listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1"]), WI(["L1", "E2"])]);
       const rendered = await alone({ bundle: research, layout: 2, replies: [{ lists: [{ id: "L1", members }], blocks: [], not_found: [] }] }).render("Which tickets exist, and which one is assigned to Casey?");
       expect(rendered.outcome).toBe("answered");
-      expect(rendered.cited).toEqual(["E2", ...members]);
+      expect(rendered.cited).toEqual(cited);
     });
     /** Source notes with distinct identities, whose short display names need not repeat their source titles. */
     const document = (n: number): EvidenceDeskItemV2 => ({
@@ -628,17 +754,61 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     it("preserves an L-only fallback beside another need's grounded member without duplicating that presentation", async () => {
       const original = fullListBundle("documents", [document(1), document(2), document(3)], ["E2"]);
       const rendered = await alone({ bundle: { ...original, plan: planOf([WI(["L1"]), WI(["L1", "E2"])]) }, layout: 2, replies: [{
-        lists: [], not_found: [], blocks: [{ block: "points", ordered: false, items: [{ text: "Ledger 2 is open.", member: "E2", evidence: ["E2"] }] }],
+        lists: [], not_found: [], blocks: [{ block: "points", ordered: false, items: [{ text: "LIVE-QA-20261104-A Atlas ledger 2 is open.", member: "E2", evidence: ["E2"] }] }],
       }] }).render("Which ledger entries exist, and which one is open?");
       expect(rendered.outcome).toBe("answered");
       expect(rendered.cited).toEqual(["E1", "E3", "E2"]);
       expect(rendered.result.response.parts[0]!.statements).toHaveLength(2);
       expect(rendered.result.response.parts[0]!.statements[0]!.text).not.toContain("ledger 2");
     });
+    it("states the rest of a declared list beside members bound to rows, whether a need requests them or not", async () => {
+      // E2 answers the precise need and no need requests E1: bindings never narrow the declared list, so code states E3.
+      const original = fullListBundle("documents", [document(1), document(2), document(3)], ["E2"]);
+      const rendered = await alone({ bundle: { ...original, plan: planOf([WI(["L1"]), WI(["L1", "E2"])]) }, layout: 2, replies: [{
+        lists: [], not_found: [], blocks: [{ block: "points", ordered: false, items: [
+          { text: "LIVE-QA-20261104-A Atlas ledger 1 is closed.", member: "E1", evidence: ["E1"] }, { text: "LIVE-QA-20261104-A Atlas ledger 2 is open.", member: "E2", evidence: ["E2"] },
+        ] }],
+      }] }).render("Which ledger entries exist, and which one is open?");
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.cited).toEqual(["E3", "E1", "E2"]);
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([
+        expect.stringMatching(/^1 of the 3 documents created on October 4, 2026: LIVE-QA-20261104-A Atlas ledger 3/u), "LIVE-QA-20261104-A Atlas ledger 1 is closed.", "LIVE-QA-20261104-A Atlas ledger 2 is open.",
+      ]);
+    });
+    it("states the rest of a declared list beside a point bound to one member that a content need cites", async () => {
+      const original = fullListBundle("documents", Array.from({ length: 5 }, (_, index) => document(index + 1)), []);
+      const rendered = await alone({ bundle: { ...original, plan: planOf([WI(["L1"]), C(["E3"])]) }, layout: 2, replies: [{
+        lists: [], not_found: [], blocks: [{ block: "points", ordered: false, items: [{ text: "LIVE-QA-20261104-A Atlas ledger 3 is open.", member: "E3", evidence: ["E3"] }] }],
+      }] }).render("Which ledger entries exist, and is ledger 3 open?");
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.cited).toEqual(["E1", "E2", "E4", "E5", "E3"]);
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([expect.stringMatching(/^4 of the 5 documents created on October 4, 2026: /u), "LIVE-QA-20261104-A Atlas ledger 3 is open."]);
+    });
+    describe("27 documents, 22 of them ledger entries, each bound to a row of the writer's table", () => {
+      // List-only research: E3 to E24 are ledger entries; the other five are checklists.
+      const ledger = ids(3, 22);
+      const items = Array.from({ length: 27 }, (_, index) => ledger.includes(`E${index + 1}`) ? document(index + 1)
+        : { ...document(index + 1), label: `LIVE-QA-20261104-A Atlas checklist ${index + 1}`, text: `Checklist ${index + 1}: release steps.` });
+      const table = { block: "table", title: "Open ledger", columns: ["Entry", "Owner"], rows: ledger.map(id => ({ member: id, cells: [`LIVE-QA-20261104-A Atlas ledger ${id.slice(1)}`, "Casey"], evidence: [id] })) };
+      it("states the five other documents when the writer selects none of the list", async () => {
+        const rendered = await alone({ bundle: fullListBundle("documents", items, []), layout: 2, replies: [{ lists: [], not_found: [], blocks: [table] }] }).render("Show every open Atlas ledger entry and its owner.");
+        expect(rendered.outcome).toBe("answered");
+        expect(rendered.cited).toEqual([...["E1", "E2", "E25", "E26", "E27"], ...ledger]);
+        expect(rendered.result.response.parts[0]!.statements[0]!.text).toMatch(/^5 of the 27 documents created on October 4, 2026: LIVE-QA-20261104-A Atlas checklist 1/u);
+        expect(blocksOf(rendered)).toMatchObject([{ kind: "text", statements: [0] }, { kind: "table", title: "Open ledger", rows: Array.from({ length: 22 }, () => expect.any(Object)) }]);
+      });
+      it("states nothing more when the writer selects the 22 entries in lists", async () => {
+        const rendered = await alone({ bundle: fullListBundle("documents", items, []), layout: 2, replies: [{ lists: [{ id: "L1", members: ledger }], not_found: [], blocks: [table] }] }).render("Show every open Atlas ledger entry and its owner.");
+        expect(rendered.outcome).toBe("answered");
+        expect(rendered.cited).toEqual(ledger);
+        expect(blocksOf(rendered)).toMatchObject([{ kind: "table", title: "Open ledger", rows: Array.from({ length: 22 }, () => expect.any(Object)) }]);
+        expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text).join(" ")).not.toMatch(/documents|checklist/u);
+      });
+    });
     it("keeps the precise 22 ledger rows through explicit member bindings without adding the 27-document inventory", async () => {
       const selected = ids(3, 22);
       const run = alone({ bundle: fullListBundle("documents", Array.from({ length: 27 }, (_, index) => document(index + 1)), selected), layout: 2, replies: [{
-        lists: [], not_found: [], blocks: [{ block: "table", title: "Open ledger", columns: ["Entry", "Owner"], rows: selected.map(id => ({ member: id, cells: [`Ledger ${id.slice(1)}`, "Casey"], evidence: [id] })) }],
+        lists: [], not_found: [], blocks: [{ block: "table", title: "Open ledger", columns: ["Entry", "Owner"], rows: selected.map(id => ({ member: id, cells: [`LIVE-QA-20261104-A Atlas ledger ${id.slice(1)}`, "Casey"], evidence: [id] })) }],
       }] });
       const rendered = await run.render("Show every open Atlas ledger entry and its owner.");
       expect(rendered.outcome).toBe("answered");
@@ -661,9 +831,62 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.result.response.parts[0]!.statements.some(statement => statement.text.startsWith("1 of the 2") && statement.text.includes("LIVE-QA-20261104-A Atlas ledger 1"))).toBe(true);
       expect(rendered.cited).toContain("E1");
     });
+    it.each([
+      { name: "a row bound to one member whose cells and citations are another's too", selected: "E2", block: { block: "table", columns: ["Entry", "Owner"], rows: [{ member: "E2", evidence: ["E1", "E2"], cells: ["Ledger 1", "Casey"] }] } },
+      { name: "an aggregate point bound to one member that cites another member too", selected: "E1", block: { block: "points", ordered: false, items: [{ text: "Several ledger entries are open.", member: "E1", evidence: ["E1", "E2"] }] } },
+    ])("does not let $name present it: code still states the member", async ({ selected, block }) => {
+      const rendered = await alone({ bundle: fullListBundle("documents", [document(1), document(2)], [selected]), layout: 2, replies: [{ lists: [], not_found: [], blocks: [block] }] }).render("Which ledger entry is open?");
+      expect(rendered.result.response.parts[0]!.statements.some(statement => statement.text.startsWith("1 of the 2") && statement.text.includes(`LIVE-QA-20261104-A Atlas ledger ${selected.slice(1)}`))).toBe(true);
+      expect(rendered.cited).toContain(selected);
+    });
+    it("lets a comparison row that names its member also cite another member", async () => {
+      const rendered = await alone({ bundle: fullListBundle("documents", [document(1), document(2)], ["E1"]), layout: 2, replies: [{ lists: [], not_found: [], blocks: [{
+        block: "table", columns: ["Entry", "Versus ledger 2"], rows: [{ member: "E1", evidence: ["E1", "E2"], cells: ["LIVE-QA-20261104-A Atlas ledger 1", "Opened the same day"] }],
+      }] }] }).render("How does ledger 1 compare with ledger 2?");
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual(["Entry: LIVE-QA-20261104-A Atlas ledger 1; Versus ledger 2: Opened the same day."]);
+      expect(rendered.cited).toEqual(["E1", "E2"]);
+    });
+    it("lets a dependency table present each entry it names, each row citing the entry it depends on too", async () => {
+      const rows = [[1, 2], [2, 3], [3, 1]].map(([n, on]) => ({ member: `E${n}`, evidence: [`E${n}`, `E${on}`], cells: [`LIVE-QA-20261104-A Atlas ledger ${n}`, `Ledger ${on}`] }));
+      const rendered = await alone({ bundle: fullListBundle("documents", [document(1), document(2), document(3)], []), layout: 2, replies: [{
+        lists: [], not_found: [], blocks: [{ block: "table", title: "Dependencies", columns: ["Entry", "Depends on"], rows }],
+      }] }).render("Which ledger entries exist, and what does each depend on?");
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([1, 2, 3].map(n => `Entry: LIVE-QA-20261104-A Atlas ledger ${n}; Depends on: Ledger ${[2, 3, 1][n - 1]}.`));
+      expect(blocksOf(rendered)).toMatchObject([{ kind: "table", title: "Dependencies" }]);
+    });
+    it("lets 22 bound ledger rows that also cite a checklist present their entries, restating none", async () => {
+      // E1 is a checklist among the 27 documents; each ledger row cites it beside its own entry.
+      const selected = ids(3, 22);
+      const items = Array.from({ length: 27 }, (_, index) => selected.includes(`E${index + 1}`) ? document(index + 1)
+        : { ...document(index + 1), label: `LIVE-QA-20261104-A Atlas checklist ${index + 1}`, text: `Checklist ${index + 1}: release steps.` });
+      const rendered = await alone({ bundle: fullListBundle("documents", items, selected), layout: 2, replies: [{ lists: [], not_found: [], blocks: [{
+        block: "table", title: "Open ledger", columns: ["Entry", "Owner"], rows: selected.map(id => ({ member: id, cells: [`LIVE-QA-20261104-A Atlas ledger ${id.slice(1)}`, "Casey"], evidence: [id, "E1"] })),
+      }] }] }).render("Show every open Atlas ledger entry and its owner.");
+      expect(rendered.outcome).toBe("answered");
+      expect(blocksOf(rendered)).toMatchObject([{ kind: "table", title: "Open ledger", rows: Array.from({ length: 22 }, () => expect.any(Object)) }]);
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text).join(" ")).not.toMatch(/documents/u);
+    });
+    it("reads a member declared by its opened body as that body's listed row, so code does not restate it", async () => {
+      const research = listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1", "E2"])]);
+      const opened = { ...research, items: [...research.items, { short: "E4", source: "tickets", item: ticketRow(2, "THERM-2: the fixture is late."), full: true, opened: true, preloaded: false, touched: 4, cited_by_plan: false }] };
+      const rendered = await alone({ bundle: opened, layout: 2, replies: [{ lists: [], not_found: [], blocks: [{ block: "points", ordered: false, items: [{ text: "THERM-2 waits on the fixture.", member: "E4", evidence: ["E4"] }] }] }] }).render("Which ticket waits on the fixture?");
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual(["THERM-2 waits on the fixture."]);
+      expect(rendered.cited).toEqual(["E4"]);
+    });
+    it("lets a bound row cite a source outside its list beside its member's own text", async () => {
+      const research = fullListBundle("documents", [document(1), document(2)], ["E1"]);
+      const supported = { ...research, items: [...research.items, { short: "E3", source: "meetings", item: record("ledger-note", "Casey owns ledger 1."), full: true, opened: true, preloaded: false, touched: 3, cited_by_plan: false }] };
+      const rendered = await alone({ bundle: supported, layout: 2, replies: [{ lists: [], not_found: [], blocks: [{ block: "table", columns: ["Entry", "Owner"], rows: [{ member: "E1", evidence: ["E1", "E3"], cells: ["LIVE-QA-20261104-A Atlas ledger 1", "Casey"] }] }] }] }).render("Which ledger entry is open, and who owns it?");
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual(["Entry: LIVE-QA-20261104-A Atlas ledger 1; Owner: Casey."]);
+      expect(rendered.cited).toEqual(["E1", "E3"]);
+    });
     it("does not let a bound row dropped by the final citation limit suppress a research member", async () => {
       const rendered = await alone({ bundle: fullListBundle("documents", Array.from({ length: 45 }, (_, index) => document(index + 1)), ["E1"]), layout: 2, replies: [{
-        lists: [], not_found: [], blocks: [{ block: "table", columns: ["Entry", "Owner"], rows: [{ member: "E1", evidence: ["E1", "L1"], cells: ["Ledger 1", "Casey"] }] }],
+        lists: [], not_found: [], blocks: [{ block: "table", columns: ["Entry", "Owner"], rows: [{ member: "E1", evidence: ["E1", "L1"], cells: ["LIVE-QA-20261104-A Atlas ledger 1", "Casey"] }] }],
       }] }).render("Which ledger entry is open?");
       expect(rendered.outcome).toBe("partial");
       expect(rendered.cited).toEqual(["E1"]);
@@ -685,14 +908,14 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.cited.slice(0, 25)).toEqual(ids(1, 25));
     });
     it.each([
-      { source: "tickets", items: [ticketRow(1, "Ticket one is open."), ticketRow(2, "Ticket two is open.")] },
-      { source: "follow_ups", items: [followUpItem(1), followUpItem(2)] },
-      { source: "projects", items: [1, 2].map(n => ({ id: `project-${n}`, kind: "project", label: `Project ${n}`, text: `Project ${n} is active.`, visibility: "project", citation: { kind: "project", project_id: `prj_00000000-0000-4000-8000-${String(n).padStart(12, "0")}` }, receipt_sha256: canonicalSha256(n) } satisfies EvidenceDeskItemV2)) },
-      { source: "meetings", items: [record("one", "Action one.", { kind: "action" }), record("two", "Action two.", { kind: "action" })] },
-      { source: "documents", items: [document(1), document(2)] },
-    ])("accepts a grounded point binding for $source without repeating the selected member", async ({ source, items }) => {
+      { source: "tickets", name: "THERM-2", items: [ticketRow(1, "Ticket one is open."), ticketRow(2, "Ticket two is open.")] },
+      { source: "follow_ups", name: "THERM-42 follow-up", items: [followUpItem(1), followUpItem(2)] },
+      { source: "projects", name: "Project 2", items: [1, 2].map(n => ({ id: `project-${n}`, kind: "project", label: `Project ${n}`, text: `Project ${n} is active.`, visibility: "project", citation: { kind: "project", project_id: `prj_00000000-0000-4000-8000-${String(n).padStart(12, "0")}` }, receipt_sha256: canonicalSha256(n) } satisfies EvidenceDeskItemV2)) },
+      { source: "meetings", name: "Meeting two", items: [record("one", "Action one.", { kind: "action" }), record("two", "Action two.", { kind: "action" })] },
+      { source: "documents", name: "LIVE-QA-20261104-A Atlas ledger 2", items: [document(1), document(2)] },
+    ])("accepts a grounded point binding for $source without repeating the selected member", async ({ source, name, items }) => {
       const rendered = await alone({ bundle: fullListBundle(source, items, ["E2"]), layout: 2, replies: [{
-        lists: [], not_found: [], blocks: [{ block: "points", ordered: false, items: [{ text: "The selected item is open.", member: "E2", evidence: ["E2"] }] }],
+        lists: [], not_found: [], blocks: [{ block: "points", ordered: false, items: [{ text: `${name} is open.`, member: "E2", evidence: ["E2"] }] }],
       }] }).render("Which item is open?");
       expect(rendered.outcome).toBe("answered");
       expect(blocksOf(rendered)).toEqual([{ kind: "text", statements: [0] }]);
@@ -702,7 +925,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       const row = pageRow(["123", "Full page title", "2026-10-04T18:00:00.000Z", "2026-10-04T18:00:00.000Z", "3"]);
       const research = fullListBundle("pages", [row, section(row, "The page is current.")], ["E2"]);
       const rendered = await alone({ bundle: { ...research, lists: [list("L1", ["E1"], { source: "pages" })], items: research.items.map((entry, index) => ({ ...entry, full: index === 1 })) }, layout: 2, replies: [{
-        lists: [], not_found: [], blocks: [{ block: "points", ordered: false, items: [{ text: "The page is current.", member: "E1", evidence: ["E2"] }] }],
+        lists: [], not_found: [], blocks: [{ block: "points", ordered: false, items: [{ text: "Full page title is current.", member: "E1", evidence: ["E2"] }] }],
       }] }).render("Which page is current?");
       expect(rendered.outcome).toBe("answered");
       expect(blocksOf(rendered)).toEqual([{ kind: "text", statements: [0] }]);
@@ -745,11 +968,44 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(part.statements.every(statement => Buffer.byteLength(statement.text, "utf8") <= PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 && statement.citation_indexes.length <= 40)).toBe(true);
       expect(part.statements.map(statement => statement.text).join(" ")).not.toContain("and 99 more");
     });
-    it.each([{ members: [] }, { members: ["E999"] }])("does not turn an empty or unknown selection into the full inventory ($members)", async ({ members }) => {
+    it.each([{ members: [] }, { members: ["E999"] }])("states the declared inventory when a selection is empty or names no member of it ($members)", async ({ members }) => {
+      // The writer reports absence through not_found; a selection that names no member is no selection.
       const rendered = await alone({ bundle: listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1"])]), layout: 2, replies: [{ lists: [{ id: "L1", members }], blocks: [], not_found: [] }] }).render("Which tickets match?");
-      const part = rendered.result.response.parts[0]!;
-      expect(part.status).toBe("not_found");
-      expect(part.statements).toEqual([]);
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.cited).toEqual(ids(1, 3));
+      expect(blocksOf(rendered)).toMatchObject([{ kind: "table", caption: "3 tickets created on October 4, 2026" }]);
+    });
+    it("reads a member selected by its opened body as that body's listed row", async () => {
+      const research = listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1"])]);
+      const opened = { ...research, items: [...research.items, { short: "E4", source: "tickets", item: ticketRow(2, "THERM-2: the fixture passed."), full: true, opened: true, preloaded: false, touched: 4, cited_by_plan: false }] };
+      const { rendered, corrections } = await observed(() => alone({ bundle: opened, layout: 2, replies: [{ lists: [{ id: "L1", members: ["E4"] }], blocks: [], not_found: [] }] }).render("Which ticket passed?"));
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.cited).toEqual(["E2"]);
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([`1 of the 3 tickets created on October 4, 2026: ${facts(2)}.`]);
+      expect(corrections).not.toHaveProperty("writer_unknown_id_dropped");
+    });
+    it.each([{ members: [] }, { members: ["E999"] }])("selects by a where the writer gave beside members that name none of the list ($members)", async ({ members }) => {
+      const research = listBundle(5, 0, [list("L1", ids(1, 5))], [WI(["L1"])]);
+      const mixed = { ...research, items: research.items.map((entry, index) => index % 2 === 0 ? entry : { ...entry, item: { ...entry.item, attributes: { status: "Done", owner: "Dana Lee" } } }) };
+      const rendered = await alone({ bundle: mixed, layout: 2, replies: [{ lists: [{ id: "L1", where: { field: "status", value: "In Progress" }, members }], blocks: [], not_found: [] }] }).render("Which tickets are in progress?");
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.cited).toEqual(["E1", "E3", "E5"]);
+      expect(rendered.result.response.parts[0]!.statements[0]!.text).toMatch(/^3 of the 5 tickets created on October 4, 2026 have status In Progress: /u);
+    });
+    it("states nothing of a declared list the writer selects explicitly empty beside not_found, and says what was not found", async () => {
+      const rendered = await alone({ bundle: listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1"])]), layout: 2, replies: [{
+        lists: [{ id: "L1", members: [] }], blocks: [], not_found: ["tickets assigned to Casey"],
+      }] }).render("Which tickets are assigned to Casey?");
+      expect(rendered.outcome).toBe("not_found");
+      expect(rendered.cited).toEqual([]);
+      expect(rendered.result.response.parts[0]).toMatchObject({ status: "not_found", statements: [], gap: "Not found: tickets assigned to Casey." });
+    });
+    it("still states the members research requested when the writer selects their list explicitly empty beside not_found", async () => {
+      const rendered = await alone({ bundle: listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1", "E2"])]), layout: 2, replies: [{
+        lists: [{ id: "L1", members: [] }], blocks: [], not_found: ["tickets assigned to Casey"],
+      }] }).render("Which tickets are assigned to Casey?");
+      expect(rendered.cited).toEqual(["E2"]);
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([expect.stringMatching(/^1 of the 3 tickets created on October 4, 2026: THERM-2: /u)]);
     });
     it.each([{ members: [] }, { members: ["E999"] }])("restores precise research members despite an empty or invalid writer selection ($members)", async ({ members }) => {
       const rendered = await alone({ bundle: listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1", "E2"])]), layout: 2, replies: [{ lists: [{ id: "L1", members }], blocks: [], not_found: [] }] }).render("Which tickets match?");
@@ -760,7 +1016,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     it("keeps incomplete-list coverage when bound points present all known selected members", async () => {
       const research = fullListBundle("documents", [document(1), document(2)], ["E1", "E2"]);
       const rendered = await alone({ bundle: { ...research, lists: [list("L1", ["E1", "E2"], { source: "documents", unverified_end: true })] }, layout: 2, replies: [{
-        lists: [], not_found: [], blocks: [{ block: "points", ordered: false, items: [1, 2].map(n => ({ text: `Ledger ${n} is open.`, member: `E${n}`, evidence: [`E${n}`] })) }],
+        lists: [], not_found: [], blocks: [{ block: "points", ordered: false, items: [1, 2].map(n => ({ text: `LIVE-QA-20261104-A Atlas ledger ${n} is open.`, member: `E${n}`, evidence: [`E${n}`] })) }],
       }] }).render("Which ledger entries are open?");
       expect(rendered.outcome).toBe("partial");
       expect(rendered.cited).toEqual(["E1", "E2"]);

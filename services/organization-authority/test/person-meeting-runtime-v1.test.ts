@@ -565,6 +565,11 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect([f.extracted(), source!.pending_imports, source!.error, f.proposals(source!.source_key)]).toEqual([1, [], null, 0]);
     expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([]);
     expect(await f.readers()).toEqual(['owner']);
+    // With no card to wait for, its notes have nothing to review rather than staying "Not reviewed yet".
+    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
+    const scope = { kind: 'global' } as const;
+    const citation = originals.deskSearch({ access_token: 'owner', scope, kinds: ['imported_meeting'] }).items[0]!.citation;
+    expect(originals.read({ access_token: 'owner', scope, citation }).imported_meeting_review).toBe('nothing_to_review');
   });
   it('keeps a private import with the importer even while a folder is watched', async () => {
     const f = await fixture(); f.grantProject(); f.join(project, 'reader-a');

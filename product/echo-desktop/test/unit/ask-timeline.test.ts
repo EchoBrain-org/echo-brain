@@ -478,6 +478,32 @@ describe('Ask on the timeline', () => {
     expect(calls('ask.source')).toHaveLength(1);
   });
 
+  it.each([
+    [['nothing_to_review'], []],
+    [['reviewed'], ['Reviewed']],
+    [['reviewed', 'nothing_to_review'], ['Reviewed']],
+    [['nothing_to_review', 'not_reviewed'], ['Not reviewed yet']],
+  ] as const)('badges imported notes cited from revisions reviewed %j as %j: one with nothing to review has no badge', async (reviews, badges) => {
+    const label = 'Imported meeting: Pilot';
+    const revision = (at: number) => ({
+      source_id: `source:${'3'.repeat(64)}`, revision_id: `r${at + 1}`, source_sha256: sha(`4${at}`), representation_sha256: sha(`5${at}`), anchor_sha256: sha(`6${at}`),
+    } as const);
+    const notes = reviews.map((_, at): AnswerSource => ({ kind: 'original', label, ref: revision(at),
+      cited: { kind: 'imported_meeting', label, visibility: 'only_me', citation: { kind: 'source_revision', ...revision(at) } } }));
+    const one = turn('One?', DAY, answerOf('One?', notes, [['The notes propose shipping the pilot.', notes.map((_, at) => at)]]));
+    seed(one);
+    const reads = reviews.map(() => held.hold('ask.source'));
+    const store = await startStore();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    store.chooseSource(0, null, one.id);
+    reviews.forEach((imported_meeting_review, at) => reads[at]!(ok({ label, text: `Passage ${at + 1}.`, imported_meeting_review })));
+    await flush();
+    const { SourcePane } = await import('../../src/renderer/screens/ask.js');
+    const pane = render(SourcePane({ state: store.getState() }));
+    expect(byTestId(pane, 'evidence-text').map(text)).toEqual(reviews.map((_, at) => `Passage ${at + 1}.`));
+    expect(byTestId(pane, 'source-review-state').map(text)).toEqual(badges);
+  });
+
   it('says nothing when nothing changed (ADR-0049), and with every sentence left out shows only Ask again', async () => {
     const [one, two] = [turn('One?', 2 * DAY, status()), turn('Two?', DAY, status())];
     seed(one, two);
@@ -751,6 +777,32 @@ describe('Ask on the timeline', () => {
     ].join('\n'));
     expect(await store.copyAnswer(quiet.id)).toBe(true);
     expect(copied[1]!.startsWith(`Nothing changed since ${when}\n\nTHERM-482, Sensor drift, is open. [1]`)).toBe(true);
+  });
+
+  it('copies an Ask again whose every answer sentence a check left out as the page shows it, past what Copy answer takes: its "Since", then that nothing you can see matched', async () => {
+    const sources = [followUp('itm_timeline-1'), page('31010')];
+    const long = 'x'.repeat(11_990);
+    const answer = answerOf('What is open on THERM?', sources, [['Confirm the trace is still open.', [0]]]);
+    const earlier = turn('What is open on THERM?', 3 * DAY, answer);
+    const again = turn('What is open on THERM?', 2 * DAY, answer, { again_of: earlier.id, since: [said(long, [1], sources)] });
+    // The follow-up is no longer yours to read: the answer's one sentence is left out, and the "Since" beside it stays.
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
+    const copied: string[] = [];
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.check': params => checks!(params.items as never),
+      'clipboard.writeText': params => { copied.push(String(params.text)); return ok(null); },
+      'ask.record': () => fail('not_found'),
+    }, () => ({ active: [apollo], archived: [] })));
+    seed(earlier, again);
+    const store = await startStore();
+    store.pickSuggestion({ question: again.question, turn: again.id });
+    await flush();
+    const shown = (await view())(store);
+    expect(byTestId(shown, 'since-text').map(text)).toEqual([long]);
+    expect(byTestId(shown, 'statement-text')).toHaveLength(0);
+    expect(byTestId(shown, 'answer-empty').map(text)).toEqual(['Nothing you can see matched.']);
+    expect(await store.copyAnswer(again.id)).toBe(true);
+    expect(copied).toEqual([`Since ${askedWhen(earlier.asked_at, NOW.getTime())}\n${long}\nNothing you can see matched.`]);
   });
 
   it('keeps of a turn only what the page reads back: its full question and "since" once, no receipt, and each source\'s citation once', async () => {
@@ -1524,6 +1576,26 @@ describe('follow-ups from the bar', () => {
     expect(kept().map(turn => turn.text)).toEqual(['First?', 'Third?']);
     expect(calls('ask.run').map(call => call.question)).toEqual(['First?', 'Second?', 'Third?', 'Third?']);
     expect(store.getState().ask?.failed).toBeFalsy();
+  });
+
+  it.each([false, true])('says and copies that nothing in the project matched when a project question found nothing and nothing explains it (earlier: %s)', async earlier => {
+    const question = 'What did we agree on pricing?';
+    const nothing = turn(question, 2 * DAY, answerOf(question, [], [], { scope: inApollo, outcome: 'not_found',
+      parts: [{ question, status: 'not_found', statements: [] }] }));
+    rpc.mockImplementation(rpcFor(held, { 'clipboard.writeText': () => ok(null), 'ask.record': () => fail('not_found') }, () => ({ active: [apollo], archived: [] })));
+    seed(nothing, ...(earlier ? [turn('Two?', DAY, status())] : []));
+    const store = await startStore();
+    store.pickSuggestion({ question, turn: nothing.id });
+    await flush();
+    const shown = (await view())(store);
+    // In full, the project's own line under the answer says it; opened later from its line, the answer says it.
+    const where = earlier ? byTestId(shown, 'opened-turn')[0]! : byTestId(shown, 'turn')[0]!;
+    expect(byTestId(where, 'project-empty').map(text).map(line => line.startsWith('Nothing in Apollo matched.'))).toEqual(earlier ? [] : [true]);
+    expect(byTestId(where, 'answer-empty').map(text)).toEqual(earlier ? ['Nothing in Apollo matched.'] : []);
+    expect(byTestId(where, 'answer-gap')).toHaveLength(0);
+    click(byTestId(where, 'copy-answer')[0]);
+    await flush();
+    expect(calls('clipboard.writeText').at(-1)).toEqual({ text: 'Nothing in Apollo matched.' });
   });
 
   it('offers, never makes, one ask across everything when a project question finds nothing', async () => {

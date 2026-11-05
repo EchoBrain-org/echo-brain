@@ -21,7 +21,7 @@ import type Database from "better-sqlite3";
 import { appendAuditRowV1 } from "./audit-row-v1.js";
 import { canonicalSourceContentV1, sourceContentSha256V1 } from "@echo-brain/organization-processing/core";
 import type { MeetingDocument } from "@echo-brain/organization-processing/core";
-import type { PersonItemRefV1 } from "@echo-brain/organization-api";
+import type { PersonImportedMeetingReviewV1, PersonItemRefV1 } from "@echo-brain/organization-api";
 import type {
   OriginalContextReleaseV1,
   OriginalContextCitationV1,
@@ -444,7 +444,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     this.assertOrganization(actor);
     this.assertScope(actor, input.scope);
     let atom: ReleasedSourceContextAtomV1 | undefined;
-    let imported_meeting_review: 'not_reviewed' | 'reviewed' | undefined;
+    let imported_meeting_review: PersonImportedMeetingReviewV1 | undefined;
     if (input.citation.document_id === undefined) {
       const row = this.textByCitation(actor, input.scope, input.citation);
       atom = row === undefined ? undefined : this.textAnchorForCitation(row, input.citation);

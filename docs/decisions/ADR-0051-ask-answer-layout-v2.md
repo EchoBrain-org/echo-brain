@@ -257,35 +257,63 @@ requested member E id. These ids preserve the requested selection across
 writer and layout choices; supporting facts unrelated to membership belong in
 a separate content need. Opened bodies map back to the inventory's member
 identity. The writer receives this set as `requested_members`, independently
-of `stated`, which says that a membership need cites the inventory.
+of `stated`, which says that a membership need cites the inventory. A
+`which_items` need still open when research stopped requests its members, or
+declares its list, in the same way, as ADR-0041 states such a need's list; the
+answer stays partial.
 
 Every layout parses the whole selection before applying presentation bounds.
 A `members` array has no 25-item or evidence-array bound. Repeated groups for
-the same list merge by id, preserving every selected member once; ids outside
-that inventory are removed. An explicit empty selection never becomes the
-full inventory. It can select no members from an L-only inventory declaration;
-it cannot erase a nonempty precise research member set, which code restores. Compound conditions can name every matching id without
-extending the one-field `where` language.
+the same list merge by id, preserving every selected member once. A selected
+opened body or section names the member it is part of, as research's ids do;
+ids outside that inventory are removed. A `where` given beside `members` is
+kept, and selects when the members name no member of the list. Compound
+conditions can name every matching id without extending the one-field `where`
+language.
 
-A successful writer may not silently lose requested members. Code restores
-research's precise requested members absent from the writer's selection. If
-a found membership need cites only L and the writer supplies no selection,
-code states that declared list: all members for a complete list, or known
-members with `at least` and partial status for an incomplete list. Other
-inventories do not enter the answer merely because research read them.
-Each need retains that fallback independently: another need's precise subset
-of the same inventory does not erase an omitted L-only declaration.
+What code states of a stated list is the writer's selection together with
+research's. The writer's selection is a use that names at least one member, or
+carries a `where`; code adds the precise members research's found membership
+needs request that it leaves out, so a selection that omits requested members
+never loses them. When the writer selects none of a list and a found
+membership need cites the list with no member ids, code states that whole
+declared list: all members for a complete list, or known members with
+`at least` and partial status for an incomplete list. A need that cites
+member E ids requests those members only: no other list it cites falls back to
+its whole inventory. A selection that names no member, given empty or left
+empty by that removal, is no selection, with one exception: an explicit empty
+`members` array in a reply that also has `not_found` says that no member of
+the list answers, and code states nothing of it, unless research requested
+specific members of it, which code still states. Other inventories do not
+enter the answer merely because research read them. Each need retains that
+fallback independently: another need's precise subset of the same inventory
+does not erase an omitted L-only declaration. Within one need that cites
+several lists, each member it requests, by id or by declaring its lists, is
+stated once: where the writer selected it in a list the need cites, otherwise
+under the first of those lists, in the need's citation order, that holds it,
+which is also where the writer is told it is requested. Members that different
+needs request keep a statement under each need's list, and the writer's
+selections render where the writer put them.
 
 A v2 table row or points item may declare an optional internal `member` E id
 for the inventory member it presents, independently of its supporting
-`evidence`. This allows abbreviated display labels without guessing membership
-from wording. Code accepts the declaration only for an actual inventory member
-whose own text (or mapped opened body) grounds that retained item. Unknown or
+`evidence`, so membership is never guessed from wording alone. Code accepts the declaration for member M only when the declared
+id is M or an opened body or section of M, the retained item cites one of M's
+ids, and its text names M as the writer saw it listed: M's key, its title, or
+the key its title leads with ("THERM-2" of "THERM-2: Fixture work 2"), whole
+and in any case. The item may cite other members too, as a comparison or a
+dependency row does; an item about another member names that member, not M,
+so it cannot hide M. A declaration that fails is ignored. Unknown or
 mismatched ids, a citation without a declaration, downgraded rows, and statements
-dropped by grounding or per-statement citation limits do not cover a requested
-member. Code restores the uncovered members, avoiding duplicate enumeration
-when valid rows or points already present them. This writer field is internal;
-it does not extend the released answer API or apply to other block kinds.
+dropped by grounding or per-statement citation limits do not cover a member.
+Bindings never narrow a list: code states the selection above, less the
+members valid rows or points already present, so it never repeats a presented
+member and never drops an unpresented selected one. A declared list beside 22
+bound ledger rows therefore still states its 5 other documents, unless the
+writer selects the 22 in `lists`. The writer prompt asks for that selection
+in `lists`, and for each row or point that presents one member to declare it
+and name it. This writer field is internal; it does not extend the released
+answer API or apply to other block kinds.
 
 A v2 answer renders every selected member. Code divides a logical list into
 statements that each fit 4 KiB and 40 citations, then groups their rows into
@@ -316,9 +344,9 @@ no longer holds:
   without the header: the plain writer's prompt and schema, and statements
   the client shows as paragraphs. Any other value is still refused.
 - The writer's layout v1 prompt and schema, its forms, sections and declared
-  tables, and code's v1 layout are removed. The plain writer, for an Ask
-  without the header, is unchanged byte for byte, and so is the answer an
-  Ask in blocks falls back to when its blocks cannot be released.
+  tables, and code's v1 layout are removed. The retirement leaves the plain
+  writer, for an Ask without the header, byte for byte as it was, and with it
+  the answer an Ask in blocks falls back to when its blocks cannot be released.
 - A V8 part never carries `layout`, and the answer's validator refuses one.
   A table keeps the bounds it had: a column's name 100 bytes, a cell 300 and
   a caption 600. Code still builds a list's table only up to six columns,

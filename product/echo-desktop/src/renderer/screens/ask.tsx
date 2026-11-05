@@ -6,7 +6,7 @@ import type {
 } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import {
-  answerGaps, answerSentences, blockTitle, CARD_WORDS, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownArranged,
+  answerGaps, answerSays, answerSentences, blockTitle, CARD_WORDS, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownArranged,
   shownItems, statementGroups, tableDay, yoursIn, type AnswerTable, type Inline, type Shows, type SourceGroup,
 } from '../answer.js';
 import { askedToday, askedWhen, identity, initial, marked, meetingTime, snippet, when } from '../format.js';
@@ -19,7 +19,7 @@ import {
 } from '../progress.js';
 import {
   activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
-  fullPageOffered, litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
+  fullPageOffered, litAtoms, matchesShown, nothingLine, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, searchAgain, setBarText, sourceName, submitBar, suggestionsShown, toggleEarlier, toggleSourceList, toggleTurn, turnOf, widenScope,
   UNTITLED,
   type AskClarify, type AskTook, type PaneTarget, type Read, type RecordSectionKey, type State,
@@ -492,15 +492,16 @@ function Arranged({ state, view, part, index, blocks, opening }: {
  * (ADR-0051), and a paragraph per sentence when not. A part with nothing to
  * show is left out, and so is a sentence citing a source you can no longer
  * read; one whose source changed is lit in the signal (ADR-0047). Only typed
- * actionable explanations are shown. A completed no-match answer without an
- * explanation uses the empty line, unless the project's own line says so.
+ * actionable explanations are shown. An answer that says nothing and shows no
+ * explanation says `empty`, its turn's line (nothingLine), unless the
+ * project's own line under it says so (null): no answer is left blank.
  */
-function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: State; view: TurnView; dimmed?: boolean; empty?: boolean }) {
+function AgenticAnswer({ state, view, empty, dimmed = false }: { state: State; view: TurnView; empty: string | null; dimmed?: boolean }) {
   const answer = view.answer;
   const gaps = answerGaps(answer, view.shows);
   // A part opens the answer when it is the first and no direct answer is above it.
   const parts = answer.parts.map((part, index) => ({ part, index, opening: index === 0 && !answer.direct })).filter(({ part }) => partShows(part, view.shows));
-  const said = parts.length > 0 || (answer.direct !== undefined && view.shows(answer.direct.citation_indexes));
+  const said = answerSays(answer, view.shows);
   return (
     <div class={`agentic-answer${dimmed ? ' dimmed' : ''}`} data-testid="answer">
       {answer.direct && <Statement state={state} view={view} statement={answer.direct} id="direct" />}
@@ -515,7 +516,7 @@ function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: S
         </section>
       ))}
       {gaps.map(gap => <p key={gap} class="answer-empty" data-testid="answer-gap">{gap}</p>)}
-      {!said && gaps.length === 0 && empty && answer.outcome === 'not_found' && <p class="answer-empty" data-testid="answer-empty">Nothing you can see matched.</p>}
+      {!said && gaps.length === 0 && empty !== null && <p class="answer-empty" data-testid="answer-empty">{empty}</p>}
     </div>
   );
 }
@@ -715,10 +716,10 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
       <div class="question selectable" data-testid="question">{turn.text}</div>
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
       {changed && <ChangedSince at={turn.asked_at} />}
-      {!omitted && <AgenticAnswer state={state} view={view} empty={!foundNothingInProject(turn)} />}
+      {!omitted && <AgenticAnswer state={state} view={view} empty={foundNothingInProject(turn) ? null : nothingLine(turn, state)} />}
       {(foundNothingInProject(turn) || widen) && (
         <div class="project-empty" data-testid={foundNothingInProject(turn) ? 'project-empty' : undefined}>
-          {foundNothingInProject(turn) && <span>Nothing in {scopeName(turn.scope, state)} matched.</span>}
+          {foundNothingInProject(turn) && <span>{nothingLine(turn, state)}</span>}
           {/* Offered on the thread's latest turn only, as the next step; never under a question that failed. */}
           {widen && (
             <button type="button" class="link-button" data-testid="ask-everywhere" onClick={() => askEverywhere(turn.id)}>Ask across everything you can see</button>
@@ -770,7 +771,7 @@ function OpenedTurn({ state, turn, checks }: { state: State; turn: TimelineTurn;
     <div class="opened" data-testid="opened-turn">
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
       {!omitted && turnNote(turn, checks) === 'changed' && <ChangedSince at={turn.asked_at} />}
-      {!omitted && <AgenticAnswer state={state} view={view} dimmed />}
+      {!omitted && <AgenticAnswer state={state} view={view} empty={nothingLine(turn, state)} dimmed />}
       <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={undefined} again copy={!omitted} />
     </div>
   );
@@ -826,8 +827,11 @@ export function AskView({ state }: { state: State }) {
   const scroller = useRef<HTMLElement>(null);
   // Where the timeline last put the view: the scroll event that records a person's scroll can arrive after a new row.
   const placedAt = useRef<number | null>(null);
-  // Reading follows the bottom until the person scrolls away or chooses a specific citation.
-  type Position = { kind: 'bottom' } | { kind: 'anchor'; element: Element; offset: number; preferBottom: boolean };
+  // Reading follows the bottom until the person scrolls away or chooses a specific citation. A held sentence that prefers
+  // the end (a latest citation chosen at the end, or a sentence held with the view back at the end) follows the end only
+  // while the end keeps it wholly in view.
+  type Anchor = { kind: 'anchor'; element: Element; offset: number; preferBottom: boolean };
+  type Position = { kind: 'bottom' } | Anchor;
   const reading = useRef<{ width: number; height: number; position: Position } | null>(null);
   const anchors = useRef<NodeListOf<Element> | null>(null);
   const savePosition = (position: Position) => {
@@ -855,22 +859,28 @@ export function AskView({ state }: { state: State }) {
     const element = next && next.getBoundingClientRect().top < bounds.bottom ? next : items[low - 1];
     if (element) savePosition(anchorPosition(element));
   };
+  // Where a held sentence puts the view once the view or what is below it changes. One that prefers the end goes there
+  // while the end keeps the sentence wholly in view, and reads from where it is then; a long answer or rows coming in
+  // can push it out of view there, and then the sentence stays where it was, as any other held one does. Held with
+  // nothing left below the view, it prefers the end again; one the end cuts short keeps its place for when there is room.
+  const hold = (position: Anchor): Anchor => {
+    const view = scroller.current!;
+    const bounds = position.element.getBoundingClientRect();
+    const top = bounds.top - view.getBoundingClientRect().top;
+    const atEnd = top - (view.scrollHeight - view.scrollTop - view.clientHeight);
+    if (position.preferBottom && atEnd >= 0 && atEnd + bounds.height <= view.clientHeight) {
+      view.scrollTop = view.scrollHeight;
+      return { ...position, offset: atEnd };
+    }
+    const target = view.scrollTop + top - position.offset;
+    view.scrollTop = target;
+    return { ...position, preferBottom: Math.abs(view.scrollHeight - view.clientHeight - target) < 1 };
+  };
   const keepReading = () => {
     const view = scroller.current, saved = reading.current;
     if (!view || !saved || (view.clientWidth === saved.width && view.clientHeight === saved.height)) return;
     let position = saved.position;
-    if (position.kind === 'anchor' && view.contains(position.element)) {
-      const bounds = position.element.getBoundingClientRect();
-      const top = bounds.top - view.getBoundingClientRect().top;
-      const atEnd = top - (view.scrollHeight - view.scrollTop - view.clientHeight);
-      // Choosing a latest citation at the end keeps following the end only if that also keeps its statement readable.
-      // A long answer can push the chosen statement out of view there, in which case the explicit reading anchor wins.
-      if (position.preferBottom && atEnd >= 0 && atEnd + bounds.height <= view.clientHeight) position = { kind: 'bottom' };
-      else {
-        view.scrollTop += top - position.offset;
-        position = { ...position, preferBottom: false };
-      }
-    }
+    if (position.kind === 'anchor' && view.contains(position.element)) position = hold(position);
     if (position.kind === 'bottom') view.scrollTop = view.scrollHeight;
     placedAt.current = view.scrollTop;
     savePosition(position);
@@ -878,11 +888,14 @@ export function AskView({ state }: { state: State }) {
   const chooseReading = (event: MouseEvent) => {
     // Capture the source's turn/focus before chooseSource changes the pane width. Pointer and keyboard activation both
     // produce this click, and every block gives its sentence or row the same focus id the source pane uses.
+    const view = scroller.current;
     const marker = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-reading-focus]') : null;
     const turn = marker?.closest('[data-turn]');
     const element = marker && turn?.querySelector(`[data-reading-anchor="${CSS.escape(marker.dataset.readingFocus!)}"]`);
-    if (element) savePosition(anchorPosition(element,
-      reading.current?.position.kind === 'bottom' && turn?.getAttribute('data-turn') === turns.at(-1)?.id));
+    // A latest citation chosen with the view at the end prefers the end: where the view is, not the position last recorded,
+    // which can still hold a sentence after the view came back to the end without the person scrolling there.
+    if (view && element) savePosition(anchorPosition(element,
+      view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX && turn?.getAttribute('data-turn') === turns.at(-1)?.id));
   };
   // Content changes invalidate only the cached node list; they do not measure the existing thread.
   useLayoutEffect(() => { anchors.current = null; }, [thread.seq, turns.length, thread.opened, thread.earlier, state.timeline.turns, state.timeline.checks]);
@@ -916,7 +929,12 @@ export function AskView({ state }: { state: State }) {
   const follow = useCallback(() => {
     const view = scroller.current;
     if (view && placedAt.current !== null && view.scrollTop < placedAt.current - FOLLOW_PX) rememberReading();
-    if (reading.current?.position.kind === 'bottom') toBottom();
+    const position = reading.current?.position;
+    if (position?.kind === 'bottom') toBottom();
+    else if (view && position?.kind === 'anchor' && position.preferBottom && view.contains(position.element)) {
+      savePosition(hold(position));
+      placedAt.current = view.scrollTop;
+    }
   }, []);
   const onScroll = () => {
     const view = scroller.current, saved = reading.current;
@@ -1198,7 +1216,9 @@ export function Passage({ text, label }: { text: string; label: string }) {
           : <ul key={index}>{block.items.map((item, at) => <li key={at}><Runs runs={item} /></li>)}</ul>)}</>;
 }
 
-function SourceReviewBadge({ review, shared = false }: { review: 'not_reviewed' | 'reviewed'; shared?: boolean }) {
+/** Imported notes' review badge. Notes with no decision or action have nothing to review, and no badge. */
+function SourceReviewBadge({ review, shared = false }: { review: 'not_reviewed' | 'reviewed' | 'nothing_to_review'; shared?: boolean }) {
+  if (review === 'nothing_to_review') return null;
   return <div class="meta" data-testid={shared ? 'source-review-summary' : undefined}><span class="tag" data-testid="source-review-state">
     {review === 'reviewed' ? 'Reviewed' : 'Not reviewed yet'}
   </span></div>;

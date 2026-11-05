@@ -470,8 +470,8 @@ export type ProjectActivity = PersonProjectActivityItemV1;
 export interface SourceEvidence {
   readonly label: string;
   readonly text: string;
-  /** Imported notes alone have a review badge; it never makes them an approved record. */
-  readonly imported_meeting_review?: 'not_reviewed' | 'reviewed';
+  /** Imported notes alone have a review state; it never makes them an approved record. Nothing to review shows no badge. */
+  readonly imported_meeting_review?: 'not_reviewed' | 'reviewed' | 'nothing_to_review';
 }
 
 /** One approved decision, action or rationale, with up to three excerpts that support it. */

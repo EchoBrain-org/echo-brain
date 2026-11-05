@@ -142,6 +142,8 @@ describe('thin live ticket dispatcher', () => {
     const result = await observeCoreRuntimeV1('ask_request', () => desk.search({ query: 'launch', limit: 4 }), { observer: event => { events.push(event); } });
     expect(result.items.map(item => item.id)).toEqual(['local-1', 'page-1', 'local-2', 'page-2']);
     expect(result.notice).toBe('Live tickets could not be searched just now, so these results leave them out.');
+    // Research reads it as an availability failure: absence among live tickets is unproven.
+    expect(result.notice_kind).toBe('availability');
     expect(result.receipt_digests).toEqual([receipt('local'), receipt('knowledge')]);
     expect(JSON.stringify(result)).not.toContain('private provider failure');
     expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'evidence_search', event: 'failed', evidence_source: 'ticket' })]));
@@ -156,6 +158,7 @@ describe('thin live ticket dispatcher', () => {
     const result = await desk.search({ limit: 4 });
     expect(result.items.map(item => item.id)).toEqual(['local-1', 'local-2']);
     expect(result.notice).toBe('Live tickets could not be searched just now, so these results leave them out. Live pages could not be searched just now, so these results leave them out.');
+    expect(result.notice_kind).toBe('availability');
   });
   it.each([
     ['a chosen source', { query: 'launch', source: 'ticket' }],
@@ -229,10 +232,12 @@ describe('thin live ticket dispatcher', () => {
   });
   it('preserves partial-source notices and receipts even when the result cap omits a provider', async () => {
     const f = mixedFixture();
-    vi.mocked(f.base.search).mockResolvedValue({ items: f.local, truncated: true, notice: 'Meeting records were unavailable when this request began.', receipt_digests: [receipt('local')] });
+    vi.mocked(f.base.search).mockResolvedValue({ items: f.local, truncated: true, notice: 'Meeting records were unavailable when this request began.', notice_kind: 'availability', receipt_digests: [receipt('local')] });
     const result = await deskWith(f.base, f.ticket, f.page).search({ query: 'launch', limit: 2 });
     expect(result.items.map(item => item.id)).toEqual(['local-1', 'ticket-1']);
     expect(result).toMatchObject({ truncated: true, notice: 'Meeting records were unavailable when this request began.', receipt_digests: [receipt('local'), receipt('jira'), receipt('knowledge')] });
+    // The base desk's notice that meeting records could not be searched keeps its availability kind when joined.
+    expect(result.notice_kind).toBe('availability');
   });
   it.each(['page', 'local'] as const)('refuses a Jira grant revoked during the final %s await without repeating provider reads', async later => {
     const f = mixedFixture(); let revoked = false; let localChecks = 0;

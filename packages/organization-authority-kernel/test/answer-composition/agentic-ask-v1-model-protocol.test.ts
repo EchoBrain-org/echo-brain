@@ -140,6 +140,8 @@ describe("agentic Ask model protocol parity", () => {
       "\"which_say\": which members of such a picked set say something (\"which of the tickets updated since Monday mention the recall\")",
       "which items say something when the question picks no set by a date, owner, status, kind or channel (\"which pages mention the recall\": search finds them)",
       "(\"is the beta on hold\", \"who owns OPS-17\", \"when was the onboarding guide created\")",
+      // One named item's own fact stays content however research found the item, so its answer states no list (F01).
+      "or a fact about one particular item, its title, dates, status, owner or lead included (\"is the beta on hold\", \"who owns OPS-17\", \"when was the onboarding guide created\"), even when you list items to find that one item.",
       "Mark a which_items need \"found\" with its inventory L id and every requested member E id.",
       "Put supporting facts unrelated to that membership in a separate content need.",
       "Give a which_say need the id of the list whose members it checks, whatever its status, and mark it \"found\" with that id and ids whose full text you have seen. Mark a content need \"found\" only with ids whose full text you have seen",
@@ -239,12 +241,18 @@ describe("agentic Ask model protocol parity", () => {
     expect([parsed.lists, parsed.sentences, parseAnswer({ sentences: [], not_found: [] }).lists]).toEqual([
       [{ id: "L2" }, { id: "L1" }, { id: "L3", where: { field: "owner", value: "Dana Lee" } }, { id: "L4" }, { id: "L5" }], [{ text: "Two pages mention BUG-412.", evidence: ["L1", "E4"] }], [],
     ]);
-    // Member intent is uncapped and takes the place of a filter; an empty selection never becomes a full inventory.
+    // Member intent is uncapped and takes the place of a filter, which is kept beside it for code to use when the ids name no
+    // member; ids none of which code can read are the filter, or no use; an empty members array stays an empty selection.
     const members = parseAnswer({ lists: [
       { id: "L1", members: ["e5", "E5", "[E7]", "L2", 9], where: { field: "owner", value: "Dana" } }, { id: "L2", members: ["x"], where: { field: "status", value: "open" } },
-      { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) },
+      { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) }, { id: "L4", members: [], where: { field: "status", value: "In Progress" } }, { id: "L5", members: [] },
     ], sentences: [], not_found: [] }).lists;
-    expect(members).toEqual([{ id: "L1", members: ["E5", "E7", "E9"] }, { id: "L2", members: [] }, { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) }]);
+    expect(members).toEqual([
+      { id: "L1", members: ["E5", "E7", "E9"], where: { field: "owner", value: "Dana" } }, { id: "L2", where: { field: "status", value: "open" } },
+      { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) }, { id: "L4", members: [], where: { field: "status", value: "In Progress" } }, { id: "L5", members: [] },
+    ]);
+    expect(parseAnswer({ lists: [{ id: "L1", members: ["x", "L2"] }, { id: "L2", members: ["E999"], where: { field: "status", value: "open" } }], sentences: [], not_found: [] }).lists)
+      .toEqual([{ id: "L2", members: ["E999"], where: { field: "status", value: "open" } }]);
     // A list may be used once in full or by a selection and once by id, in the writer's order; still at most 5 lists.
     expect(parseAnswer({ lists: [
       { id: "L1", members: ["E5"] }, { id: "L1" }, { id: "L1", where: { field: "owner", value: "Dana" } }, { id: "L1", members: ["E6"] },
@@ -545,6 +553,18 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(ANSWER_BLOCKS_PROMPT).toContain("The member id identifies what the item presents; evidence alone does not.");
     expect(ANSWER_PROMPT).toContain("If you omit a found membership need's list, code restores its requested_members");
     expect(ANSWER_BLOCKS_PROMPT).not.toContain("Never write items, rows, events or facts for a list's members");
+    // A member is shown once: by code through a selection, or by a row or point that declares it, which is then the selection.
+    // The writer's lists selection decides what code states; a v2 row or point that declares and names a member shows it once.
+    expect(ANSWER_PROMPT).toContain("Return the members that answer the question in lists: that is your selection. Preserve every requested member; code adds any your selection leaves out.");
+    expect(ANSWER_PROMPT).not.toContain("replaces research's");
+    expect(ANSWER_PROMPT).toContain("Code states the members your selection names, with their grounded names and row facts.");
+    expect(ANSWER_PROMPT).toContain("To say that no member of a list answers, give it an empty members array and put the missing fact in not_found; code still states that list's requested_members.");
+    expect(ANSWER_PROMPT).not.toContain("never present those members again yourself");
+    expect(ANSWER_BLOCKS_PROMPT).toContain("A table row or points item that presents one member must declare member as that member's E id and name it by its title or key as its list shows it; code states the selected members you do not present that way, and never repeats one you do.");
+    expect(ANSWER_BLOCKS_PROMPT).not.toMatch(/never also select a member shown that way|no other member's|are your selection of their list/u);
+    // A question about one named item is answered from its text, never with a list of the items research looked through.
+    expect(ANSWER_PROMPT).toContain("Return lists only when the question asks which or how many items exist: answer a question about one named item, such as who leads it or when it is due, with sentences citing its text, and return no list.");
+    expect(ASK_STEP_PROMPT).not.toContain("names every member");
     expect(lines[0]).toContain("\"block_catalog\" lists the blocks it can show");
     expect(Object.keys(JSON.parse(lines.at(-1)!))).toEqual(["lists", "blocks", "not_found"]);
     // An answer in blocks has no count limit, whatever the answer prompt's usual length says (ADR-0051).
@@ -553,7 +573,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     // The plain writer, which a request without the header gets: its prompt, follow-up guidance and schema, the selection
     // contract every writer shares, pinned.
     expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, answerSchema].map(value => canonicalSha256(value))).toEqual([
-      "sha256:15ac24d938855d0c79fc5e650821b9cb59447274e366863a6335964121fdf12d", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
+      "sha256:d2b59da4d440a6cb896b648ba6a19d2232e67ce1d89299d120fd4e5be8a988f6", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
       "sha256:0c8157fa3082e4ccf8db8f2bff7c6ee648d3fac7093e54dce29b0ddcfb0f01ee",
     ]);
   });

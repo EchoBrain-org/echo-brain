@@ -355,6 +355,8 @@ describe('Person evidence desk over the real approved-record route', () => {
     const result = await lagged.makeDesk().search({ query: 'launch', limit: 10 });
     expect(result.items.filter(item => item.citation.kind === 'approved_record')).toEqual([]);
     expect(result.notice).toContain('Meeting records were unavailable');
+    // Meeting records could not be searched in this request: research reads it as availability, so absence is unproven.
+    expect(result.notice_kind).toBe('availability');
 
     const corrupt = await fixture({ corrupt: true });
     await expect(corrupt.makeDesk().search({ query: 'launch', limit: 10 })).rejects.toThrow('corrupt readable index');

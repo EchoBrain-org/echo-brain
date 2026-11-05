@@ -48,11 +48,13 @@ import {
   agenticListStatementV1,
   agenticListStatementsV2,
   agenticListTableV1,
+  agenticNeedReadsListV1,
   agenticOpenReadsV1,
   agenticPlanListsV1,
   agenticWriterListMemberV1,
   agenticWriterListV1,
   parseAgenticListIdV1,
+  type AgenticListIdV1,
   type AgenticListNounFormsV1,
   type AgenticListSelectionV1,
   type AgenticOpenReadsV1,
@@ -194,6 +196,25 @@ function privateItem(item: Entry["item"]): boolean {
   return item.visibility === "only_me" || item.visibility === "approver_only";
 }
 
+/** Lowercase, each run of spaces one space: how a member's name is matched in a statement. */
+function folded(value: string): string { return value.toLowerCase().replace(/\s+/gu, " ").trim(); }
+/**
+ * Whether a statement's text names a list member as the writer saw it listed: its key, its title, or the key its title
+ * leads with ("THERM-2: Fixture work 2"), whole and in any case, never inside a longer word or number ("THERM-12").
+ */
+function namesMember(text: string, member: Pick<AgenticWriterListMemberV1, "title" | "key">): boolean {
+  const said = folded(text);
+  const leading = /^([^\s:]*\d[^\s:]*): /u.exec(member.title)?.[1];
+  return [member.key, member.title, leading].some(name => {
+    const wanted = name === undefined ? "" : folded(name);
+    if (wanted.length === 0) return false;
+    for (let at = said.indexOf(wanted); at >= 0; at = said.indexOf(wanted, at + 1)) {
+      if (!/[\p{L}\p{N}]/u.test(said[at - 1] ?? " ") && !/[\p{L}\p{N}]/u.test(said[at + wanted.length] ?? " ")) return true;
+    }
+    return false;
+  });
+}
+
 /**
  * A completed answer can report source coverage separately from a requested
  * fact gap. A limited open matters when it requested or returned a cited body;
@@ -270,12 +291,31 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const { stated, checking, unlisted } = agenticPlanListsV1(needs, id => listById.has(id));
       const checked = checkedItems(bundle, agenticOpenReadsV1(bundle.rounds, short => byShort.get(short)?.full === true));
       const rows = new Map(lists.map(list => [list.id, list.members.map(short => agenticWriterListMemberV1(byShort.get(short)!, checked.has(short), options.context.time_zone))]));
-      const requestedByList = new Map(lists.map(list => {
-        const selections = needs.filter(need => need.kind === "which_items" && need.status === "found" && need.evidence.includes(list.id))
-          .map(need => need.evidence.flatMap(short => membership.in(list.id, short) ?? []));
-        // Each L-only need keeps its declared-list fallback even when another need selects specific members of that list.
-        return [list.id, { members: [...new Set(selections.flat())], inventoryFallback: selections.some(members => members.length === 0) }] as const;
-      }));
+      // A which_items need research has not given up on, found or still open when research stopped, requests its members,
+      // as it states its lists (agenticNeedReadsListV1); an interrupted answer stays partial. Its E ids request those members
+      // of each list it cites, opened bodies mapped back to their rows. Only a need that cites no member declares its lists,
+      // each the fallback when the writer selects none of it: a need citing members never brings another list's inventory.
+      // Each L-only need keeps its declared-list fallback even when another need selects specific members of that list.
+      // Within one need, a member is requested once: of the first list it cites, in its own order, that holds the member.
+      const listNeeds = needs.flatMap(need => {
+        if (need.kind !== "which_items" || !agenticNeedReadsListV1(need)) return [];
+        const cited = [...new Set(need.evidence)].flatMap(id => listById.has(id as AgenticListIdV1) ? [id as AgenticListIdV1] : [])
+          .map(id => ({ id, members: [...new Set(need.evidence.flatMap(short => membership.in(id, short) ?? []))] }));
+        return [{ cited, declares: cited.every(list => list.members.length === 0) }];
+      });
+      const requestedByList = new Map(lists.map(list => [list.id, { members: [] as string[], inventoryFallback: false }]));
+      for (const need of listNeeds) {
+        const placed = new Set<string>();
+        for (const { id, members } of need.cited) {
+          const request = requestedByList.get(id)!;
+          if (need.declares) request.inventoryFallback = true;
+          for (const member of members) {
+            if (placed.has(member)) continue;
+            placed.add(member);
+            if (!request.members.includes(member)) request.members.push(member);
+          }
+        }
+      }
       const viewOf = (list: (typeof lists)[number], cap?: number) => ({ ...agenticWriterListV1(list, rows.get(list.id)!, stated.includes(list.id), cap),
         ...(requestedByList.get(list.id)!.members.length === 0 ? {} : { requested_members: requestedByList.get(list.id)!.members }),
       });
@@ -357,11 +397,21 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       /** A sentence resting on list rows or list ids: it cites one the writer saw, and no evidence text it read. */
       const restsOnRows = (sentence: AnswerSentence) => !sentence.evidence.some(short => textGiven.has(short)) &&
         sentence.evidence.some(id => shownRows.has(id) || writerById.has(parseAgenticListIdV1(id) ?? "L0"));
-      /** Keep selection intent, including an empty selection, while removing ids outside its inventory. */
+      /**
+       * Each selection by id as the list members it names: an opened body or section is the member it is part of, as research
+       * and the bindings read it, and an id outside the list names none. One that names no member is its where, when it
+       * has one, and otherwise no selection, except an explicit empty one in a reply that says what it did not find: that
+       * says no member of the list answers.
+       */
       const withMembers = (answer: Answer): Answer => Object.freeze({ ...answer, lists: Object.freeze(answer.lists.flatMap(use => {
-        const kept = use.members?.filter(id => listById.get(use.id)?.members.includes(id) === true);
-        if (kept !== undefined && kept.length < use.members!.length) observeCoreModelCorrectionV1("writer_unknown_id_dropped", use.members!.length - kept.length);
-        return kept === undefined ? [use] : [Object.freeze({ id: use.id, members: Object.freeze(kept) })];
+        if (use.members === undefined) return [use];
+        const named = use.members.map(id => membership.in(use.id, id));
+        const unknown = named.filter(member => member === undefined).length;
+        if (unknown > 0) observeCoreModelCorrectionV1("writer_unknown_id_dropped", unknown);
+        const members = [...new Set(named.flatMap(member => member ?? []))];
+        if (members.length > 0) return [Object.freeze({ id: use.id, members: Object.freeze(members) })];
+        if (use.where !== undefined) return [Object.freeze({ id: use.id, where: use.where })];
+        return use.members.length === 0 && answer.not_found.length > 0 ? [Object.freeze({ id: use.id, members: Object.freeze([]) })] : [];
       })) });
       // A sentence resting on rows or list ids takes the writer's one repair when a repair can still run; the repaired
       // reply, or a first reply no repair can follow, is kept, and code leaves such a sentence out.
@@ -430,7 +480,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // ---- statements (W2, W3): each list's use that says which items exist, then its use by id ----
         /** One statement of a list; `which` when it says which items exist (a use in full or by `where`), never for a use by id alone. */
         type Naming = { readonly list: AgenticWriterListV1; readonly noun: AgenticListNounFormsV1; readonly selected: readonly AgenticWriterListMemberV1[]; readonly which: boolean; readonly where?: AgenticListSelectionV1; readonly by_id: boolean };
-        const uses = [...(reply?.lists ?? [])];
+        // Only a list the writer saw can carry its selection; a use of another is counted as unknown below.
+        const uses = (reply?.lists ?? []).filter(use => writerById.has(use.id));
         /** What the lists add to the gap, in order; `partial` when its rule makes the part partial whatever it names (W1, W2, W3). */
         const listGaps: { readonly text: string; readonly partial: boolean }[] = [];
         const writerGaps: { readonly text: string; readonly partial: boolean }[] = [];
@@ -484,17 +535,21 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         };
         /** How a v2 item reads: one whose sentence carries code's note reads as text when its block shows other fields than its sentence, so the note shows. */
         const itemShape = (item: AnswerItem, noted: boolean): AnswerItem => !noted || item.kind === "answer" || item.kind === "text" || item.kind === "point" ? item : textItem(item);
-        type Laid = { text: string; shorts: readonly string[]; read?: readonly string[]; shape: DraftShape; item?: AnswerItem; member?: string };
+        /** A statement as code lays it out; a writer's item also keeps the ids it cites that the writer saw, text or rows, and the member it declares. */
+        type Laid = { text: string; shorts: readonly string[]; read?: readonly string[]; cites?: readonly string[]; shape: DraftShape; item?: AnswerItem; member?: string };
         const writerSentences: Laid[] = sentences.flatMap(given => {
           // Only a v2 reply's sentences are items.
           const sentence = verified(given);
           const kept = drafted(sentence);
-          return kept === undefined ? [] : [{ text: kept.text, shorts: kept.shorts, read: kept.read, shape: PROSE,
+          return kept === undefined ? [] : [{ text: kept.text, shorts: kept.shorts, read: kept.read, cites: sentence.evidence.filter(id => textGiven.has(id) || shownRows.has(id)), shape: PROSE,
             ...(sentence.item === undefined ? {} : { item: itemShape(sentence.item, kept.noted) }), ...(sentence.member === undefined ? {} : { member: sentence.member }) }];
         });
 
         const statementKeyOf = (sentence: Laid) => JSON.stringify([sentence.text, [...new Set(sentence.shorts.map(keyOf))].sort(), sentence.shorts.some(short => privateItem(byShort.get(short)!.item))]);
-        // Only retained, grounded structured items can present a member. A citation alone is not a declaration.
+        // Only retained, grounded structured items can present a member. A citation alone is not a declaration. An item
+        // presents member M of a list when the member it declares is M (an opened body or section is the member it is part
+        // of), it cites one of M's ids, and its text names M as the writer saw M listed. It may cite other members too, as a
+        // comparison or a dependency does; an item about another member names that one, not M.
         // Blocks have no count bound; an oversized whole answer is recomposed without these bindings before its
         // legacy presentation bounds apply, so a dropped item can never suppress the research member floor.
         const presented = new Map<string, Set<string>>();
@@ -505,34 +560,53 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           presentationKeys.add(key);
           if (sentence.member === undefined || (sentence.item?.kind !== "row" && sentence.item?.kind !== "point")) continue;
           for (const list of lists) {
-            if (!list.members.includes(sentence.member) || !sentence.read?.some(short => membership.in(list.id, short) === sentence.member)) continue;
+            const member = membership.in(list.id, sentence.member);
+            const row = member === undefined ? undefined : rows.get(list.id)!.find(value => value.id === member);
+            if (row === undefined || !(sentence.cites ?? []).some(short => membership.in(list.id, short) === member) || !namesMember(sentence.text, row)) continue;
             const members = presented.get(list.id) ?? new Set<string>();
-            members.add(sentence.member); presented.set(list.id, members);
+            members.add(row.id); presented.set(list.id, members);
           }
         }
-        // Research's found which_items needs preserve the requested member set. Their L ids are inventories;
-        // their E ids identify the requested members, including opened bodies mapped back to listed rows.
-        // If a found need declares only L and the writer supplies no selection, that declared list is the fallback.
-        // Inventories unrelated to a found membership need never become answers merely because research read them.
+        // Research's which_items needs, found or still open when research stopped, preserve the requested member set. Their
+        // L ids are inventories; their E ids identify the requested members, including opened bodies mapped back to listed rows.
+        // A stated list shows the writer's valid selection, a use that names a member or carries a where, together with the
+        // requested members it leaves out. If such a need declares only L and the writer selects none of that list, that
+        // declared list is the fallback. A selection that names no member, given empty or left empty of ids outside the
+        // list, is no selection, except an explicit empty one beside not_found: that says no member answers, which holds
+        // only for a list research requested no member of, since its requested members are still stated.
+        // Bindings never narrow a selection: a member the writer presents through a bound row or point is only not stated
+        // again (naming, below). Inventories unrelated to a membership need never become answers merely because research
+        // read them.
+        // Within one need, each member it requests, by id or by declaring its lists, is stated once: where the writer
+        // selected it in a list the need cites, otherwise under the first of those lists, in the need's order, that holds
+        // it. Members different needs request keep a statement under each need's list; the writer's selections render
+        // where the writer put them.
+        const selectedIn = (id: AgenticListIdV1) => uses.filter(use => use.id === id)
+          .flatMap(use => use.members ?? agenticListSelectV1(rows.get(id)!, use.where, views.get(id)!.filter.time_zone).map(member => member.id));
+        const added = new Map<string, readonly string[]>();
+        const whole = new Set<string>();
+        for (const need of listNeeds) {
+          const done = new Set(need.cited.flatMap(({ id }) => selectedIn(id)));
+          for (const { id, members } of need.cited) {
+            // The declared list, when the writer selects none of it.
+            const declared = need.declares && !uses.some(use => use.id === id);
+            const wanted = declared ? rows.get(id)!.map(member => member.id) : members;
+            const fresh = wanted.filter(member => !done.has(member));
+            for (const member of fresh) done.add(member);
+            if (declared && fresh.length === wanted.length) whole.add(id);
+            else added.set(id, [...new Set([...(added.get(id) ?? []), ...fresh])]);
+          }
+        }
         const restored = new Set<string>();
         for (const id of stated) {
-          const list = views.get(id)!;
-          const request = requestedByList.get(id)!;
-          const requested = new Set(request.members);
-          const given = uses.filter(use => use.id === id);
-          if (given.length === 0 && request.inventoryFallback) {
-            if (!presented.get(id)?.size) { uses.push({ id }); restored.add(id); continue; }
-            for (const member of rows.get(id)!) requested.add(member.id);
-          }
-          const selected = new Set(given.flatMap(use => use.members ?? agenticListSelectV1(rows.get(id)!, use.where, list.filter.time_zone).map(member => member.id)));
-          const missing = [...requested].filter(member => !selected.has(member) && !presented.get(id)?.has(member));
-          if (missing.length > 0) {
-            const at = uses.findIndex(use => use.id === id && use.members !== undefined);
-            if (given.length === 0 && missing.length === list.count) uses.push({ id });
-            else if (at < 0) uses.push({ id, members: missing });
-            else uses[at] = { id, members: [...new Set([...uses[at]!.members!, ...missing])] };
-            restored.add(id);
-          }
+          if (whole.has(id)) { uses.push({ id }); restored.add(id); continue; }
+          const missing = added.get(id) ?? [];
+          if (missing.length === 0) continue;
+          const at = uses.findIndex(use => use.id === id && use.members !== undefined);
+          if (!uses.some(use => use.id === id) && missing.length === views.get(id)!.count) uses.push({ id });
+          else if (at < 0) uses.push({ id, members: missing });
+          else uses[at] = { id, members: [...new Set([...uses[at]!.members!, ...missing])] };
+          restored.add(id);
         }
         const usedLists = [...new Set(uses.map(use => use.id).filter(id => writerById.has(id) || restored.has(id)))].map(id => views.get(id)!);
         // A list whose date filter could not test some items (research tool contract v1) supports neither "none" nor "all" of
@@ -550,6 +624,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         if (unseen > 0) correct("writer_unknown_id_dropped", unseen);
         const naming: Naming[] = usedLists.flatMap(list => {
           const id = list.id, all = rows.get(id)!, noun = nounOf(list);
+          // Code never states again a member the writer presents through a bound row or point; it states the rest of the selection.
+          const shown = presented.get(id);
+          const unshown = (members: readonly AgenticWriterListMemberV1[]) => shown === undefined ? members : members.filter(member => !shown.has(member.id));
           const byId = uses.find(use => use.id === id && use.members !== undefined);
           const picked = byId === undefined ? undefined : all.filter(member => byId.members!.includes(member.id));
           const given = uses.find(use => use.id === id && use.members === undefined);
@@ -557,8 +634,13 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const chosen = given === undefined ? undefined : agenticListSelectV1(all, where, list.filter.time_zone);
           // A use that says which items exist of a list that is not complete reads "at least", whatever it selects, and the part says so.
           if ((chosen !== undefined || (picked !== undefined && stated.includes(id))) && !list.complete) listGaps.push({ text: listEndGap(noun.plural), partial: true });
+          // A use that says which items exist names them all; with some presented, it names the rest by id.
+          const rest = (selected: readonly AgenticWriterListMemberV1[], which: Omit<Naming, "list" | "noun" | "selected">): Naming[] => {
+            const left = unshown(selected);
+            return left.length === 0 ? [] : left.length === selected.length ? [{ list, noun, selected, ...which }] : [{ list, noun, selected: left, which: false, by_id: true }];
+          };
           // Two uses that select the same members are one statement, named by id, with the lead of the one that says which items exist.
-          if (chosen !== undefined && chosen.length > 0 && picked !== undefined && chosen.length === picked.length && chosen.every(member => picked.includes(member))) return [{ list, noun, selected: picked, which: true, ...(where === undefined ? {} : { where }), by_id: true }];
+          if (chosen !== undefined && chosen.length > 0 && picked !== undefined && chosen.length === picked.length && chosen.every(member => picked.includes(member))) return rest(picked, { which: true, ...(where === undefined ? {} : { where }), by_id: true });
           // A selection that names nothing is its not_found phrase (K); an empty list keeps the plain not-found answer.
           if (chosen?.length === 0 && where !== undefined) {
             const verified = agenticListSelectionVerifiedV1(all, where, list.filter.time_zone);
@@ -567,8 +649,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
               confirmed: list.complete && !list.unchecked?.count && verified });
           }
           return [
-            ...(chosen === undefined || chosen.length === 0 ? [] : [{ list, noun, selected: chosen, which: true, ...(where === undefined ? {} : { where }), by_id: false }]),
-            ...(picked === undefined || picked.length === 0 ? [] : [{ list, noun, selected: picked, which: stated.includes(id) && picked.length === all.length, by_id: true }]),
+            ...(chosen === undefined || chosen.length === 0 ? [] : rest(chosen, { which: true, ...(where === undefined ? {} : { where }), by_id: false })),
+            ...(picked === undefined || picked.length === 0 ? [] : rest(picked, { which: stated.includes(id) && picked.length === all.length, by_id: true })),
           ];
         });
         // Legacy answers share at most 25 names (W6). Blocks keep every member across bounded statements instead.
@@ -667,8 +749,17 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             : { status: "not_found", statements: [], gap: withGaps(gapText ?? (unsupportedAction && needs.length === 0 ? undefined : uncheckedEmpty ? UNCHECKED_EMPTY_GAP : NOT_FOUND_GAP))! };
         }
         const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
-        // A writer's missing text has no per-need provenance: an unchecked declared content list cannot prove absence.
-        const unconfirmedContent = unchecked.length > 0 || checking.some(id => (views.get(id)!.unchecked?.count ?? 0) > 0);
+        // A writer's missing text has no per-need provenance, so incomplete coverage of a list a need still asks about leaves
+        // it unproven, as it does a where selection over such a list: an unchecked declared content list, or, for a which_items
+        // need not found (not_found or open), a list it cites, or every list when it cites none, that was not read to its end
+        // or whose filter could not test every item. A found need's list reads "at least" and never blocks it.
+        const coverageIncomplete = (list: (typeof lists)[number]) => !list.complete || (list.unchecked?.count ?? 0) > 0;
+        const unconfirmedAbsence = unchecked.length > 0 || checking.some(id => (views.get(id)!.unchecked?.count ?? 0) > 0)
+          || needs.some(need => {
+            if (need.kind !== "which_items" || need.status === "found") return false;
+            const cited = need.evidence.flatMap(id => listById.get(parseAgenticListIdV1(id) ?? "L0") ?? []);
+            return (cited.length === 0 ? lists : cited).some(coverageIncomplete);
+          });
         // What the person is told about the filters of every list the answer uses, and of those which_say needs check (W7).
         const filterNotices = [...new Set([...usedLists, ...checking.map(id => views.get(id)!)])].flatMap(list => agenticListFilterNoticeV1(list, nounOf(list).plural) ?? []);
         // A completed answer can retain source coverage as a notice. A stop
@@ -678,11 +769,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           ...(coverageLimited ? [LIMITED_COVERAGE_GAP] : []),
           ...(researchIncomplete && anyEvidence && draft.gap === undefined ? [INCOMPLETE_SEARCH_NOTICE] : []),
         ];
-        const outcome = researchIncomplete ? "partial" as const : !anyEvidence ? (incomplete || unsupportedAction || unconfirmedContent || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
+        const outcome = researchIncomplete ? "partial" as const : !anyEvidence ? (incomplete || unsupportedAction || unconfirmedAbsence || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
         // Preserve reason provenance before diagnostic gap strings are combined. Desktop actions never classify prose.
-        const confirmedMissing = [...(unconfirmedContent || selectionNotFound.some(gap => !gap.confirmed) ? [] : reply?.not_found ?? []), ...selectionNotFound.filter(gap => gap.confirmed).map(gap => gap.text)];
+        // Only finished research confirms the writer's missing text: an interrupted search keeps its retry reason alone.
+        const confirmedMissing = [...(researchIncomplete || unconfirmedAbsence || selectionNotFound.some(gap => !gap.confirmed) ? [] : reply?.not_found ?? []), ...selectionNotFound.filter(gap => gap.confirmed).map(gap => gap.text)];
         const missing = confirmedMissing.length > 0 ? boundedBytes(cleanLine(`Not found: ${confirmedMissing.join("; ")}.`, 600), 2 * 1024)
-          : outcome === "not_found" || (unsupportedAction && !anyEvidence && !incomplete && !unconfirmedContent && !listGaps.some(gap => gap.partial)
+          : outcome === "not_found" || (unsupportedAction && !anyEvidence && !incomplete && !unconfirmedAbsence && !listGaps.some(gap => gap.partial)
             && needs.length > 0 && needs.every(need => need.status === "not_found")) ? NOT_FOUND_GAP : undefined;
         const gapDetails = { ...(unsupportedAction ? { unsupported_action: true as const } : {}),
           ...(researchIncomplete ? { interrupted: true as const } : {}), ...(missing === undefined ? {} : { not_found: missing }) };
