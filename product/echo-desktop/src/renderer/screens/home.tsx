@@ -236,7 +236,7 @@ function NeedsYou({ state, rows }: { state: State; rows: readonly NeedRow[] }) {
   if (rows.length === 0) {
     return (
       <section class="needs-section" data-testid="needs" aria-busy={busy(home)}>
-        <div class="home-clear" data-testid="home-clear">{home && !home.loading && 'Nothing needs you'}</div>
+        <div class="home-clear" data-testid="home-clear">{!home || home.loading ? 'Loading what needs you…' : 'Nothing needs you'}</div>
       </section>
     );
   }

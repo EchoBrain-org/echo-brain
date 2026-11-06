@@ -55,6 +55,25 @@ test('signing in lands on Home, and signing in again as the same person keeps th
   await expect(page.getByTestId('compose-body')).toHaveValue('Half a thought');
 });
 
+test('Home loads when returning from a browser sign-in that completed in the background', async () => {
+  run = await launch('signed-out', { 'hold-signin': '' });
+  const { page, app, home } = run;
+  const homeReads = () => run.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'home' && call.body.read === 'rows');
+  await expect(page.getByTestId('signed-out')).toBeVisible();
+  await chooseFromAccountMenu(run, page.getByTestId('signin-open'), 'Sign in with Google…');
+  await page.getByTestId('signin-url').fill('https://authority.example');
+  await page.getByTestId('signin-button').click();
+  await emit(app, 'echo-test:conceal');
+  rmSync(join(home, 'hold-signin'));
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  // Projects finish independently while Home is still deferred behind the browser.
+  expect(homeReads()).toHaveLength(0);
+  await emit(app, 'echo-test:resume');
+  await expect.poll(() => homeReads().length).toBe(1);
+  await expect(page.getByTestId('needs')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.getByTestId('home-clear')).toHaveText('Nothing needs you');
+});
+
 test('a session left under a refresh claim by the weekly expiry shows sign-in at once, and signing in works', async () => {
   run = await launch('expired-claim');
   await expect(run.page.getByTestId('signed-out')).toBeVisible({ timeout: 2500 });
