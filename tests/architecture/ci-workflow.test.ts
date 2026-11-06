@@ -95,7 +95,9 @@ describe("CI workflow", () => {
     // legs first build what their proofs import, as npm run check did. Adding
     // a step to npm run check fails here until CI runs it too.
     const scripts = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")).scripts;
-    const commands = (scripts.check as string).split(" && ").map((command) => command.replace(/^(tsc|vitest) /, "npx $1 "));
+    const localSteps = (scripts.check as string).split(" && ");
+    expect(localSteps.shift()).toBe("umask 022");
+    const commands = localSteps.map((command) => command.replace(/^(tsc|vitest) /, "npx $1 "));
     expect(commands.at(-1)).toBe("npx vitest run --config vitest.config.ts");
     expect(legCommands("static").join(" && ")).toContain(commands.slice(0, -1).join(" && "));
     expect(legCommands("static")[0]).toMatch(/^sudo -n python3 -B tests\/fixtures\/staging-release-posix-proof\.py /);

@@ -314,7 +314,7 @@ function validationTime(manifest, now, allowExpired) {
   return allowExpired ? Math.min(now, expiresAt - 1) : now;
 }
 
-export function validatePreparedClientUpdateFeed({ prepared, authorizationPath, now = Date.now(), allowExpired = false }) {
+export function inspectPreparedClientUpdateFeed({ prepared, now = Date.now(), allowExpired = false }) {
   const config = parseUpdateConfig(json(join(prepared, 'bootstrap-config.json')));
   if (config.installation !== 'cli-kit') fail('publisher_adapter_unavailable');
   const payload = read(join(prepared, 'manifest.json'));
@@ -324,11 +324,6 @@ export function validatePreparedClientUpdateFeed({ prepared, authorizationPath, 
   if (manifest.sequence < config.minimum_sequence) fail('stale_metadata');
   if (manifest.artifacts.some(a => new URL(a.url).origin !== new URL(config.feed_url).origin)) fail('wrong_artifact_origin');
   const release = readCleanV1Release(join(prepared, 'release.json'));
-  const approval = json(authorizationPath);
-  if (approval.kind !== 'echo-staging-release-founder-authorization-v1' ||
-      approval.release_sha256 !== manifest.release_sha256 ||
-      approval.person_client_sha256 !== release.person_client.artifact_sha256 ||
-      ['slack_approved', 'person_records_passed', 'person_ask_passed', 'release_authorized'].some(k => approval[k] !== true)) fail('exact_release_authorization_required');
   if (updateDigest(read(join(prepared, 'release.json'))) !== manifest.release_sha256 ||
       release.release_id !== manifest.release_id || release.source_sha !== manifest.source_sha ||
       release.person_client.version !== manifest.product_version) fail('release_mismatch');
@@ -344,6 +339,17 @@ export function validatePreparedClientUpdateFeed({ prepared, authorizationPath, 
   });
   validateArtifacts(entries, prepared, manifest, release, config);
   return { config, manifest, payload, release };
+}
+
+export function validatePreparedClientUpdateFeed({ prepared, authorizationPath, now = Date.now(), allowExpired = false }) {
+  const validated = inspectPreparedClientUpdateFeed({ prepared, now, allowExpired });
+  const { manifest, release } = validated;
+  const approval = json(authorizationPath);
+  if (approval.kind !== 'echo-staging-release-founder-authorization-v1' ||
+      approval.release_sha256 !== manifest.release_sha256 ||
+      approval.person_client_sha256 !== release.person_client.artifact_sha256 ||
+      ['slack_approved', 'person_records_passed', 'person_ask_passed', 'release_authorized'].some(k => approval[k] !== true)) fail('exact_release_authorization_required');
+  return validated;
 }
 
 export function validateSealedClientUpdateFeed({ prepared, authorizationPath, now = Date.now(), allowExpired = false }) {

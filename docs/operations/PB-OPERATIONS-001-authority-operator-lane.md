@@ -54,6 +54,14 @@ the printed handoff and never create an app or grant consent on the host.
 
 ## Coordinated server and client release
 
+Use the existing release CLI's read-only `preflight` before builds and
+`round-status --round <private-round.json>` when resuming. The
+[preparation and evidence procedure](../../deploy/release/README.md#preparation-and-resumable-evidence)
+owns their inputs. They report local prerequisites and saved evidence; they
+never authorize a write or replace fresh runtime checks. Prepare the server
+and all four client artifacts for one exact final review, and retain separate
+native clients on the prior published version for update proof.
+
 For a release that changes both the Authority and its Person clients, use the
 [coordinated server and client release guide](../../deploy/release/README.md#coordinated-server-and-client-release).
 It coordinates the existing server and feed CLIs; it is not a new orchestrator

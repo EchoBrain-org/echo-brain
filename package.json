@@ -73,7 +73,8 @@
     "eval:research-loop": "node tools/evals/research-loop/cli.mjs",
     "test:research-loop-eval": "node --test tools/evals/research-loop/test/*.test.mjs",
     "capacity:checkpoint": "npm run build:workspaces && node tools/evals/authority-core/core-checkpoint.mjs",
-    "check": "npm run check:architecture-boundaries && npm run check:docs && npm run lint && npm run build && tsc --noEmit -p tsconfig.json && vitest run --config vitest.config.ts"
+    "check": "umask 022 && npm run check:architecture-boundaries && npm run check:docs && npm run lint && npm run build && tsc --noEmit -p tsconfig.json && vitest run --config vitest.config.ts",
+    "test:release-regressions": "node tools/release-regressions.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.11",

@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { executeStagingRelease, planStagingRelease, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
+import { verifyAcceptedStagingRelease, executeStagingRelease, planStagingRelease, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
 import type { StagingReleasePlanOptions } from '../../tools/authority-staging-release.mjs';
 import { cleanReleaseRecord, cleanRuntimeProfile, deployRuntimeProfileFiles } from '../support/clean-v1-release.js';
 import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
@@ -439,5 +439,20 @@ describe('bounded staging release operator', () => {
     expect(rejected.status).not.toBe(0);
     expect(rejected.stdout).toBe('');
     expect(f.state.submissions).toBe(0);
+  });
+});
+
+
+describe('accepted-server publication evidence', () => {
+  it('requires the exact accepted release, completed status and a recent observation', () => {
+    const f = fixture();
+    writeFileSync(f.options.acceptedRelease, readFileSync(f.options.release), { mode: 0o600 });
+    planStagingRelease(f.options, f.dependencies);
+    executeStagingRelease(f.options.output, f.dependencies);
+    const expected = { release_id: f.request().candidate.release_id, release_sha256: f.request().candidate.sha256 };
+    expect(verifyAcceptedStagingRelease(f.options.output, expected, f.dependencies).state).toBe('succeeded');
+    expect(() => verifyAcceptedStagingRelease(f.options.output, { ...expected, release_sha256: 'f'.repeat(64) }, f.dependencies)).toThrow('accepted_server_status_mismatch');
+    expect(() => verifyAcceptedStagingRelease(f.options.output, expected, { ...f.dependencies, now: () => f.dependencies.now() + 300001 })).toThrow('accepted_server_status_stale');
+    expect(() => verifyAcceptedStagingRelease(f.options.output, expected, { ...f.dependencies, now: () => f.dependencies.now() - 1 })).toThrow('accepted_server_status_stale');
   });
 });

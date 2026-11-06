@@ -10,9 +10,11 @@ export interface ClientUpdatePublicationSummary {
   verified_objects: number;
   object_count: number;
   metadata_fresh: boolean;
+  last_failure: { code: string; recovery: 'status' | 'replace-status' } | null;
 }
 export interface ClientUpdatePublicationDependencies {
   /** timeout is the call's size-scaled bound in milliseconds; a PUT passes its own. */
+  verifyServer?: (path: string | undefined, expected: ClientUpdateManifest, dependencies: { now: () => number }) => unknown;
   aws?: (args: string[], options?: { timeout?: number }) => any;
   runtime?: () => string;
   now?: () => number;
@@ -25,10 +27,10 @@ export interface ClientUpdatePublicationDependencies {
   };
 }
 export function planClientUpdatePublish(options: { hostingReceipt: string; prepared: string; authorization: string; output: string }, dependencies?: ClientUpdatePublicationDependencies): Promise<ClientUpdatePublicationSummary>;
-export function executeClientUpdatePublish(options: { receipt: string; approveManifest: string }, dependencies?: ClientUpdatePublicationDependencies): Promise<ClientUpdatePublicationSummary>;
+export function executeClientUpdatePublish(options: { receipt: string; approveManifest: string; serverStatus?: string }, dependencies?: ClientUpdatePublicationDependencies): Promise<ClientUpdatePublicationSummary>;
 export function statusClientUpdatePublish(options: { receipt: string }, dependencies?: ClientUpdatePublicationDependencies): Promise<ClientUpdatePublicationSummary>;
 export function planClientUpdateReplacement(options: { hostingReceipt: string; prepared: string; authorization: string; expectedPredecessor: string; output: string }, dependencies?: ClientUpdatePublicationDependencies): Promise<ClientUpdatePublicationSummary>;
-export function executeClientUpdateReplacement(options: { receipt: string; approveManifest: string }, dependencies?: ClientUpdatePublicationDependencies): Promise<ClientUpdatePublicationSummary>;
+export function executeClientUpdateReplacement(options: { receipt: string; approveManifest: string; serverStatus?: string }, dependencies?: ClientUpdatePublicationDependencies): Promise<ClientUpdatePublicationSummary>;
 export function statusClientUpdateReplacement(options: { receipt: string }, dependencies?: ClientUpdatePublicationDependencies): Promise<ClientUpdatePublicationSummary>;
 
 export function isAbsentClientUpdateHead(args: readonly string[], stderr: unknown): boolean;

@@ -46,6 +46,7 @@ production/client-live deployment or change their approval boundaries.
 | --- | --- |
 | Prepared | Exact candidate artifacts and unsigned feed inputs exist for review. Nothing has been accepted or published. |
 | Staged | The candidate is running on the staging host. The prior record remains accepted. Existing clients already reach the candidate. |
+| Promoted | The promotion action succeeded, but no later host status has confirmed the candidate as accepted. Take a fresh status before publishing. |
 | Server accepted | Promotion completed and a fresh host status confirms the candidate as accepted. The client feed may still advertise the prior release. |
 | Client published | The signed feed and all four artifacts (both CLI kits and both desktop packages) are verified and currently installable. This does not prove a client has updated. |
 | Client verified | Representative native Mac and Linux CLI seats activated the published release and passed authenticated read and cited-Ask checks. Representative Mac and Linux desktops passed the [desktop update checks](../client-updates/README.md#verify-the-desktop-update). |
@@ -53,6 +54,122 @@ production/client-live deployment or change their approval boundaries.
 Report a coordinated release complete only after the last phase, including the
 desktop update checks. State the environment and seats actually verified;
 representative acceptance is not proof that every enrolled seat updated.
+
+### Preparation and resumable evidence
+
+Run the local check before expensive builds:
+
+```sh
+npm run authority:staging-release -- preflight --target darwin
+# On the Linux package builder:
+npm run authority:staging-release -- preflight --target linux
+```
+
+This read-only command reports the pinned Node/npm versions, clean checkout,
+archive/package tools, test file-creation mask and a 10 GiB build-space floor.
+It does not sign in, contact AWS, start Docker, or claim remote readiness.
+Check the live prerequisites through the operator playbook: existing SSO and
+registry access, accepted host/tooling, source connections, runtime tracing,
+and representative native Mac/Linux seats. In particular, confirm the first
+required canary Ask exported a complete trace before running the three broader
+questions. A working local LangSmith connection alone is not exporter proof.
+After exporting the canary runs and saving the candidate's raw tracing-status
+object through the existing read-only observability lane, run:
+
+```sh
+npm run authority:staging-release -- trace-preflight \
+  --release /absolute/private/release.json \
+  --runs /absolute/private/canary-langsmith-runs.json \
+  --export-status /absolute/private/tracing-status.json
+```
+
+It requires a complete trace from the exact candidate in the past 15 minutes,
+an enabled exporter with a positive export count, and zero failed, dropped,
+incomplete or pending exports. Failure exits non-zero before the full Ask round.
+These inputs are saved observations; obtain them freshly from that candidate.
+Reuse the user's persistent tracing selection when valid; a fresh-state reset
+still requires the human setup lane. Prepare short-lived onboarding transfers
+and invitations when the human is ready to consume them.
+
+`deploy/release/linux-builder.Dockerfile` supplies the missing archive and
+packaging dependencies in one standard Node 22.22.1 environment. Build it with
+`docker build --platform linux/amd64 -f deploy/release/linux-builder.Dockerfile -t echo-linux-builder .`.
+Use a writable clean checkout at the exact release SHA inside the container,
+with private inputs and outputs outside that checkout; do not share a live
+worktree's `node_modules` or `.git` indirection across machines. Its default
+command runs the Linux preflight. This is package preparation only; emulation
+on a Mac does not prove native Linux activation. The base version is pinned;
+OS dependency updates still require validating the resulting build environment.
+
+`npm run check` sets the ordinary `022` creation mask in its own process before
+running the unchanged checks, preventing private evidence-shell settings from
+breaking permission fixtures. Evidence files continue to require explicit
+`0600` permissions. Before staging, `npm run test:release-regressions` runs the
+existing publisher, session coordination, renderer, research completion and
+trace-evaluator regressions. It is a focused development check, not a replacement
+for the required full local check or CI. Preserve and reuse valid results for
+the same candidate rather than running both repeatedly.
+
+Keep a private `round.json` containing references instead of handwritten state
+flags. All paths are absolute; the descriptor and evidence JSON files are
+owner-only (`0600`). Null means evidence has not been produced:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "echo-release-round-v1",
+  "release": "/absolute/private/release.json",
+  "prepared": null,
+  "server_receipts": [],
+  "publication_receipt": null,
+  "predecessor_receipt": null,
+  "research_check": null,
+  "client_proofs": []
+}
+```
+
+Set `prepared` to the unsigned prepared-feed directory, `research_check` to the
+candidate's `release-check.json`, and `publication_receipt` to its existing
+publisher receipt. For a feed replacement, set `predecessor_receipt` to the
+last succeeded publication receipt; its exact feed digest enters the combined
+review without guessing from the mutable public endpoint. Add this candidate's server action receipts in execution
+order, including any unfinished operation. Do not include receipts for older
+candidates or abandoned unexecuted plans. The existing commands continue to own
+and update those receipts; this descriptor creates no authorization.
+
+```sh
+npm run authority:staging-release -- round-status --round /absolute/private/round.json
+```
+
+The command validates referenced server receipts, exact release/feed bindings,
+prepared artifacts, three research cases and client evidence. It derives the
+recorded phase, missing work and combined-review manifest digest/targets.
+Unknown state flags, mixed targets, wrong candidates and changed evidence are
+rejected. It performs no AWS calls or mutations. `saved_evidence_only` is
+intentional: run the required fresh host and feed status commands before
+reporting a release complete. Research coverage is reported separately from
+answer quality; passing those three checks does not establish correct filtering,
+historical completion, attribution or session continuity. Review the relevant
+live outcomes after the offline regressions. Deliberate provider-concurrency
+stress is a separate check with its own result; a sequential retry is not a
+passing concurrency result.
+
+Reserve updater-capable native Mac and Linux seats on release A before installing
+candidate clients elsewhere. For each of the four targets, an operator may add a
+content-free `echo-release-client-proof-v1` attestation to `client_proofs`. It
+contains `target` (`macos-kit`, `linux-kit`, `macos-app`, or `linux-deb`), `seat`,
+`native: true`, `release_id`, `source_sha`, `artifact_sha256`,
+`baseline_source_sha`, `method: "signed-feed-update"`, and `checks`.
+Each check has `passed: true`, the absolute `path` of the inspected evidence,
+and its `sha256`. The CLI checks are `baseline`, `available_without_activation`,
+`activation`, `authenticated_read`, and `cited_ask`. Desktop checks are
+`baseline`, `in_app_update`, `installed_identity`, and `authenticated_read`;
+Linux desktop also requires `package_installed`.
+These are explicit operator attestations with immutable evidence bindings, not
+independent UI verification. A manual reinstall after an updater failure does
+not qualify. First enrollment remains the distinct human procedure in the feed
+guide and is not counted as an A-to-B proof by this command. It never claims
+fleet-wide delivery or invents approval.
 
 ### Prepare the transition before staging
 
@@ -146,9 +263,12 @@ digest; do not silently substitute it under the prior approval.
    and inspect its own `status`/`replace-status`. Require `state: "succeeded"`,
    `metadata_fresh: true`, and the reviewed release, manifest and all four
    targets.
-   The feed validator verifies authorization and artifact identity but does
-   **not** inspect the host's accepted release. Promotion-before-publication is
-   an operator requirement, not a cross-service guard implemented by the CLI.
+   Pass the fresh status receipt as the publisher's `--server-status`. The
+   publisher validates that it observed this exact release as accepted within
+   five minutes of the run starting, before writing and again before making
+   the feed visible.
+   This is a receipt guard, not an atomic server/feed transaction; one operator
+   still controls the slot.
 3. On representative native Mac and Linux seats still running release A, verify
    the availability notice while the Person command remains on A, then run
    `echo-brain update` explicitly to install B through the configured signed

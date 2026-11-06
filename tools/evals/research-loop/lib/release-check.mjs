@@ -11,7 +11,14 @@ import { reachChecks, traceCounts } from "./reach.mjs";
  */
 
 const metadataOf = run => run?.metadata ?? run?.extra?.metadata ?? {};
-const startOf = run => run?.start_time ?? run?.started_at ?? null;
+// LangSmith exports UTC timestamps without an offset. Never let the operator's
+// timezone change the calendar day or the ordering of equivalent instants.
+const startOf = run => {
+  const raw = run?.start_time ?? run?.started_at;
+  if (typeof raw !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$/u.test(raw)) return null;
+  const at = Date.parse(/(?:Z|[+-]\d{2}:\d{2})$/u.test(raw) ? raw : `${raw}Z`);
+  return Number.isFinite(at) ? new Date(at).toISOString() : null;
+};
 /** Runs as LangSmith returns them: an array, the MCP's `{ items }` or an API page's `{ runs }`. */
 function runsOf(value) {
   const runs = Array.isArray(value) ? value : Array.isArray(value?.items) ? value.items : Array.isArray(value?.runs) ? value.runs : null;
@@ -84,6 +91,7 @@ export function releaseCheck(value, questions, { release_sha: releaseSha } = {})
     const problems = [
       ...(releaseSha !== undefined && trace.release_sha !== releaseSha ? [`the trace ran release ${trace.release_sha ?? "unknown"}, not ${releaseSha}`] : []),
       ...(trace.complete === true ? [] : ["the trace's capture is not confirmed complete"]),
+      ...(trace.started_at === null ? ["the trace's start time is invalid"] : []),
       ...(reach.looked_at_every_collection ? [] : [`collections not looked at: ${reach.missing.join(", ")}`]),
       ...(reach.no_repeated_refusal ? [] : ["a refused call was sent again"]),
       ...(reach.unchecked_stated === false ? ["unchecked items were not stated"] : []),
