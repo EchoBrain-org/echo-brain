@@ -126,7 +126,7 @@ function fixture(options: { expiresAt?: number; previousExpiresAt?: number; prev
     if (state.advanceAfterFetch[key] !== undefined) state.now = state.advanceAfterFetch[key];
     return response;
   };
-  const dependencies: ClientUpdatePublicationDependencies = { aws, fetch, runtime: () => SOURCE, readTemplate: () => TEMPLATE, now: () => state.now, validatePrepared: options => {
+  const dependencies: ClientUpdatePublicationDependencies = { verifyServer: () => undefined, aws, fetch, runtime: () => SOURCE, readTemplate: () => TEMPLATE, now: () => state.now, validatePrepared: options => {
     state.validationOptions.push(options);
     if (!options.allowExpired && Date.parse(manifest.expires_at) <= state.now) throw new Error('expired_metadata');
     return { config, manifest, feedBytes };
@@ -635,4 +635,32 @@ describe('authenticated S3 HEAD absence classification', () => {
     expect(isAbsentClientUpdateHead(['cloudformation', 'head-object'], stderr)).toBe(false);
     expect(isAbsentClientUpdateHead(['s3api', 'head-object'], undefined)).toBe(false);
   });
+});
+
+describe('publication diagnostics', () => {
+  it('retains a bounded failure code without upstream error content', async () => {
+    const f = fixture(); await f.plan();
+    f.dependencies.fetch = async () => { throw Object.assign(new Error('private upstream response must not be recorded'), { cause: { code: 'UND_ERR_SOCKET' } }); };
+    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', last_failure: { code: 'public_connection_failed', recovery: 'status' } });
+    const receipt = readFileSync(f.receipt, 'utf8');
+    expect(receipt).toContain('public_connection_failed');
+    expect(receipt).not.toContain('private upstream');
+    await expect(f.execute()).rejects.toThrow('publication_unconfirmed_use_status');
+  });
+});
+
+
+it('refuses new publication writes before verifying the accepted server', async () => {
+  const f = fixture(); await f.plan();
+  f.dependencies.verifyServer = () => { throw new Error('accepted_server_status_mismatch'); };
+  await expect(f.execute()).rejects.toThrow('accepted_server_status_mismatch');
+  expect(f.calls.some(call => call[1] === 'put-object')).toBe(false);
+});
+
+it('rechecks accepted-server freshness immediately before exposing the new feed', async () => {
+  const f = fixture({ previousSequence: 1, sequence: 2 }); await f.replacePlan();
+  let checks = 0;
+  f.dependencies.verifyServer = () => { if (++checks > 1) throw new Error('accepted_server_status_stale'); };
+  expect(await f.replaceExecute()).toMatchObject({ state: 'unconfirmed', verified_objects: 4, last_failure: { code: 'accepted_server_status_stale' } });
+  expect(f.calls.filter(call => call[1] === 'put-object').some(call => call[call.indexOf('--key') + 1] === 'feed.json')).toBe(false);
 });

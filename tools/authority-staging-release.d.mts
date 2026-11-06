@@ -143,3 +143,8 @@ export function releaseSsmParameters(request: unknown, readSource?: StagingRelea
 export function planStagingRelease(options: StagingReleasePlanOptions, dependencies?: StagingReleaseDependencies): StagingReleaseSummary;
 export function executeStagingRelease(path: string, dependencies?: StagingReleaseDependencies, pollOnly?: boolean): StagingReleaseSummary;
 export function safeReleaseOutcome(raw: string, request: StagingReleaseRequest, requestHash: string): StagingReleaseOutcome;
+export function readStagingReleaseReceipt(path: string, readSource?: StagingReleaseSourceReader): {
+  schema_version: 1; kind: string; request: StagingReleaseRequest; request_sha256: string;
+  state: StagingReleaseState; command_id: string | null; outcome: StagingReleaseOutcome | null;
+};
+export function verifyAcceptedStagingRelease(path: string, expected: { release_id: string; release_sha256: string }, dependencies?: Pick<StagingReleaseDependencies, 'readSource' | 'now'>): StagingReleaseSummary;

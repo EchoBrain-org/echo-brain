@@ -261,6 +261,24 @@ function langsmithAsk({ trace, question, started, research: value, answer, relea
   return [root, ...(withResearch ? [stage] : []), ...tools];
 }
 
+test("LangSmith timestamps are normalized as UTC independently of the operator timezone", () => {
+  const previous = process.env.TZ;
+  try {
+    for (const timezone of ["UTC", "America/Los_Angeles", "Asia/Tokyo"]) {
+      process.env.TZ = timezone;
+      const runs = langsmithAsk({ trace: "utc", question: "q", started: "2026-11-06T00:30:58.857000", research: activeProjectsTrace(), answer: null });
+      assert.equal(langsmithTraces(runs)[0].started_at, "2026-11-06T00:30:58.857Z");
+      runs[0].start_time = "2026-11-05T16:30:58.857-08:00";
+      assert.equal(langsmithTraces(runs)[0].started_at, "2026-11-06T00:30:58.857Z");
+      for (const run of runs) run.start_time = "invalid";
+      assert.equal(langsmithTraces(runs)[0].started_at, null);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  }
+});
+
 test("the release check reads each open-ended question's latest staging trace and applies its reach and cost keys", () => {
   const questions = [
     { id: "current-projects-and-leads", question: caseById("current-projects-and-leads").question, reach: caseById("current-projects-and-leads").reach },

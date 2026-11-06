@@ -224,7 +224,8 @@ After promotion and the fresh status check:
 ```sh
 npm run client-update:publish -- execute \
   --receipt /absolute/private/first-publication.json \
-  --approve-manifest '<exact-reviewed-manifest-sha256>'
+  --approve-manifest '<exact-reviewed-manifest-sha256>' \
+  --server-status /absolute/private/fresh-accepted-status.json
 npm run client-update:publish -- status \
   --receipt /absolute/private/first-publication.json
 ```
@@ -265,6 +266,28 @@ but clients still reject that expired feed. Status cannot authorize an expired
 write or renew metadata. Signing, sealing and publication remain strict about
 freshness. Receipts remain bound to their exact tooling commit; never edit an
 old receipt's source binding to run newer tooling against it.
+
+## Publication readiness and recovery
+
+`execute` and `replace-execute` now require `--server-status` pointing to a
+successful `authority:staging-release` **status action** for the exact candidate
+as both accepted and candidate release. The publisher validates the complete
+receipt and its release hash. Its request must be no more than five minutes
+old and not in the future. This is a recent recorded observation, not an atomic
+transaction across the server and feed. Keep one operator controlling the slot.
+The check runs before new writes and again immediately before the feed PUT.
+If it expires while uploading artifacts, reconcile the publication with its
+existing status command, obtain a fresh accepted-server status, and resume the
+same receipt with the new `--server-status`. Never repeat an attempted PUT.
+Read-only publication status does not need a server receipt.
+
+Public HTTPS verification uses a new connection per GET, so synchronous archive
+validation cannot leave a stale pooled connection for the next read. No private
+`NODE_OPTIONS` transport helper is needed. Failed operations retain a bounded
+`last_failure.code` and `last_failure.recovery` in their receipt and summary;
+raw exception text and remote responses are never recorded there. Existing
+receipts without the field remain readable. Resume unfinished operations with
+the tooling source that created them before switching to this version.
 
 ## Replace an existing feed
 
@@ -310,7 +333,8 @@ status confirm the exact accepted release:
 ```sh
 npm run client-update:publish -- replace-execute \
   --receipt /absolute/private/B-feed-replacement.json \
-  --approve-manifest '<exact-reviewed-B-manifest-sha256>'
+  --approve-manifest '<exact-reviewed-B-manifest-sha256>' \
+  --server-status /absolute/private/B-fresh-accepted-status.json
 npm run client-update:publish -- replace-status \
   --receipt /absolute/private/B-feed-replacement.json
 ```

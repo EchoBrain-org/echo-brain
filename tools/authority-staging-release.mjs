@@ -286,6 +286,25 @@ function readReceipt(path, readSource) {
   return receipt;
 }
 
+/** Validate saved evidence without contacting AWS or changing an operation. */
+export function readStagingReleaseReceipt(path, readSource = sourceFile) {
+  return readReceipt(path, readSource);
+}
+
+/** A recent, successful status must observe this exact release as accepted. */
+export function verifyAcceptedStagingRelease(path, expected, dependencies = {}) {
+  if (typeof path !== 'string' || !path) fail('accepted_server_status_required');
+  const receipt = readReceipt(path, dependencies.readSource ?? sourceFile);
+  const request = receipt.request;
+  const now = (dependencies.now ?? Date.now)();
+  if (receipt.state !== 'succeeded' || request.action !== 'status' ||
+      request.accepted.release_id !== expected.release_id || request.candidate.release_id !== expected.release_id ||
+      request.accepted.sha256 !== expected.release_sha256 || request.candidate.sha256 !== expected.release_sha256) fail('accepted_server_status_mismatch');
+  const age = now - request.created_at * 1000;
+  if (!Number.isFinite(age) || age < 0 || age > 300_000) fail('accepted_server_status_stale');
+  return summary(receipt);
+}
+
 function validateToolingInventory(diagnostic, request) {
   const inventory = diagnostic.inventory;
   const problemCategories = { missing: 'tool_missing', invalid: 'tool_file_invalid', unknown: 'tool_hash_unknown' };
@@ -393,12 +412,21 @@ export function executeStagingRelease(pathname, dependencies = {}, pollOnly = fa
   });
 }
 
-function main(argv) {
+async function main(argv) {
   const command = argv.shift();
   const options = {};
   for (let i = 0; i < argv.length; i += 2) {
     if (!argv[i]?.startsWith('--') || !argv[i + 1] || argv[i + 1].startsWith('--') || Object.hasOwn(options, argv[i])) fail('arguments_invalid');
     options[argv[i]] = argv[i + 1];
+  }
+  if (command === 'round-status' && same(Object.keys(options), ['--round'])) {
+    return (await import('./release-readiness.mjs')).releaseRoundStatus(options['--round']);
+  }
+  if (command === 'trace-preflight' && same(Object.keys(options).sort(), ['--export-status', '--release', '--runs'])) {
+    return (await import('./release-trace-preflight.mjs')).releaseTracePreflight({ release: options['--release'], runs: options['--runs'], exportStatus: options['--export-status'] });
+  }
+  if (command === 'preflight' && Object.keys(options).every(key => key === '--target')) {
+    return (await import('./release-preflight.mjs')).releasePreflight({ target: options['--target'] });
   }
   if (command === 'plan') {
     const required = ['--action', '--accepted-release', '--release', '--runtime-profile', '--output'];
@@ -411,11 +439,13 @@ function main(argv) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { process.stdout.write(`${JSON.stringify(main(process.argv.slice(2)))}\n`); }
-  catch (error) {
+  main(process.argv.slice(2)).then(result => {
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    if (result.ready === false) process.exitCode = 1;
+  }).catch(error => {
     // Validators, AWS and filesystem errors can contain input values/paths.
     const safe = /^[a-z][a-z0-9_]{1,80}$/.test(error?.message ?? '') ? error.message : 'release_operation_refused';
     process.stderr.write(`${JSON.stringify({ ok: false, code: safe })}\n`);
     process.exitCode = 1;
-  }
+  });
 }
