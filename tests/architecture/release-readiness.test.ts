@@ -58,6 +58,29 @@ describe('release progress from saved evidence', () => {
     f.publication.state = 'unconfirmed';
     expect(f.status().remaining).toContain('reconcile_existing_publication_receipt');
   });
+  it('resumes after promotion with a fresh status and publication, never another stage', () => {
+    const f = fixture(); f.config.prepared = f.dir;
+    const previous = { sha256: 'a'.repeat(64), release_id: 'previous-release' };
+    const receipts: Record<string, any> = {};
+    const add = (action: string, minutesAgo: number, accepted = previous) => {
+      const path = `/${Object.keys(receipts).length}-${action}`;
+      receipts[path] = { ...f.server, request: { ...f.server.request, action, accepted, created_at: f.server.request.created_at - minutesAgo * 60 } };
+      f.config.server_receipts.push(path);
+    };
+    Object.assign(f.dependencies, { readServer: (path: string) => receipts[path] });
+    add('stage', 30); add('canary', 25); add('promote', 10);
+    let result = f.status();
+    expect(result.recorded_phase).toBe('promoted');
+    expect(result.next_action).toBe('obtain_fresh_status_then_publish_approved_feed');
+    expect(result.remaining).toEqual(expect.arrayContaining(['obtain_fresh_accepted_server_status', 'publish_approved_feed']));
+    expect(result.remaining).not.toContain('complete_combined_review_then_promote_and_publish');
+    add('status', 0, f.server.request.accepted);
+    result = f.status();
+    expect(result.recorded_phase).toBe('server_accepted');
+    expect(result.next_action).toBe('obtain_fresh_status_then_publish_approved_feed');
+    f.config.publication_receipt = '/publication'; f.publication.state = 'publishing'; f.publication.verified_objects = 2;
+    expect(f.status().next_action).toBe('obtain_fresh_status_then_resume_approved_publication');
+  });
   it('does not let publication hide an uncertain server operation', () => {
     const f = fixture(); Object.assign(f.config, { prepared: f.dir, server_receipts: ['/status'], publication_receipt: '/publication' });
     f.server.state = 'unconfirmed';

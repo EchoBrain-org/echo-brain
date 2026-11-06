@@ -46,6 +46,7 @@ production/client-live deployment or change their approval boundaries.
 | --- | --- |
 | Prepared | Exact candidate artifacts and unsigned feed inputs exist for review. Nothing has been accepted or published. |
 | Staged | The candidate is running on the staging host. The prior record remains accepted. Existing clients already reach the candidate. |
+| Promoted | The promotion action succeeded, but no later host status has confirmed the candidate as accepted. Take a fresh status before publishing. |
 | Server accepted | Promotion completed and a fresh host status confirms the candidate as accepted. The client feed may still advertise the prior release. |
 | Client published | The signed feed and all four artifacts (both CLI kits and both desktop packages) are verified and currently installable. This does not prove a client has updated. |
 | Client verified | Representative native Mac and Linux CLI seats activated the published release and passed authenticated read and cited-Ask checks. Representative Mac and Linux desktops passed the [desktop update checks](../client-updates/README.md#verify-the-desktop-update). |

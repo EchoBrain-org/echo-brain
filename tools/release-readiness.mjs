@@ -79,6 +79,8 @@ export function releaseRoundStatus(path, dependencies = {}) {
   const accepted = succeeded.findLast(receipt => receipt.request.action === 'status' && receipt.request.accepted.sha256 === releaseHash);
   const lastMutation = receipts.findLast(receipt => ['stage', 'rollback', 'promote'].includes(receipt.request.action));
   if (lastMutation?.state === 'succeeded' && lastMutation.request.action === 'stage') phase = 'staged';
+  // A promotion is not observed acceptance until a later status confirms it.
+  if (lastMutation?.state === 'succeeded' && lastMutation.request.action === 'promote') phase = 'promoted';
   if (accepted && (!lastMutation || accepted.request.created_at >= lastMutation.request.created_at)) phase = 'server_accepted';
   if (pending.length) remaining.unshift('reconcile_existing_server_receipt_with_original_tooling');
   if (last && last.state !== 'succeeded' && !pending.length) remaining.push('inspect_server_operation_result');
@@ -98,7 +100,7 @@ export function releaseRoundStatus(path, dependencies = {}) {
     if (publication.state === 'succeeded' && publication.verified_objects === 5 && publication.object_count === 5) phase = 'client_published';
     else remaining.push(publication.state === 'unconfirmed' ? 'reconcile_existing_publication_receipt' : 'resume_approved_publication');
     if (!publication.metadata_fresh) remaining.push('renew_expired_feed_metadata');
-  } else remaining.push('complete_combined_review_then_promote_and_publish');
+  } else remaining.push(['promoted', 'server_accepted'].includes(phase) ? 'publish_approved_feed' : 'complete_combined_review_then_promote_and_publish');
   const proofs = round.client_proofs.map(file => clientProof(file, release, prepared?.manifest));
   if (new Set(proofs.map(proof => proof.target)).size !== proofs.length) fail('duplicate_client_proof');
   for (const target of RELEASE_TARGETS) if (!proofs.some(proof => proof.target === target.option)) remaining.push(`verify_native_${target.option.replaceAll('-', '_')}_update`);
@@ -111,7 +113,7 @@ export function releaseRoundStatus(path, dependencies = {}) {
   else if (publication && !publication.metadata_fresh) nextAction = 'renew_expired_feed_metadata';
   else if (phase === 'client_published') nextAction = remaining.find(item => item.startsWith('verify_native_'));
   else if (phase === 'client_proofs_recorded') nextAction = 'refresh_live_server_and_feed_status_before_reporting_released';
-  else if (phase === 'server_accepted') nextAction = 'obtain_fresh_status_then_resume_approved_publication';
+  else if (['promoted', 'server_accepted'].includes(phase)) nextAction = publication ? 'obtain_fresh_status_then_resume_approved_publication' : 'obtain_fresh_status_then_publish_approved_feed';
   else if (phase === 'staged') nextAction = research ? 'review_quality_and_exact_server_and_feed_inputs' : 'verify_canary_approval_and_tracing_then_run_candidate_checks';
   else nextAction = prepared ? 'stage_and_canary_through_existing_release_lane' : 'prepare_four_target_feed_for_combined_review';
   return { kind: 'echo-release-round-status-v1', release_id: release.release_id, source_sha: release.source_sha,
