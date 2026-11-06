@@ -264,7 +264,8 @@ digest; do not silently substitute it under the prior approval.
    targets.
    Pass the fresh status receipt as the publisher's `--server-status`. The
    publisher validates that it observed this exact release as accepted within
-   five minutes, before writing and again before making the feed visible.
+   five minutes of the run starting, before writing and again before making
+   the feed visible.
    This is a receipt guard, not an atomic server/feed transaction; one operator
    still controls the slot.
 3. On representative native Mac and Linux seats still running release A, verify

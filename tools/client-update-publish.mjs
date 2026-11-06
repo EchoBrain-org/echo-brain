@@ -165,6 +165,13 @@ function publicationWindow(pending, preflightCalls) {
 function requireValidity(inputs, d, required) {
   if (Date.parse(inputs.manifest.expires_at) - currentTime(d) < required) fail('insufficient_metadata_validity');
 }
+// The accepted-server status is captured before a run, so its age is measured
+// once, at the run's start: artifact transfer time must not expire it before
+// the feed write. The same evidence is still re-read before that write.
+function acceptedServerCheck(serverStatus, d) {
+  const started = currentTime(d);
+  return manifest => d.verifyServer(serverStatus, manifest, { now: () => started });
+}
 function requirePublicationWindow(receipt, index, inputs, d) {
   requireValidity(inputs, d, publicationWindow(receipt.objects.slice(index).filter(object => !object.attempted), () => 1));
 }
@@ -237,7 +244,8 @@ export async function executeClientUpdatePublish({ receipt: path, approveManifes
     if (receipt.state === 'succeeded') return summary(receipt, inputs, d);
     // Historical CLI-only receipts may be inspected, but never resumed with new writes.
     if (receipt.objects.some(object => !object.attempted)) requireReleaseTargets(inputs.manifest);
-    if (receipt.objects.some(object => !object.attempted)) d.verifyServer(serverStatus, inputs.manifest, { now: d.now });
+    const verifyServer = acceptedServerCheck(serverStatus, d);
+    if (receipt.objects.some(object => !object.attempted)) verifyServer(inputs.manifest);
     try {
       for (const [index, object] of receipt.objects.entries()) {
         if (!object.attempted) {
@@ -249,7 +257,7 @@ export async function executeClientUpdatePublish({ receipt: path, approveManifes
           if (bytes.length !== object.bytes || digest(bytes) !== object.sha256) fail('publication_inputs_changed');
           // The final feed is revalidated after its preflight HEAD and file
           // read, immediately before the sole conditional write makes it live.
-          if (object.key === 'feed.json') { inputs = revalidateSealedInputs(receipt, d); d.verifyServer(serverStatus, inputs.manifest, { now: d.now }); }
+          if (object.key === 'feed.json') { inputs = revalidateSealedInputs(receipt, d); verifyServer(inputs.manifest); }
           requireReleaseTargets(inputs.manifest);
           requirePublicationWindow(receipt, index, inputs, d);
           receipt.state = 'publishing'; object.attempted = true; save(path, receipt);
@@ -452,7 +460,8 @@ export async function executeClientUpdateReplacement({ receipt: path, approveMan
     let inputs = replacementInputs(receipt, d);
     if (receipt.state === 'succeeded') return replacementSummary(receipt, inputs, d);
     if (!receipt.feed.attempted || receipt.artifacts.some(object => !object.reused && !object.attempted)) requireReleaseTargets(inputs.manifest);
-    if (!receipt.feed.attempted || receipt.artifacts.some(object => !object.reused && !object.attempted)) d.verifyServer(serverStatus, inputs.manifest, { now: d.now });
+    const verifyServer = acceptedServerCheck(serverStatus, d);
+    if (!receipt.feed.attempted || receipt.artifacts.some(object => !object.reused && !object.attempted)) verifyServer(inputs.manifest);
     try {
       for (const [index, object] of receipt.artifacts.entries()) {
         if (object.reused) {
@@ -482,7 +491,7 @@ export async function executeClientUpdateReplacement({ receipt: path, approveMan
         await recheckPredecessor(receipt, inputs, d);
         requireReleaseTargets(inputs.manifest);
         replacementWindow(receipt, receipt.artifacts.length, inputs, d);
-        d.verifyServer(serverStatus, inputs.manifest, { now: d.now });
+        verifyServer(inputs.manifest);
         receipt.state = 'publishing'; receipt.feed.attempted = true; save(path, receipt);
         const result = d.aws(['s3api', 'put-object', '--bucket', receipt.hosting.bucket, '--key', 'feed.json', '--body', file, '--if-match', receipt.predecessor.etag, '--expected-bucket-owner', ACCOUNT, '--server-side-encryption', 'AES256', '--content-type', receipt.feed.content_type, '--cache-control', receipt.feed.cache_control, '--checksum-algorithm', 'SHA256', '--checksum-sha256', Buffer.from(receipt.feed.sha256, 'hex').toString('base64')], { timeout: operationTimeout(receipt.feed.bytes) });
         if (result?.ServerSideEncryption !== 'AES256' || typeof result.VersionId !== 'string' || !result.VersionId || result.VersionId === 'null') fail('put_object_result_unconfirmed');

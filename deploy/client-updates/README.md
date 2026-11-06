@@ -273,13 +273,17 @@ old receipt's source binding to run newer tooling against it.
 successful `authority:staging-release` **status action** for the exact candidate
 as both accepted and candidate release. The publisher validates the complete
 receipt and its release hash. Its request must be no more than five minutes
-old and not in the future. This is a recent recorded observation, not an atomic
-transaction across the server and feed. Keep one operator controlling the slot.
-The check runs before new writes and again immediately before the feed PUT.
-If it expires while uploading artifacts, reconcile the publication with its
-existing status command, obtain a fresh accepted-server status, and resume the
-same receipt with the new `--server-status`. Never repeat an attempted PUT.
-Read-only publication status does not need a server receipt.
+old when that `execute` run starts and not in the future. This is a recent
+recorded observation, not an atomic transaction across the server and feed.
+Keep one operator controlling the slot. The check runs before new writes and
+again immediately before the feed PUT; that second check re-reads the same
+receipt but measures its age from the run's start, so slow artifact transfers
+cannot expire it. Each new `execute` run, including a resume, needs a status
+taken within five minutes of starting. If a run stops with an `unconfirmed`
+receipt, reconcile it with its existing status command, obtain a fresh
+accepted-server status, and resume the same receipt with the new
+`--server-status`. Never repeat an attempted PUT. Read-only publication status
+does not need a server receipt.
 
 Public HTTPS verification uses a new connection per GET, so synchronous archive
 validation cannot leave a stale pooled connection for the next read. No private

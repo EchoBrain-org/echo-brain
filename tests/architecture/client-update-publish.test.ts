@@ -657,7 +657,26 @@ it('refuses new publication writes before verifying the accepted server', async 
   expect(f.calls.some(call => call[1] === 'put-object')).toBe(false);
 });
 
-it('rechecks accepted-server freshness immediately before exposing the new feed', async () => {
+// The server status is captured before the run, so artifact transfer time must
+// not count against its freshness. 20 minutes is the 512 KiB/s floor for ~300 MB
+// uploaded and then downloaded again.
+it.each([
+  ['first publication', {}, 'plan', 'execute'],
+  ['replacement', { previousSequence: 1, sequence: 2 }, 'replacePlan', 'replaceExecute'],
+] as const)('measures accepted-server freshness from the start of a slow %s run', async (_lane, options, plan, execute) => {
+  const f = fixture(options); await f[plan]();
+  const statusAt = f.state.now;
+  const seen: number[] = [];
+  f.dependencies.verifyServer = (_path, _expected, { now }) => {
+    seen.push(now());
+    if (now() - statusAt > 300_000) throw new Error('accepted_server_status_stale');
+  };
+  f.state.advanceAfterFetch[f.artifactKeys.at(-1)!] = statusAt + 20 * 60_000;
+  expect(await f[execute]()).toMatchObject({ state: 'succeeded', verified_objects: 5, last_failure: null });
+  expect(seen).toEqual([statusAt, statusAt]);
+});
+
+it('rechecks the accepted-server evidence immediately before exposing the new feed', async () => {
   const f = fixture({ previousSequence: 1, sequence: 2 }); await f.replacePlan();
   let checks = 0;
   f.dependencies.verifyServer = () => { if (++checks > 1) throw new Error('accepted_server_status_stale'); };
