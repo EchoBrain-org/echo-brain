@@ -178,6 +178,43 @@ describe('when a check runs (R2)', () => {
     await flush();
     expect(calls('changes.read').at(-1)?.[1]).toEqual({ expect: { authority: ACCOUNT.authority, membership_id: 'other' } });
   });
+
+  it.each(['member', 'other'])('loads Home on return when browser sign-in finished behind another app (%s)', async membership => {
+    let signedIn = true;
+    let title = 'Previous account review';
+    const status = () => ({ signed_in: signedIn, account: signedIn ? account : null });
+    rpc.mockImplementation(changesRpc({
+      'app.status': () => ok(status()),
+      'account.signOut': () => { signedIn = false; return ok(status()); },
+      'signin.begin': () => { signedIn = true; return ok(status()); },
+      'reviews': () => ok({ reviews: [{ approval_id: `apr_${'a'.repeat(64)}`, title, project_ids: [], status: 'pending',
+        decided_on: null, first_line: null, action_count: 0, meeting_at: null, all_day: false, records: [] }] }),
+    }));
+    const store = await startStore();
+    expect(store.getState().home?.reviews[0]?.title).toBe(title);
+    store.accountCommand('switch');
+    await store.signOut();
+    expect(store.getState().home).toBeNull();
+    cover(store);
+    account = { ...ACCOUNT, membership_id: membership };
+    title = 'Signed-in account review';
+    const before = [homeReads(), meetings('reviews')];
+    await store.signIn(ACCOUNT.authority);
+    await flush();
+    expect(store.getState().status?.signed_in).toBe(true);
+    expect(names(store.getState().projects.items)).toEqual(['Apollo']);
+    expect(store.getState().home).toBeNull();
+    expect([homeReads(), meetings('reviews')]).toEqual(before);
+
+    await uncover(store);
+    await flush();
+    expect([homeReads() - before[0]!, meetings('reviews') - before[1]!]).toEqual([1, 1]);
+    expect(store.getState().home).toMatchObject({ loading: false, reviews: [{ title }] });
+    expect(calls('reviews').at(-1)?.[1].expect).toEqual({ authority: ACCOUNT.authority, membership_id: membership });
+    expect(store.windowState({ onScreen: true, front: true })).toBeNull();
+    await flush();
+    expect([homeReads() - before[0]!, meetings('reviews') - before[1]!]).toEqual([1, 1]);
+  });
 });
 
 describe('what a moved area reads again (R3)', () => {

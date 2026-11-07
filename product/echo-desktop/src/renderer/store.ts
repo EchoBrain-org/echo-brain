@@ -5189,7 +5189,8 @@ const projectShown = () => (state.route.page === 'project' ? state.route.project
 
 const SURFACES: readonly Surface[] = [
   // Home, and the decision page over it: their rows, and the decision's check (only new rows read live, but on a return).
-  { areas: ['follow_ups', 'reviews'], shows: () => (state.route.page === 'home' || state.route.page === 'decision') && state.home !== null, read: back => loadHome(back) },
+  // Sign-in can finish behind the browser, before Home has loaded. Returning must also read that uninitialized Home.
+  { areas: ['follow_ups', 'reviews'], shows: () => state.route.page === 'home' || state.route.page === 'decision', read: back => loadHome(back) },
   // Home's altitudes: your projects' follow-ups, and the live titles of the project or person it is zoomed on.
   { areas: ['follow_ups'], shows: () => state.route.page === 'home', read: () => loadAltitude() },
   // The decision page's records: each finished check's follow-ups.
