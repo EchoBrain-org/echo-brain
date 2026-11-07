@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonMeetingReviewV2, PersonRunV1 } from '@echo-brain/organization-api';
 import { validatePersonRunsRequestV1 } from '@echo-brain/organization-api';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
-import { ACCOUNT, cover, digest, elements, EMPTY_SUMMARY, fail, flush, hide, ok, render, show, startStore as start, storeLifecycle, text, uncover } from './harness.js';
+import { ACCOUNT, byTestId, cover, digest, elements, EMPTY_SUMMARY, fail, flush, hide, ok, plainHooks, render, show, startStore as start, storeLifecycle, text, uncover } from './harness.js';
 import type { HomeView, OpenItemsView, OpenItemView, ToolStatus } from '../../src/shared/protocol.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
+vi.mock('preact/hooks', original => plainHooks(original));
 
 /** The proposal, and the one record its approval wrote: a check is keyed by its record's own approval id. */
 const approval = 'apr_' + 'a'.repeat(64);
@@ -2321,6 +2322,57 @@ describe('Rows first, then what each says now', () => {
     await flush();
     expect(store.homeRows().map(row => row.kind)).toEqual(['approve', 'update']);
     expect(store.getState().home).toMatchObject({ loading: false });
+  });
+
+  it.each(['reviews', 'list'] as const)('keeps initial loading after empty follow-ups arrive while %s are pending', async pending => {
+    fx.listed = pending === 'reviews';
+    fx.home = emptyHome();
+    fx.hold[pending] = true;
+    const store = await start();
+    const { Home } = await import('../../src/renderer/screens/home.js');
+    expect(store.getState().home).toMatchObject({ loading: true, open: emptyHome(), reviews: [] });
+    expect(store.homeRows()).toEqual([]);
+    const shownBefore = text(byTestId(render(Home({ state: store.getState() })), 'home-clear')[0]);
+    fx.hold[pending] = false;
+    release(pending);
+    await flush();
+    expect(store.getState().home?.loading).toBe(false);
+    expect(store.homeRows().map(row => row.kind)).toEqual(pending === 'reviews' ? ['approve'] : []);
+    expect(shownBefore).toBe('Loading what needs you…');
+  });
+
+  it.each(['member', 'another'])('keeps completed empty Home during refresh, but resets it after sign-out (%s)', async member => {
+    fx.listed = false;
+    fx.home = emptyHome();
+    rpc.mockImplementation((method, params) => method === 'projects.list'
+      ? ok({ items: params.status === 'archived' ? [] : [project], next_cursor: null }) : authority(method, params));
+    const store = await start();
+    const { Home } = await import('../../src/renderer/screens/home.js');
+    const line = () => text(byTestId(render(Home({ state: store.getState() })), 'home-clear')[0]);
+    expect(line()).toBe('Nothing needs you');
+    fx.hold.reviews = true;
+    const refreshing = store.loadHome();
+    await flush();
+    expect(store.getState().home?.loading).toBe(true);
+    expect(line()).toBe('Nothing needs you');
+    fx.hold.reviews = false;
+    release('reviews');
+    await refreshing;
+
+    store.accountCommand('signout');
+    await store.signOut();
+    expect(store.getState().home).toBeNull();
+    fx.hold.reviews = true;
+    fx.signedIn = true;
+    fx.member = member;
+    await store.refreshStatus();
+    await flush();
+    const firstLine = line();
+    fx.hold.reviews = false;
+    release('reviews');
+    await flush();
+    expect(firstLine).toBe('Loading what needs you…');
+    expect(line()).toBe('Nothing needs you');
   });
 
   it('fails a load whose reviews cannot be read, as before, keeping what else it read and starting no run until Try again', async () => {

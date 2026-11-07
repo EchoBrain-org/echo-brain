@@ -234,8 +234,9 @@ function NeedsYou({ state, rows }: { state: State; rows: readonly NeedRow[] }) {
   const home = state.home;
   if (home?.failure && rows.length === 0) return <section class="needs-section" data-testid="home-error"><Failed home={home} /></section>;
   if (rows.length === 0) {
-    // Loading only until what waits on you is first read: Home reading again keeps saying what the last read found.
-    const first = !home || (home.loading && home.open === null);
+    // One quick empty response does not settle Home: reviews and runs may still be on their first read.
+    // Later refreshes keep saying what the last whole load found.
+    const first = !home || (home.loading && !home.settled);
     return (
       <section class="needs-section" data-testid="needs" aria-busy={busy(home)}>
         <div class="home-clear" data-testid="home-clear">{first ? 'Loading what needs you…' : 'Nothing needs you'}</div>

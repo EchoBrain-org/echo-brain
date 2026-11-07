@@ -39,7 +39,7 @@ async function stateWith(altitude: Partial<AltitudeState>, projects: ProjectSumm
   return {
     ...getState(), status: { client_version: 'test', signed_in: true, account: ACCOUNT },
     projects: { items: projects, next: null, loading: false, ...list },
-    home: { seq: 1, loading: false, reviews: [], runs: [], open: null, live: {}, reading: false, ...home },
+    home: { seq: 1, loading: false, settled: true, reviews: [], runs: [], open: null, live: {}, reading: false, ...home },
     altitude: { level: 'projects', category: null, project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: true, reading: false,
       listFailure: null, listStale: false, ...altitude },
   };
@@ -251,7 +251,7 @@ describe('Home', () => {
 
   it.each(['uninitialized', 'loading'])('shows a loading message while Home is %s, before claiming nothing needs you', async phase => {
     const { Home } = await import('../../src/renderer/screens/home.js');
-    const state = await stateWith({}, [THERMAL], {}, { loading: true });
+    const state = await stateWith({}, [THERMAL], {}, { loading: true, settled: false });
     if (phase === 'uninitialized') state.home = null;
     const tree = render(Home({ state }));
     expect(text(byTestId(tree, 'home-clear')[0])).toBe('Loading what needs you…');
