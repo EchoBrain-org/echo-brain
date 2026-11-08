@@ -646,13 +646,14 @@ type RecordEnvelopeV4 = ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
 
 /**
  * The one envelope reader: an admitted record's stored approved row, bound to its digests (and to `envelopeSha256` when
- * given), parsed and validated as an approved record. Any mismatch is unavailable metadata.
+ * given), parsed and validated as an approved record. Any mismatch is unavailable metadata. `digest: false` skips the
+ * stored-digest check, for the desk open's atom count only, which reads after its audit and never checked it.
  */
-function approvedEnvelope(record: Database.Database, codecs: RecordInputCodecRegistryV4, position: number, recordSha256: Sha256Digest, envelopeSha256?: Sha256Digest) {
+function approvedEnvelope(record: Database.Database, codecs: RecordInputCodecRegistryV4, position: number, recordSha256: Sha256Digest, envelopeSha256?: Sha256Digest, digest = true) {
   const row = record.prepare("SELECT canonical_envelope, envelope_sha256, receipt_issued_at, approval_id FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'").get(position, recordSha256) as
     | { readonly canonical_envelope: string; readonly envelope_sha256: Sha256Digest; readonly receipt_issued_at: string; readonly approval_id: string }
     | undefined;
-  if (row === undefined || sha256Digest(row.canonical_envelope) !== row.envelope_sha256 || (envelopeSha256 !== undefined && row.envelope_sha256 !== envelopeSha256)) metadataUnavailable();
+  if (row === undefined || (digest && sha256Digest(row.canonical_envelope) !== row.envelope_sha256) || (envelopeSha256 !== undefined && row.envelope_sha256 !== envelopeSha256)) metadataUnavailable();
   let parsed: JsonObject;
   let envelope: RecordEnvelopeV4;
   try {
@@ -711,7 +712,6 @@ function boundedDeskItems(items: readonly ReadableSearchResultItemV1[]): readonl
     Buffer.byteLength(item.text, "utf8") <= EVIDENCE_DESK_MAX_ITEM_UTF8_BYTES_V1,
   );
 }
-
 
 function hasExpectedGenerationIdentity(input: {
   readonly result: Pick<ReadableSearchResultV1, "generation_id" | "exact_head">;
@@ -912,12 +912,14 @@ export function createPersonRecordSearchRouteV1(
 
   /**
    * The release fence: the bearer still names every admitted tuple (the same person and session; `checked_at` may
-   * advance), in this organization, with the same project grants. Nothing is released otherwise.
+   * advance), in this organization, with the same project grants. Nothing is released otherwise. A batch release's
+   * revalidation reads the grants first (`grantsFirst`), as it always has.
    */
-  function fence(accessToken: string, admitted: readonly PersonAccessAuthorization[], grantsSha256: Sha256Digest | undefined, projectId?: string): PersonRecordSearchReleaseAuthorizationV1 {
+  function fence(accessToken: string, admitted: readonly PersonAccessAuthorization[], grantsSha256: Sha256Digest | undefined, projectId?: string, grantsFirst = false): PersonRecordSearchReleaseAuthorizationV1 {
     const current = options.sessions.authenticateAccess({ access_token: accessToken });
-    if (admitted.some((authorization) => !samePersonReleaseAuthorizationV1(authorization, current)) || current.organization_id !== options.organization_id ||
-      captureRecordProjectsV1(options.capture_projects, current, projectId).grants_sha256 !== grantsSha256) personDenied();
+    const grants = () => captureRecordProjectsV1(options.capture_projects, current, projectId).grants_sha256 !== grantsSha256;
+    const person = () => admitted.some((authorization) => !samePersonReleaseAuthorizationV1(authorization, current)) || current.organization_id !== options.organization_id;
+    if (grantsFirst ? grants() || person() : person() || grants()) personDenied();
     return releaseAuthorization(current);
   }
 
@@ -1305,7 +1307,7 @@ export function createPersonRecordSearchRouteV1(
     });
     // A record's text is released whole or not at all, so the anchor is cut only when its bound left it out; truncated
     // also covers the meeting's other records (ADR-0041).
-    const { brief } = approvedEnvelope(options.record, options.record_input_codecs, resolvedAnchor.record_position, resolvedAnchor.record_sha256);
+    const { brief } = approvedEnvelope(options.record, options.record_input_codecs, resolvedAnchor.record_position, resolvedAnchor.record_sha256, undefined, false);
     return Object.freeze({ response, release, desk_items: projection, truncated: brief.decisions.length + brief.actions.length + brief.rationales.length > 10 || deskSourceItems.length !== items.length,
       anchor_truncated: !deskSourceItems.includes(resolvedAnchor) });
   }
@@ -1634,7 +1636,7 @@ export function createPersonRecordSearchRouteV1(
       readonly release: PersonRecordSearchBatchReleaseV1;
     }): PersonRecordSearchReleaseAuthorizationV1 {
       if (!releaseWitnesses.has(input.release)) personDenied();
-      const current = fence(input.access_token, [input.release.initial_authorization, input.release.current_authorization], input.release.project_authorization?.grants_sha256, input.release.project_id);
+      const current = fence(input.access_token, [input.release.initial_authorization, input.release.current_authorization], input.release.project_authorization?.grants_sha256, input.release.project_id, true);
       assertReleaseSnapshot(input.release.active_pointer);
       return current;
     },
