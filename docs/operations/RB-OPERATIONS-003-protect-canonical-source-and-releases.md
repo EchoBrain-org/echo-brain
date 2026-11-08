@@ -119,12 +119,10 @@ its head's own tree.
 The aggregate uses `if: always()` and succeeds only when the plan succeeded,
 every selected job's result equals `success`, and every deselected job's
 result equals `skipped`. A failed or cancelled plan, or a missing plan output,
-fails closed. The executable architecture tests
-[`tests/architecture/ci-workflow.test.ts`](../../tests/architecture/ci-workflow.test.ts)
-and
+fails closed. The executable architecture test
 [`tests/architecture/ci-select-jobs.test.ts`](../../tests/architecture/ci-select-jobs.test.ts)
-assert the dependency topology, each selection rule, the aggregate's
-success-or-deselected test, and each job's traced inputs. The three `check`
+asserts each selection rule, the aggregate's success-or-deselected test for
+every planned job, and each job's traced inputs. The three `check`
 legs come from one matrix: `static` runs `npm run check` up to its vitest step,
 `vitest` runs the workspace tests, and `tail` runs the proofs after it. The two
 desktop runs come from one `desktop-app` matrix. Both matrices use
@@ -148,13 +146,10 @@ is a bootstrap: `main` does not contain `CODEOWNERS` yet, so GitHub cannot
 enforce Code Owner review on that pull request. Retain the owner review and
 green `CI required checks` URLs as the bootstrap receipt.
 
-The architecture test
-[`tests/architecture/github-governance.test.ts`](../../tests/architecture/github-governance.test.ts)
-keeps the complete protected-path list exact and prevents a later catch-all
-rule from silently overriding it. If a new workflow, workspace manifest, build
-configuration, release tool, or deployment entry point is added, update
-`CODEOWNERS` and the test together through an owner-approved pull request,
-explicitly requesting `@EchoBrain-org` if GitHub does not route it.
+If a new workflow, workspace manifest, build configuration, release tool, or
+deployment entry point is added, update `CODEOWNERS` through an owner-approved
+pull request, explicitly requesting `@EchoBrain-org` if GitHub does not route
+it.
 
 ### 2. Create the active `main` ruleset
 

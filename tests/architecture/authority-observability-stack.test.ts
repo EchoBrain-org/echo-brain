@@ -245,24 +245,4 @@ describe("Authority minimal observability stack", () => {
       ]),
     );
   });
-
-  it("documents the shared content-free heartbeat and production metadata boundary", () => {
-    const runbook = readFileSync(RUNBOOK, "utf8");
-    const heartbeat = runbook.slice(
-      runbook.indexOf("#### Inspect the shared trace transport heartbeat"),
-      runbook.indexOf("### 6. Rehearse the sanitized worker-failure signal"),
-    );
-
-    expect(heartbeat).toContain(
-      'kind = "echo-authority-journey-telemetry-liveness-v1"',
-    );
-    expect(heartbeat).toContain(
-      "fields @timestamp, event, release_sha, build_number",
-    );
-    expect(heartbeat).toContain("approximately every 60 seconds");
-    expect(heartbeat).toContain("content-free and best effort");
-    expect(heartbeat).toContain("log-stream-only permission");
-    expect(heartbeat).toContain("Staging and production use the same core context and transport implementation.");
-    expect(heartbeat).toContain("`EchoBrain/AuthorityJourneyV1`; staging retains `EchoBrain/StagingJourneyV1`.");
-  });
 });

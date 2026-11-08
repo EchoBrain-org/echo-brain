@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, posix, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,6 +15,14 @@ import {
 
 const REPO = resolve(import.meta.dirname, "../..");
 const WORKFLOW = readFileSync(resolve(REPO, ".github/workflows/ci.yml"), "utf8");
+// One job's block of the workflow, from its key to the next job's key or the end.
+function jobSteps(id: string) {
+  const jobs = WORKFLOW.indexOf("\njobs:\n");
+  const start = WORKFLOW.indexOf(`\n  ${id}:\n`, jobs) + 1;
+  expect(start, id).toBeGreaterThan(jobs);
+  const end = WORKFLOW.slice(start).search(/\n  [a-z-]+:\n/);
+  return end === -1 ? WORKFLOW.slice(start) : WORKFLOW.slice(start, start + end + 1);
+}
 const REPOSITORY = "EchoBrain-org/echo-brain";
 const EVERY_JOB = {
   check: true,
@@ -469,12 +477,6 @@ describe("job input closures", () => {
     for (const file of files) expect(inputs[job].has(file), `${job} input ${file} (from ${path})`).toBe(true);
   }
 
-  function jobSteps(id: string) {
-    const start = WORKFLOW.indexOf(`\n  ${id}:\n`) + 1;
-    expect(start).toBeGreaterThan(0);
-    return WORKFLOW.slice(start, start + WORKFLOW.slice(start).search(/\n  [a-z-]+:\n/) + 1);
-  }
-
   const rootManifest = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8"));
   const workspaceByName = new Map<string, string>(rootManifest.workspaces.map((workspace: string) => [
     JSON.parse(readFileSync(join(REPO, workspace, "package.json"), "utf8")).name,
@@ -578,5 +580,126 @@ describe("job input closures", () => {
     expect(setupPaths.length).toBeGreaterThan(0);
     for (const path of setupPaths) expectCovered("person_client_package", path);
     expectCovered("person_client_package", "tsconfig.json");
+  });
+});
+
+// The workflow wiring that code and files outside ci.yml can silently outgrow.
+describe("CI workflow gate", () => {
+  const scripts = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")).scripts as Record<string, string>;
+  const legCommands = (leg: string) => jobSteps("check").split(/(?=^      - )/m)
+    .filter((step) => step.includes(`        if: matrix.leg == '${leg}'\n`))
+    .map((step) => step.match(/^        run: (.+)$/m)![1]!);
+  const aggregate = (env: Record<string, string>) => spawnSync("bash", [
+    "-c", jobSteps("required-checks").split("        run: |\n")[1]!.replace(/^ {10}/gm, ""),
+  ], { env: { PATH: process.env.PATH!, ...env }, encoding: "utf8" });
+
+  it("accepts a skipped job only when the plan deselected it, for every planned job", () => {
+    const required = jobSteps("required-checks");
+    for (const output of JOB_OUTPUTS) {
+      const variable = output.toUpperCase();
+      expect(required).toContain(`${variable}_SELECTED: \${{ needs.plan.outputs.${output} }}`);
+      expect(required).toContain(`selected "$${variable}_RESULT" "$${variable}_SELECTED"`);
+    }
+    const pullRequest = {
+      PLAN_RESULT: "success",
+      CHECK_RESULT: "success", CHECK_SELECTED: "true",
+      DOCS_RESULT: "skipped", DOCS_SELECTED: "false",
+      PERSON_CLIENT_PACKAGE_RESULT: "skipped", PERSON_CLIENT_PACKAGE_SELECTED: "false",
+      DESKTOP_APP_RESULT: "success", DESKTOP_APP_SELECTED: "true",
+      AUTHORITY_CONTAINER_RESULT: "success",
+      AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT: "success", AUTHORITY_RECOVERY_INFRASTRUCTURE_SELECTED: "true",
+      TESTED_TREE: "e".repeat(40),
+    };
+    const verifiedMain = {
+      ...pullRequest,
+      CHECK_RESULT: "skipped", CHECK_SELECTED: "false",
+      DOCS_RESULT: "success", DOCS_SELECTED: "true",
+      DESKTOP_APP_RESULT: "skipped", DESKTOP_APP_SELECTED: "false",
+      AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT: "skipped", AUTHORITY_RECOVERY_INFRASTRUCTURE_SELECTED: "false",
+    };
+    for (const passing of [pullRequest, verifiedMain]) {
+      const { status, stdout } = aggregate(passing);
+      expect(status).toBe(0);
+      expect(stdout).toBe(`::notice title=${TESTED_TREE}::${"e".repeat(40)}\n`);
+    }
+    for (const failing of [
+      { PLAN_RESULT: "failure" },
+      { PLAN_RESULT: "cancelled" },
+      { DESKTOP_APP_RESULT: "skipped" },
+      { DESKTOP_APP_RESULT: "failure" },
+      { DESKTOP_APP_RESULT: "cancelled" },
+      { DESKTOP_APP_SELECTED: "" },
+      { PERSON_CLIENT_PACKAGE_RESULT: "success" },
+      { PERSON_CLIENT_PACKAGE_RESULT: "failure" },
+      { PERSON_CLIENT_PACKAGE_SELECTED: "" },
+      { CHECK_RESULT: "skipped" },
+      { DOCS_RESULT: "success" },
+      { AUTHORITY_CONTAINER_RESULT: "skipped" },
+      { AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT: "skipped" },
+    ]) {
+      const { status, stdout } = aggregate({ ...pullRequest, ...failing });
+      expect(status, JSON.stringify(failing)).not.toBe(0);
+      expect(stdout, JSON.stringify(failing)).not.toContain(TESTED_TREE);
+    }
+    for (const failing of [
+      { DOCS_RESULT: "skipped" },
+      { DOCS_RESULT: "failure" },
+      { CHECK_SELECTED: "" },
+      { CHECK_RESULT: "failure" },
+      { AUTHORITY_CONTAINER_RESULT: "failure" },
+    ]) {
+      expect(aggregate({ ...verifiedMain, ...failing }).status, JSON.stringify(failing)).not.toBe(0);
+    }
+  });
+
+  it("runs every deterministic evaluator test in the tail leg", () => {
+    const commands = legCommands("tail").map((command) =>
+      command.replace(/npm run ([\w:-]+)/g, (_match, name: string) => scripts[name] ?? ""),
+    );
+    const patterns = commands.flatMap((command) =>
+      [...command.matchAll(/(?:^| && )node --test ([^&]+)/g)]
+        .flatMap((match) => match[1]!.trim().split(/\s+/)),
+    );
+    const scheduled = new Set(globSync(patterns, { cwd: REPO }));
+    const tests = globSync("tools/evals/*/test/**/*.test.mjs", { cwd: REPO });
+    expect(tests.length).toBeGreaterThan(0);
+    expect(tests.filter((path) => !scheduled.has(path))).toEqual([]);
+  });
+
+  it("runs every npm run check step in the static and vitest legs", () => {
+    // Adding a step to npm run check fails here until CI runs it too.
+    const localSteps = scripts.check!.split(" && ");
+    expect(localSteps.shift()).toBe("umask 022");
+    const commands = localSteps.map((command) => command.replace(/^(tsc|vitest) /, "npx $1 "));
+    expect(commands.at(-1)).toBe("npx vitest run --config vitest.config.ts");
+    expect(legCommands("static").join(" && ")).toContain(commands.slice(0, -1).join(" && "));
+    expect(legCommands("vitest")).toContain(`${commands.at(-1)} --maxWorkers=3`);
+  });
+
+  it("pulls every container image by digest, so the registry mirror cannot change it", () => {
+    const compose = readFileSync(join(REPO, "deploy/organization-authority/compose.clean-v1.yaml"), "utf8");
+    const dockerfile = readFileSync(join(REPO, "deploy/organization-authority/Dockerfile"), "utf8");
+    const images = [
+      jobSteps("authority-container").match(/driver-opts: image=(\S+)$/m)![1]!,
+      ...compose.match(/^ +image: [^"].*$/gm)!.map((line) => line.trim().slice("image: ".length)),
+      ...[...dockerfile.matchAll(/^FROM (\S+)/gm)].map((match) => match[1]!),
+    ];
+    expect(images.length).toBeGreaterThan(2);
+    for (const image of images) expect(image).toMatch(/^[a-z0-9./-]+:[\w.-]+@sha256:[0-9a-f]{64}$/);
+  });
+
+  it("validates every committed Guard policy with its same-named template", () => {
+    expect(jobSteps("authority-recovery-infrastructure")).toContain("npm run check:authority-recovery-infrastructure");
+    expect(scripts["check:authority-recovery-infrastructure"]).toBe("node tools/validate-authority-recovery-templates.mjs");
+    const validator = readFileSync(join(REPO, "tools/validate-authority-recovery-templates.mjs"), "utf8");
+    const deployment = join(REPO, "deploy/organization-authority");
+    const guards = globSync("*.guard", { cwd: deployment });
+    expect(guards.length).toBeGreaterThan(0);
+    for (const guard of guards) {
+      const template = guard.replace(/\.guard$/, ".template.json");
+      expect(existsSync(join(deployment, template)), template).toBe(true);
+      expect(validator).toContain(`"${guard}"`);
+      expect(validator).toContain(`"${template}"`);
+    }
   });
 });

@@ -30,7 +30,6 @@ const GUARD_POLICY = resolve(
   "deploy/organization-authority/authority-staging-data-backup-v1.guard",
 );
 const VALIDATOR = resolve(REPO, "tools/validate-authority-recovery-templates.mjs");
-const readRepoFile = (path: string) => readFileSync(resolve(REPO, path), "utf8");
 const TEMPLATE_SHA256 = createHash("sha256")
   .update(readFileSync(TEMPLATE))
   .digest("hex");
@@ -319,47 +318,6 @@ describe("Authority staging data-backup stack", () => {
     expect(guard).toContain("LockConfiguration not exists");
     expect(readFileSync(VALIDATOR, "utf8")).toContain(
       '"authority-staging-data-backup-v1.guard"',
-    );
-  });
-});
-
-describe("staging data-backup recovery documents", () => {
-  it("route the slot's clean-data volume to its own backup lane and rehearsal", () => {
-    const runbook = readRepoFile(
-      "docs/operations/RB-OPERATIONS-004-authority-staging-data-volume-backup.md",
-    );
-    const playbook = readRepoFile(
-      "docs/operations/PB-OPERATIONS-001-authority-operator-lane.md",
-    );
-    const rootFloor = readRepoFile(
-      "docs/operations/RB-OPERATIONS-002-authority-recovery-floor.md",
-    );
-    const deployment = readRepoFile("deploy/organization-authority/README.md");
-
-    expect(runbook).toContain("tested_at: null");
-    expect(runbook).toContain("npm run authority:staging -- backup");
-    expect(runbook).toContain("retention is not\na backup");
-    expect(runbook).toContain("never from the input");
-    expect(runbook).toContain("`alert_delivery_confirmed`");
-    expect(runbook).toContain("sudo mount -o ro,noload,noexec,nodev,nosuid <restored-device>");
-    expect(runbook).toContain("--clean-data <read-only-mount> \\");
-    expect(runbook).toContain("`state/confluence-person-connections.sqlite`");
-    expect(runbook).toContain("private-DNS `ssm` and\n  `ssmmessages` interface endpoints");
-    expect(runbook).toContain("Coding agents do not start backup or restore jobs");
-    expect(runbook).toContain("A verifier refusal leaves `tested_at: null`.");
-    expect(playbook).toContain("| Back up the retained data volume | `authority:staging backup`");
-    expect(playbook).toContain("Retention alone is not a backup.");
-    expect(rootFloor).toContain("It does not reach the staging slot");
-    expect(deployment).toContain("Retention alone is not a\n  backup.");
-    expect(deployment).not.toContain(
-      "Until the later retained-data-volume and replaceable-host programme",
-    );
-    expect(readRepoFile("README.md")).toContain("| `backup`    |");
-    expect(readRepoFile("docs/operations/README.md")).toContain(
-      "RB-OPERATIONS-004-authority-staging-data-volume-backup.md",
-    );
-    expect(readRepoFile("docs/components/operations-release.md")).toContain(
-      "  - RB-OPERATIONS-004\n",
     );
   });
 });

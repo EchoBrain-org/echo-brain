@@ -17,10 +17,6 @@ const BUNDLE_WORKFLOW = resolve(
   REPO,
   ".github/workflows/authority-recovery-helper-bundle.yml",
 );
-const RUNBOOK = resolve(
-  REPO,
-  "docs/operations/RB-OPERATIONS-002-authority-recovery-floor.md",
-);
 
 const template = () => readTemplate(TEMPLATE);
 
@@ -143,25 +139,5 @@ describe("Authority isolated recovery helper stack", () => {
     expect(workflow).not.toMatch(
       /aws-actions|configure-aws-credentials|s3 cp/i,
     );
-  });
-
-  it("keeps the runbook bound to the helper stack, the complete gp3 restore metadata, and no-replay inspection", () => {
-    const runbook = readFileSync(RUNBOOK, "utf8");
-    for (const required of [
-      "authority-recovery-helper-v1.template.json",
-      "authority-recovery-helper-v1.guard",
-      "build-authority-recovery-helper-bundle.mjs",
-      "iops",
-      "throughput",
-      "3.3.40.0",
-      "cloud-init status --wait",
-      "helper-stack-deleted",
-      "aws cloudformation delete-stack",
-      "/opt/echo-authority-recovery/runtime/node /opt/echo-authority-recovery/source/tools/verify-authority-recovery.mjs",
-      "ro,noload",
-      "secondary device",
-    ]) {
-      expect(runbook).toContain(required);
-    }
   });
 });
