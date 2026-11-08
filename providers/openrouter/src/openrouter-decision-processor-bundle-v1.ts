@@ -1,12 +1,8 @@
 import { readPrivateAuthorityCredential } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
-import {
-  createOpenRouterDecisionProcessor,
-  openrouterProcessingVersion,
-} from "./llm/openrouter-decision-processor.js";
-import type { AdmittedMeetingProcessingAdmissionV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1";
-import type { AdmittedMeetingProcessingCommitmentsV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments";
-import { assertOpenRouterDecisionProcessorRuntimeCommitmentsV1, fixedOpenRouterDecisionProcessorConfigV1, OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1, openRouterDecisionProcessorConfigurationSha256V1, openRouterDecisionProcessorCredentialReferenceSha256V1 } from "./openrouter-decision-processor-config-v1.js";
 import type { DecisionProcessorBundleV1 } from "@echo-brain/organization-processing/ports/decision-processor-bundle-v1";
+import { createFixedDecisionProcessorBundleV1 } from "./fixed-decision-processor-bundle-v1.js";
+import { createOpenRouterDecisionProcessor } from "./llm/openrouter-decision-processor.js";
+import { fixedOpenRouterDecisionProcessorConfigV1, OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1, openRouterDecisionProcessorConfigurationSha256V1, openRouterDecisionProcessorCredentialReferenceSha256V1 } from "./openrouter-decision-processor-config-v1.js";
 
 /**
  * Contains the fixed V1 OpenRouter construction path. The shared runtime
@@ -19,64 +15,18 @@ export function createOpenRouterDecisionProcessorBundleV1(input: {
   readonly limit?: <T>(signal: AbortSignal | undefined, op: () => Promise<T>) => Promise<T>;
 }): DecisionProcessorBundleV1 {
   const credentialReference = `file:${input.credential_file}`;
-  let commitmentsChecked = false;
-  return Object.freeze({
-    processor_adapter_id: "llm",
-    current_commitments(instance_id: string) {
-      return Object.freeze({ adapter_id: 'llm', instance_id, version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
-        configuration_sha256: openRouterDecisionProcessorConfigurationSha256V1(), credential_reference_sha256: openRouterDecisionProcessorCredentialReferenceSha256V1(credentialReference) });
-    },
-    assert_admission_commitments(
-      commitments: AdmittedMeetingProcessingCommitmentsV1,
-    ): void {
-      assertOpenRouterDecisionProcessorRuntimeCommitmentsV1({
-        adapter_id: commitments.processor.adapter_id,
-        version: commitments.processor.version,
-        configuration_sha256: commitments.processor.configuration_sha256,
-        credential_reference_sha256:
-          commitments.processor.credential_reference_sha256,
-        credential_reference: credentialReference,
-      });
-      commitmentsChecked = true;
-    },
-    create_processor(admission: AdmittedMeetingProcessingAdmissionV1) {
-      if (!commitmentsChecked) {
-        throw new Error(
-          "OpenRouter decision-processor admission commitments were not checked",
-        );
-      }
-      if (admission.processor.adapter_id !== "llm") {
-        throw new Error(
-          "OpenRouter decision-processor differs from the admitted processor",
-        );
-      }
-      const config = fixedOpenRouterDecisionProcessorConfigV1(
-        admission.processor.instance_id,
-        credentialReference,
-      );
+  return createFixedDecisionProcessorBundleV1({
+    label: "OpenRouter",
+    version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
+    configuration_sha256: openRouterDecisionProcessorConfigurationSha256V1(),
+    credential_reference_sha256: openRouterDecisionProcessorCredentialReferenceSha256V1(credentialReference),
+    config: (instance_id) => fixedOpenRouterDecisionProcessorConfigV1(instance_id, credentialReference),
+    processor: (config) => {
       const credential = readPrivateAuthorityCredential(credentialReference);
-      const processor = createOpenRouterDecisionProcessor(config, {
-        credentialResolver: (reference) =>
-          reference === credentialReference ? credential : undefined,
+      return createOpenRouterDecisionProcessor(config, {
+        credentialResolver: (reference) => (reference === credentialReference ? credential : undefined),
         ...(input.limit === undefined ? {} : { limit: input.limit }),
       });
-      const validation = processor.validateConfig(config);
-      if (!validation.ok) {
-        throw new Error(
-          `OpenRouter decision-processor configuration is invalid: ${validation.errors.join("; ")}`,
-        );
-      }
-      if (
-        processor.identity.adapter_id !== admission.processor.adapter_id ||
-        processor.identity.instance_id !== admission.processor.instance_id ||
-        processor.identity.version !== admission.processor.version ||
-        openrouterProcessingVersion(config) !== admission.processor.version
-      ) {
-        throw new Error(
-          "OpenRouter decision-processor differs from the admitted processor",
-        );
-      }
-      return processor;
     },
   });
 }
