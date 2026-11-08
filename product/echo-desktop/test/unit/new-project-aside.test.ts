@@ -14,7 +14,8 @@ let signedIn: boolean;
 let active: ProjectSummary[];
 let held: Held;
 const told = () => rpc.mock.calls.filter(([method]) => method === 'app.setUnresolved').map(([, params]) => params);
-const adds = () => rpc.mock.calls.filter(([method]) => method === 'projects.change').map(([, params]) => (params as { change: { membership_id: string } }).change.membership_id);
+const adds = () => rpc.mock.calls.map(([method, params]) => method === 'projects.change' ? (params as { change: { kind: string; membership_id?: string } }).change : null)
+  .filter(change => change?.kind === 'member-add').map(change => change!.membership_id);
 const uploads = () => rpc.mock.calls.filter(([method]) => method === 'documents.upload');
 
 storeLifecycle();
@@ -30,7 +31,6 @@ beforeEach(() => {
     'projects.create': () => ok({ project_id: fresh.project_id }),
     'projects.read': () => ok(fresh),
     'projects.change': () => ok({}),
-    'projects.leave': () => ok({}),
     'dialog.openDocuments': () => ok({ files: [{ handle: 'h1', name: 'a.txt' }, { handle: 'h2', name: 'b.txt' }, { handle: 'h3', name: 'c.txt' }], refused: [] }),
     'documents.upload': params => ok({ request_id: params.request_id }),
     'documents.abandon': () => ok(null),

@@ -6,7 +6,7 @@
 import type {
   Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskRead, AskScope, AskSearched, AskStep, Audience, ConnectedTools,
   CreatedProject, DocumentSummary, Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, MemberPage, Opened,
-  ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef,
+  ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef,
   RecordSection, SourceEvidence, SourceRef, ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
 import {
@@ -95,13 +95,6 @@ export function projectView(raw: unknown, projectId: string): ProjectSummary {
   const project = validated(validateProjectSummaryV2, raw);
   if (project.project_id !== projectId) throw new ViewError();
   return projectSummary(project);
-}
-
-/** A rename, archive/unarchive, or leave receipt, checked against exactly the request we sent. */
-export function projectSettingsView(raw: unknown, requestId: string, projectId: string, operation: ProjectSettingsReceipt['operation']): ProjectSettingsReceipt {
-  const receipt = validated(validateProjectSettingsReceiptV1, raw);
-  if (receipt.request_id !== requestId || receipt.project_id !== projectId || receipt.operation !== operation) throw new ViewError();
-  return { request_id: requestId, project_id: projectId, operation };
 }
 
 /** Who can read an item, in the list's three words: a project row says nothing more about its projects. */
@@ -197,8 +190,12 @@ export function directoryView(raw: unknown): MemberPage {
   return { items: page.items.map(({ membership_id, display_name }) => ({ membership_id, display_name })), next_cursor: page.next_cursor };
 }
 
+/** A project's own setting: rename, archive or unarchive, leave. */
+type ProjectSetting = Extract<ProjectChange, { readonly kind: 'rename' | 'archive' | 'unarchive' | 'leave' }>;
+const isSetting = (change: ProjectChange): change is ProjectSetting => ['rename', 'archive', 'unarchive', 'leave'].includes(change.kind);
+
 /** What a change's receipt says it did: its operation, and the member, note or document it names. */
-function receiptOf(change: ProjectChange): readonly [string, string] {
+function receiptOf(change: Exclude<ProjectChange, ProjectSetting>): readonly [string, string] {
   switch (change.kind) {
     case 'member-add':
     case 'member-set': return ['member_set', change.membership_id];
@@ -210,8 +207,16 @@ function receiptOf(change: ProjectChange): readonly [string, string] {
   }
 }
 
-/** The receipt for exactly the change that was sent: applied. */
+/** The receipt for exactly the change that was sent: applied. A setting (rename, archive or unarchive, leave) has its own receipt. */
 export function changeView(raw: unknown, requestId: string, change: ProjectChange): null {
+  if (isSetting(change)) {
+    // A setting's receipt names its operation: archive for unarchive too.
+    const settled = validated(validateProjectSettingsReceiptV1, raw);
+    if (settled.request_id !== requestId || settled.project_id !== change.project_id || settled.operation !== (change.kind === 'unarchive' ? 'archive' : change.kind)) {
+      throw new ViewError();
+    }
+    return null;
+  }
   const receipt = change.kind === 'document-associate' || change.kind === 'document-dissociate'
     ? validated(validatePersonDocumentAssociationReceiptV1, unwrap(raw)) : validated(validateProjectMutationReceiptV1, raw);
   const [operation, id] = receiptOf(change);

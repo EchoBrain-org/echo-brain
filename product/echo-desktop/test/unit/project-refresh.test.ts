@@ -254,7 +254,7 @@ describe('project lists on foreground refresh', () => {
 
   it('a project left while the refresh was on its way stays gone', async () => {
     const { store, stale, done } = await refreshing();
-    rpc.mockImplementation(rpcFor(held, { 'projects.leave': () => ok({}) }, () => ({ active, archived })));
+    rpc.mockImplementation(rpcFor(held, { 'projects.change': () => ok(null) }, () => ({ active, archived })));
     store.toggleProjectSettings(active[0]!, 'sidebar');
     store.askProjectSetting('leave');
     store.confirmProjectSetting();

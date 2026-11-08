@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView, membersView, noteMatchesView,
-  noteTitle, openItemsView, openItemView, openView, revokedView, projectActivityView, projectMatchesView, projectSettingsView, projectView, receiptView, recordView,
+  noteTitle, openItemsView, openItemView, openView, revokedView, projectActivityView, projectMatchesView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 import { personCitedRecordV1, personRecordAtomIdV1, validatePersonRecordListV1 } from '@echo-brain/organization-api';
@@ -589,9 +589,11 @@ describe('documents, members and project changes', () => {
   it('a project setting is made only by its matching V1 receipt', () => {
     const receipt = { schema_version: 1, kind: 'echo-project-settings-receipt-v1', request_id: REQUEST('1'), project_id: PROJECT,
       operation: 'archive', received_at: AT, state: 'applied' };
-    expect(projectSettingsView(receipt, REQUEST('1'), PROJECT, 'archive')).toEqual({ request_id: REQUEST('1'), project_id: PROJECT, operation: 'archive' });
-    expect(() => projectSettingsView(receipt, REQUEST('2'), PROJECT, 'archive')).toThrow(ViewError);
-    expect(() => projectSettingsView({ ...receipt, operation: 'leave' }, REQUEST('1'), PROJECT, 'archive')).toThrow(ViewError);
+    // Archive and unarchive are both settled by an archive receipt.
+    for (const kind of ['archive', 'unarchive'] as const) expect(changeView(receipt, REQUEST('1'), { kind, project_id: PROJECT })).toBeNull();
+    expect(() => changeView(receipt, REQUEST('2'), { kind: 'archive', project_id: PROJECT })).toThrow(ViewError);
+    expect(() => changeView({ ...receipt, operation: 'leave' }, REQUEST('1'), { kind: 'archive', project_id: PROJECT })).toThrow(ViewError);
+    expect(() => changeView(receipt, REQUEST('1'), { kind: 'rename', project_id: PROJECT, name: 'Apollo' })).toThrow(ViewError);
   });
 
   it('employees keep their name, email and standing; an invitation says only when it expires, and only for the file asked for', () => {

@@ -2600,11 +2600,10 @@ async function sendProjectSetting(project: ProjectSummary, operation: 'rename' |
   const write = { requestId, operation, ...detail, status: 'sending' as const };
   set({ projectSettings: { ...settings, menu: false, rename: null, confirm: null, write } });
   unresolvedChanged();
-  const result = operation === 'rename'
-    ? await rpc('projects.rename', { expect: account, request_id: requestId, project_id: project.project_id, name: detail.name! })
-    : operation === 'archive'
-      ? await rpc('projects.archive', { expect: account, request_id: requestId, project_id: project.project_id, archived: detail.archived! })
-      : await rpc('projects.leave', { expect: account, request_id: requestId, project_id: project.project_id });
+  const { project_id } = project;
+  const change: ProjectChange = operation === 'rename' ? { kind: 'rename', project_id, name: detail.name! }
+    : operation === 'leave' ? { kind: 'leave', project_id } : { kind: detail.archived ? 'archive' : 'unarchive', project_id };
+  const result = await rpc('projects.change', { expect: account, request_id: requestId, change });
   const current = state.projectSettings;
   if (current?.write?.requestId !== requestId) return;
   if (!result.ok) {
