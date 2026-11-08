@@ -218,6 +218,8 @@ describe('the timeline file (C5)', () => {
       // turn asked in Mine, and blocks with nothing to arrange.
       { ...good, answer: { ...good.answer, parts: [bare] } }, { ...good, answer: { ...good.answer, parts: [{ ...bare, layout: [{ kind: 'lead', statements: [0] }] }] } },
       { ...good, scope: { kind: 'mine' } }, { ...good, answer: { ...good.answer, parts: [{ ...good.answer.parts[0]!, statements: [] }] } },
+      // A v1 layout even beside valid blocks: what a read drops, a put never writes.
+      { ...good, answer: { ...good.answer, parts: [{ ...good.answer.parts[0]!, layout: [{ kind: 'lead', statements: [0] }] }] } },
       { ...good, id: 'turn-1' }, { ...good, asked_at: 'yesterday' }, { ...good, scope: { kind: 'project', project_id: 'Apollo' } },
       { ...good, again_of: 'turn-0' }, { ...good, markers: { 0: 'v1' } }, { ...good, markers: { first: sha('b') } },
       // What a check found unreadable: distinct places among the answer's own sources.

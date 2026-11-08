@@ -5,7 +5,8 @@
 // file and renames it over the old one, so a reader never meets half a file.
 // A file that cannot be read, or is not what a put writes, reads as empty and
 // is replaced by the next put; a turn an older desktop saved that no page
-// draws now goes on its own, and the next put writes the rest. Our own
+// draws now goes on its own (so does a malformed one that merely looks like
+// it, rather than emptying the file), and the next put writes the rest. Our own
 // sign-out deletes the account's file; reading one account's timeline deletes
 // any other account's, so an account change leaves nothing of the last one
 // here. Kept apart from host.ts so all of it is tested on a real folder.
@@ -241,13 +242,14 @@ function gapDetails(value: unknown): boolean {
 /**
  * An answer as the timeline keeps it: what the page reads back of a turn
  * (TimelineAnswer). A part with statements has them in blocks (answer layout
- * v2, ADR-0051), and one with none has nothing to arrange.
+ * v2, ADR-0051), one with none has nothing to arrange, and none carries a
+ * retired v1 layout: what a read drops, a put never writes.
  */
 function answer(value: unknown): value is TimelineAnswer {
   if (!record(value) || !scope(value.scope) || !OUTCOMES.has(value.outcome)) return false;
   if (!Array.isArray(value.sources) || value.sources.length > MOST || !value.sources.every(source)) return false;
   if (value.direct !== undefined && !statement(value.direct)) return false;
-  return Array.isArray(value.parts) && value.parts.length <= 64 && value.parts.every(part => record(part) && string(part.question) && STATUSES.has(part.status)
+  return Array.isArray(value.parts) && value.parts.length <= 64 && value.parts.every(part => record(part) && !Object.hasOwn(part, 'layout') && string(part.question) && STATUSES.has(part.status)
     && statements(part.statements) && (part.gap === undefined || string(part.gap)) && (part.gap_details === undefined || gapDetails(part.gap_details)) && (part.records === undefined || statements(part.records))
     && (part.blocks === undefined ? part.statements.length === 0 : part.statements.length > 0 && arranged(part.blocks, part.statements.length)));
 }
