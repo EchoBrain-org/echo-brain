@@ -124,6 +124,49 @@ describe('SQLite trigger runs v1', () => {
     expect(f.runs.claim(f.owner, first!.run_id, 600_000).kind).toBe('claimed');
   });
 
+  it('names the person\'s oldest queued impact check by created_at, then run id: pending, or running past its lease, and nothing else', async () => {
+    const f = await approvalCoreFixture();
+    let now = new Date(NOW);
+    const runs = new SqliteTriggerRunsV1(f.db, () => now);
+    f.core.decide('desktop', f.approve({ routes: f.routes(id => ({ 'decision-1': [f.projectA], 'act-1': [f.projectA, f.projectB], 'act-2': [] })[id] ?? null) }), () => f.session);
+    await f.publisher(null).appendFinalizedApprovalsToV4(signal());
+    const [first, second, third] = (JSON.parse(f.receipt()!) as { records: { approval_id: string; record_sha256: string }[] }).records;
+    // Each record's check, queued under an id and at a time the test picks.
+    const queue = (run_id: string, record: { approval_id: string; record_sha256: string }, at: string) => f.db.prepare(`INSERT INTO authority_trigger_runs_v1
+      (run_id, trigger, event_ref, organization_id, principal_id, membership_id, record_sha256, state, attempts, created_at, updated_at)
+      VALUES (?, 'approved_record', ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`).run(run_id, record.approval_id, f.person.organization_id, f.person.principal_id, f.person.membership_id, record.record_sha256, at, at);
+    const next = () => runs.nextQueued(f.person)?.run_id;
+    const lease = (run_id: string) => {
+      const claimed = runs.claim(f.person, run_id, 600_000);
+      if (claimed.kind !== 'claimed') throw new Error(`expected a lease on ${run_id}`);
+      return claimed.lease_token;
+    };
+    expect(next()).toBeUndefined();
+    // A leftover sweep, older than every check and first by id, is never a check-in's to start.
+    f.db.prepare(`INSERT INTO authority_trigger_runs_v1 (run_id, trigger, event_ref, organization_id, principal_id, membership_id, scope_kind, state, attempts, created_at, updated_at)
+      VALUES ('run_0000', 'sweep', 'sweep_leftover', ?, ?, ?, 'mine', 'pending', 0, '2026-10-07T09:00:00.000Z', '2026-10-07T09:00:00.000Z')`).run(f.person.organization_id, f.person.principal_id, f.person.membership_id);
+    expect(next()).toBeUndefined();
+    queue('run_zzzz', first!, NOW);
+    queue('run_aaaa', second!, '2026-10-07T10:05:00.000Z');
+    expect(next()).toBe('run_zzzz');                                        // the oldest, though a newer one has the lower id
+    queue('run_mmmm', third!, NOW);
+    expect(next()).toBe('run_mmmm');                                        // queued at the same time: the lower id
+    expect(runs.nextQueued({ ...f.person, membership_id: 'mem_00000000-0000-4000-8000-0000000000f2' })).toBeUndefined();
+    // A live attempt is not queued; once its lease lapses it is, since `claim` takes it again.
+    const lapsing = lease('run_mmmm');
+    expect(next()).toBe('run_zzzz');
+    now = new Date(Date.parse(NOW) + 599_999);
+    expect(next()).toBe('run_zzzz');
+    now = new Date(Date.parse(NOW) + 600_000);
+    expect(runs.nextQueued(f.person)).toMatchObject({ run_id: 'run_mmmm', trigger: 'approved_record', state: 'running', lease_token: lapsing });
+    // A finished or failed check is not queued, and a failed one is again once it is tried again.
+    expect(runs.finish('run_mmmm', lease('run_mmmm'), card())).toBe(true);
+    expect(runs.fail('run_zzzz', lease('run_zzzz'), 'research_failed')).toBe(true);
+    expect(next()).toBe('run_aaaa');
+    expect(runs.retry(f.person, 'run_zzzz')).toBe(true);
+    expect(next()).toBe('run_zzzz');
+  });
+
   it('fails after three counted attempts and retries with attempts reset', async () => {
     const f = await approvedRunFixture();
     const run = f.runs.list(f.owner, 1)[0]!;

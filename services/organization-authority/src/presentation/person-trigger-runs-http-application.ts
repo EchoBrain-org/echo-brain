@@ -7,6 +7,8 @@ type Input<K extends PersonRunsRequestV1['operation']> = { readonly access_token
 export interface PersonTriggerRunsHttpApplicationV1 {
   list(input: { readonly access_token: string; readonly signal?: AbortSignal }): Promise<PersonRunsResultsV1['list']>;
   start(input: { readonly access_token: string; readonly request: { readonly schema_version: 1; readonly operation: 'start'; readonly run_id: string; readonly capture_id?: string }; readonly signal?: AbortSignal }): Promise<PersonRunsResultsV1['start']>;
+  /** Starts the caller's oldest queued impact check, as `start` starts one by id; the desktop sends it with each change check. */
+  next(input: Input<'next'>): Promise<PersonRunsResultsV1['next']>;
   retry(input: { readonly access_token: string; readonly request: { readonly schema_version: 1; readonly operation: 'retry'; readonly run_id: string }; readonly signal?: AbortSignal }): Promise<PersonRunsResultsV1['retry']>;
   view(input: { readonly access_token: string; readonly request: { readonly schema_version: 1; readonly operation: 'view'; readonly run_id: string }; readonly signal?: AbortSignal }): Promise<PersonRunsResultsV1['view']>;
   home(input: Input<'home'>): Promise<PersonRunsResultsV1['home']>;

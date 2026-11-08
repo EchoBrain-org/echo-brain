@@ -315,6 +315,134 @@ describe('durable approved-record trigger runs', () => {
   });
 });
 
+type RunsFixture = Awaited<ReturnType<typeof fixture>>;
+/** A check-in: the desktop sends it with each change check. */
+const checkIn = (app: RunsFixture['app'], access_token: string) => app.next({ access_token, request: { schema_version: 1, operation: 'next' } });
+/** Queues the impact check of a newer approval, a second after the fixture's own, and answers its run id. */
+async function queueNewer(f: RunsFixture): Promise<string> {
+  f.advance(1_000);
+  const other = await f.otherProposal();
+  f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: 'approve-newer' }), () => f.session);
+  await f.publisher(enqueueApprovedRecordRunV1(f.runs)).appendFinalizedApprovalsToV4(new AbortController().signal);
+  const newer = f.runs.list(f.person, 1)[0]!;
+  expect(newer).toMatchObject({ trigger: 'approved_record', state: 'pending' });
+  expect(newer.run_id).not.toBe(f.row.run_id);
+  return newer.run_id;
+}
+const ended = async (f: RunsFixture, run_id: string) => await vi.waitFor(() => expect(f.runs.read(f.person, run_id)!.state).not.toBe('running'), { interval: 1 });
+
+describe('check-in: the Authority starts the caller\'s next queued impact check (DSK-1)', () => {
+  it('starts the caller\'s oldest queued check with their own token, then the next, and answers idle once none is queued', async () => {
+    const f = await fixture();
+    const newer = await queueNewer(f);
+    await expect(checkIn(f.app, 'unknown')).rejects.toMatchObject({ code: 'unauthorized' });
+    // Another person has nothing queued, and never starts the approver's check.
+    await expect(checkIn(f.app, 'other')).resolves.toEqual({ state: 'idle' });
+    expect(f.research).not.toHaveBeenCalled();
+    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'running' });
+    await f.settled();
+    expect(f.bindDesk.mock.calls[0]![2]).toMatchObject({ access_token: 'approver' });
+    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'done' });
+    expect(f.runs.read(f.person, newer)).toMatchObject({ state: 'pending', attempts: 0, lease_token: null });
+    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'running' });
+    await ended(f, newer);
+    expect(f.runs.read(f.person, newer)).toMatchObject({ state: 'done' });
+    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'idle' });
+    expect(f.research).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers busy while another of the caller\'s runs is running, or while the process runs as many as it allows', async () => {
+    const f = await fixture({ render: ({ signal }) => new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('closed')), { once: true })) });
+    const newer = await queueNewer(f);
+    const app = f.create(f.runs, 1);
+    await expect(checkIn(app, 'approver')).resolves.toEqual({ state: 'running' });
+    // One live run per person: the newer check waits, unclaimed.
+    await expect(checkIn(app, 'approver')).resolves.toEqual({ state: 'busy' });
+    expect(f.runs.read(f.person, newer)).toMatchObject({ state: 'pending', lease_token: null });
+    // The first attempt outlives its lease and still holds the process's one place: its check reads queued again, but waits.
+    f.advance(1_001);
+    await expect(checkIn(app, 'approver')).resolves.toEqual({ state: 'busy' });
+    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'running', attempts: 0 });
+    expect(f.research).toHaveBeenCalledTimes(1);
+    app.close();
+  });
+
+  it('takes over an attempt that stopped without finishing once its lease has lapsed (R60), and leaves a live one be', async () => {
+    let calls = 0;
+    const f = await fixture({ render: async ({ signal }) => {
+      calls++;
+      if (calls === 1) return await new Promise<never>((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('the Authority stopped')), { once: true }));
+      return card;
+    } });
+    const stopped = f.create();
+    await expect(checkIn(stopped, 'approver')).resolves.toEqual({ state: 'running' });
+    await vi.waitFor(() => expect(f.research).toHaveBeenCalledTimes(1), { interval: 1 });
+    stopped.close();
+    await vi.waitFor(() => expect(f.runs.read(f.person, f.row.run_id)!.state).toBe('running'), { interval: 1 });
+    const restarted = f.create();
+    // Its lease still holds: nothing is queued to start.
+    await expect(checkIn(restarted, 'approver')).resolves.toEqual({ state: 'idle' });
+    f.advance(1_001);
+    await expect(checkIn(restarted, 'approver')).resolves.toEqual({ state: 'running' });
+    await f.settled();
+    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'done', attempts: 0 });
+    expect(f.research).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers pending while the search index lags, claiming and spending nothing, and starts once it has caught up', async () => {
+    let lags = true;
+    const indexLags = vi.fn(() => lags);
+    const f = await fixture({ indexLags });
+    const claim = vi.spyOn(f.runs, 'claim');
+    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'pending' });
+    expect(claim).not.toHaveBeenCalled();
+    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'pending', attempts: 0, lease_token: null, error_code: null });
+    expect(f.bindDesk).not.toHaveBeenCalled(); expect(f.research).not.toHaveBeenCalled();
+    lags = false;
+    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'running' });
+    await f.settled();
+    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'done', attempts: 0 });
+    // With nothing queued, a check-in asks nothing of the index.
+    lags = true; indexLags.mockClear();
+    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'idle' });
+    expect(indexLags).not.toHaveBeenCalled();
+  });
+
+  it('never starts a failed check, and starts it again once its approver tries it again', async () => {
+    let calls = 0;
+    const f = await fixture({ render: async () => { calls++; if (calls === 1) throw new Error('the renderer refused'); return card; } });
+    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'running' });
+    await f.settled();
+    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'failed', error_code: 'research_failed' });
+    // A failed check waits for Try again.
+    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'idle' });
+    await expect(f.app.retry({ access_token: 'approver', request: { schema_version: 1, operation: 'retry', run_id: f.row.run_id } })).resolves.toEqual({ state: 'pending' });
+    await expect(checkIn(f.app, 'other')).resolves.toEqual({ state: 'idle' });
+    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'running' });
+    await f.settled();
+    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'done', attempts: 0, error_code: null });
+    expect(f.research).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers idle when the check it picked has ended or gone by the time it claims it (another check-in was first)', async () => {
+    let calls = 0;
+    const f = await fixture({ render: async () => { calls++; if (calls === 1) throw new Error('the renderer refused'); return card; } });
+    const newer = await queueNewer(f);
+    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'running' }); await f.settled();
+    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'running' }); await ended(f, newer);
+    const failed = f.runs.read(f.person, f.row.run_id)!; const done = f.runs.read(f.person, newer)!;
+    expect([failed.state, done.state]).toEqual(['failed', 'done']);
+    // Each picked while it was queued; by its claim, another check-in had run it to its end, or the id is gone.
+    const picked = vi.spyOn(f.runs, 'nextQueued');
+    for (const row of [failed, done, { ...done, run_id: 'run_gone-0000' }]) {
+      picked.mockReturnValueOnce(row);
+      await expect(checkIn(f.app, 'approver'), row.run_id).resolves.toEqual({ state: 'idle' });
+    }
+    expect(picked).toHaveBeenCalledTimes(3);
+    expect(f.research).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('open items written when an impact check finishes', () => {
   it('writes one unsent item per conflict or needs-updating row at finish, with exact owners, and no outside text', async () => {
     const f = await openItemsFixture({ outsideText: 'Kestrel cooling fan drift 0xC0FFEE' });
@@ -348,7 +476,7 @@ describe('open items written when an impact check finishes', () => {
     expect((await f.app.list({ access_token: 'mina' })).runs).toMatchObject([{ run_id: sweep.run_id, trigger: 'sweep', state: 'pending', error_code: null }]);
     expect(await stage()).toMatchObject([{ run_id: f.runId, state: 'pending', error_code: null }]);
     expect([f.runs.readUnfenced(f.runId)!.state, f.runs.readUnfenced(sweep.run_id)!.state]).toEqual(['running', 'running']);
-    // The desktop starts it again: claim takes over the lapsed attempt.
+    // Started again (here by id; a check-in picks it the same way): claim takes over the lapsed attempt.
     await expect(f.app.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id: f.runId } })).resolves.toEqual({ state: 'running' });
     await vi.waitFor(() => expect(f.runs.read(f.person, f.runId)!.state).toBe('done'), { interval: 1 });
   });

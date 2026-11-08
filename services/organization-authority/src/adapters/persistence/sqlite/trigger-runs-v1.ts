@@ -134,6 +134,17 @@ export class SqliteTriggerRunsV1 {
       .all(actor.organization_id, actor.principal_id, actor.membership_id, trigger ?? null, trigger ?? null, capped) as StoredRowV1[]).map(publicRow);
   }
 
+  /**
+   * The actor's oldest queued impact check, by `created_at, run_id`: pending, or running with a lapsed lease (its attempt
+   * stopped without finishing, which `claim` takes again). Approved-record runs only.
+   */
+  nextQueued(actor: ApprovalActorV1): TriggerRunRowV1 | undefined {
+    const found = this.database.prepare(`${selectRows} WHERE organization_id=? AND principal_id=? AND membership_id=? AND trigger='approved_record'
+      AND (state='pending' OR (state='running' AND lease_expires_at<=?)) ORDER BY created_at, run_id LIMIT 1`).get(
+      actor.organization_id, actor.principal_id, actor.membership_id, this.timestamp()) as StoredRowV1 | undefined;
+    return found === undefined ? undefined : publicRow(found);
+  }
+
   read(actor: ApprovalActorV1, runId: string): TriggerRunRowV1 | undefined {
     const found = this.database.prepare(`${selectRows} WHERE run_id=? AND organization_id=? AND principal_id=? AND membership_id=?`).get(
       runId, actor.organization_id, actor.principal_id, actor.membership_id) as StoredRowV1 | undefined;

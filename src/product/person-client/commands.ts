@@ -265,6 +265,7 @@ Prints {ok:true,result:<operation result>}. Existing retained meetings remain re
 Runs a versioned request against approved-record impact runs, the open items they found, and the sweeps that re-check them. Every request is {"schema_version":1,"operation":<operation>,...}:
   list                 your own impact runs and sweeps
   start, retry, view   with run_id; view shows a finished run's impact card to anyone who can read its decision
+  next                 starts your oldest queued impact check, as start does by run_id: idle when none is queued, busy while another of yours runs; the desktop sends it with each change check
   home                 what waits on you: Send rows and open items; read "rows" reads no item live (every reach not_read) and never says sweep_due
   items                with scope mine, involved, run, record or project, an id for run, record and project, and an optional cursor; involved is mine plus the items you last handed on that you can still see; states (a non-empty list of unsent, open, done and not_relevant) pages over items in those states only, with the same states again beside a cursor; changed_since (a UTC millisecond time, mine and involved only) pages over the items sent, handed on or set since then, sent again beside a cursor; read "rows" answers the same page with no item read live (every reach not_read), and read "counts" the counts alone, with no cursor, states or changed_since
   item                 with item_id; read "rows" reads it with no live read
@@ -279,7 +280,7 @@ Reads when something new last arrived in each of your active projects from someo
 `,
   changes: `usage: echo-brain person changes
 
-Checks what moved in your own view since you last looked, with no content: one fingerprint per area (projects, the follow-ups you sent, own or last handed on, and the meetings waiting for your review), and how many seconds to wait before checking again. Compare each fingerprint with the last one you saw and read that area again only when it differs. Prints echo-person-changes-v1 as its last line.
+Checks what moved in your own view since you last looked, with no content: one fingerprint per area (projects, the follow-ups you sent, own or last handed on, and the meetings waiting for your review together with the state of your own impact checks), and how many seconds to wait before checking again (15 while one of your checks is queued or running or one of your approvals is publishing). It never starts a check: runs next does. Compare each fingerprint with the last one you saw and read that area again only when it differs. Prints echo-person-changes-v1 as its last line.
 `,
   "ask-source": `usage: echo-brain person ask-source --source-id <source-id> --revision-id <revision-id> --source-sha256 <sha256:64hex> --representation-sha256 <sha256:64hex> --anchor-sha256 <sha256:64hex> [--document-id <document-id>] [--project <project-id>]
 
