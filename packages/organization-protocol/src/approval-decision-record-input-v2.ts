@@ -269,7 +269,7 @@ export function validateApprovalDecisionRecordInputV2(value: unknown): Validated
 function result(input: ValidatedApprovalDecisionRecordInputV2): ValidatedRecordInputV4 {
   return { human_act_resolution_ref: input.approval_decision_ref_v2, event: input.event, semantic_idempotency_key: input.semantic_idempotency_key };
 }
-/** Plain closures for clarity. (The registry copies validateInput onto its own frozen object, so `this` would also work.) */
+/** Plain closures: the registry calls them unbound. */
 export const APPROVAL_DECISION_RECORD_INPUT_CODEC_V2: RecordInputCodecV4 = Object.freeze({
   input_reference_field: APPROVAL_DECISION_FIELD_V2, reference_kind: APPROVAL_DECISION_REF_KIND_V2, reference_schema_version: 2,
   validateInput: (value: unknown) => result(validateApprovalDecisionRecordInputV2(value)),

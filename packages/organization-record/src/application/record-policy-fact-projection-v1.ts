@@ -58,7 +58,6 @@ export interface RecordPolicyBindingV1 {
  * small static composition seam, not a runtime plugin mechanism.
  */
 export interface RecordPolicyFactProjectorV1 {
-  readonly id: string;
   matches(envelope: RecordPolicyFactEnvelopeV1): boolean;
   project(input: {
     readonly envelope: RecordPolicyFactEnvelopeV1;
@@ -75,49 +74,20 @@ export type RecordPolicyFactProjectorRegistryV1 = Pick<
   "project" | "policyBinding"
 >;
 
-function projectorFor(
-  projectors: readonly RecordPolicyFactProjectorV1[],
-  envelope: RecordPolicyFactEnvelopeV1,
-): RecordPolicyFactProjectorV1 {
-  const matches = projectors.filter((projector) => projector.matches(envelope));
-  if (matches.length !== 1) {
-    throw new Error(
-      matches.length === 0
-        ? "record has no configured policy fact projector"
-        : "record matches multiple policy fact projectors",
-    );
-  }
-  return matches[0]!;
-}
-
+/** The one projector (approval-decision V2); a record it does not match is refused. */
 export function createRecordPolicyFactProjectorRegistryV1(
-  projectors: readonly RecordPolicyFactProjectorV1[],
+  [projector]: readonly [RecordPolicyFactProjectorV1],
 ): RecordPolicyFactProjectorRegistryV1 {
-  if (projectors.length === 0) {
-    throw new Error("record policy fact projector registry is empty");
-  }
-  const identifiers = new Set<string>();
-  for (const projector of projectors) {
-    if (
-      typeof projector.id !== "string" ||
-      projector.id.length === 0 ||
-      typeof projector.matches !== "function" ||
-      typeof projector.project !== "function" ||
-      typeof projector.policyBinding !== "function" ||
-      identifiers.has(projector.id)
-    ) {
-      throw new Error("record policy fact projector registry is invalid");
-    }
-    identifiers.add(projector.id);
-  }
-  const frozen = Object.freeze([...projectors]);
+  const matched = (envelope: RecordPolicyFactEnvelopeV1): RecordPolicyFactProjectorV1 => {
+    if (!projector.matches(envelope)) throw new Error("record has no configured policy fact projector");
+    return projector;
+  };
   return Object.freeze({
     project: (input: {
       readonly envelope: RecordPolicyFactEnvelopeV1;
       readonly record_position: number;
       readonly witness: unknown;
-    }) => projectorFor(frozen, input.envelope).project(input),
-    policyBinding: (envelope: RecordPolicyFactEnvelopeV1) =>
-      projectorFor(frozen, envelope).policyBinding(envelope),
+    }) => matched(input.envelope).project(input),
+    policyBinding: (envelope: RecordPolicyFactEnvelopeV1) => matched(envelope).policyBinding(envelope),
   });
 }
