@@ -3,7 +3,7 @@ import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1 }
 import { DocumentFileError } from './document-file.js';
 import { validatePersonDocumentSearchV2, parseCanonicalAssociationProjectIdsJsonV1, validatePersonUploadAudienceV3 } from '@echo-brain/organization-api';
 import { readUpdateFile } from './update-file.js';
-import { validatePersonUpdateSubmitV3, validatePersonUpdateRequestId, validateProjectIdV1, validateProjectCreateV1, validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1, validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1 } from '@echo-brain/organization-api';
+import { validatePersonUpdateRequestId, validateProjectIdV1 } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import { validatePersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
@@ -18,7 +18,7 @@ import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { EmployeeMutationError, PersonClient } from "./client.js";
-import { PersonAuthorityClientError, PersonContextMutationError } from "./authority-client.js";
+import { PersonAuthorityClientError, PersonContextMutationError, type ContextRouteName } from "./authority-client.js";
 import { PersonClientSessionUnavailableError, type PersonSessionEndedCode } from "./session-store.js";
 import { startPersonLoopbackHandoff } from "./browser-login-handoff.js";
 import {
@@ -101,12 +101,12 @@ type Option = string;
 const RULES: Readonly<
   Record<string, { accepts?: readonly Option[]; requires?: readonly Option[] }>
 > = {
-  "documents-upload-v2": { accepts: ["file", "audience", "audience-project-id", "association-project-ids-json", "audience-project-ids-json", "title", "request-id", "expected-membership-id", "expected-authority"], requires: ["file", "title", "request-id"] },
-  "documents-associate": { accepts: ["request-id", "document-id", "project-id", "expected-membership-id", "expected-authority"], requires: ["request-id", "document-id", "project-id"] },
-  "documents-dissociate": { accepts: ["request-id", "document-id", "project-id", "expected-membership-id", "expected-authority"], requires: ["request-id", "document-id", "project-id"] },
+  "documents-upload-v2": { accepts: ["file", "audience", "audience-project-id", "association-project-ids-json", "audience-project-ids-json", "title", "request-id"], requires: ["file", "title", "request-id"] },
+  "documents-associate": { accepts: ["request-id", "document-id", "project-id"], requires: ["request-id", "document-id", "project-id"] },
+  "documents-dissociate": { accepts: ["request-id", "document-id", "project-id"], requires: ["request-id", "document-id", "project-id"] },
   "documents-pending": { accepts: [], requires: [] },
-  "documents-retry": { accepts: ["request-id", "expected-membership-id", "expected-authority"], requires: ["request-id"] },
-  "documents-abandon": { accepts: ["request-id", "expected-membership-id", "expected-authority"], requires: ["request-id"] },
+  "documents-retry": { accepts: ["request-id"], requires: ["request-id"] },
+  "documents-abandon": { accepts: ["request-id"], requires: ["request-id"] },
   "documents-status-v2": { accepts: ["request-id"], requires: ["request-id"] },
   "documents-search-v2": { accepts: ["project-id", "query", "limit", "cursor"] },
   "documents-download-v2": { accepts: ["document-id", "out", "project-id"], requires: ["document-id", "out"] },
@@ -137,7 +137,7 @@ const RULES: Readonly<
   "session-refresh": {},
   logout: {},
   ask: {
-    accepts: ["question", "project", "progress", "expected-membership-id", "expected-authority", "previous"],
+    accepts: ["question", "project", "progress", "previous"],
     requires: ["question"],
   },
   list: { accepts: ["project", "only-me", "cursor"] },
@@ -565,14 +565,6 @@ function contextCliFailure(action: string, error: unknown, values: Record<Option
   };
 }
 
-/** Optional paired options that bind a document operation to its captured account. */
-function expectedAccount(values: Record<Option, string | boolean | undefined>) {
-  return {
-    ...(values['expected-membership-id'] === undefined ? {} : { expected_membership_id: requiredText(values, 'expected-membership-id') }),
-    ...(values['expected-authority'] === undefined ? {} : { expected_authority: requiredText(values, 'expected-authority') }),
-  };
-}
-
 /** These act on the session itself; every other command acts for one account, and takes a pin. */
 const SESSION_ACTIONS: ReadonlySet<string> = new Set(["login", "status", "session-refresh", "logout"]);
 const PIN_OPTIONS: readonly Option[] = ["expected-membership-id", "expected-authority"];
@@ -638,6 +630,39 @@ function contextPaging(values: Record<Option, string | boolean | undefined>) {
     ...(values.cursor === undefined ? {} : { cursor: requiredText(values, 'cursor') }),
   };
 }
+
+/** A project change's kind, request ID and project. */
+function projectChange(values: Record<Option, string | boolean | undefined>, kind: string) {
+  return { schema_version: 1, kind, request_id: requiredText(values, 'request-id'), project_id: requiredText(values, 'project-id') };
+}
+
+/** Each project-context command: its route (CONTEXT_ROUTES) and the request its options make, validated by the route. */
+const CONTEXT_COMMANDS: Readonly<Record<string, (values: Record<Option, string | boolean | undefined>) => readonly [ContextRouteName, unknown]>> = {
+  'projects-list-v2': values => ['projectsV2', { ...contextPaging(values), ...(values.status === undefined ? {} : { status: requiredText(values, 'status') }) }],
+  'projects-create': values => ['createProject', { schema_version: 1, kind: 'echo-project-create-v1', request_id: requiredText(values, 'request-id'), name: requiredText(values, 'name') }],
+  'projects-read-v2': values => ['readProjectV2', requiredText(values, 'project-id')],
+  'projects-rename': values => ['renameProject', { ...projectChange(values, 'echo-project-rename-v1'), name: requiredText(values, 'name') }],
+  'projects-archive': values => ['archiveProject', { ...projectChange(values, 'echo-project-archive-v1'), archived: true }],
+  'projects-unarchive': values => ['archiveProject', { ...projectChange(values, 'echo-project-archive-v1'), archived: false }],
+  'projects-leave': values => ['leaveProject', projectChange(values, 'echo-project-leave-v1')],
+  'projects-members': values => ['projectMembers', { project_id: validateProjectIdV1(values['project-id']), ...contextPaging(values) }],
+  'projects-directory': values => ['projectDirectory', { project_id: validateProjectIdV1(values['project-id']),
+    ...(values.query === undefined ? {} : { query: requiredText(values, 'query') }), ...contextPaging(values) }],
+  directory: values => ['organizationDirectory', { ...(values.query === undefined ? {} : { query: requiredText(values, 'query') }), ...contextPaging(values) }],
+  'projects-member-add': values => ['addProjectMember', { ...projectChange(values, 'echo-project-member-add-v1'), membership_id: requiredText(values, 'membership-id') }],
+  'projects-member-set': values => ['setProjectMember', { ...projectChange(values, 'echo-project-member-set-v1'), membership_id: requiredText(values, 'membership-id'),
+    role: requiredText(values, 'role') }],
+  'projects-member-remove': values => ['removeProjectMember', { ...projectChange(values, 'echo-project-member-remove-v1'), membership_id: requiredText(values, 'membership-id') }],
+  'projects-associate': values => ['associateProjectContext', { ...projectChange(values, 'echo-project-context-associate-v1'), context_id: requiredText(values, 'context-id') }],
+  'projects-dissociate': values => ['dissociateProjectContext', { ...projectChange(values, 'echo-project-context-dissociate-v1'), context_id: requiredText(values, 'context-id') }],
+  'projects-search-v2': values => ['searchProjectContextV2', { project_id: validateProjectIdV1(values['project-id']), query: requiredText(values, 'query'), ...contextPaging(values) }],
+  'updates-submit-v3': values => ['submitUpdateV3', { schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: validatePersonUpdateRequestId(requiredText(values, 'request-id')),
+    title: requiredText(values, 'title'), text: readUpdateFile(requiredText(values, 'file')),
+    association_project_ids: canonicalProjectIdArray(values['association-project-ids-json'], '--association-project-ids-json'), audience: uploadAudienceV3(values) }],
+  'updates-status-v3': values => ['updateStatusV3', requiredText(values, 'request-id')],
+  'updates-search-v3': values => ['searchUploadsV3', { query: requiredText(values, 'query'), ...contextPaging(values) }],
+  'updates-search': values => ['searchUploadsV2', { query: requiredText(values, 'query'), ...contextPaging(values) }],
+};
 
 /**
  * Reads one secret line that is never echoed. A terminal gets one prompt line
@@ -1098,6 +1123,9 @@ export async function runPersonClientCli(
 
   const client = new PersonClient({
     home_directory: dependencies.home_directory,
+    // A pinned run's own requests are refused under the session lease while another account is signed in. A refresh the
+    // lease needs is not pinned: it renews whatever session is stored, as before.
+    ...(pin === undefined ? {} : { account: pin }),
     ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }),
     allow_insecure_loopback: dependencies.allow_insecure_loopback === true,
     ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
@@ -1137,8 +1165,7 @@ export async function runPersonClientCli(
         const requestId = validatePersonUpdateRequestId(requiredText(values, 'request-id'));
         printDocument(stdout, await client.uploadDocumentV2({ file: requiredText(values, 'file'), request_id: requestId,
           title: requiredText(values, 'title'), audience: uploadAudienceV3(values),
-          association_project_ids: canonicalProjectIdArray(values['association-project-ids-json'], '--association-project-ids-json'),
-          ...expectedAccount(values) }));
+          association_project_ids: canonicalProjectIdArray(values['association-project-ids-json'], '--association-project-ids-json') }));
         break;
       }
       case 'documents-associate':
@@ -1146,7 +1173,7 @@ export async function runPersonClientCli(
         const validate = action === 'documents-associate' ? validatePersonDocumentAssociateV1 : validatePersonDocumentDissociateV1;
         const request = validate({ schema_version: 1, kind: action === 'documents-associate' ? 'echo-person-document-associate-v1' : 'echo-person-document-dissociate-v1',
           request_id: requiredText(values, 'request-id'), document_id: requiredText(values, 'document-id'), project_id: requiredText(values, 'project-id') });
-        printDocument(stdout, await client.changeDocumentAssociation(request, expectedAccount(values)));
+        printDocument(stdout, await client.changeDocumentAssociation(request));
         break;
       }
       case 'documents-pending':
@@ -1154,9 +1181,8 @@ export async function runPersonClientCli(
         break;
       case 'documents-retry':
       case 'documents-abandon': {
-        const expected = expectedAccount(values);
         const requestId = requiredText(values, 'request-id');
-        printDocument(stdout, action === 'documents-retry' ? await client.retryDocument(requestId, expected) : client.abandonDocument(requestId, expected));
+        printDocument(stdout, action === 'documents-retry' ? await client.retryDocument(requestId) : client.abandonDocument(requestId));
         break;
       }
       case 'documents-status-v2':
@@ -1169,75 +1195,6 @@ export async function runPersonClientCli(
         break;
       case 'documents-download-v2':
         printDocument(stdout, await client.downloadDocumentV2(requiredText(values, 'document-id'), requiredText(values, 'out'), values['project-id'] === undefined ? undefined : requiredText(values, 'project-id')));
-        break;
-      case 'projects-list-v2':
-        print(stdout, await client.projectsV2({ ...contextPaging(values), ...(values.status === undefined ? {} : { status: requiredText(values, 'status') as 'active' | 'archived' }) }));
-        break;
-      case 'projects-create':
-        print(stdout, await client.createProject(validateProjectCreateV1({ schema_version: 1, kind: 'echo-project-create-v1',
-          request_id: requiredText(values, 'request-id'), name: requiredText(values, 'name') })));
-        break;
-      case 'projects-read-v2':
-        print(stdout, await client.readProjectV2(requiredText(values, 'project-id')));
-        break;
-      case 'projects-rename':
-        print(stdout, await client.renameProject(validateProjectRenameV1({ schema_version: 1, kind: 'echo-project-rename-v1', request_id: requiredText(values, 'request-id'), project_id: requiredText(values, 'project-id'), name: requiredText(values, 'name') })));
-        break;
-      case 'projects-archive':
-      case 'projects-unarchive':
-        print(stdout, await client.archiveProject(validateProjectArchiveV1({ schema_version: 1, kind: 'echo-project-archive-v1', request_id: requiredText(values, 'request-id'), project_id: requiredText(values, 'project-id'), archived: action === 'projects-archive' })));
-        break;
-      case 'projects-leave':
-        print(stdout, await client.leaveProject(validateProjectLeaveV1({ schema_version: 1, kind: 'echo-project-leave-v1', request_id: requiredText(values, 'request-id'), project_id: requiredText(values, 'project-id') })));
-        break;
-      case 'projects-members':
-        print(stdout, await client.projectMembers({ project_id: validateProjectIdV1(values['project-id']), ...contextPaging(values) }));
-        break;
-      case 'projects-directory':
-        print(stdout, await client.projectDirectory({ project_id: validateProjectIdV1(values['project-id']), ...(values.query === undefined ? {} : { query: requiredText(values, 'query') }), ...contextPaging(values) }));
-        break;
-      case 'directory':
-        print(stdout, await client.organizationDirectory({ ...(values.query === undefined ? {} : { query: requiredText(values, 'query') }), ...contextPaging(values) }));
-        break;
-      case 'projects-member-add':
-        print(stdout, await client.addProjectMember(validateProjectMemberAddV1({ schema_version: 1, kind: 'echo-project-member-add-v1',
-          request_id: requiredText(values, 'request-id'), project_id: requiredText(values, 'project-id'), membership_id: requiredText(values, 'membership-id') })));
-        break;
-      case 'projects-member-set':
-        print(stdout, await client.setProjectMember(validateProjectMemberSetV1({ schema_version: 1, kind: 'echo-project-member-set-v1',
-          request_id: requiredText(values, 'request-id'), project_id: requiredText(values, 'project-id'),
-          membership_id: requiredText(values, 'membership-id'), role: requiredText(values, 'role') })));
-        break;
-      case 'projects-member-remove':
-        print(stdout, await client.removeProjectMember(validateProjectMemberRemoveV1({ schema_version: 1, kind: 'echo-project-member-remove-v1',
-          request_id: requiredText(values, 'request-id'), project_id: requiredText(values, 'project-id'), membership_id: requiredText(values, 'membership-id') })));
-        break;
-      case 'projects-associate':
-        print(stdout, await client.associateProjectContext(validateProjectContextAssociateV1({ schema_version: 1, kind: 'echo-project-context-associate-v1',
-          request_id: requiredText(values, 'request-id'), project_id: requiredText(values, 'project-id'), context_id: requiredText(values, 'context-id') })));
-        break;
-      case 'projects-dissociate':
-        print(stdout, await client.dissociateProjectContext(validateProjectContextDissociateV1({ schema_version: 1, kind: 'echo-project-context-dissociate-v1',
-          request_id: requiredText(values, 'request-id'), project_id: requiredText(values, 'project-id'), context_id: requiredText(values, 'context-id') })));
-        break;
-      case 'projects-search-v2':
-        print(stdout, await client.searchProjectContextV2({ project_id: validateProjectIdV1(values['project-id']), query: requiredText(values, 'query'), ...contextPaging(values) }));
-        break;
-      case 'updates-submit-v3': {
-        const request = validatePersonUpdateSubmitV3({ schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: validatePersonUpdateRequestId(requiredText(values, 'request-id')),
-          title: requiredText(values, 'title'), text: readUpdateFile(requiredText(values, 'file')),
-          association_project_ids: canonicalProjectIdArray(values['association-project-ids-json'], '--association-project-ids-json'), audience: uploadAudienceV3(values) });
-        print(stdout, await client.submitUpdateV3(request));
-        break;
-      }
-      case 'updates-status-v3':
-        print(stdout, await client.updateStatusV3(requiredText(values, 'request-id')));
-        break;
-      case 'updates-search-v3':
-        print(stdout, await client.searchUploadsV3({ query: requiredText(values, 'query'), ...contextPaging(values) }));
-        break;
-      case 'updates-search':
-        print(stdout, await client.searchUploadsV2({ query: requiredText(values, 'query'), ...contextPaging(values) }));
         break;
       case "login": {
         requireSignedOut(client);
@@ -1322,7 +1279,7 @@ export async function runPersonClientCli(
           // One line per step event as it arrives; the last line is the answer's, with the receipt when the Authority streamed.
           // Progress V3 lines: a step may name a follow-up, a project, a person, a tool or a tool container.
           const answer = await client.askWithLiveProgress(question, scope, dependencies.abort_signal,
-            progress => print(stdout, validatePersonAskProgressLineV3({ ok: true, progress })), expectedAccount(values), askPrevious);
+            progress => print(stdout, validatePersonAskProgressLineV3({ ok: true, progress })), askPrevious);
           print(stdout, validatePersonAskProgressResultLineV3({ ok: true, result: answer.result, ...(answer.receipt === undefined ? {} : { receipt: answer.receipt }) }));
           break;
         }
@@ -1414,6 +1371,13 @@ export async function runPersonClientCli(
         await client.revokeEmployee(requiredText(values, "email"));
         print(stdout, { ok: true, revoked: true });
         break;
+      default: {
+        // Own entries only: an Object.prototype name (toString, __proto__ ...) is no project-context command.
+        const command = Object.hasOwn(CONTEXT_COMMANDS, action) ? CONTEXT_COMMANDS[action] : undefined;
+        if (command === undefined) break;
+        const [route, request] = command(values);
+        print(stdout, await client.context(route, request));
+      }
     }
     // A pinned run ends as it began, for its account; otherwise what it printed is not for it.
     assertPinned(client, pin);
