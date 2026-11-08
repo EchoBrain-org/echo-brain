@@ -308,7 +308,7 @@ describe("plan outputs", () => {
     expect(readFileSync(join(root, "output"), "utf8").split("\n")).toEqual([
       "mode=full",
       `tree=${revision("HEAD^{tree}")}`,
-      ...JOB_OUTPUTS.map((job) => `${job}=${EVERY_JOB[job]}`),
+      ...JOB_OUTPUTS.map((job) => `${job}=${EVERY_JOB[job as keyof typeof EVERY_JOB]}`),
       "",
     ]);
   });

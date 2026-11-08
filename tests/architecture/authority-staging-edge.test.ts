@@ -1,14 +1,21 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import {
-  installStagingEdgeToken,
-  stagingEdgeStatus,
-  validateStagingEdgeInput,
-} from "../../tools/authority-staging-edge.mjs";
-import type {
-  FetchLike,
-  StagingEdgeInput,
-} from "../../tools/authority-staging-edge.mjs";
+import * as edge from "../../tools/authority-staging-edge.mjs";
+
+// The fakes implement only the parts of fetch and the secret writer the tool reads.
+type FetchLike = (url: string, init?: Record<string, unknown>) => Promise<unknown>;
+type EdgeCall = (
+  input: unknown,
+  dependencies?: Readonly<{
+    fetchImpl?: FetchLike;
+    putSecretValue?: (value: unknown) => Promise<void>;
+    requestTimeoutMs?: number;
+    maxResponseBytes?: number;
+  }>,
+) => Promise<unknown>;
+const stagingEdgeStatus = edge.stagingEdgeStatus as EdgeCall;
+const installStagingEdgeToken = edge.installStagingEdgeToken as EdgeCall;
+const { validateStagingEdgeInput } = edge;
 
 const INPUT = Object.freeze({
   accountId: "a".repeat(32),
@@ -138,7 +145,7 @@ function ownedDns() {
   };
 }
 
-function install(input: StagingEdgeInput, fetchImpl: FetchLike) {
+function install(input: unknown, fetchImpl: FetchLike) {
   return installStagingEdgeToken(input, {
     fetchImpl,
     putSecretValue: async () => {},

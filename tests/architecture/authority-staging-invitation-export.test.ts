@@ -4,7 +4,6 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { executeInvitationExport, invitationExportCommands, openInvitationPayload, planInvitationExport, sealInvitationPayload } from '../../tools/authority-staging-invitation-export.mjs';
-import type { InvitationExportRequest } from '../../tools/authority-staging-invitation-export.mjs';
 import { cleanReleaseRecord } from '../support/clean-v1-release.js';
 import { canonicalJsonForTest as canonicalJson } from '../support/test-canonical-json.js';
 
@@ -27,7 +26,7 @@ function fixture() {
   const release = readFileSync(releasePath);
   const input = join(root, 'input.json'); write(input, { outputDir: output, release: releasePath });
   const receipt = join(output, 'invitation-export.json');
-  const request = (): InvitationExportRequest => JSON.parse(readFileSync(receipt, 'utf8'));
+  const request = () => JSON.parse(readFileSync(receipt, 'utf8'));
   const calls: (readonly string[])[] = [];
   const state = { submissions: 0, account: '904560150024', changedVolume: false, lostSend: false, pending: false, failed: false, rawOutput: false, clock: 0 };
   const payload = () => { const size = Buffer.alloc(4); size.writeUInt32BE(release.length); return Buffer.concat([size, release, INVITATION]); };
@@ -44,7 +43,8 @@ function fixture() {
       default: throw new Error('unexpected AWS operation');
     }
   };
-  const dependencies = { aws, now: () => state.clock, sleep: (ms: number) => { state.clock += ms; } };
+  // sleep stands in for the tool's Atomics.wait, which reports 'timed-out' after ms.
+  const dependencies = { aws, now: () => state.clock, sleep: (ms: number) => { state.clock += ms; return 'timed-out' as const; } };
   return { root, output, input, receipt, releasePath, release, request, calls, state, payload, encrypted, dependencies };
 }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -80,7 +80,7 @@ describe('private staging invitation export', () => {
 
   it('decrypts directly to two private files, removes the recipient key, never resubmits after completion, and rejects a changed completed file', () => {
     const f = planned();
-    const result = executeInvitationExport(f.receipt, f.dependencies);
+    const result = executeInvitationExport(f.receipt, f.dependencies)!;
     expect(readFileSync(result.invitation_path)).toEqual(INVITATION);
     expect(readFileSync(result.release_path)).toEqual(f.release);
     expect(statSync(result.invitation_path).mode & 0o777).toBe(0o600);
@@ -137,7 +137,7 @@ describe('private staging invitation export', () => {
     const f = planned(); f.state.pending = true;
     expect(() => executeInvitationExport(f.receipt, f.dependencies)).toThrow('export_pending_retry_same_receipt');
     f.state.pending = false;
-    expect(executeInvitationExport(f.receipt, f.dependencies).state).toBe('exported');
+    expect(executeInvitationExport(f.receipt, f.dependencies)!.state).toBe('exported');
     expect(f.state.submissions).toBe(1);
   });
 

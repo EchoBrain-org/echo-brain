@@ -14,12 +14,6 @@ import {
   main,
   runAuthorityStaging,
 } from "../../tools/authority-staging.mjs";
-import type {
-  ChangeSetPlan,
-  ChangeSetRequest,
-  LifecycleDependencies,
-  StackStatus,
-} from "../../tools/authority-staging.mjs";
 import {
   readTemplate,
   resource,
@@ -84,14 +78,27 @@ const EXPECTED_PARAMETERS = Object.freeze({
 });
 
 const template = () => readTemplate(TEMPLATE);
-type VolumeFacts = Awaited<
-  ReturnType<
-    NonNullable<NonNullable<LifecycleDependencies["ec2"]>["describeVolume"]>
-  >
->;
-type KeyFacts = Awaited<
-  ReturnType<NonNullable<LifecycleDependencies["kms"]>["describeKey"]>
->;
+type StackStatus =
+  | { readonly exists: false }
+  | {
+      readonly exists: true;
+      readonly status: string;
+      readonly outputs: Readonly<Record<string, string>>;
+      readonly terminationProtection: boolean;
+    };
+type ChangeSetRequest = {
+  readonly region: string;
+  readonly stackName: string;
+  readonly changeSetName: string;
+  readonly changeSetType: "CREATE" | "UPDATE";
+  readonly clientToken: string;
+  readonly onStackFailure?: "DO_NOTHING";
+  readonly parameterKeys?: readonly string[];
+  readonly templatePath: string;
+  readonly templateSha256: string;
+  readonly capabilities: readonly ["CAPABILITY_IAM"];
+  readonly parameters: Readonly<Record<string, string>>;
+};
 
 function inlinePolicyStatements(
   role: CloudFormationResource,
@@ -436,24 +443,23 @@ function backupDependencies(
   const events: string[] = [];
   const requests: ChangeSetRequest[] = [];
   let backupStack: StackStatus = options.backupStack ?? { exists: false };
-  const plan = (request: ChangeSetRequest): ChangeSetPlan => ({
-    actions: (options.changeActions ??
-      fullInventory()) as Extract<ChangeSetPlan, { kind: "change_set" }>["actions"],
+  const plan = (request: ChangeSetRequest) => ({
+    actions: options.changeActions ?? fullInventory(),
     changeSetType: request.changeSetType,
     id: "change-set-backup-1",
     kind: "change_set",
     matchesExpected: options.matchesExpected ?? true,
     status: "CREATE_COMPLETE",
   });
-  const dependencies: LifecycleDependencies = {
+  const dependencies = {
     cloudFormation: {
-      describeStack: async ({ stackName }) => {
+      describeStack: async ({ stackName }: { stackName: string }) => {
         events.push(`describe:${stackName}`);
         if (stackName === SLOT_STACK) return options.slot ?? slotStack();
         if (stackName === BACKUP_STACK) return backupStack;
         throw new Error(`unexpected stack ${stackName}`);
       },
-      createChangeSet: async (request) => {
+      createChangeSet: async (request: ChangeSetRequest) => {
         events.push(`plan:${request.stackName}:${request.changeSetType}`);
         requests.push(request);
         if (!backupStack.exists)
@@ -465,12 +471,15 @@ function backupDependencies(
           };
         return plan(request);
       },
-      describeChangeSet: async (request) => {
+      describeChangeSet: async (request: ChangeSetRequest) => {
         events.push(`review:${request.stackName}:${request.changeSetType}`);
         requests.push(request);
         return plan(request);
       },
-      executeChangeSet: async ({ stackName, changeSetType }) => {
+      executeChangeSet: async ({
+        stackName,
+        changeSetType,
+      }: Pick<ChangeSetRequest, "stackName" | "changeSetType">) => {
         events.push(`execute:${stackName}:${changeSetType}`);
         backupStack = {
           exists: true,
@@ -486,7 +495,7 @@ function backupDependencies(
             : false,
         };
       },
-      ensureTerminationProtection: async ({ stackName }) => {
+      ensureTerminationProtection: async ({ stackName }: { stackName: string }) => {
         events.push(`protect:${stackName}`);
         if (stackName !== BACKUP_STACK)
           throw new Error("only the backup stack may be protected here");
@@ -498,13 +507,13 @@ function backupDependencies(
       describeImage: async () => {
         throw new Error("backup never inspects the host image");
       },
-      describeVolume: async ({ volumeId }) => {
+      describeVolume: async ({ volumeId }: { volumeId: string }) => {
         events.push(`volume:${volumeId}`);
-        return cleanDataVolume(options.volume) as VolumeFacts;
+        return cleanDataVolume(options.volume);
       },
     },
     sns: {
-      describeTopic: async ({ topicArn }) => {
+      describeTopic: async ({ topicArn }: { topicArn: string }) => {
         events.push("topic");
         if (options.topic === "unreadable") throw new Error("access denied");
         return {
@@ -515,9 +524,9 @@ function backupDependencies(
       },
     },
     kms: {
-      describeKey: async ({ keyId }) => {
+      describeKey: async ({ keyId }: { keyId: string }) => {
         events.push(`key:${keyId === KEY_ARN ? "source" : "other"}`);
-        return sourceKey(options.key) as KeyFacts;
+        return sourceKey(options.key);
       },
     },
   };

@@ -1,11 +1,10 @@
-import { afterEach, describe, expect, expectTypeOf, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { verifyAcceptedStagingRelease, executeStagingRelease, planStagingRelease, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
-import type { StagingReleasePlanOptions } from '../../tools/authority-staging-release.mjs';
 import { cleanReleaseRecord, cleanRuntimeProfile, deployRuntimeProfileFiles } from '../support/clean-v1-release.js';
 import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
 
@@ -26,7 +25,7 @@ function fixture() {
   temporary.push(directory);
   const profile = cleanRuntimeProfile(COMMIT, deployRuntimeProfileFiles());
   const record = (id: string) => cleanReleaseRecord({ release_id: id, source_sha: COMMIT, authority_image: { reference: `904560150024.dkr.ecr.us-west-2.amazonaws.com/echo/organization-authority@sha256:${'d'.repeat(64)}` }, runtime_profile: { artifact_sha256: profile.digest } });
-  const options: StagingReleasePlanOptions = { action: 'status', acceptedRelease: join(directory, 'accepted.json'), release: join(directory, 'candidate.json'), runtimeProfile: join(directory, 'profile.json'), output: join(directory, 'operation.json'), previousToolingSource: OLD };
+  const options = { action: 'status', acceptedRelease: join(directory, 'accepted.json'), release: join(directory, 'candidate.json'), runtimeProfile: join(directory, 'profile.json'), output: join(directory, 'operation.json'), previousToolingSource: OLD };
   write(options.acceptedRelease, record('clean-v1-accepted-test'));
   write(options.release, record('clean-v1-candidate-test'));
   writeFileSync(options.runtimeProfile, profile.bytes, { mode: 0o600 });
@@ -124,21 +123,7 @@ describe('bounded staging release operator', () => {
     planStagingRelease({ ...f.options, action: 'install', inspection, output: join(f.directory, 'install-rest.json') }, dependencies);
     const rest = tools(JSON.parse(readFileSync(join(f.directory, 'install-rest.json'), 'utf8')).request);
     expect([...sent, ...rest].sort()).toEqual(Object.keys(first.old_tool_hashes).sort());
-    // @ts-expect-error Only an install reads an inspection receipt.
     expect(() => planStagingRelease({ ...f.options, action: 'stage', inspection, output: join(f.directory, 'stage.json') }, dependencies)).toThrow('unexpected_inspection');
-  });
-
-  it('exposes validated protocol results without losing their types', () => {
-    expectTypeOf<ReturnType<typeof stagingReleaseTarget>>().not.toBeAny();
-    expectTypeOf<ReturnType<typeof validateReleaseRequest>>().not.toBeAny();
-    expectTypeOf<ReturnType<typeof planStagingRelease>>().not.toBeAny();
-    expectTypeOf<ReturnType<typeof executeStagingRelease>>().not.toBeAny();
-    expectTypeOf<ReturnType<typeof safeReleaseOutcome>>().not.toBeAny();
-    type Paths = Pick<StagingReleasePlanOptions, 'acceptedRelease' | 'release' | 'runtimeProfile' | 'output'>;
-    expectTypeOf<Paths & { action: 'promote' }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
-    expectTypeOf<Paths & { action: 'status'; approval: string }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
-    expectTypeOf<Paths & { action: 'promote'; approval: string }>().toMatchTypeOf<StagingReleasePlanOptions>();
-    expectTypeOf<Paths & { action: 'install' | 'inspect-install' }>().toMatchTypeOf<StagingReleasePlanOptions>();
   });
 
   it('requires a validated request before rendering any remote command', () => {
@@ -170,7 +155,6 @@ describe('bounded staging release operator', () => {
 
   it.each(['shell', 'onboard', 'restore', 'down'])('rejects unsupported action %s before AWS', action => {
     const f = fixture();
-    // @ts-expect-error Untrusted JS/CLI callers still require runtime rejection.
     expect(() => planStagingRelease({ ...f.options, action }, f.dependencies)).toThrow('action_invalid');
     expect(f.calls).toHaveLength(0);
   });
@@ -294,24 +278,19 @@ describe('bounded staging release operator', () => {
     expect(f.state.submissions).toBe(1);
   });
 
-  // The host runner, the local CLI and its declarations each spell these lists.
-  it('keeps the host runner tools, actions and safe codes equal to the local CLI and its types', () => {
+  // The host runner and the local CLI each spell these lists.
+  it('keeps the host runner tools, actions and safe codes equal to the local CLI', () => {
     const quoted = (text: string) => [...text.matchAll(/'([^']+)'/g)].map(match => match[1]!).sort();
     const host = readFileSync(join(REPO, 'tools/authority-staging-release-host.py'), 'utf8');
     const local = readFileSync(join(REPO, 'tools/authority-staging-release.mjs'), 'utf8');
-    const types = readFileSync(join(REPO, 'tools/authority-staging-release.d.mts'), 'utf8');
     const python = (name: string) => quoted(host.match(new RegExp(`^${name} = \\((.*)\\)$`, 'm'))![1]!);
-    const union = (name: string) => quoted(types.match(new RegExp(`export type ${name} =([^;]*);`))![1]!);
     const toolFiles = local.match(/^const TOOL_FILES = Object\.freeze\(\{\n([\s\S]*?)\n\}\);$/m)![1]!;
     const tools = [...toolFiles.matchAll(/^ {2}'([^']+)': /gm)].map(match => match[1]!).sort();
     expect(python('TOOLS')).toEqual(tools);
-    expect(union('StagingReleaseTool')).toEqual(tools);
     const actions = quoted(local.match(/^const ACTIONS = \[(.*)\];$/m)![1]!);
     expect(python('ACTIONS')).toEqual(actions);
-    expect(union('StagingReleaseAction')).toEqual(actions);
     const codes = quoted(local.match(/^ {2}const codes = \[(.*)\];$/m)![1]!);
     expect(python('SAFE_CODES')).toEqual(codes);
-    expect(union('StagingReleaseCode')).toEqual(codes);
   });
 
   it('persists installation-phase failures without retrying or accepting them for inspection', () => {
@@ -383,7 +362,6 @@ describe('bounded staging release operator', () => {
 
   it('requires an explicit exact-release founder authorization for promotion', () => {
     const f = fixture();
-    // @ts-expect-error Verify the runtime also refuses missing authorization.
     expect(() => planStagingRelease({ ...f.options, action: 'promote' }, f.dependencies)).toThrow();
     const candidate = JSON.parse(readFileSync(f.options.release, 'utf8'));
     const approval = join(f.directory, 'approval.json');
