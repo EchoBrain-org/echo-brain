@@ -88,7 +88,7 @@ rank of 1.40 against production's 2.33, and best in 10 of 15 cases.
 ## Gates
 
 - `npm run check` and the desktop CI jobs pass.
-- The [wording evaluation](../../tools/evals/ask-wording/README.md) still
+- The [wording evaluation](https://github.com/EchoBrain-org/echo-brain/blob/1f2e20e3627ce2f0e8bedf753f4333526fa8a084/tools/evals/ask-wording/README.md) still
   passes its three rules with the v2 prompt.
 - The block evaluation, merged with this change, re-runs on the built writer
   (the kernel's own prompt, schema, reading and checks) and passes rules 1 to 5

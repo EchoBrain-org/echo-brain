@@ -1,12 +1,12 @@
 /**
- * Deterministic grading for the Ask answer wording eval (README.md, "Pre-registered rules"). No model judges: each
- * trial is measured from the laid-out V8 answer alone, and the three rules are counts over trials.
+ * Deterministic grading for the gate's wording cases (README.md, "Wording cases"). No model judges: each trial is
+ * measured from the laid-out V8 answer alone, and the three rules are counts over trials.
  */
 import { readFileSync } from "node:fs";
 import { validatePersonQueryText } from "@echo-brain/organization-api";
 import { ITEM_KINDS, nonEmptyStrings, says, words } from "../shared/grading.mjs";
 
-export const CASES_FILE = new URL("./cases.json", import.meta.url);
+export const CASES_FILE = new URL("./wording-cases.json", import.meta.url);
 /** Each group's number of cases, as pre-registered. */
 export const GROUPS = Object.freeze({ names_long_id: 6, plain: 4 });
 /** A lead may share at most this many consecutive words with the question (rule 1). */
@@ -78,8 +78,8 @@ export function caseProblems(document) {
 }
 
 /** The pre-registered cases, refused when they are not the set the README registered. */
-export function loadCases(path = CASES_FILE) {
-  const document = JSON.parse(readFileSync(path, "utf8"));
+export function loadCases() {
+  const document = JSON.parse(readFileSync(CASES_FILE, "utf8"));
   const problems = caseProblems(document);
   if (problems.length > 0) throw new Error(`wording eval cases are invalid: ${problems.slice(0, 5).join("; ")}`);
   return document;
@@ -131,7 +131,7 @@ export function gradeTrial(caseDefinition, response) {
 
 /**
  * The three pre-registered rules over graded trials (`{ grade }`): each passes when at least 90% of all trials pass it.
- * The wording change ships when all three pass. The means are reported beside them, never as rules.
+ * The wording ships when all three pass. The means are reported beside them, never as rules, and each group's counts.
  */
 export function summarizeRules(trials) {
   const rate = (pick) => (trials.length === 0 ? null : trials.filter(pick).length / trials.length);
@@ -154,5 +154,11 @@ export function summarizeRules(trials) {
       long_id_mentions: graded.reduce((total, trial) => total + Object.values(trial.grade.id_mentions).reduce((sum, count) => sum + count, 0), 0),
       leads_naming_a_question_id: graded.filter((trial) => trial.grade.lead_names_question_id).length,
     }),
+    groups: Object.freeze(Object.fromEntries(Object.keys(GROUPS).map((group) => {
+      const own = trials.filter((entry) => entry.group === group);
+      const count = (name) => own.filter((entry) => entry.grade.rules[name]).length;
+      return [group, Object.freeze({ trials: own.length, no_restating: count("no_restating"), long_ids_once: count("long_ids_once"), nothing_lost: count("nothing_lost"),
+        errors: own.filter((entry) => entry.error !== undefined).length })];
+    }))),
   });
 }

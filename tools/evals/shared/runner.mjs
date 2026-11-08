@@ -1,5 +1,5 @@
 /**
- * What the opt-in real-model evaluation runners share (ask-follow-up, ask-wording and ask-blocks): the
+ * What the opt-in real-model evaluation runners share (ask-follow-up and ask-blocks): the
  * report's hash, JSON, usage, safe-error and code-identity helpers, one generation through any model port and the
  * metadata a report keeps of it, a pool that runs trials a few at a time, integer bounds, the argv loop, the writer route
  * (the OpenRouter bundle or the personal Claude account), the private report directory, and the explicit --run and

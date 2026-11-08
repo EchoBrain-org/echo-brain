@@ -1,7 +1,7 @@
 /**
- * What the Ask writer evaluations (ask-wording and ask-blocks) share about running their synthetic cases: each item as
- * the desk releases it, and Ask over a case's desk as the kernel runs it, research scripted and every writer call passed
- * to the evaluation's own writer. What their graders share is in grading.mjs.
+ * What the Ask writer gate's two case sets (ask-blocks: its block and wording cases) share about running their synthetic
+ * cases: each item as the desk releases it, and Ask over a case's desk as the kernel runs it, research scripted and every
+ * writer call passed to the evaluation's own writer. What their graders share is in grading.mjs.
  */
 import { createHash } from "node:crypto";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";

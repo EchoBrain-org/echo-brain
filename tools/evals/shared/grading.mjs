@@ -1,6 +1,6 @@
 /**
- * What the Ask writer evaluations' graders (ask-wording and ask-blocks) share: the kinds of item a case may hold, and
- * the words they read. Nothing here imports the code a grader grades.
+ * What the Ask writer gate's graders (ask-blocks: grade.mjs and wording.mjs) share: the kinds of item a case may hold,
+ * and the words they read. Nothing here imports the code a grader grades.
  */
 
 /** The kinds of item a case may hold. */
