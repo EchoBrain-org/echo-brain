@@ -88,7 +88,7 @@ describe('approval publisher: the brief', () => {
   });
   it('writes no record and runs no hook for a rejection', async () => {
     const calls: unknown[] = [];
-    const f = await approvalCoreFixture({ after_record: (_tx, e) => { calls.push(e); } });
+    const f = await approvalCoreFixture({ after_record: (_tx, e) => calls.push(e) });
     f.core.decide('desktop', f.reject(), () => f.session);
     await f.core.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
     expect(f.recordCount()).toBe(0);
@@ -123,8 +123,42 @@ describe('approval publisher: hooks', () => {
     expect(Object.isFrozen(event)).toBe(true);
     expect(Object.isFrozen(event.reviewer)).toBe(true);
   });
-  it('accepts a synchronous hook that returns a value', async () => {
-    // It returns a RunResult; only a thenable is refused.
+  it('rolls the receipt and the hook\'s writes back when the hook throws, then runs it once on the retry', async () => {
+    let failures = 1;
+    const f = await approvalCoreFixture({ after_record: (tx, e) => {
+      tx.prepare("INSERT INTO temp.hook_log VALUES (?, 'A')").run(e.approval_id);
+      if (failures-- > 0) throw new Error('hook failed');
+    } });
+    hookLog(f);
+    f.core.decide('desktop', f.approve(), () => f.session);
+    await expect(f.core.processing.appendFinalizedApprovalsToV4(signal())).rejects.toThrow('hook failed');
+    expect(f.receipt()).toBeNull();
+    expect(logged(f)).toEqual([]);
+    expect(f.recordCount()).toBe(1);
+    await f.core.processing.appendFinalizedApprovalsToV4(signal());
+    expect(logged(f)).toEqual(['A']);
+    expect(publishedCount(f)).toBe(1);
+    await f.core.processing.appendFinalizedApprovalsToV4(signal());
+    expect(logged(f)).toEqual(['A']);
+  });
+  it('rolls back the hook\'s writes for an earlier record of the group when it throws on a later one', async () => {
+    let calls = 0;
+    const f = await approvalCoreFixture({ after_record: (tx, e) => {
+      tx.prepare("INSERT INTO temp.hook_log VALUES (?, 'A')").run(e.approval_id);
+      if (++calls === 2) throw new Error('second record failed');
+    } });
+    hookLog(f);
+    f.core.decide('desktop', f.approve({ routes: f.routes(id => ({ 'decision-1': [f.projectA], 'act-1': [f.projectA, f.projectB], 'act-2': [] })[id] ?? null) }), () => f.session);
+    await expect(f.core.processing.appendFinalizedApprovalsToV4(signal())).rejects.toThrow('second record failed');
+    expect(f.receipt()).toBeNull();
+    expect(logged(f)).toEqual([]);
+    expect(f.recordCount()).toBe(3);
+    await f.core.processing.appendFinalizedApprovalsToV4(signal());
+    expect(logged(f)).toHaveLength(3);
+    expect(publishedCount(f)).toBe(1);
+  });
+  it('accepts a synchronous hook that returns a value, an object or a number', async () => {
+    // A RunResult, then push's length; only a thenable is refused.
     const returning: (tx: import('better-sqlite3').Database, e: AfterApprovedRecordEventV1) => unknown =
       (tx, e) => tx.prepare("INSERT INTO temp.hook_log VALUES (?, 'run')").run(e.approval_id);
     const f = await approvalCoreFixture({ after_record: returning as AfterApprovedRecordHookV1 });
@@ -133,6 +167,12 @@ describe('approval publisher: hooks', () => {
     await f.core.processing.appendFinalizedApprovalsToV4(signal());
     expect(publishedCount(f)).toBe(1);
     expect(logged(f)).toEqual(['run']);
+    const calls: AfterApprovedRecordEventV1[] = [];
+    const g = await approvalCoreFixture({ after_record: (_tx, e) => calls.push(e) });
+    g.core.decide('desktop', g.approve(), () => g.session);
+    await g.core.processing.appendFinalizedApprovalsToV4(signal());
+    expect(publishedCount(g)).toBe(1);
+    expect(calls).toHaveLength(1);
   });
   it('refuses an async hook function and an after_record that is not a function at registration', async () => {
     const f = await approvalCoreFixture();

@@ -110,7 +110,7 @@ export function createPersonMeetingRuntimeV1(options: {
   /** One provider per tool; a stored source belongs to the provider whose cursor policy names its source adapter. */
   readonly providers: readonly PersonMeetingProviderV1[]; readonly processor: DecisionProcessorBundleV1;
   readonly approval: Omit<ApprovalWorkflowContextV1, 'state'>; readonly extraction_attempts: ExtractionAttemptStoreV1;
-  /** Static, core-independent approval core options: the decided_at test seam and the after-record hooks. */
+  /** Static, core-independent approval core options: the decided_at test seam, the after-record hook and the presenter. */
   readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'now' | 'after_record' | 'presenter'>;
   /** Provider routes composed around the shared personal Authority runtime. */
   readonly provider_applications?: readonly ProviderHttpApplicationV1[];

@@ -37,7 +37,7 @@ import a provider implementation.
 - `approval-core-v1.ts` owns one proposal per meeting and the decision table
   (first decision wins, from any surface). `approval-publisher-v1.ts` turns each
   approval into one record through `approval-decision-projection-v1.ts`, writes
-  the receipt and runs the after-record hooks in one Authority transaction.
+  the receipt and runs the after-record hook in one Authority transaction.
   `authority-record-protocols-v1.ts` is the one list of record codecs and
   projectors. `person-trigger-runs-v1.ts` serves `POST /v1/person/runs`: the
   approver-owned impact checks that the hook enqueues and the sweeps a person

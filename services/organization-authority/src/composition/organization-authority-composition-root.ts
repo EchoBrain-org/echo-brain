@@ -315,65 +315,65 @@ export async function openOrganizationAuthorityService(
               new SqliteTriggerRunsV1(resources.database),
             ),
             presenter: (core) =>
-                createSlackApprovalPresenterV1({
-                  database: resources.database,
-                  core,
-                  target: (reviewer) => {
-                    const membership_type = resources.database
-                      .prepare(
-                        "SELECT membership_type FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=? AND status='active'",
-                      )
-                      .pluck()
-                      .get(
-                        reviewer.organization_id,
-                        reviewer.principal_id,
-                        reviewer.membership_id,
-                      );
-                    if (
-                      membership_type !== "owner" &&
-                      membership_type !== "employee"
+              createSlackApprovalPresenterV1({
+                database: resources.database,
+                core,
+                target: (reviewer) => {
+                  const membership_type = resources.database
+                    .prepare(
+                      "SELECT membership_type FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=? AND status='active'",
                     )
-                      return null;
-                    return resolveSlackDmApprovalTargetV1(
-                      openedControl,
-                      resources.coordinates,
-                      { ...reviewer, membership_type },
+                    .pluck()
+                    .get(
+                      reviewer.organization_id,
+                      reviewer.principal_id,
+                      reviewer.membership_id,
                     );
-                  },
-                  targetCurrent,
-                  poster: (target) =>
-                    createTargetBoundSlackApprovalPosterV1({
-                      target,
-                      activeConnection: () =>
-                        readActiveSlackConnectionV1(
-                          openedControl,
-                          resources.coordinates,
-                        ),
-                      targetCurrent,
-                      botToken: slack.bot_token_source,
-                      needsReinstall: (active) =>
-                        slack.connection_health.needsReinstall(
-                          active.state_sha256,
-                        ),
-                      markNeedsReinstall: (active) =>
-                        slack.connection_health.markNeedsReinstall(
-                          active.state_sha256,
-                        ),
-                    }),
-                  projects: (reviewer) =>
-                    resources.database
-                      .prepare(
-                        `SELECT p.project_id,p.name FROM authority_projects_v1 p JOIN authority_project_memberships_v1 m ON m.project_id=p.project_id WHERE p.organization_id=? AND p.status='active' AND m.principal_id=? AND m.membership_id=? AND m.status='active' ORDER BY p.project_id LIMIT 100`,
-                      )
-                      .all(
-                        reviewer.organization_id,
-                        reviewer.principal_id,
-                        reviewer.membership_id,
-                      ) as readonly {
-                      readonly project_id: string;
-                      readonly name: string;
-                    }[],
-                }),
+                  if (
+                    membership_type !== "owner" &&
+                    membership_type !== "employee"
+                  )
+                    return null;
+                  return resolveSlackDmApprovalTargetV1(
+                    openedControl,
+                    resources.coordinates,
+                    { ...reviewer, membership_type },
+                  );
+                },
+                targetCurrent,
+                poster: (target) =>
+                  createTargetBoundSlackApprovalPosterV1({
+                    target,
+                    activeConnection: () =>
+                      readActiveSlackConnectionV1(
+                        openedControl,
+                        resources.coordinates,
+                      ),
+                    targetCurrent,
+                    botToken: slack.bot_token_source,
+                    needsReinstall: (active) =>
+                      slack.connection_health.needsReinstall(
+                        active.state_sha256,
+                      ),
+                    markNeedsReinstall: (active) =>
+                      slack.connection_health.markNeedsReinstall(
+                        active.state_sha256,
+                      ),
+                  }),
+                projects: (reviewer) =>
+                  resources.database
+                    .prepare(
+                      `SELECT p.project_id,p.name FROM authority_projects_v1 p JOIN authority_project_memberships_v1 m ON m.project_id=p.project_id WHERE p.organization_id=? AND p.status='active' AND m.principal_id=? AND m.membership_id=? AND m.status='active' ORDER BY p.project_id LIMIT 100`,
+                    )
+                    .all(
+                      reviewer.organization_id,
+                      reviewer.principal_id,
+                      reviewer.membership_id,
+                    ) as readonly {
+                    readonly project_id: string;
+                    readonly name: string;
+                  }[],
+              }),
           },
         });
         if (synthetic !== undefined)
