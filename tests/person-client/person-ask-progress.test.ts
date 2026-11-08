@@ -161,6 +161,7 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       expect(headers.get('accept')).toBe('text/event-stream, application/json');
       expect(headers.get('authorization')).toBe('Bearer bearer');
       expect(headers.get('x-echo-time-zone')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+      expect(Math.abs(Date.now() - Date.parse(headers.get('x-echo-client-now')!))).toBeLessThan(5_000);
       expect(headers.get('x-echo-answer-layout')).toBeNull();
       expect(headers.get('x-echo-ask-gap-details')).toBe('1');
     }
@@ -445,18 +446,20 @@ describe('person ask --progress', () => {
     expect(lines(plain.stdout)).toEqual([{ ok: true, result: answerV8() }]);
   });
 
-  it('sends no opt-in header and prints one line without --progress, on /v7 in every scope', async () => {
-    for (const [argv, body] of [
-      [['ask', '--question', 'What did we decide?'], answerV8()],
-      [['ask', '--question', 'What did we decide?', '--project', projectId], answerProjectV8()],
+  // One Ask transport: a plain Ask streams too, under the session's own credential, and prints only the answer's line.
+  it('streams an Ask without --progress too, and prints just its answer line, on /v7 in every scope', async () => {
+    for (const [argv, body, request] of [
+      [['ask', '--question', 'What did we decide?'], answerV8(), { schema_version: 3, question: 'What did we decide?' }],
+      [['ask', '--question', 'What did we decide?', '--project', projectId], answerProjectV8(), { schema_version: 3, question: 'What did we decide?', project_id: projectId }],
     ] as const) {
-      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body));
+      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(framesV3([...STEPS_V3, { type: 'answer', response: body, receipt: receiptV3() }]), 7));
       const { output, run } = cli(sessionHome(), fetch);
       await expect(run(argv)).resolves.toBe(0);
-      expect(pathOf(fetch.mock.calls[0]![0])).toBe('/v7/person/ask');
-      expect(headersOf(fetch.mock.calls[0]![1]).has(PERSON_ASK_PROGRESS_HEADER_V1)).toBe(false);
-      expect(headersOf(fetch.mock.calls[0]![1]).get('x-echo-answer-layout')).toBeNull();
-      expect(output.stdout).toBe(`${JSON.stringify({ ok: true, result: body })}\n`);
+      const [url, init] = fetch.mock.calls[0]!;
+      expect([pathOf(url), init?.method, JSON.parse(String(init?.body))]).toEqual(['/v7/person/ask', 'POST', request]);
+      expect(headersOf(init).get(PERSON_ASK_PROGRESS_HEADER_V1)).toBe('3');
+      expect(headersOf(init).get('authorization')).toBe(`Bearer ${SESSION.access_token}`);
+      expect(output).toEqual({ stdout: `${JSON.stringify({ ok: true, result: body })}\n`, stderr: '' });
     }
   });
 

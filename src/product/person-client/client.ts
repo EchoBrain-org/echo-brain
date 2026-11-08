@@ -724,17 +724,17 @@ export class PersonClient {
    * request-advertised live evidence sources, ECHO's shared follow-ups
    * (ADR-0040), and the asker's projects, people, tools and tool containers
    * (research tool contract v1). It may carry the asker's previous turn
-   * (ADR-0047).
+   * (ADR-0047) and a diagnostic capture. It is the one streamed Ask
+   * (askWithLiveProgress) with its steps unread.
    */
   async askWithLiveSources(question: string, scope?: ProjectIdV1, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1,
     previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
-    validateAskInput(question, scope);
-    return this.withReadSession((authority, token) => authority.askV7(token, question, scope, signal, captureId, previous), signal, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
+    return (await this.askWithLiveProgress(question, scope, signal, () => undefined, previous, captureId)).result;
   }
 
   /**
-   * `askWithLiveSources` with Ask progress V3 (ADR-0039): each step event
-   * reaches `onProgress` as it arrives, and may name a follow-up, a project, a
+   * Every Ask, in Ask progress V3 (ADR-0039): each step event reaches
+   * `onProgress` as it arrives, and may name a follow-up, a project, a
    * person, a tool or a tool container; the answer carries its receipt only
    * when the Authority streamed. A JSON answer comes back without progress or a
    * receipt.
@@ -748,7 +748,7 @@ export class PersonClient {
    * refused before anything is sent, so no step of that account reaches it.
    */
   async askWithLiveProgress(question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
+    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonLiveAnswerV3> {
     validateAskInput(question, scope);
     return this.withSession(async stored => {
       const authority = this.authority(stored.authority_origin);
@@ -762,7 +762,7 @@ export class PersonClient {
         if (!sameAccount(current, stored)) throw new Error("Person tool operation did not match the current account");
         onProgress(event);
       };
-      const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous);
+      const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous, captureId);
       this.assertCurrentSession(stored);
       return answer;
     }, signal, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);

@@ -1065,29 +1065,19 @@ export class PersonAuthorityClient {
   }
 
   /**
-   * Ask (`/v7`, the V8 answer, research tool contract v1): global by default, and a supplied project ID is a strict
-   * project-only scope. The answer may cite live tickets and pages, follow-ups, and the asker's projects, people, tools
-   * and tool containers, and must echo the requested scope. The request may carry the asker's previous turn (ADR-0047).
-   */
-  async askV7(accessToken: string, question: string, scope?: ProjectIdV1, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1, previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
-    const response = await this.json({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, captureId, previous), headers: askHeaders(),
-      validate_request: validatePersonAnswerRequestV3, validate_response: validatePersonAnswerResponseV8,
-      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
-    return inAskScope(response, scope, previous);
-  }
-
-  /**
-   * `askV7` streamed in Ask progress V3 (ADR-0039): each step event reaches
-   * `onProgress` as it arrives, and the answer comes back with the receipt the
-   * Authority built after its final check. An Authority that does not stream
-   * answers with the JSON answer, returned without a receipt, and an error
-   * inside the stream is the error its JSON response would have had. The ask
-   * timeout and the caller's signal bound the whole stream.
+   * The Ask's one transport (`/v7`, the V8 answer, research tool contract v1), streamed in Ask progress V3 (ADR-0039):
+   * global by default, and a supplied project ID is a strict project-only scope. The answer may cite live tickets and
+   * pages, follow-ups, and the asker's projects, people, tools and tool containers, and must echo the requested scope.
+   * The request may carry the asker's previous turn (ADR-0047) and a diagnostic capture. Each step event reaches
+   * `onProgress` as it arrives, and the answer comes back with the receipt the Authority built after its final check.
+   * An Authority that does not stream answers with the JSON answer, returned without a receipt, and an error inside
+   * the stream is the error its JSON response would have had. The ask timeout and the caller's signal bound the whole
+   * stream.
    */
   async askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
+    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonLiveAnswerV3> {
     const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
-    const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, undefined, previous), validate_request: validatePersonAnswerRequestV3,
+    const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, captureId, previous), validate_request: validatePersonAnswerRequestV3,
       access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json`, [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 } }, deadline);
     if (!isAskProgressStream(response)) {
       const value = await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
