@@ -242,7 +242,6 @@ function verifyApprovalDecisionWitnessV1(parsed: ReturnType<typeof validateAppro
  */
 export function createApprovalDecisionPolicyProjectorV1(): RecordPolicyFactProjectorV1 {
   return Object.freeze({
-    id: APPROVAL_DECISION_REF_KIND_V2,
     matches: (envelope: RecordPolicyFactEnvelopeV1) => {
       const ref = envelope.body.human_act_resolution_ref as { kind?: unknown; schema_version?: unknown };
       return ref.kind === APPROVAL_DECISION_REF_KIND_V2 && ref.schema_version === 2;
