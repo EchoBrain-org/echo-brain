@@ -1,11 +1,9 @@
 // The Ask timeline (ADR-0047), in the real app with the fixture Authority:
 // kept on this computer through navigation, earlier turns folded to lines
-// that open as they were, a turn an older desktop saved without blocks kept
-// in them, what changed lit, follow-ups carrying readable evidence, and a
-// project's dot with its New rows.
+// that open as they were, what changed lit, follow-ups carrying readable
+// evidence, and a project's dot with its New rows.
 import { expect, test, type Page } from '@playwright/test';
-import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emit, launch, type Launched } from './launch.js';
 
@@ -80,32 +78,6 @@ test('the timeline stays through navigation, on this computer only, each place s
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('opened-turn')).toContainText('We agreed to ship Apollo with annual plans first.');
   expect(asks()).toHaveLength(3);
-});
-
-test('a turn an older desktop saved without blocks still opens, a paragraph a sentence, and the next answer writes it back in blocks', async () => {
-  const question = 'What is open on THERM?';
-  const said = ['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.'];
-  const cited = (id: string, label: string) => ({ kind: 'page', tool_id: 'confluence', label, permalink: `https://example.atlassian.net/wiki/pages/viewpage.action?pageId=${id}` });
-  // The account's file as a desktop from before answer layout v2 (ADR-0051) wrote it: the part's sentences, and no blocks.
-  const old = { id: '00000000-0000-4000-8000-000000000001', asked_at: new Date(Date.now() - 24 * 60 * 60_000).toISOString(), text: question, question,
-    scope: { kind: 'global' }, answer: { text: said.join('\n'), scope: { kind: 'global' }, outcome: 'answered', sources: [cited('31001', 'THERM triage'), cited('31010', 'DVT plan')],
-      parts: [{ question, status: 'answered', statements: said.map((text, at) => ({ text, citation_indexes: [at], private: false })) }] } };
-  const account = createHash('sha256').update('https://authority.example mem_22222222-2222-4222-8222-222222222222').digest('hex');
-  const file = join('.local', 'share', 'echo-brain', 'person', 'ask-timeline-v1', `${account}.json`);
-  run = await launch('', { [file]: JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [old] }) });
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('ask-field').click();
-  await page.getByTestId('suggestion').filter({ hasText: question }).click();
-  const turn = page.getByTestId('turn').filter({ hasText: question });
-  await expect(turn.locator('.answer-paragraph').getByTestId('statement-text')).toHaveText(said);
-  await expect(turn.locator('.answer-paragraph')).toHaveCount(2);
-  await expect(turn.getByTestId('citation')).toHaveText(['1', '2']);
-  // A new answer is kept beside it, and the file now holds the old turn in its blocks too.
-  await ask(page, 'What did we agree?');
-  const saved = () => (JSON.parse(readFileSync(join(run.home, file), 'utf8')) as { turns: { id: string; answer: { parts: { blocks?: unknown }[] } }[] }).turns;
-  await expect.poll(() => saved().map(each => each.id)).toHaveLength(2);
-  expect(saved()[0]).toMatchObject({ id: old.id, answer: { parts: [{ blocks: [{ kind: 'text', statements: [0] }, { kind: 'text', statements: [1] }] }] } });
 });
 
 test('a line tagged Changed opens as its heading, with what changed lit and what you can no longer read left out', async () => {

@@ -192,8 +192,6 @@ describe('view models copy only what the renderer may see', () => {
       { kind: 'original', label: 'Pricing call', ref: { source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
         representation_sha256: sha('5'), anchor_sha256: sha('6') } },
     ]);
-    // One part answers the question itself: its plain text does not repeat it.
-    expect(answer.text).toBe('Ship it.');
   });
 
   it('maps Agentic Ask statements to their exact sources, including project records and fallback whitespace; the notice stays behind', () => {
@@ -210,17 +208,16 @@ describe('view models copy only what the renderer may see', () => {
       direct: { private: false, citation_indexes: [0] }, parts: [{ status: 'records_only', records: [{ text: 'Exact\n  fallback' }] }],
       sources: [{ kind: 'record', label: 'Project review', record: { policy_id: 'project-members-readable-person-v1' } }],
     });
-    // The page no longer shows what research did not cover (ADR-0047): neither the notice nor a gap reaches it, nor its plain reading.
+    // The page no longer shows what research did not cover (ADR-0047): the notice does not reach it.
     expect(answer).not.toHaveProperty('notice');
-    expect(answer.text).toBe('A summary.\nExact\n  fallback');
   });
 
-  it('keeps a not-found outcome, whose plain reading leaves its gap out', () => {
+  it('keeps a not-found outcome and its gap', () => {
     const project = { kind: 'project', project_id: 'prj_11111111-1111-4111-8111-111111111111' } as const;
     const empty = (outcome: string) => ({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: project, outcome, citations: [],
       parts: [{ question: 'Who owns pricing?', status: 'not_found', statements: [], gap: 'Not found.' }] });
     expect(answerView({ ok: true, result: empty('not_found') }, project)).toEqual({
-      text: '', scope: project, sources: [], outcome: 'not_found',
+      scope: project, sources: [], outcome: 'not_found',
       parts: [{ question: 'Who owns pricing?', status: 'not_found', statements: [], gap: 'Not found.' }],
     });
   });
@@ -776,26 +773,19 @@ describe('a streamed answer\'s receipt (ADR-0039, ADR-0040, ADR-0043)', () => {
     }
   });
 
-  it('refuses a Mine answer, a scope no Ask answers any more, with or without its receipt', () => {
-    const mine = { kind: 'mine' } as const;
-    const answer = { ...v8([named]), scope: mine };
-    expect(() => answerView({ ok: true, result: answer }, mine)).toThrow(ViewError);
-    expect(() => answerView({ ok: true, result: answer, receipt: meetings }, mine)).toThrow(ViewError);
-  });
 });
 
 describe('an answer arranged in blocks (answer layout v2, ADR-0051)', () => {
   const scope = { kind: 'global' } as const;
   const question = 'Can THERM start PVT?';
 
-  it('carries the fixture\'s blocks as the client validated them, every block, and reads its sentences one a line', () => {
+  it('carries the fixture\'s blocks as the client validated them, every block', () => {
     const arranged = answerView({ ok: true, result: blocksAnswer(question, scope) }, scope);
     const blocks = arranged.parts[0]!.blocks!;
     expect(blocks.map(block => block.kind)).toEqual(['answer', 'table', 'timeline', 'card', 'points', 'text', 'quote']);
     expect(blocks[2]).toMatchObject({ kind: 'timeline', title: 'Soak test', statements: [2, 3], events: [{ date: '2026-10-20', who: 'Noor Haddad' }, { date: '2026-10-23' }] });
     expect(blocks[3]).toMatchObject({ kind: 'card', title: 'THERM-48', entity: 'ticket', facts: [{ label: 'Status', value: 'In review' }, { label: 'Owner', value: 'Tomas Okafor' }] });
     expect(arranged.parts[0]).not.toHaveProperty('layout');
-    expect(arranged.text).toBe(arranged.parts[0]!.statements.map(statement => statement.text).join('\n'));
   });
 
   it('marks a cited item only you or the approver can read as private, for the lock on its source row', () => {
@@ -854,7 +844,7 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
   it('reads the full question an answer answers, and Ask again\'s "since", whose citations are the answer\'s own', () => {
     const since = { statements: [{ text: 'ECHO-7 moved to In Progress.', citation_indexes: [0], private: true }] };
     const answer = answerView(line({ question: 'Who owns ECHO-7?', since }), scope);
-    expect(answer).toMatchObject({ outcome: 'answered', question: 'Who owns ECHO-7?', since: since.statements, text: 'Ship it.' });
+    expect(answer).toMatchObject({ outcome: 'answered', question: 'Who owns ECHO-7?', since: since.statements });
     // Nothing material changed: an empty list, which the page says as "Nothing changed since".
     expect(answerView(line({ question: 'Who owns ECHO-7?', since: { statements: [] } }), scope).since).toEqual([]);
     // A "since" sentence that cites what the answer does not is not the client's output.
@@ -870,7 +860,7 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
     const choices = [{ label: 'THERM-482 · Sensor drift', question: 'Who owns THERM-482?' }, { label: 'THERM-490 · DVT retest', question: 'Who owns THERM-490?' }];
     // "Which one?" names the question asked, and says nothing else.
     const clarify = (fields: Record<string, unknown>) => line({ outcome: 'clarify', citations: [], parts: [], question: 'Who owns it?', choices, ...fields });
-    expect(answerView(clarify({}), scope)).toEqual({ text: '', scope, sources: [], parts: [], outcome: 'clarify', question: 'Who owns it?', choices });
+    expect(answerView(clarify({}), scope)).toEqual({ scope, sources: [], parts: [], outcome: 'clarify', question: 'Who owns it?', choices });
     expect(() => answerView(clarify({ choices: choices.slice(0, 1) }), scope)).toThrow(ViewError);
     expect(() => answerView(line({ outcome: 'clarify', citations: [], parts: [], question: 'Who owns it?' }), scope)).toThrow(ViewError);
     expect(() => answerView(clarify({ choices: [...choices, { label: 'More' }] }), scope)).toThrow(ViewError);

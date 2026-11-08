@@ -530,7 +530,7 @@ describe('Copy answer', () => {
     const base = therm();
     const long = 'x'.repeat(11_850);
     const missing = 'Not found: the person who approved the launch.';
-    const { store, thread } = await answered({ ...base, text: long, outcome: 'partial', parts: [{ question: QUESTION, status: 'partial',
+    const { store, thread } = await answered({ ...base, outcome: 'partial', parts: [{ question: QUESTION, status: 'partial',
       statements: [{ text: long, citation_indexes: [0], private: false }], blocks: [{ kind: 'text', statements: [0] }],
       gap: `${missing} Some unchecked entries did not fit.`, gap_details: { not_found: missing } }] });
     expect(byTestId(thread(), 'answer-gap').map(text)).toEqual([missing]);
@@ -541,7 +541,7 @@ describe('Copy answer', () => {
   it('copies the plain text when the Markdown is past what Copy answer takes', async () => {
     const base = therm();
     const long = 'x'.repeat(11_990);
-    const { store } = await answered({ ...base, text: long, parts: [{ question: QUESTION, status: 'answered', statements: [{ text: long, citation_indexes: [0], private: false }],
+    const { store } = await answered({ ...base, parts: [{ question: QUESTION, status: 'answered', statements: [{ text: long, citation_indexes: [0], private: false }],
       blocks: [{ kind: 'text', statements: [0] }] }] });
     expect(await store.copyAnswer(paneTurn(store))).toBe(true);
     expect(copied()).toEqual([long]);

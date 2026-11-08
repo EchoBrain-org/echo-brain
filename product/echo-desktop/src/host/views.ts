@@ -308,19 +308,14 @@ export function isRecordRef(value: unknown): value is RecordRef {
  * research tool contract v1). An answer to an Ask that carried `previous`
  * (ADR-0047) also says the full question it answers, Ask again's "since" (its
  * citations among the answer's), or, asking which one (`clarify`), the
- * choices and no part. Its diagnostic notice and gaps stay out of the plain
- * reading; the desktop and Copy derive actionable explanations from gap_details.
+ * choices and no part. Its diagnostic notice stays out; the desktop and Copy
+ * derive actionable explanations from gap_details.
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const { result, receipt } = validated(validatePersonAskProgressResultLineV3, raw);
   const { direct, parts, outcome } = result;
   const sources = result.citations.map(citedSource);
-  // One part answers the question itself, so its question is not repeated.
-  const single = parts.length === 1;
-  const textValue = [direct?.text, ...parts.flatMap(part => [single ? undefined : part.question, ...part.statements.map(statement => statement.text),
-    ...(part.records?.map(record => record.text) ?? [])])]
-    .filter((line): line is string => typeof line === 'string' && line !== '').join('\n');
-  return { text: textValue, scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
+  return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
     ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through, rows: receipt.rows.map(askRow) } }),
     ...(result.question === undefined ? {} : { question: result.question }),
     ...(result.since === undefined ? {} : { since: result.since.statements }),

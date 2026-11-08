@@ -198,17 +198,11 @@ export interface Matches {
   readonly items: readonly Match[];
 }
 
-/**
- * Ask is always explicitly scoped; there is no default. Mine (only what you added) is never asked from the desktop any
- * more (ADR-0049): it stays for the turns kept on this computer that were asked in it.
- */
-export type AskScope = { readonly kind: 'global' } | ProjectScope | { readonly kind: 'mine' };
+/** Ask is always explicitly scoped; there is no default: everything you can read, or one project. */
+export type AskScope = { readonly kind: 'global' } | ProjectScope;
 
 /** An Ask in one project: the bar's chip. */
 export type ProjectScope = { readonly kind: 'project'; readonly project_id: string };
-
-/** A scope the desktop asks in: everything you can read, or one project. */
-export type AskedScope = Exclude<AskScope, { readonly kind: 'mine' }>;
 
 /** Immutable coordinates of one answer source; opaque to the renderer. */
 export interface SourceRef {
@@ -374,9 +368,8 @@ export interface AnswerPart {
 /** One thing a follow-up could be about, as Ask offers it to choose (ADR-0047): a short label, and the full question it asks. */
 export type AskChoice = PersonAnswerChoiceV1;
 
-/** An Agentic Ask answer. `text` is its plain reading, for Copy answer when its Markdown is too long. */
+/** An Agentic Ask answer. */
 export interface Answer {
-  readonly text: string;
   readonly scope: AskScope;
   readonly sources: readonly AnswerSource[];
   readonly direct?: AnswerStatement;
@@ -745,7 +738,7 @@ export interface HostMethods {
     result: Receipt;
   };
   /** `previous`: the earlier turn a follow-up or Ask again carries (C3). */
-  'ask.run': { params: { expect: Expect; question: string; scope: AskedScope; cancel_id: string; previous?: AskPrevious }; result: Answer };
+  'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious }; result: Answer };
   /** The account's Ask timeline on this device, oldest first; an unreadable file reads as empty (ADR-0047). */
   'timeline.read': { params: { expect: Expect }; result: { turns: TimelineTurn[] } };
   /** Keeps one turn: a new one at the end, or one already kept in its place; then the oldest past the bounds go. */

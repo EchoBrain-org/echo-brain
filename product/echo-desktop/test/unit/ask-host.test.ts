@@ -25,7 +25,6 @@ describe('the command an Ask runs', () => {
     const ref = { source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'), representation_sha256: sha('5'), anchor_sha256: sha('6') };
     const passage = ['ask-source', `--source-id=${ref.source_id}`, '--revision-id=r1', `--source-sha256=${sha('4')}`, `--representation-sha256=${sha('5')}`, `--anchor-sha256=${sha('6')}`];
     expect(askSourceArgv(ref, { kind: 'global' })).toEqual(passage);
-    expect(askSourceArgv(ref, { kind: 'mine' })).toEqual(passage);
     expect(askSourceArgv({ ...ref, document_id: `doc_${'a'.repeat(64)}` }, { kind: 'project', project_id: project }))
       .toEqual([...passage, `--document-id=doc_${'a'.repeat(64)}`, `--project=${project}`]);
   });

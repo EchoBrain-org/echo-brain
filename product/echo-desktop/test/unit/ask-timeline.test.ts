@@ -1,15 +1,11 @@
 // The Ask timeline (ADR-0047), in the store and on the page: which turns show
 // in full and which fold, the timeline kept through navigation and read again
-// at sign-in, a turn saved without blocks as paragraphs; one check of
-// the newest turns' sources when Ask opens, kept five minutes, quiet when it
+// at sign-in; one check of the newest turns' sources when Ask opens, kept five minutes, quiet when it
 // fails, turned into Changed tags, lit sentences and sentences left out; the
 // earlier turn a follow-up or Ask again carries, and how it is trimmed; "Which
 // one?"; the sidebar's dots with a project's New rows; and the earlier
 // questions past the newest three folded into one line, with the sidebar's Ask
 // going back to where you left Ask.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, AskScope, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
@@ -20,10 +16,9 @@ import {
 } from '../../src/renderer/timeline.js';
 import { suggestedQuestions } from '../../src/renderer/bar.js';
 import { askedWhen } from '../../src/renderer/format.js';
-import { readTimeline, timelinePath } from '../../src/host/timeline.js';
 import { paragraphs } from '../fixtures/authority.js';
 import {
-  ACCOUNT, byClass, byTestId, classes, click, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore,
+  ACCOUNT, byTestId, classes, click, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore,
   storeLifecycle, text, timelineFiles, wake,
 } from './harness.js';
 
@@ -70,7 +65,7 @@ const said = (text: string, citation_indexes: number[], sources: readonly Answer
 /** An answer citing `sources`, one sentence per `statements`, each its own paragraph. */
 function answerOf(question: string, sources: readonly AnswerSource[], statements: readonly [string, number[]][], extra: Partial<Answer> = {}): Answer {
   const shown = statements.map(([words, cited]) => said(words, cited, sources));
-  return { text: shown.map(statement => statement.text).join('\n'), scope: { kind: 'global' }, sources: [...sources], outcome: 'answered',
+  return { scope: { kind: 'global' }, sources: [...sources], outcome: 'answered',
     parts: [{ question, status: 'answered', statements: shown, ...(shown.length === 0 ? {} : { blocks: paragraphs(shown) }) }], ...extra };
 }
 
@@ -661,32 +656,6 @@ describe('Ask on the timeline', () => {
     expect(store.checksOf(one)).toEqual({ 2: 'unreadable' });
   });
 
-  it.each([
-    { saved: 'its sentences alone', layout: undefined },
-    { saved: 'answer layout v1 (ADR-0045), retired since', layout: [{ kind: 'lead', statements: [0] }, { kind: 'heading', text: 'Still to do' }, { kind: 'bullets', statements: [1, 2] }] },
-  ])('opens a turn an older desktop saved with $saved as the host reads it back: a paragraph per sentence', async ({ layout }) => {
-    const old = turn('What is open on THERM?', DAY, status());
-    const { blocks: _blocks, ...part } = old.answer.parts[0]!;
-    // The account's file as a desktop from before layout v2 wrote it: the part's sentences, and how it read beside them.
-    const saved = { ...old, answer: { ...old.answer, parts: [layout === undefined ? part : { ...part, layout }] } };
-    const person = mkdtempSync(join(tmpdir(), 'echo-person-'));
-    try {
-      mkdirSync(join(person, 'ask-timeline-v1'), { mode: 0o700 });
-      writeFileSync(timelinePath(person, ACCOUNT), JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [saved] }), { mode: 0o600 });
-      seed(...readTimeline(person, ACCOUNT));
-    } finally {
-      rmSync(person, { recursive: true, force: true });
-    }
-    const store = await startStore();
-    store.pickSuggestion({ question: old.question, turn: old.id });
-    await flush();
-    const shown = byTestId((await view())(store), 'answer')[0]!;
-    // Each sentence its own paragraph, with its own numbers.
-    expect(byClass(shown, 'answer-paragraph').map(node => byTestId(node, 'statement').map(sentence => text(byTestId(sentence, 'statement-text')))))
-      .toEqual(part.statements.map(statement => [statement.text]));
-    expect(byTestId(shown, 'citation').map(text)).toEqual(['1', '2', '3']);
-  });
-
   it('clears what a check said when it goes stale, so the page stops showing it then', async () => {
     seed(turn('One?', 2 * DAY, status()), turn('Two?', DAY, status()));
     checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'changed' : 'same' })) });
@@ -970,7 +939,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     const choices = [{ label: 'THERM-482 · Sensor drift', question: 'Who owns THERM-482?' }, { label: 'THERM-490 · DVT retest', question: 'Who owns THERM-490?' }];
     rpc.mockImplementation(rpcFor(held, {
       'ask.run': params => (params.question === 'who owns that ticket?'
-        ? ok({ text: '', scope: { kind: 'global' }, sources: [], parts: [], outcome: 'clarify', choices })
+        ? ok({ scope: { kind: 'global' }, sources: [], parts: [], outcome: 'clarify', choices })
         : ok({ ...answerOf(String(params.question), [ticket('THERM-482', '20482')], [['Dev owns THERM-482, since Oct 21.', [0]]]), question: String(params.question) })),
     }, () => ({ active: [apollo], archived: [] })));
     seed(turn('What is open on DVT?', 10 * 60_000, status()));
@@ -1266,20 +1235,6 @@ describe('one thread per place (ADR-0049)', () => {
     const first = turn('When do we ship?', 2 * DAY, status());
     const again = turn('When do we ship Apollo?', DAY, status(), { again_of: first.id });
     expect(askedSuggestions([first, again], { kind: 'global' })).toEqual([{ question: again.question, turn: again.id }]);
-  });
-
-  it('keeps a turn asked in Mine before it went on Home\'s thread: asked again at Home, and folded by the same question there', async () => {
-    const mine = turn('What did I note?', 2 * DAY, status(), { scope: { kind: 'mine' } });
-    seed(mine);
-    checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
-    const store = await startStore();
-    store.pickSuggestion({ question: mine.question, turn: mine.id });
-    await flush();
-    store.askAgain(mine.id);
-    await flush();
-    expect(calls('ask.run')[0]).toMatchObject({ question: 'What did I note?', scope: { kind: 'global' } });
-    const asked = turn('what did I note?', HOUR, status());
-    expect(visibleTurns([mine, asked])).toEqual([asked]);
   });
 });
 

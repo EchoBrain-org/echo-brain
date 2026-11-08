@@ -28,7 +28,7 @@ const therm: AnswerSource = { kind: 'container', tool_id: 'jira', label: 'Therma
 const space: AnswerSource = { kind: 'container', tool_id: 'confluence', label: 'Thermal team', permalink: 'https://example.atlassian.net/wiki/spaces/THT', container: 'confluence_space' };
 /** An answer whose one sentence cites every source given. */
 const answering = (sources: readonly AnswerSource[], receipt?: AskReceipt): Answer => ({
-  text: 'Thermal recovery is led by Mara.', scope: { kind: 'global' }, sources, outcome: 'answered', ...(receipt ? { receipt } : {}),
+  scope: { kind: 'global' }, sources, outcome: 'answered', ...(receipt ? { receipt } : {}),
   parts: [{ question: 'Who leads Thermal recovery?', status: 'answered',
     statements: [{ text: 'Thermal recovery is led by Mara.', citation_indexes: sources.map((_, index) => index), private: false }], blocks: [{ kind: 'text', statements: [0] }] }],
 });

@@ -19,7 +19,7 @@ const receipt: AskReceipt = { looked_through: 3, rows: [
   { type: 'searched', sources: [{ kind: 'meetings' }], found: 3 }, { type: 'read', items: [decision, note, ticket] },
 ] };
 const answer = (withReceipt = true): Answer => ({
-  text: 'Ship it.', scope: { kind: 'global' }, sources: [decision], outcome: 'answered',
+  scope: { kind: 'global' }, sources: [decision], outcome: 'answered',
   parts: [{ question: 'What did we agree?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0], private: false }],
     blocks: [{ kind: 'text', statements: [0] }] }],
   ...(withReceipt ? { receipt } : {}),

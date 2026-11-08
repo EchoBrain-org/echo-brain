@@ -101,7 +101,7 @@ const GLOBAL = { kind: 'global' } as const;
 const NOW = new Date(2026, 9, 23, 12).getTime();
 /** An answer of `statements`, each its own paragraph, citing the sources given by place. */
 const paragraphed = (statements: readonly [string, number[]][], extra: Partial<Answer> = {}): Answer => ({
-  text: statements.map(([text]) => text).join('\n'), scope: GLOBAL, outcome: 'answered', sources: [page('1'), page('2'), page('3')],
+  scope: GLOBAL, outcome: 'answered', sources: [page('1'), page('2'), page('3')],
   parts: [{ question: 'Q?', status: 'answered', statements: statements.map(([text, citation_indexes]) => ({ text, citation_indexes, private: false })),
     ...(statements.length === 0 ? {} : { blocks: paragraphs(statements) }) }], ...extra,
 });
