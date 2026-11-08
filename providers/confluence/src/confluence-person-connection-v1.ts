@@ -13,7 +13,7 @@ import { readConfluencePageSectionsV1, readConfluencePageVersionsV1 } from './co
 import { createConfluencePersonLiveContainerReaderV1 } from './confluence-person-live-container-reader-v1.js';
 import { createConfluencePersonLiveEvidenceReaderV1 } from './confluence-person-live-evidence-reader-v1.js';
 import type { ConfluenceNangoV1 } from './confluence-nango-v1.js';
-import { verifyConfluenceConnectionV1 } from './confluence-payload-v1.js';
+import { verifyAtlassianConnectionV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
 import { CONFLUENCE_ID, CONFLUENCE_PERSON_PROVIDER_V1, confluenceArray, confluenceFailure, confluenceNextCursorV1, confluenceString, confluenceRecord } from './confluence-validation-v1.js';
 
 type ConfluencePersonAuthorizationV1 = PersonConnectionAuthorizationV1;
@@ -32,7 +32,7 @@ export function createConfluencePersonConnectionV1(options: {
 }) {
   const cloud = options.cloud_id;
   const shared = createPersonConnectionLifecycleV1({ ...options, scope_id: options.cloud_id, provider: CONFLUENCE_PERSON_PROVIDER_V1,
-    verify: (authenticated, input) => verifyConfluenceConnectionV1(createConfluenceCloudTransportV1(authenticated), input),
+    verify: (authenticated, input) => verifyAtlassianConnectionV1(CONFLUENCE_PERSON_PROVIDER_V1, createConfluenceCloudTransportV1(authenticated), input),
   });
   const { actor } = shared;
   /** Request-local picker cursors, fenced to both person tenure and live grant. */
@@ -74,7 +74,7 @@ export function createConfluencePersonConnectionV1(options: {
       if (input.cursor !== undefined && (cursor === undefined || cursor.person_sha256 !== person_sha256 || cursor.grant_sha256 !== stored.binding.read_grant_sha256)) confluenceFailure('invalid_request');
       current();
       const transport = createConfluenceCloudTransportV1(authenticatedFetch);
-      await verifyConfluenceConnectionV1(transport, { expected_origin: stored.site, signal: input.signal });
+      await verifyAtlassianConnectionV1(CONFLUENCE_PERSON_PROVIDER_V1, transport, { expected_origin: stored.site, signal: input.signal });
       const raw = confluenceRecord(await transport.request({ path: '/api/v2/spaces', query: { limit: '20', ...(cursor?.provider_cursor === undefined ? {} : { cursor: cursor.provider_cursor }) }, signal: input.signal }));
       const results = confluenceArray(raw.results, 20).map(value => {
         const space = confluenceRecord(value);
@@ -102,7 +102,7 @@ export function createConfluencePersonConnectionV1(options: {
       lifecycle: shared, validate: validateConfluenceProjectSetV1, selection: request => request.space_ids,
       async resolve(space_ids, connection, signal) {
         const transport = createConfluenceCloudTransportV1(connection.transport);
-        await verifyConfluenceConnectionV1(transport, { expected_origin: connection.stored.site, signal });
+        await verifyAtlassianConnectionV1(CONFLUENCE_PERSON_PROVIDER_V1, transport, { expected_origin: connection.stored.site, signal });
         for (const id of space_ids) {
           const space = confluenceRecord(await transport.request({ path: `/api/v2/spaces/${encodeURIComponent(id)}`, signal }));
           if (confluenceString(space.id, 128) !== id) confluenceFailure('invalid_output');
