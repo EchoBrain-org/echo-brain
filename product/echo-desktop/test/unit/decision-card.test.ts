@@ -180,6 +180,7 @@ describe('the decision card', () => {
     const impacts = elements(tree).filter(node => node.props.class === 'impact');
     expect(impacts.map(node => node.props['aria-label'])).toEqual(['Impact · THERM', 'Impact · No project, only me']);
     expect(text(impacts[0])).toContain('Follow-ups');
+    expect(text(impacts[1])).toContain('The impact check failed.');
     expect(text(impacts[1])).toContain('Try again');
     retryImpact.mockClear();
     expect(elements(impacts[0]).filter(node => node.type === 'button' && text(node) === 'Try again')).toHaveLength(0);

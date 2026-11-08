@@ -197,59 +197,19 @@ test('Copy answer copies the answer as Markdown and says so, and main takes no m
   expect((await write('𝄞'.repeat(12_000))).ok).toBe(true);
 });
 
-/** A day as the page names it: "Oct 20", with its year when it is not this year's. */
-function pageDay(iso: string): string {
-  const [year, month, date] = iso.split('-').map(Number) as [number, number, number];
-  return new Date(year, month - 1, date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(year === new Date().getFullYear() ? {} : { year: 'numeric' }) });
-}
-
-test('an answer the writer arranged in blocks draws its timeline, card, numbered steps and quote, and Copy answer writes them as Markdown', async () => {
+// What each block draws, the numbers each item keeps and how Copy answer writes them are ask-blocks.test's and
+// answer.test's; here, that every kind of block reaches the real window through the client and host, and that it never
+// scrolls sideways.
+test('an answer the writer arranged in blocks draws every block in the window, and the page never scrolls sideways', async () => {
   run = await launch('ask-blocks');
-  const { page, app } = run;
-  const copied = () => app.evaluate(() => (globalThis as { echoTestClipboard?: string }).echoTestClipboard);
+  const { page } = run;
   await askFromHome(page, 'Can THERM start PVT?');
   const answer = page.getByTestId('answer');
-  await expect(answer).toBeVisible();
   await expect(answer.locator('.answer-lead').getByTestId('statement-text')).toHaveText('Yes, PVT can start: the 72-hour soak passed on Oct 23.');
   await expect(answer.locator('h3.answer-heading')).toHaveText(['Soak test', 'Before PVT', 'Open risk']);
-  // A timeline: each event's day down the side, what happened, and who.
-  const events = answer.locator('.answer-timeline > li');
-  await expect(events.locator('time')).toHaveText([pageDay('2026-10-20'), pageDay('2026-10-23')]);
-  await expect(events.locator('time').nth(0)).toHaveAttribute('datetime', '2026-10-20');
-  await expect(events.getByTestId('statement-text')).toHaveText(['Approved the soak plan.', 'The 72-hour soak passed.']);
-  await expect(events.locator('.event-who')).toHaveText(['Noor Haddad', 'Noor Haddad']);
-  // A card, headed by its kind and its title, its facts as label and value rows.
-  const card = answer.getByRole('group', { name: 'Ticket THERM-48' });
-  await expect(card.locator('.answer-card-head')).toHaveText('TicketTHERM-48');
-  await expect(card.locator('dt')).toHaveText(['Status', 'Owner']);
-  await expect(card.locator('dd').getByTestId('statement-text')).toHaveText(['In review', 'Tomas Okafor']);
-  // Steps in order, numbered; a quote set apart, its source under it.
-  await expect(answer.locator('ol.answer-steps > li').getByTestId('statement-text')).toHaveText(['Freeze the firmware at 1.4.2.', 'Ship the build to the line.']);
-  await expect(answer.locator('.answer-quote blockquote').getByTestId('statement-text')).toHaveText('Start PVT once the soak passes.');
-  await expect(answer.locator('.answer-quote figcaption')).toHaveText('Noor Haddad, Oct 23 review');
-  // Each item keeps its own numbers: a fact's opens its ticket beside the answer, and lights that fact alone.
-  await card.locator('.answer-fact').nth(1).getByTestId('citation').click();
-  await expect(page.getByTestId('source-pane')).toContainText('Jira · Ticket');
-  await expect(card.locator('.answer-fact.on dt')).toHaveText('Owner');
-  await expect(answer.locator('.on[data-testid="statement"]')).toHaveCount(1);
-  // The page never scrolls sideways; a table keeps its own box.
+  for (const block of ['.answer-table', '.answer-timeline', '.answer-card', 'ol.answer-steps', '.answer-quote']) await expect(answer.locator(block).first()).toBeVisible();
+  // A table keeps its own box.
   expect(await page.evaluate(() => document.querySelector('.ask')!.scrollWidth <= document.querySelector('.ask')!.clientWidth)).toBe(true);
-
-  const copy = page.getByTestId('copy-answer');
-  await copy.click();
-  await expect(copy).toHaveText('Copied');
-  expect(await copied()).toBe([
-    'Yes, PVT can start: the 72-hour soak passed on Oct 23. [2]', '',
-    '2 Jira tickets are open', '', '| Item | Status | Owner | Due |', '| --- | --- | --- | --- |',
-    '| THERM-52 · Thermal pad supplier [5] | In Progress | Tomas Okafor | 2026-11-04 |', '| THERM-55 · Line fixture [6] | To Do | You | 2026-10-30 |', '',
-    '### Soak test', '', `- ${pageDay('2026-10-20')}, Noor Haddad: Approved the soak plan. [1]`, `- ${pageDay('2026-10-23')}, Noor Haddad: The 72-hour soak passed. [2]`, '',
-    '**Ticket: THERM-48**', '', '- Status: In review [4]', '- Owner: Tomas Okafor [4]', '',
-    '### Before PVT', '', '1. Freeze the firmware at 1.4.2. [3]', '2. Ship the build to the line. [3]', '',
-    '### Open risk', '', 'Sensor self-heating is still unexplained, so the soak report keeps it on the PVT watch list. [2]', '',
-    '> Start PVT once the soak passes. [3]', '>', '> Noor Haddad, Oct 23 review', '',
-    'Sources', '', '1. Soak test plan', '2. Soak test report', '3. PVT readiness review', '4. THERM-48 · Soak sign-off', '5. THERM-52 · Thermal pad supplier',
-    '6. THERM-55 · Line fixture',
-  ].join('\n'));
 });
 const progressSteps = (page: Page) => page.getByTestId('ask-steps').getByTestId('ask-step');
 /** Opens the Ask's quiet line onto its rows, once it has some. */

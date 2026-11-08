@@ -374,6 +374,8 @@ describe('Home rows', () => {
     // A check that did not finish needs you: right after the decisions to approve, never at the bottom of a long Home.
     expect(rows.map(row => row.kind)).toEqual(['approve', 'failed', 'send', 'review', 'update', 'checking', 'checking']);
     expect(rows[1]).toMatchObject({ kind: 'failed', review: { approval_id: reviews[1]!.approval_id } });
+    const { ReviewLine } = await import('../../src/renderer/screens/home.js');
+    expect(text(render(ReviewLine({ row: rows[1] as Parameters<typeof ReviewLine>[0]['row'] })))).toBe('Approved · the check did not finish');
     expect(rows[3]).toMatchObject({ kind: 'review', item: { item_id: 'itm_00000002' } });
     expect(rows[5]).toMatchObject({ kind: 'checking', run: { state: 'running' } });
     // A finished check makes no row of its own: what it found comes from `home`.
