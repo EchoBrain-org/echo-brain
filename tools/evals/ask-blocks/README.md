@@ -1,59 +1,32 @@
-# Ask block catalog evaluation
+# Ask writer gate
 
-On 2026-11-02 the founder asked whether "model-arranged" Ask answers hold up:
-treat each UI block as a tool the writer can pick, describe blocks the way
-research sources are described, and find the block size that balances how
-many blocks the model chooses from against how flexible each one is. This
-opt-in evaluation answers that offline, before any product change.
-
-It measures only the writer of a laid-out answer
-([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md), and
-[ADR-0045](../../../docs/decisions/ADR-0045-ask-answer-layout.md) until it was
-retired). Research is
-scripted, as in the [wording evaluation](../ask-wording/README.md): for each
-case one search returns its synthetic items and research opens them all, so
-every trial hands the writer the same evidence. The writer is the product's
-model route (OpenRouter, `anthropic/claude-sonnet-5.5`, ADR-0037). Only the
-layout part of the writer's instructions, the catalog it is shown and its
-reply schema change between catalogs. Nothing is read from any tool, and no
-product code changes.
+This opt-in evaluation is the gate on Ask's built writer: the writer of an
+answer in blocks
+([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md)), the
+answer every Ask gets. Research is scripted: for each case one search returns
+its synthetic items and research opens them all, so every trial hands the
+writer the same evidence. Ask runs through the kernel end to end; only the
+writer's call goes to the model, through the product's route (OpenRouter,
+`anthropic/claude-sonnet-5.5`, ADR-0037) or the personal Claude account
+writer. Nothing is read from any tool, and no product code changes.
 
 ```sh
 npm run build:workspaces
-node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory
+node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory \
+  --writer claude-account --claude-executable /absolute/path/to/claude
 ```
 
-`--out` must be a private directory outside the repository. Unlike the wording
-evaluation, the report keeps full traces: every writer and judge prompt, raw
-reply, repair and check. Every case is synthetic, so the prompts carry no
-person's data; the credential is read only by the product bundle and never
-written. `--cases`, `--catalogs` and `--trials` make a smaller diagnostic run,
-which never decides anything.
+`--out` must be a private directory outside the repository. The report keeps
+full traces: every writer prompt, raw reply and repair, and the released
+answer. Every case is synthetic, so the prompts carry no person's data; the
+credential is read only by the product bundle and never written. `--cases`
+and `--trials` make a smaller diagnostic run, which never decides anything.
 
-## Catalogs (pre-registered)
-
-Each catalog entry follows the research tool contract
-([ADR-0042](../../../docs/decisions/ADR-0042-research-tool-contract.md)): a
-name the model passes, a `description` that says only what the entry shows,
-and `params`, each field it takes with what it means and its limits. The
-catalog reaches the writer as data beside `source_catalog`, and its reply
-schema and checks are built from the same entries. There are no "use this
-when" rules: the model picks from what entries show and what the evidence
-holds. The entries are in [`catalogs.mjs`](catalogs.mjs).
-
-| Catalog | Modeled on | What the writer picks |
-| --- | --- | --- |
-| `today` | Production layout v1 (ADR-0045), retired on 2026-11-04 | A form for each sentence (lead, prose, bullet, table row), sections and tables, in the production prompt and schema, unchanged |
-| `templates` | OpenAI ChatKit widget templates, Microsoft Adaptive Card templates | One whole-answer template of 5 (`fact`, `list`, `report`, `story`, `profile`), filled |
-| `balanced` | Vercel json-render style meaning-sized components | Any sequence of 7 blocks: `answer`, `text`, `points`, `table`, `timeline`, `card`, `quote` |
-| `primitives` | Google A2UI's basic catalog, without its media and input components | A flat tree of 7 components: `Column`, `Row`, `List`, `Card`, `Tabs`, `Divider`, `Text` |
-
-For `templates`, `balanced` and `primitives`, the system prompt is the
-production writer prompt with its layout part replaced by the catalog's. Each
-catalog's layout part keeps production's two wording rules word for word
-(answer without restating the question; a long identifier at most once), says
-that every item cites its evidence, and asks for the conclusion first. Every
-catalog gets up to 3,000 output tokens, as `today` did.
+The evaluation began on 2026-11-02 as a comparison of block catalogs, with a
+model judge, the founder's blind ranking page, held-out quick-lead questions
+and `--resume`. Those were decided and closed (the dated records below); their
+code left the tree on 2026-11-08 and remains in Git, with the full original
+description, at [`1f2e20e`](https://github.com/EchoBrain-org/echo-brain/blob/1f2e20e3627ce2f0e8bedf753f4333526fa8a084/tools/evals/ask-blocks/README.md).
 
 ## Cases (pre-registered)
 
@@ -82,35 +55,32 @@ people it may name, and, for two cases, a trap.
 
 ## Procedure
 
-1. For each case, Ask runs as the kernel runs it with answer layout v2, over
-   the scripted desk, with a writer that answers nothing; this records the
-   writer's exact prompts without a network call.
-2. Each catalog writes every case three times. A reply that fails its
-   catalog's checks gets one repair, with the production repair instruction
-   naming the first problem. Calls run four at a time.
-3. Each reply is read into common blocks (answer, prose, list, table,
-   timeline, card, quote, heading) for grading. `primitives` components have
-   no meaning of their own, so code infers tables, cards and quotes from their
-   structure, as an app drawing them would have to: a `Column` of two or more
-   `Row`s of `Text` is a table, a `Card` holding label and value pairs is a
-   card, a `Text` that is a quotation is a quote.
-4. A model judge on the same route ranks each case's three trial-1 answers,
-   shown as text with the evidence, once in the page's order and once
-   reversed. It is reported beside the founder's ranking and decides nothing.
-5. The founder ranks the same three answers per case on a private page, blind:
-   labels A to C in a fixed random order per case, every catalog drawn in one
-   style. After ranking, the page reveals the catalogs, the judge's ranks, the
-   grades and every trial's full trace.
+1. For each case, Ask runs as the kernel runs it, over the scripted desk, with
+   a writer that answers nothing; this records the writer's exact prompts and
+   the evidence it is given, without a network call.
+2. Each case runs three times through the kernel end to end. Only the
+   writer's call goes to the model. The kernel's own prompt, block catalog,
+   reply schema and output room (2,000 tokens), its reading and checks, its
+   one repair and its downgrades decide what is released; the harness adds no
+   repair. The report keeps each writer call's prompts, raw reply and usage,
+   and the released answer. Calls run four at a time.
+3. What is graded is the released answer: its part's `blocks`, read into
+   common blocks: the answer block's statements as the answer's claims, a
+   text block as prose, points as a list, ordered or not, and a table, a
+   timeline, a card and a quote as themselves, each with its title. Each
+   claim's evidence is the evidence ids of its statement's citations, or of a
+   table row's own: each of the answer's citations is mapped back, by its
+   citation, to the case item it cites, whose id is `E1` to `En` in the order
+   research opened the items, as the writer saw them.
 
 ## Measures
 
 A **claim** is a unit a reader takes as a fact: an answer or prose sentence, a
-list item, a table row, a timeline event, a card fact, a quote. A `primitives`
-`Text` is a claim when it is body or caption text of four words or more and
-not a table's header row. Headings, titles, column names and labels are not.
+list item, a table row, a timeline event, a card fact, a quote. Titles and
+column names are not.
 
-- **Valid:** the reply passes its catalog's checks, at once or after its one
-  repair. `today` used production's own reading of the reply.
+- **Valid:** the answer was released with `blocks`; an answer released
+  without them is not valid and passes nothing.
 - **Grounded:** every claim cites at least one evidence id, and every cited id
   is one the writer was given; each date a claim writes (`YYYY-MM-DD`, or a
   month name with a day, read in 2026 unless it names a year) is today or a
@@ -124,102 +94,47 @@ not a table's header row. Headings, titles, column names and labels are not.
   answer (one alternative of each). In a case marked "in order", the facts
   first appear in the listed order in the blocks after the answer block (in
   the answer block itself when it is the only block).
-- **Fit**, within the catalog's own blocks: the answer shows one of the
-  case's shapes, or, only when the catalog cannot show any of them, one of the
-  case's fallback shapes. A `single` case fits only a single answer: the
-  answer block, at most one prose block of up to two sentences, nothing else,
-  and at most three claims in all. Fit cannot compare catalogs (each
-  catalog's own blocks decide what it can show); the founder's ranking does.
+- **Fit:** the answer shows one of the case's shapes. A `single` case fits
+  only a single answer: the answer block, at most one prose block of up to two
+  sentences, nothing else, and at most three claims in all.
 - **Stable:** in at least two of a case's three trials, the first block after
   the answer has the same shape (or there is none in both).
-- **Ranks:** the founder's rank for each catalog's trial-1 answer per case, 1
-  best, ties allowed; a trial with no valid answer is shown as having none and
-  ranks last. The judge's rank is the mean of its two orders.
 
 Shapes: **single** as above; **prose** a prose block; **parallel** a list of two
-or more items; **ordered** a list marked ordered (only `balanced` and
-`primitives` can mark one); **grid** a table of two or more rows and columns;
-**sequence** a timeline of two or more events whose dates never go back, or a
-table with a date, day, when or due column whose rows never go back, or a list
-whose every item writes a date and never goes back; **profile** a card with
-two or more facts; **verbatim** a quote, or a quoted span, that passes the
-word-for-word check; **sections** two or more headings or titles, each with a
-claim under it.
-
-What each catalog can show, for the fallback rule: `templates` single, prose,
-parallel, grid, sequence, profile, verbatim; `balanced` and `primitives` all
-nine. `today` could show single, prose, parallel, grid, sequence, verbatim and
-sections.
+or more items; **ordered** a list marked ordered; **grid** a table of two or
+more rows and columns; **sequence** a timeline of two or more events whose
+dates never go back, or a table with a date, day, when or due column whose rows
+never go back, or a list whose every item writes a date and never goes back;
+**profile** a card with two or more facts; **verbatim** a quote, or a quoted
+span, that passes the word-for-word check; **sections** two or more titled
+blocks, each with a claim under it.
 
 Reported beside them, never as rules: valid at once, repairs, blocks and
-claims per answer, which blocks each catalog used, output tokens and latency.
+claims per answer, which blocks were used, output tokens and latency.
 
 ## Pre-registered rules
 
-Written before any run, over 45 trials per catalog (15 cases, 3 trials):
+Written before any run, over 45 trials (15 cases, 3 trials):
 
 1. **Valid:** at least 43 of 45.
 2. **Grounded:** at least 43 of 45.
 3. **Nothing lost:** at least 41 of 45.
 4. **Fit:** at least 36 of 45.
 5. **Stable:** at least 12 of 15 cases.
-6. **Ranked by the founder:** `balanced` ranked at least as high as `today` in
-   at least 9 of 15 cases.
 
-The model-arranged direction is sound when `balanced` passes all six. The
-right block size is the catalog with the lowest mean founder rank among those
-that pass rules 1 to 3; a tie (mean ranks within 0.1) goes to fewer repairs,
-then to fewer output tokens. The judge's mean ranks, and how often its top
-pick and its order of each pair of catalogs match the founder's, are reported
-beside it.
-
-Rule 6 compares `balanced` with `today`, which no longer runs ("Layout v1
-retired, 2026-11-04"): the code counts rules 1 to 5, and its decision gives
-the right block size only.
-
-## Changes after the diagnostic run
-
-A diagnostic run on 2026-11-02 (three cases, one trial, at `9d626c2`) decided
-nothing and found two faults in the harness, fixed before the full run. No
-rule, threshold or catalog entry changed.
-
-- The provider refused the `templates` reply schema, a template given as a
-  choice of five object shapes, on every call (HTTP 400). The schema is now one
-  template object whose `name` is one of the five, and code refuses a field the
-  named template does not take, as the five shapes did.
-- Two order facts could not tell order. In `week-events` the fourth event's
-  fact was "certificate", which the second event's text also says; it is now
-  the certificate's date, Nov 3, which only the fourth event says. In
-  `dvt-date-moves` each move's reason sat beside its new date, where a writer
-  may name either first; the case now checks the three dates, in order.
-
-## Resuming
-
-A run that loses calls to a provider failure is resumed with
-`--resume <earlier report>`. It carries every call that got a reply, reads
-and checks each again with the current code, and makes only the calls a
-trial still needs: the repair after a carried refused reply, or the whole
-trial when its first call failed. A judged order is carried when it judged the
-same trial-1 answers. The earlier report must be this evaluation's, over the
-same cases, from the same writer (its route, adapter and answer model, so one
-model's replies never stand for another's), with the same writer prompts; the
-new report names what it carried and counts the calls that still failed.
-
-The first full run (2026-11-02, at `2834997`) lost calls when OpenRouter
-refused them with HTTP 402, for lack of credit: trial 1 was complete, trial 2
-lost 15 calls, trial 3 113, and the judge 57 of 59. It is kept as a partial
-report and decides nothing.
+**The gate passes** when the built writer meets all five in a complete run:
+every case, three trials (the report's `complete` and `decision.passes`). Any
+other run is a diagnostic and decides nothing. The founder's check on the
+desktop stands in for the blind ranking the catalogs had.
 
 ## Writer route
 
-The founder had ranked nothing yet, so the run of record re-ran every trial
-and the judge through the product's personal Claude account writer instead
+The runs of record use the product's personal Claude account writer
 (`--writer claude-account --claude-executable <signed-in claude binary>`,
 `providers/openrouter/src/claude-research`): the same model,
 `claude-sonnet-5-5`, through the Claude Agent SDK and the founder's own
 `claude` sign-in, with the SDK's JSON-schema output in place of OpenRouter's.
-Every answer of the run of record comes from that one route; the report names
-it under `model.route`.
+The report names the route under `model.route`.
 
 ## Result, 2026-11-02 (rules 1 to 5)
 
@@ -621,7 +536,7 @@ change.
   owner and due date, and none has been checked yet.").
 
 **Held-out questions.** Because the rule was chosen on these 15 cases, five
-new questions in [`held-out-cases.json`](held-out-cases.json), written before
+new questions in [`held-out-cases.json`](https://github.com/EchoBrain-org/echo-brain/blob/1f2e20e3627ce2f0e8bedf753f4333526fa8a084/tools/evals/ask-blocks/held-out-cases.json), written before
 any run, ask about another synthetic program (HELIX, with other people), each
 with a list for an answer: decisions and next steps (`ho-review-next`),
 blockers (`ho-launch-blockers`), steps in order (`ho-release-steps`), a status
@@ -737,7 +652,7 @@ that is a patch". It is reverted (`630efd8`), so the writer is PR #394's
 again, and ADR-0051 records the rejection beside its other rejected repair.
 
 This record, the held-out questions in
-[`held-out-cases.json`](held-out-cases.json) and `--case-set held-out` stay:
+[`held-out-cases.json`](https://github.com/EchoBrain-org/echo-brain/blob/1f2e20e3627ce2f0e8bedf753f4333526fa8a084/tools/evals/ask-blocks/held-out-cases.json) and `--case-set held-out` stay:
 the founder preferred the check's answers in all 7 questions it changed, so a
 short answer with its list below is the shape a later attempt should reach,
 without a second writer call, and the held-out questions can test it beyond
@@ -1016,9 +931,5 @@ among them, and kept the change: "Keep the change".
 - One model route and synthetic items only, and the writer is the only model
   step: research is scripted and reads no list, so code-written list tables
   are not exercised.
-- The page draws every catalog in one plain style, not the desktop's; how the
-  desktop would draw a new block is not measured.
-- The judge reads answers as text, not as drawn, and is the writer's own model.
-- The founder's ranking is one reader's.
-- Inferring `primitives` structure is code's reading; another app could read a
-  tree differently.
+- How the desktop draws an answer is not measured; the founder's check on the
+  desktop is.
