@@ -666,9 +666,9 @@ export interface OpenItemsView extends Omit<PersonRunsResultsV1['items'], 'items
   readonly items: readonly OpenItemView[];
 }
 /**
- * The impact checks of your own approvals, the open items they found, and the
- * sweeps that recheck them. What a check found shows as the meeting's
- * follow-ups, so the desktop never asks for its card (`view`).
+ * The impact checks of your own approvals and the open items they found.
+ * What a check found shows as the meeting's follow-ups, so the desktop never
+ * asks for its card (`view`).
  */
 export interface RunsResults {
   list: PersonRunsResultsV1['list'];
@@ -680,7 +680,6 @@ export interface RunsResults {
   send: PersonRunsResultsV1['send'];
   set_state: PersonRunsResultsV1['set_state'];
   assign: PersonRunsResultsV1['assign'];
-  sweep: PersonRunsResultsV1['sweep'];
 }
 
 export interface HostMethods {
@@ -857,7 +856,7 @@ export function isWriteCall(method: string, params: unknown): boolean {
 }
 /** Every runs operation: only these reach the log by name. */
 const RUNS_OPERATIONS: ReadonlySet<string> = new Set<PersonRunsRequestV1['operation']>(
-  ['list', 'home', 'start', 'retry', 'items', 'item', 'send', 'set_state', 'assign', 'sweep'],
+  ['list', 'home', 'start', 'retry', 'items', 'item', 'send', 'set_state', 'assign'],
 );
 /**
  * A call as desktop.log names it, content-free: the method, and for runs its operation and how much it read ("runs.home",

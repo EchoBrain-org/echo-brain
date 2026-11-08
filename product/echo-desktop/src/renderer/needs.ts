@@ -1,6 +1,4 @@
-import type {
-  PersonImpactStageV1, PersonOpenItemKindV1, PersonOpenItemStateV1, PersonOpenItemsSummaryV1, PersonOpenItemVerdictV1,
-} from '@echo-brain/organization-api';
+import type { PersonImpactStageV1, PersonOpenItemKindV1, PersonOpenItemStateV1, PersonOpenItemsSummaryV1 } from '@echo-brain/organization-api';
 import type { ConnectedTool, OpenItemView } from '../shared/protocol.js';
 import { needsAttention, overdue, waitedDays, waitingSince } from './altitude.js';
 import { externalSourceProvider } from './answer.js';
@@ -9,7 +7,7 @@ import { clip } from './format.js';
 // The words Home, the follow-ups lists and the item page use for what an
 // approved meeting set going (open items and Home v1, section 8; follow-ups
 // thread v1). One status vocabulary (F7): Not sent, Open, Done, Dismissed.
-// "Check" is ECHO's re-read only: "Checked 2 h ago", "Check now".
+// "Check" is only the impact check's: "Checking…", "Check failed".
 
 /** A decided line as a row's title reads, without its closing full stop. */
 export function titleLine(line: string): string {
@@ -198,21 +196,6 @@ export function liveFacts(item: OpenItemView): string | null {
   return facts === '' ? null : facts;
 }
 
-/** What ECHO's last check found, in a few words. */
-const VERDICT: Readonly<Record<PersonOpenItemVerdictV1, string>> = {
-  landed: 'matches now', still_open: 'not updated yet', changed: 'changed, still doesn\'t match', unreadable: 'couldn\'t read it',
-};
-
-/** The item page's one faint line: "Checked 2 h ago · not updated yet", naming no one; nothing when ECHO never checked it. */
-export function checkWords(check: OpenItemView['check'], now = Date.now()): string | null {
-  return check === null ? null : `Checked ${checkedAgo(check.checked_at, now)} · ${VERDICT[check.verdict]}`;
-}
-
-/** What a follow-ups row's hover ends with when the item's last check matched what the meeting decided. */
-export function matchesNow(item: OpenItemView): string | null {
-  return item.check?.verdict === 'landed' ? VERDICT.landed : null;
-}
-
 /** A follow-up's status (F7). */
 export const STAGES: Readonly<Record<PersonOpenItemStateV1, string>> = { unsent: 'Not sent', open: 'Open', done: 'Done', not_relevant: 'Dismissed' };
 
@@ -330,9 +313,9 @@ export function followUpAge(item: OpenItemView, now: number): { days: number; wo
 
 /**
  * A follow-ups row's hover (K): the long words its marks leave out. What it
- * is, the meeting it came from, where it stands and with whom ("Sent to Mina
- * 4 days ago"; "With Rafael" once it was handed on since), and a match ECHO's
- * last check found. The viewer is "you".
+ * is, the meeting it came from, and where it stands and with whom ("Sent to
+ * Mina 4 days ago"; "With Rafael" once it was handed on since). The viewer is
+ * "you".
  */
 export function followUpHover(item: OpenItemView, me: string | null, now: number, tools?: readonly ConnectedTool[] | null): string {
   const who = (person: { membership_id: string; name: string }) => (person.membership_id === me ? 'you' : firstName(person.name));
@@ -340,10 +323,10 @@ export function followUpHover(item: OpenItemView, me: string | null, now: number
   const where = item.state === 'unsent' ? (ownerUnmatched(item) ? 'No owner yet' : `For ${who(item.owner)}, not sent yet`)
     : item.state === 'open' ? (item.sent_at === null || handedOn ? `With ${who(item.owner)}` : `Sent to ${who(item.owner)} ${daysAgo(daysSince(item.sent_at, now))}`)
     : item.state === 'done' ? `Done${item.state_set_by === null ? '' : ` by ${who(item.state_set_by)}`}` : STAGES.not_relevant;
-  return joined([itemKind(item, tools), item.decision ? `from ${item.decision.title}` : null, where, matchesNow(item)]);
+  return joined([itemKind(item, tools), item.decision ? `from ${item.decision.title}` : null, where]);
 }
 
-/** Follow-ups not closed, as a total counts them (F7): not sent yet, or open. A check's verdict never takes one out. */
+/** Follow-ups not closed, as a total counts them (F7): not sent yet, or open. */
 export function activeTotal(counts: Pick<PersonOpenItemsSummaryV1, 'unsent' | 'open'>): number {
   return counts.unsent + counts.open;
 }
@@ -404,33 +387,6 @@ export function followUpsWords(summary: PersonOpenItemsSummaryV1, stage: PersonI
   if (stage.state === 'running') return 'Checking…';
   if (stage.state === 'failed') return 'Check failed';
   return 'None';
-}
-
-/**
- * When ECHO last checked, as the canvas words it: "just now", "5 min ago",
- * "2 h ago", then for six hours or more the day: "today", "yesterday", "Oct 6".
- */
-function checkedAgo(iso: string, now: number): string {
-  const time = Date.parse(iso);
-  if (Number.isNaN(time)) return '';
-  const minutes = Math.max(0, Math.floor((now - time) / 60_000));
-  if (minutes < 1) return 'just now';
-  if (minutes < 60) return `${minutes} min ago`;
-  if (minutes < 6 * 60) return `${Math.floor(minutes / 60)} h ago`;
-  const today = new Date(now);
-  if (time >= new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) return 'today';
-  if (time >= new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1).getTime()) return 'yesterday';
-  return monthDay(iso) ?? '';
-}
-
-/**
- * When ECHO last checked one of yours, as "ECHO checked 2 h ago": the latest
- * of the times reads said (your Follow-ups list's own, and Home's, whichever
- * was read since); null when none knows of one.
- */
-export function lastChecked(times: readonly (string | null | undefined)[], now: number): string | null {
-  const at = times.filter((time): time is string => typeof time === 'string').sort().at(-1);
-  return at === undefined ? null : `ECHO checked ${checkedAgo(at, now)}`;
 }
 
 /** One event of a follow-up's history. */

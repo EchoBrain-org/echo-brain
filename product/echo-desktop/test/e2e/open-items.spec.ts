@@ -179,8 +179,7 @@ test('a follow-up sent to you while ECHO runs comes as a notification within one
   await expect(updates).toContainText('Update2A Jira ticket you can\'t openand 1 more');
   await updates.click();
   await expect(page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' })).toBeVisible();
-  // The check starts no sweep or run.
-  expect(requests('sweep')).toEqual([]);
+  // The check starts no run.
   expect(requests('start')).toEqual([]);
   // Clicked with another app in front: its page opens over Home as ECHO comes forward.
   await emit(app.app, 'echo-test:conceal');
@@ -202,8 +201,9 @@ test('a follow-up sent to you while ECHO runs comes as a notification within one
 test('an owner change whose reply was lost shows the item as it is now, and holds nothing', async () => {
   app = await launch('granola-review-assign-lost');
   const { page } = app;
-  await page.getByTestId('need-category').and(page.locator('[data-category="update"]')).click();
-  await page.getByTestId('need-row').filter({ hasText: 'ECHO-12' }).click();
+  // ECHO-12 waits on Mina, its owner, so it is not on Ari's Home: Ari sent it, so it is on Ari's Follow-ups page.
+  await page.getByTestId('sidebar-follow-ups').click();
+  await row(page.getByTestId('follow-ups'), 'ECHO-12').locator('.follow-up-open').click();
   const item = page.getByTestId('follow-up');
   await item.getByRole('button', { name: /^Owner: Mina/ }).click();
   // Escape closes the picker first, then the page; the focus goes back to the owner.

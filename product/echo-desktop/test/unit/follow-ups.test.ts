@@ -15,7 +15,7 @@ async function notices(counts: Partial<OpenItemsView['summary']>): Promise<unkno
   const { FollowUps } = await import('../../src/renderer/screens/follow-ups.js');
   const list: FollowUpList = {
     kind: 'list', seq: 1, scope: 'involved', title: null, loading: false, items: [], live: {}, reading: false, reads: [{ parts: ['active'], pages: [{ cursor: null, ids: [] }], next: null }],
-    summary: { ...EMPTY_SUMMARY, ...counts }, stage: null, ticks: {}, sends: {}, check: null, expanded: {}, busy: false, said: null, picker: null, stale: false,
+    summary: { ...EMPTY_SUMMARY, ...counts }, stage: null, ticks: {}, sends: {}, expanded: {}, busy: false, said: null, picker: null, stale: false,
   };
   return elements(FollowUps({ state: getState(), list })).filter(node => node.props.class === 'notice').map(node => node.props.children);
 }
@@ -29,7 +29,7 @@ describe('a follow-ups list', () => {
 });
 
 /** Pilot planning's list, read to its end: three not sent and ticked, one open, and (counted only) one dismissed. */
-async function meeting(patch: Partial<Pick<FollowUpList, 'summary' | 'check'>> = {}): Promise<Node> {
+async function meeting(): Promise<Node> {
   const { getState } = await import('../../src/renderer/store.js');
   const { FollowUps } = await import('../../src/renderer/screens/follow-ups.js');
   const unsent = [1, 2, 3].map(n => followUp(n, { state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, send_included: null }));
@@ -38,18 +38,12 @@ async function meeting(patch: Partial<Pick<FollowUpList, 'summary' | 'check'>> =
     kind: 'list', seq: 1, scope: 'record', id: items[0]!.decision!.record_sha256, title: 'Pilot planning', loading: false, items, live: {}, reading: false,
     reads: [{ parts: ['active'], pages: [{ cursor: null, ids: items.map(item => item.item_id) }], next: null }],
     summary: { ...EMPTY_SUMMARY, unsent: 3, open: 1, not_relevant: 1, decisions: 1 }, stage: null,
-    ticks: Object.fromEntries(unsent.map(item => [item.item_id, true])), sends: {}, check: null, expanded: {}, busy: false, said: null, picker: null, stale: false, ...patch,
+    ticks: Object.fromEntries(unsent.map(item => [item.item_id, true])), sends: {}, expanded: {}, busy: false, said: null, picker: null, stale: false,
   };
   return render(FollowUps({ state: getState(), list })) as Node;
 }
 
 describe('a meeting\'s list', () => {
-  it('offers Check now only for open follow-ups, and says when the check is running', async () => {
-    const buttons = (tree: Node) => elements(tree).filter(node => node.type === 'button' && text(node) === 'Check now');
-    expect(buttons(await meeting())).toHaveLength(1);
-    expect(buttons(await meeting({ summary: EMPTY_SUMMARY }))).toHaveLength(0);
-    expect(text(await meeting({ check: 'checking' }))).toContain('Checking…');
-  });
   it('says under its title how far its follow-ups have come, dismissed ones left out, with a bar of the same', async () => {
     const tree = await meeting();
     const head = elements(tree).find(node => node.type === 'header')!;
@@ -79,9 +73,9 @@ const PROJECT = project(1, 1, { name: 'Apollo' });
 /**
  * Your Follow-ups page, as K draws it: Mina's ticket open nine days (late), Rafael's page open four (needs attention), yours open
  * since this morning, one ECHO found no owner for (not sent for two days), Mina's next not sent since this morning, and
- * Rafael's done one, folded. Home last read that ECHO checked two hours ago (`homeChecked`); the list's own read, never.
+ * Rafael's done one, folded.
  */
-async function yours(patch: Partial<Pick<FollowUpList, 'owner' | 'expanded' | 'summary'>> = {}, homeChecked: string | null = daysAgo(2 / 24)): Promise<Node> {
+async function yours(patch: Partial<Pick<FollowUpList, 'owner' | 'expanded'>> = {}): Promise<Node> {
   const { getState } = await import('../../src/renderer/store.js');
   const { FollowUps } = await import('../../src/renderer/screens/follow-ups.js');
   const decision = { ...followUp(1).decision!, project_ids: [PROJECT.project_id] };
@@ -97,12 +91,10 @@ async function yours(patch: Partial<Pick<FollowUpList, 'owner' | 'expanded' | 's
   const list: FollowUpList = {
     kind: 'list', seq: 1, scope: 'involved', title: null, loading: false, items, live: {}, reading: false,
     reads: [{ parts: ['active'], pages: [{ cursor: null, ids: items.map(item => item.item_id) }], next: null }],
-    summary: { ...EMPTY_SUMMARY, unsent: 2, open: 3, done: 1 }, stage: null, ticks: {}, sends: {}, check: null, expanded: {}, busy: false, said: null,
+    summary: { ...EMPTY_SUMMARY, unsent: 2, open: 3, done: 1 }, stage: null, ticks: {}, sends: {}, expanded: {}, busy: false, said: null,
     picker: null, stale: false, ...patch,
   };
-  const home = { seq: 1, loading: false, settled: true, reviews: [], runs: [], live: {}, reading: false,
-    open: { send: [], items: [], landed: 0, waiting: 2, last_checked_at: homeChecked, sweep_due: false } };
-  const state = { ...getState(), status: { signed_in: true, account: ACCOUNT }, home, projects: { items: [PROJECT], next: null, loading: false } } as unknown as State;
+  const state = { ...getState(), status: { signed_in: true, account: ACCOUNT }, projects: { items: [PROJECT], next: null, loading: false } } as unknown as State;
   return render(FollowUps({ state, list })) as Node;
 }
 
@@ -114,23 +106,11 @@ describe('your Follow-ups page (One place to look v1, K)', () => {
   const row = (tree: Node, n: number) => byTestId(tree, 'follow-up-row').find(node => node.props['data-item'] === id(n))!;
   const part = (node: Node, cls: string) => elements(node).find(entry => String(entry.props.class ?? '').split(' ').includes(cls));
 
-  it('has no page heading but for a screen reader, and says faintly under the list when ECHO last checked', async () => {
+  it('has no page heading but for a screen reader', async () => {
     const tree = await yours();
     const head = elements(tree).find(node => node.type === 'header')!;
     expect(head.props.class).toBe('follow-ups-head sr-only');
     expect(text(head)).toBe('Follow-ups');
-    expect(text(byTestId(tree, 'follow-ups-checked'))).toBe('ECHO checked 2 h ago');
-  });
-
-  it('says when ECHO last checked from the list\'s own read too, which is newer than Home\'s once a check finished off Home', async () => {
-    const summary = { ...EMPTY_SUMMARY, unsent: 2, open: 3, done: 1, last_checked_at: daysAgo(5 / 1440) };
-    expect(text(byTestId(await yours({ summary }), 'follow-ups-checked'))).toBe('ECHO checked 5 min ago');
-    // Home not read yet, or never told of a check: the list's own read still says it.
-    expect(text(byTestId(await yours({ summary }, null), 'follow-ups-checked'))).toBe('ECHO checked 5 min ago');
-    // Neither read knows of one: nothing is said.
-    expect(byTestId(await yours({}, null), 'follow-ups-checked')).toEqual([]);
-    // Home read since the list was (a decision page opened over it): Home's newer time.
-    expect(text(byTestId(await yours({ summary: { ...summary, last_checked_at: daysAgo(3) } }), 'follow-ups-checked'))).toBe('ECHO checked 2 h ago');
   });
 
   it('shows who owns what: All, then a face per owner counted by what they hold open, needing attention first, then No owner', async () => {
