@@ -13,13 +13,13 @@ real meeting provider and this synthetic source must cross the same boundary.
 | `capture` | Yes | Overall capture state and per-component availability. |
 | `participants` | Yes | Participant records; the array may be empty when the source supplies none. |
 | `content` | Yes | Summaries, notes, transcript turns, chat, and other evidence blocks. |
-| `artifacts` | Yes | Referenced files/recordings; use an empty array when there are none. |
+| `artifacts` | Yes | Always an empty array: no source sends an artifact. |
 | `title` | No | Meeting title. |
 | `description` | No | Meeting description. |
 | `lifecycle` | No | Scheduled, active, completed, cancelled, deleted, or unknown. |
 | `time` | No | Scheduled/actual times, timezone, and all-day flag. |
 | `context` | No | Owner, calendar, location, scopes, labels, language, and meeting type. |
-| `governance` | No | Sensitivity, consent, retention, deletion, and redaction facts. |
+| `governance` | No | Sensitivity, consent, retention, and redaction facts. |
 | `extensions` | No | Provider-specific JSON that cannot be represented canonically. |
 
 ## Required nested fields
@@ -32,18 +32,15 @@ real meeting provider and this synthetic source must cross the same boundary.
 - Each capture component: `kind` and `state`.
 - Each participant: `id`.
 - Each content block: `id`, `kind`, and non-empty `text`.
-- Each artifact: `id`, `kind`, and `availability`.
 
 Everything else nested under those objects is optional, but the validator rejects
 unknown keys rather than silently accepting a near-canonical shape.
 
 ## Cross-reference and formatting rules
 
-- Participant, content-block, and artifact IDs must be unique in one meeting.
-- `speaker_participant_id`, `author_participant_id`, calendar organizer, and
+- Participant and content-block IDs must be unique in one meeting.
+- `speaker_participant_id`, calendar organizer, and
   `context.owner_participant_id` must resolve to a participant in the same record.
-- An artifact reference on a content block must resolve to an artifact in the
-  same record.
 - Canonical timestamps must be exact UTC ISO strings, for example
   `2026-08-24T16:00:00.000Z`.
 - Numeric sequences and offsets must be non-negative integers; start cannot be
