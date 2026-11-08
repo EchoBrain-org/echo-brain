@@ -1,4 +1,3 @@
-import { observeCoreRuntimeSyncV1, annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import {
   AdapterError,
   type AdapterErrorCode,
@@ -6,15 +5,6 @@ import {
 } from "../core/index.js";
 
 export type LlmProviderId = string;
-
-/** The adapter translates its wire usage before neutral transport observes it. */
-export interface LlmTransportProfile {
-  readonly id: string;
-  readonly displayName: string;
-  readonly usage: (payload: unknown) => StructuredGenerationFailureObservation;
-  /** The adapter declares which non-2xx refusals its provider does not bill (AdapterError.unbilled). */
-  readonly unbilledStatus?: (status: number) => boolean;
-}
 
 export interface StructuredGenerationRequest {
   model: string;
@@ -86,18 +76,6 @@ export interface LlmProviderClient {
 
 export type LlmCredentialResolver = (reference: string) => string | undefined;
 
-export interface HostedLlmClientOptions {
-  credentialRef: string;
-  credentialResolver: LlmCredentialResolver;
-  requestTimeoutMs?: number;
-  fetchImpl?: typeof fetch;
-}
-
-export interface ProviderJsonResponse {
-  payload: unknown;
-  response: Response;
-}
-
 export const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 120_000;
 export const MAX_LLM_REQUEST_TIMEOUT_MS = 600_000;
 export const DEFAULT_MAX_OUTPUT_TOKENS = 4_096;
@@ -115,68 +93,6 @@ export function optionalPositiveInteger(value: unknown): number | undefined {
   return Number.isSafeInteger(value) && typeof value === 'number' && value >= 0
     ? value
     : undefined;
-}
-
-function requiredCredential(
-  provider: string,
-  reference: string,
-  resolver: LlmCredentialResolver,
-): string {
-  let credential: string | undefined;
-  try {
-    credential = resolver(reference);
-  } catch {
-    throw new AdapterError(
-      'unauthorized',
-      `${provider} credential is unreadable`,
-      false,
-    );
-  }
-  if (!nonEmptyString(credential)) {
-    throw new AdapterError(
-      'unauthorized',
-      `${provider} credential is unavailable`,
-      false,
-    );
-  }
-  return credential;
-}
-
-export function createHostedLlmRequester(
-  profile: LlmTransportProfile,
-  baseUrl: string,
-  credentialHeaders: (credential: string) => Record<string, string>,
-  options: HostedLlmClientOptions,
-) {
-  const requestTimeoutMs =
-    options.requestTimeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS;
-  const fetchImpl = options.fetchImpl ?? fetch;
-  return async (
-    path: string,
-    init: RequestInit,
-    signal?: AbortSignal,
-  ) => {
-    const credential = requiredCredential(
-      profile.displayName,
-      options.credentialRef,
-      options.credentialResolver,
-    );
-    return await requestProviderJson(
-      profile,
-      `${baseUrl}${path}`,
-      {
-        ...init,
-        headers: {
-          'content-type': 'application/json',
-          ...credentialHeaders(credential),
-          ...init.headers,
-        },
-      },
-      requestTimeoutMs,
-      signal,
-      fetchImpl,
-    );
-  };
 }
 
 function statusTaxonomy(status: number): {
@@ -212,75 +128,6 @@ export function providerStatusError(
   unbilled = false,
 ): AdapterError {
   return new ProviderStatusError(provider, status, unbilled);
-}
-
-async function requestProviderJson(
-  profile: LlmTransportProfile,
-  url: string,
-  init: RequestInit,
-  requestTimeoutMs: number,
-  signal: AbortSignal | undefined,
-  fetchImpl: typeof fetch,
-): Promise<ProviderJsonResponse> {
-  const signals = [AbortSignal.timeout(requestTimeoutMs)];
-  if (signal !== undefined) signals.push(signal);
-  let response: Response;
-  try {
-    response = await fetchImpl(url, {
-      ...init,
-      signal: AbortSignal.any(signals),
-    });
-  } catch (error) {
-    if (signal?.aborted === true) {
-      throw new DOMException(
-        `${profile.displayName} request was cancelled`,
-        'AbortError',
-      );
-    }
-    if (
-      error instanceof Error &&
-      (error.name === 'TimeoutError' || error.name === 'AbortError')
-    ) {
-      throw new AdapterError(
-        'timeout',
-        `${profile.displayName} request timed out or was cancelled`,
-        true,
-      );
-    }
-    throw new AdapterError(
-      'temporarily_unavailable',
-      `${profile.displayName} is unreachable`,
-      true,
-    );
-  }
-  annotateCoreRuntimeV1({ counts: { http_status: response.status } });
-  if (!response.ok) {
-    throw providerStatusError(profile.displayName, response.status, profile.unbilledStatus?.(response.status) === true);
-  }
-  try {
-    const body = await response.text();
-    const payload: unknown = observeCoreRuntimeSyncV1("model_parse", () => JSON.parse(body) as unknown);
-    observeProviderUsage(profile, payload);
-    return { payload, response };
-  } catch {
-    throw new AdapterError(
-      'temporarily_unavailable',
-      `${profile.displayName} returned a non-JSON response body`,
-      true,
-    );
-  }
-}
-
-/** Usage is observational; the adapter owns wire field interpretation. */
-function observeProviderUsage(profile: LlmTransportProfile, payload: unknown): void {
-  try {
-    const usage = profile.usage(payload);
-    annotateCoreRuntimeV1({ counts: {
-      input_tokens: optionalPositiveInteger(usage.inputTokens) ?? null,
-      output_tokens: optionalPositiveInteger(usage.outputTokens) ?? null,
-      total_tokens: optionalPositiveInteger(usage.totalTokens) ?? null,
-    } });
-  } catch { /* provider usage is not a business input */ }
 }
 
 export function invalidProviderResponse(

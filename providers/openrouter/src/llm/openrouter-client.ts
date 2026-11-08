@@ -1,13 +1,13 @@
 import { AdapterError } from "@echo-brain/organization-processing/core";
-import { annotateCoreRuntimeV1, observeCoreModelMetadataV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { annotateCoreRuntimeV1, observeCoreModelMetadataV1, observeCoreRuntimeSyncV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import {
-  createHostedLlmRequester,
+  DEFAULT_LLM_REQUEST_TIMEOUT_MS,
   invalidProviderResponse,
   isRecord,
   nonEmptyString,
   optionalPositiveInteger,
-  type HostedLlmClientOptions,
-  type LlmTransportProfile,
+  providerStatusError,
+  type LlmCredentialResolver,
   type LlmProviderClient,
   StructuredGenerationAttemptError,
   type StructuredGenerationFailureObservation,
@@ -15,14 +15,14 @@ import {
   type StructuredGenerationResult,
 } from "@echo-brain/organization-processing/llm/llm-provider";
 
-const transportProfile: LlmTransportProfile = {
-  id: 'openrouter', displayName: 'OpenRouter',
-  usage: (payload) => isRecord(payload) ? generationUsageObservation(payload) : {},
-  // OpenRouter bills no non-2xx reply; a 429 or 5xx refusal is the transient, unbilled kind.
-  unbilledStatus: (status) => status === 429 || status >= 500,
-};
-
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+
+export interface OpenRouterClientOptions {
+  readonly credentialRef: string;
+  readonly credentialResolver: LlmCredentialResolver;
+  readonly requestTimeoutMs?: number;
+  readonly fetchImpl?: typeof fetch;
+}
 
 function generationUsageObservation(
   payload: Record<string, unknown>,
@@ -54,15 +54,55 @@ function generationUsageObservation(
 
 export class OpenRouterClient implements LlmProviderClient {
   readonly provider = 'openrouter' as const;
-  private readonly request;
+  private readonly options: OpenRouterClientOptions;
+  private readonly requestTimeoutMs: number;
+  private readonly fetchImpl: typeof fetch;
 
-  constructor(options: HostedLlmClientOptions) {
-    this.request = createHostedLlmRequester(
-      transportProfile,
-      OPENROUTER_BASE_URL,
-      (credential) => ({ authorization: `Bearer ${credential}` }),
-      options,
-    );
+  constructor(options: OpenRouterClientOptions) {
+    this.options = options;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+
+  /** One request with the resolved bearer credential and this client's timeout: the reply's JSON, or the provider's refusal. */
+  private async request(path: string, init: RequestInit, signal?: AbortSignal): Promise<{ readonly payload: unknown; readonly response: Response }> {
+    let credential: string | undefined;
+    try {
+      credential = this.options.credentialResolver(this.options.credentialRef);
+    } catch {
+      throw new AdapterError('unauthorized', 'OpenRouter credential is unreadable', false);
+    }
+    if (!nonEmptyString(credential)) throw new AdapterError('unauthorized', 'OpenRouter credential is unavailable', false);
+    const signals = [AbortSignal.timeout(this.requestTimeoutMs)];
+    if (signal !== undefined) signals.push(signal);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${OPENROUTER_BASE_URL}${path}`, {
+        ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}`, ...init.headers }, signal: AbortSignal.any(signals),
+      });
+    } catch (error) {
+      if (signal?.aborted === true) throw new DOMException('OpenRouter request was cancelled', 'AbortError');
+      if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+        throw new AdapterError('timeout', 'OpenRouter request timed out or was cancelled', true);
+      }
+      throw new AdapterError('temporarily_unavailable', 'OpenRouter is unreachable', true);
+    }
+    annotateCoreRuntimeV1({ counts: { http_status: response.status } });
+    // OpenRouter bills no non-2xx reply; a 429 or 5xx refusal is the transient, unbilled kind.
+    if (!response.ok) throw providerStatusError('OpenRouter', response.status, response.status === 429 || response.status >= 500);
+    try {
+      const body = await response.text();
+      const payload: unknown = observeCoreRuntimeSyncV1("model_parse", () => JSON.parse(body) as unknown);
+      try {
+        // Usage is observational, never a business input.
+        const usage = isRecord(payload) ? generationUsageObservation(payload) : {};
+        annotateCoreRuntimeV1({ counts: { input_tokens: optionalPositiveInteger(usage.inputTokens) ?? null,
+          output_tokens: optionalPositiveInteger(usage.outputTokens) ?? null, total_tokens: optionalPositiveInteger(usage.totalTokens) ?? null } });
+      } catch { /* provider usage is not a business input */ }
+      return { payload, response };
+    } catch {
+      throw new AdapterError('temporarily_unavailable', 'OpenRouter returned a non-JSON response body', true);
+    }
   }
 
   async generateStructured(
