@@ -66,14 +66,9 @@ including the owner or due prefix. A value inside another value ("open" in
 calendar due dates use the renderer's written date. Citing
 a row never names it alone, whether a sentence cites it beside its text for the
 row's facts, its list id brings it, or the row carries text, as a follow-up's
-does. Layout v2 renders every selected member. Layout v1 and the plain fallback
-retain 25 names and report partial when some cannot fit. This evaluation
-retains its legacy count-completeness surrogate: a longer list counts as named
-in full when a statement ends "and N more", reads as one code wrote (it cites only list
-members' rows, and its text names every item it cites), and the members it
-names plus N are exactly the list. That surrogate verifies the declared count,
-not that all names were displayed; it is not proof of a complete v2 presentation.
-Where the research result lacks the name
+does. Every answer names every selected member
+([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md), amended),
+so no count stands in for a name. Where the research result lacks the name
 code writes, the check errs toward not named: a meeting record is titled there
 by its meeting's label, while code names it by a line of its own text, which
 the result does not carry, so a member the key names by its meeting is never
@@ -85,8 +80,8 @@ supported. An answer may cite the row of a member of a list research read,
 which counts as research evidence like an item read in full.
 
 Every Ask run reports `kinds`, its final plan's needs by declared kind
-(`which_items`, `which_say`, `content`, and `missing` for a need saved without
-one), and the report shows them beside each Ask case. A case's `expected_kinds`
+(`which_items`, `which_say` and `content`, a need without one counting as
+content), and the report shows them beside each Ask case. A case's `expected_kinds`
 is scored by code as `declared_kinds`, beside each run's `kinds`: it passes when
 the set of kinds the final plan declares, a need without a kind counting as
 content, is exactly the case's ("need kinds as the case expects"). A failed run
@@ -117,7 +112,9 @@ every member in statements of at most 40 citations, with no count of
 statements. Research itself is unchanged, but the writer is handed less
 evidence, to make room for the block catalog and its longer reply. Take Ask
 baselines again on an endpoint built after it before comparing writer
-numbers. Approved-record and Sweep runs are unchanged.
+numbers; grading no longer credits the "and N more" count that only answers
+from before it could end a list statement with. Approved-record and Sweep runs
+are unchanged.
 
 **Baselines across ADR-0041 (2026-10-17).** Ask's research and writer changed:
 a complete list is evidence, and code names its members. Ask baselines taken

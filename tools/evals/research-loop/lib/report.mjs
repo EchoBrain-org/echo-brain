@@ -115,8 +115,8 @@ const JUDGE_METRICS = [
 
 /** Sums one count over entries that have it; null when none does (no sweep was graded). */
 const tally = (entries, key) => (entries.length === 0 ? null : entries.reduce((sum, entry) => sum + entry[key], 0));
-/** An Ask plan's needs by declared kind (ADR-0041); `missing` counts needs saved without one. */
-const KIND_COUNTS = ["which_items", "which_say", "content", "missing"];
+/** An Ask plan's needs by declared kind (ADR-0041). */
+const KIND_COUNTS = ["which_items", "which_say", "content"];
 
 /**
  * Per-case means of each metric (unknown runs excluded), then means across
@@ -246,8 +246,8 @@ export function markdownReport(identity, report) {
     "",
     "Each Ask plan's needs by declared kind (ADR-0041), over the case's completed runs. \"As expected\" is the code check for a case that names the kinds its plan should declare.",
     "",
-    "| Case | Budget | which_items | which_say | content | no kind | As expected |",
-    "| --- | --- | --- | --- | --- | --- | --- |",
+    "| Case | Budget | which_items | which_say | content | As expected |",
+    "| --- | --- | --- | --- | --- | --- |",
     ...asked.map(entry => `| ${entry.case_id} | ${entry.budget} | ${KIND_COUNTS.map(kind => entry.kinds[kind]).join(" | ")} | ${percent(entry.planner_kinds_declared)} |`),
     "",
     "## Renderers",
