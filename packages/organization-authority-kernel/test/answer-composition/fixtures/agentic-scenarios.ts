@@ -79,7 +79,7 @@ export const need = (text: string, status: string, evidence: readonly string[] =
 export const part = (question: string, needs: readonly ReturnType<typeof need>[], notes = "") => ({ question, needs, notes });
 export const step = (parts: readonly ReturnType<typeof part>[], actions: readonly { tool: string; args: Record<string, string> }[]) => ({ parts, actions });
 
-/** The Ask golden scenarios. Both golden fixtures pin every one byte for byte: change one only by recording a reviewed baseline. */
+/** The Ask golden scenarios. The golden quality baseline pins every one byte for byte: change one only by recording a reviewed baseline. */
 export const SCENARIOS: Readonly<Record<string, Scenario>> = {
   finish_after_search_and_open: {
     question: "When does DVT start?", asker: "Zhen Ye",
