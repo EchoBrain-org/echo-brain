@@ -1,7 +1,6 @@
 import type {
   Answer, AnswerPart, AnswerSource, AnswerStatement, AnswerTableRow, ArrangedBlock, CardEntity, ConnectedTool, ExternalAnswerSource,
 } from '../shared/protocol.js';
-import { startOfDay } from './format.js';
 import { sourceKey } from './openers.js';
 
 /**
@@ -186,41 +185,6 @@ export function tableDay(cell: string, now = Date.now()): string | null {
   if (!value) return null;
   const year = value.getFullYear() === new Date(now).getFullYear() ? {} : { year: 'numeric' as const };
   return value.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...year });
-}
-
-/** Text compared as words: trimmed, lower case, a curly apostrophe as a straight one. */
-const plain = (text: string) => text.trim().replace(/[\u2018\u2019]/gu, "'").toLowerCase();
-/** A table's owner column, by its exact name: never "Assigned by". Its due date and status columns, by a word of theirs. */
-const OWNER_COLUMNS: ReadonlySet<string> = new Set(['owner', 'assignee', 'assigned to']);
-const DUE = /\b(due|deadline)\b/iu;
-const STATUS = /\b(status|state)\b/iu;
-/** Statuses of work that is over: never late. */
-const OVER: ReadonlySet<string> = new Set(['done', 'closed', 'resolved', 'complete', 'completed', 'fixed', 'shipped', 'merged', 'released', 'cancelled', 'canceled',
-  "won't do", "won't fix", 'duplicate', 'rejected', 'obsolete', 'dismissed', 'not relevant']);
-
-/** Whether a table cell names you as its row's owner: its column is the owner's, and it says "You" or your name (`me`). */
-export function yoursIn(column: string, cell: string, me: string | null): boolean {
-  const who = plain(cell);
-  return OWNER_COLUMNS.has(plain(column)) && (who === 'you' || (me !== null && who === plain(me)));
-}
-
-/** The column that says when a row is due, or -1. */
-export function dueColumn(columns: readonly string[]): number {
-  return columns.findIndex(column => DUE.test(column));
-}
-
-/**
- * Whether a table row is yours and late: its owner is you ("You", or your
- * name), its due date has passed, and its status, if it has one, is not over.
- * The one thing an answer shows in the signal colour (ADR-0045).
- */
-export function lateForYou(columns: readonly string[], cells: readonly string[], me: string | null, now = Date.now()): boolean {
-  const due = dueColumn(columns);
-  const status = columns.findIndex(column => STATUS.test(column));
-  if (due < 0 || !columns.some((column, at) => yoursIn(column, cells[at]!, me))) return false;
-  const when = day(cells[due]!);
-  if (!when || when.getTime() >= startOfDay(now)) return false;
-  return status < 0 || !OVER.has(plain(cells[status]!));
 }
 
 /**

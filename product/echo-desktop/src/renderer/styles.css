@@ -440,9 +440,9 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
 .answer-bullets li { display: flex; gap: 12px; }
 .answer-bullets li::before { content: ""; flex-shrink: 0; width: 5px; height: 5px; margin-top: 10px; border-radius: 3px; background: var(--faint); }
 .answer-bullets li.on { margin: -2px -8px; padding: 2px 8px; border-radius: 8px; background: var(--selected); }
-/* A table scrolls in its own box when the window is narrow; the page never scrolls sideways. Only your late due date is in the signal colour.
-   A shadow at an edge says more of the table is past it: covers in the workspace's colour scroll with the table (local) over shadows that
-   stay with the box (scroll). The first column wraps at about 40% of the box, so the next one shows beside it. */
+/* A table scrolls in its own box when the window is narrow; the page never scrolls sideways. A shadow at an edge says more of the table
+   is past it: covers in the workspace's colour scroll with the table (local) over shadows that stay with the box (scroll). The first
+   column wraps at about 40% of the box, so the next one shows beside it. */
 .answer-table {
   position: relative; max-width: 100%; overflow-x: auto; overflow-wrap: normal; container-type: inline-size; border: 1px solid var(--line); border-radius: 10px;
   background:
@@ -461,9 +461,6 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
 .answer-table td { padding: 11px 14px; border-top: 1px solid var(--line); vertical-align: top; }
 .answer-table td.short, .answer-table td.day { white-space: nowrap; }
 .answer-table td.day { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
-.answer-table td.you { font-weight: 500; }
-.answer-table td.late { font-weight: 500; color: var(--signal-text); }
-.answer-table td.late time::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 3px; background: var(--signal); vertical-align: 1px; }
 .answer-table tr.on td { background: var(--selected); }
 .answer-table .marker { vertical-align: 1px; }
 /* Numbered steps, a timeline, a card and a quote, in the same type. A timeline keeps each event's day down the side, beside a dot on

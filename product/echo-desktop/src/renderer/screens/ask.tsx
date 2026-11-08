@@ -6,8 +6,8 @@ import type {
 } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import {
-  answerGaps, answerSays, answerSentences, blockTitle, CARD_WORDS, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownArranged,
-  shownItems, statementGroups, tableDay, yoursIn, type AnswerTable, type Inline, type Sentence, type Shows, type SourceGroup,
+  answerGaps, answerSays, answerSentences, blockTitle, CARD_WORDS, documentName, externalSourceProvider, partShows, passageBlocks, rowId, rowStatement, shownArranged,
+  shownItems, statementGroups, tableDay, type AnswerTable, type Inline, type Sentence, type Shows, type SourceGroup,
 } from '../answer.js';
 import { askedToday, askedWhen, identity, initial, marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
@@ -315,14 +315,11 @@ function Points({ state, view, part, index, statements, ordered }: {
   );
 }
 
-/** One cell of a table that is not its first: an ISO date as "Oct 14" in mono, late when the row is yours and late; you, as the owner, heavier. */
-function Cell({ cell, late, you }: { cell: string; late: boolean; you: boolean }) {
+/** One cell of a table that is not its first: an ISO date as "Oct 14" in mono. */
+function Cell({ cell }: { cell: string }) {
   const day = tableDay(cell);
-  if (day !== null) {
-    return <td class={`day${late ? ' late' : ''}`}><time dateTime={cell}>{day}</time>{late && <span class="sr-only">, overdue</span>}</td>;
-  }
-  const kind = [you ? 'you' : '', [...cell].length <= 32 ? 'short' : ''].filter(Boolean).join(' ');
-  return <td class={kind || undefined}>{cell}</td>;
+  if (day !== null) return <td class="day"><time dateTime={cell}>{day}</time></td>;
+  return <td class={[...cell].length <= 32 ? 'short' : undefined}>{cell}</td>;
 }
 
 /**
@@ -330,14 +327,12 @@ function Cell({ cell, late, you }: { cell: string; late: boolean; you: boolean }
  * page never does. Its caption shows above it only when the table opens the
  * answer (`opens`): after the answer it would say the answer again
  * (ADR-0049), so it only names the table. Each row's numbers are in its first
- * cell, and a row is lit on its own. Only your row's late due date is in the
- * signal colour, but for a row whose sources changed since.
+ * cell, and a row is lit on its own; a row whose sources changed since is lit
+ * in the signal.
  */
 function Table({ state, view, index, block, place, opens, label }: {
   state: State; view: TurnView; index: number; block: AnswerTable; place: number; opens: boolean; label: string;
 }) {
-  const me = state.status?.account?.display_name ?? null;
-  const due = dueColumn(block.columns);
   const rows = block.rows.map((row, at) => ({ row, at, mark: markIn(view, row.citation_indexes) })).filter(({ mark }) => mark !== 'omitted');
   return <>
     {block.caption && opens && <p class="answer-lead selectable">{block.caption}</p>}
@@ -348,12 +343,11 @@ function Table({ state, view, index, block, place, opens, label }: {
         <tbody>
           {rows.map(({ row, at, mark }) => {
             const id = rowId(index, place, at);
-            const late = lateForYou(block.columns, row.cells, me);
             return (
               <tr key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="answer-row" data-reading-anchor={id} data-mark={mark ?? undefined}>
                 {row.cells.map((cell, column) => column === 0
                   ? <td key={column}><span class="first">{cell}<Markers state={state} view={view} statement={rowStatement(row)} id={id} /></span></td>
-                  : <Cell key={column} cell={cell} late={late && column === due} you={yoursIn(block.columns[column]!, cell, me)} />)}
+                  : <Cell key={column} cell={cell} />)}
               </tr>
             );
           })}

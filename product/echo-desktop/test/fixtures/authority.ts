@@ -229,12 +229,11 @@ const THERM_BLOCK_CITATIONS = [
 /**
  * `ask-blocks`'s V8 answer (answer layout v2, ADR-0051), THERM's, in every
  * block: the answer; the open tickets, a list statement that reads as a
- * table right after it, with a row of yours that is late; the soak as a
- * timeline; THERM-48 as a card; the steps before PVT; the open risk as
- * titled text; and Noor's words as a quote. Each statement reads as the
- * Authority writes it from its block: an event from its day, who and what
- * happened, a fact from its card's kind and title and its label and value, a
- * quote from its source and words.
+ * table right after it; the soak as a timeline; THERM-48 as a card; the
+ * steps before PVT; the open risk as titled text; and Noor's words as a
+ * quote. Each statement reads as the Authority writes it from its block: an
+ * event from its day, who and what happened, a fact from its card's kind and
+ * title and its label and value, a quote from its source and words.
  */
 export function blocksAnswer(question: string, scope: Record<string, unknown>): Record<string, unknown> {
   const said = (text: string, cited: number[]) => ({ text, citation_indexes: cited, private: cited.some(at => THERM_BLOCK_CITATIONS[at]!.visibility === 'only_me') });
