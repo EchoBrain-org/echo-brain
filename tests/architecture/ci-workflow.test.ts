@@ -106,7 +106,6 @@ describe("CI workflow", () => {
       "npm run build",
       "node tests/fixtures/person-onboarding-smoke.mjs",
       "npm run test:research-loop-eval",
-      "npm run test:agentic-ask-eval",
       "npm run test:ask-follow-up-eval",
       "npm run test:ask-wording-eval",
       "npm run test:ask-blocks-eval",

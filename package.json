@@ -63,8 +63,6 @@
     "check:authority-recovery-infrastructure": "node tools/validate-authority-recovery-templates.mjs",
     "test:capacity": "npm run build:workspaces && node tools/evals/authority-core/verify-contract.mjs && node --test tools/evals/authority-core/test/*.test.mjs",
     "eval:retrieval-quality": "npm run build:workspaces && node tools/evals/authority-core/retrieval-quality.mjs",
-    "eval:agentic-ask": "node tools/evals/agentic-ask/run.mjs",
-    "test:agentic-ask-eval": "npm run build:workspaces && node --test tools/evals/agentic-ask/test/*.test.mjs",
     "eval:ask-follow-up": "node tools/evals/ask-follow-up/run.mjs",
     "test:ask-follow-up-eval": "npm run build:workspaces && node --test tools/evals/ask-follow-up/test/*.test.mjs",
     "eval:ask-wording": "node tools/evals/ask-wording/run.mjs",
