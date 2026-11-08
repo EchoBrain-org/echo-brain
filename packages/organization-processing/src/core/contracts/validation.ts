@@ -5,6 +5,7 @@ import type {
   MeetingBatch,
   MeetingDocument,
   MeetingParticipant,
+  MeetingParticipantIdentity,
 } from "./meeting.js";
 
 function object(value: unknown, label: string): Record<string, unknown> {
@@ -142,14 +143,15 @@ function among(...allowed: string[]): (value: unknown, label: string) => void {
  * A dense array of at most `maximum` items, each checked as `<label>[<index>]`;
  * with `key`, an item whose key repeats an earlier one's is refused at once.
  */
-function list(maximum: number, check: (item: unknown, label: string) => void, key?: (item: never) => unknown): Check {
+function list<T>(maximum: number, check: (item: unknown, label: string) => void, key?: (item: T) => unknown): Check {
   return (value, label) => {
     const seen = new Set<unknown>();
     for (const [index, item] of array(value, label, maximum).entries()) {
       check(item, `${label}[${index}]`);
       if (key === undefined) continue;
-      if (seen.has(key(item as never))) throw new Error(`${label} must be unique`);
-      seen.add(key(item as never));
+      const id = key(item as T);
+      if (seen.has(id)) throw new Error(`${label} must be unique`);
+      seen.add(id);
     }
   };
 }
@@ -164,7 +166,7 @@ const PARTICIPANT: Readonly<Record<string, Check>> = {
   id: text,
   display_name: optionalText,
   identities: optional(list(100, record({ kind: among('source', 'email', 'phone', 'other'), value: text }),
-    (identity: Record<string, unknown>) => `${identity['kind']}:${identity['value']}`)),
+    (identity: MeetingParticipantIdentity) => `${identity.kind}:${identity.value}`)),
   roles: optional(list(20, among('organizer', 'host', 'invitee', 'attendee', 'speaker', 'note_taker', 'bot'), (role: string) => role)),
   response_status: optional(among('accepted', 'declined', 'tentative', 'unknown')),
   attendance: optional(among('attended', 'no_show', 'unknown')),
@@ -184,21 +186,21 @@ const CAPTURE: Readonly<Record<string, Check>> = {
   warnings: optional(list(1_000, (warning, label) => nonEmptyString(warning, label))),
 };
 
-const TIME: Readonly<Record<string, Check>> = {
-  scheduled_start_at: optionalAt,
-  scheduled_end_at: optionalAt,
-  actual_start_at: optionalAt,
-  // All four times are checked before either order.
-  actual_end_at: (value, label, time) => {
-    optionalTimestamp(value, label);
-    if (typeof time['scheduled_start_at'] === 'string' && typeof time['scheduled_end_at'] === 'string' &&
-        time['scheduled_start_at'] > time['scheduled_end_at']) throw new Error('meeting.time scheduled end precedes its start');
-    if (typeof time['actual_start_at'] === 'string' && typeof time['actual_end_at'] === 'string' &&
-        time['actual_start_at'] > time['actual_end_at']) throw new Error('meeting.time actual end precedes its start');
-  },
-  timezone: optionalText,
-  all_day: optional(flag),
-};
+const TIMES = ['scheduled_start_at', 'scheduled_end_at', 'actual_start_at', 'actual_end_at'] as const;
+
+/** The four times, then both orders, then the timezone and the all-day flag. */
+function meetingTime(value: unknown, label: string): void {
+  const time = object(value, label);
+  onlyKeys(time, [...TIMES, 'timezone', 'all_day'], label);
+  for (const key of TIMES) optionalTimestamp(time[key], `${label}.${key}`);
+  for (const which of ['scheduled', 'actual'] as const) {
+    const start = time[`${which}_start_at`];
+    const end = time[`${which}_end_at`];
+    if (typeof start === 'string' && typeof end === 'string' && start > end) throw new Error(`${label} ${which} end precedes its start`);
+  }
+  optionalNonEmptyString(time['timezone'], `${label}.timezone`);
+  if (time['all_day'] !== undefined && typeof time['all_day'] !== 'boolean') throw new Error(`${label}.all_day must be a boolean`);
+}
 
 const NON_NEGATIVE_INTEGER: Check = (value, label) => {
   if (value !== undefined && (!Number.isSafeInteger(value) || (value as number) < 0)) {
@@ -346,7 +348,7 @@ export function assertCanonicalMeetingDocument(
     title: optionalText,
     description: optionalText,
     lifecycle: optional(among('scheduled', 'active', 'completed', 'cancelled', 'deleted', 'unknown')),
-    time: optional(record(TIME)),
+    time: optional(meetingTime),
     capture: record(CAPTURE),
     participants: list(10_000, (item, label) => {
       fields(item, label, PARTICIPANT);

@@ -148,53 +148,51 @@ function optionalAmong(allowed: readonly string[]): Check {
  * At most `maximum` items, each checked as `<label>[<index>]` (an array's holes
  * are skipped); an item whose `key` repeats an earlier one's is refused at once.
  */
-function eachUnique(
+function eachUnique<T>(
   value: unknown,
   label: string,
   maximum: number,
   check: (item: unknown, label: string) => void,
-  key: (item: never) => unknown,
+  key: (item: T) => unknown,
 ): void {
   const seen = new Set<unknown>();
   assertArray(value, label, maximum).forEach((item, index) => {
     check(item, `${label}[${index}]`);
-    if (seen.has(key(item as never))) {
+    const id = key(item as T);
+    if (seen.has(id)) {
       organizationProtocolValidationFailure(`${label} must be unique`);
     }
-    seen.add(key(item as never));
+    seen.add(id);
   });
 }
 
-const TIME_CHECKS: Readonly<Record<string, Check>> = {
-  scheduled_start_at: optionalAt,
-  scheduled_end_at: optionalAt,
-  actual_start_at: optionalAt,
-  // All four times are checked before either order.
-  actual_end_at: (value, label, time) => {
-    assertOptionalTimestamp(value, label);
-    const meetingTime = label.slice(0, label.lastIndexOf("."));
-    if (
-      typeof time.scheduled_start_at === "string" &&
-      typeof time.scheduled_end_at === "string" &&
-      time.scheduled_start_at > time.scheduled_end_at
-    ) {
-      organizationProtocolValidationFailure(`${meetingTime} scheduled end precedes its start`);
+const MEETING_TIME_KEYS = [
+  "scheduled_start_at",
+  "scheduled_end_at",
+  "actual_start_at",
+  "actual_end_at",
+] as const;
+
+/** The four times, then both orders, then the timezone and the all-day flag. */
+function assertMeetingTime(value: unknown, label: string): void {
+  if (value === undefined) return;
+  const time = asRecord(value, label);
+  if (Object.keys(time).some((key) => ![...MEETING_TIME_KEYS, "timezone", "all_day"].includes(key))) {
+    organizationProtocolValidationFailure(`${label} has an unexpected shape`);
+  }
+  for (const key of MEETING_TIME_KEYS) assertOptionalTimestamp(time[key], `${label}.${key}`);
+  for (const which of ["scheduled", "actual"] as const) {
+    const start = time[`${which}_start_at`];
+    const end = time[`${which}_end_at`];
+    if (typeof start === "string" && typeof end === "string" && start > end) {
+      organizationProtocolValidationFailure(`${label} ${which} end precedes its start`);
     }
-    if (
-      typeof time.actual_start_at === "string" &&
-      typeof time.actual_end_at === "string" &&
-      time.actual_start_at > time.actual_end_at
-    ) {
-      organizationProtocolValidationFailure(`${meetingTime} actual end precedes its start`);
-    }
-  },
-  timezone: optionalText,
-  all_day: (value, label) => {
-    if (value !== undefined && typeof value !== "boolean") {
-      organizationProtocolValidationFailure(`${label} must be a boolean`);
-    }
-  },
-};
+  }
+  assertOptionalNonEmptyString(time.timezone, `${label}.timezone`);
+  if (time.all_day !== undefined && typeof time.all_day !== "boolean") {
+    organizationProtocolValidationFailure(`${label}.all_day must be a boolean`);
+  }
+}
 
 const PARTICIPANT_CHECKS: Readonly<Record<string, Check>> = {
   id: text,
@@ -206,7 +204,7 @@ const PARTICIPANT_CHECKS: Readonly<Record<string, Check>> = {
         kind: (kind, kindLabel) => assertOneOf(kind, PARTICIPANT_IDENTITY_KINDS, kindLabel),
         value: text,
       }, true);
-    }, (identity: Record<string, unknown>) => `${String(identity.kind)}:${String(identity.value)}`);
+    }, (identity: { readonly kind: unknown; readonly value: unknown }) => `${String(identity.kind)}:${String(identity.value)}`);
   },
   roles: (value, label) => {
     if (value === undefined) return;
@@ -366,9 +364,7 @@ function assertOrganizationRecordDecisionBrief(
   const meeting = fields(brief.meeting, `${label}.meeting`, {
     id: text,
     title: optionalText,
-    time: (time, timeLabel) => {
-      if (time !== undefined) fields(time, timeLabel, TIME_CHECKS);
-    },
+    time: (time, timeLabel) => assertMeetingTime(time, timeLabel),
     // Deliberately stricter than core, which tolerates repeated participant ids.
     // Derive keys a participant observation by (meeting snapshot, participant),
     // so a duplicate id would either collide on insert or silently drop a

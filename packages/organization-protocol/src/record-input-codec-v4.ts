@@ -60,25 +60,26 @@ function object(value: unknown): Record<string, unknown> {
 
 /**
  * The one record codec (approval-decision V2, the only record the publisher writes), frozen once by composition with
- * the joins every envelope relies on; no runtime registration. Its descriptor is read once, so later mutation of the
- * codec object changes nothing.
+ * the joins every envelope relies on; no runtime registration. The registry keeps its own frozen copy of the codec and
+ * calls its functions as that copy's methods, so a codec may use `this` and later mutation of the codec changes nothing.
  */
 export function createRecordInputCodecRegistryV4([codec]: readonly [RecordInputCodecV4]): RecordInputCodecRegistryV4 {
-  const { input_reference_field: field, reference_kind: kind, reference_schema_version: version, validateInput, fromReference } = codec;
+  const selected: RecordInputCodecV4 = Object.freeze({ input_reference_field: codec.input_reference_field, reference_kind: codec.reference_kind,
+    reference_schema_version: codec.reference_schema_version, validateInput: codec.validateInput, fromReference: codec.fromReference });
   function check(result: ValidatedRecordInputV4): ValidatedRecordInputV4 {
-    if (result.human_act_resolution_ref.kind !== kind || result.human_act_resolution_ref.schema_version !== version ||
+    if (result.human_act_resolution_ref.kind !== selected.reference_kind || result.human_act_resolution_ref.schema_version !== selected.reference_schema_version ||
         result.event.kind !== "approved") fail("V4 record codec returned a different contract");
     return result;
   }
   return Object.freeze({
     validateInput(value: unknown) {
-      if (!Object.hasOwn(object(value), field)) fail("V4 record input codec is unknown or ambiguous");
-      return check(validateInput(value));
+      if (!Object.hasOwn(object(value), selected.input_reference_field)) fail("V4 record input codec is unknown or ambiguous");
+      return check(selected.validateInput(value));
     },
     fromReference(value: unknown, event: unknown) {
       const reference = object(value);
-      if (reference.kind !== kind || reference.schema_version !== version) fail("V4 record resolution codec is unknown");
-      return check(fromReference(value, event));
+      if (reference.kind !== selected.reference_kind || reference.schema_version !== selected.reference_schema_version) fail("V4 record resolution codec is unknown");
+      return check(selected.fromReference(value, event));
     },
   });
 }

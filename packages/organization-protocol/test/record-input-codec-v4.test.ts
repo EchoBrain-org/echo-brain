@@ -38,12 +38,15 @@ describe("the one V4 record codec", () => {
     expect(() => decision.fromReference(reference, input.event)).toThrow("unknown");
   });
 
-  it("reads its descriptor once instead of admitting later registration or mutation", () => {
+  it("keeps its own frozen copy of the codec, whose functions it calls as methods", () => {
     const codec = alternate();
     const registry = createRecordInputCodecRegistryV4([codec]);
     Object.assign(codec, { reference_kind: "changed", fromReference: () => { throw new Error("mutated"); } });
     expect(registry.fromReference(reference, { kind: "approved" }).human_act_resolution_ref).toEqual(reference);
     expect(Object.isFrozen(registry)).toBe(true);
+    const methods = alternate();
+    const viaThis: RecordInputCodecV4 = { ...methods, fromReference(this: RecordInputCodecV4, ref, event) { return methods.fromReference({ ...(ref as object), kind: this.reference_kind }, event); } };
+    expect(createRecordInputCodecRegistryV4([viaThis]).fromReference(reference, { kind: "approved" }).human_act_resolution_ref).toEqual(reference);
   });
 
   it("rejects a decoder returning a different contract or a rejection", () => {
