@@ -68,11 +68,7 @@
         "export": "readPersonOnboardingInvitation"
       }
     ],
-    "compatibility_entrypoints": [],
-    "retired_source_paths": [
-      "src/product/person-client/requests.ts",
-      "src/product/person-client/person-api-request-builders.ts"
-    ]
+    "compatibility_entrypoints": []
   },
   "layer_rules": [
     {

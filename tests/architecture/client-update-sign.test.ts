@@ -96,8 +96,7 @@ describe('local approved release signer', () => {
     expect(f.payload.at(-1)).toBe(10);
     const result = signClientUpdateFeed(f.options);
     const signature = readFileSync(f.signaturePath);
-    expect(result.status).toBe('signed');
-    expect(result.signature_sha256).toBe(updateDigest(signature));
+    expect(result).toMatchObject({ status: 'signed', signature_sha256: updateDigest(signature) });
     expect(signature.length).toBe(64);
     expect(lstatSync(f.signaturePath).mode & 0o777).toBe(0o600);
     const publicKey = createPublicKey({ key: Buffer.from(f.metadata.public_key_spki, 'base64'), format: 'der', type: 'spki' });

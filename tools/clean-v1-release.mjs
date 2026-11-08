@@ -203,6 +203,10 @@ function main(argv) {
       fail('draft is not valid JSON');
     }
     const record = validateCleanV1Release(draft);
+    // New records omit the retired Ask switches; validate and field still read older records.
+    if (Object.hasOwn(record, 'agentic_ask_v1') || Object.hasOwn(record, 'small_scope_shortcut')) {
+      fail('agentic_ask_v1 and small_scope_shortcut are retired; omit them from new records');
+    }
     try {
       writeFileSync(resolve(field), `${canonicalJson(record)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     } catch (error) {

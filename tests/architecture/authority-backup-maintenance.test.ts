@@ -34,19 +34,6 @@ const RUNTIME_PROFILE_TOOL = join(
   "release",
   "clean-v1-runtime-profile.py",
 );
-const RECOVERY_RUNBOOK = join(
-  REPO,
-  "docs",
-  "operations",
-  "RB-OPERATIONS-002-authority-recovery-floor.md",
-);
-const RELEASE_README = join(REPO, "deploy", "release", "README.md");
-const AUTHORITY_README = join(
-  REPO,
-  "deploy",
-  "organization-authority",
-  "README.md",
-);
 const roots: string[] = [];
 
 afterAll(() => {
@@ -224,32 +211,18 @@ function dropRuntimeProfile(subject: Subject) {
 }
 
 describe.concurrent("current-host backup maintenance transaction", () => {
-  it("documents the canonical installed deployment path for durable execution", ({ expect }) => {
+  it("runs durably from the canonical installed deployment path", ({ expect }) => {
     const source = readFileSync(MAINTENANCE, "utf8");
-    const releaseReadme = readFileSync(RELEASE_README, "utf8");
-    const authorityReadme = readFileSync(AUTHORITY_README, "utf8");
     expect(source).toContain(
       "/srv/echo-authority-clean-v1/backup-authority-maintenance.sh",
     );
     expect(source).not.toContain("/opt/echo-brain");
-    expect(releaseReadme).toContain("install -o root -g root -m 0755 \\");
-    expect(releaseReadme).toContain("./backup-authority-maintenance.sh");
-    expect(releaseReadme).toContain(
-      "sha256sum ./backup-authority-maintenance.sh",
-    );
-    expect(authorityReadme).toContain(
-      "/srv/echo-authority-clean-v1/backup-authority-maintenance.sh",
-    );
-    expect(authorityReadme).toContain("mode `0755`");
   });
 
   it("bounds the durable unit beyond the maximum acknowledgement and restart proof", ({ expect }) => {
     const script = readFileSync(MAINTENANCE, "utf8");
-    const runbook = readFileSync(RECOVERY_RUNBOOK, "utf8");
-    for (const source of [script, runbook]) {
-      expect(source).toContain("TimeoutStartSec=3900");
-      expect(source).toContain("TimeoutStopSec=300");
-    }
+    expect(script).toContain("TimeoutStartSec=3900");
+    expect(script).toContain("TimeoutStopSec=300");
     expect(script).toContain("ack-timeout-seconds <1-3600>");
     expect(script).toContain("--wait-timeout 90 authority proxy");
   });

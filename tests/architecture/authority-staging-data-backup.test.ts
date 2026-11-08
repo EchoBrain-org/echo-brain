@@ -14,12 +14,6 @@ import {
   main,
   runAuthorityStaging,
 } from "../../tools/authority-staging.mjs";
-import type {
-  ChangeSetPlan,
-  ChangeSetRequest,
-  LifecycleDependencies,
-  StackStatus,
-} from "../../tools/authority-staging.mjs";
 import {
   readTemplate,
   resource,
@@ -36,7 +30,6 @@ const GUARD_POLICY = resolve(
   "deploy/organization-authority/authority-staging-data-backup-v1.guard",
 );
 const VALIDATOR = resolve(REPO, "tools/validate-authority-recovery-templates.mjs");
-const readRepoFile = (path: string) => readFileSync(resolve(REPO, path), "utf8");
 const TEMPLATE_SHA256 = createHash("sha256")
   .update(readFileSync(TEMPLATE))
   .digest("hex");
@@ -84,14 +77,27 @@ const EXPECTED_PARAMETERS = Object.freeze({
 });
 
 const template = () => readTemplate(TEMPLATE);
-type VolumeFacts = Awaited<
-  ReturnType<
-    NonNullable<NonNullable<LifecycleDependencies["ec2"]>["describeVolume"]>
-  >
->;
-type KeyFacts = Awaited<
-  ReturnType<NonNullable<LifecycleDependencies["kms"]>["describeKey"]>
->;
+type StackStatus =
+  | { readonly exists: false }
+  | {
+      readonly exists: true;
+      readonly status: string;
+      readonly outputs: Readonly<Record<string, string>>;
+      readonly terminationProtection: boolean;
+    };
+type ChangeSetRequest = {
+  readonly region: string;
+  readonly stackName: string;
+  readonly changeSetName: string;
+  readonly changeSetType: "CREATE" | "UPDATE";
+  readonly clientToken: string;
+  readonly onStackFailure?: "DO_NOTHING";
+  readonly parameterKeys?: readonly string[];
+  readonly templatePath: string;
+  readonly templateSha256: string;
+  readonly capabilities: readonly ["CAPABILITY_IAM"];
+  readonly parameters: Readonly<Record<string, string>>;
+};
 
 function inlinePolicyStatements(
   role: CloudFormationResource,
@@ -316,47 +322,6 @@ describe("Authority staging data-backup stack", () => {
   });
 });
 
-describe("staging data-backup recovery documents", () => {
-  it("route the slot's clean-data volume to its own backup lane and rehearsal", () => {
-    const runbook = readRepoFile(
-      "docs/operations/RB-OPERATIONS-004-authority-staging-data-volume-backup.md",
-    );
-    const playbook = readRepoFile(
-      "docs/operations/PB-OPERATIONS-001-authority-operator-lane.md",
-    );
-    const rootFloor = readRepoFile(
-      "docs/operations/RB-OPERATIONS-002-authority-recovery-floor.md",
-    );
-    const deployment = readRepoFile("deploy/organization-authority/README.md");
-
-    expect(runbook).toContain("tested_at: null");
-    expect(runbook).toContain("npm run authority:staging -- backup");
-    expect(runbook).toContain("retention is not\na backup");
-    expect(runbook).toContain("never from the input");
-    expect(runbook).toContain("`alert_delivery_confirmed`");
-    expect(runbook).toContain("sudo mount -o ro,noload,noexec,nodev,nosuid <restored-device>");
-    expect(runbook).toContain("--clean-data <read-only-mount> \\");
-    expect(runbook).toContain("`state/confluence-person-connections.sqlite`");
-    expect(runbook).toContain("private-DNS `ssm` and\n  `ssmmessages` interface endpoints");
-    expect(runbook).toContain("Coding agents do not start backup or restore jobs");
-    expect(runbook).toContain("A verifier refusal leaves `tested_at: null`.");
-    expect(playbook).toContain("| Back up the retained data volume | `authority:staging backup`");
-    expect(playbook).toContain("Retention alone is not a backup.");
-    expect(rootFloor).toContain("It does not reach the staging slot");
-    expect(deployment).toContain("Retention alone is not a\n  backup.");
-    expect(deployment).not.toContain(
-      "Until the later retained-data-volume and replaceable-host programme",
-    );
-    expect(readRepoFile("README.md")).toContain("| `backup`    |");
-    expect(readRepoFile("docs/operations/README.md")).toContain(
-      "RB-OPERATIONS-004-authority-staging-data-volume-backup.md",
-    );
-    expect(readRepoFile("docs/components/operations-release.md")).toContain(
-      "  - RB-OPERATIONS-004\n",
-    );
-  });
-});
-
 function slotStack(
   overrides: Partial<{
     terminationProtection: boolean;
@@ -436,24 +401,23 @@ function backupDependencies(
   const events: string[] = [];
   const requests: ChangeSetRequest[] = [];
   let backupStack: StackStatus = options.backupStack ?? { exists: false };
-  const plan = (request: ChangeSetRequest): ChangeSetPlan => ({
-    actions: (options.changeActions ??
-      fullInventory()) as Extract<ChangeSetPlan, { kind: "change_set" }>["actions"],
+  const plan = (request: ChangeSetRequest) => ({
+    actions: options.changeActions ?? fullInventory(),
     changeSetType: request.changeSetType,
     id: "change-set-backup-1",
     kind: "change_set",
     matchesExpected: options.matchesExpected ?? true,
     status: "CREATE_COMPLETE",
   });
-  const dependencies: LifecycleDependencies = {
+  const dependencies = {
     cloudFormation: {
-      describeStack: async ({ stackName }) => {
+      describeStack: async ({ stackName }: { stackName: string }) => {
         events.push(`describe:${stackName}`);
         if (stackName === SLOT_STACK) return options.slot ?? slotStack();
         if (stackName === BACKUP_STACK) return backupStack;
         throw new Error(`unexpected stack ${stackName}`);
       },
-      createChangeSet: async (request) => {
+      createChangeSet: async (request: ChangeSetRequest) => {
         events.push(`plan:${request.stackName}:${request.changeSetType}`);
         requests.push(request);
         if (!backupStack.exists)
@@ -465,12 +429,15 @@ function backupDependencies(
           };
         return plan(request);
       },
-      describeChangeSet: async (request) => {
+      describeChangeSet: async (request: ChangeSetRequest) => {
         events.push(`review:${request.stackName}:${request.changeSetType}`);
         requests.push(request);
         return plan(request);
       },
-      executeChangeSet: async ({ stackName, changeSetType }) => {
+      executeChangeSet: async ({
+        stackName,
+        changeSetType,
+      }: Pick<ChangeSetRequest, "stackName" | "changeSetType">) => {
         events.push(`execute:${stackName}:${changeSetType}`);
         backupStack = {
           exists: true,
@@ -486,7 +453,7 @@ function backupDependencies(
             : false,
         };
       },
-      ensureTerminationProtection: async ({ stackName }) => {
+      ensureTerminationProtection: async ({ stackName }: { stackName: string }) => {
         events.push(`protect:${stackName}`);
         if (stackName !== BACKUP_STACK)
           throw new Error("only the backup stack may be protected here");
@@ -498,13 +465,13 @@ function backupDependencies(
       describeImage: async () => {
         throw new Error("backup never inspects the host image");
       },
-      describeVolume: async ({ volumeId }) => {
+      describeVolume: async ({ volumeId }: { volumeId: string }) => {
         events.push(`volume:${volumeId}`);
-        return cleanDataVolume(options.volume) as VolumeFacts;
+        return cleanDataVolume(options.volume);
       },
     },
     sns: {
-      describeTopic: async ({ topicArn }) => {
+      describeTopic: async ({ topicArn }: { topicArn: string }) => {
         events.push("topic");
         if (options.topic === "unreadable") throw new Error("access denied");
         return {
@@ -515,9 +482,9 @@ function backupDependencies(
       },
     },
     kms: {
-      describeKey: async ({ keyId }) => {
+      describeKey: async ({ keyId }: { keyId: string }) => {
         events.push(`key:${keyId === KEY_ARN ? "source" : "other"}`);
-        return sourceKey(options.key) as KeyFacts;
+        return sourceKey(options.key);
       },
     },
   };

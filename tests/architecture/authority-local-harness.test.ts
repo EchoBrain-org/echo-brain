@@ -285,7 +285,7 @@ describe("Authority local harness", () => {
     const state = completeOwnedState(root, tuple as ReturnType<typeof externalTuple>);
     const generated = generatedDirectory(state);
     // The overlay a pre-Nango harness wrote: no command override and one state mount.
-    const overlay = localOverlay({ state, ports: tuple.ports, localSource: tuple.source_revision });
+    const overlay = localOverlay({ state, ports: tuple.ports, localSource: tuple.source_revision, nango: undefined });
     expect(overlay).not.toContain("command:");
     expect(overlay).not.toContain("nango");
     expect(overlay).toContain(`    volumes: !override\n      - "${state}:/echo-clean"\n    ports: !override`);

@@ -154,9 +154,8 @@ The reviewed source is covered by:
 
 The Phase-1 replay corpus, quality CLI and its adapter/evaluator tests are
 retired. Their former corpus-validation behavior is no longer claimed as
-enforcement. Exact source tombstones reject those removed files, and the
-workspace boundary test rejects replacement files under `src/quality/`
-because that directory no longer has a layer rule.
+enforcement. The workspace boundary test rejects replacement files under
+`src/quality/` because that directory no longer has a layer rule.
 
 The active synthetic-demo lane remains separate. Its source adapter and
 pre-Slack evaluator use canonical meeting documents and the production

@@ -74,9 +74,9 @@ Every registered workspace source boundary declares a small
 product, package, and service workspaces anchor the few canonical components
 that a person or coding agent should use to enter the architecture. Each
 contract
-also lists exact retired source paths and any frozen compatibility facades.
-The architecture-boundary check requires the index, verifies its exports and
-facade targets, and rejects a reintroduced retired path.
+also lists any frozen compatibility facades.
+The architecture-boundary check requires the index and verifies its exports and
+facade targets.
 
 The index is intentionally selective. It does not enumerate every source file
 or ban vocabulary across the repository. Historical, wire, persisted, and

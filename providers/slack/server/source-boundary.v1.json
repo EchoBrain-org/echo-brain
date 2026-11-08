@@ -126,31 +126,6 @@
         "export": "SlackIntegrationProvider"
       }
     ],
-    "compatibility_entrypoints": [],
-    "retired_source_paths": [
-      "providers/slack/server/src/organization-control-plane/clean-slack-connect-main.ts",
-      "providers/slack/server/src/organization-control-plane/slack-external-identity-integration-v1.ts",
-      "providers/slack/server/src/organization-control-plane/composition/slack-connection-setup-cli.ts",
-      "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.ts",
-      "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-bot-token-reader-v1.ts",
-      "providers/slack/server/src/setup/slack-browser-oauth-configuration-v1.ts",
-      "providers/slack/server/src/slack-private-credentials-v1.ts",
-      "providers/slack/server/src/context/slack-channel-live-evidence-reader-v1.ts",
-      "providers/slack/server/src/context/slack-context-current-identity-v1.ts",
-      "providers/slack/server/src/context/slack-context-payload-v1.ts",
-      "providers/slack/server/src/context/slack-context-source-v1.ts",
-      "providers/slack/server/src/context/slack-context-transport-v1.ts",
-      "providers/slack/server/src/context/slack-context-validation-v1.ts",
-      "providers/slack/server/src/organization-control-plane/application/slack-public-channel-context-capability-v1.ts",
-      "providers/slack/server/src/organization-protocol/private-slack-block-approval-record-input-v1.ts",
-      "providers/slack/server/src/organization-protocol/private-slack-block-approval-record-input-v2.ts",
-      "providers/slack/server/src/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.ts",
-      "providers/slack/server/src/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2.ts",
-      "providers/slack/server/src/private-approval/private-slack-approval-block-kit-card-v2.ts",
-      "providers/slack/server/src/private-approval/slack-approval-card-input-v1.ts",
-      "providers/slack/server/src/private-approval/private-slack-approval-project-eligibility-v2.ts",
-      "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.ts",
-      "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.ts"
-    ]
+    "compatibility_entrypoints": []
   }
 }

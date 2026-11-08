@@ -13,10 +13,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  createOnboardingInputArchive,
+  createOnboardingInputArchive as createArchive,
   cleanupOnboardingTransfer,
   executeOnboardingTransfer,
-  onboardingTransferSsmCommands,
+  onboardingTransferSsmCommands as ssmCommands,
   planOnboardingTransfer,
   preflightOnboardingInput,
 } from "../../tools/authority-staging-onboarding-transfer.mjs";
@@ -26,6 +26,21 @@ import {
 } from "../../tools/lib/operator-io.mjs";
 import { spawnSync } from "node:child_process";
 import { gunzipSync } from "node:zlib";
+
+// Both tools destructure an options bag; an omitted option reads as undefined.
+const createOnboardingInputArchive = createArchive as (options: {
+  sourceDir: string;
+  stagingSyntheticMeetingsDir?: string;
+  reuseCurrentProviderInputs?: boolean;
+  output: string;
+}) => ReturnType<typeof createArchive>;
+const onboardingTransferSsmCommands = ssmCommands as (options: {
+  region: string;
+  artifact: Readonly<Record<string, string>>;
+  stagingSyntheticMeetings?: boolean;
+  reuseCurrentProviderInputs?: boolean;
+  operationId?: string;
+}) => ReturnType<typeof ssmCommands>;
 
 const INPUT_FILES = [
   "onboarding.clean-v1.json",
@@ -354,7 +369,7 @@ describe("Authority staging onboarding input preflight", () => {
 
     const report = preflightOnboardingInput(privateConfig(source, archive, meetings));
     const fixtures = report.staging_synthetic_meetings!;
-    const states = new Map(fixtures.required_files.map((file) => [file.name, file.state]));
+    const states = new Map(fixtures.required_files.map((file: { name: string; state: string }) => [file.name, file.state]));
 
     expect(report.ready).toBe(false);
     expect(fixtures.directory_private).toBe(true);
@@ -418,7 +433,7 @@ describe("Authority staging onboarding input preflight", () => {
     });
     expect(report.required_files).toHaveLength(INPUT_FILES.length);
     expect(
-      report.required_files.every((file) => file.state === "ready"),
+      report.required_files.every((file: { state: string }) => file.state === "ready"),
     ).toBe(true);
   });
 
@@ -435,7 +450,7 @@ describe("Authority staging onboarding input preflight", () => {
     expect(report.ready).toBe(false);
     expect(report.state).toBe("incomplete");
     const byName = new Map(
-      report.required_files.map((file) => [file.name, file.state]),
+      report.required_files.map((file: { name: string; state: string }) => [file.name, file.state]),
     );
     expect(byName.get("nango-secret-key")).toBe("missing");
     expect(byName.get("llm-credential")).toBe("empty");
@@ -483,7 +498,7 @@ describe("Authority staging onboarding input preflight", () => {
       bytes_over_limit: 2 * 1024 * 1024,
       next_action: "reduce total required input bytes by at least 2097152, to at most 41943040, then rerun preflight",
     });
-    expect(report.required_files.every((file) => file.state === "ready")).toBe(true);
+    expect(report.required_files.every((file: { state: string }) => file.state === "ready")).toBe(true);
   });
 
   it("pins local AWS CLI calls to echo-prod without inherited endpoint, proxy, or CA overrides", () => {
@@ -816,7 +831,7 @@ describe("Authority staging onboarding transfer", () => {
       host_stage_path: "/srv/echo-authority-clean-v1/rehearsal-inputs/onboarding-transfer-001",
       next_human_action: expect.stringContaining("prepare-rehearsal --operation-id onboarding-transfer-001"),
     });
-    if (!result.completion_path) throw new Error("staged reuse operation must return a completion receipt path");
+    if (!("completion_path" in result) || !result.completion_path) throw new Error("staged reuse operation must return a completion receipt path");
     const completion = JSON.parse(readFileSync(result.completion_path, "utf8"));
     expect(completion).toMatchObject({
       state: "remote_staged",

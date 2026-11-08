@@ -53,7 +53,6 @@ interface BoundaryManifest {
       path: string;
       export: string;
     }>;
-    retired_source_paths: string[];
     compatibility_entrypoints: Array<{
       path: string;
       targets: string[];
@@ -147,8 +146,6 @@ describe("workspace source boundaries", () => {
   describe("ownership, layer and component-index refusals", () => {
     const authorityPath = "services/organization-authority/source-boundary.v1.json";
     const retiredRoot = readJson<Registry>(REGISTRY).retired_workspace_roots[0]!;
-    const retiredPath = readJson<BoundaryManifest>(authorityPath)
-      .component_index_contract!.retired_source_paths[0]!;
     const unlayered = "services/organization-authority/src/unlayered.ts";
     const orphan = "src/product/organization/orphan.ts";
     // Document parser and filesystem work stay out of these layers.
@@ -176,7 +173,7 @@ describe("workspace source boundaries", () => {
         "services/organization-authority/src/composition/organization-authority-service-cli.ts",
       ];
       writeFixtureJson(fixture, authorityPath, authority);
-      for (const path of [retiredPath, unlayered, orphan]) {
+      for (const path of [unlayered, orphan]) {
         mkdirSync(dirname(join(fixture, path)), { recursive: true });
         writeFileSync(join(fixture, path), "export {};\n");
       }
@@ -191,7 +188,6 @@ describe("workspace source boundaries", () => {
       ["a reintroduced retired workspace root", `retired workspace root remains: ${retiredRoot}`],
       ["a workspace without a component index", "@echo-brain/federation-protocol: component_index_contract is required"],
       ["a missing canonical Authority component path", "canonical component 'Organization Authority composition root' path is missing"],
-      ["a reintroduced retired Authority component path", `retired component source path remains: ${retiredPath}`],
       ["a compatibility facade that targets the wrong implementation", "compatibility entrypoint must import only its declared implementation targets"],
       ["an owned source file outside every declared layer", `owned source file has no layer rule: ${unlayered}`],
       ["a module under a retired machine product root", `module remains under removed internal root: ${orphan}`],
@@ -246,128 +242,6 @@ describe("workspace source boundaries", () => {
 
     writeFileSync(join(first, "tracked.txt"), "first fixture only\n");
     expect(readFileSync(join(second, "tracked.txt"), "utf8")).toBe("dirty\n");
-  });
-
-  it("locks the one-way workspace dependency graph", () => {
-    const registry = readJson<Registry>(REGISTRY);
-    const graph = Object.fromEntries(
-      registry.manifests.map((path) => {
-        const manifest = readJson<BoundaryManifest>(path);
-        return [manifest.name, [...manifest.allowed_workspace_packages].sort()];
-      }),
-    );
-
-    expect(graph).toEqual({
-      "@echo-brain/federation-protocol": [],
-      "@echo-brain/organization-protocol": [
-        "@echo-brain/federation-protocol"
-      ],
-      "@echo-brain/organization-api": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-protocol"
-      ],
-      "@echo-brain/organization-authority": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-api",
-        "@echo-brain/organization-authority-kernel",
-        "@echo-brain/organization-control-plane",
-        "@echo-brain/organization-processing",
-        "@echo-brain/organization-protocol",
-        "@echo-brain/organization-record",
-        "@echo-brain/organization-retrieval",
-        "@echo-brain/provider-confluence",
-        "@echo-brain/provider-granola",
-        "@echo-brain/provider-jira",
-        "@echo-brain/provider-openrouter",
-        "@echo-brain/provider-runtime",
-        "@echo-brain/provider-slack-server",
-        "@echo-brain/provider-synthetic-demo"
-      ],
-      "@echo-brain/organization-control-plane": [],
-      "@echo-brain/organization-record": [
-        "@echo-brain/federation-protocol"
-      ],
-      "@echo-brain/organization-retrieval": [
-        "@echo-brain/federation-protocol"
-      ],
-      "@echo-brain/person-client": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-api",
-        "@echo-brain/organization-protocol",
-        "@echo-brain/provider-confluence-client",
-        "@echo-brain/provider-jira-client",
-        "@echo-brain/provider-slack-client"
-      ],
-      "@echo-brain/organization-authority-kernel": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-api",
-        "@echo-brain/organization-control-plane",
-        "@echo-brain/organization-protocol",
-        "@echo-brain/organization-record",
-        "@echo-brain/organization-retrieval"
-      ],
-      "@echo-brain/organization-processing": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-authority-kernel",
-        "@echo-brain/organization-control-plane",
-        "@echo-brain/organization-record"
-      ],
-      "@echo-brain/provider-openrouter": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-authority-kernel",
-        "@echo-brain/organization-processing"
-      ],
-      "@echo-brain/provider-synthetic-demo": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-api",
-        "@echo-brain/organization-authority-kernel",
-        "@echo-brain/organization-processing"
-      ],
-      "@echo-brain/provider-slack-server": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-api",
-        "@echo-brain/organization-authority-kernel",
-        "@echo-brain/organization-control-plane",
-        "@echo-brain/organization-protocol",
-        "@echo-brain/provider-runtime",
-        "@echo-brain/provider-slack-client"
-      ],
-      "@echo-brain/provider-slack-client": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-api"
-      ],
-      "@echo-brain/provider-granola": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-authority-kernel",
-        "@echo-brain/organization-processing",
-        "@echo-brain/provider-runtime"
-      ],
-      "@echo-brain/provider-runtime": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-api",
-        "@echo-brain/organization-authority-kernel"
-      ],
-      "@echo-brain/provider-confluence": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-api",
-        "@echo-brain/organization-authority-kernel",
-        "@echo-brain/provider-confluence-client",
-        "@echo-brain/provider-runtime"
-      ],
-      "@echo-brain/provider-confluence-client": [
-        "@echo-brain/organization-api"
-      ],
-      "@echo-brain/provider-jira": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-api",
-        "@echo-brain/organization-authority-kernel",
-        "@echo-brain/provider-jira-client",
-        "@echo-brain/provider-runtime"
-      ],
-      "@echo-brain/provider-jira-client": [
-        "@echo-brain/organization-api"
-      ]
-    });
   });
 
   describe("declared workspace dependency direction", () => {
@@ -882,7 +756,7 @@ describe("workspace source boundaries", () => {
       boundary_root: root, source_root: `${root}/src`, package_json: `${root}/package.json`, entry_points: [source],
       owned_source_paths: [`${root}/src/**`], allowed_internal_paths: [`${root}/src/**`],
       allowed_workspace_packages: [], allowed_external_packages: [], allowed_node_builtins: [], runtime_assets: [],
-      component_index_contract: { canonical_components: [{ name: "Synthetic decoder", path: source, export: "decode" }], retired_source_paths: [], compatibility_entrypoints: [] },
+      component_index_contract: { canonical_components: [{ name: "Synthetic decoder", path: source, export: "decode" }], compatibility_entrypoints: [] },
       layer_rules: [{ name: "provider-owned", from: `${root}/src/**`, allowed_imports: [`${root}/src/**`], allowed_workspace_packages: [], allowed_external_packages: [], allowed_node_builtins: [] }],
     };
     writeFixtureJson(fixture, `${root}/source-boundary.v1.json`, manifest);

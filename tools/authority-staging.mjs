@@ -212,51 +212,48 @@ function validateParameters(value) {
   return Object.freeze(parameters);
 }
 
-function validateEdge(value) {
-  const raw = requiredObject(value, "edge_invalid");
-  onlyKeys(
-    raw,
-    new Set(["accountId", "zoneId", "hostname"]),
-    "edge_property_not_allowed",
-  );
-  return Object.freeze({
-    accountId: exactString(
-      raw.accountId,
-      /^[a-f0-9]{32}$/i,
-      "edge_account_invalid",
+/** Exactly these string fields, each checked in order against [pattern, code]. */
+function exactFields(value, invalidCode, propertyCode, fields) {
+  const raw = requiredObject(value, invalidCode);
+  onlyKeys(raw, new Set(Object.keys(fields)), propertyCode);
+  return Object.freeze(
+    Object.fromEntries(
+      Object.entries(fields).map(([key, [pattern, code]]) => [
+        key,
+        exactString(raw[key], pattern, code),
+      ]),
     ),
-    hostname: exactString(
-      raw.hostname,
+  );
+}
+
+function validateEdge(value) {
+  const edge = exactFields(value, "edge_invalid", "edge_property_not_allowed", {
+    accountId: [/^[a-f0-9]{32}$/i, "edge_account_invalid"],
+    hostname: [
       /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/,
       "edge_hostname_invalid",
-    ).toLowerCase(),
-    zoneId: exactString(raw.zoneId, /^[a-f0-9]{32}$/i, "edge_zone_invalid"),
+    ],
+    zoneId: [/^[a-f0-9]{32}$/i, "edge_zone_invalid"],
   });
+  return Object.freeze({ ...edge, hostname: edge.hostname.toLowerCase() });
 }
 
 function validateHostSetup(value) {
-  const raw = requiredObject(value, "host_setup_invalid");
-  onlyKeys(
-    raw,
-    new Set(["path", "key", "sha256"]),
+  return exactFields(
+    value,
+    "host_setup_invalid",
     "host_setup_property_not_allowed",
+    {
+      key: [S3_KEY, "host_setup_key_invalid"],
+      path: [/^.{1,2048}$/, "host_setup_path_invalid"],
+      sha256: [SHA256, "host_setup_sha256_invalid"],
+    },
   );
-  return Object.freeze({
-    key: exactString(raw.key, S3_KEY, "host_setup_key_invalid"),
-    path: exactString(raw.path, /^.{1,2048}$/, "host_setup_path_invalid"),
-    sha256: exactString(raw.sha256, SHA256, "host_setup_sha256_invalid"),
-  });
 }
 
 function validateBackup(value) {
-  const raw = requiredObject(value, "backup_invalid");
-  onlyKeys(raw, new Set(["alertTopicArn"]), "backup_property_not_allowed");
-  return Object.freeze({
-    alertTopicArn: exactString(
-      raw.alertTopicArn,
-      SNS_TOPIC_ARN,
-      "backup_alert_topic_invalid",
-    ),
+  return exactFields(value, "backup_invalid", "backup_property_not_allowed", {
+    alertTopicArn: [SNS_TOPIC_ARN, "backup_alert_topic_invalid"],
   });
 }
 
@@ -359,32 +356,21 @@ function outputMap(stack) {
     if (typeof key !== "string" || typeof value !== "string")
       refuse("stack_outputs_invalid");
   }
-  if (stack.status === "REVIEW_IN_PROGRESS")
-    return Object.freeze({
-      pendingCreate: true,
-      failedCreate: false,
-      status: stack.status,
-      terminationProtection: stack.terminationProtection,
-      outputs: Object.freeze({ ...outputs }),
-    });
-  if (stack.status === "CREATE_FAILED")
-    return Object.freeze({
-      failedCreate: true,
-      pendingCreate: false,
-      status: stack.status,
-      terminationProtection: stack.terminationProtection,
-      outputs: Object.freeze({ ...outputs }),
-    });
+  const pendingCreate = stack.status === "REVIEW_IN_PROGRESS";
+  const failedCreate = stack.status === "CREATE_FAILED";
+  const updateRolledBack = stack.status === RECOVERABLE_UPDATE_STACK_STATUS;
   if (
-    !HEALTHY_STACK_STATUSES.has(stack.status) &&
-    stack.status !== RECOVERABLE_UPDATE_STACK_STATUS
+    !pendingCreate &&
+    !failedCreate &&
+    !updateRolledBack &&
+    !HEALTHY_STACK_STATUSES.has(stack.status)
   ) {
     refuse("stack_status_invalid");
   }
   return Object.freeze({
-    failedCreate: false,
-    pendingCreate: false,
-    updateRolledBack: stack.status === RECOVERABLE_UPDATE_STACK_STATUS,
+    failedCreate,
+    pendingCreate,
+    updateRolledBack,
     status: stack.status,
     terminationProtection: stack.terminationProtection,
     outputs: Object.freeze({ ...outputs }),
@@ -446,6 +432,29 @@ function changeSetName(input, action) {
   return `echo-authority-${action}-${input.operationId}`.slice(0, 128);
 }
 
+/** The one change-set request shape; only the data-backup stack names its own vector. */
+function stackChangeSetRequest(
+  input,
+  action,
+  type,
+  { stackName, template, parameters, edgePlanBinding, parameterKeys },
+) {
+  return Object.freeze({
+    capabilities: Object.freeze(["CAPABILITY_IAM"]),
+    changeSetName: changeSetName(input, action),
+    changeSetType: type,
+    clientToken: input.operationId,
+    edgePlanBinding,
+    onStackFailure: type === "CREATE" ? "DO_NOTHING" : undefined,
+    parameterKeys,
+    parameters,
+    region: input.region,
+    stackName,
+    templatePath: template.path,
+    templateSha256: template.sha256,
+  });
+}
+
 function changeSetRequest(
   input,
   action,
@@ -455,15 +464,9 @@ function changeSetRequest(
   initializeBlankDataVolume = false,
   resumeRetainedAuthority = false,
 ) {
-  const edgePlanBinding =
-    action === "slot-init" ? canonicalEdgePlanBinding(input) : undefined;
-  return Object.freeze({
-    capabilities: Object.freeze(["CAPABILITY_IAM"]),
-    changeSetName: changeSetName(input, action),
-    changeSetType: type,
-    clientToken: input.operationId,
-    edgePlanBinding,
-    onStackFailure: type === "CREATE" ? "DO_NOTHING" : undefined,
+  return stackChangeSetRequest(input, action, type, {
+    edgePlanBinding:
+      action === "slot-init" ? canonicalEdgePlanBinding(input) : undefined,
     parameters: buildParameters(
       input,
       hostEnabled,
@@ -471,27 +474,21 @@ function changeSetRequest(
       initializeBlankDataVolume,
       resumeRetainedAuthority,
     ),
-    region: input.region,
     stackName: input.stack.name,
-    templatePath: input.template.path,
-    templateSha256: input.template.sha256,
+    template: input.template,
   });
 }
 
-function adapterFunction(dependencies, name) {
-  const value = dependencies?.cloudFormation?.[name];
-  if (typeof value !== "function") refuse(`cloudformation_${name}_required`);
-  return value;
-}
-
-function ec2AdapterFunction(dependencies, name) {
-  const value = dependencies?.ec2?.[name];
-  if (typeof value !== "function") refuse(`ec2_${name}_required`);
+/** One injected AWS operation, refused as `<group>_<name>_required` when absent. */
+function adapterFunction(dependencies, name, group = "cloudFormation") {
+  const value = dependencies?.[group]?.[name];
+  if (typeof value !== "function")
+    refuse(`${group.toLowerCase()}_${name}_required`);
   return value;
 }
 
 async function assertStagingAmiRootDevice(input, dependencies) {
-  const describeImage = ec2AdapterFunction(dependencies, "describeImage");
+  const describeImage = adapterFunction(dependencies, "describeImage", "ec2");
   let image;
   try {
     image = await describeImage({
@@ -629,17 +626,29 @@ function checkedChangeSet(value) {
   });
 }
 
-async function planStack(
+/**
+ * A plan creates the change set for review; execute re-reads the one stored
+ * under the same request and accepts it only if it still matches.
+ */
+async function reviewableChangeSet(request, dependencies, execute) {
+  const changeSet = adapterFunction(
+    dependencies,
+    execute ? "describeChangeSet" : "createChangeSet",
+  );
+  return checkedChangeSet(await changeSet(request));
+}
+
+async function stackPlan(
   input,
   action,
   hostEnabled,
   dependencies,
-  setupArtifact,
+  execute,
+  setupArtifact = undefined,
   initializeBlankDataVolume = false,
   resumeRetainedAuthority = false,
 ) {
   const existing = await describeExactStack(input, dependencies);
-  const createChangeSet = adapterFunction(dependencies, "createChangeSet");
   const request = changeSetRequest(
     input,
     action,
@@ -649,42 +658,11 @@ async function planStack(
     initializeBlankDataVolume,
     resumeRetainedAuthority,
   );
-  const planned = await createChangeSet(request);
-  const plan = checkedChangeSet(planned);
+  const plan = await reviewableChangeSet(request, dependencies, execute);
   return Object.freeze({
     edgePlanBinding: request.edgePlanBinding,
     existing,
     plan: assertChangeBoundary(plan, action),
-  });
-}
-
-async function reviewedPlanStack(
-  input,
-  action,
-  hostEnabled,
-  dependencies,
-  initializeBlankDataVolume = false,
-  resumeRetainedAuthority = false,
-) {
-  const existing = await describeExactStack(input, dependencies);
-  const describeChangeSet = adapterFunction(dependencies, "describeChangeSet");
-  const expected = changeSetRequest(
-    input,
-    action,
-    changeSetTypeFor(existing),
-    hostEnabled,
-    undefined,
-    initializeBlankDataVolume,
-    resumeRetainedAuthority,
-  );
-  const plan = assertChangeBoundary(
-    checkedChangeSet(await describeChangeSet(expected)),
-    action,
-  );
-  return Object.freeze({
-    edgePlanBinding: expected.edgePlanBinding,
-    existing,
-    plan,
   });
 }
 
@@ -820,7 +798,8 @@ async function probeAuthorityDescriptor(
   const url = `https://${input.edge.hostname}${AUTHORITY_DESCRIPTOR_PATH}`;
   let lastStatus = null;
   let lastFailure = "unreachable";
-  for (let attempt = 1; attempt <= attemptLimit; attempt += 1) {
+  // One observation: a final descriptor result, or the failure class to retry.
+  const observe = async (attempt) => {
     let response;
     try {
       response = await fetchImpl(url, {
@@ -830,23 +809,15 @@ async function probeAuthorityDescriptor(
       });
     } catch {
       lastStatus = null;
-      lastFailure = "unreachable";
-      if (attempt < attemptLimit) await sleepImpl(DESCRIPTOR_PROBE_INTERVAL_MS);
-      continue;
+      return "unreachable";
     }
     lastStatus = typeof response?.status === "number" ? response.status : null;
-    if (lastStatus !== 200) {
-      lastFailure = "http_status";
-      if (attempt < attemptLimit) await sleepImpl(DESCRIPTOR_PROBE_INTERVAL_MS);
-      continue;
-    }
+    if (lastStatus !== 200) return "http_status";
     let body;
     try {
       body = await response.json();
     } catch {
-      lastFailure = "body_invalid";
-      if (attempt < attemptLimit) await sleepImpl(DESCRIPTOR_PROBE_INTERVAL_MS);
-      continue;
+      return "body_invalid";
     }
     // Validate the established public response envelope, while deliberately
     // retaining none of the response body in a receipt or log. A 200 from a
@@ -855,9 +826,7 @@ async function probeAuthorityDescriptor(
     try {
       descriptor = validateOrganizationAuthorityDescriptorResponse(body);
     } catch {
-      lastFailure = "descriptor_invalid";
-      if (attempt < attemptLimit) await sleepImpl(DESCRIPTOR_PROBE_INTERVAL_MS);
-      continue;
+      return "descriptor_invalid";
     }
     if (input.authorityPinSha256 === undefined) {
       return descriptorObservation({
@@ -892,6 +861,12 @@ async function probeAuthorityDescriptor(
       status: 200,
       failure_class: null,
     });
+  };
+  for (let attempt = 1; attempt <= attemptLimit; attempt += 1) {
+    const observed = await observe(attempt);
+    if (typeof observed !== "string") return observed;
+    lastFailure = observed;
+    if (attempt < attemptLimit) await sleepImpl(DESCRIPTOR_PROBE_INTERVAL_MS);
   }
   return descriptorObservation({
     accepted: false,
@@ -908,19 +883,15 @@ function requiredAuthorityFailureCode(descriptor) {
     : "authority_descriptor_unready";
 }
 
-function executedUpFailureReceipt(input, failureClass, fields) {
-  return lifecycleReceipt(input, "up", "failed", {
-    ...fields,
-    failure_class: failureClass,
-  });
-}
-
-function refuseWithReceipt(code, receipt) {
+function refuseExecutedUp(input, code, fields) {
   const error = new LifecycleError(code);
   // This is intentionally a sanitized, public receipt only. runCli emits it
   // before the controlled nonzero exit so automation can distinguish a probe
   // failure from a CloudFormation failure without ever receiving response data.
-  error.receipt = receipt;
+  error.receipt = lifecycleReceipt(input, "up", "failed", {
+    ...fields,
+    failure_class: code,
+  });
   throw error;
 }
 
@@ -930,6 +901,18 @@ function safeEdgeState(value) {
   if (typeof value.state !== "string" || !EDGE_RECEIPT_STATES.has(value.state))
     refuse("edge_receipt_invalid");
   return value.state;
+}
+
+/** One edge operation ("install" or "status") on the slot's tunnel; its checked state. */
+async function edgeState(input, outputs, dependencies, operation) {
+  const secretArn = requiredOutput(outputs, "AuthorityTunnelTokenSecretArn");
+  const edge = edgeFunctions(dependencies);
+  return safeEdgeState(
+    await edge[operation](
+      edgeInput(input, secretArn, dependencies),
+      edgeDependencies(dependencies),
+    ),
+  );
 }
 
 async function initializedProtectedStack(input, dependencies) {
@@ -945,10 +928,8 @@ async function initializedProtectedStack(input, dependencies) {
 async function prepareSetupArtifact(input, outputs, dependencies) {
   if (input.hostSetup === undefined) refuse("host_setup_required");
   const expectedBucket = requiredOutput(outputs, "HostSetupArtifactBucketName");
-  const uploadObject = dependencies?.s3?.uploadObject;
-  const assertObject = dependencies?.s3?.assertObject;
-  if (typeof uploadObject !== "function") refuse("s3_uploadObject_required");
-  if (typeof assertObject !== "function") refuse("s3_assertObject_required");
+  const uploadObject = adapterFunction(dependencies, "uploadObject", "s3");
+  const assertObject = adapterFunction(dependencies, "assertObject", "s3");
   let uploaded;
   try {
     uploaded = await uploadObject({
@@ -1005,8 +986,7 @@ async function assertReviewedSetupArtifact(plan, outputs, input, dependencies) {
   ) {
     refuse("reviewed_host_setup_drifted");
   }
-  const assertObject = dependencies?.s3?.assertObject;
-  if (typeof assertObject !== "function") refuse("s3_assertObject_required");
+  const assertObject = adapterFunction(dependencies, "assertObject", "s3");
   try {
     await assertObject({
       bucket: requiredOutput(outputs, "HostSetupArtifactBucketName"),
@@ -1020,60 +1000,67 @@ async function assertReviewedSetupArtifact(plan, outputs, input, dependencies) {
   }
 }
 
-async function quiesceExactHost(input, outputs, dependencies) {
+/** Run one SSM host action on the slot's exact instance and require every proof. */
+async function exactHostAction(
+  input,
+  outputs,
+  dependencies,
+  name,
+  failedCode,
+  unprovenCode,
+  proofs,
+) {
   const instanceId = requiredOutput(outputs, "StagingHostInstanceId");
   if (!/^i-[a-f0-9]{8,17}$/.test(instanceId))
     refuse("host_instance_id_invalid");
-  const quiesceHost = dependencies?.ssm?.quiesceHost;
-  if (typeof quiesceHost !== "function") refuse("ssm_quiesceHost_required");
+  const hostAction = adapterFunction(dependencies, name, "ssm");
   let result;
   try {
-    result = await quiesceHost({
+    result = await hostAction({
       instanceId,
       mountPath: CLEAN_DATA_MOUNT,
       region: input.region,
     });
   } catch {
-    refuse("host_quiesce_failed");
+    refuse(failedCode);
   }
   if (
     result === null ||
     typeof result !== "object" ||
-    result.composeStopped !== true ||
-    result.dockerStopped !== true ||
-    result.syncComplete !== true ||
-    result.volumeUnmounted !== true ||
-    result.volumeSafe !== true
+    proofs.some((proof) => result[proof] !== true)
   ) {
-    refuse("host_quiesce_unproven");
+    refuse(unprovenCode);
   }
 }
 
-async function recoverExactHost(input, outputs, dependencies) {
-  const instanceId = requiredOutput(outputs, "StagingHostInstanceId");
-  if (!/^i-[a-f0-9]{8,17}$/.test(instanceId))
-    refuse("host_instance_id_invalid");
-  const recoverHost = dependencies?.ssm?.recoverHost;
-  if (typeof recoverHost !== "function") refuse("ssm_recoverHost_required");
-  let result;
-  try {
-    result = await recoverHost({
-      instanceId,
-      mountPath: CLEAN_DATA_MOUNT,
-      region: input.region,
-    });
-  } catch {
-    refuse("host_recovery_failed");
-  }
-  if (
-    result === null ||
-    typeof result !== "object" ||
-    result.volumeMounted !== true ||
-    result.dockerStarted !== true ||
-    result.existingContainersStarted !== true
-  ) {
-    refuse("host_recovery_unproven");
-  }
+function quiesceExactHost(input, outputs, dependencies) {
+  return exactHostAction(
+    input,
+    outputs,
+    dependencies,
+    "quiesceHost",
+    "host_quiesce_failed",
+    "host_quiesce_unproven",
+    [
+      "composeStopped",
+      "dockerStopped",
+      "syncComplete",
+      "volumeUnmounted",
+      "volumeSafe",
+    ],
+  );
+}
+
+function recoverExactHost(input, outputs, dependencies) {
+  return exactHostAction(
+    input,
+    outputs,
+    dependencies,
+    "recoverHost",
+    "host_recovery_failed",
+    "host_recovery_unproven",
+    ["volumeMounted", "dockerStarted", "existingContainersStarted"],
+  );
 }
 
 async function recoverCurrentRolledBackHost(input, dependencies) {
@@ -1104,9 +1091,7 @@ function assertSlotInitPlan(planned) {
 
 async function runSlotInit(input, { execute = false, ...dependencies } = {}) {
   const planned = assertSlotInitPlan(
-    execute
-      ? await reviewedPlanStack(input, "slot-init", false, dependencies)
-      : await planStack(input, "slot-init", false, dependencies),
+    await stackPlan(input, "slot-init", false, dependencies, execute),
   );
   if (!execute)
     return lifecycleReceipt(
@@ -1133,17 +1118,11 @@ async function runSlotInit(input, { execute = false, ...dependencies } = {}) {
   const protectedStack = await describeExactStack(input, dependencies);
   if (protectedStack?.terminationProtection !== true)
     refuse("slot_termination_protection_unproven");
-  const secretArn = requiredOutput(
-    protectedStack.outputs,
-    "AuthorityTunnelTokenSecretArn",
-  );
-  const edge = edgeFunctions(dependencies);
-  const edgeConfig = edgeInput(input, secretArn, dependencies);
-  const installed = await edge.install(
-    edgeConfig,
-    edgeDependencies(dependencies),
-  );
-  if (safeEdgeState(installed) !== "ready") refuse("edge_install_unready");
+  if (
+    (await edgeState(input, protectedStack.outputs, dependencies, "install")) !==
+    "ready"
+  )
+    refuse("edge_install_unready");
   return lifecycleReceipt(input, "slot-init", "ready", {
     ...publicPlan(planned.plan, false, planned.edgePlanBinding),
     edge_ready: true,
@@ -1184,54 +1163,39 @@ async function runUp(
     const descriptor = await probeAuthorityDescriptor(input, dependencies, {
       attempts: DESCRIPTOR_PROBE_ATTEMPTS,
     });
-    if (!descriptor.accepted) {
-      const failureCode = requiredAuthorityFailureCode(descriptor);
-      refuseWithReceipt(
-        failureCode,
-        executedUpFailureReceipt(input, failureCode, {
-          authority_descriptor: descriptor,
-          authority_accepted: false,
-          authority_serving: descriptor.serving,
-          host_enabled: true,
-          host_ready: true,
-          stack_status: current.status,
-          verification_only: true,
-        }),
-      );
-    }
-    return lifecycleReceipt(input, "up", "executed", {
+    // An accepted descriptor is always serving.
+    const verification = {
       authority_descriptor: descriptor,
-      authority_accepted: true,
-      authority_serving: true,
+      authority_accepted: descriptor.accepted,
+      authority_serving: descriptor.serving,
       host_enabled: true,
       host_ready: true,
       stack_status: current.status,
       verification_only: true,
-    });
+    };
+    if (!descriptor.accepted)
+      refuseExecutedUp(
+        input,
+        requiredAuthorityFailureCode(descriptor),
+        verification,
+      );
+    return lifecycleReceipt(input, "up", "executed", verification);
   }
   await assertStagingAmiRootDevice(input, dependencies);
   if (input.hostSetup === undefined) refuse("host_setup_required");
   const setupArtifact = execute
     ? undefined
     : await prepareSetupArtifact(input, current.outputs, dependencies);
-  const planned = execute
-    ? await reviewedPlanStack(
-        input,
-        "up",
-        true,
-        dependencies,
-        initializeBlankDataVolume,
-        requireAuthority,
-      )
-    : await planStack(
-        input,
-        "up",
-        true,
-        dependencies,
-        setupArtifact,
-        initializeBlankDataVolume,
-        requireAuthority,
-      );
+  const planned = await stackPlan(
+    input,
+    "up",
+    true,
+    dependencies,
+    execute,
+    setupArtifact,
+    initializeBlankDataVolume,
+    requireAuthority,
+  );
   if (!execute)
     return lifecycleReceipt(input, "up", "planned", {
       ...publicPlan(planned.plan, true),
@@ -1247,36 +1211,28 @@ async function runUp(
   const hostReady =
     requiredOutput(stack.outputs, "StagingHostReady") === "true";
   if (!hostReady)
-    refuseWithReceipt(
-      "host_ready_unproven",
-      executedUpFailureReceipt(input, "host_ready_unproven", {
-        ...publicPlan(planned.plan, true),
-        authority_accepted: false,
-        authority_serving: false,
-        host_enabled: false,
-        host_ready: false,
-        initialize_blank_data_volume: initializeBlankDataVolume,
-        stack_status: stack.status,
-      }),
-    );
+    refuseExecutedUp(input, "host_ready_unproven", {
+      ...publicPlan(planned.plan, true),
+      authority_accepted: false,
+      authority_serving: false,
+      host_enabled: false,
+      host_ready: false,
+      initialize_blank_data_volume: initializeBlankDataVolume,
+      stack_status: stack.status,
+    });
   const descriptor = await probeAuthorityDescriptor(input, dependencies, {
     attempts: requireAuthority ? DESCRIPTOR_PROBE_ATTEMPTS : 1,
   });
-  if (requireAuthority && !descriptor.accepted) {
-    const failureCode = requiredAuthorityFailureCode(descriptor);
-    refuseWithReceipt(
-      failureCode,
-      executedUpFailureReceipt(input, failureCode, {
-        ...publicPlan(planned.plan, true),
-        authority_descriptor: descriptor,
-        authority_accepted: false,
-        authority_serving: descriptor.serving,
-        host_ready: hostReady,
-        initialize_blank_data_volume: initializeBlankDataVolume,
-        stack_status: stack.status,
-      }),
-    );
-  }
+  if (requireAuthority && !descriptor.accepted)
+    refuseExecutedUp(input, requiredAuthorityFailureCode(descriptor), {
+      ...publicPlan(planned.plan, true),
+      authority_descriptor: descriptor,
+      authority_accepted: false,
+      authority_serving: descriptor.serving,
+      host_ready: hostReady,
+      initialize_blank_data_volume: initializeBlankDataVolume,
+      stack_status: stack.status,
+    });
   return lifecycleReceipt(input, "up", "executed", {
     ...publicPlan(planned.plan, true),
     initialize_blank_data_volume: initializeBlankDataVolume,
@@ -1294,9 +1250,13 @@ async function runDown(input, { execute = false, ...dependencies } = {}) {
   const current = await initializedProtectedStack(input, dependencies);
   const hostEnabled =
     requiredOutput(current.outputs, "StagingHostReady") === "true";
-  const planned = execute
-    ? await reviewedPlanStack(input, "down", false, dependencies)
-    : await planStack(input, "down", false, dependencies);
+  const planned = await stackPlan(
+    input,
+    "down",
+    false,
+    dependencies,
+    execute,
+  );
   if (!execute)
     return lifecycleReceipt(
       input,
@@ -1381,59 +1341,28 @@ async function runStatus(input, dependencies = {}) {
       stack_status: stack.status,
       termination_protection: true,
     });
-  const secretArn = requiredOutput(
-    stack.outputs,
-    "AuthorityTunnelTokenSecretArn",
-  );
-  const edge = edgeFunctions(dependencies);
-  const status = await edge.status(
-    edgeInput(input, secretArn, dependencies),
-    edgeDependencies(dependencies),
-  );
-  const edgeState = safeEdgeState(status);
+  const edge = await edgeState(input, stack.outputs, dependencies, "status");
   const descriptor = await probeAuthorityDescriptor(input, dependencies);
-  if (!descriptor.serving)
-    return lifecycleReceipt(input, "status", "authority_unready", {
+  const reached = (state) =>
+    lifecycleReceipt(input, "status", state, {
       authority_descriptor: descriptor,
-      authority_accepted: false,
-      authority_serving: false,
+      authority_accepted: descriptor.accepted,
+      authority_serving: descriptor.serving,
       edge_checked: true,
-      edge_ready: edgeState === "ready",
+      edge_ready: edge === "ready",
       host_enabled: true,
       host_ready: true,
       stack_status: stack.status,
       termination_protection: true,
     });
+  if (!descriptor.serving) return reached("authority_unready");
   if (!descriptor.accepted)
-    return lifecycleReceipt(
-      input,
-      "status",
+    return reached(
       descriptor.failure_class === "descriptor_pin_mismatch"
         ? "authority_pin_mismatch"
         : "authority_unpinned",
-      {
-        authority_descriptor: descriptor,
-        authority_accepted: false,
-        authority_serving: true,
-        edge_checked: true,
-        edge_ready: edgeState === "ready",
-        host_enabled: true,
-        host_ready: true,
-        stack_status: stack.status,
-        termination_protection: true,
-      },
     );
-  return lifecycleReceipt(input, "status", edgeState, {
-    authority_descriptor: descriptor,
-    authority_accepted: true,
-    authority_serving: true,
-    edge_checked: true,
-    edge_ready: edgeState === "ready",
-    host_enabled: true,
-    host_ready: true,
-    stack_status: stack.status,
-    termination_protection: true,
-  });
+  return reached(edge);
 }
 
 function regionalArn(value, code) {
@@ -1463,9 +1392,8 @@ async function verifiedDataVolume(input, outputs, dependencies) {
     requiredOutput(outputs, "AuthorityTunnelTokenSecretArn"),
     "stack_outputs_invalid",
   );
-  const describeVolume = ec2AdapterFunction(dependencies, "describeVolume");
-  const describeKey = dependencies?.kms?.describeKey;
-  if (typeof describeKey !== "function") refuse("kms_describeKey_required");
+  const describeVolume = adapterFunction(dependencies, "describeVolume", "ec2");
+  const describeKey = adapterFunction(dependencies, "describeKey", "kms");
   let volume;
   try {
     volume = await describeVolume({ region: input.region, volumeId });
@@ -1540,8 +1468,7 @@ async function verifiedDataVolume(input, outputs, dependencies) {
 }
 
 async function provenAlertTopic(input, dependencies) {
-  const describeTopic = dependencies?.sns?.describeTopic;
-  if (typeof describeTopic !== "function") refuse("sns_describeTopic_required");
+  const describeTopic = adapterFunction(dependencies, "describeTopic", "sns");
   let topic;
   try {
     topic = await describeTopic({
@@ -1571,13 +1498,7 @@ function dataBackupStackName(input) {
 }
 
 function dataBackupChangeSetRequest(input, stackName, type, source) {
-  const template = checkedTemplate(DATA_BACKUP_TEMPLATE_PATH);
-  return Object.freeze({
-    capabilities: Object.freeze(["CAPABILITY_IAM"]),
-    changeSetName: changeSetName(input, "backup"),
-    changeSetType: type,
-    clientToken: input.operationId,
-    onStackFailure: type === "CREATE" ? "DO_NOTHING" : undefined,
+  return stackChangeSetRequest(input, "backup", type, {
     parameterKeys: DATA_BACKUP_PARAMETER_KEYS,
     parameters: Object.freeze({
       DataVolumeId: source.volumeId,
@@ -1586,10 +1507,8 @@ function dataBackupChangeSetRequest(input, stackName, type, source) {
       BackupScheduleExpression: DATA_BACKUP_SCHEDULE_EXPRESSION,
       RecoveryPointRetentionDays: DATA_BACKUP_RETENTION_DAYS,
     }),
-    region: input.region,
     stackName,
-    templatePath: template.path,
-    templateSha256: template.sha256,
+    template: checkedTemplate(DATA_BACKUP_TEMPLATE_PATH),
   });
 }
 
@@ -1650,12 +1569,8 @@ async function runBackup(input, { execute = false, ...dependencies } = {}) {
     changeSetTypeFor(existing),
     source,
   );
-  const planChangeSet = adapterFunction(
-    dependencies,
-    execute ? "describeChangeSet" : "createChangeSet",
-  );
   const plan = assertDataBackupChangeBoundary(
-    checkedChangeSet(await planChangeSet(request)),
+    await reviewableChangeSet(request, dependencies, execute),
     existing,
   );
   const fields = {
@@ -1872,6 +1787,35 @@ export function awsJson(
   });
 }
 
+/**
+ * One region-scoped AWS CLI call: `command`, then `--region`, then `args`, then
+ * `--output json` unless the operation prints nothing.
+ */
+function aws(command, region, args, { output = true, ...options } = {}) {
+  return awsJson(
+    [
+      ...command,
+      "--region",
+      region,
+      ...args,
+      ...(output ? ["--output", "json"] : []),
+    ],
+    options,
+  );
+}
+
+/** An AWS response object whose named fields have these types, or `code`. */
+function shapedResponse(value, types, code) {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Object.entries(types).some(([field, type]) => typeof value[field] !== type)
+  ) {
+    throw new AwsCliError(code);
+  }
+  return value;
+}
+
 function cloudFormationParameters(parameters) {
   return Object.entries(parameters).map(([ParameterKey, ParameterValue]) => ({
     ParameterKey,
@@ -2021,18 +1965,11 @@ function normalizedChangeSet(payload, expected) {
 }
 
 async function describeAwsChangeSet(expected) {
-  const result = await awsJson([
-    "cloudformation",
-    "describe-change-set",
-    "--region",
+  const result = await aws(
+    ["cloudformation", "describe-change-set"],
     expected.region,
-    "--stack-name",
-    expected.stackName,
-    "--change-set-name",
-    expected.changeSetName,
-    "--output",
-    "json",
-  ]);
+    ["--stack-name", expected.stackName, "--change-set-name", expected.changeSetName],
+  );
   return normalizedChangeSet(result, expected);
 }
 
@@ -2066,17 +2003,11 @@ function safeFailureEvents(payload) {
 
 async function failedStackEvents(region, stackName) {
   try {
-    const result = await awsJson([
-      "cloudformation",
-      "describe-events",
-      "--region",
-      region,
+    const result = await aws(["cloudformation", "describe-events"], region, [
       "--stack-name",
       stackName,
       "--filters",
       "FailedEvents=true",
-      "--output",
-      "json",
     ]);
     return safeFailureEvents(result);
   } catch {
@@ -2097,11 +2028,7 @@ export function createAwsCliAdapters() {
     successMarker,
     unprovenCode,
   }) {
-    const sent = await awsJson([
-      "ssm",
-      "send-command",
-      "--region",
-      region,
+    const sent = await aws(["ssm", "send-command"], region, [
       "--document-name",
       "AWS-RunShellScript",
       "--instance-ids",
@@ -2113,38 +2040,20 @@ export function createAwsCliAdapters() {
         commands,
         executionTimeout: [String(SSM_LIFECYCLE_RUN_TIMEOUT_SECONDS)],
       }),
-      "--output",
-      "json",
     ]);
     const commandId = sent.Command?.CommandId;
     if (typeof commandId !== "string" || commandId.length === 0)
       throw new AwsCliError("ssm_command_response_invalid");
-    await awsJson(
-      [
-        "ssm",
-        "wait",
-        "command-executed",
-        "--region",
-        region,
-        "--command-id",
-        commandId,
-        "--instance-id",
-        instanceId,
-      ],
-      { timeoutMs: AWS_SSM_LIFECYCLE_WAIT_TIMEOUT_MS },
-    );
-    const result = await awsJson([
-      "ssm",
-      "get-command-invocation",
-      "--region",
+    const invocation = ["--command-id", commandId, "--instance-id", instanceId];
+    await aws(["ssm", "wait", "command-executed"], region, invocation, {
+      output: false,
+      timeoutMs: AWS_SSM_LIFECYCLE_WAIT_TIMEOUT_MS,
+    });
+    const result = await aws(
+      ["ssm", "get-command-invocation"],
       region,
-      "--command-id",
-      commandId,
-      "--instance-id",
-      instanceId,
-      "--output",
-      "json",
-    ]);
+      invocation,
+    );
     if (
       result.Status !== "Success" ||
       result.StandardOutputContent !== successMarker
@@ -2157,16 +2066,11 @@ export function createAwsCliAdapters() {
     cloudFormation: Object.freeze({
       async describeStack({ region, stackName }) {
         try {
-          const result = await awsJson([
-            "cloudformation",
-            "describe-stacks",
-            "--region",
+          const result = await aws(
+            ["cloudformation", "describe-stacks"],
             region,
-            "--stack-name",
-            stackName,
-            "--output",
-            "json",
-          ]);
+            ["--stack-name", stackName],
+          );
           const stack = result.Stacks?.[0];
           if (!stack || typeof stack.StackStatus !== "string")
             throw new AwsCliError("stack_response_invalid");
@@ -2237,17 +2141,17 @@ export function createAwsCliAdapters() {
           throw error;
         }
         try {
-          await awsJson([
-            "cloudformation",
-            "wait",
-            "change-set-create-complete",
-            "--region",
+          await aws(
+            ["cloudformation", "wait", "change-set-create-complete"],
             expected.region,
-            "--stack-name",
-            expected.stackName,
-            "--change-set-name",
-            expected.changeSetName,
-          ]);
+            [
+              "--stack-name",
+              expected.stackName,
+              "--change-set-name",
+              expected.changeSetName,
+            ],
+            { output: false },
+          );
         } catch {
           // A no-change set is FAILED by design. Describe below identifies the
           // safe, expected case without putting the service reason in output.
@@ -2264,18 +2168,20 @@ export function createAwsCliAdapters() {
         region,
         stackName,
       }) {
-        const request = [
-          "cloudformation",
-          "execute-change-set",
-          "--region",
-          region,
-          "--change-set-name",
-          changeSetId,
-          "--client-request-token",
-          clientRequestToken,
-        ];
+        const request = () =>
+          aws(
+            ["cloudformation", "execute-change-set"],
+            region,
+            [
+              "--change-set-name",
+              changeSetId,
+              "--client-request-token",
+              clientRequestToken,
+            ],
+            { output: false },
+          );
         try {
-          await awsJson(request);
+          await request();
         } catch (error) {
           // A bounded local CLI failure does not establish whether AWS received
           // the request. Preserve that ambiguity for operator recovery instead
@@ -2283,20 +2189,21 @@ export function createAwsCliAdapters() {
           if (isBoundedCliFailure(error)) throw error;
           // The service accepts a client token precisely so an uncertain
           // request can be retried without starting a second update.
-          await awsJson(request);
+          await request();
         }
         try {
-          await awsJson([
-            "cloudformation",
-            "wait",
-            changeSetType === "CREATE"
-              ? "stack-create-complete"
-              : "stack-update-complete",
-            "--region",
+          await aws(
+            [
+              "cloudformation",
+              "wait",
+              changeSetType === "CREATE"
+                ? "stack-create-complete"
+                : "stack-update-complete",
+            ],
             region,
-            "--stack-name",
-            stackName,
-          ]);
+            ["--stack-name", stackName],
+            { output: false },
+          );
         } catch {
           throw new AwsCliError(
             "stack_operation_failed",
@@ -2305,43 +2212,33 @@ export function createAwsCliAdapters() {
         }
       },
       async ensureTerminationProtection({ region, stackName }) {
-        await awsJson([
-          "cloudformation",
-          "update-termination-protection",
-          "--region",
+        await aws(
+          ["cloudformation", "update-termination-protection"],
           region,
-          "--stack-name",
-          stackName,
-          "--enable-termination-protection",
-        ]);
+          ["--stack-name", stackName, "--enable-termination-protection"],
+          { output: false },
+        );
       },
     }),
     ec2: Object.freeze({
       async describeImage({ imageId, region }) {
-        const result = await awsJson([
-          "ec2",
-          "describe-images",
-          "--region",
-          region,
+        const result = await aws(["ec2", "describe-images"], region, [
           "--image-ids",
           imageId,
-          "--output",
-          "json",
         ]);
         const images = result.Images;
         if (!Array.isArray(images) || images.length !== 1)
           throw new AwsCliError("ami_root_mapping_response_invalid");
-        const image = images[0];
-        if (
-          image === null ||
-          typeof image !== "object" ||
-          typeof image.ImageId !== "string" ||
-          typeof image.RootDeviceName !== "string" ||
-          typeof image.RootDeviceType !== "string" ||
-          typeof image.State !== "string"
-        ) {
-          throw new AwsCliError("ami_root_mapping_response_invalid");
-        }
+        const image = shapedResponse(
+          images[0],
+          {
+            ImageId: "string",
+            RootDeviceName: "string",
+            RootDeviceType: "string",
+            State: "string",
+          },
+          "ami_root_mapping_response_invalid",
+        );
         return Object.freeze({
           imageId: image.ImageId,
           rootDeviceName: image.RootDeviceName,
@@ -2350,30 +2247,23 @@ export function createAwsCliAdapters() {
         });
       },
       async describeVolume({ region, volumeId }) {
-        const result = await awsJson([
-          "ec2",
-          "describe-volumes",
-          "--region",
-          region,
+        const result = await aws(["ec2", "describe-volumes"], region, [
           "--volume-ids",
           volumeId,
-          "--output",
-          "json",
         ]);
         const volumes = result.Volumes;
         if (!Array.isArray(volumes) || volumes.length !== 1)
           throw new AwsCliError("volume_response_invalid");
-        const volume = volumes[0];
-        if (
-          volume === null ||
-          typeof volume !== "object" ||
-          typeof volume.VolumeId !== "string" ||
-          typeof volume.AvailabilityZone !== "string" ||
-          typeof volume.State !== "string" ||
-          typeof volume.Encrypted !== "boolean"
-        ) {
-          throw new AwsCliError("volume_response_invalid");
-        }
+        const volume = shapedResponse(
+          volumes[0],
+          {
+            VolumeId: "string",
+            AvailabilityZone: "string",
+            State: "string",
+            Encrypted: "boolean",
+          },
+          "volume_response_invalid",
+        );
         const tags = {};
         for (const tag of Array.isArray(volume.Tags) ? volume.Tags : []) {
           if (typeof tag?.Key === "string" && typeof tag?.Value === "string")
@@ -2392,29 +2282,22 @@ export function createAwsCliAdapters() {
     }),
     kms: Object.freeze({
       async describeKey({ keyId, region }) {
-        const result = await awsJson([
-          "kms",
-          "describe-key",
-          "--region",
-          region,
+        const result = await aws(["kms", "describe-key"], region, [
           "--key-id",
           keyId,
-          "--output",
-          "json",
         ]);
-        const key = result.KeyMetadata;
-        if (
-          key === null ||
-          typeof key !== "object" ||
-          typeof key.Arn !== "string" ||
-          typeof key.AWSAccountId !== "string" ||
-          typeof key.KeyManager !== "string" ||
-          typeof key.KeyState !== "string" ||
-          typeof key.Enabled !== "boolean" ||
-          typeof key.KeyUsage !== "string"
-        ) {
-          throw new AwsCliError("key_response_invalid");
-        }
+        const key = shapedResponse(
+          result.KeyMetadata,
+          {
+            Arn: "string",
+            AWSAccountId: "string",
+            KeyManager: "string",
+            KeyState: "string",
+            Enabled: "boolean",
+            KeyUsage: "string",
+          },
+          "key_response_invalid",
+        );
         return Object.freeze({
           accountId: key.AWSAccountId,
           arn: key.Arn,
@@ -2427,26 +2310,18 @@ export function createAwsCliAdapters() {
     }),
     sns: Object.freeze({
       async describeTopic({ region, topicArn }) {
-        const result = await awsJson([
-          "sns",
-          "get-topic-attributes",
-          "--region",
-          region,
+        const result = await aws(["sns", "get-topic-attributes"], region, [
           "--topic-arn",
           topicArn,
-          "--output",
-          "json",
         ]);
-        const attributes = result.Attributes;
-        const confirmed = Number(attributes?.SubscriptionsConfirmed);
-        if (
-          typeof attributes?.TopicArn !== "string" ||
-          typeof attributes.SubscriptionsConfirmed !== "string" ||
-          !Number.isSafeInteger(confirmed) ||
-          confirmed < 0
-        ) {
+        const attributes = shapedResponse(
+          result.Attributes,
+          { TopicArn: "string", SubscriptionsConfirmed: "string" },
+          "topic_response_invalid",
+        );
+        const confirmed = Number(attributes.SubscriptionsConfirmed);
+        if (!Number.isSafeInteger(confirmed) || confirmed < 0)
           throw new AwsCliError("topic_response_invalid");
-        }
         return Object.freeze({
           subscriptionsConfirmed: confirmed,
           topicArn: attributes.TopicArn,
@@ -2468,11 +2343,7 @@ export function createAwsCliAdapters() {
         const calculated = sha256Hex(readFileSync(sourcePath));
         if (sha256 !== undefined && sha256 !== calculated)
           throw new AwsCliError("bundle_source_checksum_mismatch");
-        const result = await awsJson([
-          "s3api",
-          "put-object",
-          "--region",
-          region,
+        const result = await aws(["s3api", "put-object"], region, [
           "--bucket",
           bucket,
           "--key",
@@ -2481,8 +2352,6 @@ export function createAwsCliAdapters() {
           sourcePath,
           "--metadata",
           `sha256=${calculated}`,
-          "--output",
-          "json",
         ]);
         if (
           typeof result.VersionId !== "string" ||
@@ -2492,19 +2361,13 @@ export function createAwsCliAdapters() {
         return Object.freeze({ sha256: calculated, version: result.VersionId });
       },
       async assertObject({ bucket, key, region, sha256, version }) {
-        const result = await awsJson([
-          "s3api",
-          "head-object",
-          "--region",
-          region,
+        const result = await aws(["s3api", "head-object"], region, [
           "--bucket",
           bucket,
           "--key",
           key,
           "--version-id",
           version,
-          "--output",
-          "json",
         ]);
         if (result.Metadata?.sha256 !== sha256)
           throw new AwsCliError("object_checksum_metadata_mismatch");
@@ -2515,20 +2378,16 @@ export function createAwsCliAdapters() {
         /^arn:(?:aws|aws-us-gov|aws-cn):secretsmanager:([a-z0-9-]+):/,
       )?.[1];
       if (region === undefined) throw new AwsCliError("secret_arn_invalid");
-      await awsJson(
+      await aws(
+        ["secretsmanager", "put-secret-value"],
+        region,
         [
-          "secretsmanager",
-          "put-secret-value",
-          "--region",
-          region,
           "--secret-id",
           secretArn,
           "--client-request-token",
           clientRequestToken,
           "--secret-string",
           "file:///dev/stdin",
-          "--output",
-          "json",
         ],
         // The host resolves :SecretString:token through asm-exec. The raw
         // connector value stays in this process and the AWS CLI child's stdin.
@@ -2606,24 +2465,22 @@ function parseCli(argv) {
   if (!["slot-init", "up", "down", "status", "backup"].includes(action))
     refuse("usage");
   let inputPath;
-  let execute = false;
-  let initializeBlankDataVolume = false;
-  let requireAuthority = false;
+  const options = {
+    execute: false,
+    initializeBlankDataVolume: false,
+    requireAuthority: false,
+  };
+  const switches = new Map([
+    ["--execute", "execute"],
+    ["--initialize-blank-data-volume", "initializeBlankDataVolume"],
+    ["--require-authority", "requireAuthority"],
+  ]);
   for (let index = 0; index < rest.length; index += 1) {
     const flag = rest[index];
-    if (flag === "--execute" && !execute) {
-      execute = true;
-      continue;
-    }
-    if (flag === "--require-authority" && !requireAuthority) {
-      requireAuthority = true;
-      continue;
-    }
-    if (
-      flag === "--initialize-blank-data-volume" &&
-      !initializeBlankDataVolume
-    ) {
-      initializeBlankDataVolume = true;
+    const option = switches.get(flag);
+    // Each switch may appear once.
+    if (option !== undefined && !options[option]) {
+      options[option] = true;
       continue;
     }
     if (flag === "--input" && inputPath === undefined) {
@@ -2634,14 +2491,14 @@ function parseCli(argv) {
     refuse("usage");
   }
   if (typeof inputPath !== "string" || inputPath.length === 0) refuse("usage");
-  if (initializeBlankDataVolume && action !== "up")
+  if (options.initializeBlankDataVolume && action !== "up")
     refuse("initialize_blank_data_volume_requires_up");
-  if (requireAuthority && action !== "up")
+  if (options.requireAuthority && action !== "up")
     refuse("require_authority_requires_up");
   // This is a reviewed host-bootstrap intent. A plan does not probe the
   // descriptor, but must bind the same resume parameter that its execute will
   // require from CloudFormation.
-  if (requireAuthority && initializeBlankDataVolume)
+  if (options.requireAuthority && options.initializeBlankDataVolume)
     refuse("require_authority_conflicts_with_blank_data_volume");
   let input;
   try {
@@ -2649,13 +2506,7 @@ function parseCli(argv) {
   } catch {
     refuse("input_file_invalid");
   }
-  return Object.freeze({
-    action,
-    execute,
-    initializeBlankDataVolume,
-    requireAuthority,
-    input,
-  });
+  return Object.freeze({ action, ...options, input });
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
@@ -2666,17 +2517,12 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     requireAuthority,
     input,
   } = parseCli(argv);
-  const defaults = createAwsCliAdapters();
+  const adapters = Object.entries(createAwsCliAdapters()).map(
+    ([name, adapter]) => [name, dependencies[name] ?? adapter],
+  );
   return runAuthorityStaging(action, input, {
-    ...defaults,
     ...dependencies,
-    cloudFormation: dependencies.cloudFormation ?? defaults.cloudFormation,
-    ec2: dependencies.ec2 ?? defaults.ec2,
-    kms: dependencies.kms ?? defaults.kms,
-    putSecretValue: dependencies.putSecretValue ?? defaults.putSecretValue,
-    s3: dependencies.s3 ?? defaults.s3,
-    sns: dependencies.sns ?? defaults.sns,
-    ssm: dependencies.ssm ?? defaults.ssm,
+    ...Object.fromEntries(adapters),
     execute,
     initializeBlankDataVolume,
     requireAuthority,
@@ -2700,9 +2546,13 @@ async function reexecWithAsmExecIfNeeded() {
   const action = process.argv[2];
   if (!new Set(["slot-init", "status"]).has(action)) return false;
   const token = process.env.ECHO_CLOUDFLARE_API_TOKEN;
+  const resolved = process.env.ECHO_AUTHORITY_STAGING_ASM_EXEC === "1";
   const slotInitPlan =
     action === "slot-init" && !process.argv.slice(3).includes("--execute");
-  if (slotInitPlan) {
+  // Status must describe AWS first: several recovery states deliberately skip
+  // Cloudflare. A healthy status reaches edgeInput, whose controlled sentinel
+  // below triggers the same resolved re-exec only when the edge is required.
+  if (slotInitPlan || (action === "status" && !resolved)) {
     if (
       typeof token === "string" &&
       token.length > 0 &&
@@ -2714,26 +2564,11 @@ async function reexecWithAsmExecIfNeeded() {
     }
     return false;
   }
-  if (process.env.ECHO_AUTHORITY_STAGING_ASM_EXEC === "1") {
+  if (resolved) {
     if (typeof token !== "string" || token.length === 0)
       throw new LifecycleError("cloudflare_api_token_required");
     if (isDynamicCloudflareReference(token))
       throw new LifecycleError("cloudflare_api_token_resolution_failed");
-    return false;
-  }
-  // Status must describe AWS first: several recovery states deliberately skip
-  // Cloudflare. A healthy status reaches edgeInput, whose controlled sentinel
-  // below triggers the same resolved re-exec only when the edge is required.
-  if (action === "status") {
-    if (
-      typeof token === "string" &&
-      token.length > 0 &&
-      !isDynamicCloudflareReference(token)
-    ) {
-      throw new LifecycleError(
-        "cloudflare_api_token_dynamic_reference_required",
-      );
-    }
     return false;
   }
   return reexecWithAsmExec();
