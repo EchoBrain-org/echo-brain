@@ -1,38 +1,58 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { ANSWER_BLOCKS_PROMPT, cleanLine, repairInput } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
+import { ANSWER_BLOCK_CATALOG, ANSWER_BLOCKS_PROMPT, answerBlocksSchema } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { pooled } from "../../shared/runner.mjs";
-import { BLOCK_CATALOG } from "../catalogs.mjs";
 import { help, parseArgs, researchStep, run } from "../run.mjs";
 import { loadCases } from "../grade.mjs";
+import { loadCases as loadWordingCases } from "../wording.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072 };
 const document = loadCases();
-const OWNS = "Priya Raman owns it.";
-/** The reply to each call, by the field its schema asks for (schemaOf): the judge's ranks, or the catalog's answer that Priya Raman owns it. */
-const REPLY = Object.freeze({
-  ranks: { ranks: ["A", "B", "C"].map((answer, at) => ({ answer, rank: at + 1, reason: "fixture" })) },
-  template: { template: { name: "fact", answer: [{ text: OWNS, evidence: ["E1"] }] }, not_found: [] },
-  blocks: { blocks: [{ block: "answer", sentences: [{ text: OWNS, evidence: ["E1"] }] }], not_found: [] },
-  root: { root: "main", components: [{ id: "main", component: "Column", children: ["a"] }, { id: "a", component: "Text", variant: "body", text: OWNS, evidence: ["E1"] }], not_found: [] },
-});
-/** A balanced reply that opens with prose, which the catalog refuses. */
-const PROSE_FIRST = Object.freeze({ blocks: [{ block: "text", sentences: [{ text: OWNS, evidence: ["E1"] }] }], not_found: [] });
-/** The field a call's schema asks for: the judge's ranks, a template, balanced's blocks, or else the primitives' root. */
-const schemaOf = (input) => ["ranks", "template", "blocks"].find((field) => Object.hasOwn(input.schema.properties ?? {}, field)) ?? "root";
-/** A run over soak-owner, one trial of every catalog with the judge on, with `fields` changed. */
-const options = (out, fields = {}) => ({ run: true, credentialFile: null, out, caseIds: ["soak-owner"], catalogIds: null, trials: 1, judge: true, concurrency: 1, timeoutMs: 20_000, ...fields });
-/** A route that answers each call with its schema's reply (REPLY), keeping every input. */
+/** The writer's answer that Priya Raman owns it, in blocks. */
+const REPLY = Object.freeze({ lists: [], blocks: [{ block: "answer", sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }], not_found: [] });
+/** A run over soak-owner, one trial, with `fields` changed. */
+const options = (out, fields = {}) => ({ run: true, credentialFile: null, out, caseIds: ["soak-owner"], trials: 1, concurrency: 1, timeoutMs: 20_000, ...fields });
+/** A route that answers each writer call with REPLY, keeping every input. */
 const answering = (inputs = []) => ({ inputs, async generate_with_observation(input) {
   inputs.push(input);
-  return { value: REPLY[schemaOf(input)], finish_reason: "stop", usage: null, provider_latency_ms: 1 };
+  return { value: REPLY, finish_reason: "stop", usage: null, provider_latency_ms: 1 };
 } });
+
+const wording = loadWordingCases();
+const founder = wording.cases.find((entry) => entry.id === "follow-up-owner-quoted-title");
+/** A private directory with a private credential file in it, removed after the test. */
+function privateRoot(t) {
+  const root = mkdtempSync(join(tmpdir(), "echo-ask-blocks-eval-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const credential = join(root, "credential");
+  writeFileSync(credential, "not a real credential", { mode: 0o600 });
+  return { root, credential };
+}
+/** A layout v2 reply: one answer block whose sentence cites `evidence`. */
+const answerBlock = (text, evidence) => ({ lists: [], blocks: [{ block: "answer", sentences: [{ text, evidence }] }], not_found: [] });
+/**
+ * A writer for the wording cases that answers with `lead(case)` (by default every required fact, briefly) as its answer
+ * block and cites everything it was shown; it never sees a credential.
+ */
+function wordingWriter(lead = (entry) => `It is ${entry.expect.facts.map((alternatives) => alternatives.at(-1)).join(", ")}.`) {
+  const inputs = [];
+  return {
+    inputs,
+    async generate_with_observation(input) {
+      inputs.push(input);
+      const shown = JSON.parse(input.user_prompt);
+      const entry = wording.cases.find((value) => value.question === shown.question);
+      return { value: answerBlock(lead(entry), shown.evidence.map((item) => item.id)),
+        finish_reason: "stop", usage: { input_tokens: 4000, output_tokens: 60, total_tokens: 4060 }, provider_latency_ms: 900 };
+    },
+  };
+}
 
 /** Every repository module Node loads for the module `entry`, as a hook on its loader sees them, relative to the repository. */
 function loadedModules(entry) {
@@ -55,16 +75,48 @@ test("makes no request without an explicit run and a private credential file, an
   const credential = join(directory, "credential");
   writeFileSync(credential, "not read", { mode: 0o600 });
   const base = ["--run", "--credential-file", credential, "--out", join(directory, "out")];
-  assert.throws(() => parseArgs([...base, "--catalogs", "balanced,balanced"]), /--catalogs must select known catalogs, each once/u);
   assert.throws(() => parseArgs([...base, "--cases", "no-such-case"]), /--cases must select known cases/u);
-  assert.throws(() => parseArgs([...base, "--judge", "maybe"]), /--judge must be on or off/u);
+  assert.throws(() => parseArgs([...base, "--cases", "soak-owner,soak-owner"]), /--cases must select known cases, each once/u);
+  assert.throws(() => parseArgs([...base, "--trials", "4"]), /--trials must be an integer from 1 to 3/u);
   const parsed = parseArgs([...base, "--cases", "soak-owner", "--trials", "1"]);
-  assert.deepEqual([parsed.trials, parsed.judge, parsed.concurrency, parsed.caseSet], [1, true, 4, "main"]);
-  // The held-out questions run the built writer alone, judge off, and name their own cases.
-  assert.throws(() => parseArgs([...base, "--case-set", "other"]), /--case-set must be main or held-out/u);
-  assert.throws(() => parseArgs([...base, "--case-set", "held-out"]), /--case-set held-out runs --catalogs built --judge off only/u);
-  assert.throws(() => parseArgs([...base, "--case-set", "held-out", "--catalogs", "built", "--judge", "off", "--cases", "soak-owner"]), /--cases must select known cases/u);
-  assert.equal(parseArgs([...base, "--case-set", "held-out", "--catalogs", "built", "--judge", "off", "--cases", "ho-review-next"]).caseSet, "held-out");
+  assert.deepEqual([parsed.caseSet, parsed.trials, parsed.concurrency, parsed.timeoutMs, parsed.caseIds], ["main", 1, 4, 120_000, ["soak-owner"]]);
+  assert.deepEqual([parseArgs(base).trials, parseArgs(base).caseIds, parseArgs([...base, "--case-set", "main"]).caseSet], [3, null, "main"]);
+  // Each case set names its own cases and its own timeout bounds.
+  assert.throws(() => parseArgs([...base, "--case-set", "other"]), /--case-set must be main or wording/u);
+  assert.throws(() => parseArgs([...base, "--case-set", "wording", "--cases", "soak-owner"]), /--cases must select known cases/u);
+  assert.deepEqual([parseArgs([...base, "--case-set", "wording", "--cases", "owner-plain"]).caseIds, parseArgs([...base, "--case-set", "wording"]).timeoutMs], [["owner-plain"], 60_000]);
+  assert.equal(parseArgs([...base, "--timeout-ms", "180000"]).timeoutMs, 180_000);
+  assert.throws(() => parseArgs([...base, "--timeout-ms", "180001"]), /--timeout-ms must be an integer from 15000 to 180000/u);
+  assert.equal(parseArgs([...base, "--case-set", "wording", "--timeout-ms", "85000"]).timeoutMs, 85_000);
+  assert.throws(() => parseArgs([...base, "--case-set", "wording", "--timeout-ms", "120000"]), /--timeout-ms must be an integer from 15000 to 85000/u);
+});
+
+test("reads no credential and writes nowhere but a private directory outside the repository", (t) => {
+  const { root, credential } = privateRoot(t);
+  assert.deepEqual(parseArgs(["--help"]), { help: true });
+  assert.match(help(), /--credential-file/u);
+  assert.match(help(), /answer layout v2/u);
+  assert.throws(() => parseArgs(["--credential-file", credential, "--out", join(root, "out")]), /unless --run is explicit/u);
+  chmodSync(credential, 0o644);
+  assert.throws(() => parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out")]), /not be readable by group or other/u);
+  chmodSync(credential, 0o600);
+  assert.throws(() => parseArgs(["--run", "--credential-file", credential, "--out", join(ROOT, "tools", "evals", "ask-blocks")]), /outside the repository/u);
+  const options = parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out")]);
+  assert.equal(statSync(options.out).mode & 0o777, 0o700);
+  assert.equal(readFileSync(credential, "utf8"), "not a real credential");
+});
+
+test("writes through the personal Claude account only with the signed-in claude binary named", (t) => {
+  const { root, credential } = privateRoot(t);
+  const base = ["--run", "--credential-file", credential, "--out", join(root, "out")];
+  assert.throws(() => parseArgs([...base, "--writer", "anthropic"]), /--writer must be openrouter or claude-account/u);
+  assert.throws(() => parseArgs([...base, "--writer", "claude-account"]), /needs --claude-executable/u);
+  assert.throws(() => parseArgs([...base, "--writer", "claude-account", "--claude-executable", "claude"]), /needs --claude-executable/u);
+  assert.throws(() => parseArgs([...base, "--writer", "claude-account", "--claude-executable", join(root, "missing")]), /needs --claude-executable/u);
+  const executable = join(root, "claude");
+  writeFileSync(executable, "", { mode: 0o700 });
+  const options = parseArgs([...base, "--writer", "claude-account", "--claude-executable", executable]);
+  assert.deepEqual([options.writer, options.claudeExecutable], ["claude-account", executable]);
 });
 
 test("scripts research as one search, every item opened, then finish", () => {
@@ -72,43 +124,6 @@ test("scripts research as one search, every item opened, then finish", () => {
   assert.deepEqual(researchStep(steps, 1).actions, [{ tool: "search", args: { query: steps.research.query } }]);
   assert.equal(researchStep(steps, 2).actions.length, steps.items.length);
   assert.deepEqual(researchStep(steps, 3).actions, [{ tool: "finish", args: {} }]);
-});
-
-test("runs every catalog with one repair or retry, judges both orders, and keeps full traces", async () => {
-  const out = mkdtempSync(join(tmpdir(), "ask-blocks-run-"));
-  const inputs = [];
-  const structured = { async generate_with_observation(input) {
-    inputs.push(input);
-    const schema = schemaOf(input);
-    const seen = inputs.filter((entry) => schemaOf(entry) === schema).length;
-    // Balanced's first reply opens with prose, so the repair answers; primitives' first call fails, so the retry does.
-    if (schema === "root" && seen === 1) throw new Error("fixture outage");
-    return { value: schema === "blocks" && seen === 1 ? PROSE_FIRST : REPLY[schema], finish_reason: "stop", usage: { input_tokens: 9, output_tokens: 4, total_tokens: 13 }, provider_latency_ms: 2 };
-  } };
-  const { reportPath, report } = await run(options(out), { loaded: { structured_output: structured, generation }, progress: () => undefined });
-
-  assert.equal(statSync(reportPath).mode & 0o777, 0o600);
-  assert.equal(report.complete, false);
-  assert.deepEqual(Object.fromEntries(report.trials.map((trial) => [trial.catalog, trial.attempts.map((attempt) => attempt.kind)])),
-    { templates: ["first"], balanced: ["first", "repair"], primitives: ["first", "retry"] });
-  assert.ok(report.trials.every((trial) => trial.grade.valid && trial.grade.grounded && trial.grade.fit));
-  const repair = report.trials.find((trial) => trial.catalog === "balanced").attempts[1];
-  assert.match(JSON.parse(repair.user_prompt).validation_error, /blocks\[0\] must be the answer block/u);
-  assert.equal(report.summary.balanced.repairs, 1);
-  // The judge saw both orders; its rank is their mean, so A-to-C then C-to-A gives every catalog 2.
-  assert.equal(report.judge["soak-owner"].length, 2);
-  assert.deepEqual(Object.values(report.judge_ranks["soak-owner"]), [2, 2, 2]);
-  // Every writer call kept the catalog's own schema and output tokens; the prompts are in the report.
-  assert.ok(inputs.filter((input) => !Object.hasOwn(input.schema.properties, "ranks")).every((input) => input.max_output_tokens === 3_000));
-  // Each catalog's prompts start from the built writer's, with its own layout part and entries in place of the kernel's.
-  const prompts = report.prompts["soak-owner"];
-  assert.deepEqual(JSON.parse(prompts.balanced.user_prompt).block_catalog, BLOCK_CATALOG);
-  assert.ok(!Object.hasOwn(JSON.parse(prompts.templates.user_prompt), "block_catalog"));
-  for (const catalog of ["templates", "balanced", "primitives"]) {
-    const system = report.system_prompts[prompts[catalog].system_prompt_sha256];
-    assert.ok(system.startsWith("You write Echo's final answer") && !system.includes(ANSWER_BLOCKS_PROMPT), catalog);
-  }
-  assert.equal(JSON.parse(readFileSync(reportPath, "utf8")).kind, "echo-ask-blocks-evaluation-v1");
 });
 
 test("writes through the personal Claude account port, admitting each request and adding up its usage", async () => {
@@ -121,86 +136,26 @@ test("writes through the personal Claude account port, admitting each request an
       for (const operation of ["count_tokens", "messages"]) {
         await admit({ model: input.model, operation, signal: AbortSignal.timeout(5_000) }, async () => { admittedRequests.push(operation); return { value: null, usage: { input_tokens: 10, output_tokens: operation === "messages" ? 7 : 0 } }; });
       }
-      return REPLY.blocks;
+      return REPLY;
     },
   };
   const accountGeneration = { ...generation, generation_adapter_id: "claude-account-research-writer-v1", answer_model: "claude-sonnet-5-5" };
-  const { report } = await run(options(out, { catalogIds: ["balanced"], judge: false, writer: "claude-account" }), { loaded: { structured_output: port, generation: accountGeneration }, progress: () => undefined });
+  const { report } = await run(options(out, { writer: "claude-account" }), { loaded: { structured_output: port, generation: accountGeneration }, progress: () => undefined });
   assert.deepEqual(report.model, { route: "claude-account", adapter_id: "claude-account-research-writer-v1", answer_model: "claude-sonnet-5-5" });
   assert.deepEqual(admittedRequests, ["count_tokens", "messages"]);
   assert.deepEqual(report.trials[0].attempts[0].usage, { input_tokens: 20, output_tokens: 7, total_tokens: 27 });
   assert.equal(report.trials[0].grade.valid, true);
 });
 
-test("resumes an earlier report: carries every call that got a reply and makes only the calls it lacks", async () => {
-  const out = mkdtempSync(join(tmpdir(), "ask-blocks-resume-"));
-  // In the outage the judge, balanced's repair and every primitives call fail, and balanced's first reply opens with prose.
-  const fake = (outage, inputs) => ({ async generate_with_observation(input) {
-    inputs.push(input);
-    const schema = schemaOf(input);
-    if (outage && (schema === "ranks" || schema === "root" || (schema === "blocks" && JSON.parse(input.user_prompt).validation_error !== undefined))) throw new Error("402");
-    return { value: outage && schema === "blocks" ? PROSE_FIRST : REPLY[schema], finish_reason: "stop", usage: null, provider_latency_ms: 1 };
-  } });
-  const first = await run(options(out), { loaded: { structured_output: fake(true, []), generation }, progress: () => undefined });
-  // Balanced's repair and both primitives calls failed, so neither trial ends with a reply.
-  assert.deepEqual(first.report.errors, { writer_calls: 3, trials_without_reply: 2, judge_orders_without_ranks: 2 });
-
-  const inputs = [];
-  const { report } = await run(options(out, { resume: first.reportPath }), { loaded: { structured_output: fake(false, inputs), generation }, progress: () => undefined });
-  // Only the balanced repair, the primitives call and the two judge orders were made again.
-  assert.equal(inputs.length, 4);
-  assert.deepEqual(Object.fromEntries(report.trials.map((trial) => [trial.catalog, trial.attempts.map((attempt) => `${attempt.kind}${attempt.carried ? " (carried)" : ""}`)])),
-    { templates: ["first (carried)"], balanced: ["first (carried)", "repair"], primitives: ["first"] });
-  assert.ok(report.trials.every((trial) => trial.grade.valid));
-  assert.deepEqual([report.resumed_from.carried_calls, report.resumed_from.carried_judge_orders], [2, 0]);
-  assert.deepEqual(report.errors, { writer_calls: 0, trials_without_reply: 0, judge_orders_without_ranks: 0 });
-});
-
-test("resumes only a report of the same writer: its route, adapter and answer model, so one model's replies never stand for another's", async () => {
-  const out = mkdtempSync(join(tmpdir(), "ask-blocks-resume-writer-"));
-  const balanced = { catalogIds: ["balanced"], judge: false };
-  const first = await run(options(out, balanced), { loaded: { structured_output: answering(), generation }, progress: () => undefined });
-  for (const [writer, other] of [["openrouter", { ...generation, answer_model: "other-model" }], ["openrouter", { ...generation, generation_adapter_id: "other" }], ["claude-account", generation]]) {
-    const inputs = [];
-    const loaded = { structured_output: answering(inputs), generation: other };
-    await assert.rejects(run(options(out, { ...balanced, writer, resume: first.reportPath }), { loaded, progress: () => undefined }),
-      /--resume: that report's writer was openrouter \/ fixture \/ fixture-model, not /u);
-    assert.equal(inputs.length, 0);
-  }
-  // The same writer resumes, carrying the call that got a reply.
-  const { report } = await run(options(out, { ...balanced, resume: first.reportPath }), { loaded: { structured_output: answering(), generation }, progress: () => undefined });
-  assert.equal(report.resumed_from.carried_calls, 1);
-});
-
 test("fingerprints its cases, its pre-registration and every module the run loads", async () => {
   const out = mkdtempSync(join(tmpdir(), "ask-blocks-code-"));
-  const { report } = await run(options(out, { catalogIds: ["balanced"], judge: false }), { loaded: { structured_output: answering(), generation }, progress: () => undefined });
+  const { report } = await run(options(out), { loaded: { structured_output: answering(), generation }, progress: () => undefined });
   const fingerprinted = Object.keys(report.code.before.files_sha256);
-  assert.deepEqual(fingerprinted, ["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/held-out-cases.json", "tools/evals/ask-blocks/README.md", ...loadedModules("tools/evals/ask-blocks/run.mjs")]);
+  assert.deepEqual(fingerprinted, ["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/wording-cases.json", "tools/evals/ask-blocks/README.md", ...loadedModules("tools/evals/ask-blocks/run.mjs")]);
   // Among them layout v2's checks and title bound, and the kernel's shared modules on the writer's path.
   for (const file of ["packages/organization-api/dist/person-answer-layout-checks.js", "packages/organization-api/dist/person-answer-layout-v2.js",
     "packages/organization-authority-kernel/dist/shared/core-runtime-observation-v1.js", "packages/organization-authority-kernel/dist/shared/evidence-desk-v2.js"]) assert.ok(fingerprinted.includes(file), file);
   assert.equal(report.code.unchanged, true);
-});
-
-test("repairs a refused reply with the prompt production's gate sends: the reply cut to one line of 4,000 characters", async () => {
-  const out = mkdtempSync(join(tmpdir(), "ask-blocks-repair-"));
-  // A reply balanced refuses (it opens with prose), longer than 4,000 characters, with a line separator and a double space.
-  const refused = { blocks: [{ block: "text", sentences: [{ text: `${OWNS} Then  ${"more ".repeat(1_000)}`, evidence: ["E1"] }] }], not_found: [] };
-  const inputs = [];
-  const structured = { async generate_with_observation(input) {
-    inputs.push(input);
-    return { value: inputs.length === 1 ? refused : REPLY.blocks, finish_reason: "stop", usage: null, provider_latency_ms: 1 };
-  } };
-  const { report } = await run(options(out, { catalogIds: ["balanced"], judge: false }), { loaded: { structured_output: structured, generation }, progress: () => undefined });
-  const [first, repair] = report.trials[0].attempts;
-  assert.deepEqual([first.valid, repair.kind, repair.valid], [false, "repair", true]);
-  assert.equal(repair.user_prompt, JSON.stringify(repairInput(JSON.parse(report.prompts["soak-owner"].balanced.user_prompt), refused, first.problems[0])));
-  // Where a plain cut would keep the separator and both spaces and end mid-word, production's is one clean line.
-  const sent = JSON.parse(repair.user_prompt).rejected_response;
-  assert.equal(sent, cleanLine(JSON.stringify(refused), 4_000));
-  assert.notEqual(sent, JSON.stringify(refused).slice(0, 4_000));
-  assert.deepEqual([[...sent].length <= 4_000, sent.endsWith("…"), sent.includes(" "), sent.includes("  ")], [true, true, false, false]);
 });
 
 test("stops starting tasks once one fails, lets those running finish, then throws the first failure", async () => {
@@ -233,7 +188,7 @@ test("makes no more calls once a trial fails, and writes no report", async () =>
   let lines = 0;
   // Nine trials, two at a time; the first trial to end fails, as a fault in the harness would.
   const progress = () => { lines += 1; if (lines === 1) throw new Error("harness fault"); };
-  await assert.rejects(run(options(out, { trials: 3, judge: false, concurrency: 2 }), { loaded: { structured_output: route, generation }, progress }), /harness fault/u);
+  await assert.rejects(run(options(out, { caseIds: ["soak-owner", "notes-due", "gate-blockers"], trials: 3, concurrency: 2 }), { loaded: { structured_output: route, generation }, progress }), /harness fault/u);
   await new Promise((resolve) => setTimeout(resolve, 20));
   // Only the two trials running when it failed made their call.
   assert.deepEqual([route.inputs.length, readdirSync(out)], [2, []]);
@@ -243,6 +198,86 @@ test("writes only its report to --out, as --help says", async () => {
   assert.match(help(), /the report is written there with mode 0600/u);
   assert.doesNotMatch(help(), /page's data/u);
   const out = mkdtempSync(join(tmpdir(), "ask-blocks-out-"));
-  const { reportPath } = await run(options(out, { catalogIds: ["balanced"], judge: false }), { loaded: { structured_output: answering(), generation }, progress: () => undefined });
+  const { reportPath } = await run(options(out), { loaded: { structured_output: answering(), generation }, progress: () => undefined });
   assert.deepEqual(readdirSync(out), [basename(reportPath)]);
+});
+
+test("runs a wording case through the kernel, only the writer reaching the model, grades its lead and keeps no prompt", async (t) => {
+  const { root } = privateRoot(t);
+  const options = { run: true, credentialFile: null, out: root, caseSet: "wording", caseIds: [founder.id], trials: 1, concurrency: 1, timeoutMs: 15_000 };
+  const structured = wordingWriter();
+  const { report } = await run(options, { loaded: { structured_output: structured, generation }, progress: () => undefined });
+  const [trial] = report.trials;
+  // No capture: the writer was called once, for the trial itself.
+  assert.deepEqual([structured.inputs.length, trial.outcome, trial.attempts.length, trial.grade.rules], [1, "answered", 1, { no_restating: true, long_ids_once: true, nothing_lost: true }]);
+  // The writer read Ask's prompt, block catalog and schema, and both items, the follow-up first, as the asker sees them.
+  const [input] = structured.inputs;
+  const shown = JSON.parse(input.user_prompt);
+  assert.ok(input.system_prompt.startsWith("You write Echo's final answer") && input.system_prompt.endsWith(`\n\n${ANSWER_BLOCKS_PROMPT}`));
+  assert.deepEqual([shown.block_catalog, input.schema], [ANSWER_BLOCK_CATALOG, answerBlocksSchema]);
+  assert.deepEqual([shown.asked_by, shown.today, shown.evidence.map((item) => item.kind)], ["Noor Haddad", "2026-10-26", ["follow_up", "decision"]]);
+  // The lead is the answer block's statement.
+  assert.equal(trial.grade.lead, "It is Noor Haddad.");
+  // Only the writer prompt's digest and model metadata are kept: no prompt, raw reply or released answer.
+  assert.deepEqual(trial.attempts[0], { attempt: 1, kind: "first", system_prompt_sha256: report.writer_prompt_sha256[0], max_output_tokens: input.max_output_tokens,
+    finish_reason: "stop", usage: { input_tokens: 4000, output_tokens: 60, total_tokens: 4060 }, provider_latency_ms: 900, elapsed_ms: trial.attempts[0].elapsed_ms, valid: true });
+  assert.equal(report.writer_prompt_sha256.length, 1);
+  assert.deepEqual(["prompts", "system_prompts", "writer"].filter((field) => Object.hasOwn(report, field)), []);
+  assert.deepEqual(["read", "response"].filter((field) => Object.hasOwn(trial, field)), []);
+  assert.ok(!JSON.stringify(report).includes("You write Echo's final answer"), "no prompt text is kept");
+  assert.ok(!JSON.stringify(report).includes('"blocks":[{"block"'), "no raw reply is kept");
+  // A writer that cannot be reached keeps its safe error class only; code's fallback writes no statement, so it passes nothing.
+  const broken = { async generate_with_observation() { throw Object.assign(new Error("secret provider detail"), { diagnostic: { failure_class: "adapter_http", http_status: 401 } }); } };
+  const refused = (await run(options, { loaded: { structured_output: broken, generation }, progress: () => undefined })).report;
+  assert.deepEqual([refused.trials[0].grade.statements, refused.trials[0].grade.rules], [[], { no_restating: false, long_ids_once: false, nothing_lost: false }]);
+  assert.deepEqual(refused.trials[0].attempts[0].error, { name: "Error", failure_class: "adapter_http", http_status: 401, finish_reason: null, usage: null, provider_latency_ms: null });
+  assert.deepEqual(refused.errors, { writer_calls: 1, trials_without_reply: 1 });
+  assert.ok(!JSON.stringify(refused).includes("secret provider detail"));
+});
+
+test("writes a private report that applies the wording cases' three rules, and decides only on every case three times", async (t) => {
+  const { root } = privateRoot(t);
+  const out = join(root, "report");
+  const options = { ...parseArgs(["--run", "--credential-file", join(root, "credential"), "--out", out, "--case-set", "wording"]) };
+  const passing = await run(options, { loaded: { structured_output: wordingWriter(), generation }, progress: () => undefined });
+  assert.equal(statSync(passing.reportPath).mode & 0o777, 0o600);
+  const report = JSON.parse(readFileSync(passing.reportPath, "utf8"));
+  assert.deepEqual([report.kind, report.case_set, report.complete, report.summary.wording_ships, report.decision.passes, report.trials.length], ["echo-ask-blocks-evaluation-v1", "wording", true, true, true, 30]);
+  assert.deepEqual(report.model, { route: "openrouter", adapter_id: "fixture", answer_model: "fixture-model" });
+  assert.deepEqual(report.summary.groups.names_long_id, { trials: 18, no_restating: 18, long_ids_once: 18, nothing_lost: 18, errors: 0 });
+  // Restating the question, as the founder's staging answer did, keeps the wording from shipping.
+  const restating = await run({ ...options, caseIds: [founder.id, "owner-plain"], trials: 1 },
+    { loaded: { structured_output: wordingWriter((entry) => `${entry.expect.facts[0].at(-1)} answers: ${entry.question}`), generation }, progress: () => undefined });
+  assert.deepEqual([restating.report.complete, restating.report.summary.rules.no_restating.passed_trials, restating.report.summary.wording_ships, restating.report.decision.passes], [false, 0, false, null]);
+  // A smaller run that passes every rule keeps its scores, and still never ships the wording.
+  const diagnostic = await run({ ...options, caseIds: ["owner-plain"], trials: 1 }, { loaded: { structured_output: wordingWriter(), generation }, progress: () => undefined });
+  assert.deepEqual([diagnostic.report.complete, Object.values(diagnostic.report.summary.rules).map((rule) => rule.passed), diagnostic.report.summary.wording_ships, diagnostic.report.decision.passes],
+    [false, [true, true, true], false, null]);
+  assert.equal(readdirSync(out).length, 3);
+});
+
+test("runs trials a few at a time and keeps the report's trials in their order: each trial of every case in turn", async (t) => {
+  const { root, credential } = privateRoot(t);
+  const base = ["--run", "--credential-file", credential, "--out", join(root, "out"), "--case-set", "wording"];
+  for (const value of ["0", "7", "two"]) assert.throws(() => parseArgs([...base, "--concurrency", value]), /--concurrency must be an integer from 1 to 6/u);
+  const caseIds = ["owner-plain", "rollback-named-id", "blocker-plain"];
+  const options = parseArgs([...base, "--cases", caseIds.join(","), "--concurrency", "3"]);
+  // A writer whose later cases answer sooner, so trials end out of order; it counts the calls it is in at once.
+  const answers = wordingWriter();
+  let running = 0;
+  const overlapping = { peak: 0, async generate_with_observation(input) {
+    running += 1;
+    overlapping.peak = Math.max(overlapping.peak, running);
+    const at = caseIds.findIndex((id) => wording.cases.find((entry) => entry.id === id).question === JSON.parse(input.user_prompt).question);
+    await new Promise((resolve) => setTimeout(resolve, (caseIds.length - at) * 15));
+    try { return await answers.generate_with_observation(input); } finally { running -= 1; }
+  } };
+  const together = await run(options, { loaded: { structured_output: overlapping, generation }, progress: () => undefined });
+  const alone = await run({ ...options, concurrency: 1 }, { loaded: { structured_output: wordingWriter(), generation }, progress: () => undefined });
+  assert.equal(overlapping.peak, 3);
+  assert.deepEqual(together.report.trials.map((entry) => [entry.case_id, entry.trial]), [1, 2, 3].flatMap((trial) => caseIds.map((id) => [id, trial])));
+  // Apart from their timings, the trials are the ones a run one trial at a time reports, and the report says how many ran at once.
+  const timeless = (trials) => JSON.parse(JSON.stringify(trials, (key, value) => (key === "elapsed_ms" ? undefined : value)));
+  assert.deepEqual(timeless(together.report.trials), timeless(alone.report.trials));
+  assert.deepEqual([together.report.limits.concurrency, alone.report.limits.concurrency], [3, 1]);
 });

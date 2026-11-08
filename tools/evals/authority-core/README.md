@@ -2,18 +2,14 @@
 
 Optimize the shared runtime's latency and efficiency as active employees **N**
 and retained history grow. The
-[core metric contract](../../../docs/product/2026-09-09-authority-core-capacity-metrics-v4.md)
-defines the boundary and gates.
-
-V4 replaces the frozen, baseline-not-run V3 profile because the ranking rule
-changed: [ADR-0011](../../../docs/decisions/ADR-0011-bm25-lexical-scoring-v1.md)
-moves Layer 2 from a term-frequency sum to fixed-point BM25 over the reader's
-authorized atoms, and the oracle pins that contract by name and analyzer
-digest. V3 had replaced V2 because V2 assigned its 70/30 policy split per
-atom, while the canonical approval boundary assigns one policy to all facts in
-an approved meeting. Each profile retains its predecessor's definition and
-profile digests as historical evidence. No baseline or capacity result carries
-forward across any of them.
+[core metric contract V4](../../../docs/product/2026-09-09-authority-core-capacity-metrics-v4.md)
+defined the boundary and gates. It was never run and no runner was built: its
+executable `metrics.v4.json` and `verify-contract.mjs` left the tree on
+2026-11-08 and remain in Git. The ranking rule it pinned,
+[ADR-0011](../../../docs/decisions/ADR-0011-bm25-lexical-scoring-v1.md)
+fixed-point BM25 over the reader's authorized atoms, is what the oracle
+reimplements; `test/oracle-v1.test.mjs` checks the oracle's analyzer digest
+against the candidate analyzer's source. No baseline or capacity result exists.
 
 No provider clients, HTTP fixtures, simulated network waits, extraction-quality
 scores or nondeterministic model behavior run inside this benchmark. Canonical
@@ -25,8 +21,7 @@ The metric components are:
 
 | File | Purpose |
 | --- | --- |
-| `metrics.v4.json`, `verify-contract.mjs` | Pin the core-only contract and verify its formulas. `metrics.v4.json` records the V3 digests; the frozen V2 and V3 contracts left the tree on 2026-10-31 and remain in Git. |
-| `corpus-v1.mjs` | Generate provider-free history templates and logical postings. |
+| `corpus-v1.mjs` | Generate provider-free M1 history templates and logical postings. |
 | `oracle-v1.mjs` | Independently reimplement ranking (BM25 fixed-point, ADR-0011) and build held-out query plans for the oracle/engine agreement test. |
 | `grading.mjs` | Nearest-rank p95 used by the ranking diagnostic; failed work counts as infinite latency. |
 | `retrieval-quality.mjs` | Measure target recall and rank through the real search engine, using the existing corpus generator. |
@@ -62,12 +57,9 @@ or a speedup claim. This artificial-vocabulary test cannot establish natural
 language answer quality; the [four-meeting rehearsal pass/fail gate](../../../demo/RUNBOOK.md#passfail-gate)
 remains the acceptance path for captured answers, citations and visibility.
 
-The frozen V4 definition names the test's original location under
+The V4 definition names the test's original location under
 `tools/evals/retrieval-quality/test/`; it now lives at
-`test/oracle-engine-agreement.test.mjs`. The V4 rules are unchanged. Its
-definition pin and profile digest changed once, on 2026-10-31: the definition's
-link to the retired V3 contract moved to a commit permalink, and its verifier
-sentence no longer claims predecessor checks.
+`test/oracle-engine-agreement.test.mjs`.
 
 No measurement scorer, run-integrity verifier or milestone protocol is
 implemented; nothing here can issue a qualification or milestone result.
@@ -120,12 +112,12 @@ Current membership, project grant, candidate and snapshot checks remain in the
 production review and its authorization callback. The authorization witness is
 the review's own (the authenticated Person action and its Authority audit
 entry); the harness injects none.
-The frozen V4 workload keeps its `organization-member` policy class, which only
-the history generator and ranking tests use; the engine has no such policy, so
+The history generator keeps the V4 workload's `organization-member` policy
+class, which only it and the ranking tests use; the engine has no such policy, so
 the search fixture indexes those facts as records of one project every reader
 holds. The checkpoint's shared audience is
 the project members, because the in-app review offers the approving person only
-that or themselves alone. The metric profile is unchanged.
+that or themselves alone.
 This directly composes the shared production components; it does not start the
 deployed API/provider composition. A change to that composition must also be
 checked against this harness before making performance claims.

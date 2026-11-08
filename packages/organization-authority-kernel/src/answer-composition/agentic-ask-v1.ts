@@ -205,31 +205,13 @@ const LIST_SOURCES: Readonly<Record<string, EvidenceDeskSourceV2>> = Object.free
 });
 
 /**
- * The research loop for every trigger, with Ask's writer. A question brief
- * is rendered by Ask's writer, as the V8 answer; a task brief is research only,
- * or its trigger's renderer.
- */
-export function createAgenticResearchV1(options: CreateAgenticAskOptions) {
-  return createAgenticAskCore(options) as unknown as {
-    answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }): Promise<AgenticAskWithResearchV1<PersonAnswerResponseV8>>;
-    research(input: AgenticResearchInputV1): Promise<AgenticResearchResultV1>;
-    renderWithResearch<In, Out>(input: AgenticRenderedResearchInputV1<In, Out>): Promise<{ readonly rendered: Out; readonly research: AgenticResearchResultV1 }>;
-  };
-}
-/**
- * Ask's core: V8 answers (research tool contract v1), which may read and cite live tickets and pages, ECHO's shared
- * follow-ups (ADR-0040), and the asker's projects, the people in their organization, their tools, and the containers of
- * their connected tools. Progress streams in V3. The cores of the V4 to V7 answers were retired with their routes.
+ * Ask's core, and the research loop for every trigger (research tool contract v1). A question brief is rendered by Ask's
+ * writer as the V8 answer, which may read and cite live tickets and pages, ECHO's shared follow-ups (ADR-0040), and the
+ * asker's projects, the people in their organization, their tools, and the containers of their connected tools; its
+ * progress streams in V3. A task brief is research only, or its trigger's renderer. The cores of the V4 to V7 answers
+ * were retired with their routes.
  */
 export function createAgenticAskV5(options: CreateAgenticAskOptions) {
-  return createAgenticAskCore(options) as unknown as {
-    /** `previous`: the asker's previous turn (ADR-0047). */
-    answer(input: { readonly question: string; readonly signal?: AbortSignal; readonly previous?: PersonAnswerPreviousV1 }): Promise<PersonAnswerResponseV8>;
-    answerWithReceipt(input: AgenticAskProgressInputV3): Promise<AgenticAskAnswerWithReceiptV3>;
-    answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }): Promise<AgenticAskWithResearchV1<PersonAnswerResponseV8>>;
-  };
-}
-function createAgenticAskCore(options: CreateAgenticAskOptions) {
   const now = options.now_ms ?? (() => performance.now());
   const temporal = options.time_context;
   // The HTTP boundary validates the time context, so its day always parses.
@@ -522,7 +504,8 @@ function createAgenticAskCore(options: CreateAgenticAskOptions) {
   }, value => ({ trigger: input.trigger, output_kind: value.response !== undefined ? 'answer' : value.rendered !== undefined ? 'rendered' : 'research', result: value.response ?? value.rendered ?? value.research }));
   const signalOf = (signal: AbortSignal | undefined) => signal === undefined ? {} : { signal };
   return Object.freeze({
-    async answer(input: { readonly question: string; readonly signal?: AbortSignal; readonly previous?: PersonAnswerPreviousV1 }) {
+    /** `previous`: the asker's previous turn (ADR-0047). */
+    async answer(input: { readonly question: string; readonly signal?: AbortSignal; readonly previous?: PersonAnswerPreviousV1 }): Promise<PersonAnswerResponseV8> {
       return (await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal) }, undefined, input.previous)).response!;
     },
     /** Ask with its progress sent to `on_progress` while it runs, in V3, and the receipt built after release (ADR-0039). */
@@ -533,7 +516,7 @@ function createAgenticAskCore(options: CreateAgenticAskOptions) {
       return Object.freeze({ response: output.response!, receipt: output.receipt! });
     },
     /** Ask plus its research result and writer input, for the research evaluation. */
-    async answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }) {
+    async answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }): Promise<AgenticAskWithResearchV1<PersonAnswerResponseV8>> {
       const output = await request({ trigger: "ask", brief: questionBrief(input.question, input.budget ?? AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal) });
       return Object.freeze({ response: output.response!, research: output.research!, writer_evidence: output.writer_evidence });
     },
@@ -549,3 +532,5 @@ function createAgenticAskCore(options: CreateAgenticAskOptions) {
     },
   });
 }
+/** The same factory, under the name the trigger runs and the research evaluation call it by. */
+export const createAgenticResearchV1 = createAgenticAskV5;

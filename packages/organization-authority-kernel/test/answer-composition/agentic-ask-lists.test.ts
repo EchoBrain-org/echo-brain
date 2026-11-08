@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { askQuestionCompletionProblemsV1, askResearchCompletionProblemsV1, type AskResearchListV1 } from "../../src/answer-composition/agentic-ask-research-state-v1.js";
-import { createAgenticAskV5, type createAgenticResearchV1 } from "../../src/answer-composition/agentic-ask-v1.js";
+import { createAgenticAskV5 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { agenticStartingSlotV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
 import { agenticListMembershipV1 } from "../../src/answer-composition/agentic-list-evidence-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
@@ -107,7 +107,7 @@ function askedByMara(replies: (input: StructuredGenerationInput) => unknown, des
   const research = createAgenticAskV5({
     desk, generation, audit: { append: () => undefined }, asker: { display_name: "Mara Lind" }, wall_ms: () => Date.parse(now), ...(time_zone === undefined ? {} : { time_context: { now, time_zone } }),
     model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); const reply = replies(input); if (reply === undefined) throw new Error("unscripted call"); return reply; } },
-  }) as unknown as ReturnType<typeof createAgenticResearchV1>;
+  });
   return { research, inputs, port: desk };
 }
 

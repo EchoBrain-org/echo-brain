@@ -149,17 +149,17 @@ function itemKindFor(index) {
   return index % 10 === 0 ? "decision" : index % 2 === 0 ? "action" : "rationale";
 }
 
-export function policyForSource(sourceIndex) {
+function policyForSource(sourceIndex) {
   return Math.floor(((sourceIndex + 1) * 7) / 10) > Math.floor((sourceIndex * 7) / 10)
     ? POLICY_ORGANIZATION_MEMBER
     : POLICY_RESTRICTED_REVIEWER;
 }
 
-export function ownerIndexForSource(sourceIndex, ownerCount) {
+function ownerIndexForSource(sourceIndex, ownerCount) {
   return (sourceIndex + Math.floor(sourceIndex / 10)) % ownerCount;
 }
 
-export function ageBucketForSource(sourceIndex, sourceCount) {
+function ageBucketForSource(sourceIndex, sourceCount) {
   return Math.min(9, Math.floor((sourceIndex * 10) / sourceCount));
 }
 
@@ -219,8 +219,6 @@ function buildAtom({ index, logPosition, ownerCount, vocabulary, cdf, random, ag
 function milestoneShape(milestone) {
   const shapes = {
     M1: { atoms: 350, historyDays: 30, workdays: 20, owners: 10 },
-    M2: { atoms: 21875, historyDays: 365, workdays: 250, owners: 50 },
-    M3: { atoms: 218750, historyDays: 730, workdays: 500, owners: 250 },
   };
   const shape = shapes[milestone];
   if (shape === undefined) throw new Error(`unsupported milestone: ${milestone}`);

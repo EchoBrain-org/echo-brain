@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { assertCorpusShape, buildSyntheticCorpus } from "../corpus-v1.mjs";
 import { ANALYZER_SOURCE_SHA256, buildQueryPlan } from "../oracle-v1.mjs";
@@ -11,6 +13,12 @@ test("M1 generator is deterministic and fulfills corpus shape", () => {
   assert.equal(first.exact_head.hash, second.exact_head.hash);
   assert.deepEqual(assertCorpusShape(first), { posting_count: 8750, age_buckets: Array(10).fill(35) });
   assert.equal(ANALYZER_SOURCE_SHA256, "340d7f303a96bfb59b9661ce998a6b12b7cfd4947322eae7cd9a794451415d91");
+});
+
+test("the oracle's analyzer pin is the digest of the candidate analyzer's source", () => {
+  // The oracle reimplements analyzer.ts without importing it, so a changed analyzer needs its compatibility checked first.
+  const source = readFileSync(new URL("../../../../packages/organization-retrieval/src/application/analyzer.ts", import.meta.url));
+  assert.equal(createHash("sha256").update(source).digest("hex"), ANALYZER_SOURCE_SHA256, "Candidate analyzer changed; verify oracle compatibility first");
 });
 
 test("query plan contains broad, medium, selective and ordinary negative queries", () => {

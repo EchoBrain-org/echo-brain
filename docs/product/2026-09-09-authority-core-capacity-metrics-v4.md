@@ -1,10 +1,10 @@
 # Authority core capacity metrics V4
 
 No capacity milestone has passed. The executable coordinates are
-[metrics.v4.json](../../tools/evals/authority-core/metrics.v4.json).
-`node tools/evals/authority-core/verify-contract.mjs` checks its definition
-bytes, profile pin, analyzer pin, and numeric invariants. That check is not a
-run and never passes a milestone.
+[metrics.v4.json](https://github.com/EchoBrain-org/echo-brain/blob/1f2e20e3627ce2f0e8bedf753f4333526fa8a084/tools/evals/authority-core/metrics.v4.json).
+It was never run and had no runner; it and its verifier,
+`tools/evals/authority-core/verify-contract.mjs`, left the tree on 2026-11-08.
+`tools/evals/authority-core/test/oracle-v1.test.mjs` still checks the analyzer pin.
 
 ## Normative V3 incorporation
 

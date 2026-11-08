@@ -1,28 +1,18 @@
 /**
- * Deterministic grading for the Ask block evaluation (README.md, "Measures" and "Pre-registered rules"). Each trial is
- * graded from its reply as its catalog reads it into common blocks, against the evidence the writer was given. The
- * founder's and the judge's ranks are summarized here too; neither is a model call.
+ * Deterministic grading for the gate on Ask's built writer (README.md, "Measures" and "Pre-registered rules"). Each
+ * trial is graded from the answer the kernel released, read into common blocks, against the evidence the writer was
+ * given. No model judges.
  */
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { validatePersonQueryText } from "@echo-brain/organization-api";
+import { validatePersonAnswerResponseV8, validatePersonQueryText } from "@echo-brain/organization-api";
 import { ITEM_KINDS, nonEmptyStrings, says, wordIndex, words } from "../shared/grading.mjs";
-import { CATALOG_IDS } from "./catalogs.mjs";
 
 export const CASES_FILE = new URL("./cases.json", import.meta.url);
 export const CASE_COUNT = 15;
-/** The held-out cases of the quick-lead check (README.md, "Quick lead check"): list-shaped questions on another program. */
-export const HELD_OUT_FILE = new URL("./held-out-cases.json", import.meta.url);
-export const HELD_OUT_COUNT = 5;
 export const TRIALS = 3;
 export const SHAPES = Object.freeze(["single", "prose", "parallel", "ordered", "grid", "sequence", "profile", "verbatim", "sections"]);
-/**
- * The pre-registered thresholds, over 45 trials (rules 1 to 4) and 15 cases (rule 5). Rule 6 compared `balanced` with a
- * catalog that no longer runs (README.md, "Layout v1 retired, 2026-11-04").
- */
+/** The pre-registered thresholds, over 45 trials (rules 1 to 4) and 15 cases (rule 5). */
 export const RULES = Object.freeze({ valid: 43, grounded: 43, nothing_lost: 41, fit: 36, stable: 12 });
-/** Mean founder ranks within this much of each other are a tie for block size. */
-const RANK_TIE = 0.1;
 const QUOTE_WORDS = 6;
 
 // ---- words and dates ---------------------------------------------------------------------------------------------
@@ -58,13 +48,13 @@ function openingDate(text) {
 const itemText = (item) => [item.title, item.label, item.text, item.owner, item.status, item.due_at, item.key, item.priority, item.decision?.title, item.decision?.first_line]
   .filter((value) => typeof value === "string").join("\n");
 
-/** Every problem with a cases document of `count` cases; an empty list when it is a pre-registered set. */
-export function caseProblems(document, count = CASE_COUNT) {
+/** Every problem with a cases document; an empty list when it is the pre-registered set. */
+export function caseProblems(document) {
   const problems = [];
   if (document === null || typeof document !== "object" || document.kind !== "echo-ask-blocks-eval-cases-v1" || document.schema_version !== 1) return ["the cases document kind is invalid"];
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(document.today ?? "") || typeof document.time_zone !== "string" || typeof document.asker !== "string" || Number.isNaN(Date.parse(document.asked_at))) problems.push("today, asked_at, time_zone and asker are required");
   const cases = Array.isArray(document.cases) ? document.cases : [];
-  if (cases.length !== count) problems.push(`there are ${cases.length} cases, not ${count}`);
+  if (cases.length !== CASE_COUNT) problems.push(`there are ${cases.length} cases, not ${CASE_COUNT}`);
   const ids = new Set();
   for (const entry of cases) {
     const where = `case ${entry?.id}`;
@@ -90,18 +80,12 @@ export function caseProblems(document, count = CASE_COUNT) {
   return problems;
 }
 
-/** Pre-registered cases (the 15, or the held-out set with its own count), refused when they are not the set the README registered. */
-export function loadCases(path = CASES_FILE, count = CASE_COUNT) {
-  const document = JSON.parse(readFileSync(path, "utf8"));
-  const problems = caseProblems(document, count);
+/** The pre-registered cases, refused when they are not the set the README registered. */
+export function loadCases() {
+  const document = JSON.parse(readFileSync(CASES_FILE, "utf8"));
+  const problems = caseProblems(document);
   if (problems.length > 0) throw new Error(`block eval cases are invalid: ${problems.slice(0, 5).join("; ")}`);
   return document;
-}
-
-/** The page's fixed order of the catalogs for a case (labels A to C), from the case id alone. */
-export function caseOrder(caseId) {
-  const key = (catalog) => createHash("sha256").update(`${caseId}:${catalog}`).digest("hex");
-  return Object.freeze([...CATALOG_IDS].sort((left, right) => key(left).localeCompare(key(right))));
 }
 
 // ---- the writer's evidence ---------------------------------------------------------------------------------------
@@ -121,6 +105,37 @@ export function evidenceOf(userPrompt) {
 }
 
 // ---- reading an answer's blocks ----------------------------------------------------------------------------------
+/**
+ * An answer the kernel released, read as common blocks (README.md, "Procedure"): its first part's `blocks`, each claim
+ * citing the evidence ids of its statement's citations, or of a table row's own (`ids` has one per citation of the
+ * answer). Valid only when the answer passes the V8 contract and was released with blocks.
+ */
+export function readReleased(response, ids) {
+  let answer;
+  try { answer = validatePersonAnswerResponseV8(response); } catch (error) {
+    return Object.freeze({ valid: false, problems: [error instanceof Error ? error.message : "the answer could not be read"], blocks: [] });
+  }
+  const part = answer.parts[0];
+  if (part.blocks === undefined) return Object.freeze({ valid: false, problems: ["the answer was released without blocks"], blocks: [] });
+  const cites = (indexes) => [...new Set(indexes.map((index) => ids[index]))];
+  const claim = (at) => ({ text: part.statements[at].text, evidence: cites(part.statements[at].citation_indexes) });
+  const titled = (block) => (block.title === undefined ? {} : { title: block.title });
+  const blocks = part.blocks.map((block) => {
+    switch (block.kind) {
+      case "answer": return { kind: "answer", claims: block.statements.map(claim) };
+      case "text": return { kind: "prose", ...titled(block), claims: block.statements.map(claim) };
+      case "points": return { kind: "list", ordered: block.ordered, ...titled(block), claims: block.statements.map(claim) };
+      case "table": return { kind: "table", ...titled(block), columns: [...block.columns], rows: block.rows.map((row) => ({ cells: [...row.cells], evidence: cites(row.citation_indexes) })) };
+      // An event, a fact and a quote are each one statement, and cite what it cites.
+      case "timeline": return { kind: "timeline", ...titled(block), events: block.events.map((event, at) => ({ date: event.date, text: event.text, ...(event.who === undefined ? {} : { who: event.who }), evidence: claim(block.statements[at]).evidence })) };
+      case "card": return { kind: "card", title: block.title, card_kind: block.entity, facts: block.facts.map((fact, at) => ({ label: fact.label, value: fact.value, evidence: claim(block.statements[at]).evidence })) };
+      // The contract has no other block: what is left is a quote.
+      default: return { kind: "quote", text: block.text, from: block.from ?? "", evidence: claim(block.statements[0]).evidence };
+    }
+  });
+  return Object.freeze({ valid: true, problems: [], blocks });
+}
+
 /** Every claim in an answer's blocks, in reading order, with the text the checks read and where it sits. */
 export function claimsOf(blocks) {
   return blocks.flatMap((block, at) => {
@@ -136,12 +151,11 @@ export function claimsOf(blocks) {
   });
 }
 
-/** Everything an answer writes, in reading order: headings, titles, labels, columns and claims. */
+/** Everything an answer writes, in reading order: titles, columns and claims. */
 export function readingText(blocks) {
   return blocks.flatMap((block) => {
     const title = block.title === undefined || block.title.length === 0 ? [] : [block.title];
     switch (block.kind) {
-      case "heading": case "label": return [block.text];
       case "answer": case "prose": case "list": return [...title, ...block.claims.map((claim) => claim.text)];
       case "table": return [...title, block.columns.filter(Boolean).join("; "), ...block.rows.map((row) => row.cells.filter(Boolean).join("; "))];
       case "timeline": return [...title, ...block.events.map((event) => [event.date, event.text, event.who].filter(Boolean).join(" "))];
@@ -171,12 +185,11 @@ const nonDecreasing = (days) => days.every((day, at) => at === 0 || day >= days[
 /** The shapes an answer shows (README.md, "Measures"). */
 export function shapesOf(blocks, evidence) {
   const shapes = new Set();
-  const content = blocks.filter((block) => block.kind !== "heading" && block.kind !== "label");
   const claims = claimsOf(blocks);
-  const rich = content.some((block) => ["list", "table", "timeline", "card", "quote"].includes(block.kind));
-  const prose = content.filter((block) => block.kind === "prose");
-  if (content[0]?.kind === "answer" && !rich && prose.length <= 1 && (prose[0]?.claims.length ?? 0) <= 2 && content.length <= 2 && claims.length <= 3) shapes.add("single");
-  for (const block of content) {
+  const rich = blocks.some((block) => ["list", "table", "timeline", "card", "quote"].includes(block.kind));
+  const prose = blocks.filter((block) => block.kind === "prose");
+  if (blocks[0]?.kind === "answer" && !rich && prose.length <= 1 && (prose[0]?.claims.length ?? 0) <= 2 && blocks.length <= 2 && claims.length <= 3) shapes.add("single");
+  for (const block of blocks) {
     if (block.kind === "prose") shapes.add("prose");
     if (block.kind === "list" && block.claims.length >= 2) {
       shapes.add(block.ordered ? "ordered" : "parallel");
@@ -196,11 +209,11 @@ export function shapesOf(blocks, evidence) {
     if (block.kind === "quote" && words(block.text).length >= QUOTE_WORDS && verbatim(block.text, block.evidence, evidence)) shapes.add("verbatim");
   }
   if (claims.some((claim) => !claim.quote && quotedSpans(claim.text).some((span) => verbatim(span, claim.evidence, evidence)))) shapes.add("verbatim");
-  // Sections: two or more headings or titles, each with a claim under it before the next one.
+  // Sections: two or more titles, each with a claim under it before the next one.
   let sections = 0;
   let pending = false;
   for (const block of blocks) {
-    if (block.kind === "heading" || (block.title !== undefined && block.title.length > 0 && block.kind !== "card")) pending = true;
+    if (block.title !== undefined && block.title.length > 0 && block.kind !== "card") pending = true;
     if (pending && claimsOf([block]).length > 0) { sections += 1; pending = false; }
   }
   if (sections >= 2) shapes.add("sections");
@@ -272,17 +285,19 @@ export function factsOf(caseDefinition, blocks) {
   return Object.freeze({ nothing_lost: missing.length === 0 && inOrder, missing: Object.freeze(missing), in_order: inOrder });
 }
 
-/** Whether the answer fits within its catalog's own blocks (README.md, "Fit"). */
-export function fits(caseDefinition, catalog, shapes) {
+/**
+ * Whether the answer shows one of the case's shapes (README.md, "Fit"). Answers in blocks can show every shape, so a
+ * case's fallback shapes never apply.
+ */
+export function fits(caseDefinition, shapes) {
   const wanted = caseDefinition.expect.shapes;
   if (wanted.includes("any")) return true;
   if (wanted.includes("single")) return shapes.has("single");
-  const accepted = wanted.some((shape) => catalog.can_show.includes(shape)) ? wanted : caseDefinition.expect.fallback;
-  return accepted.some((shape) => shapes.has(shape));
+  return wanted.some((shape) => shapes.has(shape));
 }
 
-/** One trial's grade, from its catalog's reading of its final reply. An invalid reply passes nothing. */
-export function gradeTrial(caseDefinition, catalog, read, evidence) {
+/** One trial's grade, from the reading of the answer it released (readReleased). An invalid answer passes nothing. */
+export function gradeTrial(caseDefinition, read, evidence) {
   if (!read.valid) {
     return Object.freeze({ valid: false, grounded: false, nothing_lost: false, fit: false, shapes: Object.freeze([]), main_shape: "invalid",
       grounding_problems: Object.freeze([]), missing_facts: Object.freeze([]), in_order: false, claims: 0, blocks: 0, block_kinds: Object.freeze([]) });
@@ -291,7 +306,7 @@ export function gradeTrial(caseDefinition, catalog, read, evidence) {
   const grounding = groundingOf(caseDefinition, read.blocks, evidence);
   const facts = factsOf(caseDefinition, read.blocks);
   return Object.freeze({
-    valid: true, grounded: grounding.grounded, nothing_lost: facts.nothing_lost, fit: fits(caseDefinition, catalog, shapes),
+    valid: true, grounded: grounding.grounded, nothing_lost: facts.nothing_lost, fit: fits(caseDefinition, shapes),
     shapes: Object.freeze([...shapes].sort()), main_shape: mainShape(read.blocks),
     grounding_problems: grounding.problems, missing_facts: facts.missing, in_order: facts.in_order,
     claims: claimsOf(read.blocks).length, blocks: read.blocks.length, block_kinds: Object.freeze(read.blocks.map((block) => block.kind)),
@@ -308,89 +323,35 @@ export function stableOf(trials) {
 /** `value` to two decimal places, as the summaries report a mean. */
 const hundredths = (value) => Math.round(value * 100) / 100;
 
-/** Each catalog's rule counts over its trials, beside the measures reported with them. */
-export function summarizeCatalogs(trials, catalogIds = CATALOG_IDS) {
-  return Object.freeze(Object.fromEntries(catalogIds.map((catalog) => {
-    const own = trials.filter((trial) => trial.catalog === catalog);
-    const count = (name) => own.filter((trial) => trial.grade[name]).length;
-    const cases = [...new Set(own.map((trial) => trial.case_id))];
-    const stable = cases.filter((caseId) => stableOf(own.filter((trial) => trial.case_id === caseId))).length;
-    const total = (pick) => own.reduce((sum, trial) => sum + (pick(trial) ?? 0), 0);
-    const kinds = {};
-    for (const trial of own) for (const kind of trial.grade.block_kinds) kinds[kind] = (kinds[kind] ?? 0) + 1;
-    return [catalog, Object.freeze({
-      trials: own.length, cases: cases.length,
-      valid: count("valid"), grounded: count("grounded"), nothing_lost: count("nothing_lost"), fit: count("fit"), stable,
-      valid_at_once: own.filter((trial) => trial.attempts?.[0]?.valid === true).length,
-      repairs: own.filter((trial) => (trial.attempts?.length ?? 0) > 1).length,
-      mean_blocks: own.length === 0 ? null : hundredths(total((trial) => trial.grade.blocks) / own.length),
-      mean_claims: own.length === 0 ? null : hundredths(total((trial) => trial.grade.claims) / own.length),
-      output_tokens: total((trial) => trial.attempts?.reduce((sum, attempt) => sum + (attempt.usage?.output_tokens ?? 0), 0)),
-      block_kinds: Object.freeze(kinds),
-      rules: Object.freeze({
-        valid: count("valid") >= RULES.valid, grounded: count("grounded") >= RULES.grounded, nothing_lost: count("nothing_lost") >= RULES.nothing_lost,
-        fit: count("fit") >= RULES.fit, stable: stable >= RULES.stable,
-      }),
-    })];
-  })));
-}
-
-/**
- * The founder's and the judge's ranks over the cases (README.md, "Ranks" and "Pre-registered rules"): each catalog's
- * mean rank, and how often the judge's top pick and its order of each pair of catalogs match the founder's. `founder`
- * and `judge` map case id to catalog id to rank (1 best); a case missing from either is left out of it.
- */
-export function summarizeRanks(founder, judge, catalogIds = CATALOG_IDS) {
-  const mean = (ranks, catalog) => {
-    const values = Object.values(ranks).map((byCatalog) => byCatalog[catalog]).filter((value) => typeof value === "number");
-    return values.length === 0 ? null : hundredths(values.reduce((sum, value) => sum + value, 0) / values.length);
-  };
-  const cases = Object.keys(founder);
-  let tops = 0;
-  let topCases = 0;
-  let pairs = 0;
-  let agreeing = 0;
-  for (const caseId of cases.filter((id) => judge[id] !== undefined)) {
-    const best = (ranks) => new Set(catalogIds.filter((catalog) => ranks[catalog] === Math.min(...catalogIds.map((entry) => ranks[entry]))));
-    const founderBest = best(founder[caseId]);
-    topCases += 1;
-    if ([...best(judge[caseId])].some((catalog) => founderBest.has(catalog))) tops += 1;
-    for (const [at, left] of catalogIds.entries()) {
-      for (const right of catalogIds.slice(at + 1)) {
-        pairs += 1;
-        if (Math.sign(founder[caseId][left] - founder[caseId][right]) === Math.sign(judge[caseId][left] - judge[caseId][right])) agreeing += 1;
-      }
-    }
-  }
+/** The rule counts over a run's trials, beside the measures reported with them. */
+export function summarize(trials) {
+  const count = (name) => trials.filter((trial) => trial.grade[name]).length;
+  const cases = [...new Set(trials.map((trial) => trial.case_id))];
+  const stable = cases.filter((caseId) => stableOf(trials.filter((trial) => trial.case_id === caseId))).length;
+  const total = (pick) => trials.reduce((sum, trial) => sum + (pick(trial) ?? 0), 0);
+  const kinds = {};
+  for (const trial of trials) for (const kind of trial.grade.block_kinds) kinds[kind] = (kinds[kind] ?? 0) + 1;
   return Object.freeze({
-    cases: cases.length,
-    founder_mean_rank: Object.freeze(Object.fromEntries(catalogIds.map((catalog) => [catalog, mean(founder, catalog)]))),
-    judge_mean_rank: Object.freeze(Object.fromEntries(catalogIds.map((catalog) => [catalog, mean(judge, catalog)]))),
-    judge_top_pick_agrees: topCases === 0 ? null : Object.freeze({ cases: topCases, agreeing: tops }),
-    judge_pairs_agree: pairs === 0 ? null : Object.freeze({ pairs, agreeing }),
+    trials: trials.length, cases: cases.length,
+    valid: count("valid"), grounded: count("grounded"), nothing_lost: count("nothing_lost"), fit: count("fit"), stable,
+    valid_at_once: trials.filter((trial) => trial.attempts?.[0]?.valid === true).length,
+    repairs: trials.filter((trial) => (trial.attempts?.length ?? 0) > 1).length,
+    mean_blocks: trials.length === 0 ? null : hundredths(total((trial) => trial.grade.blocks) / trials.length),
+    mean_claims: trials.length === 0 ? null : hundredths(total((trial) => trial.grade.claims) / trials.length),
+    output_tokens: total((trial) => trial.attempts?.reduce((sum, attempt) => sum + (attempt.usage?.output_tokens ?? 0), 0)),
+    block_kinds: Object.freeze(kinds),
+    rules: Object.freeze({
+      valid: count("valid") >= RULES.valid, grounded: count("grounded") >= RULES.grounded, nothing_lost: count("nothing_lost") >= RULES.nothing_lost,
+      fit: count("fit") >= RULES.fit, stable: stable >= RULES.stable,
+    }),
   });
 }
 
 /**
- * The pre-registered decision on block size: the catalog with the lowest mean founder rank among those passing rules 1
- * to 3, a tie within 0.1 going to fewer repairs, then to fewer output tokens. Undecided until every case is ranked. The
- * direction also needed rule 6, which no longer runs (README.md, "Layout v1 retired, 2026-11-04").
- */
-export function decide(catalogs, ranks) {
-  const complete = ranks !== null && ranks.cases === CASE_COUNT;
-  const eligible = Object.entries(catalogs).filter(([, summary]) => summary.rules.valid && summary.rules.grounded && summary.rules.nothing_lost)
-    .map(([catalog, summary]) => ({ catalog, rank: ranks?.founder_mean_rank?.[catalog] ?? null, repairs: summary.repairs, tokens: summary.output_tokens }))
-    .filter((entry) => entry.rank !== null)
-    .sort((left, right) => (Math.abs(left.rank - right.rank) > RANK_TIE ? left.rank - right.rank : left.repairs - right.repairs || left.tokens - right.tokens));
-  return Object.freeze({ complete, right_size: complete ? (eligible[0]?.catalog ?? null) : null, eligible: Object.freeze(eligible) });
-}
-
-/**
- * The gate on the built writer (README.md, "Gate on the built writer"): it passes when `built` meets rules 1 to 5 at the
- * pre-registered thresholds in a complete gate run (`summary` is its summarizeCatalogs entry). Undecided otherwise; the
- * founder's check on the desktop stands in for rule 6.
+ * The gate (README.md, "Pre-registered rules"): it passes when the built writer meets rules 1 to 5 at the pre-registered
+ * thresholds in a complete run (`summary` is its summarize result). Undecided otherwise.
  */
 export function decideGate(summary, complete) {
   const rules = summary?.rules ?? null;
-  return Object.freeze({ complete, arm: "built", passes: complete && rules !== null ? Object.values(rules).every(Boolean) : null, rules });
+  return Object.freeze({ complete, passes: complete && rules !== null ? Object.values(rules).every(Boolean) : null, rules });
 }

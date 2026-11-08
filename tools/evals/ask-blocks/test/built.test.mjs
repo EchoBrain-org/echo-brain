@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { citationOfAgenticEvidenceItemV8 } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-evidence-bundle-v1.js";
 import { ANSWER_BLOCK_CATALOG, ANSWER_BLOCKS_PROMPT, answerBlocksSchema } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { sha256 } from "../../shared/runner.mjs";
-import { ARM_IDS, BUILT, CATALOGS, CATALOG_IDS, TEMPLATE_CATALOG, readReleased } from "../catalogs.mjs";
-import { decideGate, evidenceOf, gradeTrial, loadCases } from "../grade.mjs";
-import { captureWriterPrompts, deskItem, evidenceIdsOf, parseArgs, run } from "../run.mjs";
+import { decideGate, evidenceOf, gradeTrial, loadCases, readReleased } from "../grade.mjs";
+import { captureWriterPrompts, deskItem, evidenceIdsOf, run } from "../run.mjs";
 
 const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072 };
 const document = loadCases();
@@ -77,9 +76,8 @@ test("reads every block of a released answer into the common blocks, each claim 
     { kind: "card", title: "THERM-488", card_kind: "ticket", facts: [{ label: "Status", value: "Blocked", evidence: ["E3"] }, { label: "Owner", value: "Dev Mehta", evidence: ["E3"] }] },
     { kind: "quote", text: "The DVT gate opens only when THERM-482 is fixed", from: "DVT readiness review", evidence: ["E1"] },
   ]);
-  assert.deepEqual(read.view.map((node) => node.t), ["lead", "h", "p", "h", "ol", "h", "table", "h", "timeline", "card", "quote"]);
-  // Graded as the other arms are, against the evidence the v2 writer is given.
-  const grade = gradeTrial(blockers, BUILT, read, await given());
+  // Graded against the evidence the v2 writer is given.
+  const grade = gradeTrial(blockers, read, await given());
   assert.deepEqual([grade.valid, grade.grounded, grade.fit, grade.grounding_problems], [true, true, true, []]);
   assert.deepEqual(grade.shapes, ["grid", "ordered", "profile", "prose", "sections", "sequence", "verbatim"]);
 });
@@ -92,39 +90,24 @@ test("is not valid when the answer fails the V8 contract, its blocks left off in
   const broken = readReleased(released({ blocks: released().parts[0].blocks.slice(0, 6) }), ids);
   assert.deepEqual([broken.valid, broken.problems], [false, ["organization API: Ask answer blocks leave a statement out"]]);
   assert.equal(readReleased(null, ids).valid, false);
-  const grade = gradeTrial(blockers, BUILT, without, await given());
+  const grade = gradeTrial(blockers, without, await given());
   assert.deepEqual([grade.valid, grade.grounded, grade.nothing_lost, grade.fit, grade.main_shape], [false, false, false, false, "invalid"]);
 });
 
 test("decides the gate only on a complete gate run, by rules 1 to 5", () => {
   const rules = (failing = []) => Object.fromEntries(["valid", "grounded", "nothing_lost", "fit", "stable"].map((rule) => [rule, !failing.includes(rule)]));
-  assert.deepEqual(decideGate({ rules: rules() }, true), { complete: true, arm: "built", passes: true, rules: rules() });
+  assert.deepEqual(decideGate({ rules: rules() }, true), { complete: true, passes: true, rules: rules() });
   assert.equal(decideGate({ rules: rules(["stable"]) }, true).passes, false);
   assert.equal(decideGate({ rules: rules() }, false).passes, null);
-  assert.deepEqual(decideGate(undefined, true), { complete: true, arm: "built", passes: null, rules: null });
+  assert.deepEqual(decideGate(undefined, true), { complete: true, passes: null, rules: null });
 });
 
-test("selects the built arm beside the three catalogs, and never asks the judge to rank it", () => {
-  const directory = mkdtempSync(join(tmpdir(), "ask-blocks-built-args-"));
-  const credential = join(directory, "credential");
-  writeFileSync(credential, "not read", { mode: 0o600 });
-  const base = ["--run", "--credential-file", credential, "--out", join(directory, "out")];
-  assert.deepEqual([CATALOG_IDS, ARM_IDS], [["templates", "balanced", "primitives"], ["templates", "balanced", "primitives", "built"]]);
-  const gate = parseArgs([...base, "--catalogs", "built", "--judge", "off"]);
-  assert.deepEqual([gate.catalogIds, gate.judge, gate.trials, gate.caseIds], [["built"], false, 3, null]);
-  assert.throws(() => parseArgs([...base, "--catalogs", "built"]), /nothing for the judge to rank: add --judge off/u);
-  assert.throws(() => parseArgs([...base, "--catalogs", "shipped", "--judge", "off"]), /known catalogs/u);
-  // A diagnostic beside a catalog keeps the judge for that catalog.
-  assert.deepEqual(parseArgs([...base, "--catalogs", "balanced,built", "--trials", "1"]).catalogIds, ["balanced", "built"]);
-});
-
-/** A route that answers every writer call from `reply(input, call)` and refuses any other call. */
+/** A route that answers every writer call from `reply(input, call)`. */
 function route(reply) {
   const inputs = [];
   return {
     inputs,
     async generate_with_observation(input) {
-      if (Object.hasOwn(input.schema.properties ?? {}, "ranks")) throw new Error("the judge never ranks the built writer");
       inputs.push(input);
       return { value: reply(input, inputs.length), finish_reason: "stop", usage: { input_tokens: 900, output_tokens: 120, total_tokens: 1020 }, provider_latency_ms: 3 };
     },
@@ -141,7 +124,7 @@ const TICKET_REPLY = Object.freeze({ lists: [], not_found: [], blocks: [
   { block: "text", sentences: [{ text: "It stalls below 40% duty cycle under 5°C.", evidence: ["E1"] }] },
 ] });
 
-const options = (out, fields = {}) => ({ run: true, credentialFile: null, out, caseIds: ["ticket-profile"], catalogIds: ["built"], trials: 1, judge: false, concurrency: 1, timeoutMs: 20_000, ...fields });
+const options = (out, fields = {}) => ({ run: true, credentialFile: null, out, caseIds: ["ticket-profile"], trials: 1, concurrency: 1, timeoutMs: 20_000, ...fields });
 
 test("runs the built writer through the kernel end to end, keeping each call and grading the answer it releases", async () => {
   const out = mkdtempSync(join(tmpdir(), "ask-blocks-built-run-"));
@@ -153,7 +136,7 @@ test("runs the built writer through the kernel end to end, keeping each call and
   assert.ok(input.system_prompt.startsWith("You write Echo's final answer") && input.system_prompt.endsWith(`\n\n${ANSWER_BLOCKS_PROMPT}`));
   assert.deepEqual([JSON.parse(input.user_prompt).block_catalog, input.schema, input.max_output_tokens], [ANSWER_BLOCK_CATALOG, answerBlocksSchema, 2_000]);
   // The writer was asked exactly as the capture recorded it, so its call keeps the prompts the report holds.
-  const prompts = report.prompts["ticket-profile"].built;
+  const prompts = report.prompts["ticket-profile"];
   assert.deepEqual([prompts.user_prompt, prompts.system_prompt_sha256, report.system_prompts[prompts.system_prompt_sha256]], [input.user_prompt, sha256(input.system_prompt), input.system_prompt]);
   const [trial] = report.trials;
   const { elapsed_ms: elapsed, ...attempt } = trial.attempts[0];
@@ -167,27 +150,8 @@ test("runs the built writer through the kernel end to end, keeping each call and
   // The kernel reads its events oldest first.
   assert.deepEqual(trial.read.blocks[2].events.map((event) => [event.date, event.evidence]), [["2026-10-08", ["E1"]], ["2026-11-05", ["E2"]]]);
   assert.deepEqual([trial.grade.valid, trial.grade.grounded, trial.grade.nothing_lost, trial.grade.fit, trial.grade.main_shape], [true, true, true, true, "profile"]);
-  assert.deepEqual(report.catalogs.built, { modeled_on: BUILT.modeled_on, catalog_key: "block_catalog", catalog: ANSWER_BLOCK_CATALOG, can_show: BUILT.can_show, schema: answerBlocksSchema });
-  assert.deepEqual([report.complete, report.decision, report.judge, report.errors], [false, { complete: false, arm: "built", passes: null, rules: report.summary.built.rules }, {},
-    { writer_calls: 0, trials_without_reply: 0, judge_orders_without_ranks: 0 }]);
-});
-
-test("starts each catalog from the built writer's prompts: only the layout part and the block catalog differ", async () => {
-  const out = mkdtempSync(join(tmpdir(), "ask-blocks-built-catalog-"));
-  const filled = { template: { name: "fact", answer: [{ text: "It is a High priority Jira issue.", evidence: ["E1"] }] }, not_found: [] };
-  const writer = route((input) => (Object.hasOwn(input.schema.properties, "template") ? filled : TICKET_REPLY));
-  const { report } = await run(options(out, { catalogIds: ["templates", "built"] }), { loaded: { structured_output: writer, generation }, progress: () => undefined });
-  const prompts = report.prompts["ticket-profile"];
-  const [templates, built] = [JSON.parse(prompts.templates.user_prompt), JSON.parse(prompts.built.user_prompt)];
-  // The same input, the catalog's entries in the block catalog's place.
-  assert.deepEqual(Object.keys(templates), Object.keys(built).map((key) => (key === "block_catalog" ? "template_catalog" : key)));
-  const { template_catalog: templateCatalog, ...templatesRest } = templates;
-  const { block_catalog: blockCatalog, ...builtRest } = built;
-  assert.deepEqual([templatesRest, templateCatalog, blockCatalog], [builtRest, TEMPLATE_CATALOG, ANSWER_BLOCK_CATALOG]);
-  // The same system prompt, the catalog's layout part in place of the kernel's.
-  const system = (arm) => report.system_prompts[prompts[arm].system_prompt_sha256];
-  const layout = CATALOGS.find((entry) => entry.id === "templates").layout_prompt;
-  assert.equal(system("templates"), `${system("built").slice(0, -ANSWER_BLOCKS_PROMPT.length)}${layout}`);
+  assert.deepEqual(report.writer, { block_catalog: ANSWER_BLOCK_CATALOG, schema: answerBlocksSchema });
+  assert.deepEqual([report.complete, report.decision, report.errors], [false, { complete: false, passes: null, rules: report.summary.rules }, { writer_calls: 0, trials_without_reply: 0 }]);
 });
 
 test("lets the kernel's own reading, repair and downgrades decide what is released; the harness adds no repair", async () => {
@@ -208,38 +172,35 @@ test("lets the kernel's own reading, repair and downgrades decide what is releas
   // Downgraded, the quote and both events read as text after the answer: no quote, and no timeline of one event.
   assert.deepEqual(trial.read.blocks.map((block) => block.kind), ["answer", "prose"]);
   assert.deepEqual(trial.read.blocks[1].claims.map((claim) => claim.text), ["DVT readiness review: Priya owns the soak from now on.", "2026-10-27: The soak was assigned.", "The chamber was ordered."]);
-  assert.deepEqual([report.summary.built.repairs, report.summary.built.valid_at_once, report.summary.built.valid], [1, 0, 1]);
+  assert.deepEqual([report.summary.repairs, report.summary.valid_at_once, report.summary.valid], [1, 0, 1]);
 });
 
-test("makes a complete gate run of the built writer alone, every case three times with the judge off, and decides it", async () => {
+test("makes a complete gate run, every case three times, and decides it", async () => {
   const out = mkdtempSync(join(tmpdir(), "ask-blocks-built-gate-"));
   // A reply that says nothing wrong and nothing asked: valid and grounded, but it loses every case's facts.
   const writer = route((input) => ({ lists: [], not_found: [], blocks: [{ block: "answer", sentences: [{ text: "The evidence covers it.", evidence: JSON.parse(input.user_prompt).evidence.map((item) => item.id) }] }] }));
   const { report } = await run(options(out, { caseIds: null, trials: 3, concurrency: 6 }), { loaded: { structured_output: writer, generation }, progress: () => undefined });
-  assert.deepEqual([report.complete, report.limits.catalogs, report.summary.built.trials, writer.inputs.length], [true, ["built"], 45, 45]);
-  assert.deepEqual(report.decision, { complete: true, arm: "built", passes: false, rules: { valid: true, grounded: true, nothing_lost: false, fit: false, stable: true } });
+  assert.deepEqual([report.complete, report.summary.trials, writer.inputs.length], [true, 45, 45]);
+  assert.deepEqual(report.decision, { complete: true, passes: false, rules: { valid: true, grounded: true, nothing_lost: false, fit: false, stable: true } });
   // The same run with fewer trials decides nothing.
   const fewer = await run(options(out, { caseIds: null, trials: 1, concurrency: 6 }), { loaded: { structured_output: route(() => TICKET_REPLY), generation }, progress: () => undefined });
   assert.deepEqual([fewer.report.complete, fewer.report.decision.passes], [false, null]);
 });
 
-test("resumes a built trial: a reply is handed to the kernel again only when it asks with the same prompts", async () => {
-  const out = mkdtempSync(join(tmpdir(), "ask-blocks-built-resume-"));
-  const outage = Object.assign(new Error("402"), { diagnostic: { failure_class: "adapter_http", http_status: 402 } });
+test("counts the writer calls that failed and the trials left without a reply", async () => {
+  const out = mkdtempSync(join(tmpdir(), "ask-blocks-built-errors-"));
+  const outage = (status) => Object.assign(new Error(String(status)), { diagnostic: { failure_class: "adapter_http", http_status: status } });
+  // The first reply has no blocks; its repair meets a 402, so the kernel releases code's fallback, without blocks.
   const failing = { inputs: [], async generate_with_observation(input) {
     this.inputs.push(input);
-    if (this.inputs.length > 1) throw outage;
+    if (this.inputs.length > 1) throw outage(402);
     return { value: { lists: [], not_found: [] }, finish_reason: "stop", usage: null, provider_latency_ms: 1 };
   } };
-  const first = await run(options(out), { loaded: { structured_output: failing, generation }, progress: () => undefined });
-  // The kernel refused the first reply and its repair met the outage, so it released code's fallback, without blocks.
-  assert.deepEqual(first.report.trials[0].attempts.map((attempt) => [attempt.kind, attempt.error?.http_status ?? null]), [["first", null], ["repair", 402]]);
-  assert.deepEqual([first.report.trials[0].grade.valid, first.report.errors.writer_calls], [false, 1]);
-
-  const writer = route(() => TICKET_REPLY);
-  const { report } = await run(options(out, { resume: first.reportPath }), { loaded: { structured_output: writer, generation }, progress: () => undefined });
-  // Only the repair was made again: the first reply was carried, refused again, and repaired.
-  assert.equal(writer.inputs.length, 1);
-  assert.deepEqual(report.trials[0].attempts.map((attempt) => `${attempt.kind}${attempt.carried ? " (carried)" : ""}`), ["first (carried)", "repair"]);
-  assert.deepEqual([report.trials[0].grade.valid, report.resumed_from.carried_calls, report.errors.writer_calls], [true, 1, 0]);
+  const { report } = await run(options(out), { loaded: { structured_output: failing, generation }, progress: () => undefined });
+  assert.deepEqual(report.trials[0].attempts.map((attempt) => [attempt.kind, attempt.error?.http_status ?? null]), [["first", null], ["repair", 402]]);
+  assert.deepEqual([report.trials[0].grade.valid, report.errors], [false, { writer_calls: 1, trials_without_reply: 0 }]);
+  // A 401 on the first call is not repeated, so the trial has no reply at all.
+  const refused = { async generate_with_observation() { throw outage(401); } };
+  const none = (await run(options(out), { loaded: { structured_output: refused, generation }, progress: () => undefined })).report;
+  assert.deepEqual([none.trials[0].attempts.length, none.trials[0].read, none.trials[0].grade.valid, none.errors], [1, null, false, { writer_calls: 1, trials_without_reply: 1 }]);
 });

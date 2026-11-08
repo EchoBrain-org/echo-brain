@@ -103,16 +103,19 @@ export function codeChecks(testCase, run, dataset) {
   };
 }
 
-/** A run's final plan's needs by declared kind; a need saved without one (a run from before ADR-0041) is `missing`. */
+/** A need's declared kind (ADR-0041); a need without one is content, as Ask reads it. */
+const kindOf = need => NEED_KINDS.includes(need.kind) ? need.kind : "content";
+
+/** A run's final plan's needs by declared kind. */
 function kindsOf(plan) {
-  const kinds = { which_items: 0, which_say: 0, content: 0, missing: 0 };
-  for (const need of plan.flatMap(part => part.needs)) kinds[NEED_KINDS.includes(need.kind) ? need.kind : "missing"] += 1;
+  const kinds = { which_items: 0, which_say: 0, content: 0 };
+  for (const need of plan.flatMap(part => part.needs)) kinds[kindOf(need)] += 1;
   return kinds;
 }
 
-/** Whether the kinds a run's final plan declares, as a set, are the case's: a need without a kind is content, as Ask reads it. */
+/** Whether the kinds a run's final plan declares, as a set, are the case's. */
 function declaredKinds(plan, expected) {
-  const declared = [...new Set(plan.flatMap(part => part.needs.map(need => NEED_KINDS.includes(need.kind) ? need.kind : "content")))].sort();
+  const declared = [...new Set(plan.flatMap(part => part.needs.map(kindOf)))].sort();
   return isDeepStrictEqual(declared, [...expected].sort());
 }
 
@@ -120,9 +123,9 @@ function declaredKinds(plan, expected) {
 const ROW_FACT_PARTS = new Set(["date", "owner", "status"]);
 
 /**
- * The lists a run's research read (ADR-0041; a run from before it has none): the lists holding each item as a member,
- * and those a found which_items need of the final plan cites by id, which Ask's renderer states. A need without a kind
- * (a run saved earlier) is content, whose list ids carry no meaning.
+ * The lists a run's research read (ADR-0041; a task's run has none): the lists holding each item as a member, and
+ * those a found which_items need of the final plan cites by id, which Ask's renderer states. A need without a kind is
+ * content, whose list ids carry no meaning.
  */
 function listIndex(research) {
   const all = Array.isArray(research.lists) ? research.lists : [];
@@ -135,32 +138,25 @@ function listIndex(research) {
  * A list part scores on the whole list (ADR-0041, addition 7): each measure holds only when it holds for every member,
  * so naming some members earns nothing. Found: research came across every member. Read: a complete list research
  * read holds every member. Cited: the plan cites every member, or a found which_items need cites a list holding it.
- * Handed: the writer saw every member. Named: every member is named by some statement (`statementOf`), or, for a list
- * longer than the 25 names an answer gives, a statement code wrote ends "and N more" and the members it names plus N
- * are exactly the list. A member the key names by its meeting (a meeting record) has no name here: the research result
- * titles a meeting record by its meeting's label, which every record of the meeting shares, while code names it by a
- * line of its own text (its list label), which the result does not carry. So no statement names it, and the judge's
- * yes cannot count for a list holding one.
+ * Handed: the writer saw every member. Named: every member is named by some statement (`statementOf`). A member the
+ * key names by its meeting (a meeting record) has no name here: the research result titles a meeting record by its
+ * meeting's label, which every record of the meeting shares, while code names it by a line of its own text (its list
+ * label), which the result does not carry. So no statement names it, and the judge's yes cannot count for a list
+ * holding one.
  */
 function listPart(part, items, meetings, lists, handedIds, answer) {
   const members = part.evidence.map(ref => matching(items, ref, meetings));
   const every = holds => members.every(found => found.some(holds));
   const nameable = part.evidence.map(ref => ref.meeting === undefined);
-  const statements = (answer?.parts ?? []).flatMap(value => value.statements).map(statement => statementOf(statement, members, nameable, items, lists, answer));
+  const statements = (answer?.parts ?? []).flatMap(value => value.statements).map(statement => statementOf(statement, members, nameable, items, answer));
   const named = (_, index) => statements.some(statement => statement.named.has(index));
-  // Code's statement counts the members it does not name, from ECHO's own list (ADR-0041, addition 5); each
-  // statement is read alone, so members another statement names by id never count twice.
-  const more = statements.some(statement => {
-    const counted = /; and (\d+) more\.$/u.exec(statement.text);
-    return statement.code && counted !== null && statement.named.size > 0 && statement.named.size + Number(counted[1]) === members.length;
-  });
   return {
     id: part.id, type: part.type,
     found: every(() => true),
     read: every(item => lists.of(item.id).some(list => list.complete === true)),
     cited_by_plan: every(item => item.cited_by_plan || lists.of(item.id).some(lists.relied)),
     handed: every(item => handedIds.has(item.id)),
-    named: answer !== null && (members.every(named) || more),
+    named: answer !== null && members.every(named),
     // For reading a run, never for its score.
     members: members.length,
     members_named: members.filter(named).length,
@@ -172,20 +168,12 @@ function listPart(part, items, meetings, lists, handedIds, answer) {
  * What one statement of an answer names (ADR-0041): the members of a list part it cites, by any of their items, whose
  * names its text holds (`namer`), however the statement came to cite them. The response does not say which statements
  * code wrote, so a statement never names a member by citing it alone: a writer's sentence citing 8 rows, as one on
- * follow-ups' text may, names the 4 its text names. `code`: the statement reads as one code wrote, which alone may end
- * "and N more" (addition 5): it cites only list members' rows, and its text names every item it cites, as code's
- * statements do (a name never covers a member the statement does not cite).
+ * follow-ups' text may, names the 4 its text names. A name never covers a member the statement does not cite.
  */
-function statementOf(statement, members, nameable, items, lists, answer) {
-  const resolved = statement.citation_indexes.map(index => items.filter(item => isDeepStrictEqual(item.citation, answer.citations[index]?.citation)));
-  const cited = new Set(resolved.flat());
+function statementOf(statement, members, nameable, items, answer) {
+  const cited = new Set(statement.citation_indexes.flatMap(index => items.filter(item => isDeepStrictEqual(item.citation, answer.citations[index]?.citation))));
   const says = namer(statement.text, [...members.filter((_, index) => nameable[index]).flat(), ...cited], cited);
-  const rows = resolved.length > 0 && resolved.every(value => value.length > 0 && value.every(item => lists.of(item.id).length > 0));
-  return {
-    text: statement.text,
-    code: rows && [...cited].every(says),
-    named: new Set(members.flatMap((value, index) => nameable[index] && value.some(item => cited.has(item)) && value.some(says) ? [index] : [])),
-  };
+  return { named: new Set(members.flatMap((value, index) => nameable[index] && value.some(item => cited.has(item)) && value.some(says) ? [index] : [])) };
 }
 
 /** Characters of a label in a code-written name (AGENTIC_LIST_NAME_CHARS_V1). */
