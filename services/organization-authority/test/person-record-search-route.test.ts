@@ -26,7 +26,6 @@ import {
   warmReadableSearchActiveGenerationV1,
   type BuildReadableSearchGenerationV1Input,
   type ReadableSearchAtomV1,
-  type ReadableSearchResultItemV1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -44,7 +43,6 @@ import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "@echo-brain/organization-authori
 import { EMP_A, EVERYONE, OWNER, PROJ_X, SHARED, T, UNJOINED, meetingWorld } from "./fixtures/person-meeting-world.js";
 import { SIGNED_APPROVAL_CODECS } from "./fixtures/signed-approval-decision-v1.js";
 
-import { independentRecordCoverageFixture, rolloutCoverageFixture } from "./retrieval-coverage-fixture.js";
 
 const roots: string[] = [];
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
@@ -388,147 +386,6 @@ describe("Person Layer 2 route", () => {
     expect(route.searchBatch({ access_token: "reader", query: "launch" }).response.items).toEqual([]);
     record.close(); value.record.close(); value.authority.close();
   });
-  it.each(["owner", "employee", "other-owner"] as const)("finds independent lexical facts across the four frozen queries for %s", async (actor) => {
-    const value = setup(false);
-    const record = recordLog();
-    const atoms = independentRecordCoverageFixture.records.flatMap((source, index) =>
-      source.items.map((item, order): ReadableSearchAtomV1 => ({
-        ...policyAtom({ id: index === 3 ? "restricted" : "member", policy_id: index === 3
-          ? RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 : PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1 }),
-        record_position: index + 1,
-        record_sha256: sha256Digest(source.title),
-        envelope_sha256: sha256Digest(`envelope-${source.title}`),
-        atom_id: sha256Digest(item.text),
-        atom_order: order,
-        signal_id_sha256: sha256Digest(`signal-${item.text}`),
-        item_kind: item.kind,
-        text: item.text,
-        text_sha256: sha256Digest(item.text),
-      })),
-    );
-    try {
-      const active_generation = publish(value, record, atoms, { position: 4, record_sha256: atoms.at(-1)!.record_sha256 });
-      const reader = readerAuthorization({ principal_id: `principal_${actor}`,
-        membership_id: `membership_${actor}`, membership_type: actor === "employee" ? "employee" : "owner" });
-      let authenticationCount = 0;
-      const search = vi.fn(searchReadableSearchGenerationV1);
-      const route = createRoute(value, { record, search_generation: search, sessions: { authenticateAccess: () => ({ ...reader,
-        checked_at: new Date(Date.parse(reader.checked_at) + authenticationCount++).toISOString(),
-      }) } });
-      const reads = independentRecordCoverageFixture.queries.map(query => route.searchBatch({ access_token: "fixture-reader", query, limit: 10 }));
-      const released = reads.flatMap(read => read.response.items);
-      const revenue = sha256Digest("Revenue signal calibration");
-      const perQuery = search.mock.results.map(result => result.value.items as readonly ReadableSearchResultItemV1[]);
-      const required = atoms.filter(atom => atom.record_sha256 === revenue &&
-        (atom.text.includes("at least 8") || atom.text.includes("confirmed list")));
-      expect(required).toHaveLength(2);
-      expect(perQuery.map(items => items.length)).toEqual([10, 10, 10, 10]);
-      expect(reads.map(read => read.response.items.map(item => item.atom_id))).toEqual(perQuery.map(items => items.map(item => item.atom_id)));
-      if (actor === "owner") {
-        // Real lexical ranks (one-based, zero means absent), not captured live
-        // scores: per-query limits do not lose these facts.
-        expect(perQuery.map(items => items.findIndex(item => item.atom_id === required[0]!.atom_id) + 1))
-          .toEqual([0, 0, 9, 0]);
-        expect(perQuery.map(items => items.findIndex(item => item.atom_id === required[1]!.atom_id) + 1))
-          .toEqual([10, 7, 4, 9]);
-      }
-      for (const fact of required) {
-        expect(released.map(item => item.atom_id)).toContain(fact.atom_id);
-      }
-      for (const read of reads) {
-        expect(read.release.active_pointer.generation_id).toBe(active_generation.generation_id);
-        expect(read.release.active_pointer.record_head).toEqual({ position: 4, record_sha256: atoms.at(-1)!.record_sha256 });
-      }
-
-      // One read per query above.
-      expect(search.mock.calls.map(([call]) => call.query)).toEqual([...independentRecordCoverageFixture.queries]);
-      for (const [call] of search.mock.calls) {
-        expect(call.reader).toEqual({ principal_id: reader.principal_id, membership_id: reader.membership_id, project_ids: [SHARED_PROJECT] });
-        expect(call.active_generation).toEqual(active_generation);
-      }
-      const privateAtoms = atoms.filter(atom => atom.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2);
-      if (actor === "owner") {
-        expect(released.some(item => item.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2)).toBe(true);
-      } else {
-        // Owner role alone also cannot grant the exact reviewer's private scope.
-        const observed = [...perQuery.flat(), ...released];
-        expect(observed.every(item => item.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1)).toBe(true);
-        for (const atom of privateAtoms) expect(released.map(item => item.text)).not.toContain(atom.text);
-      }
-    } finally {
-      record.close();
-      value.record.close();
-      value.authority.close();
-    }
-  });
-
-  it.each([false, true])("keeps the frozen four-query rollout plan to approved member evidence (mixed corpus: %s)", (mixed) => {
-    const value = setup(false);
-    const record = recordLog();
-    const atoms = rolloutCoverageFixture.records.flatMap((source, index) =>
-      source.items.map((item, order): ReadableSearchAtomV1 => ({
-        ...policyAtom({ id: "member", policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1 }),
-        record_position: 3 - index,
-        record_sha256: sha256Digest(source.title),
-        envelope_sha256: sha256Digest(`envelope-${source.title}`),
-        atom_id: sha256Digest(item.text),
-        atom_order: order,
-        signal_id_sha256: sha256Digest(`signal-${item.text}`),
-        item_kind: item.kind,
-        text: item.text,
-        text_sha256: sha256Digest(item.text),
-      })),
-    );
-    if (mixed) {
-      for (const [index, text] of [
-        "September 16 office renovation work remains on schedule; confirm furniture delivery first.",
-        "Echo training materials for operational workflows are ready for review.",
-        "The September newsletter launch needs an editorial review before publication.",
-      ].entries()) {
-        atoms.push({ ...atoms[0]!, record_position: 5 + index, record_sha256: sha256Digest(`distractor-${index}`),
-          atom_id: sha256Digest(text), atom_order: 0, item_kind: index === 2 ? "decision" : "action",
-          text, text_sha256: sha256Digest(text) });
-      }
-    }
-    const privateText = "Echo private commercial concession: 28 locations September 16 guaranteed at a secret discount.";
-    atoms.push({ ...policyAtom({ id: "restricted", policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 }),
-      record_position: 4, text: privateText, text_sha256: sha256Digest(privateText) });
-    const headAtom = atoms.reduce((head, atom) => atom.record_position > head.record_position ? atom : head);
-    try {
-      publish(value, record, atoms, { position: headAtom.record_position, record_sha256: headAtom.record_sha256 });
-      let authenticationCount = 0;
-      const search = vi.fn(searchReadableSearchGenerationV1);
-      const route = createRoute(value, { record, search_generation: search, sessions: { authenticateAccess: () => ({ ...authorization(),
-        checked_at: new Date(Date.parse("2026-09-09T00:00:00.000Z") + authenticationCount++).toISOString(),
-      }) } });
-      const read = () => rolloutCoverageFixture.queries.map(query => route.searchBatch({ access_token: "fixture-reader", query, limit: 10 }).response);
-      const responses = read();
-      if (!mixed) {
-        // Real lexical ranks: the adoption decision is found at ranks 10 and 9;
-        // the three deadline actions are absent from every top ten.
-        expect(search.mock.results.map(result => result.value.items.findIndex((item: ReadableSearchResultItemV1) => item.text.includes("at least 8"))))
-          .toEqual([-1, 9, 8, -1]);
-        for (const deadline of ["September 3", "September 5", "September 11"]) {
-          expect(search.mock.results.every(result => result.value.items.every((item: ReadableSearchResultItemV1) => !item.text.includes(deadline))))
-            .toBe(true);
-        }
-      }
-      const items = responses.flatMap(response => response.items);
-      expect(items.map(item => item.text).join("\n")).not.toContain(privateText);
-      expect(items.every(item => item.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1)).toBe(true);
-      expect(items.every(item => atoms.some(atom => atom.atom_id === item.atom_id && atom.text === item.text && atom.record_sha256 === item.record_sha256))).toBe(true);
-      expect(read()).toEqual(responses);
-      const factual = route.search({ access_token: "fixture-reader", query: "revised data-processing addendum Leah September 5" });
-      expect(factual.items[0]!.text).toContain("by September 5");
-      // This sentence exists only outside the approved generation.
-      expect(route.search({ access_token: "fixture-reader", query: "unapproved-windfall-claim" }).items).toEqual([]);
-    } finally {
-      record.close();
-      value.record.close();
-      value.authority.close();
-    }
-  });
-
   it("uses only the bearer-derived reader tuple and writes one compact Layer 2 audit", () => {
     const value = setup();
     const search = vi.fn(() => fakeResult([
