@@ -5,7 +5,7 @@ import type {
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskedScope, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
+  Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
   ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView,
   ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
@@ -35,7 +35,7 @@ type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | {
 /** A question, in the scope it was asked in. */
 export interface AskQuestion {
   question: string;
-  scope: AskedScope;
+  scope: AskScope;
 }
 
 /**
@@ -547,7 +547,7 @@ export interface State {
    * What the bar asks about, and searches: a project (the chip), or all
    * context; never Mine (ADR-0049). The page never moves with it.
    */
-  barScope: AskedScope;
+  barScope: AskScope;
   /** The bar's text. Only asking, Escape, or a real change of access empties it. */
   barText: string;
   matches: MatchesState | null;
@@ -2600,11 +2600,10 @@ async function sendProjectSetting(project: ProjectSummary, operation: 'rename' |
   const write = { requestId, operation, ...detail, status: 'sending' as const };
   set({ projectSettings: { ...settings, menu: false, rename: null, confirm: null, write } });
   unresolvedChanged();
-  const result = operation === 'rename'
-    ? await rpc('projects.rename', { expect: account, request_id: requestId, project_id: project.project_id, name: detail.name! })
-    : operation === 'archive'
-      ? await rpc('projects.archive', { expect: account, request_id: requestId, project_id: project.project_id, archived: detail.archived! })
-      : await rpc('projects.leave', { expect: account, request_id: requestId, project_id: project.project_id });
+  const { project_id } = project;
+  const change: ProjectChange = operation === 'rename' ? { kind: 'rename', project_id, name: detail.name! }
+    : operation === 'leave' ? { kind: 'leave', project_id } : { kind: detail.archived ? 'archive' : 'unarchive', project_id };
+  const result = await rpc('projects.change', { expect: account, request_id: requestId, change });
   const current = state.projectSettings;
   if (current?.write?.requestId !== requestId) return;
   if (!result.ok) {
@@ -3938,7 +3937,7 @@ export function fullTurns(view: AskState): readonly string[] {
  * under it (ADR-0039); with no answer, they go, and so does any item they
  * opened in the pane.
  */
-export async function ask(question: string, scope: AskedScope = state.barScope, how?: AskHow): Promise<void> {
+export async function ask(question: string, scope: AskScope = state.barScope, how?: AskHow): Promise<void> {
   const account = expect();
   const text = question.trim();
   const open = state.ask;
@@ -4067,8 +4066,7 @@ export function askEverywhere(id: string): void {
 export function askAgain(id: string): void {
   const turn = turnOf(id);
   if (!turn || state.ask?.asking) return;
-  // A turn asked in Mine before it went is asked again at Home, on whose thread it stays (ADR-0049).
-  void ask(askText(turn.question), turn.scope.kind === 'mine' ? { kind: 'global' } : turn.scope, { againOf: turn.id });
+  void ask(askText(turn.question), turn.scope, { againOf: turn.id });
 }
 
 /** A choice of "Which one?": its full question, asked with the same earlier turn. */

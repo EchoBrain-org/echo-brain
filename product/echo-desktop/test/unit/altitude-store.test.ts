@@ -511,7 +511,7 @@ describe('Home altitudes when your projects change', () => {
   it('leaving the project Home is zoomed on sends Home to My projects', async () => {
     rpc.mockImplementation(rpcFor(held, {
       'app.status': () => ok({ signed_in: true, account }),
-      'projects.leave': () => ok({}),
+      'projects.change': () => ok(null),
       runs: params => ((params as { request: Request }).request.operation === 'items'
         ? empty() : fail('unavailable', { retryable: true })),
     }, () => lists));
@@ -590,7 +590,7 @@ describe('Home altitudes keep their copy of a long list while they read it again
   it('a project restored while Home shows My projects is read', async () => {
     const OLD = project(5, 25, { name: 'Old', status: 'archived' });
     lists = { active: [THERMAL, BATTERY], archived: [OLD] };
-    rpc.mockImplementation(rpcFor(held, { 'app.status': () => ok({ signed_in: true, account }), runs: runsHandler, 'projects.archive': () => ok({}) }, () => lists));
+    rpc.mockImplementation(rpcFor(held, { 'app.status': () => ok({ signed_in: true, account }), runs: runsHandler, 'projects.change': () => ok(null) }, () => lists));
     const store = await startStore();
     store.zoomTo('projects');
     await flush(80);
@@ -607,7 +607,7 @@ describe('Home altitudes keep their copy of a long list while they read it again
     const made = project(13, 30, { name: 'Made here' });
     rpc.mockImplementation(rpcFor(held, {
       'app.status': () => ok({ signed_in: true, account }), runs: runsHandler,
-      'projects.rename': params => ok({ request_id: params.request_id, project_id: params.project_id, operation: 'rename' }),
+      'projects.change': () => ok(null),
       'projects.create': () => ok({ project_id: made.project_id }),
       'projects.read': () => ok(made),
     }, () => lists));
@@ -643,7 +643,7 @@ describe('Home altitudes keep their copy of a long list while they read it again
       lists = { active: numbered(12), archived: [] };
       rpc.mockImplementation(rpcFor(held, {
         'app.status': () => ok({ signed_in: true, account }), runs: runsHandler,
-        'projects.rename': params => ok({ request_id: params.request_id, project_id: params.project_id, operation: 'rename' }),
+        'projects.change': () => ok(null),
       }, () => lists));
     });
 
@@ -700,7 +700,7 @@ describe('Home altitudes keep their copy of a long list while they read it again
   it('a read of every page on its way when you leave a project does not bring it back', async () => {
     lists = { active: numbered(12), archived: [] };
     const third = lists.active[2]!;
-    rpc.mockImplementation(rpcFor(held, { 'app.status': () => ok({ signed_in: true, account }), runs: runsHandler, 'projects.leave': () => ok({}) }, () => lists));
+    rpc.mockImplementation(rpcFor(held, { 'app.status': () => ok({ signed_in: true, account }), runs: runsHandler, 'projects.change': () => ok(null) }, () => lists));
     const store = await startStore();
     store.zoomTo('projects');
     await flush(200);
@@ -751,8 +751,7 @@ describe('Home altitudes drop a read of every page that a change overtook', () =
       release = null;
       rpc.mockImplementation(rpcFor(held, {
         'app.status': () => ok({ signed_in: true, account }), runs: runsHandler,
-        'projects.rename': params => ok({ request_id: params.request_id, project_id: params.project_id, operation: 'rename' }),
-        'projects.archive': () => ok({}),
+        'projects.change': () => ok(null),
         'projects.create': () => ok({ project_id: MADE.project_id }),
         'projects.read': () => ok(MADE),
         'projects.list': params => {

@@ -10,8 +10,6 @@ const notificationScan = (body: Record<string, unknown>) => body.operation === '
   && ((body.states as string[] | undefined)?.join() === 'open' || body.changed_since !== undefined);
 /** Foreground runs requests; notification discovery is checked independently. */
 const requests = (operation: string) => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === operation && !notificationScan(call.body)).map(call => call.body!);
-/** A day as the app writes it ("Oct 7"), in this computer's time zone, as the app's is. */
-const day = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
 /** A list's rows of one status, wherever they show: current work in one list, a closed status in its fold. */
 const ofState = (list: Locator, status: 'unsent' | 'open' | 'done' | 'not_relevant') => list.locator(`[data-testid="follow-up-row"][data-state="${status}"]`);
@@ -20,9 +18,6 @@ const fold = (list: Locator, status: 'Done' | 'Dismissed') => list.getByRole('re
 const row = (scope: Locator, text: string) => scope.getByTestId('follow-up-row').filter({ hasText: text });
 /** One of these rows, by its text. */
 const rowOf = (rows: Locator, text: string) => rows.filter({ hasText: text });
-/** A list's owner line: its buttons' names, in order. */
-const owners = (list: Locator) => list.getByRole('group', { name: 'Show follow-ups by owner' }).getByRole('button')
-  .evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')));
 
 /** Picks a person under an owner chip that is open. */
 async function pickOwner(page: Page, name: string, query?: string) {
@@ -42,25 +37,13 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   await send.click();
   const list = page.getByTestId('follow-ups');
   await expect(list.getByRole('heading', { name: 'Pilot planning' })).toBeVisible();
-  // How far its follow-ups have come: none sent yet, of four.
-  await expect(list).toContainText(`Approved ${day('2026-10-07T10:00:00.000Z')} · 0 of 4 sent · 0 done`);
-  // One list of what is not done yet, each found weeks ago so each needs attention, longest waiting first (here, as found); its
-  // owners above it, counted by what they hold open; every row ticked, as one click sends them all.
+  // How the list and each row draw (its progress line, its owners, each row's mark, owner and hover) is follow-ups.test's.
+  // One list of what is not done yet, longest waiting first (here, as found); every row ticked, as one click sends them all.
   const unsent = ofState(list, 'unsent');
   await expect(unsent).toHaveText([/^ECHO-12 · Pilot launch/, /^Thermostat PRD · Pilot scope/, /^Send the revised quote/, /^Confirm the trace/]);
-  expect(await owners(list)).toEqual(['All owners', 'Mina Patel, 0 open', 'Rafael Moreno, 0 open', 'No owner, 1']);
   for (const name of ['Send the revised quote', 'Confirm the trace', 'ECHO-12 · Pilot launch', 'Thermostat PRD · Pilot scope']) {
     await expect(list.getByRole('checkbox', { name, exact: true })).toBeChecked();
   }
-  await expect(rowOf(unsent, 'Send the revised quote')).toContainText('Rafael');
-  await expect(rowOf(unsent, 'Confirm the trace')).toContainText('Mina');
-  // Not sent: the owner steps back, as the dashed mark does; each over a week old, solid orange.
-  await expect(rowOf(unsent, 'Confirm the trace').locator('.follow-up-owner')).toHaveClass(/later/);
-  await expect(rowOf(unsent, 'Confirm the trace').locator('.follow-up-state')).toHaveAttribute('data-tone', 'late');
-  // What it is and where it came from are its hover.
-  await expect(rowOf(unsent, 'ECHO-12')).toHaveAttribute('title', 'Jira ticket · from Pilot planning · For Mina, not sent yet');
-  // ECHO matched no one for the PRD page: Pick owner.
-  await expect(rowOf(unsent, 'Thermostat PRD').getByRole('button', { name: 'Pick owner: Thermostat PRD · Pilot scope' })).toBeVisible();
   await expect(list.getByRole('button', { name: 'Send 4', exact: true })).toBeVisible();
   await emit(app.app, 'echo-test:conceal');
   await expect(page.getByTestId('concealed')).toBeVisible();

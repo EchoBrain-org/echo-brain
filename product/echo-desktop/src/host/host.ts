@@ -22,7 +22,7 @@ import { lost, pinRefusal, refreshStops } from './session.js';
 import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timelineTurn } from './timeline.js';
 import {
   abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
-  membersView, noteMatchesView, noteTitle, openItemsView, openItemView, openView, projectMatchesView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectSettingsView, projectView,
+  membersView, noteMatchesView, noteTitle, openItemsView, openItemView, openView, projectMatchesView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectView,
   projectActivityView, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
@@ -399,6 +399,14 @@ function changeArgs(change: ProjectChange | undefined, requestId: string): strin
     case 'document-dissociate':
       if (!valid(validatePersonDocumentIdV1, change.document_id)) return null;
       return ['documents', change.kind.slice('document-'.length), ...common, option('document-id', change.document_id)];
+    case 'rename': {
+      const title = projectName(change.name);
+      return title === null ? null : ['projects', 'rename', option('request-id', requestId), option('project-id', change.project_id), option('name', title)];
+    }
+    case 'archive':
+    case 'unarchive':
+    case 'leave':
+      return ['projects', change.kind, option('request-id', requestId), option('project-id', change.project_id)];
     default:
       return null;
   }
@@ -527,31 +535,6 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       return forAccount(method, expect, ['projects', 'create', option('request-id', request_id), option('name', title)],
         stdout => createdView(lastJson(stdout), request_id), request_id);
     }
-    case 'projects.rename': {
-      const { expect, request_id, project_id, name } = params as Params<'projects.rename'>;
-      const title = projectName(name);
-      if (!valid(validatePersonUpdateRequestId, request_id) || !valid(validateProjectIdV1, project_id) || title === null) {
-        return code('invalid_request', true, typeof request_id === 'string' ? request_id : undefined);
-      }
-      return forAccount(method, expect, ['projects', 'rename', option('request-id', request_id), option('project-id', project_id), option('name', title)],
-        stdout => projectSettingsView(lastJson(stdout), request_id, project_id, 'rename'), request_id);
-    }
-    case 'projects.archive': {
-      const { expect, request_id, project_id, archived } = params as Params<'projects.archive'>;
-      if (!valid(validatePersonUpdateRequestId, request_id) || !valid(validateProjectIdV1, project_id) || typeof archived !== 'boolean') {
-        return code('invalid_request', true, typeof request_id === 'string' ? request_id : undefined);
-      }
-      return forAccount(method, expect, ['projects', archived ? 'archive' : 'unarchive', option('request-id', request_id), option('project-id', project_id)],
-        stdout => projectSettingsView(lastJson(stdout), request_id, project_id, 'archive'), request_id);
-    }
-    case 'projects.leave': {
-      const { expect, request_id, project_id } = params as Params<'projects.leave'>;
-      if (!valid(validatePersonUpdateRequestId, request_id) || !valid(validateProjectIdV1, project_id)) {
-        return code('invalid_request', true, typeof request_id === 'string' ? request_id : undefined);
-      }
-      return forAccount(method, expect, ['projects', 'leave', option('request-id', request_id), option('project-id', project_id)],
-        stdout => projectSettingsView(lastJson(stdout), request_id, project_id, 'leave'), request_id);
-    }
     case 'employees.list': {
       const { expect } = params as Params<'employees.list'>;
       return forAccount(method, expect, ['employee', 'list'], stdout => employeesView(lastJson(stdout)));
@@ -673,17 +656,9 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
           stdout => projectMatchesView(lastJson(stdout), scope.project_id));
       }
       if (scope?.kind !== 'global') return code('invalid_request');
-      // All context: your saved notes, which the API searches one note
-      // version at a time. Newer notes (V3) first, ten in all.
-      const [newer, older] = await Promise.all([
-        forAccount(method, expect, ['updates', 'search-v3', ...terms], stdout => noteMatchesView(lastJson(stdout), 3)),
-        forAccount(method, expect, ['updates', 'search', ...terms], stdout => noteMatchesView(lastJson(stdout), 2)),
-      ]);
-      if (!newer.ok) return newer;
-      if (!older.ok) return older;
-      // Either version opens by the same ref: a note found by both shows once.
-      const ids = new Set(newer.value.map(match => match.context_id));
-      return ok({ items: [...newer.value, ...older.value.filter(match => !ids.has(match.context_id))].slice(0, 10) });
+      // All context: your saved notes. None can be stored as V2: ADR-0048 (494c62a) retired the V2 write before the V16
+      // baseline (4df2de2), the only state an Authority opens, so the V3 search finds every one.
+      return forAccount(method, expect, ['updates', 'search-v3', ...terms], stdout => ({ items: noteMatchesView(lastJson(stdout)) }));
     }
     case 'writes.status': {
       const { expect, request_id, kind } = params as Params<'writes.status'>;

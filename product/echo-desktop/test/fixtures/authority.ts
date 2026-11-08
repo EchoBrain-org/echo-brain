@@ -142,10 +142,6 @@ const OKAFOR = { membership_id: 'mem_99999999-9999-4999-8999-999999999999', name
  * without seeding 25 (the Authority's own page).
  */
 const LIST_PAGE = 10;
-/** An opened meeting's page: at most 25 parts, whose atoms stay within 32 KiB; a longer atom comes in parts of 3 KiB. */
-const OPEN_ATOMS = 25;
-const OPEN_ATOMS_BYTES = 32 * 1024;
-const ATOM_PART_BYTES = 3 * 1024;
 
 /** Ari's own notes, uploads and approved meetings, some only Ari can read (ADR-0049). */
 const ONLY_ME_MODES = new Set(['only-me']);
@@ -177,8 +173,6 @@ const PILOT_REASONS = [{ signal_id: 'why-1', text: 'The freeze lifts on Friday, 
   quotes: ['[09:03] Mina Patel: Agreed. The freeze lifts on Friday.'] }];
 /** One route per item of Pilot planning, each to `projects`. */
 const routesTo = (projects: readonly string[] | null) => PILOT_ITEMS.map(item => ({ signal_id: item.signal_id, project_ids: projects === null ? null : [...projects] }));
-/** One action long enough to come in three parts, across the first page's end. */
-const LONG_ACTION = `Draft the renewal terms.${' Clause.'.repeat(872)}`;
 
 /** An approved meeting, as list and open release it. */
 interface Meeting {
@@ -392,10 +386,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let granolaWatch: { watch: string; folder_id: string | null; project_id: string | null } | undefined;
   let granolaReview: Record<string, unknown> | undefined;
   // The impact check of the approved meeting's first record: none until it is approved.
-  let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null; retried: boolean } | null = null;
+  let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null } | null = null;
   // A check for each further destination of an approved meeting.
   let extraRuns: { run_id: string; record: { approval_id: string; project_ids: string[]; private?: true }; record_sha256: string; state: 'pending' | 'running' | 'done' | 'failed';
-    error_code: string | null; retried: boolean }[] = [];
+    error_code: string | null }[] = [];
   // The people a meeting's impact check names, to pick as owners.
   if (mode.startsWith('granola')) desktop.people.push(...[MINA, RAFAEL, OKAFOR].map(person => ({ membership_id: person.membership_id, display_name: person.name })));
   const fixture = (id: string) => {
@@ -475,17 +469,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       record_sha256: PRICING_REVIEW, title: 'Pricing review', added_at: '2026-09-21T20:30:00.000Z', meeting_date: '2026-09-21', visibility: 'only_me',
       project_ids: [], approver: session.membership_id, started_at: '2026-09-21T19:00:00.000Z', timezone: 'America/Los_Angeles',
       participants: ['Ari', 'Maya Chen'], approved_by: 'Ari',
-      atoms: [
-        ...Array.from({ length: 20 }, (_, index) => ({ kind: 'decision' as const, text: `Decision ${index + 1}: keep plan ${index + 1} as priced.`,
-          ...(index === 0 ? { status: 'proposed' } : {}) })),
-        { kind: 'action', text: 'Send the annual price sheet.', owner: 'Maya Chen' },
-        { kind: 'action', text: 'Update the pricing page.' },
-        { kind: 'action', text: 'Brief the sales team.' },
-        { kind: 'action', text: LONG_ACTION },
-        { kind: 'action', text: 'Book the follow-up review.' },
-        { kind: 'rationale', text: 'Annual plans fund the launch.' },
-        { kind: 'rationale', text: 'Teams asked for one price sheet.' },
-      ],
+      atoms: [{ kind: 'decision', text: 'Keep annual plans as priced.' }, { kind: 'action', text: 'Send the annual price sheet.', owner: 'Maya Chen' }],
     });
     documents.push({
       document_id: PRICING_MEMO, request_id: '00000000-0000-4000-8000-0000000000d9', filename: 'Pricing memo.pdf', title: 'Pricing memo',
@@ -709,15 +693,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const [given, from] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
     return given === key && /^[1-9][0-9]*$/.test(from ?? '') ? Number(from) : null;
   };
-  /** A meeting's atoms as open pages them: each atom's text in parts of at most 3 KiB, its attributes on the first. */
-  const atomParts = (meeting: Meeting) => meeting.atoms.flatMap(atom => {
-    const count = Math.ceil(Buffer.byteLength(atom.text) / ATOM_PART_BYTES);
-    const { text: whole, ...attributes } = atom;
-    if (count === 1) return [atom];
-    return Array.from({ length: count }, (_, index) => ({
-      kind: atom.kind, text: whole.slice(index * ATOM_PART_BYTES, (index + 1) * ATOM_PART_BYTES), ...(index === 0 ? attributes : {}), part: { index: index + 1, count },
-    }));
-  });
 
   // Ask progress (ADR-0039). The fixture answer's meeting is Tuesday sync, whose decision d1 an answer cites by its atom id.
   const TUESDAY = desktop.record.record_sha256;
@@ -934,7 +909,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   if (mode === 'granola-review-assign-lost') {
     granolaApproved = true;
     granolaReview = { action: 'approve', routes: routesTo([THERMOSTAT]), owners: MEETING_ACTIONS.map(action => ({ signal_id: action.signal_id, owner: action.owner })) };
-    granolaRun = { state: 'done', error_code: null, retried: false };
+    granolaRun = { state: 'done', error_code: null };
     meetings.push(pilotMeeting([THERMOSTAT]));
     writeFound();
     const found = openItems.find(item => item.run_id === PILOT_RUN)!;
@@ -1153,10 +1128,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         case 'review':
           granolaReview = body; granolaApproved = true;
           if (body?.action === 'approve' && granolaRun === null) {
-            granolaRun = { state: 'pending', error_code: null, retried: false };
+            granolaRun = { state: 'pending', error_code: null };
             // A check per further destination, each of its own record.
             extraRuns = recordsOf(body).slice(1).map((record, index) => ({ run_id: `run_00000000-0000-4000-8000-0000000000${21 + index}`, record,
-              record_sha256: digestOf(`record:Pilot planning:${record.approval_id}`), state: 'pending' as const, error_code: null, retried: false }));
+              record_sha256: digestOf(`record:Pilot planning:${record.approval_id}`), state: 'pending' as const, error_code: null }));
           }
           // The approved meeting's first record: in the projects it was sent to, where it opens.
           if (body?.action === 'approve' && !meetings.some(meeting => meeting.record_sha256 === PILOT_RECORD)) {
@@ -1167,8 +1142,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }
     }
     // Impact checks: approving queues one run; a start runs it, and the first
-    // list after that finds it done (in granola-run-failed, failed until Try
-    // again). A done check has found two open items. A sweep of a scope with
+    // list after that finds it done. A done check has found two open items. A sweep of a scope with
     // open items queues a sweep run, which starts once no impact check of
     // Ari's is pending or running; the first list after its start finds it
     // done, each item it checked carrying its verdict. Every answer passes the
@@ -1198,7 +1172,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const result = (operation: string, value: unknown) => json(api.validatePersonRunsResultV1(operation, value));
       const now = () => new Date().toISOString();
       if (request.operation === 'list' && run?.state === 'running') {
-        Object.assign(run, mode === 'granola-run-failed' && !run.retried ? { state: 'failed', error_code: 'research_failed' } : { state: 'done' });
+        run.state = 'done';
       }
       for (const extra of extraRuns) {
         if (request.operation !== 'list' || extra.state !== 'running') continue;
@@ -1246,13 +1220,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           if (sweepRuns.some(entry => entry.state === 'running')) return result('start', { state: 'busy' });
           if (run.state === 'pending') run.state = 'running';
           return result('start', { state: run.state });
-        }
-        case 'retry': {
-          // Any of Ari's failed checks, each record's own.
-          const failed = [...(run && request.run_id === runId ? [run] : []), ...extraRuns.filter(extra => extra.run_id === request.run_id)][0];
-          if (failed?.state !== 'failed') return failure('not_found', 404);
-          Object.assign(failed, { state: 'pending', error_code: null, retried: true });
-          return result('retry', { state: 'pending' });
         }
         // Home: the Send row while Ari's check has items not sent, the open items that wait on
         // Ari, and the open items Ari sent that ECHO saw change; then, of the open items Ari sent
@@ -1501,20 +1468,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         });
       }
       const meeting = kind === 'meeting' ? meetings.find(entry => entry.record_sha256 === id) : undefined;
+      // Every meeting here is one page: a record's next page and its More are the reader's unit tests (ask-progress.test).
       if (meeting) {
-        const parts = atomParts(meeting);
-        const from = pageFrom(request.ref, request.cursor);
-        if (from === null || (from > 0 && from >= parts.length)) return failure('not_found', 404);
-        // At most 25 parts, and at least one, within the atoms' byte budget.
-        let to = from;
-        while (to < parts.length && to - from < OPEN_ATOMS && (to === from || Buffer.byteLength(JSON.stringify(parts.slice(from, to + 1))) <= OPEN_ATOMS_BYTES)) to += 1;
+        if (request.cursor !== undefined) return failure('not_found', 404);
         return open({
-          item: meetingRow(meeting),
-          ...(request.cursor === undefined ? { meeting: {
+          item: meetingRow(meeting), atoms: meeting.atoms, next_cursor: null, meeting: {
             started_at: meeting.started_at, timezone: meeting.timezone, all_day: false, participants: meeting.participants, participants_more: false,
             approved_by: meeting.approved_by,
-          } } : {}),
-          atoms: parts.slice(from, to), next_cursor: to < parts.length ? pageCursor(request.ref, to) : null,
+          },
         });
       }
       return failure('not_found', 404);
@@ -1527,15 +1488,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         .map(item => ({ ...item, audience: { kind: 'project', project_id: body?.project_id } }));
       return json(response);
     }
-    // All context: saved notes, each version searched and read on its own.
-    if (method === 'POST' && (path === '/v3/person/updates/search' || path === '/v2/person/updates/search')) {
-      if (path.startsWith('/v2/')) {
-        const response = fixture('updates-search-v2');
-        response.results = (response.results as { title: string; excerpt: string }[]).filter(item => found(body?.query, item));
-        return json(response);
-      }
-      const results = desktop.notes.filter(note => found(body?.query, note)).map(({ text, ...note }) => ({ ...note, excerpt: excerpt(text) }));
-      return json({ schema_version: 3, kind: 'echo-person-upload-search-v3', results });
+    // All context: saved notes, Apollo's update (the shared fixture's) among them.
+    if (method === 'POST' && path === '/v3/person/updates/search') {
+      const notes = [...desktop.notes.map(({ text, ...note }) => ({ ...note, excerpt: excerpt(text) })),
+        ...(fixture('updates-search-v2').results as { title: string; excerpt: string }[])];
+      return json({ schema_version: 3, kind: 'echo-person-upload-search-v3', results: notes.filter(note => found(body?.query, note)) });
     }
 
     // New project: made once per request id, with you as its lead.
@@ -1833,41 +1790,20 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (mode === 'ask-progress' && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V3) {
         return progressStream(question, scope, init?.signal ?? undefined);
       }
+      // `ask-completion` answers what it can and says it cannot make changes: typed, only to a client that asks for typed reasons.
       if (mode === 'ask-completion') {
-        const noMatch = question === 'Find the missing launch note.';
-        const interrupted = question === 'What changed during the unavailable search?';
-        const mixed = question === 'What was decided? Mark action A1 Done.';
-        const partialMissing = question === 'Who owns Harbor?' || question === 'What was decided, and who owns Harbor?';
-        const hasFacts = mixed || question === 'What was decided, and who owns Harbor?';
         const [original] = desktop.answer.parts as Record<string, unknown>[];
-        const missing = noMatch ? "I couldn't find this in the sources you can access." : 'Not found: the Harbor owner.';
-        return json({ ...answer, scope, outcome: noMatch ? 'not_found' : 'partial', citations: hasFacts ? desktop.answer.citations : [],
-          parts: [{ question, status: hasFacts ? 'partial' : 'not_found', statements: hasFacts ? original!.statements : [], ...(hasFacts ? { blocks: original!.blocks } : {}),
+        return json({ ...answer, scope, outcome: 'partial', citations: desktop.answer.citations,
+          parts: [{ question, status: 'partial', statements: original!.statements, blocks: original!.blocks,
             gap: 'The list did not reach the end. Unchecked entries and sentences did not fit.',
             ...(new Headers(init?.headers).get(api.PERSON_ASK_GAP_DETAILS_HEADER_V1) === api.PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1
-              ? { gap_details: noMatch || partialMissing ? { not_found: missing } : interrupted ? { interrupted: true } : { unsupported_action: true } } : {}) }],
+              ? { gap_details: { unsupported_action: true } } : {}) }],
         });
       }
+      // `ask-ticket` answers from one Jira ticket read live.
       if (mode === 'ask-ticket') {
-        const included = scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null);
-        return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
-          citations: included ? [thermTicket('ECHO-7', 'Jira launch', '10007')] : [],
-          parts: [{ question, status: included ? 'answered' : 'not_found', statements: included
-            ? [{ text: 'ECHO-7 is titled Jira launch.', citation_indexes: [0], private: true }]
-            : [], ...(included ? { blocks: [{ kind: 'text', statements: [0] }] } : { gap: 'No accessible Jira ticket was found.' }) }],
-        });
-      }
-      if (mode === 'ask-confluence') {
-        const included = scope.kind === 'global' || (scope.kind === 'project' && confluenceMappings.get(scope.project_id!)?.mapping != null);
-        return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
-          citations: included ? [{ kind: 'page', label: 'EVT readiness · ECHO product', visibility: 'only_me', citation: {
-            kind: 'page', tool_id: 'confluence', external_scope_id: CONFLUENCE_CLOUD, page_id: '12345', section_id: 'evt-readiness', version: '7',
-            permalink: 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=12345', text_sha256: digestOf('EVT readiness'),
-          } }] : [],
-          parts: [{ question, status: included ? 'answered' : 'not_found', statements: included
-            ? [{ text: 'The Confluence EVT readiness page is current.', citation_indexes: [0], private: true }]
-            : [], ...(included ? { blocks: [{ kind: 'text', statements: [0] }] } : { gap: 'No accessible Confluence page was found.' }) }],
-        });
+        return json({ ...answer, scope, outcome: 'answered', citations: [thermTicket('ECHO-7', 'Jira launch', '10007')],
+          parts: [{ question, status: 'answered', statements: [{ text: 'ECHO-7 is titled Jira launch.', citation_indexes: [0], private: true }], blocks: [{ kind: 'text', statements: [0] }] }] });
       }
       // `ask-blocks` answers THERM's question in every block of answer layout v2 (ADR-0051).
       if (mode === 'ask-blocks') return json(blocksAnswer(question, scope));

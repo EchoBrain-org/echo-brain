@@ -1,6 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
 import { chooseFromTray, emit, launch, type Launched } from './launch.js';
-import { captureOpenExternal } from './native.js';
 
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
@@ -88,80 +87,41 @@ test('an unconfirmed rename is retried with its same request instead of being ca
   expect(settingCalls().at(-1)?.body?.request_id).toBe(request);
 });
 
-test('a lead maps a Jira project on Tools, Save closes it, asks in that scope, and stops reading it', async () => {
+// What the Tools sheet says and does (Not set, Connected, Reads ECHO, stops on Save, Save and its toast) is project-tools.test's,
+// an Ask in a project's scope ask-host.test's, a page source's pane heading ask-progress.test's and a page link's rule
+// ticket-link.test's; here, what the real host and client ask of the Authority for a project's Tools.
+test('a lead maps a Jira project on Tools and stops reading it, each as its own request through the client', async () => {
   run = await launch('ask-ticket');
   const { page } = run;
+  const sets = () => run.calls().filter(call => call.path === '/v1/person/tools/jira/project/set');
   await openApolloSetting(page, 'tools-item');
-  await expect(page.getByTestId('project-jira-current')).toHaveText('Not set');
-  await expect(page.getByTestId('project-jira-linked')).toHaveText('Connected');
-  await expect(page.getByTestId('project-tools-save')).toBeDisabled();
   await page.getByTestId('project-jira-input').fill('echo');
   await page.getByTestId('project-tools-save').click();
-  // Save closes the sheet by itself and says what the project reads now.
-  await expect(page.getByTestId('project-tools-sheet')).toHaveCount(0);
-  await expect(page.getByTestId('toast')).toHaveText('Apollo now reads Jira ECHO');
   await expect(page.getByTestId('project-tools-line')).toContainText('Reads · Jira ECHO');
-  const save = run.calls().find(call => call.path === '/v1/person/tools/jira/project/set');
-  expect(save?.body).toMatchObject({ schema_version: 1, project_id: APOLLO, expected_revision: null, jira_project: 'ECHO' });
-  await page.getByTestId('ask-field').fill('What is the status of Apollo?');
-  await page.getByTestId('ask-field').press('Enter');
-  await expect(page.getByTestId('statement-text')).toHaveText('ECHO-7 is titled Jira launch.');
-  expect(run.calls().filter(call => call.path === '/v7/person/ask').at(-1)?.body).toMatchObject({ project_id: APOLLO });
-  await page.getByTestId('sources-toggle').click();
-  await expect(page.getByTestId('source-row')).toHaveText(/^1\s*ECHO-7 · Jira launch$/);
-  await page.getByTestId('back').click();
-  await page.getByTestId('project-tools').click();
-  await expect(page.getByTestId('project-jira-current')).toHaveText('Reads ECHO');
+  expect(sets()[0]?.body).toMatchObject({ schema_version: 1, project_id: APOLLO, expected_revision: null, jira_project: 'ECHO' });
+  await page.getByTestId('project-tools-change').click();
   await page.getByTestId('project-jira-remove').click();
-  await expect(page.getByTestId('project-jira-current')).toHaveText('Reads ECHO · stops on Save');
   await page.getByTestId('project-tools-save').click();
-  await expect(page.getByTestId('project-tools-sheet')).toHaveCount(0);
   await expect(page.getByTestId('toast')).toHaveText('Apollo no longer reads Jira');
-  const removed = run.calls().filter(call => call.path === '/v1/person/tools/jira/project/set').at(-1)!;
+  const removed = sets().at(-1)!;
   expect(removed.body?.jira_project).toBeNull(); expect(removed.body?.expected_revision).toMatch(/^[0-9a-f-]{36}$/);
-  await page.getByTestId('ask-field').fill('What is the status of Apollo?');
-  await page.getByTestId('ask-field').press('Enter');
-  // The new answer finds nothing in Apollo, and cites nothing. Asked word for word in the same place, it stands for the one
-  // before, which folds away: the question shows once (ADR-0049).
-  const latest = page.getByTestId('turn').last();
-  await expect(latest.getByTestId('project-empty')).toContainText('Nothing in Apollo matched.');
-  await expect(latest.getByTestId('sources-toggle')).toHaveCount(0);
-  await expect(page.getByTestId('turn')).toHaveCount(1);
-  await expect(page.getByTestId('timeline-row')).toHaveCount(0);
 });
 
-test('a lead maps accessible Confluence spaces, loads another page, asks with a page citation, and stops reading them', async () => {
+test('a lead maps accessible Confluence spaces, loading another page of them, and stops reading them, each through the client', async () => {
   run = await launch('ask-confluence');
-  const { page, app } = run;
-  const permalink = 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=12345';
-  const opened = await captureOpenExternal(app);
+  const { page } = run;
   await openApolloSetting(page, 'tools-item');
-  await expect(page.getByTestId('project-confluence-current')).toHaveText('Not set');
   await expect(page.getByTestId('project-confluence-spaces')).toContainText('ECHO product (ECHO)');
-  await expect(page.getByTestId('project-confluence-spaces')).not.toContainText('100');
   await page.getByTestId('project-confluence-more').click();
   await expect(page.getByTestId('project-confluence-spaces')).toContainText('Engineering (ENG)');
   await page.getByLabel(/ECHO product/).check();
   await page.getByLabel(/Engineering/).check();
   await page.getByTestId('project-tools-save').click();
-  await expect(page.getByTestId('project-tools-sheet')).toHaveCount(0);
   await expect(page.getByTestId('toast')).toHaveText('Apollo now reads 2 Confluence spaces');
   const save = run.calls().find(call => call.path === '/v1/person/tools/confluence/project/set');
   expect(save?.body).toMatchObject({ schema_version: 1, project_id: APOLLO, expected_revision: null, space_ids: ['100', '300'] });
   expect(run.calls().filter(call => call.path === '/v1/person/tools/confluence/spaces/list').map(call => call.body)).toEqual([{ schema_version: 1 }, { schema_version: 1, cursor: 'next-spaces' }]);
-  await page.getByTestId('ask-field').fill('Are we ready for EVT?');
-  await page.getByTestId('ask-field').press('Enter');
-  await expect(page.getByTestId('statement-text')).toHaveText('The Confluence EVT readiness page is current.');
-  expect(run.calls().filter(call => call.path === '/v7/person/ask').at(-1)?.body).toMatchObject({ project_id: APOLLO });
-  await page.getByTestId('citation').click();
-  const pane = page.getByTestId('source-pane');
-  await expect(pane).toContainText('Confluence · Page');
-  await expect(pane.getByTestId('open-page-source')).toHaveAttribute('title', permalink);
-  await pane.getByTestId('open-page-source').click();
-  await expect.poll(opened).toEqual([permalink]);
-  await page.getByTestId('back').click();
   await page.getByTestId('project-tools-change').click();
-  await expect(page.getByTestId('project-confluence-current')).toHaveText('Reads 2 spaces');
   await page.getByTestId('project-confluence-remove').click();
   await page.getByTestId('project-tools-save').click();
   await expect(page.getByTestId('toast')).toHaveText('Apollo no longer reads Confluence');

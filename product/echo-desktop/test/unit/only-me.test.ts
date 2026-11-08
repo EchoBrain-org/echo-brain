@@ -18,7 +18,7 @@ beforeEach(() => {
   rpc.mockImplementation(rpcFor(held, {
     'app.status': () => ok(signedIn ? { signed_in: true, account: ACCOUNT } : { signed_in: false, account: null }),
     'projects.read': () => ok(apollo),
-    'projects.rename': params => ok({ request_id: params.request_id, project_id: params.project_id, operation: 'rename' }),
+    'projects.change': () => ok(null),
     'list.page': () => ok({ items: [meeting, note], next_cursor: null, meetings_held: false }),
     'notes.submit': params => ok({ request_id: params.request_id, audience: params.audience }),
     'open.ref': () => ok({ kind: 'note', content: { context_id: note.ref.id, title: note.title, text: 'Supplier called.', received_at: note.added_at,
@@ -34,9 +34,9 @@ const override = (method: string, reply: (params: Record<string, unknown>) => un
 describe('Only me reads and changes', () => {
   it('renames a project in every loaded row without dropping the rows More read', async () => {
     const rows = Array.from({ length: 11 }, (_, index) => row(`Note ${index}`, { added_at: new Date(Date.parse('2026-10-20T10:00:00Z') - index * 3600000).toISOString(), projects: index === 2 || index === 10 ? ['Apollo'] : [] }));
-    override('projects.rename', params => {
+    override('projects.change', () => {
       for (const index of [2, 10]) rows[index] = { ...rows[index]!, projects: ['Apollo 2'] };
-      return ok({ request_id: params.request_id, project_id: params.project_id, operation: 'rename' });
+      return ok(null);
     });
     override('list.page', params => ok({ items: params.cursor ? rows.slice(10) : rows.slice(0, 10), next_cursor: params.cursor ? null : 'c2', meetings_held: false }));
     const store = await startStore();

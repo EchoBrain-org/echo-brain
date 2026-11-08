@@ -97,10 +97,10 @@ copy that a unit test proves equivalent.
   cancel id, renders the answer in the blocks the writer arranged it in, and
   keeps each turn with `timeline.put`. Answer layout v1
   ([ADR-0045](../decisions/ADR-0045-ask-answer-layout.md)) and the plain
-  answer are retired: `timeline.read` loads a turn saved with a v1 layout
-  without it, and one saved without blocks with its sentences in text blocks,
-  so its sentences show as paragraphs. Opening an old turn runs `ask.check`, a
-  content-free check that its sources are still readable.
+  answer are retired: `timeline.read` drops a turn saved with a v1 layout or
+  without blocks, or asked in Mine, and keeps the rest of the file. Opening an
+  old turn runs `ask.check`, a content-free check that its sources are still
+  readable.
 
 ## Updates
 
