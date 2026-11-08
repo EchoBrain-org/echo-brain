@@ -87,9 +87,9 @@ test('an unconfirmed rename is retried with its same request instead of being ca
   expect(settingCalls().at(-1)?.body?.request_id).toBe(request);
 });
 
-// What the Tools sheet says and does (Not set, Save, its toast, what the project reads, stops on Save) is project-tools.test's,
-// an Ask in a project's scope ask-host.test's, and a page link's rule ticket-link.test's; here, what the real host and client
-// ask of the Authority for a project's Tools.
+// What the Tools sheet says and does (Not set, Connected, Reads ECHO, stops on Save, Save and its toast) is project-tools.test's,
+// an Ask in a project's scope ask-host.test's, a page source's pane heading ask-progress.test's and a page link's rule
+// ticket-link.test's; here, what the real host and client ask of the Authority for a project's Tools.
 test('a lead maps a Jira project on Tools and stops reading it, each as its own request through the client', async () => {
   run = await launch('ask-ticket');
   const { page } = run;

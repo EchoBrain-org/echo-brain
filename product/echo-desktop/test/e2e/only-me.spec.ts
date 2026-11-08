@@ -12,13 +12,16 @@ const hue = (of: Locator) => of.evaluate(element => getComputedStyle(element).co
 
 type Rpc = (method: string, params?: unknown) => Promise<{ ok: boolean; failure?: { code: string } }>;
 
-// What Only me shows (its rows, kinds, tiles, ages, More, its sidebar row, Back and Escape) is only-me-row.test's,
-// only-me.test's and sidebar.test's; here, what the real client asks for it, and a tile's hue as the window paints it.
+// What Only me shows (its rows, kinds, tiles, ages, More and its sidebar row) is only-me-row.test's, only-me.test's and
+// sidebar.test's, and Escape's way Home search.spec's; here, what the real client asks for it, a tile's hue as the window paints
+// it, and the page with no Back link (main.tsx, which no unit test renders).
 test('the sidebar\'s Only me lists what only you can read through the client, a filed row in its project\'s hue, and More reads the next page', async () => {
   run = await launch('only-me');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('sidebar-only-me').click();
+  await expect(page.getByTestId('title')).toHaveText('Only me');
+  await expect(page.getByTestId('back')).toHaveCount(0);
   const rows = page.getByTestId('only-me-row');
   await expect(rows).toHaveCount(10);
   // Filed in Apollo: its row shows Apollo's tile, in the sidebar's hue.

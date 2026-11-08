@@ -158,6 +158,8 @@ describe('Copy answer writes Markdown', () => {
     expect(answerMarkdown(answer, ['Launch'], [{ indexes: [0] }], shows)).toContain(gap);
     expect(answerMarkdown(answer, ['Launch'], [{ indexes: [0] }], shows)).not.toContain('confidential reviewer');
     expect(answerText(answer, shows)).toBe(`Annual first.\n${gap}\nI couldn't complete the search. Please try again.`);
+    // A sentence citing what a check found unreadable is left out of the plain text too, as from the page.
+    expect(answerText(paragraphed([['Shown.', [0]], ['Hidden.', [1]]]), ids => !ids.includes(1))).toBe('Shown.');
   });
 
   it('copies only typed actionable explanations when diagnostic gaps also include formatting and coverage notes', () => {

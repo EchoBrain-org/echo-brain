@@ -21,10 +21,14 @@ async function myProjects() {
 /** Home zoomed into one kind of what needs you. */
 const list = (page: Page) => page.locator('[data-testid="needs"][data-category]');
 
-// What each altitude shows (the stops, Needs you above the projects, a project's groups, a person's) is altitude-screens.test's;
-// here, the keys and the focus, which only a real window has.
-test('Home moves the focus with the keys: Enter zooms on a project with the focus in it, Escape goes back to the row it left, the arrows go row to row', async () => {
+// What each altitude shows (the stops, a project's groups, a person's) is altitude-screens.test's; here, what only a real
+// window has: Needs you painted above your projects, no Back link at Home's top (main.tsx), the keys and the focus.
+test('Home paints what needs you above your projects with no Back link, and moves the focus with the keys: Enter zooms on a project with the focus in it, Escape goes back to the row it left, the arrows go row to row', async () => {
   const page = await myProjects();
+  await expect(page.getByTestId('back')).toHaveCount(0);
+  const needs = await page.locator('[data-testid="needs"]:not([data-category])').boundingBox();
+  const projects = await page.getByTestId('alt-projects').boundingBox();
+  expect(needs!.y + needs!.height).toBeLessThanOrEqual(projects!.y);
   const apollo = page.getByTestId('alt-project').first();
   await apollo.focus();
   await page.keyboard.press('Enter');

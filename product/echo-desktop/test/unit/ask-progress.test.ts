@@ -147,6 +147,13 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     await flush();
     expect(store.getState().reader?.ref).toEqual({ kind: 'meeting', id: sha('2') });
     expect(store.getState().reader?.cited).toBeUndefined();
+    // Its More reads the record's next page, joined under what shows; with no page after it, More goes.
+    const shown = () => render(Reader({ state: store.getState(), reader: store.getState().reader!, backTo: 'Only me' }));
+    (byTestId(shown(), 'reader-more')[0]!.props.onClick as () => void)();
+    await flush();
+    expect(calls('open.ref').at(-1)).toMatchObject({ ref: { kind: 'meeting', id: sha('2') }, cursor: 'page-2' });
+    expect(store.getState().reader?.record?.decisions.items.map(item => item.text)).toEqual(['Hold monthly plans.', 'Ship it.']);
+    expect(byTestId(shown(), 'reader-more')).toHaveLength(0);
   });
 
   it('a name of a place lights every item of it Ask read, and shows every passage', async () => {
@@ -184,6 +191,17 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     await flush();
     // A ticket has no page in the app: Open in Jira is all it has.
     expect(store.fullPageOffered()).toBe(false);
+  });
+
+  it('heads a live item beside Ask by its tool and kind: a Jira ticket, a Confluence page', async () => {
+    const { store, read, pane } = await asking();
+    const page: AnswerSource = { kind: 'page', tool_id: 'confluence', label: 'DVT plan', permalink: 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=31010' };
+    read([ticket, page]);
+    for (const [item, heading] of [[ticket, 'Jira · Ticket'], [page, 'Confluence · Page']] as const) {
+      store.openNamed([item]);
+      await flush();
+      expect(text(byTestId(pane(), 'source-pane'))).toContain(heading);
+    }
   });
 
   it('closes with no answer: a refusal, a timeout or a cancel removes what the Ask named', async () => {

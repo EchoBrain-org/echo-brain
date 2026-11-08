@@ -142,10 +142,6 @@ const OKAFOR = { membership_id: 'mem_99999999-9999-4999-8999-999999999999', name
  * without seeding 25 (the Authority's own page).
  */
 const LIST_PAGE = 10;
-/** An opened meeting's page: at most 25 parts, whose atoms stay within 32 KiB; a longer atom comes in parts of 3 KiB. */
-const OPEN_ATOMS = 25;
-const OPEN_ATOMS_BYTES = 32 * 1024;
-const ATOM_PART_BYTES = 3 * 1024;
 
 /** Ari's own notes, uploads and approved meetings, some only Ari can read (ADR-0049). */
 const ONLY_ME_MODES = new Set(['only-me']);
@@ -697,15 +693,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const [given, from] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
     return given === key && /^[1-9][0-9]*$/.test(from ?? '') ? Number(from) : null;
   };
-  /** A meeting's atoms as open pages them: each atom's text in parts of at most 3 KiB, its attributes on the first. */
-  const atomParts = (meeting: Meeting) => meeting.atoms.flatMap(atom => {
-    const count = Math.ceil(Buffer.byteLength(atom.text) / ATOM_PART_BYTES);
-    const { text: whole, ...attributes } = atom;
-    if (count === 1) return [atom];
-    return Array.from({ length: count }, (_, index) => ({
-      kind: atom.kind, text: whole.slice(index * ATOM_PART_BYTES, (index + 1) * ATOM_PART_BYTES), ...(index === 0 ? attributes : {}), part: { index: index + 1, count },
-    }));
-  });
 
   // Ask progress (ADR-0039). The fixture answer's meeting is Tuesday sync, whose decision d1 an answer cites by its atom id.
   const TUESDAY = desktop.record.record_sha256;
@@ -1481,20 +1468,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         });
       }
       const meeting = kind === 'meeting' ? meetings.find(entry => entry.record_sha256 === id) : undefined;
+      // Every meeting here is one page: a record's next page and its More are the reader's unit tests (ask-progress.test).
       if (meeting) {
-        const parts = atomParts(meeting);
-        const from = pageFrom(request.ref, request.cursor);
-        if (from === null || (from > 0 && from >= parts.length)) return failure('not_found', 404);
-        // At most 25 parts, and at least one, within the atoms' byte budget.
-        let to = from;
-        while (to < parts.length && to - from < OPEN_ATOMS && (to === from || Buffer.byteLength(JSON.stringify(parts.slice(from, to + 1))) <= OPEN_ATOMS_BYTES)) to += 1;
+        if (request.cursor !== undefined) return failure('not_found', 404);
         return open({
-          item: meetingRow(meeting),
-          ...(request.cursor === undefined ? { meeting: {
+          item: meetingRow(meeting), atoms: meeting.atoms, next_cursor: null, meeting: {
             started_at: meeting.started_at, timezone: meeting.timezone, all_day: false, participants: meeting.participants, participants_more: false,
             approved_by: meeting.approved_by,
-          } } : {}),
-          atoms: parts.slice(from, to), next_cursor: to < parts.length ? pageCursor(request.ref, to) : null,
+          },
         });
       }
       return failure('not_found', 404);
