@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView, membersView, noteMatchesView,
-  noteTitle, openItemsView, openItemView, openView, revokedView, projectActivityView, projectMatchesView, projectView, receiptView, recordView,
+  abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView, membersView,
+  noteTitle, openItemsView, openItemView, openView, revokedView, projectActivityView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 import { personCitedRecordV1, personRecordAtomIdV1, validatePersonRecordListV1 } from '@echo-brain/organization-api';
 import type { ApprovedRecord } from '../../src/shared/protocol.js';
 import { checkOf } from '../../src/shared/protocol.js';
-import { askText, searchQuery } from '../../src/shared/query.js';
+import { askText } from '../../src/shared/query.js';
 import { blocksAnswer } from '../fixtures/authority.js';
 
 // The store reads the preload's bridge when it loads; its record join needs none.
@@ -252,22 +252,6 @@ describe('view models copy only what the renderer may see', () => {
   });
 });
 
-describe('live matches', () => {
-  const item = { context_id: `ctx_${'1'.repeat(64)}`, received_at: AT, title: 'Apollo update', excerpt: 'We agreed to ship.' };
-
-  it('a project search counts only for the project searched, and who can read a match stays behind', () => {
-    const reply = { schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id: APOLLO, next_cursor: null,
-      items: [{ ...item, audience: { kind: 'projects', project_ids: [APOLLO] } }] };
-    expect(projectMatchesView(reply, APOLLO)).toEqual({ items: [item] });
-    expect(() => projectMatchesView(reply, 'prj_22222222-2222-4222-8222-222222222222')).toThrow(ViewError);
-  });
-
-  it('saved notes are matches, each opened by its ref, and who can read one stays behind', () => {
-    const results = [{ ...item, audience: { kind: 'team' } }];
-    expect(noteMatchesView({ schema_version: 3, kind: 'echo-person-upload-search-v3', results })).toEqual([item]);
-  });
-});
-
 const NOTE = `ctx_${'a'.repeat(64)}`;
 const DOC = `doc_${'e'.repeat(64)}`;
 const RECORD = sha('7');
@@ -451,16 +435,6 @@ describe('text the API accepts', () => {
     expect(askText('  what\nchanged?\u2028 ')).toBe('what changed?');
     expect(askText('e\u0301')).toBe('é');
     expect([...askText('😀'.repeat(300))].length).toBe(240);
-  });
-
-  it('a search is a question of two or more characters with 1 to 32 distinct words of at most 64 bytes', () => {
-    expect(searchQuery('  pri\ncing ')).toBe('pri cing');
-    expect(searchQuery('p')).toBeNull();
-    expect(searchQuery('!!')).toBeNull();
-    expect(searchQuery(Array.from({ length: 33 }, (_, index) => `w${index}`).join(' '))).toBeNull();
-    expect(searchQuery('x'.repeat(65))).toBeNull();
-    expect(searchQuery('é'.repeat(32))).toBe('é'.repeat(32));
-    expect(searchQuery('é'.repeat(33))).toBeNull();
   });
 });
 

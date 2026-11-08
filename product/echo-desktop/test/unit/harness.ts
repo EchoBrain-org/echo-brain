@@ -126,7 +126,6 @@ export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () 
       case 'projects.members': case 'people.directory': return ok({ items: [], next_cursor: null });
       case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
       case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
-      case 'search.run': return ok({ items: [] });
       case 'ask.cancel': case 'notice.show': case 'log.changes': return ok(null);
       case 'changes.read': return changesFor(lists());
       case 'runs': return fail('unavailable', { retryable: true });

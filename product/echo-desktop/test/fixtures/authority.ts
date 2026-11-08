@@ -15,8 +15,7 @@ const LATER = '2026-09-21T22:30:00.000Z';
 /** Half an hour past the weekly sign-in of the session the fixture installs. */
 const WEEK_LATER = '2026-09-28T22:30:00.000Z';
 
-interface Operation { id: string; http: { method: string; status: number; response: Record<string, unknown> } }
-interface Note { context_id: string; received_at: string; audience: Record<string, unknown>; title: string; text: string }
+interface Note{ context_id: string; received_at: string; audience: Record<string, unknown>; title: string; text: string }
 /** A saved document: its metadata, its original's text, and its extracted text in pages. */
 interface StoredDocument {
   document_id: string; request_id: string; filename: string; title: string; original: string; detected_media_type: string;
@@ -25,7 +24,7 @@ interface StoredDocument {
 }
 interface DesktopFixtures {
   projects: { project_id: string; name: string; role: 'lead' | 'member' }[];
-  /** Saved V3 notes the person can read, for search. */
+  /** Saved V3 notes the person can read. */
   notes: Note[];
   answer: Record<string, unknown>;
   /** The approved record the answer cites, as its brief was approved. */
@@ -196,14 +195,12 @@ function json(body: unknown, status = 200): Response {
 function failure(code: string, status: number): Response {
   return json({ error: { code, message: 'request failed' } }, status);
 }
-/** As the Authority searches: every word of the query in the title or text. */
-function found(query: unknown, entry: { title: string; text?: string; excerpt?: string }): boolean {
-  const haystack = `${entry.title}\n${entry.text ?? entry.excerpt ?? ''}`.normalize('NFC').toLowerCase();
+/** As the directory finds a person: every word of the query in their name. */
+function found(query: unknown, entry: { title: string }): boolean {
+  const haystack = entry.title.normalize('NFC').toLowerCase();
   const terms = String(query).normalize('NFC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
   return terms.length > 0 && terms.every(term => haystack.includes(term));
 }
-/** A search result's excerpt: the start of the original text. */
-function excerpt(text: string): string { return [...text.trim()].slice(0, 300).join(''); }
 
 /** The modes whose project list comes ten at a time. */
 const LIST_PAGES = new Set(['many-projects']);
@@ -351,11 +348,7 @@ function projectActivityOf(projects: readonly { project_id: string }[], arrivals
 }
 
 export function installTestAuthority(home: string, fixturesDirectory: string, SessionStore: new (home: string) => unknown) {
-  const repository = join(process.env.ECHO_PERSON_CLIENT_ENTRY!, '..', '..', '..', '..', '..');
-  const operations = (JSON.parse(readFileSync(join(repository, 'tests/fixtures/project-context-v1/operations.json'), 'utf8')) as {
-    operations: Operation[];
-  }).operations;
-  const desktop = JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
+  const desktop =JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
   const importedNotes = mode === 'ask-imported-meeting' || mode === 'ask-imported-mixed';
   if (importedNotes) {
@@ -392,13 +385,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     error_code: string | null }[] = [];
   // The people a meeting's impact check names, to pick as owners.
   if (mode.startsWith('granola')) desktop.people.push(...[MINA, RAFAEL, OKAFOR].map(person => ({ membership_id: person.membership_id, display_name: person.name })));
-  const fixture = (id: string) => {
-    const found = operations.find(entry => entry.id === id);
-    if (!found) throw new Error(`missing fixture ${id}`);
-    return structuredClone(found.http.response);
-  };
 
-  const store = new SessionStore(realpathSync(home)) as Store;
+  const store =new SessionStore(realpathSync(home)) as Store;
   const expired = mode === 'expired-claim';
   const clock = mode.startsWith('refresh-') ? LATER : mode === 'weekly-passed' ? WEEK_LATER : NOW;
   const session = {
@@ -431,14 +419,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const projectStatus = new Map<string, 'active' | 'archived'>(projects.map(project => [project.project_id, 'active']));
   const members = structuredClone(desktop.members);
   const documents = structuredClone(desktop.documents);
-  const feedItem = fixture('projects-search-v2').items as Record<string, unknown>[];
+  // Apollo update, filed in every project.
+  const apolloUpdate = `ctx_${'a'.repeat(64)}`;
   const catalog = new Map<string, { received_at: string; title: string; text: string; audience: Record<string, unknown> }>([
-    [String(feedItem[0]!.context_id), { received_at: String(feedItem[0]!.received_at), title: String(feedItem[0]!.title),
+    [apolloUpdate, { received_at: '2026-09-21T22:01:00.000Z', title: 'Apollo update',
       // Shared with several projects; a reader sees only the one it is read in (ADR-0023).
       text: 'We agreed to ship.\n', audience: { kind: 'projects' } }],
     ...desktop.notes.map(note => [note.context_id, note] as const),
   ]);
-  const filed = new Map<string, string[]>(desktop.projects.map(project => [project.project_id, [String(feedItem[0]!.context_id)]]));
+  const filed = new Map<string, string[]>(desktop.projects.map(project => [project.project_id, [apolloUpdate]]));
   if (mode.startsWith('long-feed')) {
     // Twelve notes in Beacon, hours apart; its document falls between the eleventh and the twelfth.
     const beacon = desktop.projects[1]!.project_id;
@@ -1479,20 +1468,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         });
       }
       return failure('not_found', 404);
-    }
-    if (method === 'POST' && path === '/v2/person/projects/context/search') {
-      const response = fixture('projects-search-v2');
-      response.project_id = body?.project_id;
-      response.items = (response.items as { title: string; excerpt: string }[])
-        .filter(item => found(body?.query, item))
-        .map(item => ({ ...item, audience: { kind: 'project', project_id: body?.project_id } }));
-      return json(response);
-    }
-    // All context: saved notes, Apollo's update (the shared fixture's) among them.
-    if (method === 'POST' && path === '/v3/person/updates/search') {
-      const notes = [...desktop.notes.map(({ text, ...note }) => ({ ...note, excerpt: excerpt(text) })),
-        ...(fixture('updates-search-v2').results as { title: string; excerpt: string }[])];
-      return json({ schema_version: 3, kind: 'echo-person-upload-search-v3', results: notes.filter(note => found(body?.query, note)) });
     }
 
     // New project: made once per request id, with you as its lead.

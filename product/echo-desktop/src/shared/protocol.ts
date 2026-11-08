@@ -178,22 +178,6 @@ export interface ContextContent {
   readonly project_ids: readonly string[];
 }
 
-/**
- * A live match for the bar's text: an item in the project in scope, or, in
- * all context, one of the saved notes you can read (of either note version).
- * Each opens by its ref, as a note.
- */
-export interface Match {
-  readonly context_id: string;
-  readonly title: string;
-  readonly excerpt: string;
-  readonly received_at: string;
-}
-
-export interface Matches {
-  readonly items: readonly Match[];
-}
-
 /** Ask is always explicitly scoped; there is no default: everything you can read, or one project. */
 export type AskScope = { readonly kind: 'global' } | ProjectScope;
 
@@ -742,9 +726,7 @@ export interface HostMethods {
   'projects.activity': { params: { expect: Expect }; result: { items: ProjectActivity[] } };
   /** Cancels an active Ask by its renderer-issued opaque id. */
   'ask.cancel': { params: { cancel_id: string }; result: null };
-  /** The bar's live search, within its scope: a project, or all context. */
-  'search.run': { params: { expect: Expect; query: string; scope: AskScope }; result: Matches };
-  'ask.source': { params: { expect: Expect; scope: AskScope; ref: SourceRef }; result: SourceEvidence };
+  'ask.source':{ params: { expect: Expect; scope: AskScope; ref: SourceRef }; result: SourceEvidence };
   /** Reads one approved record an answer cites. */
   'ask.record': { params: { expect: Expect; record: RecordRef }; result: ApprovedRecord };
   'writes.status': { params: { expect: Expect; request_id: string; kind: 'note' | 'document' }; result: WriteStatus };
@@ -823,7 +805,7 @@ export const HOST_TIMEOUT_MS: Readonly<Record<HostMethodName, number>> = {
   'app.status': 5_000, 'signin.begin': 660_000, 'signin.invitation': 660_000, 'projects.list': 45_000, 'changes.read': 15_000,
   'list.page': 45_000, 'open.ref': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
   'ask.run': 145_000, 'ask.cancel': 5_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
-  'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000,
+  'account.signOut': 45_000, 'account.tools': 45_000,
   'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000,
   'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
   'employees.reissue': 45_000, 'employees.revoke': 45_000,

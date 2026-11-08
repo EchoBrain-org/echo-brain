@@ -15,14 +15,14 @@ import {
   type HostMethodName, type HostRequest, type ItemRef, type ListScope, type ProjectChange, type Result,
 } from '../shared/protocol.js';
 import { sameFolder } from '../shared/folders.js';
-import { askText, searchQuery } from '../shared/query.js';
+import { askText } from '../shared/query.js';
 import { askArgv, askCheckArgv, askCheckRequest, askPrevious, askProgressLines, askRecordArgv, askSourceArgv } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import { lost, pinRefusal, refreshStops } from './session.js';
 import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timelineTurn } from './timeline.js';
 import {
   abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
-  membersView, noteMatchesView, noteTitle, openItemsView, openItemView, openView, projectMatchesView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectView,
+  membersView, noteTitle, openItemsView, openItemView, openView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectView,
   projectActivityView, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
@@ -645,20 +645,6 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       if (!isRecordRef(record)) return code('invalid_request');
       const asked = { record_sha256: record.record_sha256, policy_id: record.policy_id };
       return forAccount(method, expect, askRecordArgv(asked), stdout => recordView(lastJson(stdout), asked));
-    }
-    case 'search.run': {
-      const { expect, query, scope } = params as Params<'search.run'>;
-      const text = typeof query === 'string' ? searchQuery(query) : null;
-      if (text === null) return code('invalid_request');
-      const terms = [option('query', text), '--limit=10'];
-      if (scope?.kind === 'project' && typeof scope.project_id === 'string') {
-        return forAccount(method, expect, ['projects', 'search-v2', option('project-id', scope.project_id), ...terms],
-          stdout => projectMatchesView(lastJson(stdout), scope.project_id));
-      }
-      if (scope?.kind !== 'global') return code('invalid_request');
-      // All context: your saved notes. None can be stored as V2: ADR-0048 (494c62a) retired the V2 write before the V16
-      // baseline (4df2de2), the only state an Authority opens, so the V3 search finds every one.
-      return forAccount(method, expect, ['updates', 'search-v3', ...terms], stdout => ({ items: noteMatchesView(lastJson(stdout)) }));
     }
     case 'writes.status': {
       const { expect, request_id, kind } = params as Params<'writes.status'>;

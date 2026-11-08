@@ -13,7 +13,7 @@ const hue = (of: Locator) => of.evaluate(element => getComputedStyle(element).co
 type Rpc = (method: string, params?: unknown) => Promise<{ ok: boolean; failure?: { code: string } }>;
 
 // What Only me shows (its rows, kinds, tiles, ages, More and its sidebar row) is only-me-row.test's, only-me.test's and
-// sidebar.test's, and Escape's way Home search.spec's; here, what the real client asks for it, a tile's hue as the window paints
+// sidebar.test's, and Escape's way Home shell.spec's; here, what the real client asks for it, a tile's hue as the window paints
 // it, and the page with no Back link (main.tsx, which no unit test renders).
 test('the sidebar\'s Only me lists what only you can read through the client, a filed row in its project\'s hue, and More reads the next page', async () => {
   run = await launch('only-me');

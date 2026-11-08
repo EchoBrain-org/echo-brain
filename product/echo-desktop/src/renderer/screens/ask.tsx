@@ -2,14 +2,13 @@ import { Fragment, type ComponentChildren } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type {
   Answer, AnswerEvent, AnswerFact, AnswerPart, AnswerSource, ArrangedBlock, AskReceipt, AskSearched, CardEntity, ExternalAnswerSource, AnswerStatement,
-  ApprovedRecord, Match, OpenItemView, RecordItem, TimelineTurn, ToolContainerKind,
+  ApprovedRecord, OpenItemView, RecordItem, TimelineTurn, ToolContainerKind,
 } from '../../shared/protocol.js';
-import { askText, queryTerms } from '../../shared/query.js';
 import {
   answerGaps, answerSays, answerSentences, blockTitle, CARD_WORDS, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownArranged,
   shownItems, statementGroups, tableDay, yoursIn, type AnswerTable, type Inline, type Sentence, type Shows, type SourceGroup,
 } from '../answer.js';
-import { askedToday, askedWhen, identity, initial, marked, meetingTime, snippet, when } from '../format.js';
+import { askedToday, askedWhen, identity, initial, meetingTime } from '../format.js';
 import { message } from '../messages.js';
 import { checkWords, ownerAndStatus } from '../needs.js';
 import { sourceKey } from '../openers.js';
@@ -19,8 +18,8 @@ import {
 } from '../progress.js';
 import {
   activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
-  fullPageOffered, litAtoms, matchesShown, nothingLine, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
-  retryAsk, retryEvidence, retryRecord, scopeName, searchAgain, setBarText, sourceName, submitBar, suggestionsShown, toggleEarlier, toggleSourceList, toggleTurn, turnOf, widenScope,
+  fullPageOffered, litAtoms, nothingLine, openCompose, openFullPage, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
+  retryAsk, retryEvidence, retryRecord, scopeName, setBarText, sourceName, submitBar, suggestionsShown, toggleEarlier, toggleSourceList, toggleTurn, turnOf, widenScope,
   UNTITLED,
   type AskClarify, type AskTook, type PaneTarget, type Read, type RecordSectionKey, type State,
 } from '../store.js';
@@ -33,52 +32,10 @@ import { Check, Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OneP
 /** What an original source may show: 2,000 characters. */
 const MAX_EVIDENCE = 2_000;
 
-/** One match: its title with the query's words marked, or where in its text they are. */
-function MatchRow({ match, terms }: { match: Match; terms: readonly string[] }) {
-  const title = marked(match.title, terms);
-  const around = title.some(piece => piece.hit) ? null : snippet(match.excerpt, terms);
-  return (
-    <button type="button" class="match-row" data-testid="match-row" onClick={() => void openMatch(match)}>
-      <Doc />
-      <span class="label">
-        {title.map((piece, index) => piece.hit ? <b key={index}>{piece.text}</b> : piece.text)}
-        {around && <> · “{marked(around, terms).map((piece, index) => piece.hit ? <b key={index}>{piece.text}</b> : piece.text)}”</>}
-      </span>
-      <span class="meta">{when(match.received_at)}</span>
-    </button>
-  );
-}
-
-/** Live matches above the bar, within its scope, and the Ask that Return makes. */
-function Matches({ state, scopeName }: { state: State; scopeName: string | null }) {
-  const matches = state.matches!;
-  const terms = queryTerms(matches.query);
-  return (
-    <div class="matches" data-testid="matches" role="group" aria-label="Matches">
-      <div class="matches-head" data-testid="matches-head">Matches in {scopeName ?? 'all context'}</div>
-      {matches.items.map(match => <MatchRow key={match.context_id} match={match} terms={terms} />)}
-      {matches.loading && matches.items.length === 0 && <div class="matches-note">Searching</div>}
-      {!matches.loading && !matches.failure && matches.items.length === 0 && <div class="matches-note" data-testid="matches-empty">No matches</div>}
-      {matches.failure && (
-        <div class="matches-note" data-testid="matches-error">
-          <span class="error">{message(matches.failure)}</span>
-          <button type="button" class="link-button" onClick={searchAgain}>Try again</button>
-        </div>
-      )}
-      <div class="matches-rule" />
-      <button type="button" class="match-row ask-row" data-testid="match-ask" onClick={submitBar}>
-        <Up />
-        <span class="label">Ask {scopeName ?? 'ECHO'} about “{askText(state.barText)}”</span>
-        <span class="meta">↩</span>
-      </button>
-    </div>
-  );
-}
-
 /**
- * "Try asking": the empty bar's suggestions, over the page where live matches
- * show. The caret stays in the bar: the arrow keys light one, and Return or a
- * click asks it, or, for a question you asked, opens its turn (ADR-0047).
+ * "Try asking": the empty bar's suggestions, over the page just above the bar.
+ * The caret stays in the bar: the arrow keys light one, and Return or a click
+ * asks it, or, for a question you asked, opens its turn (ADR-0047).
  */
 function Suggestions({ suggestions, active, onPick }: { suggestions: readonly Suggestion[]; active: number; onPick: (suggestion: Suggestion) => void }) {
   return (
@@ -99,8 +56,8 @@ const CLOSED = { open: false, active: -1 };
 
 /**
  * The one bar on every page. ⊕ captures and Return asks, both in the bar's
- * scope; typing shows live matches in it. The chip names a project scope; its
- * × widens to all context without moving the page.
+ * scope. The chip names a project scope; its × widens to all context without
+ * moving the page.
  *
  * Going to the empty bar (a click, or an arrow key) offers what to ask in its
  * scope; the caret only waiting there, as it does whenever the window comes
@@ -113,8 +70,7 @@ export function Bar({ state }: { state: State }) {
   const chip = chipName(state);
   const covered = pageCovered(state);
   const text = covered ? '' : state.barText;
-  const verb = state.ask ? 'Ask' : 'Search or ask';
-  const name = `${verb} ${chip ?? 'ECHO'}`;
+  const name = `Ask ${chip ?? 'ECHO'}`;
   const [suggesting, setSuggesting] = useState(CLOSED);
   const shown = suggesting.open && suggestionsShown(state) ? barSuggestions(state) : [];
   const active = shown.length === 0 ? -1 : Math.min(suggesting.active, shown.length - 1);
@@ -141,7 +97,6 @@ export function Bar({ state }: { state: State }) {
   const count = covered ? null : questionCount(text);
   return (
     <div class={`bar-wrap${state.ask && !covered ? ' with-ask' : ''}`}>
-      {matchesShown(state) && <Matches state={state} scopeName={chip} />}
       {shown.length > 0 && <Suggestions suggestions={shown} active={active} onPick={pick} />}
       <form class="bar" onSubmit={event => { event.preventDefault(); submitBar(); }}>
         <button type="button" class="circle" aria-label="Capture" data-testid="write-button" onClick={() => openCompose()}><Plus /></button>

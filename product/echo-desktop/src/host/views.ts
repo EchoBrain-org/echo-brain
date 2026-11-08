@@ -5,14 +5,14 @@
 // the renderer needs, so nothing else the client prints can reach it.
 import type {
   Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskRead, AskScope, AskSearched, AskStep, Audience, ConnectedTools,
-  CreatedProject, DocumentSummary, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, MemberPage, Opened,
+  CreatedProject, DocumentSummary, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, MemberPage, Opened,
   ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef,
   RecordSection, SourceEvidence, SourceRef, ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
 import {
   validateEmployeeRosterV1, validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
-  validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2,
+  validateProjectCreateReceiptV1, validateProjectListV2,
   validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1,
   type PersonAnswerCitationV8, type PersonAskReceiptRowV3, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
   type PersonOpenItemV1, type PersonOpenMeetingAtomV1, type PersonOpenMeetingV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
@@ -247,22 +247,6 @@ export function revokedView(raw: unknown): null {
   const value = object(raw);
   if (value.ok !== true || value.revoked !== true) throw new ViewError();
   return null;
-}
-
-function match({ context_id, title, excerpt, received_at }: Match): Match {
-  return { context_id, title, excerpt, received_at };
-}
-
-/** A project's search results, only for the project that was searched. */
-export function projectMatchesView(raw: unknown, projectId: string): Matches {
-  const page = validated(validateProjectContextSearchResultV2, raw);
-  if (page.project_id !== projectId) throw new ViewError();
-  return { items: page.items.map(match) };
-}
-
-/** Saved notes found by a search, each opened by its ref. */
-export function noteMatchesView(raw: unknown): Match[] {
-  return validated(validatePersonUploadSearchResultV3, raw).results.map(match);
 }
 
 /** A cited passage of an original, as the contract has it. */

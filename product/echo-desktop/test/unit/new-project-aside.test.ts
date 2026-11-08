@@ -153,19 +153,6 @@ describe('New project working out of sight', () => {
     expect(store.getState().sheet).toBeNull();
     expect(store.getState().toast).toBe('Some files may not have been saved.');
   });
-
-  it('shows the bar\'s live matches while it works', async () => {
-    const store = await startWithFiles();
-    const upload = held.hold('documents.upload');
-    await store.createProject();
-    await flush();
-    store.setBarText('launch plan');
-    await vi.advanceTimersByTimeAsync(300);
-    await flush();
-    expect(store.getState().matches).toMatchObject({ query: 'launch plan', loading: false });
-    expect(store.matchesShown()).toBe(true);
-    upload(ok({ request_id: 'x' }));
-  });
 });
 
 
