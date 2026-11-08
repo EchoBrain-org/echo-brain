@@ -495,13 +495,10 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
 .asking i { width: 6px; height: 6px; border-radius: 3px; background: var(--muted); animation: pulse 1.2s infinite ease-in-out; }
 .asking i:nth-child(2) { animation-delay: 0.15s; } .asking i:nth-child(3) { animation-delay: 0.3s; }
 @keyframes pulse { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
-/* While Ask works: one quiet line (a pulse, the step now, how long) that opens onto every row of what it searched and read. */
+/* While Ask works: one quiet line (a pulse, the step now, how long). */
 .ask-trail { display: flex; flex-direction: column; gap: 6px; }
 .ask-line { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; color: var(--faint); }
 .ask-line-toggle { display: inline-flex; align-items: center; gap: 7px; min-width: 0; margin-left: -6px; padding: 3px 6px; border: 0; border-radius: 6px; font-size: inherit; text-align: left; color: inherit; background: transparent; }
-button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
-.ask-line-toggle svg { flex-shrink: 0; transition: transform 0.15s ease; }
-.ask-line-toggle.open svg { transform: rotate(90deg); }
 .ask-line .pulse { flex-shrink: 0; width: 6px; height: 6px; border-radius: 3px; background: var(--muted); animation: pulse 1.2s infinite ease-in-out; }
 .ask-line .headline { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The step now, shimmering while Ask works: a band of brighter text that sweeps across it. */
@@ -520,9 +517,7 @@ button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
 .ask-steps { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0 0 0 2px; list-style: none; font-size: 13px; color: var(--faint); }
 .ask-step { display: flex; align-items: flex-start; gap: 8px; min-width: 0; line-height: 1.45; }
 .ask-step .mark { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 19px; color: var(--muted); }
-.ask-step .mark i { width: 6px; height: 6px; border-radius: 3px; background: var(--muted); animation: pulse 1.2s infinite ease-in-out; }
 .ask-step .words { min-width: 0; overflow-wrap: anywhere; }
-.ask-step:not(.done) .words { color: var(--muted); }
 /* A name opens its item beside Ask; the one the pane shows is lit. */
 .step-name { padding: 0; border: 0; font-size: inherit; text-align: left; color: var(--text); background: transparent; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 2px; }
 .step-name:hover, .step-name.on { color: var(--text); text-decoration-color: currentColor; }

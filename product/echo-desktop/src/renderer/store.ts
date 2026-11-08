@@ -133,8 +133,8 @@ export type Read<T> =
 /**
  * The sources of what Ask shows: the pane beside it, which turn's source
  * lists are open, and the approved records and follow-ups read for them. The
- * pane shows a source of one turn at a time (`turn`), or a place the Ask on
- * its way named. Nothing here outlives Ask, or another app coming in front:
+ * pane shows a source of one turn at a time (`turn`), or a place an answer's
+ * receipt named. Nothing here outlives Ask, or another app coming in front:
  * those start it over.
  */
 export interface SourcesState {
@@ -145,10 +145,10 @@ export interface SourcesState {
   /** The source the pane shows, by its number in the answer less one; null while it shows a named place, or is closed. */
   open: number | null;
   /**
-   * The items of one place Ask named, in a live row or its receipt, that the
-   * pane shows in place of a numbered source: all of them lit, or all their
-   * passages, the first standing for the place. Named while Ask works, they
-   * go if the Ask gets no answer.
+   * The items of one place an answer's receipt named, that the pane shows in
+   * place of a numbered source: all of them lit, or all their passages, the
+   * first standing for the place. Named while a question is on its way, they
+   * go if it gets no answer.
    */
   named: readonly AnswerSource[] | null;
   /**
@@ -3909,8 +3909,7 @@ export function fullTurns(view: AskState): readonly string[] {
  * say (C5). Asked from a page, it opens Ask, which checks what you can still
  * read of the newest turns. The answer is kept at the end of the timeline, in
  * full; "Which one?" waits for a choice and is kept nowhere. While it works,
- * the steps the host reports show under it (ADR-0039); with no answer, they
- * go, and so does any item they opened in the pane.
+ * one line under it names the step the host reports (ADR-0039).
  */
 export async function ask(question: string, scope: AskScope = state.barScope, how?: AskHow): Promise<void> {
   const account = expect();
@@ -4381,9 +4380,10 @@ function freshSources(turn: string | null): SourcesState {
  * What Ask shows came on screen (an answer, by default the latest turn): the
  * pane starts closed on its sources, and the approved records of what shows
  * are read one after another, so each chip can name its meeting. Answered,
- * the items a live row opened stay in the pane, with what was read for them,
- * but only those the audited answer names (`keep`): a name cleared while Ask
- * worked lasts only for that run. With no turn to show, there is no pane.
+ * the items a name opened meanwhile stay in the pane, with what was read for
+ * them, but only those the audited answer names (`keep`): a name cleared
+ * while Ask worked lasts only for that run. With no turn to show, there is no
+ * pane.
  */
 function startSources(keep: ReadonlySet<string> | null = null, turn: string | null = threadOf(state.timeline.turns, state.barScope).at(-1)?.id ?? null): void {
   const sources = state.sources;
@@ -4487,9 +4487,9 @@ export function toggleSourceList(turn: string | null): void {
 }
 
 /**
- * A name in a live row or the receipt: the pane opens on that place beside
- * Ask, which keeps running, with every item of it the name stands for, read
- * unless it already was.
+ * A name in an answer's receipt: the pane opens on that place beside Ask,
+ * which keeps running if a question is on its way, with every item of it the
+ * name stands for, read unless it already was.
  */
 export function openNamed(items: readonly AnswerSource[]): void {
   const sources = state.sources;

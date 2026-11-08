@@ -1,5 +1,5 @@
 import { Fragment, type ComponentChildren } from 'preact';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type {
   Answer, AnswerEvent, AnswerFact, AnswerPart, AnswerSource, ArrangedBlock, AskReceipt, AskSearched, CardEntity, ExternalAnswerSource, AnswerStatement,
   ApprovedRecord, Match, OpenItemView, RecordItem, TimelineTurn, ToolContainerKind,
@@ -14,8 +14,8 @@ import { message } from '../messages.js';
 import { checkWords, ownerAndStatus } from '../needs.js';
 import { sourceKey } from '../openers.js';
 import {
-  announceAfter, announcement, duration, foundBefore, headline, liveRows, lookedThrough, namedPlaces, placeLabel, PROGRESS_AFTER_MS, searchedWords, type AskProgress,
-  type LiveRow, type NamedPlace,
+  announceAfter, announcement, duration, foundBefore, headline, lookedThrough, namedPlaces, placeLabel, PROGRESS_AFTER_MS, searchedWords, type AskProgress,
+  type NamedPlace,
 } from '../progress.js';
 import {
   activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
@@ -614,7 +614,7 @@ function TrailRows({ state, receipt }: { state: State; receipt: AskReceipt }) {
       <div class="foot-trail-head">{lookedThrough(receipt)}</div>
       <ul class="ask-steps" data-testid="receipt-rows" aria-live="off">
         {receipt.rows.map((row, index) => row.type === 'searched' ? <SearchedStep key={index} state={state} row={row} earlier={foundBefore(receipt.rows, index)} />
-          : <li key={index} class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">Read <Names state={state} places={namedPlaces(row.items)} /></span></li>)}
+          : <li key={index} class="ask-step done" data-testid="ask-step"><Mark /><span class="words">Read <Names state={state} places={namedPlaces(row.items)} /></span></li>)}
       </ul>
     </div>
   );
@@ -785,7 +785,7 @@ function Today() {
   return <div class="today" role="separator" data-testid="today"><span>Today</span></div>;
 }
 
-/** How near its bottom the timeline counts as read to the end: a new row of the Ask on its way follows it there. */
+/** How near its bottom the timeline counts as read to the end. */
 const FOLLOW_PX = 40;
 
 /**
@@ -834,10 +834,10 @@ export function AskView({ state }: { state: State }) {
     const element = next && next.getBoundingClientRect().top < bounds.bottom ? next : items[low - 1];
     if (element) savePosition(anchorPosition(element));
   };
-  // Where a held sentence puts the view once the view or what is below it changes. One that prefers the end goes there
-  // while the end keeps the sentence wholly in view, and reads from where it is then; a long answer or rows coming in
-  // can push it out of view there, and then the sentence stays where it was, as any other held one does. Held with
-  // nothing left below the view, it prefers the end again; one the end cuts short keeps its place for when there is room.
+  // Where a held sentence puts the view once the view changes. One that prefers the end goes there while the end keeps
+  // the sentence wholly in view, and reads from where it is then; a long answer can push it out of view there, and then
+  // the sentence stays where it was, as any other held one does. Held with nothing left below the view, it prefers the
+  // end again; one the end cuts short keeps its place for when there is room.
   const hold = (position: Anchor): Anchor => {
     const view = scroller.current!;
     const bounds = position.element.getBoundingClientRect();
@@ -899,18 +899,6 @@ export function AskView({ state }: { state: State }) {
     if (scroller.current) observer.observe(scroller.current);
     return () => observer.disconnect();
   }, []);
-  // A row of the question on its way only when the person is there: one who scrolled up to read stays put, even before
-  // their scroll event has arrived, because the view is no longer where the timeline left it.
-  const follow = useCallback(() => {
-    const view = scroller.current;
-    if (view && placedAt.current !== null && view.scrollTop < placedAt.current - FOLLOW_PX) rememberReading();
-    const position = reading.current?.position;
-    if (position?.kind === 'bottom') toBottom();
-    else if (view && position?.kind === 'anchor' && position.preferBottom && view.contains(position.element)) {
-      savePosition(hold(position));
-      placedAt.current = view.scrollTop;
-    }
-  }, []);
   const onScroll = () => {
     const view = scroller.current, saved = reading.current;
     // Ignore our own placement and browser scrolls caused by a resize. Only the person's new position changes intent.
@@ -919,9 +907,6 @@ export function AskView({ state }: { state: State }) {
       rememberReading();
     }
   };
-  // Which Ask's line is open, by the question on its way's seq: the next question's line starts closed.
-  const [openFor, setOpenFor] = useState<number | null>(null);
-  const lineFor = (id: number): Line => ({ open: openFor === id, toggle: () => setOpenFor(openFor === id ? null : id) });
   const { asking, failed, clarify } = thread;
   const now = Date.now();
   // Today's line goes above its first turn, or, with none yet, above the question on its way; only when earlier days have turns.
@@ -944,7 +929,7 @@ export function AskView({ state }: { state: State }) {
       {asking && (
         <div class="turn">
           <div class="question selectable" data-testid="question">{asking.question}</div>
-          <Asking state={state} progress={asking.progress} follow={follow} line={lineFor(thread.seq)} />
+          <Asking progress={asking.progress} />
         </div>
       )}
       {clarify && <Clarify state={state} clarify={clarify} />}
@@ -978,21 +963,13 @@ function useAnnouncement(text: string): string {
   return said?.text ?? '';
 }
 
-/** Whether an Ask's line is open, and the toggle that opens or closes it. */
-interface Line {
-  readonly open: boolean;
-  readonly toggle: () => void;
-}
-
 /**
  * The question on its way: one quiet line (a pulse, the step now, how long,
- * Cancel) that opens, once Ask has worked a few seconds and has rows, onto
- * every search and read so far. Each name opens beside Ask, which keeps
- * running. The section is a live region: the line, its timer and its rows are
- * kept out of it, and a screen reader hears the stage at most every few
- * seconds instead.
+ * Cancel). The section is a live region: the line and its timer are kept out
+ * of it, and a screen reader hears the stage at most every few seconds
+ * instead.
  */
-function Asking({ state, progress, follow, line }: { state: State; progress: AskProgress; follow: () => void; line: Line }) {
+function Asking({ progress }: { progress: AskProgress }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), TICK_MS);
@@ -1001,69 +978,37 @@ function Asking({ state, progress, follow, line }: { state: State; progress: Ask
   const elapsed = Math.max(0, now - progress.started);
   // A quick Ask shows nothing more than it always did.
   const live = elapsed >= PROGRESS_AFTER_MS;
-  const rows = live ? liveRows(progress) : [];
-  const canOpen = rows.length > 0;
-  const open = line.open && canOpen;
-  // The line never changes height; its rows, opened, and each new one, are followed by a person at the bottom.
-  useLayoutEffect(() => { if (open) follow(); }, [open, open && progress.rows.length, open && progress.pending > 0, follow]);
   // Heard at once, as the line always was; then the stage, once it shows, at most every few seconds.
   const heard = useAnnouncement(live ? announcement(progress) || 'Thinking…' : 'Thinking…');
-  const words = <>
-    <i class="pulse" aria-hidden="true" />
-    <span class="headline working" data-testid="ask-stage">{live ? headline(progress) : 'Thinking…'}</span>
-    <span class="timer" data-testid="ask-timer" aria-hidden="true">{duration(elapsed)}</span>
-  </>;
   return <>
     <div class="ask-trail" aria-live="off">
       <div class="ask-line" data-testid="asking">
-        {canOpen ? (
-          <button type="button" class={`ask-line-toggle${open ? ' open' : ''}`} data-testid="ask-line" aria-expanded={open} onClick={line.toggle}>
-            {words}<Chevron />
-          </button>
-        ) : <span class="ask-line-toggle">{words}</span>}
+        <span class="ask-line-toggle">
+          <i class="pulse" aria-hidden="true" />
+          <span class="headline working" data-testid="ask-stage">{live ? headline(progress) : 'Thinking…'}</span>
+          <span class="timer" data-testid="ask-timer" aria-hidden="true">{duration(elapsed)}</span>
+        </span>
         <button type="button" class="link-button faint-link" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
       </div>
-      {open && (
-        <ul class="ask-steps" data-testid="ask-steps" aria-label="What Ask has looked through">
-          {rows.map((row, index) => <LiveStep key={index} state={state} row={row} />)}
-        </ul>
-      )}
     </div>
     <span class="sr-only" aria-live="polite" data-testid="ask-announcement">{heard}</span>
   </>;
 }
 
-/** A row's mark: done, or still going. */
-function Mark({ done }: { done: boolean }) {
-  return done ? <span class="mark"><Check /></span> : <span class="mark" aria-hidden="true"><i /></span>;
+/** A row's mark: done. */
+function Mark() {
+  return <span class="mark"><Check /></span>;
 }
 
 /** A search: its source kinds, never the words searched, and what it found (`earlier`: a search before it found something). */
 function SearchedStep({ state, row, earlier }: { state: State; row: AskSearched; earlier: boolean }) {
-  return <li class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">{searchedWords(row, state.tools?.items, earlier)}</span></li>;
-}
-
-/** One row of the line, opened: a search, a read with every name it has so far, or how many are being read. */
-function LiveStep({ state, row }: { state: State; row: LiveRow }) {
-  if (row.type === 'searched') return <SearchedStep state={state} row={row.row} earlier={row.earlier} />;
-  if (row.type === 'pending') {
-    return (
-      <li class="ask-step" data-testid="ask-step"><Mark done={false} />
-        <span class="words">Reading {row.count} {row.more ? 'more' : row.count === 1 ? 'item' : 'items'}</span></li>
-    );
-  }
-  return (
-    <li class={`ask-step${row.done ? ' done' : ''}`} data-testid="ask-step"><Mark done={row.done} />
-      <span class="words">{row.done ? 'Read' : 'Reading'} <Names state={state} places={namedPlaces(row.row.items)} /></span>
-    </li>
-  );
+  return <li class="ask-step done" data-testid="ask-step"><Mark /><span class="words">{searchedWords(row, state.tools?.items, earlier)}</span></li>;
 }
 
 /**
  * Names, each opening its place beside Ask with every item of it the name
  * stands for, and how many when more than one ("Tuesday sync ×4"). The one
- * the pane shows is lit: its first item read, which stays as a live row's
- * place reads more.
+ * the pane shows is lit: its first item read.
  */
 function Names({ state, places }: { state: State; places: readonly NamedPlace[] }) {
   const first = state.sources?.named?.[0];

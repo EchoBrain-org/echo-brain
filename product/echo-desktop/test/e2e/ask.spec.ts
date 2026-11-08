@@ -211,54 +211,25 @@ test('an answer the writer arranged in blocks draws every block in the window, a
   // A table keeps its own box.
   expect(await page.evaluate(() => document.querySelector('.ask')!.scrollWidth <= document.querySelector('.ask')!.clientWidth)).toBe(true);
 });
-const progressSteps = (page: Page) => page.getByTestId('ask-steps').getByTestId('ask-step');
-/** Opens the Ask's quiet line onto its rows, once it has some. */
-async function openLine(page: Page): Promise<void> {
-  const line = page.getByTestId('ask-line');
-  await expect(line).toHaveAttribute('aria-expanded', 'false', { timeout: 10_000 });
-  await line.click();
-  await expect(line).toHaveAttribute('aria-expanded', 'true');
-}
-
-test('a long Ask shows one quiet line that opens onto what it looks through, names that open beside it while it keeps working, then a receipt', async () => {
+test('a long Ask shows one quiet line that names what it looks through while it works, then a receipt', async () => {
   run = await launch('ask-progress');
   const { page } = run;
   await askFromHome(page, 'What did we agree?');
   const asking = page.getByTestId('asking');
   // The first seconds look as Ask always did.
   await expect(asking).toContainText('Thinking…');
-  await expect(page.getByTestId('ask-steps')).toHaveCount(0);
   await expect.poll(() => run.calls().filter(call => call.path === '/v7/person/ask').map(call => call.progress)).toEqual(['3']);
 
-  // Then the line names the step now, and nothing more until it is opened: a place is named once, and the other places counted.
+  // Then the line names the step now, and opens onto nothing: a place is named once, and the other places counted.
   await expect(page.getByTestId('ask-stage')).toHaveText('Reading Tuesday sync and 2 more', { timeout: 10_000 });
-  await expect(page.getByTestId('ask-line')).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.getByTestId('ask-steps')).toHaveCount(0);
+  await expect(asking.getByRole('button')).toHaveText(['Cancel']);
   // The timer is not read out; a screen reader hears the stage instead.
   await expect(page.getByTestId('ask-timer')).toHaveText(/^\d+s$/);
   await expect(page.getByTestId('ask-timer')).toHaveAttribute('aria-hidden', 'true');
   await expect(page.getByTestId('ask-announcement')).toHaveText('Reading');
-
-  // Opened, every row: source kinds, never the words searched, and every place read, counting its items.
-  await openLine(page);
-  await expect(progressSteps(page)).toHaveText([
-    'Searched meetings, documents and Jira · 3 found', 'Reading Tuesday sync ×2, Apollo update, ECHO-7 · Jira launch',
-  ]);
-  await expect(page.getByTestId('ask-steps').getByTestId('ask-step-name').nth(0)).toHaveAccessibleName('Tuesday sync, 2 items');
   await expect(page.getByTestId('ask-view').locator('[aria-live="off"]')).toHaveCount(1);
 
-  // A name opens beside Ask, and Ask keeps working: both decisions it stands for lit in their meeting, and no Open yet.
-  const names = page.getByTestId('ask-steps').getByTestId('ask-step-name');
-  await names.nth(0).click();
-  const pane = page.getByTestId('source-pane');
-  await expect(pane).toContainText('Meeting · Approved record');
-  await expect(pane.locator('.record-item.on')).toHaveText([/Keep monthly plans until November\./, /Ship Apollo with annual plans first\./]);
-  await expect(names.nth(0)).toHaveAttribute('aria-pressed', 'true');
-  await expect(pane.getByTestId('source-open')).toHaveCount(0);
-  await expect(asking).toBeVisible();
-
-  // The answer: the line goes, and the one line under the answer says how many sources and how long it took (ADR-0049). The pane,
-  // still on the meeting, offers Open.
+  // The answer: the line goes, and the one line under the answer says how many sources and how long it took (ADR-0049).
   writeFileSync(join(run.home, 'release-ask'), '');
   await expect(page.getByTestId('answer')).toBeVisible();
   await expect(asking).toHaveCount(0);
@@ -267,8 +238,6 @@ test('a long Ask shows one quiet line that opens onto what it looks through, nam
   await expect(foot).toHaveText(/^2 sources · \d+s$/);
   await expect(foot).not.toHaveText(/48s/);
   await expect(foot).toHaveAttribute('aria-expanded', 'false');
-  await expect(pane).toContainText('Meeting · Approved record');
-  await expect(pane.getByTestId('source-open')).toBeVisible();
 
   // Opened: its sources, then every search and read the Authority audited, each name opening beside the answer. The rows stay out of
   // the thread's live region: a screen reader hears the answer, not the history again.
@@ -279,6 +248,14 @@ test('a long Ask shows one quiet line that opens onto what it looks through, nam
   const rows = page.getByTestId('receipt-rows').getByTestId('ask-step');
   await expect(rows).toHaveText(['Searched meetings, documents and Jira · 3 found', 'Read Tuesday sync ×2, Apollo update, ECHO-7 · Jira launch']);
   const named = page.getByTestId('receipt-rows').getByTestId('ask-step-name');
+  await expect(named.nth(0)).toHaveAccessibleName('Tuesday sync, 2 items');
+  // A place's name lights both decisions it stands for in their meeting.
+  await named.nth(0).click();
+  const pane = page.getByTestId('source-pane');
+  await expect(pane).toContainText('Meeting · Approved record');
+  await expect(pane.locator('.record-item.on')).toHaveText([/Keep monthly plans until November\./, /Ship Apollo with annual plans first\./]);
+  await expect(named.nth(0)).toHaveAttribute('aria-pressed', 'true');
+  await expect(pane.getByTestId('source-open')).toBeVisible();
   // A ticket opens only in Jira: it has no page here.
   await named.nth(2).click();
   await expect(pane).toContainText('Jira · Ticket');

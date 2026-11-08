@@ -3,7 +3,10 @@
 // the receipt an answer keeps.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, AskReceipt, Expect } from '../../src/shared/protocol.js';
-import { ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, latestTurn, ok, paneTurn, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text } from './harness.js';
+import {
+  ACCOUNT, asking as askingWith, byClass, byTestId, byType, elements, fail, flush, Held, latestTurn, ok, paneTurn, plainHooks, project, render, rpcFor, startStore,
+  storeLifecycle, text,
+} from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -45,27 +48,44 @@ const calls = (method: string) => rpc.mock.calls.filter(([name]) => name === met
 const asking = (question?: string) => askingWith(rpc, held, question);
 
 describe('the steps of the Ask on its way', () => {
-  it('build its stage and rows; a step of another Ask, a cancelled one or another account is dropped', async () => {
+  it('build its stage and what it reads; a step of another Ask, a cancelled one or another account is dropped', async () => {
     const { store, step, release } = await asking();
     const progress = () => store.getState().ask?.asking?.progress;
-    expect(progress()).toMatchObject({ stage: null, pending: 0, rows: [] });
+    expect(progress()).toEqual({ started: expect.any(Number), stage: null, pending: 0, read: [] });
     step({ type: 'stage', stage: 'searching' });
     step({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'tickets', tool_id: 'jira' }], found: 22 });
     step({ type: 'stage', stage: 'reading', pending: 2 });
-    expect(progress()).toMatchObject({ stage: 'reading', pending: 2, rows: [{ type: 'searched', found: 22 }] });
+    expect(progress()).toMatchObject({ stage: 'reading', pending: 2, read: [] });
     // Another Ask's id, another account, another Authority: nothing changes.
     step({ type: 'read', items: [decision] }, { cancel_id: '00000000-0000-4000-8000-000000000000' });
     step({ type: 'read', items: [decision] }, { expect: { ...EXPECT, membership_id: 'someone-else' } });
     step({ type: 'read', items: [decision] }, { expect: { ...EXPECT, authority: 'https://other.invalid' } });
-    expect(progress()?.rows).toHaveLength(1);
+    expect(progress()).toMatchObject({ pending: 2, read: [] });
     step({ type: 'read', items: [decision, note] });
-    expect(progress()).toMatchObject({ pending: 0, rows: [{ type: 'searched' }, { type: 'read', items: [decision, note] }] });
+    expect(progress()).toMatchObject({ pending: 0, read: [decision, note] });
     // Answered: a late step goes nowhere.
     release(ok(answer()));
     await flush();
     step({ type: 'stage', stage: 'writing' });
     expect(store.getState().ask?.asking).toBeNull();
     expect(latestTurn(store)?.text).toBe('What did we agree?');
+  });
+
+  it('show one line while it works: a pulse, the step now and what it reads, how long, and Cancel, with nothing to open under it', async () => {
+    const { step, thread } = await asking();
+    step({ type: 'stage', stage: 'searching' });
+    step({ type: 'searched', sources: [{ kind: 'meetings' }], found: 3 });
+    step({ type: 'stage', stage: 'reading', pending: 3 });
+    step({ type: 'read', items: [decision, note, ticket] });
+    vi.advanceTimersByTime(4_000);
+    const shown = thread();
+    const line = byTestId(shown, 'asking')[0]!;
+    expect(byClass(line, 'pulse')).toHaveLength(1);
+    expect(text(byTestId(line, 'ask-stage'))).toBe('Reading Tuesday sync and 2 more');
+    expect(text(byTestId(line, 'ask-timer'))).toBe('4s');
+    // Cancel is its one button: the line opens onto nothing, and no row shows under it.
+    expect(byType(line, 'button').map(node => node.props['data-testid'])).toEqual(['ask-cancel']);
+    expect(byTestId(shown, 'ask-step')).toEqual([]);
   });
 
   it('cancelled, takes no step more, and Ask closes with what it named', async () => {

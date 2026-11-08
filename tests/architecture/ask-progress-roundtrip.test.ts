@@ -41,7 +41,8 @@ type Expect = { readonly authority: string; readonly membership_id: string };
 interface CliRun { readonly exit: number; readonly stdout: string; readonly stderr: string; readonly overflow: boolean }
 type Source = Json & { readonly kind: 'record' | 'original' | 'follow_up' | 'ticket' | 'page' | 'project' | 'person' | 'tool' | 'container'; readonly label: string };
 interface Row { readonly type: 'searched' | 'read'; readonly sources?: readonly Json[]; readonly found?: number; readonly items?: readonly Source[] }
-interface Progress { readonly started: number; readonly stage: string | null; readonly pending: number; readonly rows: readonly Row[] }
+/** The line's model: the stage, how many items it is about to read, and the items read since the last search, which it names. */
+interface Progress { readonly started: number; readonly stage: string | null; readonly pending: number; readonly read: readonly Source[] }
 interface Receipt { readonly looked_through: number; readonly elapsed_ms: number; readonly rows: readonly Row[] }
 interface Notice { readonly cancel_id: string; readonly expect: Expect; readonly step: Json }
 interface Store {
@@ -251,13 +252,13 @@ describe('Ask progress from the Authority through the Person client to the deskt
       // --- The host: it took every step line as a step. ---
       expect(refused).not.toHaveBeenCalled();
 
-      // --- The page with the answer: the rows it showed while the Authority wrote, folded into the receipt, its names opening the exact item. ---
+      // --- The page with the answer: what its line named while the Authority wrote, folded into the receipt, its names opening the exact item. ---
       const shown = store.getState().timeline.turns.at(-1)!;
       const pageReceipt = store.getState().ask!.took[shown.id]?.receipt;
       expect(store.getState().ask!.asking).toBeNull();
       expect(pageReceipt).toEqual(views.answerView(JSON.parse(lines.at(-1)!), { kind: 'global' }).receipt);
       const pageNamed = pageReceipt!.rows.flatMap(row => row.type === 'read' ? row.items! : []);
-      expect(pageNamed).toEqual(writing!.progress.rows[1]!.items);
+      expect(pageNamed).toEqual(writing!.progress.read);
 
       const decision = pageNamed.find(item => item.kind === 'record')!;
       const document = pageNamed.find(item => item.kind === 'original')!;
@@ -286,7 +287,7 @@ describe('Ask progress from the Authority through the Person client to the deskt
       f.beforeAnswerReturn(async () => {
         try {
           await vi.waitFor(() => expect(store.getState().ask?.asking?.progress.stage).toBe('writing'), { timeout: 10_000, interval: 10 });
-          const named = store.getState().ask!.asking!.progress.rows.flatMap(row => row.items ?? []).find(item => item.kind === 'follow_up')!;
+          const named = store.getState().ask!.asking!.progress.read.find(item => item.kind === 'follow_up')!;
           expect(named).toEqual({ kind: 'follow_up', label: EXPECTED, item_id });
           store.openNamed([named]);
           await vi.waitFor(() => expect(store.getState().sources?.followUps[item_id]?.value).toBeDefined(), { timeout: 10_000, interval: 10 });
