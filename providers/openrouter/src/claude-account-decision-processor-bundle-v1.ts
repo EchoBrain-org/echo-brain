@@ -21,6 +21,7 @@ export function createClaudeAccountDecisionProcessorBundleV1(input: {
   const reference = claudeAccountDecisionProcessorCredentialReferenceV1(account);
   return createFixedDecisionProcessorBundleV1({
     label: 'Claude account',
+    invalid_processor: 'Claude account decision-processor configuration is invalid',
     version: CLAUDE_ACCOUNT_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
     configuration_sha256: claudeAccountDecisionProcessorConfigurationSha256V1(),
     credential_reference_sha256: claudeAccountDecisionProcessorCredentialReferenceSha256V1(reference),

@@ -7,6 +7,8 @@ import type { DecisionProcessorBundleV1 } from "@echo-brain/organization-process
 export interface FixedDecisionProcessorPayerV1 {
   /** Names the payer in every refusal. */
   readonly label: string;
+  /** One refusal for an invalid configuration or a built identity that differs (Claude account's wording); else each is its own. */
+  readonly invalid_processor?: string;
   readonly version: string;
   readonly configuration_sha256: Sha256Digest;
   readonly credential_reference_sha256: Sha256Digest;
@@ -47,9 +49,9 @@ export function createFixedDecisionProcessorBundleV1(payer: FixedDecisionProcess
       const config = payer.config(admitted.instance_id);
       const processor = payer.processor(config);
       const validation = processor.validateConfig(config);
-      if (!validation.ok) throw new Error(`${payer.label} decision-processor configuration is invalid: ${validation.errors.join("; ")}`);
+      if (!validation.ok) throw new Error(payer.invalid_processor ?? `${payer.label} decision-processor configuration is invalid: ${validation.errors.join("; ")}`);
       const { identity } = processor;
-      if (identity.adapter_id !== admitted.adapter_id || identity.instance_id !== admitted.instance_id || identity.version !== admitted.version) throw differs();
+      if (identity.adapter_id !== admitted.adapter_id || identity.instance_id !== admitted.instance_id || identity.version !== admitted.version) throw payer.invalid_processor === undefined ? differs() : new Error(payer.invalid_processor);
       return processor;
     },
   } satisfies DecisionProcessorBundleV1);
