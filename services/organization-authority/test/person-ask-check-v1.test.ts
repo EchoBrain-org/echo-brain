@@ -36,7 +36,6 @@ const page = (page_id: string, fields: { readonly version?: string; readonly sec
   permalink: `${SITE}/wiki/pages/viewpage.action?pageId=${page_id}`, text_sha256: sha256Digest(fields.text ?? 'Pilot starts next week.'),
 });
 const SAME: PersonAskCheckItemV1 = { state: 'same' };
-const CHANGED: PersonAskCheckItemV1 = { state: 'changed' };
 const UNREADABLE: PersonAskCheckItemV1 = { state: 'unreadable' };
 const UNKNOWN: PersonAskCheckItemV1 = { state: 'unknown' };
 
@@ -115,16 +114,12 @@ const item = (citation: unknown, asked_at = '2026-10-08T09:00:00.000Z', marker?:
 function ticketTool(read: (input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }) => Promise<ReadonlyMap<string, string | null>>, tool_id = 'jira') {
   return { kind: 'ticket' as const, tool_id, external_scope_id: CLOUD, markers: vi.fn(read) } satisfies PersonTicketCheckV1;
 }
-/** A page tool with these pages' versions and the section digests of their bodies. */
-function pageTool(pages: Readonly<Record<string, { readonly version: string; readonly sections?: readonly string[] }>>, fail: { versions?: unknown; sections?: unknown } = {}) {
+/** A page tool with these pages' versions. */
+function pageTool(pages: Readonly<Record<string, { readonly version: string }>>, fail: { versions?: unknown } = {}) {
   return { kind: 'page' as const, tool_id: 'confluence', external_scope_id: CLOUD,
     versions: vi.fn(async ({ page_ids }: { readonly page_ids: readonly string[] }) => {
       if (fail.versions !== undefined) throw fail.versions;
       return new Map(page_ids.flatMap(id => (pages[id] === undefined ? [] : [[id, pages[id]!.version] as const])));
-    }),
-    sections: vi.fn(async ({ page_ids }: { readonly page_ids: readonly string[] }) => {
-      if (fail.sections !== undefined) throw fail.sections;
-      return new Map(page_ids.flatMap(id => (pages[id]?.sections === undefined ? [] : [[id, pages[id]!.sections!.map(text => sha256Digest(text))] as const])));
     }) } satisfies PersonPageCheckV1;
 }
 
@@ -152,7 +147,7 @@ describe('Ask source check: the database kinds', () => {
     } finally { label.mockRestore(); }
   });
 
-  it('opens citations saved with the historical imported-note packet format and reports the source unchanged', async () => {
+  it('opens citations saved with the historical imported-note packet format and answers the source readable', async () => {
     const f = await world();
     const { check } = askCheckOf(f);
     const actor = f.openItemsOptions.sessions.authenticateAccess({ access_token: 'ari' });
@@ -170,9 +165,9 @@ describe('Ask source check: the database kinds', () => {
     const route = createPersonSourceEvidenceRouteV1({ originals: f.originals });
     expect(route.readSource({ access_token: 'ari', include_imported_meeting_review: true, request: { schema_version: 1, scope: GLOBAL, citation: old } as never }))
       .toMatchObject({ citation: { ...old, label: `Imported meeting: ${title}` }, text, imported_meeting_review: 'reviewed' });
-    // A later source revision changes the source check, while the old citation still opens the original notes.
+    // A later source revision leaves the old citation readable, and it still opens the original notes.
     f.editMeeting();
-    expect(await check('ari', [item(old)])).toEqual([CHANGED]);
+    expect(await check('ari', [item(old)])).toEqual([SAME]);
     expect(f.originals.read({ access_token: 'ari', scope: GLOBAL, citation: old }).atom.text).toBe(text);
   });
 
@@ -191,7 +186,7 @@ describe('Ask source check: the database kinds', () => {
     expect(await check('rafael', [item(record)])).toEqual([UNREADABLE]);
   });
 
-  it('answers originals through their ACL: notes and documents never change, an edited import is changed for its importer alone', async () => {
+  it('answers originals through their ACL: what the caller reads is the same, an edited import\'s older revision included', async () => {
     const f = await world();
     const { check } = askCheckOf(f);
     const { team, private: mine, project, document, meeting } = f.cited;
@@ -199,50 +194,39 @@ describe('Ask source check: the database kinds', () => {
     expect(await check('mina', [item(team), item(project), item(document), item(meeting), item(mine)])).toEqual([SAME, SAME, SAME, UNREADABLE, SAME]);
     // Okafor is not in project A, and the import is Ari's alone.
     expect(await check('okafor', [item(team), item(project), item(document), item(meeting), item(mine)])).toEqual([SAME, UNREADABLE, SAME, UNREADABLE, UNREADABLE]);
+    // An edit adds a newer revision of the import: its importer reads both, so both are the same; anyone else reads neither.
     f.editMeeting();
-    expect(await check('ari', [item(meeting), item(team)])).toEqual([CHANGED, SAME]);
-    // Still unreadable, never changed, for anyone else.
-    expect(await check('mina', [item(meeting)])).toEqual([UNREADABLE]);
-    // A revision cited after the edit is the newest one: the same.
     const edited = f.originals.deskSearch({ access_token: 'ari', scope: GLOBAL, kinds: ['imported_meeting'] }).items[0]!.citation;
     expect(edited.revision_id).not.toBe(meeting.revision_id);
-    expect(await check('ari', [item(edited), item(meeting)])).toEqual([SAME, CHANGED]);
+    expect(await check('ari', [item(meeting), item(edited), item(team)])).toEqual([SAME, SAME, SAME]);
+    expect(await check('mina', [item(meeting), item(edited)])).toEqual([UNREADABLE, UNREADABLE]);
     // Leaving project A loses its note.
     f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'").run(f.clock().toISOString(), f.projectA, f.membership('mina'));
     expect(await check('mina', [item(project), item(team)])).toEqual([UNREADABLE, SAME]);
   });
 
-  it('answers a follow-up changed only when its owner, state or send moved after the turn was asked, and only to whoever sees its row', async () => {
+  it('answers a follow-up the same to whoever sees its row, however it moved after the turn was asked, and unreadable to anyone else', async () => {
     const f = await world();
     const { check } = askCheckOf(f);
     const followUp = (itemId: string) => ({ kind: 'follow_up', item_id: itemId });
-    const sentAt = f.ticket.sent_at!;
-    const before = new Date(Date.parse(sentAt) - 1).toISOString();
-    const at = f.clock().toISOString();
-    expect(await check('ari', [item(followUp(f.ticket.item_id), before), item(followUp(f.ticket.item_id), sentAt), item(followUp(f.ticket.item_id), at)])).toEqual([CHANGED, SAME, SAME]);
+    const before = new Date(Date.parse(f.ticket.sent_at!) - 1).toISOString();
+    expect(await check('ari', [item(followUp(f.ticket.item_id), before), item(followUp(f.ticket.item_id), f.clock().toISOString())])).toEqual([SAME, SAME]);
     // Mina and Rafael read the decision, so they see both rows.
-    expect(await check('mina', [item(followUp(f.ticket.item_id), at), item(followUp(f.action.item_id), at)])).toEqual([SAME, SAME]);
-    expect(await check('rafael', [item(followUp(f.action.item_id), before)])).toEqual([CHANGED]);
-    // Mina closes it, then Ari hands it to Rafael: each moves it for whoever still sees it.
+    expect(await check('mina', [item(followUp(f.ticket.item_id), before), item(followUp(f.action.item_id), before)])).toEqual([SAME, SAME]);
+    expect(await check('rafael', [item(followUp(f.action.item_id), before)])).toEqual([SAME]);
+    // Mina closes it, then Ari hands it to Rafael: still the same for whoever still sees it.
     f.advance(1_000);
     await setState(f, 'mina', f.ticket.item_id, 'done');
-    expect(await check('mina', [item(followUp(f.ticket.item_id), at)])).toEqual([CHANGED]);
-    const closed = f.clock().toISOString();
-    expect(await check('ari', [item(followUp(f.ticket.item_id), closed)])).toEqual([SAME]);
+    expect(await check('mina', [item(followUp(f.ticket.item_id), before)])).toEqual([SAME]);
     f.advance(1_000);
     await assign(f, 'ari', f.ticket.item_id, 'rafael');
-    expect(await check('ari', [item(followUp(f.ticket.item_id), closed)])).toEqual([CHANGED]);
-    expect(await check('rafael', [item(followUp(f.ticket.item_id), closed)])).toEqual([CHANGED]);
-    // A check of the row changes nothing.
-    const checked = f.clock().toISOString();
-    f.advance(1_000);
-    f.check(f.ticket.item_id, 'changed');
-    expect(await check('ari', [item(followUp(f.ticket.item_id), checked)])).toEqual([SAME]);
+    expect(await check('ari', [item(followUp(f.ticket.item_id), before)])).toEqual([SAME]);
+    expect(await check('rafael', [item(followUp(f.ticket.item_id), before)])).toEqual([SAME]);
     // Okafor, who cannot read the decision, sees no row: hidden and never-made follow-ups read the same.
     expect(await check('okafor', [item(followUp(f.ticket.item_id), before), item(followUp('itm_00000000-never-made'), before)])).toEqual([UNREADABLE, UNREADABLE]);
   });
 
-  it('reads each cited revision once however many turns cited it, and an import\'s newer revisions once, answering each turn alike', async () => {
+  it('reads each cited revision once however many turns cited it, and no newer revision, answering each turn alike', async () => {
     const f = await world();
     const { check } = askCheckOf(f);
     f.editMeeting();
@@ -250,14 +234,14 @@ describe('Ask source check: the database kinds', () => {
     // The expensive read: an imported meeting's revision, verified in full.
     const imported = vi.spyOn(SqlitePersonImportedMeetingsV1.prototype, 'rows');
     try {
-      // One turn: the cited revision is read, then the newer one.
-      expect(await check('ari', [item(f.cited.meeting)])).toEqual([CHANGED]);
-      expect(imported).toHaveBeenCalledTimes(2);
+      // One turn: the cited revision alone is read, not the newer one.
+      expect(await check('ari', [item(f.cited.meeting)])).toEqual([SAME]);
+      expect(imported).toHaveBeenCalledTimes(1);
       imported.mockClear();
       // Many turns citing the same revisions, among other sources: still each revision once, and the same answer each time.
       const turns = [item(f.cited.meeting), item(f.cited.team), item(f.cited.meeting, '2026-10-01T00:00:00.000Z'), item(edited), item(f.cited.document),
         item(f.cited.meeting), item(edited), item(f.cited.document), item(f.cited.team)];
-      expect(await check('ari', turns)).toEqual([CHANGED, SAME, CHANGED, SAME, SAME, CHANGED, SAME, SAME, SAME]);
+      expect(await check('ari', turns)).toEqual([SAME, SAME, SAME, SAME, SAME, SAME, SAME, SAME, SAME]);
       expect(imported).toHaveBeenCalledTimes(2);
       // Someone who cannot read the import is answered alike for every turn, reading it no more than once.
       imported.mockClear();
@@ -272,8 +256,9 @@ describe('Ask source check: the database kinds', () => {
     const followUp = { kind: 'follow_up', item_id: f.ticket.item_id };
     const asked = f.clock().toISOString();
     f.editMeeting();
-    expect(await check('ari', [item(f.cited.meeting), item(f.decisionCitation), item(followUp, asked), item(f.cited.team), item(followUp, '2026-10-01T00:00:00.000Z'), item(f.cited.meeting)]))
-      .toEqual([CHANGED, SAME, SAME, SAME, CHANGED, CHANGED]);
+    expect(await check('ari', [item(f.cited.meeting), item(f.decisionCitation), item(followUp, asked), item(f.cited.private), item(followUp, '2026-10-01T00:00:00.000Z'),
+      item({ kind: 'follow_up', item_id: 'itm_00000000-never-made' }), item(f.cited.meeting)]))
+      .toEqual([SAME, SAME, SAME, UNREADABLE, SAME, UNREADABLE, SAME]);
   });
 
   it('refuses a person whose session or membership is gone, before any read', async () => {
@@ -319,39 +304,30 @@ describe('Ask source check: unreadable says nothing (ADR-0012)', () => {
 });
 
 describe('Ask source check: tickets and pages', () => {
-  it('returns a readable ticket same with its marker as the baseline, and compares a marker it is given', async () => {
+  it('returns every readable ticket same with its current marker, whatever marker the request gave it', async () => {
     const f = await world();
     const now = canonicalSha256('ticket now');
     // 10099 does not come back; 10077 came back with fields no marker could be made from.
     const tickets = ticketTool(async ({ ticket_ids }) => new Map(ticket_ids.filter(id => id !== '10099').map(id => [id, id === '10077' ? null : now])));
     const { check } = askCheckOf(f, { live: [tickets] });
     expect(await check('ari', [item(ticket('10012')), item(ticket('10012'), undefined, now), item(ticket('10012'), undefined, canonicalSha256('ticket then')), item(ticket('10099'), undefined, now), item(ticket('10077'), undefined, now)]))
-      .toEqual([{ state: 'same', marker: now }, { state: 'same', marker: now }, { state: 'changed', marker: now }, UNREADABLE, UNKNOWN]);
+      .toEqual([{ state: 'same', marker: now }, { state: 'same', marker: now }, { state: 'same', marker: now }, UNREADABLE, UNKNOWN]);
     // One read for the tool, of each ticket once, with the caller's own token.
     expect(tickets.markers).toHaveBeenCalledTimes(1);
     expect(tickets.markers.mock.calls[0]![0]).toMatchObject({ access_token: 'ari', ticket_ids: ['10012', '10099', '10077'] });
   });
 
-  it('compares a page by its version, then by its cited section on the current page', async () => {
+  it('answers a page same whenever its version comes back, whichever version or section it cited', async () => {
     const f = await world();
-    const cited = 'Pilot starts next week.';
-    const pages = pageTool({
-      200: { version: '3' },
-      // Version 4 added a section above the cited one: the cited text is still on the page.
-      201: { version: '4', sections: ['A new first section.', cited] },
-      202: { version: '4', sections: ['The pilot moved to next month.'] },
-      // Its body is gone by the time it is read: unreadable, never changed.
-      203: { version: '4' },
-      204: { version: '4', sections: [cited] },
-    });
+    // 200 stands at its cited version 3; 201 and 204 moved on to version 4; 205 does not come back.
+    const pages = pageTool({ 200: { version: '3' }, 201: { version: '4' }, 204: { version: '4' } });
     const { check } = askCheckOf(f, { live: [pages] });
     const inventory = { ...page('204'), section_id: 'inventory', text_sha256: sha256Digest('') };
-    expect(await check('ari', [item(page('200')), item(page('201')), item(page('202')), item(page('203')), item(inventory), item(page('205'))]))
-      .toEqual([SAME, SAME, CHANGED, UNREADABLE, CHANGED, UNREADABLE]);
-    // The unchanged version and the inventory needed no body; three pages did.
+    expect(await check('ari', [item(page('200')), item(page('201')), item(inventory), item(page('205')), item(page('201', { section: 's5', text: 'Another section.' }))]))
+      .toEqual([SAME, SAME, SAME, UNREADABLE, SAME]);
+    // One read for the tool, of each page once, with the caller's own token.
     expect(pages.versions).toHaveBeenCalledTimes(1);
-    expect(pages.sections).toHaveBeenCalledTimes(1);
-    expect(pages.sections.mock.calls[0]![0].page_ids).toEqual(['201', '202', '203']);
+    expect(pages.versions.mock.calls[0]![0]).toMatchObject({ access_token: 'ari', page_ids: ['200', '201', '204', '205'] });
   });
 
   it('answers unknown for a tool that is not connected, fails or is not composed, and reports each failure without content', async () => {
@@ -362,27 +338,10 @@ describe('Ask source check: tickets and pages', () => {
     expect(await check('ari', [item(ticket('10012')), item(page('200')), item(f.decisionCitation), item({ ...ticket('7'), tool_id: 'linear' })]))
       .toEqual([UNKNOWN, UNKNOWN, SAME, UNKNOWN]);
     expect(failures).toEqual([{ kind: 'person_ask_check_live_read', reason: 'tickets', code: 'unauthorized' }, { kind: 'person_ask_check_live_read', reason: 'pages', code: 'unavailable' }]);
-    // A body read that fails leaves the pages that needed it unknown, and the others as their versions said.
-    const bodies = pageTool({ 200: { version: '3' }, 201: { version: '4' } }, { sections: new Error('Confluence is down') });
-    const second = askCheckOf(f, { live: [bodies] });
-    expect(await second.check('ari', [item(page('200')), item(page('201'))])).toEqual([SAME, UNKNOWN]);
-    expect(second.failures).toEqual([{ kind: 'person_ask_check_live_read', reason: 'page_bodies', code: 'error' }]);
     // With no live tool composed, tickets and pages are unknown and nothing is reported.
     const none = askCheckOf(f);
     expect(await none.check('ari', [item(ticket('10012')), item(page('200'))])).toEqual([UNKNOWN, UNKNOWN]);
     expect(none.failures).toEqual([]);
-  });
-
-  it('reads at most ten page bodies a request, the first pages first, and leaves the rest unknown', async () => {
-    const f = await world();
-    const cited = 'Pilot starts next week.';
-    const ids = Array.from({ length: 12 }, (_, index) => String(300 + index));
-    const pages = pageTool(Object.fromEntries(ids.map(id => [id, { version: '4', sections: [cited] }])));
-    const { check } = askCheckOf(f, { live: [pages] });
-    // Every page twice: a page's body serves every turn that cited it.
-    expect(await check('ari', [...ids, ...ids].map(id => item(page(id))))).toEqual([...ids.map((_, index) => (index < 10 ? SAME : UNKNOWN)), ...ids.map((_, index) => (index < 10 ? SAME : UNKNOWN))]);
-    expect(pages.versions.mock.calls.map(([input]) => input.page_ids)).toEqual([ids]);
-    expect(pages.sections.mock.calls.map(([input]) => input.page_ids)).toEqual([ids.slice(0, 10)]);
   });
 
   it('reads one tool once for up to a hundred distinct sources, whatever else the request holds', async () => {
@@ -497,6 +456,10 @@ describe('Ask source check HTTP route', () => {
     const answered = await response.json() as unknown;
     expect(validatePersonAskCheckV1(answered, validatePersonAskCheckRequestV1(body))).toEqual({ schema_version: 1, kind: 'echo-person-ask-check-v1',
       items: [SAME, { state: 'same', marker: canonicalSha256('marker') }, UNREADABLE] });
+    // A released client still sends the marker an earlier check returned: accepted, and ignored.
+    const marked = await post('Bearer ari', { ...body, items: [item(ticket('10012'), undefined, canonicalSha256('an earlier marker'))] });
+    expect(marked.status).toBe(200);
+    expect(await marked.json()).toEqual({ schema_version: 1, kind: 'echo-person-ask-check-v1', items: [{ state: 'same', marker: canonicalSha256('marker') }] });
     // Kinds outside the check, a marker off a ticket, a bad shape, a query and a body over 64 KiB are invalid requests.
     for (const invalid of [
       { ...body, items: [item({ kind: 'project', project_id: 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' })] },

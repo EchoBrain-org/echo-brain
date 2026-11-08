@@ -797,8 +797,8 @@ export class PersonAuthorityClient {
   }
 
   /**
-   * The Ask source check (Ask timeline v1, C1; ADR-0047): whether each source old answers cited is the same, changed, unreadable
-   * or unknown now, and no content.
+   * The Ask source check (Ask timeline v1, C1; ADR-0047): whether the caller can still read each source old answers cited, and
+   * no content.
    */
   async askCheck(accessToken: string, value: PersonAskCheckRequestV1, signal?: AbortSignal): Promise<PersonAskCheckV1> {
     const request = validatePersonAskCheckRequestV1(value);

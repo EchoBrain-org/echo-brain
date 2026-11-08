@@ -190,7 +190,7 @@ Commands:
   list        List the newest notes, documents, imported meetings and approved meetings in one project, or only yours.
   open        Read one item by its ref from list or an ask citation.
   ask         Ask a question over context you may read.
-  ask-check   Check whether what earlier answers cited changed, with no content.
+  ask-check   Check whether you can still read what earlier answers cited, with no content.
   ask-source  Read one source-evidence packet an Ask citation names.
   runs        Read and act on impact runs, their open items, and sweeps.
   reviews     List, open and decide your meeting reviews.
@@ -287,7 +287,7 @@ Reads one bounded immutable source-evidence packet cited by Ask. Use the exact c
 `,
   "ask-check": `usage: echo-brain person ask-check --request <json>
 
-Checks whether the sources earlier answers cited changed, with no content. The request is {"schema_version":1,"kind":"echo-person-ask-check-request-v1","items":[...]}: 1 to 100 items, each {"asked_at":<UTC millisecond time the turn was asked>,"citation":<the citation exactly as the answer carried it>}, for an approved record, a source revision, a follow-up, a ticket or a page; a ticket may add the "marker" an earlier check returned. Each item is answered in order: same, changed, unreadable (never why) or unknown (its tool is not connected, failed or ran out of time), and a readable ticket with its current marker. Prints echo-person-ask-check-v1 as its last line.
+Checks whether you can still read the sources earlier answers cited, with no content. The request is {"schema_version":1,"kind":"echo-person-ask-check-request-v1","items":[...]}: 1 to 100 items, each {"asked_at":<UTC millisecond time the turn was asked>,"citation":<the citation exactly as the answer carried it>}, for an approved record, a source revision, a follow-up, a ticket or a page; a ticket's "marker" from an earlier check is accepted and ignored. Each item is answered in order: same (you can read it now), unreadable (never why) or unknown (its tool is not connected, failed or ran out of time); a readable ticket may also carry a marker, which you can ignore. Prints echo-person-ask-check-v1 as its last line.
 `,
   directory: `usage: echo-brain person directory [--query <text>] [--limit <1-10>] [--cursor <opaque-base64url>]
 

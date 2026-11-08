@@ -44,12 +44,14 @@ describe('person Ask source check client (ADR-0047)', () => {
     expect(new URL(String(url)).pathname).toBe('/v1/person/ask/check');
     expect(init).toMatchObject({ method: 'POST', headers: { authorization: 'Bearer bearer', 'content-type': 'application/json' } });
     expect(JSON.parse(String(init!.body))).toEqual(REQUEST);
+    // A readable ticket may come without its marker (a later Authority stops sending it).
+    const unmarked = { ...CHECK, items: [{ state: 'same' }, { state: 'same' }] };
+    await expect(client(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(unmarked))).askCheck('bearer', REQUEST as never)).resolves.toEqual(unmarked);
   });
 
   it('refuses an answer that is not the answer to its request', async () => {
     for (const answer of [
       { ...CHECK, items: [{ state: 'same', marker: MARKER }] },
-      { ...CHECK, items: [{ state: 'same' }, { state: 'changed' }] },
       { ...CHECK, items: [{ state: 'same', marker: MARKER }, { state: 'changed', marker: MARKER }] },
       { ...CHECK, items: [{ state: 'unreadable', marker: MARKER }, { state: 'changed' }] },
       { ...CHECK, items: [{ state: 'same', marker: MARKER }, { state: 'changed', reason: 'reassigned' }] },
@@ -136,6 +138,6 @@ describe('person Ask source check client (ADR-0047)', () => {
     expect(output.stdout).not.toContain('not_supported');
     output.stdout = '';
     expect(await run(['--help'])).toBe(0);
-    expect(output.stdout).toContain('ask-check   Check whether what earlier answers cited changed, with no content.');
+    expect(output.stdout).toContain('ask-check   Check whether you can still read what earlier answers cited, with no content.');
   });
 });
