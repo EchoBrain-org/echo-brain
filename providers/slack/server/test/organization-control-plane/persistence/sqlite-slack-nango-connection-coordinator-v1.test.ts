@@ -1,11 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
-import { applyOrganizationControlBaselineV4 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
-import { openOrganizationControlDatabase } from "../../../../../../packages/organization-control-plane/src/persistence/open-organization-control-database.js";
+import { describe, expect, it, vi } from "vitest";
+import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { FileOrganizationSecretStore } from "../../../../../../packages/organization-control-plane/src/security/file-secret-store.js";
 import type { NangoSlackConnectionV1 } from "../../../src/organization-control-plane/adapters/nango/nango-connection-client-v1.js";
 import { findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "../../../src/organization-control-plane/application/slack-app-credentials-v1.js";
@@ -14,19 +11,14 @@ import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, type OrganizationSecretStore, type Ver
 import { slackConnectionVerificationEvidenceSha256V1 } from "../../../src/organization-control-plane/application/slack-connection-verification-evidence-v1.js";
 import { readActiveSlackConnectionV1, slackNangoAppPublicConfigurationSha256V1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { activateNangoSlackConnectionV1, rebindNangoSlackConnectionV1, SlackConnectionConflictError, SlackConnectionRefusedErrorV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
+import { COORDINATES, insertSlackConnectionRows, openSlackControlDatabase, slackStateDirectory } from "../../control-database-fixture.js";
 
 /** The six scopes the retired public-channel option granted; a legacy token may still hold them. */
 const LEGACY_SIX_SCOPES = Object.freeze(["channels:history", "channels:read", ...SLACK_PRIVATE_APP_BOT_SCOPES_V1]);
 
-const COORDINATES = Object.freeze({
-  authority_id: "oau_00000000-0000-4000-8000-000000000001",
-  organization_id: "org_00000000-0000-4000-8000-000000000001",
-  state_lineage_id: "lineage-00000000-0000-4000-8000-000000000001",
-});
 const NOW = "2026-09-30T00:00:00.000Z";
 const LATER = "2026-09-30T00:10:00.000Z";
 const BOT_TOKEN = "xoxb-nango-bot-token-only";
-const directories: string[] = [];
 
 interface TestState {
   readonly database: Database.Database;
@@ -35,19 +27,8 @@ interface TestState {
 }
 
 function setup(): TestState {
-  const directory = realpathSync(mkdtempSync(join(tmpdir(), "echo-slack-nango-")));
-  directories.push(directory);
-  const database = openOrganizationControlDatabase(join(directory, "integrations.sqlite"));
-  applyOrganizationControlBaselineV4(database);
-  database
-    .prepare(
-      `INSERT INTO organization_control_plane_metadata
-       (singleton, control_plane_id, organization_id, authority_id,
-        authority_descriptor_sha256, created_at)
-       VALUES (1, ?, ?, ?, ?, ?)`,
-    )
-    .run("ocp_00000000-0000-4000-8000-000000000001", COORDINATES.organization_id, COORDINATES.authority_id, canonicalSha256({ descriptor: "test" }), NOW);
-  return { database, directory, secrets: new FileOrganizationSecretStore(join(directory, "secrets")) };
+  const directory = slackStateDirectory();
+  return { database: openSlackControlDatabase(directory), directory, secrets: new FileOrganizationSecretStore(join(directory, "secrets")) };
 }
 
 function pendingBundle(state: TestState, appId = "A0APP1") {
@@ -190,16 +171,8 @@ function seedPreInAppConnection(database: Database.Database): void {
     verification_event_id: "verify_con_legacy", verification_evidence_sha256: canonicalSha256({ legacy: "verified" }),
     verification_revision: 1, verified_at: NOW,
   };
-  database.prepare(`INSERT INTO organization_tool_connection_contracts (connection_id, contract_json, contract_sha256, created_at)
-    VALUES (?, ?, ?, ?)`).run("con_legacy", canonicalJson(contract), canonicalSha256(contract), NOW);
-  database.prepare(`INSERT INTO organization_tool_connection_current_state (connection_id, connection_contract_sha256, state_json,
-    state_sha256, current_status, updated_at) VALUES (?, ?, ?, ?, 'active', ?)`)
-    .run("con_legacy", canonicalSha256(contract), canonicalJson(state), canonicalSha256(state), NOW);
+  insertSlackConnectionRows(database, { contract, state });
 }
-
-afterEach(() => {
-  for (const value of directories.splice(0)) rmSync(value, { recursive: true, force: true });
-});
 
 describe("Nango Slack connection activation v1", () => {
   it("keeps a baseline rebind exact: a six-scope token is a workspace mismatch", async () => {
