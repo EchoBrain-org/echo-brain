@@ -1,8 +1,6 @@
 import { APPROVAL_DECISION_RECORD_INPUT_CODEC_V2, createRecordInputCodecRegistryV4 } from '@echo-brain/organization-protocol';
-import {
-  createRecordPolicyFactProjectorRegistryV1, type RecordApproverProjectorV1, type RecordPolicyFactProjectorRegistryV1,
-} from '@echo-brain/organization-record/organization-record-api-v1';
-import { createApprovalDecisionPolicyProjectorV1, projectApprovalDecisionApproverV1 } from './approval-decision-projection-v1.js';
+import { createRecordPolicyFactProjectorRegistryV1, type RecordPolicyFactProjectorRegistryV1 } from '@echo-brain/organization-record/organization-record-api-v1';
+import { createApprovalDecisionPolicyProjectorV1 } from './approval-decision-projection-v1.js';
 
 /**
  * Every record protocol this Authority appends or reads: approval-decision V2, the only record the approval publisher writes.
@@ -13,4 +11,3 @@ export const AUTHORITY_RECORD_INPUT_CODECS_V1 = createRecordInputCodecRegistryV4
 export function authorityRecordPolicyProjectorsV1(): RecordPolicyFactProjectorRegistryV1 {
   return createRecordPolicyFactProjectorRegistryV1([createApprovalDecisionPolicyProjectorV1()]);
 }
-export const AUTHORITY_RECORD_APPROVER_PROJECTORS_V1: readonly RecordApproverProjectorV1[] = Object.freeze([projectApprovalDecisionApproverV1]);

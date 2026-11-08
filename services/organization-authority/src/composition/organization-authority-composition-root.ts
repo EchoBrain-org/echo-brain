@@ -5,12 +5,11 @@ import {
   SqliteTriggerRunsV1,
 } from "../adapters/persistence/sqlite/trigger-runs-v1.js";
 import {
-  AUTHORITY_RECORD_APPROVER_PROJECTORS_V1,
   AUTHORITY_RECORD_INPUT_CODECS_V1,
   authorityRecordPolicyProjectorsV1,
 } from "./authority-record-protocols-v1.js";
+import { projectApprovalDecisionApproverV1 } from "./approval-decision-projection-v1.js";
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
-import { composeRecordApproverProjectorsV1 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   openOrganizationAuthorityRuntime,
   type OrganizationAuthorityRuntimeConfig,
@@ -454,12 +453,8 @@ export async function openOrganizationAuthorityService(
                 : { seams: dependencies.confluence_person_live_seams }),
             }))),
     ],
-    record_approver: composeRecordApproverProjectorsV1([
-      ...AUTHORITY_RECORD_APPROVER_PROJECTORS_V1,
-      ...(dependencies.api?.record_approver === undefined
-        ? []
-        : [dependencies.api.record_approver]),
-    ]),
+    // The one record protocol's approver; a test may inject another in its place.
+    record_approver: dependencies.api?.record_approver ?? projectApprovalDecisionApproverV1,
     external_identity_runtime_bundle:
       dependencies.api?.external_identity_runtime_bundle ?? slack.external_identity,
   };

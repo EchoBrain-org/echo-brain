@@ -46,13 +46,14 @@ describe("Authority record protocol composition", () => {
     expect(runtimeConfig.record_policy_fact_projectors!.policyBinding(verified as never).policy_id).toBe(PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID);
     expect(approver(envelope)).toEqual({ ...COORDINATES, approval_id: RECORD_ID, ...APPROVER });
   });
-  it("composes an injected approver beside the approval decision approver", async () => {
+  it("uses an injected approver in place of the approval decision approver", async () => {
     const { envelope } = await publishedDecision();
     const alternate = { ...COORDINATES, approval_id: "alternate", ...APPROVER };
-    const { approver } = await composed({ api: { record_approver: value => value.protocol === "alternate" ? alternate : undefined } });
-    expect(approver(envelope)).toEqual({ ...COORDINATES, approval_id: RECORD_ID, ...APPROVER });
+    const injected = (value: JsonObject) => value.protocol === "alternate" ? alternate : undefined;
+    const { approver } = await composed({ api: { record_approver: injected } });
+    expect(approver).toBe(injected);
     expect(approver({ protocol: "alternate" })).toEqual(alternate);
-    expect(approver({ protocol: "unknown" })).toBeUndefined();
+    expect(approver(envelope)).toBeUndefined();
   });
   it("fails closed on an unknown record protocol", async () => {
     const { envelope, signer } = await publishedDecision();

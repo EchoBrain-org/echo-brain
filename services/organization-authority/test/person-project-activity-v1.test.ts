@@ -7,7 +7,6 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalSha256, sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { PERSON_PROJECT_ACTIVITY_PATH_V1, validatePersonProjectActivityV1 } from '@echo-brain/organization-api';
-import { composeRecordApproverProjectorsV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
 import type { ImpactItemDraftV1, SqliteImpactItemsV1 } from '../src/adapters/persistence/sqlite/impact-items-v1.js';
 import { SqlitePersonProjectActivityV1 } from '../src/adapters/persistence/sqlite/person-project-activity-v1.js';
@@ -16,7 +15,8 @@ import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sq
 import { enqueueApprovedRecordRunV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import { createPersonDocumentApplicationV1 } from '../src/application/document-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
-import { AUTHORITY_RECORD_APPROVER_PROJECTORS_V1, AUTHORITY_RECORD_INPUT_CODECS_V1 } from '../src/composition/authority-record-protocols-v1.js';
+import { AUTHORITY_RECORD_INPUT_CODECS_V1 } from '../src/composition/authority-record-protocols-v1.js';
+import { projectApprovalDecisionApproverV1 } from '../src/composition/approval-decision-projection-v1.js';
 import { createPersonProjectActivityV1, type CreatePersonProjectActivityV1Options } from '../src/composition/person-project-activity-v1.js';
 import { createRecordProjectAuthorizationV1 } from '../src/composition/person-record-project-scope-v1.js';
 import { createPersonRecordSearchRouteV1, type CreatePersonRecordSearchRouteV1Options, type PersonRecordSearchRouteV1 } from '../src/composition/person-record-search-route.js';
@@ -44,7 +44,7 @@ function recordRoute(f: OpenItemsFixtureV1, overrides: Partial<CreatePersonRecor
     state_directory, ...f.context.coordinates, retrieval_contract_sha256: readableSearchGenerationContractV1().retrieval_contract_sha256,
     sessions: f.openItemsOptions.sessions, authority: f.db, record: f.recordLog, audit: new SqlitePersonRecordReadAuditV1(f.db),
     capture_projects: createRecordProjectAuthorizationV1(new SqliteProjectContextRepositoryV1(f.db)),
-    record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1, record_approver: composeRecordApproverProjectorsV1(AUTHORITY_RECORD_APPROVER_PROJECTORS_V1),
+    record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1, record_approver: projectApprovalDecisionApproverV1,
     ...overrides,
   });
 }
