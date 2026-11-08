@@ -53,7 +53,7 @@ the session; the Authority owns everything organizational.
   [ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md). Answer layout v1
   ([ADR-0045](../decisions/ADR-0045-ask-answer-layout.md)) and the plain
   answer are retired: the desktop draws an answer's v2 blocks, and a timeline
-  turn saved with a v1 layout or without blocks loads as paragraphs.
+  file holding a turn saved with a v1 layout or without blocks reads as empty.
 - Item routing on the decision page:
   [ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md),
   [ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md).
