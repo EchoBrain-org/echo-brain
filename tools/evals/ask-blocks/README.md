@@ -4,7 +4,7 @@ This opt-in evaluation is the gate on Ask's built writer: the writer of an
 answer in blocks
 ([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md)), the
 answer every Ask gets. It has two case sets, each decided on its own: the 15
-block cases (rules 1 to 5 below, the default) and the 10
+block cases (`--case-set main`, the default; rules 1 to 5 below) and the 10
 [wording cases](#wording-cases-pre-registered) (`--case-set wording`, three
 rules). Research is scripted: for each case one search returns
 its synthetic items and research opens them all, so every trial hands the
@@ -19,13 +19,13 @@ node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/cr
   --writer claude-account --claude-executable /absolute/path/to/claude
 ```
 
-`--out` must be a private directory outside the repository. The report keeps
-full traces: every writer prompt, raw reply and repair, and the released
-answer. Every case is synthetic, so the prompts carry no person's data; the
-credential is read only by the product bundle and never written. `--cases`
-and `--trials` make a smaller diagnostic run, which never decides anything.
-The command exits 0 only when a complete run passes its gate, 1 otherwise, and
-2 on a usage error.
+`--out` must be a private directory outside the repository. A block run's
+report keeps full traces: every writer prompt, raw reply and repair, and the
+released answer. Every case is synthetic, so the prompts carry no person's
+data; the credential is read only by the product bundle and never written.
+(A wording run keeps less: see below.) `--cases` and `--trials` make a smaller
+diagnostic run, which never decides anything. A block run exits 0 when it
+completes, and 2 on a usage error.
 
 The evaluation began on 2026-11-02 as a comparison of block catalogs, with a
 model judge, the founder's blind ranking page, held-out quick-lead questions
@@ -150,7 +150,7 @@ clean-v1-20261026-ask-timeline-aa79d90 and choose who can read it."": the lead
 restated the question, and the release name was written again. The wording
 cases measure how often the writer does that, before and after a change to its
 wording rules. They run through the same gate, asked at 2026-10-26T17:00Z, with
-a 60-second default timeout per trial:
+a 60-second default timeout per trial (85 seconds at most):
 
 ```sh
 node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory \
@@ -158,10 +158,13 @@ node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/cr
 ```
 
 They were their own evaluation, `tools/evals/ask-wording`, until 2026-11-08,
-when its runner was folded into this one; its cases and grader moved here byte
-for byte, so the cases' SHA-256 is unchanged, and its records follow the block
-records below. Its report kept no prompt or raw reply; the gate's report keeps
-full traces, as every case is synthetic.
+when its runner was folded into this one; its cases moved here byte for byte,
+so their SHA-256 is unchanged, and its grading is unchanged; its records follow
+the block records below. A wording run's report keeps, as its own did, case
+ids, each trial's statements, lead and grade (synthetic text), the writer
+prompt's SHA-256 and model metadata; never prompts, raw replies, credentials
+or provider payloads. It exits 0 when a complete run passes all three rules
+(the wording ships), 1 otherwise, and 2 on a usage error.
 
 Written before any run. Cases live in [`wording-cases.json`](wording-cases.json);
 `wording.mjs` refuses a different set. The asker is Noor Haddad; today is
@@ -208,11 +211,35 @@ deterministic: no model judge.
 
 A trial with no statement (an error, or code's fallback when the writer gave
 nothing usable) passes no rule. The wording ships when all three rules pass in
-a complete run, all 10 cases three times (the report's `decision.passes`; its
-`summary` keeps each rule's count, each group's and the measures). The same run
+a complete run, all 10 cases three times (the report's `decision.passes` and
+`summary.wording_ships`, which a smaller run never sets; its `summary` keeps
+each rule's count, each group's and the measures). The same run
 on the code before a change is reported beside it, with each trial's mean and
 longest shared run, its lead's length, and how many times long identifiers were
 written.
+
+## Changes after the diagnostic run
+
+A diagnostic run on 2026-11-02 (three cases, one trial, at `9d626c2`) decided
+nothing and found two faults in the harness, fixed before the full run. No
+rule, threshold or catalog entry changed.
+
+- The provider refused the `templates` reply schema, a template given as a
+  choice of five object shapes, on every call (HTTP 400). The schema is now one
+  template object whose `name` is one of the five, and code refuses a field the
+  named template does not take, as the five shapes did.
+- Two order facts could not tell order. In `week-events` the fourth event's
+  fact was "certificate", which the second event's text also says; it is now
+  the certificate's date, Nov 3, which only the fourth event says. In
+  `dvt-date-moves` each move's reason sat beside its new date, where a writer
+  may name either first; the case now checks the three dates, in order.
+
+## The first full run, 2026-11-02
+
+The first full run (2026-11-02, at `2834997`) lost calls when OpenRouter
+refused them with HTTP 402, for lack of credit: trial 1 was complete, trial 2
+lost 15 calls, trial 3 113, and the judge 57 of 59. It is kept as a partial
+report and decides nothing.
 
 ## Result, 2026-11-02 (rules 1 to 5)
 
@@ -736,6 +763,9 @@ short answer with its list below is the shape a later attempt should reach,
 without a second writer call, and the held-out questions can test it beyond
 the 15 cases.
 
+2026-11-08: lean-down wave 1 (ASK-3) retired the held-out questions and
+`--case-set held-out`; they can be restored from `1f2e20e`.
+
 ## Quick lead on the first try, 2026-11-02 (pre-registered)
 
 Written before any run. Asked whether to try for the check's shape in the
@@ -875,6 +905,9 @@ On seeing this result the founder closed the tuning: "no further tuning
 needed. i want to use it live". ADR-0051 lists this change beside the check
 among its rejected options. This record, the held-out questions and
 `--case-set held-out` stay.
+
+2026-11-08: lean-down wave 1 (ASK-3) retired the held-out questions and
+`--case-set held-out`; they can be restored from `1f2e20e`.
 
 ## Layout v1 retired, 2026-11-04
 

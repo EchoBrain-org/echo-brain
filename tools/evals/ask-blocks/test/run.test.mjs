@@ -79,18 +79,23 @@ test("makes no request without an explicit run and a private credential file, an
   assert.throws(() => parseArgs([...base, "--cases", "soak-owner,soak-owner"]), /--cases must select known cases, each once/u);
   assert.throws(() => parseArgs([...base, "--trials", "4"]), /--trials must be an integer from 1 to 3/u);
   const parsed = parseArgs([...base, "--cases", "soak-owner", "--trials", "1"]);
-  assert.deepEqual([parsed.caseSet, parsed.trials, parsed.concurrency, parsed.timeoutMs, parsed.caseIds], ["blocks", 1, 4, 120_000, ["soak-owner"]]);
-  assert.deepEqual([parseArgs(base).trials, parseArgs(base).caseIds], [3, null]);
-  // Each case set names its own cases and default timeout.
-  assert.throws(() => parseArgs([...base, "--case-set", "other"]), /--case-set must be blocks or wording/u);
+  assert.deepEqual([parsed.caseSet, parsed.trials, parsed.concurrency, parsed.timeoutMs, parsed.caseIds], ["main", 1, 4, 120_000, ["soak-owner"]]);
+  assert.deepEqual([parseArgs(base).trials, parseArgs(base).caseIds, parseArgs([...base, "--case-set", "main"]).caseSet], [3, null, "main"]);
+  // Each case set names its own cases and its own timeout bounds.
+  assert.throws(() => parseArgs([...base, "--case-set", "other"]), /--case-set must be main or wording/u);
   assert.throws(() => parseArgs([...base, "--case-set", "wording", "--cases", "soak-owner"]), /--cases must select known cases/u);
   assert.deepEqual([parseArgs([...base, "--case-set", "wording", "--cases", "owner-plain"]).caseIds, parseArgs([...base, "--case-set", "wording"]).timeoutMs], [["owner-plain"], 60_000]);
+  assert.equal(parseArgs([...base, "--timeout-ms", "180000"]).timeoutMs, 180_000);
+  assert.throws(() => parseArgs([...base, "--timeout-ms", "180001"]), /--timeout-ms must be an integer from 15000 to 180000/u);
+  assert.equal(parseArgs([...base, "--case-set", "wording", "--timeout-ms", "85000"]).timeoutMs, 85_000);
+  assert.throws(() => parseArgs([...base, "--case-set", "wording", "--timeout-ms", "120000"]), /--timeout-ms must be an integer from 15000 to 85000/u);
 });
 
 test("reads no credential and writes nowhere but a private directory outside the repository", (t) => {
   const { root, credential } = privateRoot(t);
   assert.deepEqual(parseArgs(["--help"]), { help: true });
   assert.match(help(), /--credential-file/u);
+  assert.match(help(), /answer layout v2/u);
   assert.throws(() => parseArgs(["--credential-file", credential, "--out", join(root, "out")]), /unless --run is explicit/u);
   chmodSync(credential, 0o644);
   assert.throws(() => parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out")]), /not be readable by group or other/u);
@@ -197,13 +202,14 @@ test("writes only its report to --out, as --help says", async () => {
   assert.deepEqual(readdirSync(out), [basename(reportPath)]);
 });
 
-test("runs a wording case through the kernel, only the writer reaching the model, and grades its lead", async (t) => {
+test("runs a wording case through the kernel, only the writer reaching the model, grades its lead and keeps no prompt", async (t) => {
   const { root } = privateRoot(t);
   const options = { run: true, credentialFile: null, out: root, caseSet: "wording", caseIds: [founder.id], trials: 1, concurrency: 1, timeoutMs: 15_000 };
   const structured = wordingWriter();
   const { report } = await run(options, { loaded: { structured_output: structured, generation }, progress: () => undefined });
   const [trial] = report.trials;
-  assert.deepEqual([trial.response.outcome, trial.attempts.length, trial.grade.rules], ["answered", 1, { no_restating: true, long_ids_once: true, nothing_lost: true }]);
+  // No capture: the writer was called once, for the trial itself.
+  assert.deepEqual([structured.inputs.length, trial.outcome, trial.attempts.length, trial.grade.rules], [1, "answered", 1, { no_restating: true, long_ids_once: true, nothing_lost: true }]);
   // The writer read Ask's prompt, block catalog and schema, and both items, the follow-up first, as the asker sees them.
   const [input] = structured.inputs;
   const shown = JSON.parse(input.user_prompt);
@@ -212,11 +218,20 @@ test("runs a wording case through the kernel, only the writer reaching the model
   assert.deepEqual([shown.asked_by, shown.today, shown.evidence.map((item) => item.kind)], ["Noor Haddad", "2026-10-26", ["follow_up", "decision"]]);
   // The lead is the answer block's statement.
   assert.equal(trial.grade.lead, "It is Noor Haddad.");
+  // Only the writer prompt's digest and model metadata are kept: no prompt, raw reply or released answer.
+  assert.deepEqual(trial.attempts[0], { attempt: 1, kind: "first", system_prompt_sha256: report.writer_prompt_sha256[0], max_output_tokens: input.max_output_tokens,
+    finish_reason: "stop", usage: { input_tokens: 4000, output_tokens: 60, total_tokens: 4060 }, provider_latency_ms: 900, elapsed_ms: trial.attempts[0].elapsed_ms, valid: true });
+  assert.equal(report.writer_prompt_sha256.length, 1);
+  assert.deepEqual(["prompts", "system_prompts", "writer"].filter((field) => Object.hasOwn(report, field)), []);
+  assert.deepEqual(["read", "response"].filter((field) => Object.hasOwn(trial, field)), []);
+  assert.ok(!JSON.stringify(report).includes("You write Echo's final answer"), "no prompt text is kept");
+  assert.ok(!JSON.stringify(report).includes('"blocks":[{"block"'), "no raw reply is kept");
   // A writer that cannot be reached keeps its safe error class only; code's fallback writes no statement, so it passes nothing.
   const broken = { async generate_with_observation() { throw Object.assign(new Error("secret provider detail"), { diagnostic: { failure_class: "adapter_http", http_status: 401 } }); } };
-  const refused = (await run(options, { loaded: { structured_output: broken, generation }, progress: () => undefined })).report.trials[0];
-  assert.deepEqual([refused.grade.statements, refused.grade.rules], [[], { no_restating: false, long_ids_once: false, nothing_lost: false }]);
-  assert.deepEqual(refused.attempts[0].error, { name: "Error", failure_class: "adapter_http", http_status: 401, finish_reason: null, usage: null, provider_latency_ms: null });
+  const refused = (await run(options, { loaded: { structured_output: broken, generation }, progress: () => undefined })).report;
+  assert.deepEqual([refused.trials[0].grade.statements, refused.trials[0].grade.rules], [[], { no_restating: false, long_ids_once: false, nothing_lost: false }]);
+  assert.deepEqual(refused.trials[0].attempts[0].error, { name: "Error", failure_class: "adapter_http", http_status: 401, finish_reason: null, usage: null, provider_latency_ms: null });
+  assert.deepEqual(refused.errors, { writer_calls: 1, trials_without_reply: 1 });
   assert.ok(!JSON.stringify(refused).includes("secret provider detail"));
 });
 
@@ -227,16 +242,17 @@ test("writes a private report that applies the wording cases' three rules, and d
   const passing = await run(options, { loaded: { structured_output: wordingWriter(), generation }, progress: () => undefined });
   assert.equal(statSync(passing.reportPath).mode & 0o777, 0o600);
   const report = JSON.parse(readFileSync(passing.reportPath, "utf8"));
-  assert.deepEqual([report.kind, report.case_set, report.complete, report.decision.passes, report.trials.length], ["echo-ask-blocks-evaluation-v1", "wording", true, true, 30]);
+  assert.deepEqual([report.kind, report.case_set, report.complete, report.summary.wording_ships, report.decision.passes, report.trials.length], ["echo-ask-blocks-evaluation-v1", "wording", true, true, true, 30]);
   assert.deepEqual(report.model, { route: "openrouter", adapter_id: "fixture", answer_model: "fixture-model" });
   assert.deepEqual(report.summary.groups.names_long_id, { trials: 18, no_restating: 18, long_ids_once: 18, nothing_lost: 18, errors: 0 });
   // Restating the question, as the founder's staging answer did, keeps the wording from shipping.
   const restating = await run({ ...options, caseIds: [founder.id, "owner-plain"], trials: 1 },
     { loaded: { structured_output: wordingWriter((entry) => `${entry.expect.facts[0].at(-1)} answers: ${entry.question}`), generation }, progress: () => undefined });
   assert.deepEqual([restating.report.complete, restating.report.summary.rules.no_restating.passed_trials, restating.report.summary.wording_ships, restating.report.decision.passes], [false, 0, false, null]);
-  // A smaller run that passes every rule keeps its scores, and still decides nothing.
+  // A smaller run that passes every rule keeps its scores, and still never ships the wording.
   const diagnostic = await run({ ...options, caseIds: ["owner-plain"], trials: 1 }, { loaded: { structured_output: wordingWriter(), generation }, progress: () => undefined });
-  assert.deepEqual([diagnostic.report.complete, Object.values(diagnostic.report.summary.rules).map((rule) => rule.passed), diagnostic.report.decision.passes], [false, [true, true, true], null]);
+  assert.deepEqual([diagnostic.report.complete, Object.values(diagnostic.report.summary.rules).map((rule) => rule.passed), diagnostic.report.summary.wording_ships, diagnostic.report.decision.passes],
+    [false, [true, true, true], false, null]);
   assert.equal(readdirSync(out).length, 3);
 });
 

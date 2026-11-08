@@ -186,3 +186,21 @@ test("makes a complete gate run, every case three times, and decides it", async 
   const fewer = await run(options(out, { caseIds: null, trials: 1, concurrency: 6 }), { loaded: { structured_output: route(() => TICKET_REPLY), generation }, progress: () => undefined });
   assert.deepEqual([fewer.report.complete, fewer.report.decision.passes], [false, null]);
 });
+
+test("counts the writer calls that failed and the trials left without a reply", async () => {
+  const out = mkdtempSync(join(tmpdir(), "ask-blocks-built-errors-"));
+  const outage = (status) => Object.assign(new Error(String(status)), { diagnostic: { failure_class: "adapter_http", http_status: status } });
+  // The first reply has no blocks; its repair meets a 402, so the kernel releases code's fallback, without blocks.
+  const failing = { inputs: [], async generate_with_observation(input) {
+    this.inputs.push(input);
+    if (this.inputs.length > 1) throw outage(402);
+    return { value: { lists: [], not_found: [] }, finish_reason: "stop", usage: null, provider_latency_ms: 1 };
+  } };
+  const { report } = await run(options(out), { loaded: { structured_output: failing, generation }, progress: () => undefined });
+  assert.deepEqual(report.trials[0].attempts.map((attempt) => [attempt.kind, attempt.error?.http_status ?? null]), [["first", null], ["repair", 402]]);
+  assert.deepEqual([report.trials[0].grade.valid, report.errors], [false, { writer_calls: 1, trials_without_reply: 0 }]);
+  // A 401 on the first call is not repeated, so the trial has no reply at all.
+  const refused = { async generate_with_observation() { throw outage(401); } };
+  const none = (await run(options(out), { loaded: { structured_output: refused, generation }, progress: () => undefined })).report;
+  assert.deepEqual([none.trials[0].attempts.length, none.trials[0].read, none.trials[0].grade.valid, none.errors], [1, null, false, { writer_calls: 1, trials_without_reply: 1 }]);
+});

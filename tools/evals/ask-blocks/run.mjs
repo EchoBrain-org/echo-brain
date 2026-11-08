@@ -24,14 +24,22 @@ const ROOT = resolve(TOOL_DIRECTORY, "../../..");
 
 /**
  * The two pre-registered case sets (README.md): the cases a run loads, the fixture names their desk items carry, when
- * they are asked, the default per-trial timeout, and how a trial is graded and a run summarized and decided.
+ * they are asked, the per-trial timeout (default and most), whether the report keeps full traces, how a trial is graded
+ * and a run summarized and decided, and whether a run that does not pass exits 1.
+ *
+ * The block cases (`main`) keep full traces of every synthetic prompt and reply, from one capture of each case's writer
+ * prompts. The wording cases keep, as their own evaluation did, case ids, each trial's statements, lead and grade, the
+ * writer prompt's SHA-256 and model metadata: never a prompt or a raw reply, so they need no capture.
  */
 export const CASE_SETS = Object.freeze({
-  blocks: Object.freeze({ file: CASES_FILE, count: CASE_COUNT, load: loadCases, fixture: "blocks", askedAt: (document) => document.asked_at, timeoutMs: 120_000,
-    grade: (caseDefinition, { read, evidence }) => gradeTrial(caseDefinition, read ?? { valid: false }, evidence), summarize, decide: decideGate }),
-  // The wording cases are asked mid-morning of their today, in their time zone.
+  main: Object.freeze({ file: CASES_FILE, count: CASE_COUNT, load: loadCases, fixture: "blocks", askedAt: (document) => document.asked_at,
+    timeoutMs: 120_000, maxTimeoutMs: 180_000, traces: true, exitsOnFailure: false,
+    grade: (caseDefinition, { read, evidence }) => gradeTrial(caseDefinition, read ?? { valid: false }, evidence), summarize: (trials) => summarize(trials), decide: decideGate }),
+  // The wording cases are asked mid-morning of their today, in their time zone; their wording ships only from a complete run.
   wording: Object.freeze({ file: WORDING_CASES_FILE, count: Object.values(GROUPS).reduce((total, count) => total + count, 0), load: loadWordingCases, fixture: "wording",
-    askedAt: () => "2026-10-26T17:00:00.000Z", timeoutMs: 60_000, grade: (caseDefinition, { response }) => gradeWording(caseDefinition, response), summarize: summarizeRules,
+    askedAt: () => "2026-10-26T17:00:00.000Z", timeoutMs: 60_000, maxTimeoutMs: 85_000, traces: false, exitsOnFailure: true,
+    grade: (caseDefinition, { response }) => gradeWording(caseDefinition, response),
+    summarize: (trials, complete) => { const summary = summarizeRules(trials); return Object.freeze({ ...summary, wording_ships: complete && summary.wording_ships }); },
     decide: (summary, complete) => Object.freeze({ complete, passes: complete ? summary.wording_ships : null, rules: summary.rules }) }),
 });
 /** A trial makes at most two writer calls: its reply and the kernel's one repair or retry. */
@@ -44,30 +52,35 @@ export function help() {
     "  node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory [options]",
     "",
     "Options:",
-    `  --case-set SET      blocks (default: the ${CASE_SETS.blocks.count} block cases, rules 1 to 5) or wording (the ${CASE_SETS.wording.count} wording cases, its three rules).`,
+    `  --case-set SET      main (default: the ${CASE_SETS.main.count} block cases, rules 1 to 5) or wording (the ${CASE_SETS.wording.count} wording cases, its three rules).`,
     "  --cases id,id       Select cases of the set (default: all).",
     `  --trials N          Trials per case, 1 through ${TRIALS} (default: ${TRIALS}).`,
     "  --concurrency N     Model calls at once, 1 through 6 (default: 4).",
-    "  --timeout-ms N      Per-trial timeout of the whole Ask, 15000 through 180000 (default: 120000; 60000 for wording).",
+    "  --timeout-ms N      Per-trial timeout of the whole Ask, 15000 through 180000 (default: 120000); for wording 15000",
+    "                      through 85000 (default: 60000).",
     "  --writer ROUTE      openrouter (default) or claude-account: the product's personal Claude account writer, the",
     "                      same model through the Claude Agent SDK and your own signed-in claude binary.",
     "  --claude-executable PATH  With --writer claude-account: the signed-in claude binary.",
     "  --help              Show this text without reading a credential or making a request.",
     "",
-    "Only a complete run decides its set's gate: every case, three trials. A smaller run is a diagnostic.",
-    "--out must be outside the repository and private; the report is written there with mode 0600, with full traces of",
-    "every synthetic prompt and reply, never a credential.",
-    "Exit 0 when a complete run passes its gate; 1 when a rule fails or the run is not complete; 2 on a usage error.",
+    "Each trial asks one synthetic question through the kernel, its answer in blocks (answer layout v2) as every Ask's is;",
+    "only the writer's call goes to the model. Only a complete run decides its set's gate: every case, three trials.",
+    "A smaller run is a diagnostic.",
+    "--out must be outside the repository and private; the report is written there with mode 0600. A block run keeps",
+    "full traces of every synthetic prompt and reply; a wording run keeps case ids, each trial's statements, lead and",
+    "grade, the writer prompt's digest and model metadata, never prompts or raw replies. Neither keeps a credential.",
+    "A wording run exits 0 when a complete run passes all three rules (the wording ships) and 1 otherwise; a block run",
+    "exits 0 when it completes. A usage error exits 2.",
   ].join("\n");
 }
 
 export function parseArgs(argv) {
-  const options = { run: false, credentialFile: null, out: null, caseSet: "blocks", caseIds: null, trials: TRIALS, concurrency: 4, timeoutMs: null, writer: "openrouter", claudeExecutable: null };
+  const options = { run: false, credentialFile: null, out: null, caseSet: "main", caseIds: null, trials: TRIALS, concurrency: 4, timeoutMs: null, writer: "openrouter", claudeExecutable: null };
   const list = (value) => value.split(",").map((part) => part.trim()).filter(Boolean);
   if (readFlags(argv, options, {
     "--credential-file": (value) => { options.credentialFile = value; },
     "--out": (value) => { options.out = value; },
-    "--case-set": (value) => { if (!Object.hasOwn(CASE_SETS, value)) throw new Error("--case-set must be blocks or wording"); options.caseSet = value; },
+    "--case-set": (value) => { if (!Object.hasOwn(CASE_SETS, value)) throw new Error("--case-set must be main or wording"); options.caseSet = value; },
     "--cases": (value) => { options.caseIds = list(value); },
     "--trials": (value) => { options.trials = Number(value); },
     "--concurrency": (value) => { options.concurrency = Number(value); },
@@ -78,8 +91,9 @@ export function parseArgs(argv) {
   assertExplicitRun(options);
   options.trials = boundedInteger(options.trials, "--trials", 1, TRIALS);
   options.concurrency = boundedInteger(options.concurrency, "--concurrency", 1, 6);
-  options.timeoutMs = boundedInteger(options.timeoutMs ?? CASE_SETS[options.caseSet].timeoutMs, "--timeout-ms", 15_000, 180_000);
-  const known = new Set(CASE_SETS[options.caseSet].load().cases.map((entry) => entry.id));
+  const set = CASE_SETS[options.caseSet];
+  options.timeoutMs = boundedInteger(options.timeoutMs ?? set.timeoutMs, "--timeout-ms", 15_000, set.maxTimeoutMs);
+  const known = new Set(set.load().cases.map((entry) => entry.id));
   if (options.caseIds !== null && (options.caseIds.length === 0 || new Set(options.caseIds).size !== options.caseIds.length || options.caseIds.some((id) => !known.has(id)))) throw new Error("--cases must select known cases, each once");
   options.out = outputDirectory(ROOT, options.out);
   return Object.freeze(options);
@@ -106,8 +120,8 @@ export function evidenceIdsOf(citations, items) {
   return Object.freeze(citations.map((entry, at) => byKey.get(personAnswerCitationKeyV8(entry.citation)) ?? `citation ${at + 1}`));
 }
 
-/** The writer's prompts and reply schema for one case of `set`, recorded through the kernel with a writer that answers nothing. */
-export async function captureWriterPrompts(caseDefinition, document, generation, set = CASE_SETS.blocks) {
+/** The writer's prompts and reply schema for one block case, recorded through the kernel with a writer that answers nothing. */
+export async function captureWriterPrompts(caseDefinition, document, generation, set = CASE_SETS.main) {
   let captured = null;
   const { model } = scriptedModel(caseDefinition, (input) => {
     captured ??= Object.freeze({ system_prompt: input.system_prompt, user_prompt: input.user_prompt, schema: input.schema });
@@ -122,27 +136,29 @@ export async function captureWriterPrompts(caseDefinition, document, generation,
 /**
  * One trial (README.md, "Procedure"): Ask on one case of `set` through the kernel end to end with answer layout v2,
  * research scripted and each writer call sent to the route. The kernel reads, checks, repairs and releases; the harness
- * adds no repair, keeps each call (its raw reply, usage and prompts: those `prompts` recorded, or its own when the kernel
- * asked with others, as for a repair) and the released answer, reads that answer's blocks and grades it as `set` does:
- * a block case against `evidence`, what the writer was given.
+ * adds no repair, keeps each call's usage and its system prompt's digest, reads the released answer's blocks and grades
+ * it as `set` does: a block case against `evidence`, what the writer was given. A block trial also keeps each call's raw
+ * reply and prompts (those `prompts` recorded, or its own when the kernel asked with others, as for a repair) and the
+ * released answer; a wording trial keeps only its outcome and gaps beside its grade (`prompts` is null).
  */
 export async function runTrial(set, caseDefinition, trial, prompts, evidence, document, structuredOutput, generation, options) {
   const items = caseItems(set.fixture, caseDefinition);
   const attempts = [];
-  const recorded = sha256(prompts.system_prompt);
+  const recorded = prompts === null ? null : sha256(prompts.system_prompt);
   const { model } = scriptedModel(caseDefinition, async (input) => {
     const attempt = attempts.length + 1;
     // A repair names what the kernel found wrong with the reply before it; a retry repeats a call that failed.
     const problem = JSON.parse(input.user_prompt).validation_error;
-    if (typeof problem === "string" && attempts.length > 0) attempts.at(-1).problems = [problem];
+    if (set.traces && typeof problem === "string" && attempts.length > 0) attempts.at(-1).problems = [problem];
     const systemPromptSha256 = sha256(input.system_prompt);
     const asked = { attempt, kind: attempt === 1 ? "first" : typeof problem === "string" ? "repair" : "retry", system_prompt_sha256: systemPromptSha256,
-      ...(systemPromptSha256 === recorded ? {} : { system_prompt: input.system_prompt }), ...(input.user_prompt === prompts.user_prompt ? {} : { user_prompt: input.user_prompt }),
-      max_output_tokens: input.max_output_tokens };
+      ...(!set.traces || systemPromptSha256 === recorded ? {} : { system_prompt: input.system_prompt }),
+      ...(!set.traces || input.user_prompt === prompts.user_prompt ? {} : { user_prompt: input.user_prompt }), max_output_tokens: input.max_output_tokens };
     const started = performance.now();
     try {
       const observed = await observedGeneration(structuredOutput, input);
-      attempts.push({ ...asked, value: observed.value, ...generationMetadata(observed), elapsed_ms: Math.round(performance.now() - started) });
+      // A wording trial keeps only provider metadata: `observed.value` is never copied.
+      attempts.push({ ...asked, ...(set.traces ? { value: observed.value } : {}), ...generationMetadata(observed), elapsed_ms: Math.round(performance.now() - started) });
       return observed;
     } catch (error) {
       // The kernel meets the route's failure as it would in production: it retries, falls back or stops.
@@ -162,16 +178,21 @@ export async function runTrial(set, caseDefinition, trial, prompts, evidence, do
   for (const [at, entry] of attempts.entries()) {
     const last = at === attempts.length - 1;
     entry.valid = last && read?.valid === true;
-    if (last && entry.error === undefined && read !== null && !read.valid) entry.problems = read.problems;
+    if (set.traces && last && entry.error === undefined && read !== null && !read.valid) entry.problems = read.problems;
   }
   const grade = set.grade(caseDefinition, { read, response, evidence });
-  return Object.freeze({ case_id: caseDefinition.id, ...(caseDefinition.group === undefined ? {} : { group: caseDefinition.group }), trial, attempts, read, response,
+  const kept = set.traces ? { attempts, read, response }
+    : { outcome: response?.outcome ?? null, gaps: Object.freeze((response?.parts ?? []).flatMap((part) => (part.gap === undefined ? [] : [part.gap]))), attempts };
+  return Object.freeze({ case_id: caseDefinition.id, ...(caseDefinition.group === undefined ? {} : { group: caseDefinition.group }), trial, ...kept,
     ...(error === undefined ? {} : { error }), grade });
 }
 
+/** A trial whose writer gave no reply the kernel released from: the Ask failed, or every writer call did. */
+const withoutReply = (trial) => trial.error !== undefined || !trial.attempts.some((attempt) => attempt.error === undefined);
+
 /** Runs the selected cases of the case set and writes the report. */
 export async function run(options, dependencies = {}) {
-  const caseSet = options.caseSet ?? "blocks";
+  const caseSet = options.caseSet ?? "main";
   const set = CASE_SETS[caseSet];
   const document = set.load();
   const cases = options.caseIds === null ? document.cases : options.caseIds.map((id) => document.cases.find((entry) => entry.id === id));
@@ -179,19 +200,21 @@ export async function run(options, dependencies = {}) {
   const { route, loaded } = writerRoute(options, dependencies.loaded);
   const model = Object.freeze({ route, adapter_id: loaded.generation.generation_adapter_id, answer_model: loaded.generation.answer_model });
   const progress = dependencies.progress ?? ((line) => process.stderr.write(line));
-  // The writer's prompts, from one capture a case, and the evidence each case's answers are graded against.
+  // For a block run, the writer's prompts, from one capture a case, and the evidence each case's answers are graded against.
   const prompts = new Map();
-  for (const caseDefinition of cases) prompts.set(caseDefinition.id, await captureWriterPrompts(caseDefinition, document, loaded.generation, set));
+  if (set.traces) for (const caseDefinition of cases) prompts.set(caseDefinition.id, await captureWriterPrompts(caseDefinition, document, loaded.generation, set));
 
   // Trials interleave cases, so a slow route slows every case alike.
   const tasks = [];
   for (let trial = 1; trial <= options.trials; trial += 1) {
     for (const caseDefinition of cases) {
       tasks.push(async () => {
-        const own = prompts.get(caseDefinition.id);
-        const result = await runTrial(set, caseDefinition, trial, own, evidenceOf(own.user_prompt), document, loaded.structured_output, loaded.generation, options);
-        const grade = result.grade.rules === undefined ? { valid: result.grade.valid, grounded: result.grade.grounded, nothing_lost: result.grade.nothing_lost, fit: result.grade.fit } : { rules: result.grade.rules };
-        progress(`${JSON.stringify({ kind: "echo-ask-blocks-evaluation-progress-v1", case_set: caseSet, case_id: result.case_id, trial, ...grade, attempts: result.attempts.length })}\n`);
+        const own = prompts.get(caseDefinition.id) ?? null;
+        const result = await runTrial(set, caseDefinition, trial, own, own === null ? null : evidenceOf(own.user_prompt), document, loaded.structured_output, loaded.generation, options);
+        progress(`${JSON.stringify(set.traces
+          ? { kind: "echo-ask-blocks-evaluation-progress-v1", case_id: result.case_id, catalog: "built", trial, valid: result.grade.valid, grounded: result.grade.grounded,
+            nothing_lost: result.grade.nothing_lost, fit: result.grade.fit, attempts: result.attempts.length }
+          : { kind: "echo-ask-wording-evaluation-progress-v1", case_id: result.case_id, trial, outcome: result.outcome, rules: result.grade.rules })}\n`);
         return result;
       });
     }
@@ -201,17 +224,20 @@ export async function run(options, dependencies = {}) {
   const identityAfter = codeIdentity(ROOT, codeFiles());
   // Only every case of the set, three trials each, decides its gate.
   const complete = cases.length === set.count && options.trials === TRIALS;
-  const summary = set.summarize(trials);
+  const summary = set.summarize(trials, complete);
   const observedAt = new Date().toISOString();
+  // A block run's prompts, by digest, and the block catalog and schema the kernel's writer was given; a wording run's
+  // writer prompt digests alone.
   const systemPrompts = {};
-  const casePrompts = Object.fromEntries(cases.map((caseDefinition) => {
-    const entry = prompts.get(caseDefinition.id);
+  const casePrompts = Object.fromEntries([...prompts].map(([caseId, entry]) => {
     const hash = sha256(entry.system_prompt);
     systemPrompts[hash] = entry.system_prompt;
-    return [caseDefinition.id, { system_prompt_sha256: hash, user_prompt: entry.user_prompt }];
+    return [caseId, { system_prompt_sha256: hash, user_prompt: entry.user_prompt }];
   }));
-  // The block catalog and schema are the kernel's, as its writer was given them.
   const writer = prompts.get(cases[0].id);
+  const traces = set.traces
+    ? { writer: Object.freeze({ block_catalog: JSON.parse(writer.user_prompt).block_catalog ?? null, schema: writer.schema }) }
+    : { writer_prompt_sha256: Object.freeze([...new Set(trials.flatMap((trial) => trial.attempts.map((attempt) => attempt.system_prompt_sha256)))]) };
   const report = Object.freeze({
     kind: "echo-ask-blocks-evaluation-v1",
     observed_at: observedAt,
@@ -222,13 +248,12 @@ export async function run(options, dependencies = {}) {
     code: Object.freeze({ before: identityBefore, after: identityAfter, unchanged: sha256(JSON.stringify(identityBefore)) === sha256(JSON.stringify(identityAfter)) }),
     model,
     errors: Object.freeze({ writer_calls: trials.reduce((sum, trial) => sum + trial.attempts.filter((attempt) => attempt.error !== undefined).length, 0),
-      trials_without_reply: trials.filter((trial) => trial.read === null).length }),
+      trials_without_reply: trials.filter(withoutReply).length }),
     limits: Object.freeze({ cases: cases.length, trials: options.trials, timeout_ms: options.timeoutMs, concurrency: options.concurrency, max_total_model_calls: maxModelCalls(set) }),
-    writer: Object.freeze({ block_catalog: JSON.parse(writer.user_prompt).block_catalog ?? null, schema: writer.schema }),
+    ...traces,
     summary,
     decision: set.decide(summary, complete),
-    system_prompts: systemPrompts,
-    prompts: casePrompts,
+    ...(set.traces ? { system_prompts: systemPrompts, prompts: casePrompts } : {}),
     trials,
   });
   const stamp = observedAt.replace(/[:.]/gu, "-");
@@ -245,12 +270,14 @@ if (invokedDirectly) {
     else {
       const { reportPath, report } = await run(options);
       const s = report.summary;
-      const summary = report.case_set === "wording"
-        ? { rules: Object.fromEntries(Object.entries(s.rules).map(([name, rule]) => [name, `${rule.passed_trials}/${rule.trials}`])), measures: s.measures }
-        : { valid: `${s.valid}/${s.trials}`, grounded: `${s.grounded}/${s.trials}`, nothing_lost: `${s.nothing_lost}/${s.trials}`, fit: `${s.fit}/${s.trials}`,
-          stable: `${s.stable}/${s.cases}`, valid_at_once: s.valid_at_once, repairs: s.repairs, output_tokens: s.output_tokens };
-      process.stdout.write(`${JSON.stringify({ report_path: reportPath, route: report.model.route, case_set: report.case_set, complete: report.complete, summary, decision: report.decision })}\n`);
-      if (report.decision.passes !== true) process.exitCode = 1;
+      process.stdout.write(`${JSON.stringify(report.case_set === "wording"
+        ? { report_path: reportPath, route: report.model.route, complete: report.complete, wording_ships: s.wording_ships,
+          rules: Object.fromEntries(Object.entries(s.rules).map(([name, rule]) => [name, `${rule.passed_trials}/${rule.trials}`])), measures: s.measures }
+        : { report_path: reportPath, route: report.model.route, complete: report.complete, summary: { valid: `${s.valid}/${s.trials}`, grounded: `${s.grounded}/${s.trials}`,
+          nothing_lost: `${s.nothing_lost}/${s.trials}`, fit: `${s.fit}/${s.trials}`, stable: `${s.stable}/${s.cases}`, valid_at_once: s.valid_at_once, repairs: s.repairs,
+          output_tokens: s.output_tokens }, decision: report.decision })}\n`);
+      // A wording run that does not ship its wording exits 1, as its own evaluation did; a block run exits 0.
+      if (CASE_SETS[report.case_set].exitsOnFailure && report.decision.passes !== true) process.exitCode = 1;
     }
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : "block evaluation failed"}\n${help()}\n`);
