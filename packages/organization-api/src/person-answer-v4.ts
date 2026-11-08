@@ -6,7 +6,7 @@ import {
   type PersonAnswerCitationV6, type PersonEvidenceKindV5,
 } from './person-answer-v8.js';
 import { validatePersonFollowUpCitationV1, validatePersonFollowUpRefV1 } from './person-follow-up-evidence-v1.js';
-import { PERSON_WORKSPACE_CITATION_KINDS_V1, validatePersonWorkspaceCitationV1 } from './person-workspace-citation-v1.js';
+import { validatePersonWorkspaceCitationV1 } from './person-workspace-citation-v1.js';
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import { validatePersonQueryText } from './person-query.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
@@ -210,19 +210,58 @@ function scope(value: unknown): PersonAnswerScopeV3 {
  * tool containers).
  */
 type CitationVersion = 4 | 6 | 8;
+type CitedKind = PersonAnswerEvidenceCitationV8['kind'];
 
-/** A workspace item or tool container: the V8 answer's own kinds (research tool contract v1). */
-function workspaceKind(value: unknown): boolean {
-  return (PERSON_WORKSPACE_CITATION_KINDS_V1 as readonly unknown[]).includes(value);
+/**
+ * One row per citation kind, read by every per-kind rule: the first version that admits it, its exact validator, the
+ * identity a response cites once, the label of the kind an answer citation names it by when it has its own (the two are
+ * that kind together or not at all), and the ref that names its item (none: no ref is consistent), which `ref_required`
+ * makes its answer citation carry.
+ */
+interface CitationKindRow<C> {
+  readonly since: CitationVersion;
+  validate(input: Record<string, unknown>): PersonAnswerEvidenceCitationV8;
+  key(value: C): string;
+  readonly named?: 'Ticket' | 'Page' | 'Follow-up' | 'Workspace';
+  opens?(value: C, ref: PersonAnswerOpenRefV8): boolean;
+  readonly ref_required?: true;
+}
+
+const CITATION_KINDS: { readonly [K in CitedKind]: CitationKindRow<Extract<PersonAnswerEvidenceCitationV8, { readonly kind: K }>> } = {
+  approved_record: { since: 4, validate: approvedRecordCitation, key: value => `approved_record:${value.atom_id}`, opens: (value, ref) => ref === `meeting:${value.record_sha256}` },
+  // A document's passage opens its document; a note's or an imported meeting's opens that note or meeting.
+  source_revision: {
+    since: 4, validate: input => validatePersonSourceRevisionCitationV1(input, 'optional'),
+    key: value => `source_revision:${value.source_id}:${value.revision_id}:${value.representation_sha256}:${value.anchor_sha256}`,
+    opens: (value, ref) => value.document_id === undefined ? ref.startsWith('imported_meeting:') || ref.startsWith('note:') : ref === `document:${value.document_id}`,
+  },
+  // A ticket's released text is not part of its identity, so a listed ticket's row and its opened body are one citation.
+  ticket: { since: 6, validate: validatePersonTicketCitationV1, named: 'Ticket', key: value => `ticket:${value.tool_id}:${value.external_scope_id}:${value.ticket_id}` },
+  // A page's section and version are part of its identity.
+  page: { since: 6, validate: validatePersonPageCitationV1, named: 'Page', key: value => `page:${value.tool_id}:${value.external_scope_id}:${value.page_id}:${value.section_id}:${value.version}` },
+  // A follow-up always opens its item page.
+  follow_up: { since: 8, validate: validatePersonFollowUpCitationV1, named: 'Follow-up', key: value => `follow_up:${value.item_id}`, opens: (value, ref) => ref === `follow_up:${value.item_id}`, ref_required: true },
+  // A project always opens in ECHO, and a tool on the tools page; a person and a tool container open no page of ECHO's.
+  project: { since: 8, validate: validatePersonWorkspaceCitationV1, named: 'Workspace', key: value => `project:${value.project_id}`, opens: (value, ref) => ref === `project:${value.project_id}`, ref_required: true },
+  person: { since: 8, validate: validatePersonWorkspaceCitationV1, named: 'Workspace', key: value => `person:${value.membership_id}` },
+  tool: { since: 8, validate: validatePersonWorkspaceCitationV1, named: 'Workspace', key: value => `tool:${value.tool_id}`, opens: (value, ref) => ref === `tool:${value.tool_id}`, ref_required: true },
+  // Its scope and container ids are free text: the JSON array keeps two containers apart even when one holds a colon.
+  tool_container: {
+    since: 8, validate: validatePersonWorkspaceCitationV1, named: 'Workspace',
+    key: value => `tool_container:${JSON.stringify([value.tool_id, value.external_scope_id, value.container, value.container_id])}`,
+  },
+};
+
+/** The row of a citation kind, if `kind` names one (never a prototype key). */
+function citationKind(kind: unknown): CitationKindRow<PersonAnswerEvidenceCitationV8> | undefined {
+  return typeof kind === 'string' && Object.hasOwn(CITATION_KINDS, kind) ? CITATION_KINDS[kind as CitedKind] as CitationKindRow<PersonAnswerEvidenceCitationV8> : undefined;
 }
 
 function evidenceCitation(value: unknown, version: CitationVersion = 4): PersonAnswerEvidenceCitationV8 {
   const input = object(value, 'Ask citation');
-  if (version >= 6 && input.kind === 'ticket') return validatePersonTicketCitationV1(input);
-  if (version >= 6 && input.kind === 'page') return validatePersonPageCitationV1(input);
-  if (version === 8 && input.kind === 'follow_up') return validatePersonFollowUpCitationV1(input);
-  if (version === 8 && workspaceKind(input.kind)) return validatePersonWorkspaceCitationV1(input);
-  return citation(input);
+  const kind = citationKind(input.kind);
+  if (kind === undefined || kind.since > version) fail('Ask citation kind is invalid');
+  return kind.validate(input);
 }
 
 /** One V8 evidence citation, exactly as a response citation's `citation` carries it; the Ask source check reads these (ADR-0047). */
@@ -230,48 +269,32 @@ export function validatePersonAnswerEvidenceCitationV8(value: unknown): PersonAn
   return evidenceCitation(value, 8);
 }
 
-function citation(value: unknown): PersonAnswerCitationV3 {
-  const input = object(value, 'Ask citation');
-  if (input.kind === 'approved_record') {
-    assertExactKeys(input, ['kind', 'atom_id', 'record_sha256', 'policy_id'], 'Ask citation');
-    assertDigest(input.atom_id, 'Ask approved-record citation atom_id');
-    assertDigest(input.record_sha256, 'Ask approved-record citation record_sha256');
-    if (!['restricted-reviewer-person-v2', 'project-members-readable-person-v1'].includes(input.policy_id as string)) fail('Ask approved-record citation policy_id is invalid');
-    return Object.freeze({ kind: 'approved_record', atom_id: input.atom_id as `sha256:${string}`, record_sha256: input.record_sha256 as `sha256:${string}`, policy_id: input.policy_id as ApprovedRecordPolicyV3 });
-  }
-  if (input.kind === 'source_revision') return validatePersonSourceRevisionCitationV1(input, 'optional');
-  fail('Ask citation kind is invalid');
+function approvedRecordCitation(input: Record<string, unknown>): Extract<PersonAnswerCitationV3, { readonly kind: 'approved_record' }> {
+  assertExactKeys(input, ['kind', 'atom_id', 'record_sha256', 'policy_id'], 'Ask citation');
+  assertDigest(input.atom_id, 'Ask approved-record citation atom_id');
+  assertDigest(input.record_sha256, 'Ask approved-record citation record_sha256');
+  if (!['restricted-reviewer-person-v2', 'project-members-readable-person-v1'].includes(input.policy_id as string)) fail('Ask approved-record citation policy_id is invalid');
+  return Object.freeze({ kind: 'approved_record', atom_id: input.atom_id as `sha256:${string}`, record_sha256: input.record_sha256 as `sha256:${string}`, policy_id: input.policy_id as ApprovedRecordPolicyV3 });
 }
 
 /**
- * The identity an Ask response checks for duplicate citations: a response cites each key once. A page's section and
- * version are part of it; a ticket's or a follow-up's released text is not, so a listed ticket's row and its opened body
- * are one citation. A project, a person and a tool are keyed by their ids, and a tool container by its tool, scope, kind
- * and container id, never by its label or key. A renderer that numbers citations uses this key so it never builds a
- * response this refuses.
+ * The identity an Ask response checks for duplicate citations: a response cites each key once. Each kind's row keys it
+ * by what it names (a project, a person and a tool by their ids, a tool container by its tool, scope, kind and container
+ * id), never by its label or key. A renderer that numbers citations uses this key so it never builds a response this
+ * refuses.
  */
 export function personAnswerCitationKeyV8(value: PersonAnswerEvidenceCitationV8): string {
-  return citationKey(value);
+  // A value of no known kind keeps the passage key it always had.
+  return (citationKind(value.kind) ?? CITATION_KINDS.source_revision as CitationKindRow<PersonAnswerEvidenceCitationV8>).key(value);
 }
 
-function citationKey(value: PersonAnswerEvidenceCitationV8): string {
-  if (value.kind === 'project') return `project:${value.project_id}`;
-  if (value.kind === 'person') return `person:${value.membership_id}`;
-  if (value.kind === 'tool') return `tool:${value.tool_id}`;
-  // Its scope and container ids are free text: the JSON array keeps two containers apart even when one holds a colon.
-  if (value.kind === 'tool_container') return `tool_container:${JSON.stringify([value.tool_id, value.external_scope_id, value.container, value.container_id])}`;
-  if (value.kind === 'follow_up') return `follow_up:${value.item_id}`;
-  if (value.kind === 'page') return `page:${value.tool_id}:${value.external_scope_id}:${value.page_id}:${value.section_id}:${value.version}`;
-  if (value.kind === 'ticket') return `ticket:${value.tool_id}:${value.external_scope_id}:${value.ticket_id}`;
-  return value.kind === 'approved_record'
-    ? `approved_record:${value.atom_id}`
-    : `source_revision:${value.source_id}:${value.revision_id}:${value.representation_sha256}:${value.anchor_sha256}`;
-}
+const EVIDENCE_KINDS_V1: readonly string[] = ['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'];
 
+/** A record's or a passage's evidence kind, or, from its version, a citation kind named by itself. */
 function evidenceKind(value: unknown, label: string, version: CitationVersion = 4): asserts value is PersonEvidenceKindV5 {
-  if (version === 8 && (workspaceKind(value) || value === 'follow_up')) return;
-  if (version >= 6 && (value === 'page' || value === 'ticket')) return;
-  if (!['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'].includes(value as string)) fail(`${label} is invalid`);
+  const kind = citationKind(value);
+  if (kind?.named !== undefined && kind.since <= version) return;
+  if (!EVIDENCE_KINDS_V1.includes(value as string)) fail(`${label} is invalid`);
 }
 
 function visibility(value: unknown, label: string): asserts value is PersonEvidenceVisibilityV1 {
@@ -290,26 +313,6 @@ function statement(value: unknown, citations: readonly PersonAnswerCitationV8[],
   return Object.freeze({ text: input.text as string, citation_indexes: indexes, private: input.private });
 }
 
-/**
- * A citation's ref names the item it cites: its record, its document, its note or imported meeting, its follow-up, or
- * its project or tool. A person and a tool container have no ref.
- */
-function citationRefConsistent(cited: PersonAnswerEvidenceCitationV8, ref: PersonAnswerOpenRefV8): boolean {
-  if (cited.kind === 'project') return ref === `project:${cited.project_id}`;
-  if (cited.kind === 'tool') return ref === `tool:${cited.tool_id}`;
-  if (cited.kind === 'person' || cited.kind === 'tool_container') return false;
-  if (ref.startsWith('project:') || ref.startsWith('tool:')) return false;
-  if (cited.kind === 'follow_up') return ref === `follow_up:${cited.item_id}`;
-  if (ref.startsWith('follow_up:')) return false;
-  if (cited.kind === 'approved_record') return ref === `meeting:${cited.record_sha256}`;
-  if (cited.kind === 'source_revision') {
-    return cited.document_id === undefined
-      ? ref.startsWith('imported_meeting:') || ref.startsWith('note:')
-      : ref === `document:${cited.document_id}`;
-  }
-  return false;
-}
-
 function answerCitation(value: unknown, version: 6 | 8): PersonAnswerCitationV8 {
   const input = object(value, 'Ask response citation');
   assertExactKeys(input, ['citation', 'kind', 'label', 'visibility', ...(Object.hasOwn(input, 'ref') ? ['ref'] : []), ...(version === 8 && Object.hasOwn(input, 'key') ? ['key'] : [])], 'Ask response citation');
@@ -317,19 +320,16 @@ function answerCitation(value: unknown, version: 6 | 8): PersonAnswerCitationV8 
   text(input.label, 'Ask response citation label', PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
   visibility(input.visibility, 'Ask response citation visibility');
   const cited = evidenceCitation(input.citation, version);
-  if ((cited.kind === 'ticket') !== (input.kind === 'ticket')) fail('Ticket citation kind is inconsistent');
-  if ((cited.kind === 'page') !== (input.kind === 'page')) fail('Page citation kind is inconsistent');
-  if ((cited.kind === 'follow_up') !== (input.kind === 'follow_up')) fail('Follow-up citation kind is inconsistent');
-  for (const kind of PERSON_WORKSPACE_CITATION_KINDS_V1) if ((cited.kind === kind) !== (input.kind === kind)) fail('Workspace citation kind is inconsistent');
+  for (const [name, row] of Object.entries(CITATION_KINDS)) {
+    if (row.named !== undefined && (cited.kind === name) !== (input.kind === name)) fail(`${row.named} citation kind is inconsistent`);
+  }
   const ref: PersonAnswerOpenRefV8 | undefined = !Object.hasOwn(input, 'ref') ? undefined
     : version === 8 && typeof input.ref === 'string' && input.ref.startsWith('follow_up:') ? validatePersonFollowUpRefV1(input.ref, 'Ask response citation ref')
       : version === 8 && typeof input.ref === 'string' && (input.ref.startsWith('project:') || input.ref.startsWith('tool:')) ? validatePersonWorkspaceRefV1(input.ref, 'Ask response citation ref')
         : validatePersonItemRefV1(input.ref, 'Ask response citation ref');
-  // A follow-up always opens its item page.
-  if (cited.kind === 'follow_up' && ref === undefined) fail('Follow-up citation ref is missing');
-  // A project always opens in ECHO, and a tool on the tools page; a person and a tool container open no page of ECHO's.
-  if ((cited.kind === 'project' || cited.kind === 'tool') && ref === undefined) fail('Workspace citation ref is missing');
-  if (ref !== undefined && !citationRefConsistent(cited, ref)) fail('Ask response citation ref is inconsistent');
+  const row = citationKind(cited.kind)!;
+  if (row.ref_required && ref === undefined) fail(`${row.named} citation ref is missing`);
+  if (ref !== undefined && !(row.opens?.(cited, ref) ?? false)) fail('Ask response citation ref is inconsistent');
   if (Object.hasOwn(input, 'key')) {
     if (cited.kind !== 'tool_container') fail('Ask response citation key applies only to a tool container');
     text(input.key, 'Ask response citation key', 256);
@@ -428,7 +428,7 @@ function previousTurn(value: unknown): PersonAnswerPreviousV1 {
   const question = fullQuestion(input.question, 'Ask previous question');
   assertTimestamp(input.asked_at, 'Ask previous asked_at');
   const citations = Object.freeze(boundedList(input.citations, 'Ask previous citations', PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1).map(item => answerCitation(item, 8)));
-  const keys = new Set(citations.map(item => citationKey(item.citation)));
+  const keys = new Set(citations.map(item => personAnswerCitationKeyV8(item.citation)));
   if (keys.size !== citations.length) fail('Ask previous contains duplicate citations');
   const statements = Object.freeze(boundedList(input.statements, 'Ask previous statements', PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1).map((raw): PersonAnswerPreviousStatementV1 => {
     const item = object(raw, 'Ask previous statement');
@@ -487,7 +487,7 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', 2 * 1024, true);
   const citations = input.citations.map(item => answerCitation(item, 8));
   const citationKeys = new Set<string>();
-  for (const item of citations) { const key = citationKey(item.citation); if (citationKeys.has(key)) fail('Ask response contains duplicate citations'); citationKeys.add(key); }
+  for (const item of citations) { const key = personAnswerCitationKeyV8(item.citation); if (citationKeys.has(key)) fail('Ask response contains duplicate citations'); citationKeys.add(key); }
   const result = {
     schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: scope(input.scope), outcome: input.outcome as PersonAnswerResponseV8['outcome'], citations: Object.freeze(citations),
     ...(Object.hasOwn(input, 'direct') ? { direct: statement(input.direct, citations, 'Ask response direct') } : {}),
@@ -531,7 +531,7 @@ export function validatePersonEvidenceOpenRequestV1(value: unknown): PersonEvide
   const input = object(value, 'Evidence open request');
   assertExactKeys(input, ['schema_version', 'citation', ...(Object.hasOwn(input, 'neighbours') ? ['neighbours'] : []), ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : [])], 'Evidence open request');
   if (input.schema_version !== 1 || (Object.hasOwn(input, 'neighbours') && (!Number.isSafeInteger(input.neighbours) || (input.neighbours as number) < 0 || (input.neighbours as number) > 2))) fail('Evidence open request is invalid');
-  return boundedRequest({ schema_version: 1 as const, citation: citation(input.citation), ...(Object.hasOwn(input, 'neighbours') ? { neighbours: input.neighbours as 0 | 1 | 2 } : {}), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Evidence open request project_id') } : {}) }, 'Evidence open request');
+  return boundedRequest({ schema_version: 1 as const, citation: evidenceCitation(input.citation) as PersonAnswerCitationV3, ...(Object.hasOwn(input, 'neighbours') ? { neighbours: input.neighbours as 0 | 1 | 2 } : {}), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Evidence open request project_id') } : {}) }, 'Evidence open request');
 }
 
 export function validatePersonEvidenceDeskResponseV1(value: unknown): PersonEvidenceDeskResponseV1 {
@@ -541,7 +541,7 @@ export function validatePersonEvidenceDeskResponseV1(value: unknown): PersonEvid
   if (Object.hasOwn(input, 'notice')) text(input.notice, 'Evidence desk response notice', 2 * 1024, true);
   const items = input.items.map(item => deskItem(item));
   const ids = new Set<string>(); const coordinates = new Set<string>();
-  for (const item of items) { if (ids.has(item.id)) fail('Evidence desk response contains duplicate item IDs'); ids.add(item.id); const key = citationKey(item.citation); if (coordinates.has(key)) fail('Evidence desk response contains duplicate citations'); coordinates.add(key); }
+  for (const item of items) { if (ids.has(item.id)) fail('Evidence desk response contains duplicate item IDs'); ids.add(item.id); const key = personAnswerCitationKeyV8(item.citation); if (coordinates.has(key)) fail('Evidence desk response contains duplicate citations'); coordinates.add(key); }
   const result = { schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: scope(input.scope), items: Object.freeze(items), truncated: input.truncated, ...(Object.hasOwn(input, 'notice') ? { notice: input.notice as string } : {}) };
   if (canonicalJsonBytes(result).byteLength > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1) fail('Evidence desk response exceeds JSON byte bound');
   return Object.freeze(result) as PersonEvidenceDeskResponseV1;
