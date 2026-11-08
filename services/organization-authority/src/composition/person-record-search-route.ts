@@ -627,7 +627,7 @@ function recordVisibility(policy_id: ReadableSearchResultItemV1["policy_id"], au
 }
 
 /** The approval's decided_at: the record envelope's issue time (approval-publisher-v1.ts), canonical. */
-function approvalTime(envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>): string {
+function approvalTime(envelope: RecordEnvelopeV4): string {
   return receiptTime(envelope.body.issued_at);
 }
 
@@ -642,26 +642,39 @@ function participantsLine(detail: Pick<PersonOpenMeetingDetailV1, "participants"
 /** What naming a record's final approver takes: the record's coordinates, the approver projectors and the directory. */
 type DeskPresentationV1 = Pick<CreatePersonRecordSearchRouteV1Options, "authority_id" | "organization_id" | "state_lineage_id" | "record_approver" | "memberships" | "record_input_codecs">;
 
+type RecordEnvelopeV4 = ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
+
+/**
+ * The one envelope reader: an admitted record's stored approved row, bound to its digests (and to `envelopeSha256` when
+ * given), parsed and validated as an approved record. Any mismatch is unavailable metadata.
+ */
+function approvedEnvelope(record: Database.Database, codecs: RecordInputCodecRegistryV4, position: number, recordSha256: Sha256Digest, envelopeSha256?: Sha256Digest) {
+  const row = record.prepare("SELECT canonical_envelope, envelope_sha256, receipt_issued_at, approval_id FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'").get(position, recordSha256) as
+    | { readonly canonical_envelope: string; readonly envelope_sha256: Sha256Digest; readonly receipt_issued_at: string; readonly approval_id: string }
+    | undefined;
+  if (row === undefined || sha256Digest(row.canonical_envelope) !== row.envelope_sha256 || (envelopeSha256 !== undefined && row.envelope_sha256 !== envelopeSha256)) metadataUnavailable();
+  let parsed: JsonObject;
+  let envelope: RecordEnvelopeV4;
+  try {
+    parsed = parseCanonicalJson(row.canonical_envelope) as JsonObject;
+    envelope = validateOrganizationRecordEnvelopeV4(parsed, codecs);
+  } catch { metadataUnavailable(); }
+  const event = envelope.body.event;
+  if (envelope.record_sha256 !== recordSha256 || event.kind !== "approved") metadataUnavailable();
+  return { row, parsed, envelope, event, brief: event.approved_snapshot.approved_payload.brief };
+}
+
 function deskItems(record: Database.Database, items: readonly ReadableSearchResultItemV1[], presentation: DeskPresentationV1): readonly PersonRecordDeskItemV1[] {
-  const statement = record.prepare(`SELECT canonical_envelope, envelope_sha256, record_sha256, approval_id FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'`);
-  type Meeting = { readonly envelope_sha256: Sha256Digest; readonly envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>; readonly approved_at: string; readonly participants?: string; readonly approved_by?: string };
+  type Meeting = { readonly envelope_sha256: Sha256Digest; readonly envelope: RecordEnvelopeV4; readonly approved_at: string; readonly participants?: string; readonly approved_by?: string };
   // Each record is read, checked and named once, however many of its atoms a release holds.
   const meetings = new Map<string, Meeting>();
   const meetingOf = (item: ReadableSearchResultItemV1): Meeting => {
     const key = `${item.record_position}:${item.record_sha256}`;
     const cached = meetings.get(key);
     if (cached !== undefined) return cached;
-    const row = statement.get(item.record_position, item.record_sha256) as { readonly canonical_envelope: string; readonly envelope_sha256: Sha256Digest; readonly record_sha256: Sha256Digest; readonly approval_id: string } | undefined;
-    if (row === undefined) metadataUnavailable();
-    let parsed: JsonObject;
-    let envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
-    try {
-      parsed = parseCanonicalJson(row.canonical_envelope) as JsonObject;
-      envelope = validateOrganizationRecordEnvelopeV4(parsed, presentation.record_input_codecs);
-    } catch { metadataUnavailable(); }
-    if (sha256Digest(row.canonical_envelope) !== row.envelope_sha256 || envelope.record_sha256 !== item.record_sha256 || envelope.body.event.kind !== "approved") metadataUnavailable();
+    const { row, parsed, envelope, brief } = approvedEnvelope(record, presentation.record_input_codecs, item.record_position, item.record_sha256);
     // The meeting as the person open names it: participants' display names, and the approver's current directory name.
-    const detail = meetingDetailV1(envelope.body.event.approved_snapshot.approved_payload.brief,
+    const detail = meetingDetailV1(brief,
       boundedTextV1(approverDisplayNameV1(parsed, row.approval_id, presentation, presentation.record_approver, presentation.memberships), PERSON_LIST_TEXT_MAX_BYTES_V1));
     const participants = participantsLine(detail);
     const meeting: Meeting = Object.freeze({ envelope_sha256: row.envelope_sha256, envelope, approved_at: approvalTime(envelope),
@@ -699,15 +712,6 @@ function boundedDeskItems(items: readonly ReadableSearchResultItemV1[]): readonl
   );
 }
 
-function approvedRecordAtomCount(record: Database.Database, position: number, recordSha256: Sha256Digest, codecs: RecordInputCodecRegistryV4): number {
-  const row = record.prepare(`SELECT canonical_envelope FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'`).get(position, recordSha256) as { readonly canonical_envelope: string } | undefined;
-  if (row === undefined) metadataUnavailable();
-  let envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
-  try { envelope = validateOrganizationRecordEnvelopeV4(parseCanonicalJson(row.canonical_envelope), codecs); } catch { metadataUnavailable(); }
-  if (envelope.record_sha256 !== recordSha256 || envelope.body.event.kind !== "approved") metadataUnavailable();
-  const brief = envelope.body.event.approved_snapshot.approved_payload.brief;
-  return brief.decisions.length + brief.actions.length + brief.rationales.length;
-}
 
 function hasExpectedGenerationIdentity(input: {
   readonly result: Pick<ReadableSearchResultV1, "generation_id" | "exact_head">;
@@ -881,6 +885,59 @@ export function createPersonRecordSearchRouteV1(
     if (!hasExpectedGenerationIdentity({ result, pointer, authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id })) unavailable();
   }
 
+  /** What every read of the published generation names: its files, the pointer's generation, the reader and their project. */
+  function generationInput(pointer: ActiveGenerationRow, authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, projectId?: string) {
+    return { state_directory: options.state_directory, active_generation: activeGenerationAt(pointer), reader: readerOf(authorization, projects), ...(projectId === undefined ? {} : { project_id: projectId }) };
+  }
+
+  /** One read of the generation at `pointer`: a dropped handle, or a result of another generation or head, is unavailable. */
+  function generationRead<T extends Pick<ReadableSearchResultV1, "generation_id" | "exact_head">>(pointer: ActiveGenerationRow, read: () => T): T {
+    const result = readGeneration(read);
+    assertGeneration(result, pointer);
+    return result;
+  }
+
+  /** The reader prologue: the bearer's current person, who must be of this organization. */
+  function person(accessToken: string): PersonAccessAuthorization {
+    const authorization = options.sessions.authenticateAccess({ access_token: accessToken });
+    if (authorization.organization_id !== options.organization_id) personDenied();
+    return authorization;
+  }
+
+  /** The reader prologue with the person's current project grants, which must hold `projectId` when one is named. */
+  function reader(accessToken: string, projectId?: string): { readonly authorization: PersonAccessAuthorization; readonly projects: RecordProjectAuthorizationV1 } {
+    const authorization = person(accessToken);
+    return { authorization, projects: captureRecordProjectsV1(options.capture_projects, authorization, projectId) };
+  }
+
+  /**
+   * The release fence: the bearer still names every admitted tuple (the same person and session; `checked_at` may
+   * advance), in this organization, with the same project grants. Nothing is released otherwise.
+   */
+  function fence(accessToken: string, admitted: readonly PersonAccessAuthorization[], grantsSha256: Sha256Digest | undefined, projectId?: string): PersonRecordSearchReleaseAuthorizationV1 {
+    const current = options.sessions.authenticateAccess({ access_token: accessToken });
+    if (admitted.some((authorization) => !samePersonReleaseAuthorizationV1(authorization, current)) || current.organization_id !== options.organization_id ||
+      captureRecordProjectsV1(options.capture_projects, current, projectId).grants_sha256 !== grantsSha256) personDenied();
+    return releaseAuthorization(current);
+  }
+
+  /** This Authority's published generation: its organization and its retrieval contract. */
+  function ours(pointer: ActiveGenerationRow | null): pointer is ActiveGenerationRow {
+    return pointer !== null && pointer.organization_id === options.organization_id && pointer.retrieval_contract_sha256 === options.retrieval_contract_sha256;
+  }
+
+  /**
+   * The published generation at the record log head, else unavailable. With `lag`, no generation, or one a verified lag
+   * behind the head, is index lag instead: the only failure which can legitimately select originals-only mode.
+   */
+  function exactPointer(lag = false): ActiveGenerationRow {
+    const head = recordHead(options.record);
+    const pointer = activeGeneration(options.authority);
+    if (ours(pointer) && sameHead(pointer, head)) return pointer;
+    if (lag && isVerifiedIndexLag(options.record, pointer, head, options)) indexLagUnavailable();
+    return unavailable();
+  }
+
   /** Commits the audited bytes before admitting a route-local batch witness. */
   function commitBatchRelease(input: {
     readonly initial_authorization: PersonRecordSearchReleaseAuthorizationV1;
@@ -927,26 +984,10 @@ export function createPersonRecordSearchRouteV1(
     return release;
   }
 
-  /** The stored approved row of a record already admitted to this reader, bound to its digests. */
-  function envelopeRow(position: number, recordSha256: Sha256Digest, envelopeSha256?: Sha256Digest): { readonly canonical_envelope: string; readonly receipt_issued_at: string } {
-    const row = options.record.prepare("SELECT canonical_envelope, envelope_sha256, receipt_issued_at FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'").get(position, recordSha256) as
-      | { readonly canonical_envelope: string; readonly envelope_sha256: Sha256Digest; readonly receipt_issued_at: string }
-      | undefined;
-    if (row === undefined || sha256Digest(row.canonical_envelope) !== row.envelope_sha256 || (envelopeSha256 !== undefined && row.envelope_sha256 !== envelopeSha256)) metadataUnavailable();
-    return row;
-  }
-
+  /** A record already admitted to this reader, through the one envelope reader. */
   function approvedRecord(position: number, recordSha256: Sha256Digest, envelopeSha256?: Sha256Digest): ApprovedRecordV1 {
-    const row = envelopeRow(position, recordSha256, envelopeSha256);
-    let parsed: JsonObject;
-    let envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
-    try {
-      parsed = parseCanonicalJson(row.canonical_envelope) as JsonObject;
-      envelope = validateOrganizationRecordEnvelopeV4(parsed, options.record_input_codecs);
-    } catch { metadataUnavailable(); }
-    const event = envelope.body.event;
-    if (envelope.record_sha256 !== recordSha256 || event.kind !== "approved") metadataUnavailable();
-    return { envelope: parsed, brief: event.approved_snapshot.approved_payload.brief, reference: envelope.body.human_act_resolution_ref, policy_id: event.policy_id, added_at: receiptTime(row.receipt_issued_at), approved_at: approvalTime(envelope) };
+    const { row, parsed, envelope, event, brief } = approvedEnvelope(options.record, options.record_input_codecs, position, recordSha256, envelopeSha256);
+    return { envelope: parsed, brief, reference: envelope.body.human_act_resolution_ref, policy_id: event.policy_id, added_at: receiptTime(row.receipt_issued_at), approved_at: approvalTime(envelope) };
   }
 
   /**
@@ -957,8 +998,8 @@ export function createPersonRecordSearchRouteV1(
    * than failing the page.
    */
   function generationRecords(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, pointer: ActiveGenerationRow, projectId?: string, rewarm = false): readonly ReadableSearchGenerationRecordV1[] {
-    const active_generation = activeGenerationAt(pointer);
-    const list = () => listReadableSearchGenerationRecordsV1({ state_directory: options.state_directory, active_generation, reader: readerOf(authorization, projects), ...(projectId === undefined ? {} : { project_id: projectId }) });
+    const input = generationInput(pointer, authorization, projects, projectId);
+    const list = () => listReadableSearchGenerationRecordsV1(input);
     let listed: ReturnType<typeof listReadableSearchGenerationRecordsV1>;
     try {
       listed = list();
@@ -966,7 +1007,7 @@ export function createPersonRecordSearchRouteV1(
       if (!isUnavailableGenerationError(error)) throw error;
       if (!rewarm) unavailable();
       try {
-        warmReadableSearchActiveGenerationV1({ state_directory: options.state_directory, active_generation });
+        warmReadableSearchActiveGenerationV1({ state_directory: input.state_directory, active_generation: input.active_generation });
         listed = list();
       } catch { unavailable(); }
     }
@@ -1121,9 +1162,7 @@ export function createPersonRecordSearchRouteV1(
    */
   function admit(input: { readonly access_token: string; readonly record_sha256: Sha256Digest }) {
     if (typeof input.record_sha256 !== "string" || !RECORD_SHA256.test(input.record_sha256)) itemNotFound();
-    const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-    assertExpectedOrganization(authorization);
-    const projects = captureRecordProjectsV1(options.capture_projects, authorization);
+    const { authorization, projects } = reader(input.access_token);
     return { authorization, projects, admitted: admittedRecord(authorization, projects, input.record_sha256) };
   }
 
@@ -1154,20 +1193,6 @@ export function createPersonRecordSearchRouteV1(
     return Object.freeze({ status: "ok" as const, rows: Object.freeze([...rows]), handle });
   }
 
-  /** Current tuple and grants, as when the rows were read, or nothing is released. */
-  function fencedMeetingRelease(accessToken: string, admitted: PersonRecordSearchReleaseAuthorizationV1, grantsSha256: Sha256Digest): PersonRecordSearchReleaseAuthorizationV1 {
-    const released = options.sessions.authenticateAccess({ access_token: accessToken });
-    if (!samePersonReleaseAuthorizationV1(admitted, released) || released.organization_id !== options.organization_id ||
-      captureRecordProjectsV1(options.capture_projects, released).grants_sha256 !== grantsSha256) personDenied();
-    return releaseAuthorization(released);
-  }
-
-  function assertExpectedOrganization(
-    authorization: PersonAccessAuthorization,
-  ): void {
-    if (authorization.organization_id !== options.organization_id) personDenied();
-  }
-
   function assertCurrentSnapshot(previous: ActiveGenerationRow): void {
     const pointer = activeGeneration(options.authority);
     const head = recordHead(options.record);
@@ -1188,61 +1213,33 @@ export function createPersonRecordSearchRouteV1(
     input: PersonRecordSearchBatchInputV1,
   ): PersonRecordSearchBatchResultV1 {
     assertValidBatch(input);
-    const authorization = options.sessions.authenticateAccess({
-      access_token: input.access_token,
-    });
-    assertExpectedOrganization(authorization);
-    const projects = captureRecordProjectsV1(options.capture_projects, authorization, input.project_id);
+    const { authorization, projects } = reader(input.access_token, input.project_id);
     if (input.expected_pointer !== undefined) assertReleaseSnapshot(input.expected_pointer);
     const head = recordHead(options.record);
     const pointer = activeGeneration(options.authority);
-    if (
-      pointer === null ||
-      pointer.organization_id !== options.organization_id ||
-      pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 ||
-      !sameHead(pointer, head)
-    ) {
+    if (!ours(pointer) || !sameHead(pointer, head)) {
       annotateCoreRuntimeV1({ result: "unavailable", counts: { current_head: head.position, published_head: pointer?.record_head_position ?? null }, ...(pointer === null ? {} : { generation: pointer.generation_id }) });
       // A lagging pointer keeps its handle: the handle is keyed to that
       // immutable generation, so it can never serve a newer head, and the
       // Person list still reads it until the rebuild publishes (ADR-0024).
-      if (pointer === null || pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256) {
-        clearReadableSearchActiveGenerationV1();
-      }
+      if (!ours(pointer)) clearReadableSearchActiveGenerationV1();
       unavailable();
     }
-    if (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer)) {
-      unavailable();
-    }
+    if (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer)) unavailable();
     const dated = datedSelection(input, authorization, projects, pointer, input.project_id);
     const excluded = engineExclusion(input.exclude);
-    const result = readGeneration(() =>
-      search({
-        state_directory: options.state_directory,
-        active_generation: activeGenerationAt(pointer),
-        reader: readerOf(authorization, projects),
-        ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
-        ...(dated.records === undefined ? {} : { record_sha256s: dated.records }),
-        ...(dated.atom_orders === undefined ? {} : { atom_orders: dated.atom_orders }),
-        query: input.query,
-        ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
-        ...(input.limit === undefined ? {} : { limit: input.limit }),
-        ...(excluded === undefined ? {} : { exclude: excluded }),
-      }),
-    );
-    assertGeneration(result, pointer);
+    const result = generationRead(pointer, () => search({
+      ...generationInput(pointer, authorization, projects, input.project_id),
+      ...(dated.records === undefined ? {} : { record_sha256s: dated.records }),
+      ...(dated.atom_orders === undefined ? {} : { atom_orders: dated.atom_orders }),
+      query: input.query,
+      ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
+      ...(input.limit === undefined ? {} : { limit: input.limit }),
+      ...(excluded === undefined ? {} : { exclude: excluded }),
+    }));
     // The first item of each atom, in the search's order.
     const items = result.items.filter((item, index) => result.items.findIndex((other) => other.atom_id === item.atom_id) === index);
-    const released = options.sessions.authenticateAccess({
-      access_token: input.access_token,
-    });
-    if (
-      !samePersonReleaseAuthorizationV1(authorization, released) ||
-      captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256 ||
-      released.organization_id !== options.organization_id
-    ) {
-      personDenied();
-    }
+    const released = fence(input.access_token, [authorization], projects.grants_sha256, input.project_id);
     assertCurrentSnapshot(pointer);
     const deskSourceItems = input.desk === true
       ? boundedDeskItems(items)
@@ -1278,14 +1275,9 @@ export function createPersonRecordSearchRouteV1(
     readonly project_id?: string;
     readonly anchor: Pick<ReadableSearchResultItemV1, "atom_id" | "record_sha256" | "record_position" | "envelope_sha256" | "atom_order" | "audience_project_count" | "item_kind" | "text" | "policy_id">;
   }): PersonRecordSearchBatchResultV1 {
-    const anchors = readGeneration(() => readReadableSearchGenerationAtomsV1({
-      state_directory: options.state_directory,
-      active_generation: activeGenerationAt(input.pointer),
-      reader: readerOf(input.current, input.projects),
-      ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
-      atom_ids: [input.anchor.atom_id],
+    const anchors = generationRead(input.pointer, () => readReadableSearchGenerationAtomsV1({
+      ...generationInput(input.pointer, input.current, input.projects, input.project_id), atom_ids: [input.anchor.atom_id],
     }));
-    assertGeneration(anchors, input.pointer);
     const resolvedAnchor = anchors.items[0];
     if (resolvedAnchor === undefined ||
       resolvedAnchor.record_sha256 !== input.anchor.record_sha256 ||
@@ -1298,18 +1290,11 @@ export function createPersonRecordSearchRouteV1(
       resolvedAnchor.policy_id !== input.anchor.policy_id) unavailable();
     // The anchor's record in its own order: decisions, actions, then rationales. The anchor read already admitted
     // it, and its first ten atoms always hold the nine that join the anchor.
-    const record = readGeneration(() => listReadableSearchGenerationV1({
-      state_directory: options.state_directory,
-      active_generation: activeGenerationAt(input.pointer),
-      reader: readerOf(input.current, input.projects),
-      ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
-      record_sha256s: [resolvedAnchor.record_sha256],
-      limit: 10,
+    const record = generationRead(input.pointer, () => listReadableSearchGenerationV1({
+      ...generationInput(input.pointer, input.current, input.projects, input.project_id), record_sha256s: [resolvedAnchor.record_sha256], limit: 10,
     }));
-    assertGeneration(record, input.pointer);
     const items = [resolvedAnchor, ...record.items.filter((item) => item.atom_id !== resolvedAnchor.atom_id).slice(0, 9)];
-    const released = options.sessions.authenticateAccess({ access_token: input.access_token });
-    if (!samePersonReleaseAuthorizationV1(input.current, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== input.projects.grants_sha256) personDenied();
+    const released = fence(input.access_token, [input.current], input.projects.grants_sha256, input.project_id);
     assertCurrentSnapshot(input.pointer);
     const deskSourceItems = boundedDeskItems(items);
     const response = asResponse({ items: deskSourceItems });
@@ -1320,7 +1305,8 @@ export function createPersonRecordSearchRouteV1(
     });
     // A record's text is released whole or not at all, so the anchor is cut only when its bound left it out; truncated
     // also covers the meeting's other records (ADR-0041).
-    return Object.freeze({ response, release, desk_items: projection, truncated: approvedRecordAtomCount(options.record, resolvedAnchor.record_position, resolvedAnchor.record_sha256, options.record_input_codecs) > 10 || deskSourceItems.length !== items.length,
+    const { brief } = approvedEnvelope(options.record, options.record_input_codecs, resolvedAnchor.record_position, resolvedAnchor.record_sha256);
+    return Object.freeze({ response, release, desk_items: projection, truncated: brief.decisions.length + brief.actions.length + brief.rationales.length > 10 || deskSourceItems.length !== items.length,
       anchor_truncated: !deskSourceItems.includes(resolvedAnchor) });
   }
 
@@ -1343,17 +1329,8 @@ export function createPersonRecordSearchRouteV1(
     }): PersonRecordSearchBatchResultV1 {
       // Authenticate and capture scope before testing the only failure which
       // can legitimately select originals-only mode: an index behind the log.
-      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      assertExpectedOrganization(authorization);
-      captureRecordProjectsV1(options.capture_projects, authorization, input.project_id);
-      const head = recordHead(options.record);
-      const pointer = activeGeneration(options.authority);
-      if (pointer === null) indexLagUnavailable();
-      if (pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256) unavailable();
-      if (!sameHead(pointer, head)) {
-        if (isVerifiedIndexLag(options.record, pointer, head, options)) indexLagUnavailable();
-        unavailable();
-      }
+      reader(input.access_token, input.project_id);
+      exactPointer(true);
       // A one-item inventory both fixes the immutable release and ensures the
       // warmed generation can actually be opened. Any later error is terminal.
       return this.listDeskBatch({ access_token: input.access_token, ...(input.project_id === undefined ? {} : { project_id: input.project_id }), limit: 1 });
@@ -1368,28 +1345,20 @@ export function createPersonRecordSearchRouteV1(
     }): PersonRecordSearchBatchResultV1 {
       const limit = input.limit ?? 50;
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) invalidRequest();
-      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      assertExpectedOrganization(authorization);
-      const projects = captureRecordProjectsV1(options.capture_projects, authorization, input.project_id);
+      const { authorization, projects } = reader(input.access_token, input.project_id);
       if (input.expected_pointer !== undefined) assertReleaseSnapshot(input.expected_pointer);
-      const head = recordHead(options.record);
-      const pointer = activeGeneration(options.authority);
-      if (pointer === null || pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 || !sameHead(pointer, head) || (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer))) unavailable();
+      const pointer = exactPointer();
+      if (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer)) unavailable();
       const dated = datedSelection(input, authorization, projects, pointer, input.project_id);
       const excluded = engineExclusion(input.exclude);
-      const inventory = readGeneration(() => listReadableSearchGenerationV1({
-        state_directory: options.state_directory,
-        active_generation: activeGenerationAt(pointer),
-        reader: readerOf(authorization, projects),
-        ...(input.project_id === undefined ? {} : { project_id: input.project_id }), limit,
+      const inventory = generationRead(pointer, () => listReadableSearchGenerationV1({
+        ...generationInput(pointer, authorization, projects, input.project_id), limit,
         ...(dated.records === undefined ? {} : { record_sha256s: dated.records }),
         ...(dated.atom_orders === undefined ? {} : { atom_orders: dated.atom_orders }),
         ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
         ...(excluded === undefined ? {} : { exclude: excluded }),
       }));
-      assertGeneration(inventory, pointer);
-      const released = options.sessions.authenticateAccess({ access_token: input.access_token });
-      if (!samePersonReleaseAuthorizationV1(authorization, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256) personDenied();
+      const released = fence(input.access_token, [authorization], projects.grants_sha256, input.project_id);
       assertCurrentSnapshot(pointer);
       const deskSourceItems = boundedDeskItems(inventory.items);
       const response = asResponse({ items: deskSourceItems });
@@ -1408,25 +1377,19 @@ export function createPersonRecordSearchRouteV1(
       readonly record_sha256: Sha256Digest;
       readonly policy_id: ReadableSearchResultItemV1["policy_id"];
     }): PersonRecordSearchBatchResultV1 {
-      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      assertExpectedOrganization(authorization);
-      const projects = captureRecordProjectsV1(options.capture_projects, authorization, input.project_id);
-      const head = recordHead(options.record);
-      const pointer = activeGeneration(options.authority);
-      if (pointer === null || pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 || !sameHead(pointer, head)) unavailable();
-      const found = readGeneration(() => readReadableSearchGenerationAtomsV1({ state_directory: options.state_directory, active_generation: activeGenerationAt(pointer), reader: readerOf(authorization, projects), ...(input.project_id === undefined ? {} : { project_id: input.project_id }), atom_ids: [input.atom_id] }));
-      assertGeneration(found, pointer);
+      const { authorization, projects } = reader(input.access_token, input.project_id);
+      const pointer = exactPointer();
+      const found = generationRead(pointer, () => readReadableSearchGenerationAtomsV1({ ...generationInput(pointer, authorization, projects, input.project_id), atom_ids: [input.atom_id] }));
       const anchor = found.items[0];
       if (anchor === undefined || anchor.record_sha256 !== input.record_sha256 || anchor.policy_id !== input.policy_id) throw new AuthorityOperationError("not_found", "record evidence is not available");
-      const released = options.sessions.authenticateAccess({ access_token: input.access_token });
-      if (!samePersonReleaseAuthorizationV1(authorization, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256) personDenied();
+      const released = fence(input.access_token, [authorization], projects.grants_sha256, input.project_id);
       assertCurrentSnapshot(pointer);
       // Resolving a citation is an internal lookup, not a content release.
       // `finalizeDeskOpen` performs the sole audit after the expanded packet
       // and its metadata have passed the final Person and snapshot fence.
       return finalizeDeskOpen({
         access_token: input.access_token,
-        current: releaseAuthorization(released),
+        current: released,
         pointer,
         projects,
         initial_authorization: releaseAuthorization(authorization),
@@ -1460,12 +1423,10 @@ export function createPersonRecordSearchRouteV1(
       if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > MEETING_COLLECT_MAX) invalidRequest();
       const after = meetingPosition(input.after);
       const scope = meetingScope(input.scope);
-      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      assertExpectedOrganization(authorization);
-      const projects = captureRecordProjectsV1(options.capture_projects, authorization, scope.project_id);
+      const { authorization, projects } = reader(input.access_token, scope.project_id);
       const head = recordHead(options.record);
       const pointer = activeGeneration(options.authority);
-      if (pointer !== null && (pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256)) unavailable();
+      if (pointer !== null && !ours(pointer)) unavailable();
       const lagging = pointer === null || !sameHead(pointer, head);
       if (lagging) {
         if (!isVerifiedIndexLag(options.record, pointer, head, options)) unavailable();
@@ -1505,7 +1466,7 @@ export function createPersonRecordSearchRouteV1(
         return empty;
       }
       // No pointer or head check: a concurrent approval must not fail a page.
-      const released = fencedMeetingRelease(input.access_token, state.authorization, state.grants_sha256);
+      const released = fence(input.access_token, [state.authorization], state.grants_sha256);
       const receipt = options.audit.append({
         read_mode: "person_list", authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
         principal_id: released.principal_id, membership_id: released.membership_id, session_family_id: released.session_family_id, result_count: input.count,
@@ -1519,9 +1480,7 @@ export function createPersonRecordSearchRouteV1(
     openMeeting(input: Parameters<PersonMeetingItemsPortV1["openMeeting"]>[0]): ReturnType<PersonMeetingItemsPortV1["openMeeting"]> {
       if (typeof input.record_sha256 !== "string" || !RECORD_SHA256.test(input.record_sha256)) itemNotFound();
       const from = input.from === undefined ? undefined : partPosition(input.from);
-      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      assertExpectedOrganization(authorization);
-      const projects = captureRecordProjectsV1(options.capture_projects, authorization);
+      const { authorization, projects } = reader(input.access_token);
       const admitted = admittedRecord(authorization, projects, input.record_sha256);
       const record = approvedRecord(admitted.position, admitted.record_sha256);
       const parts = meetingAtomsV1(record.brief, confirmedOwners(record.reference));
@@ -1552,7 +1511,7 @@ export function createPersonRecordSearchRouteV1(
       const meeting = from === undefined
         ? meetingDetailV1(record.brief, boundedTextV1(approverDisplayNameV1(record.envelope, admitted.approval_id, options, options.record_approver, options.memberships), PERSON_LIST_TEXT_MAX_BYTES_V1))
         : undefined;
-      const released = fencedMeetingRelease(input.access_token, releaseAuthorization(authorization), projects.grants_sha256);
+      const released = fence(input.access_token, [authorization], projects.grants_sha256);
       const receipt = options.audit.append({
         read_mode: "person_open", authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
         principal_id: released.principal_id, membership_id: released.membership_id, session_family_id: released.session_family_id, result_count: atoms.length,
@@ -1567,29 +1526,13 @@ export function createPersonRecordSearchRouteV1(
       // The exact Layer 1 read first, so index lag never tells a reader that a record exists.
       const { authorization, projects } = admit(input);
       // The anchor is read at the log's head, as the desk opens it: a generation behind the log is index lag.
-      const head = recordHead(options.record);
-      const pointer = activeGeneration(options.authority);
-      if (pointer === null) indexLagUnavailable();
-      if (pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256) unavailable();
-      if (!sameHead(pointer, head)) {
-        if (isVerifiedIndexLag(options.record, pointer, head, options)) indexLagUnavailable();
-        unavailable();
-      }
-      let listed: ReadableSearchResultV1;
-      try {
-        listed = listReadableSearchGenerationV1({
-          state_directory: options.state_directory,
-          active_generation: activeGenerationAt(pointer),
-          reader: readerOf(authorization, projects),
-          record_sha256s: [input.record_sha256], limit: 1,
-        });
-      } catch (error) { if (isUnavailableGenerationError(error)) unavailable(); throw error; }
-      if (!hasExpectedGenerationIdentity({ result: listed, pointer, authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id })) unavailable();
+      const pointer = exactPointer(true);
+      const listed = generationRead(pointer, () => listReadableSearchGenerationV1({ ...generationInput(pointer, authorization, projects), record_sha256s: [input.record_sha256], limit: 1 }));
       // Atoms of one record come in their order in the record, so the first is the record's first atom.
       const first = listed.items[0];
       if (first === undefined || first.record_sha256 !== input.record_sha256) throw new AuthorityOperationError("not_found", "record evidence is not available");
-      const released = options.sessions.authenticateAccess({ access_token: input.access_token });
-      if (!samePersonReleaseAuthorizationV1(authorization, released) || captureRecordProjectsV1(options.capture_projects, released).grants_sha256 !== projects.grants_sha256 || !samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) throw new AuthorityOperationError("unauthorized", "person authentication failed");
+      fence(input.access_token, [authorization], projects.grants_sha256);
+      if (!samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) personDenied();
       return Object.freeze({ kind: "approved_record" as const, atom_id: first.atom_id, record_sha256: first.record_sha256, policy_id: first.policy_id });
     },
     recordIndexLags(): boolean {
@@ -1607,9 +1550,8 @@ export function createPersonRecordSearchRouteV1(
       return recordAssociations([{ record_position: admitted.position, record_sha256: admitted.record_sha256 }], projects.project_ids).get(admitted.record_sha256) ?? Object.freeze([]);
     },
     readableDecisions(input: Parameters<PersonReadableDecisionsV1["readableDecisions"]>[0]): ReturnType<PersonReadableDecisionsV1["readableDecisions"]> {
-      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      assertExpectedOrganization(authorization);
-      const { readable, associations } = readableWithProjects(authorization, captureRecordProjectsV1(options.capture_projects, authorization), input.record_sha256s);
+      const { authorization, projects } = reader(input.access_token);
+      const { readable, associations } = readableWithProjects(authorization, projects, input.record_sha256s);
       const found = new Map<Sha256Digest, PersonReadableDecisionV1>();
       for (const row of readable) {
         // The envelope helpers and the fallback title the person list uses for a meeting row.
@@ -1625,14 +1567,11 @@ export function createPersonRecordSearchRouteV1(
       return found;
     },
     readableDecisionProjects(input: Parameters<PersonReadableDecisionProjectsV1["readableDecisionProjects"]>[0]): ReturnType<PersonReadableDecisionProjectsV1["readableDecisionProjects"]> {
-      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      assertExpectedOrganization(authorization);
-      const { readable, associations } = readableWithProjects(authorization, input.projects, input.record_sha256s);
+      const { readable, associations } = readableWithProjects(person(input.access_token), input.projects, input.record_sha256s);
       return new Map(readable.map((row) => [row.record_sha256, Object.freeze({ project_ids: Object.freeze([...(associations.get(row.record_sha256) ?? [])]) })]));
     },
     projectRecordActivity(input: Parameters<PersonProjectRecordActivityV1["projectRecordActivity"]>[0]): ReturnType<PersonProjectRecordActivityV1["projectRecordActivity"]> {
-      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      assertExpectedOrganization(authorization);
+      const authorization = person(input.access_token);
       const held = new Set(input.projects.project_ids);
       const filedIn = filedPages(authorization);
       const receipt = options.record.prepare("SELECT receipt_issued_at FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'").pluck();
@@ -1668,9 +1607,7 @@ export function createPersonRecordSearchRouteV1(
       if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > PROJECT_RECORDS_MAX) invalidRequest();
       let projectId: string;
       try { projectId = validateProjectIdV1(input.project_id); } catch { invalidRequest(); }
-      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      assertExpectedOrganization(authorization);
-      const projects = captureRecordProjectsV1(options.capture_projects, authorization);
+      const { authorization, projects } = reader(input.access_token);
       // A project the reader does not hold lists nothing, the same as a project with no records.
       if (!projects.project_ids.includes(projectId)) return Object.freeze([]);
       const found: Sha256Digest[] = [];
@@ -1690,27 +1627,16 @@ export function createPersonRecordSearchRouteV1(
     revalidateMeetingRelease(input: Parameters<PersonMeetingItemsPortV1["revalidateMeetingRelease"]>[0]): void {
       const witness = meetingReleases.get(input.release);
       if (witness === undefined) personDenied();
-      const current = options.sessions.authenticateAccess({ access_token: input.access_token });
-      if (!samePersonReleaseAuthorizationV1(current, witness.initial) || !samePersonReleaseAuthorizationV1(current, witness.current) ||
-        current.organization_id !== options.organization_id ||
-        captureRecordProjectsV1(options.capture_projects, current).grants_sha256 !== witness.grants_sha256) personDenied();
+      fence(input.access_token, [witness.initial, witness.current], witness.grants_sha256);
     },
     revalidateBatchRelease(input: {
       readonly access_token: string;
       readonly release: PersonRecordSearchBatchReleaseV1;
     }): PersonRecordSearchReleaseAuthorizationV1 {
       if (!releaseWitnesses.has(input.release)) personDenied();
-      const current = options.sessions.authenticateAccess({
-        access_token: input.access_token,
-      });
-      if (
-        captureRecordProjectsV1(options.capture_projects, current, input.release.project_id).grants_sha256 !== input.release.project_authorization?.grants_sha256 ||
-        !samePersonReleaseAuthorizationV1(current, input.release.initial_authorization) ||
-        !samePersonReleaseAuthorizationV1(current, input.release.current_authorization) ||
-        current.organization_id !== options.organization_id
-      ) personDenied();
+      const current = fence(input.access_token, [input.release.initial_authorization, input.release.current_authorization], input.release.project_authorization?.grants_sha256, input.release.project_id);
       assertReleaseSnapshot(input.release.active_pointer);
-      return releaseAuthorization(current);
+      return current;
     },
   });
 }
