@@ -1619,10 +1619,10 @@ describe("Authority staging lifecycle", () => {
     expect(readFileSync(OPERATOR_IO, "utf8")).not.toMatch(
       /["'](?:batch-)?get-secret-value["']/,
     );
-    expect(source).toContain(
-      '"describe-events",\n      "--region",\n      region,',
+    // Failure events come from the region-scoped describe-events call only.
+    expect(source).toMatch(
+      /aws\(\["cloudformation", "describe-events"\], region, \[\s*"--stack-name",\s*stackName,\s*"--filters",\s*"FailedEvents=true",\s*\]\)/,
     );
-    expect(source).toContain('"--filters",\n      "FailedEvents=true"');
     expect(source).not.toContain('"describe-stack-events"');
   });
 
