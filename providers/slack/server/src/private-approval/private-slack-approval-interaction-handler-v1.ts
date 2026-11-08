@@ -11,7 +11,7 @@ import {
 const ACKNOWLEDGED: PrivateSlackApprovalInteractionReplyV1 = Object.freeze({ kind: "acknowledged" });
 type ClickOutcomeV1 = "decided" | "already_decided" | "stale" | "refused";
 /** What the clicker is told, privately, after a click that decided nothing. */
-const FEEDBACK = new Map<string, string>([
+const FEEDBACK = new Map<Exclude<ClickOutcomeV1, "decided">, string>([
   ["stale", "This approval has changed. Open the ECHO desktop app to review it."],
   ["already_decided", "This decision was already made. The card will refresh."],
   ["refused", "This approval is no longer available. Open the ECHO desktop app to review it."],
@@ -82,7 +82,8 @@ export function createPrivateSlackApprovalInteractionHandlerV1(input: PrivateSla
         throw error;
       }
       if (interaction.disposition === "presentation_change") return ACKNOWLEDGED;
-      const text = FEEDBACK.get((await input.click(interaction)).outcome);
+      const outcome = (await input.click(interaction)).outcome;
+      const text = outcome === "decided" ? undefined : FEEDBACK.get(outcome);
       if (text !== undefined && response_url !== undefined && input.feedback !== undefined) void sendFeedbackBestEffort(input.feedback, { response_url, text });
       return ACKNOWLEDGED;
     },
