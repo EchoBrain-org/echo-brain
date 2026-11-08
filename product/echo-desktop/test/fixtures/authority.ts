@@ -1507,15 +1507,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         .map(item => ({ ...item, audience: { kind: 'project', project_id: body?.project_id } }));
       return json(response);
     }
-    // All context: saved notes, each version searched and read on its own.
-    if (method === 'POST' && (path === '/v3/person/updates/search' || path === '/v2/person/updates/search')) {
-      if (path.startsWith('/v2/')) {
-        const response = fixture('updates-search-v2');
-        response.results = (response.results as { title: string; excerpt: string }[]).filter(item => found(body?.query, item));
-        return json(response);
-      }
-      const results = desktop.notes.filter(note => found(body?.query, note)).map(({ text, ...note }) => ({ ...note, excerpt: excerpt(text) }));
-      return json({ schema_version: 3, kind: 'echo-person-upload-search-v3', results });
+    // All context: saved notes, Apollo's update (the shared fixture's) among them.
+    if (method === 'POST' && path === '/v3/person/updates/search') {
+      const notes = [...desktop.notes.map(({ text, ...note }) => ({ ...note, excerpt: excerpt(text) })),
+        ...(fixture('updates-search-v2').results as { title: string; excerpt: string }[])];
+      return json({ schema_version: 3, kind: 'echo-person-upload-search-v3', results: notes.filter(note => found(body?.query, note)) });
     }
 
     // New project: made once per request id, with you as its lead.

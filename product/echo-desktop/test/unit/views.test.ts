@@ -262,10 +262,9 @@ describe('live matches', () => {
     expect(() => projectMatchesView(reply, 'prj_22222222-2222-4222-8222-222222222222')).toThrow(ViewError);
   });
 
-  it('saved notes of either version are the same matches, each opened by its ref', () => {
+  it('saved notes are matches, each opened by its ref, and who can read one stays behind', () => {
     const results = [{ ...item, audience: { kind: 'team' } }];
-    expect(noteMatchesView({ schema_version: 3, kind: 'echo-person-upload-search-v3', results }, 3)).toEqual([item]);
-    expect(noteMatchesView({ schema_version: 2, kind: 'echo-person-upload-search-v2', results }, 2)).toEqual([item]);
+    expect(noteMatchesView({ schema_version: 3, kind: 'echo-person-upload-search-v3', results })).toEqual([item]);
   });
 });
 

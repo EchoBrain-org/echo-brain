@@ -12,7 +12,7 @@ import type {
 import {
   validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
-  validatePersonUploadSearchResultV2, validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2,
+  validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2,
   validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1,
   type PersonAnswerCitationV8, type PersonAskReceiptRowV3, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
   type PersonOpenItemV1, type PersonOpenMeetingAtomV1, type PersonOpenMeetingV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
@@ -274,10 +274,9 @@ export function projectMatchesView(raw: unknown, projectId: string): Matches {
   return { items: page.items.map(match) };
 }
 
-/** Saved notes of one version found by a search. Either version opens by its ref. */
-export function noteMatchesView(raw: unknown, version: 2 | 3): Match[] {
-  const page = version === 3 ? validated(validatePersonUploadSearchResultV3, raw) : validated(validatePersonUploadSearchResultV2, raw);
-  return page.results.map(match);
+/** Saved notes found by a search, each opened by its ref. */
+export function noteMatchesView(raw: unknown): Match[] {
+  return validated(validatePersonUploadSearchResultV3, raw).results.map(match);
 }
 
 /** A cited passage of an original, as the contract has it. */

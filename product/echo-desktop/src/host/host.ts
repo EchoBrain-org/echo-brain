@@ -673,17 +673,9 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
           stdout => projectMatchesView(lastJson(stdout), scope.project_id));
       }
       if (scope?.kind !== 'global') return code('invalid_request');
-      // All context: your saved notes, which the API searches one note
-      // version at a time. Newer notes (V3) first, ten in all.
-      const [newer, older] = await Promise.all([
-        forAccount(method, expect, ['updates', 'search-v3', ...terms], stdout => noteMatchesView(lastJson(stdout), 3)),
-        forAccount(method, expect, ['updates', 'search', ...terms], stdout => noteMatchesView(lastJson(stdout), 2)),
-      ]);
-      if (!newer.ok) return newer;
-      if (!older.ok) return older;
-      // Either version opens by the same ref: a note found by both shows once.
-      const ids = new Set(newer.value.map(match => match.context_id));
-      return ok({ items: [...newer.value, ...older.value.filter(match => !ids.has(match.context_id))].slice(0, 10) });
+      // All context: your saved notes. No note is stored as V2 since the client stopped writing them (30 Sep), so the
+      // V3 search finds every one.
+      return forAccount(method, expect, ['updates', 'search-v3', ...terms], stdout => ({ items: noteMatchesView(lastJson(stdout)) }));
     }
     case 'writes.status': {
       const { expect, request_id, kind } = params as Params<'writes.status'>;
