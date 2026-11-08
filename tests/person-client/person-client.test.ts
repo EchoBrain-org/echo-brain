@@ -24,12 +24,9 @@ import { type OrganizationPersonSessionV2, type PersonSourceEvidenceCitationV1 }
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import {
-  EmployeeMutationError,
-  PersonClient,
-  PersonSessionStore,
-  type PersonClientCliDependencies,
-} from "../../src/product/person-client/index.js";
+import { EmployeeMutationError, PersonClient } from "../../src/product/person-client/client.js";
+import type { PersonClientCliDependencies } from "../../src/product/person-client/commands.js";
+import { PersonSessionStore } from "../../src/product/person-client/session-store.js";
 
 function fixtureId(prefix: string, suffix: number): string {
   return `${prefix}_00000000-0000-4000-8000-${String(suffix).padStart(12, "0")}`;

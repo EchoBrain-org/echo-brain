@@ -13,13 +13,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import {
-  PersonClientSessionUnavailableError,
-  PersonSessionStore,
-  readPersonOnboardingInvitation,
-  writePersonOnboardingInvitation,
-} from "../../src/product/person-client/index.js";
-import { preflightPersonOnboardingInvitationOutput } from "../../src/product/person-client/onboarding-invitation.js";
+import { PersonClientSessionUnavailableError, PersonSessionStore } from "../../src/product/person-client/session-store.js";
+import { preflightPersonOnboardingInvitationOutput, readPersonOnboardingInvitation, writePersonOnboardingInvitation } from "../../src/product/person-client/onboarding-invitation.js";
 import { describe, expect, it } from "vitest";
 
 const id = (prefix: string, tail: string) =>
