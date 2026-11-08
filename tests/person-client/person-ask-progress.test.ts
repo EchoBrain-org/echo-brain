@@ -161,6 +161,7 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       expect(headers.get('accept')).toBe('text/event-stream, application/json');
       expect(headers.get('authorization')).toBe('Bearer bearer');
       expect(headers.get('x-echo-time-zone')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+      expect(Math.abs(Date.now() - Date.parse(headers.get('x-echo-client-now')!))).toBeLessThan(5_000);
       expect(headers.get('x-echo-answer-layout')).toBeNull();
       expect(headers.get('x-echo-ask-gap-details')).toBe('1');
     }
@@ -354,24 +355,22 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     await expect(pending).rejects.toMatchObject({ code: 'transport_failed' });
   });
 
-  it('asks only as the account its caller expects: another sign-in that came first is refused before anything is sent', async () => {
+  it('asks only as the account its client is pinned to: another sign-in that came first is refused before the Ask is sent', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
-    const client = new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch });
+    const home = sessionHome();
     const progress: PersonAskProgressStepEventV3[] = [];
-    for (const expected of [
-      { expected_authority: ORIGIN, expected_membership_id: 'mem_00000000-0000-4000-8000-000000000002' },
-      { expected_authority: 'https://other.example.test', expected_membership_id: SESSION.membership_id },
-      // A pin is both or it is refused.
-      { expected_membership_id: SESSION.membership_id },
+    for (const account of [
+      { authority: ORIGIN, membership_id: 'mem_00000000-0000-4000-8000-000000000002' },
+      { authority: 'https://other.example.test', membership_id: SESSION.membership_id },
     ]) {
-      await expect(client.askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event), expected))
-        .rejects.toThrow('did not match the current account');
+      await expect(new PersonClient({ home_directory: home, now: () => NOW, fetch, account }).askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event)))
+        .rejects.toMatchObject({ name: 'PersonAuthorityClientError', code: 'stale_access_state', status: null, message: 'Person account changed during the request' });
     }
     expect(fetch).not.toHaveBeenCalled();
     expect(progress).toEqual([]);
     fetch.mockResolvedValueOnce(sse(STREAM_V3));
-    await expect(client.askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event),
-      { expected_authority: ORIGIN, expected_membership_id: SESSION.membership_id })).resolves.toEqual({ result: answerV8(), receipt: receiptV3() });
+    await expect(new PersonClient({ home_directory: home, now: () => NOW, fetch, account: { authority: ORIGIN, membership_id: SESSION.membership_id } })
+      .askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event))).resolves.toEqual({ result: answerV8(), receipt: receiptV3() });
     expect(progress).toEqual(STEPS_V3);
   });
 
@@ -447,18 +446,20 @@ describe('person ask --progress', () => {
     expect(lines(plain.stdout)).toEqual([{ ok: true, result: answerV8() }]);
   });
 
-  it('sends no opt-in header and prints one line without --progress, on /v7 in every scope', async () => {
-    for (const [argv, body] of [
-      [['ask', '--question', 'What did we decide?'], answerV8()],
-      [['ask', '--question', 'What did we decide?', '--project', projectId], answerProjectV8()],
+  // One Ask transport: a plain Ask streams too, under the session's own credential, and prints only the answer's line.
+  it('streams an Ask without --progress too, and prints just its answer line, on /v7 in every scope', async () => {
+    for (const [argv, body, request] of [
+      [['ask', '--question', 'What did we decide?'], answerV8(), { schema_version: 3, question: 'What did we decide?' }],
+      [['ask', '--question', 'What did we decide?', '--project', projectId], answerProjectV8(), { schema_version: 3, question: 'What did we decide?', project_id: projectId }],
     ] as const) {
-      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body));
+      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(framesV3([...STEPS_V3, { type: 'answer', response: body, receipt: receiptV3() }]), 7));
       const { output, run } = cli(sessionHome(), fetch);
       await expect(run(argv)).resolves.toBe(0);
-      expect(pathOf(fetch.mock.calls[0]![0])).toBe('/v7/person/ask');
-      expect(headersOf(fetch.mock.calls[0]![1]).has(PERSON_ASK_PROGRESS_HEADER_V1)).toBe(false);
-      expect(headersOf(fetch.mock.calls[0]![1]).get('x-echo-answer-layout')).toBeNull();
-      expect(output.stdout).toBe(`${JSON.stringify({ ok: true, result: body })}\n`);
+      const [url, init] = fetch.mock.calls[0]!;
+      expect([pathOf(url), init?.method, JSON.parse(String(init?.body))]).toEqual(['/v7/person/ask', 'POST', request]);
+      expect(headersOf(init).get(PERSON_ASK_PROGRESS_HEADER_V1)).toBe('3');
+      expect(headersOf(init).get('authorization')).toBe(`Bearer ${SESSION.access_token}`);
+      expect(output).toEqual({ stdout: `${JSON.stringify({ ok: true, result: body })}\n`, stderr: '' });
     }
   });
 

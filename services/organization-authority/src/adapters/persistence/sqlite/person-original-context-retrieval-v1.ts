@@ -42,10 +42,9 @@ const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const GLOBAL_SCOPE: PersonAskScopeV2 = Object.freeze({ kind: "global" });
 
 
-/** Desk search and inventory share admission/ACL joins; inventory skips term matching. */
+/** A desk inventory's rows: admission/ACL joins, newest first, before its limit. */
 interface OriginalRowsQueryV1 extends EvidenceDateFilterV1 {
   readonly limit: number;
-  readonly inventory?: true;
   readonly first_document_passage?: true;
   readonly exclude?: OriginalContextDeskExclusionV1;
 }
@@ -109,7 +108,6 @@ type SourceRow = {
   readonly packet_title?: string;
   readonly text: string;
   readonly received_at: string;
-  readonly lexical_score: number;
   readonly visibility?: "only_me" | "team" | "project" | "projects";
 };
 type DocumentRow = {
@@ -133,13 +131,12 @@ type DocumentRow = {
   readonly original_size: number;
   readonly detected_media_type: string;
   readonly received_at: string;
-  readonly lexical_score: number;
   readonly visibility?: "only_me" | "team" | "project" | "projects";
 };
 /** A document source revision's metadata: its row without a chunk. */
 type DocumentMeta = Omit<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text">;
 type DeskKind = "note" | "document_passage" | "imported_meeting";
-type DeskEntry = { readonly score: number; readonly received_at: string; readonly atom: ReleasedSourceContextAtomV1; readonly item: () => OriginalContextDeskItemV1 };
+type DeskEntry = { readonly atom: ReleasedSourceContextAtomV1; readonly item: () => OriginalContextDeskItemV1 };
 
 interface Sessions {
   authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization;
@@ -164,12 +161,6 @@ export const PERSON_QUERY_FUNCTION_WORDS_V1: ReadonlySet<string> = new Set([
   "this", "that", "these", "those", "of", "to", "for", "from", "in", "on",
   "at", "with", "by", "and", "or", "as", "about",
 ]);
-
-/** Desk ranking deliberately matches complete Unicode terms, never substrings. */
-function wholeTermScore(title: string, text: string, terms: readonly string[]): number {
-  const found = new Set((`${title}\n${text}`).normalize("NFC").toLocaleLowerCase("en-US").match(/[\p{L}\p{N}]+/gu) ?? []);
-  return terms.reduce((score, term) => score + (found.has(term) ? 1 : 0), 0);
-}
 
 function queryTerms(query: string): readonly string[] {
   const runs = query.normalize("NFC").match(/[\p{L}\p{N}]+/gu) ?? [];
@@ -218,17 +209,9 @@ function packetTitle(row: { readonly title: string; readonly packet_title?: stri
   return row.packet_title ?? row.title;
 }
 
-function wholeMatchingPacket(title: string, body: string, terms: readonly string[]): { readonly index: number; readonly text: string } {
-  const values = packets(title, body);
-  if (terms.length === 0) return Object.freeze({ index: 0, text: values[0]! });
-  let index = -1;
-  let bestScore = 0;
-  for (let candidate = 0; candidate < values.length; candidate += 1) {
-    const score = wholeTermScore("", values[candidate]!, terms);
-    if (score > bestScore) { bestScore = score; index = candidate; }
-  }
-  if (index < 0) unavailable();
-  return Object.freeze({ index, text: values[index]! });
+/** An inventory row's representative packet: its first. */
+function firstPacket(title: string, body: string): { readonly index: number; readonly text: string } {
+  return Object.freeze({ index: 0, text: packets(title, body)[0]! });
 }
 
 /** Labels cross the public API boundary; evidence retains the full filename. */
@@ -272,11 +255,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     private readonly organizationId: string,
   ) {
     this.imported = new SqlitePersonImportedMeetingsV1(database);
-    // The query parameter is a bound, adapter-created JSON array of validated terms.
     database.function("echo_evidence_day_v1", { deterministic: true }, (stamp, zone) => evidenceDayV1(String(stamp), String(zone)) ?? null);
-    database.function("echo_original_context_whole_score_v1", { deterministic: true }, (title, text, query) =>
-      typeof title === "string" && typeof text === "string" && typeof query === "string"
-        ? wholeTermScore(title, text, JSON.parse(query) as readonly string[]) : 0);
   }
 
   /**
@@ -298,9 +277,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       && (!Array.isArray(input.exclude.source_ids) || input.exclude.source_ids.some(id => typeof id !== "string") || typeof input.exclude.only_me !== "boolean"))) {
       throw new AuthorityOperationError("invalid_request", "request is invalid");
     }
-    const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
-    this.assertOrganization(actor);
-    this.assertScope(actor, input.scope);
+    const actor = this.reader(input.access_token, input.scope);
     const terms = input.query === undefined ? [] : queryTerms(input.query);
     const filteredInventory = input.query === undefined && (input.source !== undefined || input.since !== undefined || input.until !== undefined);
     const candidates = input.query === undefined && !filteredInventory
@@ -309,7 +286,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const expanded: DeskEntry[] = input.query !== undefined
       ? this.deskBm25Entries(actor, input.scope, terms, limit + 1, input.kinds, input)
       : filteredInventory ? this.deskFilteredInventory(actor, input.scope, limit + 1, input)
-      : candidates.map((row) => { const atom = this.deskAtom(row, []); return { score: row.lexical_score, received_at: row.received_at, atom, item: () => this.deskItem(row, atom, false) }; });
+      : candidates.map((row) => { const atom = this.deskAtom(row); return { atom, item: () => this.deskItem(row, atom, false) }; });
     const selected = expanded.slice(0, limit);
     const atoms = selected.map(({ atom }) => atom);
     const items = selected.map(({ item }) => item());
@@ -341,9 +318,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   }
 
   deskAuthorize(input: { readonly access_token: string; readonly scope: PersonAskScopeV2 }): { readonly checked_at: string } {
-    const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
-    this.assertOrganization(actor);
-    this.assertScope(actor, input.scope);
+    const actor = this.reader(input.access_token, input.scope);
     return Object.freeze({ checked_at: actor.checked_at });
   }
 
@@ -357,9 +332,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     if (!Number.isSafeInteger(neighbours) || neighbours < 0 || neighbours > 2) {
       throw new AuthorityOperationError("invalid_request", "request is invalid");
     }
-    const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
-    this.assertOrganization(actor);
-    this.assertScope(actor, input.scope);
+    const actor = this.reader(input.access_token, input.scope);
     if (input.citation.document_id === undefined) {
       const row = this.textByCitation(actor, input.scope, input.citation);
       if (row === undefined) denied();
@@ -391,7 +364,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     // Preserve the exact requested segment.  A large extracted chunk can have
     // several 3 KiB packets, and recomputing the anchor with an empty query
     // would otherwise silently substitute packet zero.
-    const atoms = [anchor, ...selected.slice(1).map((row) => this.deskAtom(row, []))];
+    const atoms = [anchor, ...selected.slice(1).map((row) => this.deskAtom(row))];
     return this.commitDeskRelease(actor, input.access_token, input.scope,
       selected.map((row, index) => this.deskItem(row, atoms[index]!, true)), atoms);
   }
@@ -440,9 +413,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   }
 
   read(input: { readonly access_token: string; readonly scope: PersonAskScopeV2; readonly citation: OriginalContextCitationV1 }) {
-    const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
-    this.assertOrganization(actor);
-    this.assertScope(actor, input.scope);
+    const actor = this.reader(input.access_token, input.scope);
     let atom: ReleasedSourceContextAtomV1 | undefined;
     let imported_meeting_review: PersonImportedMeetingReviewV1 | undefined;
     if (input.citation.document_id === undefined) {
@@ -455,6 +426,14 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     if (atom === undefined) denied();
     this.auditProofRead(actor, input.scope, atom);
     return Object.freeze({ scope: Object.freeze({ ...input.scope }), atom, ...(imported_meeting_review === undefined ? {} : { imported_meeting_review }) });
+  }
+
+  /** The reader prologue: the bearer's current person, an active member of this organization, who may read `scope`. */
+  private reader(accessToken: string, scope: PersonAskScopeV2): PersonAccessAuthorization {
+    const actor = this.sessions.authenticateAccess({ access_token: accessToken });
+    this.assertOrganization(actor);
+    this.assertScope(actor, scope);
+    return actor;
   }
 
   private assertOrganization(actor: PersonAccessAuthorization): void {
@@ -540,7 +519,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       if (row === undefined) denied();
       this.assertRowRevision(row);
       const atom = originalPacketAtomV1(row, candidate.packet);
-      return { score: candidate.score, received_at: candidate.received_at, atom, item: () => this.deskItem(row, atom, true) };
+      return { atom, item: () => this.deskItem(row, atom, true) };
     });
   }
 
@@ -549,10 +528,10 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const candidates: Candidate[] = [];
     const accepts = (kind: DeskKind) => filter.kinds === undefined || filter.kinds.includes(kind);
     if (filter.source !== 'meeting') {
-      if (accepts('note')) for (const row of this.textRows(actor, scope, [], { ...filter, inventory: true, limit })) if (matchesEvidenceDateV1({ received: row.received_at }, filter, 'received')) candidates.push({ received_at: row.received_at, row });
+      if (accepts('note')) for (const row of this.textRows(actor, scope, { ...filter, limit })) if (matchesEvidenceDateV1({ received: row.received_at }, filter, 'received')) candidates.push({ received_at: row.received_at, row });
       if (accepts('document_passage')) {
         const seen = new Set<string>();
-        for (const row of this.documentRows(actor, scope, [], { ...filter, inventory: true, limit, first_document_passage: true })) {
+        for (const row of this.documentRows(actor, scope, { ...filter, limit, first_document_passage: true })) {
           if (seen.has(row.document_id) || !matchesEvidenceDateV1({ received: row.received_at }, filter, 'received')) continue;
           seen.add(row.document_id); candidates.push({ received_at: row.received_at, row });
         }
@@ -566,8 +545,8 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       const scan = candidate.row;
       const row = 'document_id' in scan ? this.hydrateDocumentScanRow(actor, scope, scan) : this.textBySource(actor, scope, scan.source_id, scan.revision_id);
       if (row === undefined) denied();
-      const atom = this.deskAtom(row, []);
-      return { score: 0, received_at: candidate.received_at, atom, item: () => this.deskItem(row, atom, false) };
+      const atom = this.deskAtom(row);
+      return { atom, item: () => this.deskItem(row, atom, false) };
     });
   }
 
@@ -575,13 +554,13 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     // Source inventory exposes one stable representative passage per document.
     const sourceLimit = 100;
     const candidates = [
-      ...this.textRows(actor, scope, [], { inventory: true, limit: sourceLimit, ...(exclude === undefined ? {} : { exclude }) }),
+      ...this.textRows(actor, scope, { limit: sourceLimit, ...(exclude === undefined ? {} : { exclude }) }),
       // Transcript-only imports from a meeting tool remain visible in the
       // original-item list, but have no passage to cite. Exclude them before
       // applying the limit so they neither
       // break packet construction nor hide readable notes.
       ...this.imported.rows(actor, scope).filter(row => row.text.length > 0 && !excludedRow(row, true, exclude)).slice(0, sourceLimit),
-      ...this.documentRows(actor, scope, [], { inventory: true, limit: sourceLimit, first_document_passage: true, ...(exclude === undefined ? {} : { exclude }) }),
+      ...this.documentRows(actor, scope, { limit: sourceLimit, first_document_passage: true, ...(exclude === undefined ? {} : { exclude }) }),
     ]
       .filter((row) => kinds === undefined || kinds.includes("document_id" in row ? "document_passage" : row.api_version === 0 ? "imported_meeting" : "note"))
       .sort((left, right) => right.received_at.localeCompare(left.received_at) || left.source_id.localeCompare(right.source_id) || ("ordinal" in left ? left.ordinal : 0) - ("ordinal" in right ? right.ordinal : 0));
@@ -598,8 +577,8 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     return Object.freeze(selected);
   }
 
-  private deskAtom(row: SourceRow | DocumentRow, terms: readonly string[]): ReleasedSourceContextAtomV1 {
-    const packet = wholeMatchingPacket(packetTitle(row), row.text, terms);
+  private deskAtom(row: SourceRow | DocumentRow): ReleasedSourceContextAtomV1 {
+    const packet = firstPacket(packetTitle(row), row.text);
     this.assertRowRevision(row);
     return originalPacketAtomV1(row, packet);
   }
@@ -646,19 +625,19 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     return result;
   }
 
-  private textRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[], query: OriginalRowsQueryV1): readonly SourceRow[] {
+  private textRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, query: OriginalRowsQueryV1): readonly SourceRow[] {
     const acl = this.acl(actor, "u");
     const scoped = personOriginalScopeFilterV1("u", actor, scope);
     const dates = receivedDateSql(query, "u");
     const excluded = excludedSql("u", query.exclude);
-    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at,u.audience_kind AS visibility,echo_original_context_whole_score_v1(u.title,u.text,?) AS lexical_score
+    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at,u.audience_kind AS visibility
       FROM ${ORIGINAL_TEXT_CUSTODY_V1} u
       JOIN authority_sources_v1 s ON s.organization_id=u.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=u.context_id
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=u.payload_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
-      WHERE u.organization_id=? AND ${acl.sql} ${scoped.sql} ${query.inventory === true ? "" : "AND lexical_score > 0"} ${dates.sql} ${excluded.sql}
-      ORDER BY lexical_score DESC,u.received_at DESC,s.source_id LIMIT ?`;
-    return this.database.prepare(sql).all(JSON.stringify(terms), actor.organization_id, ...acl.args, ...scoped.args, ...dates.args, ...excluded.args, query.limit) as readonly SourceRow[];
+      WHERE u.organization_id=? AND ${acl.sql} ${scoped.sql} ${dates.sql} ${excluded.sql}
+      ORDER BY u.received_at DESC,s.source_id LIMIT ?`;
+    return this.database.prepare(sql).all(actor.organization_id, ...acl.args, ...scoped.args, ...dates.args, ...excluded.args, query.limit) as readonly SourceRow[];
   }
 
   private textScanRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2): readonly OriginalScanRow[] {
@@ -697,14 +676,14 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     return Object.freeze({ ...meta, ...chunk });
   }
 
-  private documentRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[], query: OriginalRowsQueryV1): readonly DocumentRow[] {
+  private documentRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, query: OriginalRowsQueryV1): readonly DocumentRow[] {
     const acl = this.acl(actor, "d");
     const scoped = personOriginalScopeFilterV1("d", actor, scope);
     const firstChunk = query.first_document_passage === true ? "AND t.ordinal=(SELECT MIN(first_t.ordinal) FROM authority_person_document_text_v1 first_t WHERE first_t.document_id=d.document_id AND first_t.extractor=t.extractor)" : "";
-    // Matching and packet titles use the verified filename, never a display title.
+    // Packet titles use the verified filename, never a display title.
     const dates = receivedDateSql(query, "d");
     const excluded = excludedSql("d", query.exclude);
-    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,t.ordinal,t.anchor_kind,t.anchor_start,t.text,t.extractor,representation.content_json AS representation_json,d.received_at,d.audience_kind AS visibility,echo_original_context_whole_score_v1(d.filename,t.text,?) AS lexical_score
+    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,t.ordinal,t.anchor_kind,t.anchor_start,t.text,t.extractor,representation.content_json AS representation_json,d.received_at,d.audience_kind AS visibility
       FROM authority_person_documents_v1 d
       JOIN authority_person_document_text_v1 t ON t.document_id=d.document_id
       JOIN authority_person_document_work_v1 work ON work.document_id=d.document_id AND work.state='complete' AND work.extraction_state IN ('ready','partial') AND work.extractor=t.extractor
@@ -712,9 +691,9 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=d.original_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
       JOIN authority_source_representations_v1 representation ON representation.organization_id=r.organization_id AND representation.source_id=r.source_id AND representation.revision_id=r.revision_id AND representation.processor_version=t.extractor
-      WHERE d.organization_id=? AND ${acl.sql} ${scoped.sql} ${query.inventory === true ? "" : "AND lexical_score > 0"} ${firstChunk} ${dates.sql} ${excluded.sql}
-      ORDER BY lexical_score DESC,d.received_at DESC,s.source_id,t.ordinal LIMIT ?`;
-    return this.database.prepare(sql).all(JSON.stringify(terms), actor.organization_id, ...acl.args, ...scoped.args, ...dates.args, ...excluded.args, query.limit) as readonly DocumentRow[];
+      WHERE d.organization_id=? AND ${acl.sql} ${scoped.sql} ${firstChunk} ${dates.sql} ${excluded.sql}
+      ORDER BY d.received_at DESC,s.source_id,t.ordinal LIMIT ?`;
+    return this.database.prepare(sql).all(actor.organization_id, ...acl.args, ...scoped.args, ...dates.args, ...excluded.args, query.limit) as readonly DocumentRow[];
   }
 
   private assertIntegrity(row: Pick<SourceRow, "source_id" | "revision_id" | "source_sha256" | "representation_sha256">): void {
@@ -820,9 +799,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
    * and the statements are prepared once a check. Answers keep the request's order and length.
    */
   checkSourceRevisions(input: { readonly access_token: string; readonly citations: readonly OriginalContextCitationV1[] }): readonly ("same" | "changed" | "unreadable")[] {
-    const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
-    this.assertOrganization(actor);
-    this.assertScope(actor, GLOBAL_SCOPE);
+    const actor = this.reader(input.access_token, GLOBAL_SCOPE);
     const text = this.textSourceRead(actor, GLOBAL_SCOPE);
     const documentMeta = this.documentSourceMetaRead(actor, GLOBAL_SCOPE);
     const revisions = this.database.prepare("SELECT revision_id FROM authority_source_revisions_v1 WHERE organization_id=? AND source_id=? ORDER BY captured_at DESC,revision_id DESC").pluck();

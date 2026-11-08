@@ -7,7 +7,6 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalSha256, sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { PERSON_PROJECT_ACTIVITY_PATH_V1, validatePersonProjectActivityV1 } from '@echo-brain/organization-api';
-import { composeRecordApproverProjectorsV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
 import type { ImpactItemDraftV1, SqliteImpactItemsV1 } from '../src/adapters/persistence/sqlite/impact-items-v1.js';
 import { SqlitePersonProjectActivityV1 } from '../src/adapters/persistence/sqlite/person-project-activity-v1.js';
@@ -16,7 +15,8 @@ import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sq
 import { enqueueApprovedRecordRunV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import { createPersonDocumentApplicationV1 } from '../src/application/document-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
-import { AUTHORITY_RECORD_APPROVER_PROJECTORS_V1, AUTHORITY_RECORD_INPUT_CODECS_V1 } from '../src/composition/authority-record-protocols-v1.js';
+import { AUTHORITY_RECORD_INPUT_CODECS_V1 } from '../src/composition/authority-record-protocols-v1.js';
+import { projectApprovalDecisionApproverV1 } from '../src/composition/approval-decision-projection-v1.js';
 import { createPersonProjectActivityV1, type CreatePersonProjectActivityV1Options } from '../src/composition/person-project-activity-v1.js';
 import { createRecordProjectAuthorizationV1 } from '../src/composition/person-record-project-scope-v1.js';
 import { createPersonRecordSearchRouteV1, type CreatePersonRecordSearchRouteV1Options, type PersonRecordSearchRouteV1 } from '../src/composition/person-record-search-route.js';
@@ -44,7 +44,7 @@ function recordRoute(f: OpenItemsFixtureV1, overrides: Partial<CreatePersonRecor
     state_directory, ...f.context.coordinates, retrieval_contract_sha256: readableSearchGenerationContractV1().retrieval_contract_sha256,
     sessions: f.openItemsOptions.sessions, authority: f.db, record: f.recordLog, audit: new SqlitePersonRecordReadAuditV1(f.db),
     capture_projects: createRecordProjectAuthorizationV1(new SqliteProjectContextRepositoryV1(f.db)),
-    record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1, record_approver: composeRecordApproverProjectorsV1(AUTHORITY_RECORD_APPROVER_PROJECTORS_V1),
+    record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1, record_approver: projectApprovalDecisionApproverV1,
     ...overrides,
   });
 }
@@ -106,7 +106,7 @@ const grant = (f: OpenItemsFixtureV1, who: FixturePerson, project_id: string) =>
 async function approveAnother(f: OpenItemsFixtureV1, projectIds: readonly string[], external: string): Promise<Sha256Digest> {
   const other = await f.otherProposal(true, external);
   f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: `desk-approve-${external}`, routes: f.routes(projectIds, other.approvalId) }), () => f.session);
-  await f.publisher([]).appendFinalizedApprovalsToV4(new AbortController().signal);
+  await f.publisher(null).appendFinalizedApprovalsToV4(new AbortController().signal);
   return f.recordLog.prepare('SELECT record_sha256 FROM organization_record_log ORDER BY position DESC LIMIT 1').pluck().get() as Sha256Digest;
 }
 
@@ -128,7 +128,7 @@ function moreFollowUps(f: OpenItemsFixtureV1, count: number): string[] {
 async function approveWithFollowUps(f: OpenItemsFixtureV1, projectIds: readonly string[], external: string, count: number): Promise<{ readonly record: Sha256Digest; readonly items: string[] }> {
   const other = await f.otherProposal(true, external);
   f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: `desk-approve-${external}`, routes: f.routes(projectIds, other.approvalId) }), () => f.session);
-  await f.publisher([enqueueApprovedRecordRunV1(f.runs)]).appendFinalizedApprovalsToV4(new AbortController().signal);
+  await f.publisher(enqueueApprovedRecordRunV1(f.runs)).appendFinalizedApprovalsToV4(new AbortController().signal);
   const record = f.recordLog.prepare('SELECT record_sha256 FROM organization_record_log ORDER BY position DESC LIMIT 1').pluck().get() as Sha256Digest;
   const [run] = f.runs.impactRunsFor([record]);
   const lease = f.runs.claim(f.person, run!.run_id, 60_000);

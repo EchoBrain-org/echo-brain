@@ -1,7 +1,12 @@
 import { expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { verifyConfluenceConnectionV1 } from '../src/confluence-payload-v1.js';
+import { verifyAtlassianConnectionV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
 import type { ConfluenceCloudTransportV1 } from '../src/confluence-cloud-transport-v1.js';
+import { CONFLUENCE_PERSON_PROVIDER_V1 } from '../src/confluence-validation-v1.js';
+
+/** The connection check every Confluence read and setting runs, with the Confluence provider's scopes and identity rules. */
+const verifyConfluenceConnectionV1 = (transport: ConfluenceCloudTransportV1, input?: Parameters<typeof verifyAtlassianConnectionV1>[2]) =>
+  verifyAtlassianConnectionV1(CONFLUENCE_PERSON_PROVIDER_V1, transport, input);
 
 const binding = { organization_id: 'org', principal_id: 'person', membership_id: 'member', tool_id: 'confluence', external_scope_id: '00000000-0000-4000-8000-000000000007', external_subject_id: 'acct', read_grant_sha256: canonicalSha256({ fixture: true }) } as const;
 function fixture(scopes: readonly string[] = ['read:page:confluence', 'read:space:confluence', 'search:confluence', 'read:confluence-user']): ConfluenceCloudTransportV1 {

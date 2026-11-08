@@ -12,14 +12,6 @@ const VALIDATION_TOOLS = resolve(
   REPO,
   "deploy/organization-authority/authority-current-host-recovery-v1.validation-tools.json",
 );
-const RUNBOOK = resolve(
-  REPO,
-  "docs/operations/RB-OPERATIONS-002-authority-recovery-floor.md",
-);
-const SPRINT = resolve(
-  REPO,
-  "docs/product/2026-08-25-operational-confidence-sprint-v1.md",
-);
 
 const template = () => readTemplate(TEMPLATE);
 
@@ -124,7 +116,6 @@ describe("Authority current-host recovery floor stack", () => {
   });
 
   it("checks the exact recovery shape with a committed CloudFormation Guard policy", () => {
-    const runbook = readFileSync(RUNBOOK, "utf8");
     const validationTools = JSON.parse(
       readFileSync(VALIDATION_TOOLS, "utf8"),
     ) as {
@@ -188,25 +179,11 @@ describe("Authority current-host recovery floor stack", () => {
       expect(asset.name).toMatch(/^cfn-guard-v3-.+-latest\.tar\.gz$/);
       expect(asset.sha256).toMatch(/^[0-9a-f]{64}$/);
     }
-    expect(runbook).toContain("`cfn-lint` 1.55.1");
-    expect(runbook).toContain("CloudFormation Guard 3.2.1");
-    expect(runbook).toContain(
-      "authority-current-host-recovery-v1.validation-tools.json",
-    );
-    expect(runbook).toContain("authority-current-host-recovery-v1.guard");
-    expect(runbook).toContain(
-      "npm run check:authority-recovery-infrastructure",
-    );
-    expect(runbook).toContain("aws cloudformation validate-template \\");
-    expect(runbook).toContain("`REVIEW_IN_PROGRESS`");
-    expect(runbook).toContain("EnableTerminationProtection=true");
-    expect(runbook).toContain("do not authorize\nexecution");
   });
 
-  it("requires a documented source-encryption evidence gate and does not claim vault encryption protects EBS", () => {
+  it("does not claim vault encryption protects EBS", () => {
     const stack = template();
     const serialized = JSON.stringify(stack);
-    const runbook = readFileSync(RUNBOOK, "utf8");
 
     expect(stack.Description).toContain(
       "this template cannot inspect either live resource",
@@ -214,72 +191,5 @@ describe("Authority current-host recovery floor stack", () => {
     expect(serialized).toContain(
       "not independently encrypted by the backup vault",
     );
-    expect(runbook).toContain("account-scoped `describe-volumes`");
-  });
-
-  it("keeps the restore drill constrained to the restored volume and a reviewed isolated helper", () => {
-    const runbook = readFileSync(RUNBOOK, "utf8");
-    const sprint = readFileSync(SPRINT, "utf8");
-
-    expect(runbook).toContain("`RestoreServiceRoleArn`");
-    expect(runbook).toContain("`iam:PassRole`");
-    expect(runbook).toContain("`backup:GetRecoveryPointRestoreMetadata`");
-    expect(runbook).toContain("`backup:StartRestoreJob`");
-    expect(runbook).toContain("`backup:DescribeRestoreJob`");
-    expect(runbook).toContain("EBS-only inline policies");
-    expect(runbook).toContain("Availability Zone");
-    expect(runbook).toContain("This is validation of the restored volume's");
-    expect(runbook).toContain("not a check of the helper root volume");
-    expect(runbook).toContain("`Encrypted` is exactly `true`");
-    expect(runbook).toContain("approved Authority-account KMS boundary");
-    expect(runbook).toContain("reviewed-IaC");
-    expect(runbook).toContain("no NAT, internet-gateway, transit-gateway");
-    expect(runbook).toContain("Secrets Manager, ECR, Cloudflare, the tunnel");
-    expect(runbook).toContain("offline pre-attachment smoke test");
-    expect(runbook).toContain(
-      "node --check tools/verify-authority-recovery.mjs",
-    );
-    expect(runbook).toContain(
-      "./node_modules/.bin/vitest run --config vitest.config.ts tests/architecture/authority-recovery-verifier.test.ts",
-    );
-    expect(runbook).toContain("no network request or download");
-    expect(runbook).toContain("both\n  commands must exit `0`");
-    expect(runbook).toContain("Node runtime, locked dependency");
-    expect(runbook).toContain("workspace build output");
-    expect(runbook).toContain("enable termination protection");
-    expect(runbook).toContain("AWS Backup Vault Lock is deliberately deferred");
-    expect(runbook).toContain("`BackupServiceRoleArn`");
-    expect(runbook).toContain("`backup:StartBackupJob`");
-    expect(runbook).toContain("`iam:PassedToService=backup.amazonaws.com`");
-    expect(runbook).toContain("`Lifecycle.DeleteAfterDays`");
-    expect(runbook).toContain("aws backup start-backup-job \\");
-    expect(runbook).toContain(
-      "--lifecycle DeleteAfterDays=<approved-retention-days>",
-    );
-    expect(runbook).toContain("aws backup describe-backup-job \\");
-    expect(runbook).toContain("scheduled plan's\n`RecoveryPointRetentionDays`");
-    expect(runbook).toContain("expiry cannot be verified, do not acknowledge");
-    expect(runbook).toContain("wait until account-scoped `describe-volumes`");
-    expect(runbook).toContain(
-      "aws backup get-recovery-point-restore-metadata \\",
-    );
-    expect(runbook).toContain("aws backup start-restore-job \\");
-    expect(runbook).toContain("--resource-type EBS \\");
-    expect(runbook).toContain("aws backup describe-restore-job \\");
-    expect(runbook).toContain("delete only\nthat restored drill volume");
-    expect(runbook).toContain("no private entry names or\npaths");
-    expect(sprint).toContain("distinct backup and restore service\n  roles");
-    expect(sprint).toContain("termination protection");
-    expect(sprint).toContain("AWS Backup Vault Lock\n  is explicitly deferred");
-    expect(sprint).toContain("`backup:StartBackupJob`");
-    expect(sprint).toContain("`iam:PassedToService=backup.amazonaws.com`");
-    expect(sprint).toContain(
-      "`Lifecycle.DeleteAfterDays` equal to the\n  scheduled plan's retention",
-    );
-    expect(sprint).toContain(
-      "the restored\n  volume itself, not the helper root",
-    );
-    expect(sprint).toContain("entry names, or paths");
-    expect(sprint).toContain("restored\n  drill volume");
   });
 });

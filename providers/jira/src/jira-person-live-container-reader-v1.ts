@@ -1,12 +1,12 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReaderV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
-import { createAtlassianVerificationBatchV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
+import { createAtlassianVerificationBatchV1, verifyAtlassianConnectionV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
 import { boundUtf8V1 } from '@echo-brain/provider-runtime/person-provider-v1';
 import { createPersonToolContainerReaderV1, personToolContainerRowsV1, type PersonToolContainerV1 } from '@echo-brain/provider-runtime/person-tool-container-reader-v1';
 import { JIRA_PROJECT_QUERY_MAX_BYTES_V1, type JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
-import { parseJiraProject, verifyJiraConnectionV1 } from './jira-payload-v1.js';
-import { copyJiraBindingV1, JIRA_ID, jiraArray, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
+import { parseJiraProject } from './jira-payload-v1.js';
+import { copyJiraBindingV1, JIRA_ID, JIRA_PERSON_PROVIDER_V1, jiraArray, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
 
 /** Projects one project search reads when a search looks for candidates. */
 const CANDIDATES_PAGE = 50;
@@ -37,7 +37,7 @@ export async function createJiraPersonLiveContainerReaderV1(options: {
   const apiPrefix = `https://api.atlassian.com/ex/jira/${cloudid}`;
   const pathPrefix = `/ex/jira/${cloudid}/rest/api/3`;
   let origin = options.expected_origin;
-  const verification = createAtlassianVerificationBatchV1(async (signal?: AbortSignal) => (await verifyJiraConnectionV1(transport, { signal, expected_origin: origin })).origin);
+  const verification = createAtlassianVerificationBatchV1(async (signal?: AbortSignal) => (await verifyAtlassianConnectionV1(JIRA_PERSON_PROVIDER_V1, transport, { signal, expected_origin: origin })).origin);
 
   function project(raw: unknown): PersonToolContainerV1 {
     const parsed = parseJiraProject(raw, origin!, apiPrefix);

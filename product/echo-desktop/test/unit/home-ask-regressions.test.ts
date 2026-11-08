@@ -25,7 +25,7 @@ beforeEach(() => {
       for (const file of [...timelineFiles.keys()]) if (file !== own) timelineFiles.delete(file);
       return ok({ turns: structuredClone(timelineFiles.get(own) ?? []) });
     },
-    'ask.run': () => ok({ text: 'Synthetic answer.', scope: { kind: 'global' }, sources: [], outcome: 'answered', parts: [] }),
+    'ask.run': () => ok({ scope: { kind: 'global' }, sources: [], outcome: 'answered', parts: [] }),
   }, () => ({ active: [], archived: [] })));
 });
 

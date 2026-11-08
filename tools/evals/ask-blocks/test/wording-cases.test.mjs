@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { ANSWER_BLOCKS_PROMPT } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
-import { CASES_FILE, caseProblems, loadCases } from "../grade.mjs";
+import { CASES_FILE, caseProblems, loadCases } from "../wording.mjs";
 
 const document = loadCases();
 

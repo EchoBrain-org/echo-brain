@@ -201,7 +201,6 @@ function checkComponentIndexContract(tree, manifest, errors) {
     !isObject(contract) ||
     !Array.isArray(contract.canonical_components) ||
     contract.canonical_components.length === 0 ||
-    !isStringArray(contract.retired_source_paths) ||
     !Array.isArray(contract.compatibility_entrypoints)
   ) {
     errors.push(`${manifest.name}: component_index_contract is invalid`);
@@ -240,21 +239,6 @@ function checkComponentIndexContract(tree, manifest, errors) {
     }
     if (!exportedSymbols(tree, component.path).has(component.export)) {
       errors.push(`${manifest.name}: canonical component '${component.name}' does not export '${component.export}' from ${component.path}`);
-    }
-  }
-
-  const retiredPaths = new Set();
-  for (const path of contract.retired_source_paths) {
-    if (retiredPaths.has(path)) {
-      errors.push(`${manifest.name}: component index duplicates retired source path: ${path}`);
-    }
-    retiredPaths.add(path);
-    if (!isExactSourcePath(path, manifest.source_root)) {
-      errors.push(`${manifest.name}: retired component source path must be exact and inside ${manifest.source_root}: ${path}`);
-      continue;
-    }
-    if (tree.has(path)) {
-      errors.push(`${manifest.name}: retired component source path remains: ${path}`);
     }
   }
 

@@ -206,7 +206,6 @@ function absentTerm(corpus, random) {
 export function buildQueryPlan({ corpus, reader, count = 100, seed = "queries", exact_head: exactHead = corpus.exact_head }) {
   if (!Number.isInteger(count) || count < 10) throw new Error("query count must be an integer of at least ten");
   const random = seededRandom(seed);
-  const broadMinimum = corpus.milestone === "M1" ? 200 : 1000;
   const classes = [
     ["selective", Math.round(count * 0.4)],
     ["medium", Math.round(count * 0.3)],
@@ -229,7 +228,7 @@ export function buildQueryPlan({ corpus, reader, count = 100, seed = "queries", 
         built.push(selectiveVariants[index % selectiveVariants.length]);
       }
       if (kind === "medium") built.push(positiveQuery({ corpus, head: exactHead, reader, kind, minimumCandidates: 100, termCount: 2 + (index % 3), startOffset: index }));
-      if (kind === "broad") built.push(positiveQuery({ corpus, head: exactHead, reader, kind, minimumCandidates: broadMinimum, termCount: 1 + (index % 3), startOffset: index }));
+      if (kind === "broad") built.push(positiveQuery({ corpus, head: exactHead, reader, kind, minimumCandidates: 200, termCount: 1 + (index % 3), startOffset: index }));
     }
   }
   while (built.length < count) {

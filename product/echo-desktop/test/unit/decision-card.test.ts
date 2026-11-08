@@ -6,8 +6,8 @@ import { byTestId, elements, EMPTY_SUMMARY, plainHooks, render, text, type Node 
 
 vi.mock('../../src/renderer/api.js', () => ({ rpc: vi.fn(), dropFile: vi.fn() }));
 vi.mock('preact/hooks', original => plainHooks(original));
-const { retryImpact } = vi.hoisted(() => ({ retryImpact: vi.fn() }));
-vi.mock('../../src/renderer/store.js', async original => ({ ...await original<typeof import('../../src/renderer/store.js')>(), retryImpact }));
+const { retryImpact, openFollowUps } = vi.hoisted(() => ({ retryImpact: vi.fn(), openFollowUps: vi.fn() }));
+vi.mock('../../src/renderer/store.js', async original => ({ ...await original<typeof import('../../src/renderer/store.js')>(), retryImpact, openFollowUps }));
 
 const THERM = 'prj_11111111-1111-4111-8111-111111111111';
 const ECHO = 'prj_22222222-2222-4222-8222-222222222222';
@@ -175,11 +175,17 @@ describe('the decision card', () => {
     const records = [{ approval_id: 'apr_' + '1'.repeat(64), project_ids: [THERM] }, { approval_id: 'apr_' + '2'.repeat(64), project_ids: [] }];
     const decided = { ...open, review: { ...review, status: 'approved' as const, decided_on: 'desktop' as const, records }, records,
       items: [{ ...items[0]!, project_ids: [THERM] }, { ...items[1]!, project_ids: null }, { ...items[2]!, owner: 'R. Moreno', owner_editable: false, project_ids: [] }] };
+    const first = 'run_00000000-0000-4000-8000-000000000041', checked = 'sha256:' + 'c'.repeat(64);
     const tree = await page(decision({ open: decided, runs: [run('41', records[0]!.approval_id, 'done'), run('42', records[1]!.approval_id, 'failed')],
-      lines: { 'run_00000000-0000-4000-8000-000000000041': { summary: { ...EMPTY_SUMMARY, unsent: 2, decisions: 1 }, stage: null } } }));
+      lines: { [first]: { summary: { ...EMPTY_SUMMARY, unsent: 2, decisions: 1 }, stage: { record_sha256: checked, run_id: first, state: 'done', error_code: null, mine: true } } } }));
     const impacts = elements(tree).filter(node => node.props.class === 'impact');
     expect(impacts.map(node => node.props['aria-label'])).toEqual(['Impact · THERM', 'Impact · No project, only me']);
-    expect(text(impacts[0])).toContain('Follow-ups');
+    // Its follow-ups in one line, the whole line a button that opens the meeting's list.
+    const line = byTestId(impacts[0], 'impact-follow-ups')[0]!;
+    expect([line.type, text(line)]).toEqual(['button', 'Follow-ups · 2 not sent']);
+    (line.props.onClick as () => void)();
+    expect(openFollowUps).toHaveBeenCalledExactlyOnceWith('record', checked, 'Pilot planning');
+    expect(text(impacts[1])).toContain('The impact check failed.');
     expect(text(impacts[1])).toContain('Try again');
     retryImpact.mockClear();
     expect(elements(impacts[0]).filter(node => node.type === 'button' && text(node) === 'Try again')).toHaveLength(0);

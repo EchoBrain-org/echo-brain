@@ -157,42 +157,6 @@ describe('Agentic Ask V1 public contracts', () => {
     }
   });
 
-  it('carries a citation ref only when it names the cited item (ADR-0024)', () => {
-    const answer = (value: Record<string, unknown>) => ({
-      schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
-      citations: [{ kind: 'decision', label: 'Launch decision', visibility: 'team', ...value }],
-      parts: [{ question: 'What did I decide?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }], blocks: [{ kind: 'answer', statements: [0] }] }],
-    });
-    const document_id = `doc_${'1'.repeat(64)}`;
-    const source = {
-      kind: 'source_revision' as const, source_id: `source:${'d'.repeat(64)}`, revision_id: 'revision-1',
-      source_sha256: `sha256:${'e'.repeat(64)}`, representation_sha256: `sha256:${'f'.repeat(64)}`, anchor_sha256: `sha256:${'0'.repeat(64)}`,
-    };
-    const note = `note:ctx_${'2'.repeat(64)}`;
-    const accepted = [
-      { citation, ref: `meeting:${citation.record_sha256}` },
-      { citation: { ...source, document_id }, kind: 'document_passage', ref: `document:${document_id}` },
-      { citation: source, kind: 'note', ref: note },
-    ];
-    for (const value of accepted) expect(validatePersonAnswerResponseV8(answer(value)).citations[0]!.ref).toBe(value.ref);
-    // A citation without a ref still validates.
-    expect(validatePersonAnswerResponseV8(answer({ citation }))).not.toHaveProperty('citations.0.ref');
-    const rejected = [
-      { citation, ref: `meeting:sha256:${'9'.repeat(64)}` },
-      { citation: { ...source, document_id }, kind: 'document_passage', ref: note },
-      { citation: { ...source, document_id }, kind: 'document_passage', ref: `document:doc_${'3'.repeat(64)}` },
-      { citation: source, kind: 'note', ref: `document:${document_id}` },
-      { citation: source, kind: 'note', ref: `meeting:${citation.record_sha256}` },
-    ];
-    for (const value of rejected) expect(() => validatePersonAnswerResponseV8(answer(value))).toThrow('Ask response citation ref is inconsistent');
-    for (const ref of [`record:${citation.record_sha256}`, `meeting:${citation.record_sha256} `, `meeting:sha256:${'A'.repeat(64)}`, 42]) {
-      expect(() => validatePersonAnswerResponseV8(answer({ citation, ref }))).toThrow('Ask response citation ref is invalid');
-    }
-    // The retired transcript ref (ADR-0046) is no ref at all.
-    expect(() => validatePersonAnswerResponseV8(answer({ citation: source, kind: 'note', ref: `transcript:${citation.record_sha256}` })))
-      .toThrow('Ask response citation ref is invalid');
-  });
-
   it('keeps the evidence desk contract exact-key: a desk item never carries a ref', () => {
     const item = { id: 'desk-item-1', citation, kind: 'decision', label: 'Launch decision', visibility: 'team', receipt_sha256 };
     const desk = (value: unknown) => ({ schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: { kind: 'global' }, truncated: false, items: [value] });

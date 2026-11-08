@@ -5,7 +5,6 @@ import {
 } from "@echo-brain/organization-protocol";
 import {
   RecordRetrievalSourceSnapshotPortV1,
-  composeRecordApproverProjectorsV1,
   type OrganizationRecordAppenderV4,
   type V4RecordEnvelopeView,
 } from "@echo-brain/organization-record/organization-record-api-v1";
@@ -37,18 +36,16 @@ import {
   type ProtocolAuthority,
 } from "../../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 import type { ApprovalDecisionBodyV1 } from "../../src/composition/approval-core-v1.js";
-import { buildApprovalDecisionRecordsV1 } from "../../src/composition/approval-decision-projection-v1.js";
-import {
-  AUTHORITY_RECORD_APPROVER_PROJECTORS_V1, AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1,
-} from "../../src/composition/authority-record-protocols-v1.js";
+import { buildApprovalDecisionRecordsV1, projectApprovalDecisionApproverV1 } from "../../src/composition/approval-decision-projection-v1.js";
+import { AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from "../../src/composition/authority-record-protocols-v1.js";
 import { readableSearchGenerationContractV1 } from "../../src/composition/readable-search-generation-composition.js";
 
 /** The Authority's record codecs (authority-record-protocols-v1.ts: approval decisions). */
 export const SIGNED_APPROVAL_CODECS = AUTHORITY_RECORD_INPUT_CODECS_V1;
 /** The Authority's policy projectors. */
 export const SIGNED_APPROVAL_PROJECTORS = authorityRecordPolicyProjectorsV1();
-/** The approver projectors production composes (organization-authority-composition-root.ts). */
-export const SIGNED_APPROVAL_APPROVER = composeRecordApproverProjectorsV1(AUTHORITY_RECORD_APPROVER_PROJECTORS_V1);
+/** The approver projector production composes (organization-authority-composition-root.ts). */
+export const SIGNED_APPROVAL_APPROVER = projectApprovalDecisionApproverV1;
 /** The prefix of every fixture command_id. It travels in the signed reference and must never be released. */
 export const SIGNED_APPROVAL_PRIVATE_MARKER = "cmd-fixture";
 const SIGNED_APPROVAL_ISSUED_AT = "2026-08-21T12:02:00.000Z";

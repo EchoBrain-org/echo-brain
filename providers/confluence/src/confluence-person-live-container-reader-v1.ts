@@ -1,11 +1,10 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReaderV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
-import { createAtlassianVerificationBatchV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
+import { createAtlassianVerificationBatchV1, verifyAtlassianConnectionV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
 import { createPersonToolContainerReaderV1, personToolContainerRowsV1, type PersonToolContainerV1 } from '@echo-brain/provider-runtime/person-tool-container-reader-v1';
 import type { ConfluenceCloudTransportV1 } from './confluence-cloud-transport-v1.js';
-import { verifyConfluenceConnectionV1 } from './confluence-payload-v1.js';
-import { CONFLUENCE_ID as ID, confluenceArray, confluenceFailure, confluenceNextCursorV1, confluenceRecord, confluenceString, copyConfluenceBindingV1 } from './confluence-validation-v1.js';
+import { CONFLUENCE_ID as ID, CONFLUENCE_PERSON_PROVIDER_V1, confluenceArray, confluenceFailure, confluenceNextCursorV1, confluenceRecord, confluenceString, copyConfluenceBindingV1 } from './confluence-validation-v1.js';
 
 /** A global space key, or a personal space's "~" and its owner's account or user name. */
 const SPACE_KEY = /^~?[A-Za-z0-9][A-Za-z0-9_:.-]{0,253}$/;
@@ -36,7 +35,7 @@ export async function createConfluencePersonLiveContainerReaderV1(options: {
   const fence = () => { if (canonicalSha256(transport.binding) !== bindingDigest) confluenceFailure('stale_access_state'); };
   fence();
   let origin = options.expected_origin;
-  const verification = createAtlassianVerificationBatchV1(async (signal?: AbortSignal) => (await verifyConfluenceConnectionV1(transport, { signal, expected_origin: origin,
+  const verification = createAtlassianVerificationBatchV1(async (signal?: AbortSignal) => (await verifyAtlassianConnectionV1(CONFLUENCE_PERSON_PROVIDER_V1, transport, { signal, expected_origin: origin,
     require_account(account) { if (account !== binding.external_subject_id) confluenceFailure('unauthorized'); } })).origin);
 
   function space(raw: unknown): PersonToolContainerV1 {

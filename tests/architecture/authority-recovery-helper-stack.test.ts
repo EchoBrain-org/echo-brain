@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, expectTypeOf, it } from "vitest";
-import type { AuthorityRecoveryHelperBundleManifest } from "../../tools/build-authority-recovery-helper-bundle.mjs";
+import { describe, expect, it } from "vitest";
 import { readTemplate, resource } from "../support/cloudformation-template.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
@@ -17,10 +16,6 @@ const SOURCE_CHECKOUT = resolve(REPO, "tools/lib/source-checkout.mjs");
 const BUNDLE_WORKFLOW = resolve(
   REPO,
   ".github/workflows/authority-recovery-helper-bundle.yml",
-);
-const RUNBOOK = resolve(
-  REPO,
-  "docs/operations/RB-OPERATIONS-002-authority-recovery-floor.md",
 );
 
 const template = () => readTemplate(TEMPLATE);
@@ -104,8 +99,6 @@ describe("Authority isolated recovery helper stack", () => {
   });
 
   it("pins the bundle build itself to clean Linux ARM64 source and the verifier prerequisites", () => {
-    expectTypeOf<AuthorityRecoveryHelperBundleManifest>()
-      .toHaveProperty("npm_shrinkwrap_sha256").toBeString();
     const builder = [BUNDLE_BUILDER, SOURCE_CHECKOUT]
       .map((path) => readFileSync(path, "utf8"))
       .join("\n");
@@ -146,25 +139,5 @@ describe("Authority isolated recovery helper stack", () => {
     expect(workflow).not.toMatch(
       /aws-actions|configure-aws-credentials|s3 cp/i,
     );
-  });
-
-  it("keeps the runbook bound to the helper stack, the complete gp3 restore metadata, and no-replay inspection", () => {
-    const runbook = readFileSync(RUNBOOK, "utf8");
-    for (const required of [
-      "authority-recovery-helper-v1.template.json",
-      "authority-recovery-helper-v1.guard",
-      "build-authority-recovery-helper-bundle.mjs",
-      "iops",
-      "throughput",
-      "3.3.40.0",
-      "cloud-init status --wait",
-      "helper-stack-deleted",
-      "aws cloudformation delete-stack",
-      "/opt/echo-authority-recovery/runtime/node /opt/echo-authority-recovery/source/tools/verify-authority-recovery.mjs",
-      "ro,noload",
-      "secondary device",
-    ]) {
-      expect(runbook).toContain(required);
-    }
   });
 });

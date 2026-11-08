@@ -210,13 +210,12 @@ describe("private approval review v1", () => {
     expect(card.text).toContain(decisionText);
   });
 
-  it("fails closed on malformed shape, oversized sections, and more than 50 blocks", () => {
-    expect(() =>
-      buildPrivateSlackApprovalReviewV1({
-        ...INPUT,
-        actor_id: "prn_attacker",
-      } as never),
-    ).toThrow(/unexpected shape/);
+  it("reads only the frozen review: a field outside it changes nothing", () => {
+    expect(JSON.stringify(buildPrivateSlackApprovalReviewV1({ ...INPUT, actor_id: "prn_attacker" } as never)))
+      .toBe(JSON.stringify(buildPrivateSlackApprovalReviewV1(INPUT)));
+  });
+
+  it("fails closed on oversized sections and more than 50 blocks", () => {
     expect(() =>
       buildPrivateSlackApprovalReviewV1({
         ...INPUT,

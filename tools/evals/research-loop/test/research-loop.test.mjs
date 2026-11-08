@@ -781,11 +781,6 @@ test("a writer's sentence names the members its text names, never every row it c
   const own = october4Run({ items: [...withText, ...sections], lists: [OCT4_LIST], evidence: ids, kind: "which_items", writer: [...sections.map(item => item.id), ...ids], statements: [sentence] });
   const [ownPart] = codeChecks(own.testCase, own.run, dataset).parts;
   assert.deepEqual([ownPart.named, ownPart.members_named], [false, 4]);
-  // "And N more" is code's count from ECHO's own list (addition 5): a writer's sentence that ends with one counts nothing.
-  const counted = codeChecks(beside.testCase, run([{ ...sentence, text: `The pages include ${titles(0, 4)}; and 4 more.` }]).run, dataset);
-  assert.equal(counted.parts[0].named, false);
-  const code = codeChecks(beside.testCase, run([{ text: `8 Confluence pages created on October 4, 2026: ${titles(0, 4)}; and 4 more.`, cites: ROWS.slice(0, 4) }, sentence]).run, dataset);
-  assert.deepEqual([code.parts[0].named, code.parts[0].members_named], [true, 4]);
 });
 
 /** Whether a one-statement answer citing `cites` names the list of `rows` its case keys, and how many members it names. */
@@ -823,9 +818,8 @@ test("members sharing a title but not their status, owner or due date are each n
   const status = [{ status: "open" }, { status: "closed" }];
   for (const [facts, names, expected, cites] of [
     [status, "Weekly notes (open); Weekly notes (closed); Budget", { named: true, members_named: 3 }],
-    // One title names neither member it could be, and a count cannot cover them.
+    // One title names neither member it could be.
     [status, "Weekly notes; Budget", { named: false, members_named: 1 }],
-    [status, "Weekly notes; and 1 more", { named: false, members_named: 0 }, 2],
     [status, "Weekly notes (closed); Budget", { named: false, members_named: 2 }],
     // The member recording no owner is the one named without one.
     [[{ owner: "Dana Lee" }, {}], "Weekly notes (owner Dana Lee); Weekly notes; Budget", { named: true, members_named: 3 }],
@@ -871,7 +865,7 @@ test("a title cut at 120 characters stays apart from a whole title equal to what
   assert.deepEqual([named(`${short}; ${short}…`, rows), named(`${short}; ${pages[1][1]}`, rows), named(`${short}…`, rows.slice(0, 1))], [2, 2, 0]);
 });
 
-test("past an answer's 25 names, cut, merged and lowercased names match, and only a statement naming every row it cites counts the rest", () => {
+test("past 25 names, cut, merged and lowercased names match, and a list is named only when every member is", () => {
   // 30 pages: a title past 120 characters, which code cuts, two pages sharing a label, which code names once, and 27 others.
   const long = "Field return analysis for the mock digital thermometer: probe drift, battery sag, display rounding and fixture tolerances, with owners";
   assert.ok([...long].length > 120);
@@ -880,11 +874,9 @@ test("past an answer's 25 names, cut, merged and lowercased names match, and onl
   const testCase = { ...caseById(OCT4_CASE), id: "synthetic-thirty-pages", parts: [{ id: "p1", type: "list", requirement: "All 30 pages.", evidence: pages.map(([page]) => ({ page })) }] };
   const rows = pages.map(pageRow);
   const title = ([, value]) => value;
-  // The renderer names 25 members (the merged label covers two), then counts the other 5 from ECHO's list (addition 5).
+  // Code's names for 25 members (the cut long title, and a merged label covering two) name those 25, not the list.
   const names = [`${[...long].slice(0, 119).join("").trimEnd()}…`, "Weekly notes (2 pages)", ...pages.slice(3, 25).map(title)];
-  assert.deepEqual(namedBy(`30 Confluence pages created on October 4, 2026: ${names.join("; ")}; and 5 more.`, rows.slice(0, 25), rows, testCase), [true, 25]);
-  // A statement citing only rows whose text leaves one of them unnamed is not one code wrote: its "and N more" counts nothing.
-  assert.deepEqual(namedBy(`30 Confluence pages created on October 4, 2026: ${names.slice(0, -1).join("; ")}; and 6 more.`, rows.slice(0, 25), rows, testCase), [false, 24]);
+  assert.deepEqual(namedBy(`30 Confluence pages created on October 4, 2026: ${names.join("; ")}.`, rows.slice(0, 25), rows, testCase), [false, 25]);
   // A writer's sentence naming every member, the long title whole and in lowercase, names the list without any count.
   assert.deepEqual(namedBy(`The pages are ${[long.toLowerCase(), "Weekly Notes", ...pages.slice(3).map(title)].join(", ")}.`, rows, rows, testCase), [true, 30]);
 });
@@ -908,7 +900,7 @@ test("each Ask run reports its plan's needs by declared kind, and a case may nam
   };
   const need = (kind, evidence = ["L1"]) => ({ need: `n ${kind}`, ...(kind === undefined ? {} : { kind }), status: "found", evidence });
   const all = kinds([need("which_items"), need("which_say"), need("content", ["E1"]), need(undefined, ["E1"])]);
-  assert.deepEqual(all.kinds, { which_items: 1, which_say: 1, content: 1, missing: 1 });
+  assert.deepEqual(all.kinds, { which_items: 1, which_say: 1, content: 2 });
   // The October 4 case expects which_items: a plan that declares only it passes; any other set fails, a need without a kind counting as content.
   assert.deepEqual(caseById(OCT4_CASE).expected_kinds, ["which_items"]);
   assert.deepEqual([kinds([need("which_items")]).declared_kinds, all.declared_kinds, kinds([need(undefined)]).declared_kinds, kinds([]).declared_kinds], [true, false, false, false]);
@@ -952,9 +944,9 @@ test("the report shows each Ask case's need kinds beside the declared-kind check
     return { checks: codeChecks(jira, graded, dataset), judge: null };
   };
   const report = aggregate([run("content"), run("which_say")]);
-  assert.deepEqual([report.cases[0].kinds, report.cases[0].planner_kinds_declared, report.summary.cases_awaiting_key_confirmation], [{ which_items: 0, which_say: 1, content: 1, missing: 0 }, 0.5, [jira.id]]);
+  assert.deepEqual([report.cases[0].kinds, report.cases[0].planner_kinds_declared, report.summary.cases_awaiting_key_confirmation], [{ which_items: 0, which_say: 1, content: 1 }, 0.5, [jira.id]]);
   const markdown = markdownReport({ split: "development", state: "S0", world: "therm-v1", graded_at: "2026-10-18" }, report);
-  for (const line of [/Keys drafted from the export and awaiting the founder's confirmation: jira-tickets-mentioning-bug-412-global\./u, /\| Planner \| need kinds as the case expects \(code check\) \| 50% \|/u, /\| jira-tickets-mentioning-bug-412-global \| live \| 0 \| 1 \| 1 \| 0 \| 50% \|/u]) assert.match(markdown, line);
+  for (const line of [/Keys drafted from the export and awaiting the founder's confirmation: jira-tickets-mentioning-bug-412-global\./u, /\| Planner \| need kinds as the case expects \(code check\) \| 50% \|/u, /\| jira-tickets-mentioning-bug-412-global \| live \| 0 \| 1 \| 1 \| 50% \|/u]) assert.match(markdown, line);
 });
 
 test("the dataset accepts expected kinds only on Ask cases and a key awaiting confirmation as its only status", () => {
@@ -966,22 +958,6 @@ test("the dataset accepts expected kinds only on Ask cases and a key awaiting co
   const record = dataset.cases.find(value => value.id === "approved-record-t1-two-decimal-display");
   assert.ok(datasetProblems({ ...dataset, cases: [{ ...record, expected_kinds: ["content"] }] }).some(problem => problem.includes("only Ask cases name the need kinds")));
   for (const key_status of ["confirmed", "draft", ""]) assert.ok(problems({ key_status }).some(problem => problem.includes("key_status can only be awaiting_founder_confirmation")));
-});
-
-test("a list longer than an answer's 25 names scores as named when its statement counts the rest from the list", () => {
-  // The renderer names at most 25 members, then "and N more" with N from ECHO's own list (ADR-0041, addition 5).
-  const ids = ROWS.map(row => row.id);
-  const part = text => codeChecks(caseById(OCT4_CASE), october4Run({ lists: [OCT4_LIST], evidence: ["L1"], kind: "which_items", writer: ids, cites: ROWS.slice(0, 6), text }).run, dataset).parts[0];
-  const counted = part(`8 Confluence pages created on October 4, 2026: ${titles(0, 6)}; and 2 more.`);
-  assert.deepEqual([counted.named, counted.members_named], [true, 6]);
-  // A count that leaves members out, or no count at all, is still some of the list.
-  assert.deepEqual([part(`8 Confluence pages: ${titles(0, 6)}; and 1 more.`).named, part("The pages.").named], [false, false]);
-  // Each statement is read alone: a statement selecting members by id past the full statement's names never counts twice.
-  const both = codeChecks(caseById(OCT4_CASE), october4Run({ lists: [OCT4_LIST], evidence: ["L1"], kind: "which_items", writer: ids, statements: [
-    { text: `8 Confluence pages created on October 4, 2026: ${titles(0, 6)}; and 2 more.`, cites: ROWS.slice(0, 6) },
-    { text: `1 of the 8 Confluence pages created on October 4, 2026: ${titles(6, 7)} (status current).`, cites: ROWS.slice(6, 7) },
-  ] }).run, dataset).parts[0];
-  assert.deepEqual([both.named, both.members_named], [true, 7]);
 });
 
 test("a failed run of a list case scores zero on naming its list, and reports show lists named apart from parts correct", () => {
@@ -1021,8 +997,7 @@ test("saved runs keep Ask's lists, and the judge sees them as rows without text 
   assert.deepEqual(input.research.lists[0].members[0], { id: "E1", kind: "page", title: "ECHO Product Pipeline — Start Here", dates: { created: "2026-10-04T23:20:00.000Z" }, attributes: { status: "current" } });
   assert.equal(JSON.stringify(input.research.lists).includes("SYNTHETIC MOCK"), false, "a list shows rows, never text");
   assert.deepEqual(input.key.parts.map(part => part.type), ["list"]);
-  // Past an answer's 25 names, "and N more" counts the rest, as the code check does.
-  for (const rule of [/A part of type list names a set of items/u, /Naming some of them otherwise is no\./u, /ends 'and N more' names the whole set when the items it names plus N are every one of them/u]) assert.match(JUDGE_SYSTEM, rule);
+  for (const rule of [/A part of type list names a set of items/u, /Naming some of them is no\./u]) assert.match(JUDGE_SYSTEM, rule);
   // A run without lists shows the judge none.
   const other = caseById("bug-fix-dates-vs-dvt-review");
   assert.equal("lists" in judgeInput(other, completedRun(other, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [], citations: [] } })).research, false);

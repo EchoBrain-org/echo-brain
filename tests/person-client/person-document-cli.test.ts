@@ -333,9 +333,6 @@ describe('document CLI custody and bounded transport', () => {
     expect((await run(f.home, args, fetch)).result).toEqual({ ok: true, result: receipt }); expect(sent[0]).toEqual(sent[1]);
     const mismatch = await run(f.home, args, async () => json({ ...receipt, document_id: `doc_${'b'.repeat(64)}` }));
     expect(mismatch.failure).toMatchObject({ code: 'outcome_unknown' });
-    const offline = vi.fn();
-    const stale = await run(f.home, [...args, '--expected-authority', 'https://authority.example', '--expected-membership-id', 'mem_other'], offline);
-    expect(stale.failure).toMatchObject({ code: 'account_changed', sent: false }); expect(offline).not.toHaveBeenCalled();
   });
 
   it('does not count interrupted preparation directories against the retained-request limit', async () => {

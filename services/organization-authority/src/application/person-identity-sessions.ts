@@ -576,23 +576,7 @@ export class PersonIdentitySessionApplication {
               transaction.invalidatePersonLoginGrant(loginGrantSha256);
               return undefined;
             }
-            return {
-              login_attempt_id: existing.login_attempt_id,
-              issuer: existing.issuer,
-              client_id: existing.client_id,
-              redirect_uri: existing.redirect_uri,
-              state: material.state,
-              nonce: material.nonce,
-              code_challenge: this.pkceChallenge(material.verifier),
-              code_challenge_method: "S256",
-              response_type: "code",
-              scope: "openid email",
-              created_at: existing.created_at,
-              expires_at: existing.expires_at,
-              ...(verifiedLoginHint === undefined
-                ? {}
-                : { login_hint: verifiedLoginHint }),
-            };
+            return this.begunLogin(existing, material, verifiedLoginHint);
           }
         } else if (input.kind !== "existing_identity_login") {
           throw personSessionUnauthorized();
@@ -612,7 +596,8 @@ export class PersonIdentitySessionApplication {
           );
         }
 
-        const attemptForAad = {
+        // The new attempt's fields, which the seal's authenticated data and its row share.
+        const attempt = {
           login_attempt_id: loginAttemptId,
           issuer: this.configuration.issuer,
           attempt_purpose: input.kind,
@@ -641,7 +626,7 @@ export class PersonIdentitySessionApplication {
                   "utf8",
                 )
               : Buffer.from(verifier, "ascii"),
-          authenticated_data: this.pkceAuthenticatedData(attemptForAad),
+          authenticated_data: this.pkceAuthenticatedData(attempt),
         });
         validateText(seal.key_id, "PKCE sealing key ID", 200);
         if (
@@ -651,41 +636,16 @@ export class PersonIdentitySessionApplication {
         ) {
           throw new Error("PKCE sealer returned invalid sealed bytes");
         }
+        // The row takes its created_at from the write itself.
+        const { created_at: _createdAt, ...fields } = attempt;
         const stored = transaction.insertOidcLoginAttempt({
-          login_attempt_id: loginAttemptId,
-          issuer: this.configuration.issuer,
-          attempt_purpose: input.kind,
-          client_id: this.configuration.client_id,
-          redirect_uri: this.configuration.redirect_uri,
-          tenant_constraint_sha256: this.configuration.tenant_constraint_sha256,
-          oidc_configuration_sha256:
-            this.configuration.oidc_configuration_sha256,
-          login_grant_sha256: loginGrantSha256,
-          state_sha256: stateSha256,
-          nonce_sha256: nonceSha256,
+          ...fields,
           sealed_pkce_verifier: {
             key_id: seal.key_id,
             sealed_bytes: Uint8Array.from(seal.sealed_bytes),
           },
-          expires_at: expiresAt,
         });
-        return {
-          login_attempt_id: stored.login_attempt_id,
-          issuer: stored.issuer,
-          client_id: stored.client_id,
-          redirect_uri: stored.redirect_uri,
-          state,
-          nonce,
-          code_challenge: this.pkceChallenge(verifier),
-          code_challenge_method: "S256",
-          response_type: "code",
-          scope: "openid email",
-          created_at: stored.created_at,
-          expires_at: stored.expires_at,
-          ...(verifiedLoginHint === undefined
-            ? {}
-            : { login_hint: verifiedLoginHint }),
-        };
+        return this.begunLogin(stored, { state, nonce, verifier }, verifiedLoginHint);
       },
     );
     if (begun === undefined) throw personSessionUnauthorized();
@@ -814,6 +774,22 @@ export class PersonIdentitySessionApplication {
       const outcome = this.repository.writeAtLinearization(
         () => this.runtime.clock.now(),
         (transaction, observedAt): CallbackWriteResult => {
+          // A denial terminalizes this claimed attempt (and consumes its grant); a success resolves its binding.
+          const deny = (reason: PersonSessionOidcFailureReason): CallbackWriteResult => {
+            this.completeDeniedAttempt(transaction, stateSha256, redemptionClaimId);
+            return { kind: "denied", reason };
+          };
+          const succeed = (resolvedIdentityBindingId: string): void => {
+            if (
+              transaction.completeOidcLoginAttempt(stateSha256, redemptionClaimId, {
+                outcome: "succeeded",
+                resolved_identity_binding_id: resolvedIdentityBindingId,
+                upstream_assertion_issued_at: identity.upstream_assertion_issued_at,
+              }) === undefined
+            ) {
+              throw new Error("claimed OIDC attempt could not be completed");
+            }
+          };
           const current = transaction.oidcLoginAttempt(stateSha256);
           if (
             current === undefined ||
@@ -824,24 +800,14 @@ export class PersonIdentitySessionApplication {
             return { kind: "denied", reason: "attempt_unavailable" };
           }
           if (!this.attemptUsesCurrentConfiguration(current)) {
-            this.completeDeniedAttempt(
-              transaction,
-              stateSha256,
-              redemptionClaimId,
-            );
-            return { kind: "denied", reason: "attempt_invalid" };
+            return deny("attempt_invalid");
           }
 
           let binding: StoredOidcIdentityBinding;
           if (current.attempt_purpose === "identity_bootstrap") {
             const grantSha256 = current.login_grant_sha256;
             if (grantSha256 === null) {
-              this.completeDeniedAttempt(
-                transaction,
-                stateSha256,
-                redemptionClaimId,
-              );
-              return { kind: "denied", reason: "bootstrap_binding_denied" };
+              return deny("bootstrap_binding_denied");
             }
             const grant = transaction.personLoginGrant(grantSha256);
             if (
@@ -853,12 +819,7 @@ export class PersonIdentitySessionApplication {
                 current.oidc_configuration_sha256 ||
               !isStrictlyBefore(observedAt, grant.expires_at)
             ) {
-              this.completeDeniedAttempt(
-                transaction,
-                stateSha256,
-                redemptionClaimId,
-              );
-              return { kind: "denied", reason: "bootstrap_binding_denied" };
+              return deny("bootstrap_binding_denied");
             }
             // One verified wrong-account result is safe to retry. No
             // credential has been issued and the authority has proved only
@@ -867,23 +828,13 @@ export class PersonIdentitySessionApplication {
             // account terminalizes and consumes the grant. Every other denial
             // below remains terminal as well.
             if (identity.bootstrap_email_sha256 === null) {
-              this.completeDeniedAttempt(
-                transaction,
-                stateSha256,
-                redemptionClaimId,
-              );
-              return { kind: "denied", reason: "bootstrap_binding_denied" };
+              return deny("bootstrap_binding_denied");
             }
             if (
               grant.expected_email_sha256 !== identity.bootstrap_email_sha256
             ) {
               if (claimedAttempt.bootstrap_email_mismatch_retry_reserved) {
-                this.completeDeniedAttempt(
-                  transaction,
-                  stateSha256,
-                  redemptionClaimId,
-                );
-                return { kind: "denied", reason: "bootstrap_binding_denied" };
+                return deny("bootstrap_binding_denied");
               }
               if (
                 !transaction.reserveOidcLoginAttemptBootstrapEmailMismatchRetry(
@@ -904,37 +855,14 @@ export class PersonIdentitySessionApplication {
               grant,
             );
             if (existing !== undefined || !activeTuple) {
-              this.completeDeniedAttempt(
-                transaction,
-                stateSha256,
-                redemptionClaimId,
-              );
-              return { kind: "denied", reason: "bootstrap_binding_denied" };
+              return deny("bootstrap_binding_denied");
             }
             const consumedGrant =
               transaction.consumePersonLoginGrant(grantSha256);
             if (consumedGrant === undefined) {
-              this.completeDeniedAttempt(
-                transaction,
-                stateSha256,
-                redemptionClaimId,
-              );
-              return { kind: "denied", reason: "bootstrap_binding_denied" };
+              return deny("bootstrap_binding_denied");
             }
-            if (
-              transaction.completeOidcLoginAttempt(
-                stateSha256,
-                redemptionClaimId,
-                {
-                  outcome: "succeeded",
-                  resolved_identity_binding_id: bindingId,
-                  upstream_assertion_issued_at:
-                    identity.upstream_assertion_issued_at,
-                },
-              ) === undefined
-            ) {
-              throw new Error("claimed OIDC attempt could not be completed");
-            }
+            succeed(bindingId);
             binding = transaction.insertOidcIdentityBinding({
               identity_binding_id: bindingId,
               issuer: identity.issuer,
@@ -950,12 +878,7 @@ export class PersonIdentitySessionApplication {
             });
           } else {
             if (current.login_grant_sha256 !== null) {
-              this.completeDeniedAttempt(
-                transaction,
-                stateSha256,
-                redemptionClaimId,
-              );
-              return { kind: "denied", reason: "attempt_invalid" };
+              return deny("attempt_invalid");
             }
             const existing = transaction.activeOidcIdentityBinding(
               identity.issuer,
@@ -966,28 +889,10 @@ export class PersonIdentitySessionApplication {
               existing.status !== "active" ||
               !this.hasActiveExactMembership(transaction, existing)
             ) {
-              this.completeDeniedAttempt(
-                transaction,
-                stateSha256,
-                redemptionClaimId,
-              );
-              return { kind: "denied", reason: "identity_binding_denied" };
+              return deny("identity_binding_denied");
             }
             binding = existing;
-            if (
-              transaction.completeOidcLoginAttempt(
-                stateSha256,
-                redemptionClaimId,
-                {
-                  outcome: "succeeded",
-                  resolved_identity_binding_id: binding.identity_binding_id,
-                  upstream_assertion_issued_at:
-                    identity.upstream_assertion_issued_at,
-                },
-              ) === undefined
-            ) {
-              throw new Error("claimed OIDC attempt could not be completed");
-            }
+            succeed(binding.identity_binding_id);
           }
 
           return this.issueFamily(
@@ -1733,6 +1638,29 @@ export class PersonIdentitySessionApplication {
     return this.digestCanonical(
       personLoginGrantExpectedEmailDigestInput(expectedEmail),
     );
+  }
+
+  /** What beginning a login returns, for a new attempt or a bootstrap attempt resumed from its sealed secrets. */
+  private begunLogin(
+    attempt: Pick<StoredOidcLoginAttempt, "login_attempt_id" | "issuer" | "client_id" | "redirect_uri" | "created_at" | "expires_at">,
+    secrets: BootstrapAttemptSecrets,
+    loginHint: string | undefined,
+  ): BegunPersonOidcLogin {
+    return {
+      login_attempt_id: attempt.login_attempt_id,
+      issuer: attempt.issuer,
+      client_id: attempt.client_id,
+      redirect_uri: attempt.redirect_uri,
+      state: secrets.state,
+      nonce: secrets.nonce,
+      code_challenge: this.pkceChallenge(secrets.verifier),
+      code_challenge_method: "S256",
+      response_type: "code",
+      scope: "openid email",
+      created_at: attempt.created_at,
+      expires_at: attempt.expires_at,
+      ...(loginHint === undefined ? {} : { login_hint: loginHint }),
+    };
   }
 
   private pkceChallenge(verifier: string): string {

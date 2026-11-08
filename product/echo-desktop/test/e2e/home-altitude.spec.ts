@@ -8,10 +8,6 @@ import { launch, type Launched } from './launch.js';
 let app: Launched;
 test.afterEach(async () => { await app?.close(); });
 
-const APOLLO = 'prj_11111111-1111-4111-8111-111111111111';
-const MINA = 'mem_77777777-7777-4777-8777-777777777777';
-const RAFAEL = 'mem_88888888-8888-4888-8888-888888888888';
-
 /** Home at its top in the `altitude` world, its projects read. */
 async function myProjects() {
   app = await launch('altitude');
@@ -22,50 +18,25 @@ async function myProjects() {
   return page;
 }
 
-/** Home zoomed into one kind of what needs you, or at its top. */
+/** Home zoomed into one kind of what needs you. */
 const list = (page: Page) => page.locator('[data-testid="needs"][data-category]');
-const top = (page: Page) => page.locator('[data-testid="needs"]:not([data-category])');
 
-test('Home opens at its top: the stops in the title row, what needs you with no click, then your projects', async () => {
+// What each altitude shows (the stops, a project's groups, a person's) is altitude-screens.test's; here, what only a real
+// window has: Needs you painted above your projects, no Back link at Home's top (main.tsx), the keys and the focus.
+test('Home paints what needs you above your projects with no Back link, and moves the focus with the keys: Enter zooms on a project with the focus in it, Escape goes back to the row it left, the arrows go row to row', async () => {
   const page = await myProjects();
-  // The stops sit where ECHO was, My projects lit; there is no ⌖ and no footer.
-  const title = page.getByTestId('title');
-  await expect(title.getByTestId('alt-stops')).toBeVisible();
-  await expect(title).toHaveText('My projects');
-  await expect(page.getByTestId('alt-stop').and(page.locator('[data-level="projects"]'))).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('alt-stop').and(page.locator('[data-level="project"]'))).toBeDisabled();
-  await expect(page.getByTestId('alt-me')).toHaveCount(0);
-  await expect(page.getByTestId('needs-foot')).toHaveCount(0);
   await expect(page.getByTestId('back')).toHaveCount(0);
-  // One Update is that row, by name; Needs you counts what the badge counts.
-  const row = page.getByTestId('need-row');
-  await expect(row).toHaveCount(1);
-  await expect(row).toHaveAttribute('data-kind', 'update');
-  await expect(row).toContainText('Order samples');
-  await expect(page.getByTestId('needs-head')).toHaveText('Needs you1');
-  await expect(page.getByTestId('sidebar-badge')).toHaveText('1');
-  // What needs you comes first, your projects under it.
-  const needs = await top(page).boundingBox();
+  const needs = await page.locator('[data-testid="needs"]:not([data-category])').boundingBox();
   const projects = await page.getByTestId('alt-projects').boundingBox();
   expect(needs!.y + needs!.height).toBeLessThanOrEqual(projects!.y);
-  await expect(page.getByTestId('sidebar-follow-ups-count')).toHaveText('2');
-  await expect(page.getByTestId('sidebar-follow-ups')).toHaveAccessibleName('Follow-ups, 2 waiting on others');
   const apollo = page.getByTestId('alt-project').first();
   await apollo.focus();
   await page.keyboard.press('Enter');
   const level = page.getByTestId('alt-project-level');
   await expect(level).toBeVisible();
   await expect.poll(() => page.evaluate(() => document.activeElement?.hasAttribute('data-alt-nav') ?? false)).toBe(true);
-  expect(await level.getByTestId('alt-group').evaluateAll(groups => groups.map(group => group.getAttribute('data-group')))).toEqual(['decisions', MINA, 'none', RAFAEL]);
-  await expect(level.getByTestId('alt-item').filter({ hasText: 'ECHO-61' })).toHaveCount(1);
-  const stop = title.getByTestId('alt-stop').and(page.locator('[data-level="project"]'));
-  await expect(stop).toHaveAttribute('aria-pressed', 'true');
-  await expect(stop).toHaveAccessibleName('Project, Apollo');
   await page.getByTestId('alt-owner').filter({ hasText: 'Mina Patel' }).click();
-  const person = page.getByTestId('alt-person-level');
-  await expect(person).toBeVisible();
-  expect(await person.getByTestId('alt-group').evaluateAll(groups => groups.map(group => group.getAttribute('data-group')))).toEqual([APOLLO]);
-  await expect(page.getByTestId('alt-stop').and(page.locator('[data-level="person"]'))).toHaveAccessibleName('Person, Mina Patel');
+  await expect(page.getByTestId('alt-person-level')).toBeVisible();
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('alt-projects')).toBeVisible();
@@ -80,7 +51,7 @@ test('Home opens at its top: the stops in the title row, what needs you with no 
   await expect(page.getByTestId('alt-project').nth(1)).toBeFocused();
   await page.keyboard.press('ArrowUp');
   await page.keyboard.press('ArrowUp');
-  await expect(row).toBeFocused();
+  await expect(page.getByTestId('need-row')).toBeFocused();
 });
 
 test('back on a row that Home’s read then moves to the top, the focus stays on that row and the arrows go on from there', async () => {

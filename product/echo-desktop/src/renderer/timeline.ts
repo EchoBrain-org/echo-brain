@@ -4,7 +4,7 @@
 // empty bar suggests from it. Pure, for the store and its tests; the store
 // keeps the state and makes the calls.
 import type {
-  Answer, AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskedScope, AskPrevious, AskScope, CheckCitation, TimelineTurn,
+  Answer, AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskScope, CheckCitation, TimelineTurn,
 } from '../shared/protocol.js';
 import { checkOf, MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
@@ -276,7 +276,7 @@ function within(text: string, max: number): string {
 }
 
 /** An Ask request's body as the client sends it (`PersonAnswerRequestV3`), for its bytes. */
-function bodyBytes(question: string, scope: AskedScope, previous: AskPrevious): number {
+function bodyBytes(question: string, scope: AskScope, previous: AskPrevious): number {
   const body = { schema_version: 3, question, ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}), previous };
   return new TextEncoder().encode(JSON.stringify(body)).length;
 }
@@ -302,7 +302,7 @@ export function answeredNow(turn: TimelineTurn): TurnChecks {
  * the question (C5). Sentences go from the end until the request, asking
  * `question` in `scope`, fits the Ask body's 16 KiB.
  */
-export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskedScope): AskPrevious {
+export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope): AskPrevious {
   const sources = turn.answer.sources;
   const read = (at: number) => sources[at] === undefined || checkOf(sources[at]) === undefined || known?.[at] === 'same' || known?.[at] === 'changed';
   const readable = known === null ? [] : [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
@@ -355,13 +355,13 @@ export function sameScope(a: AskScope, b: AskScope): boolean {
 
 /**
  * The thread of a place (ADR-0049): Home's, all context, is every turn; a
- * project's is only the turns asked in it. One asked in Mine stays on Home's.
+ * project's is only the turns asked in it.
  */
 export function threadOf(turns: readonly TimelineTurn[], scope: AskScope): readonly TimelineTurn[] {
   return scope.kind === 'project' ? turns.filter(turn => sameScope(turn.scope, scope)) : turns;
 }
 
-/** A question as two turns compare it: where it was asked (Mine, before it went, as Home), and its words in any case and spacing. */
+/** A question as two turns compare it: where it was asked, and its words in any case and spacing. */
 function questionKey(turn: TimelineTurn): string {
   const where = turn.scope.kind === 'project' ? `project:${turn.scope.project_id}` : 'home';
   return `${where}\n${turn.question.trim().replace(/\s+/gu, ' ').toLowerCase()}`;

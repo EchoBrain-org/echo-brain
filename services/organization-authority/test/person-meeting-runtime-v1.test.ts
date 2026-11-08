@@ -284,7 +284,7 @@ describe('personal meeting intake uses the shared processing path', () => {
       f.grantProject();
       const provider = createStagingSyntheticPersonalMeetingProviderV1({ custom_store: new StagingSyntheticMeetingStoreV1(storage) });
       const calls: AfterApprovedRecordEventV1[] = [];
-      const create = () => f.create([provider], { approval_core: { after_record: [(_db, event) => { calls.push(event); }] } });
+      const create = () => f.create([provider], { approval_core: { after_record: (_db, event) => { calls.push(event); } } });
       let runtime = create();
       expect(await runtime.tools('owner')).toEqual([]);
       const meeting = { id: 'synthetic-custom-cohort-review', title: 'Cohort rehearsal', notes: 'Ship the cohort onboarding.', transcript: 'Synthetic speaker: ship the cohort onboarding.' };
@@ -1329,9 +1329,9 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(originals.read({ access_token: 'owner', scope, citation })).toMatchObject({ imported_meeting_review: 'reviewed', atom: { label: 'Imported meeting: Test meeting' } });
     expect(f.record.prepare('SELECT count(*) FROM organization_record_log').pluck().get()).toBe(0);
   });
-  it('forwards after_record hooks from the runtime passthrough', async () => {
+  it('forwards the after_record hook from the runtime passthrough', async () => {
     const calls: AfterApprovedRecordEventV1[] = [];
-    const f = await fixture(), runtime = f.create(undefined, { approval_core: { after_record: [(tx, event) => { expect(tx.inTransaction).toBe(true); calls.push(event); }] } });
+    const f = await fixture(), runtime = f.create(undefined, { approval_core: { after_record: (tx, event) => { expect(tx.inTransaction).toBe(true); calls.push(event); } } });
     const { pending, opened } = await f.pendingReview(runtime);
     await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-hooked', action: 'approve', routes: f.routes(opened), owners: [] });
     await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
@@ -1341,7 +1341,7 @@ describe('personal meeting intake uses the shared processing path', () => {
   });
   it('crash between append and receipt at restart: one record, one receipt, one hook', async () => {
     const calls: AfterApprovedRecordEventV1[] = [];
-    const after_record = [(_tx: unknown, event: AfterApprovedRecordEventV1) => { calls.push(event); }];
+    const after_record = (_tx: unknown, event: AfterApprovedRecordEventV1) => { calls.push(event); };
     const f = await fixture();
     const crashing = f.create(undefined, { approval_core: { after_record }, record_append: { async append(input) { await f.context.record_append.append(input); throw new Error('crash after append'); } } });
     const { pending, opened } = await f.pendingReview(crashing);

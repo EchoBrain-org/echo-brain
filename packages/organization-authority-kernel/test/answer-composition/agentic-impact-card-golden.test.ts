@@ -3,7 +3,6 @@ import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import { createAgenticResearchV1, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
-import { impactUnreadNoteV1 } from "../../src/answer-composition/renderers/impact-card-renderer-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
@@ -13,15 +12,10 @@ import { checked, generation, result } from "./fixtures/agentic-scenarios.js";
  * Impact card replay (research trigger contract v1, section 5). Scripted desk
  * replies, scripted model replies and a pinned clock drive the approved-record
  * trigger end to end: its definition's brief, the research loop, the impact
- * card renderer and the shared release step. The fixture holds each card and
- * the fingerprints of every model input and audit record.
- *
- * The original fixture is a preserved historical control. Current behavior
- * has its own reviewed quality baseline and cannot rewrite that control.
+ * card renderer and the shared release step. The reviewed quality baseline
+ * holds each card and the fingerprints of every model input and audit record.
  */
-const HISTORICAL_FIXTURE = new URL("./agentic-impact-card-golden.v1.json", import.meta.url);
 const QUALITY_FIXTURE = new URL("./agentic-impact-card-quality-baseline.v1.json", import.meta.url);
-const HISTORICAL_FIXTURE_SHA256 = "sha256:894c0a9caea9ad11620d88664f83ec582a7175eff9fbe908b8dda1a026a6612c";
 const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === "approved_record")!;
 
 const RECORD = canonicalSha256({ record: "display-review" });
@@ -157,62 +151,7 @@ async function run(name: string, scenario: Scenario) {
   };
 }
 
-/**
- * A historical card under the record policy it cites now: it was recorded citing an organization-wide (Team) record, a
- * policy since retired, and the fixture record is a project record.
- */
-function currentPolicy<T>(card: T): T {
-  return JSON.parse(JSON.stringify(card).replaceAll('"policy_id":"organization-member-readable-person-v2"', '"policy_id":"project-members-readable-person-v1"')) as T;
-}
-
-/**
- * A historical card as current notes say it: an item research saw and could not read is counted, never named, since every
- * viewer of the record reads these notes (ADR-0046). The other notes keep their place.
- */
-function countedUnread(card: unknown): unknown {
-  const value = card as { readonly unconfirmed: readonly string[] };
-  const named = (note: string) => note.endsWith(" could not be read.") && !/^The \S+ source could not be read\.$/.test(note) && !/^\d+ items? could not be read\.$/.test(note);
-  const unread = value.unconfirmed.filter(named).length;
-  const index = value.unconfirmed.findIndex(named);
-  const unconfirmed = value.unconfirmed.filter(note => !named(note));
-  if (unread > 0) unconfirmed.splice(index, 0, impactUnreadNoteV1(unread));
-  return { ...value, unconfirmed };
-}
-
 describe("impact card golden replay", () => {
-  it("retains the historical impact-card control", () => {
-    const recorded = JSON.parse(readFileSync(HISTORICAL_FIXTURE, "utf8"));
-    expect(canonicalSha256(recorded)).toBe(HISTORICAL_FIXTURE_SHA256);
-  });
-
-  it("preserves historical cards outside the intentional planner-need removal, the fallback's decided lines and counted unread items", async () => {
-    const observed: Record<string, Awaited<ReturnType<typeof run>>> = {};
-    for (const [name, scenario] of Object.entries(SCENARIOS)) observed[name] = await run(name, scenario);
-    const recorded = JSON.parse(readFileSync(HISTORICAL_FIXTURE, "utf8")) as typeof observed;
-    for (const name of Object.keys(observed).filter(name => name !== "research_stopped_on_budget" && name !== "fallback_after_two_bad_replies")) {
-      expect(observed[name]!.card).toEqual(countedUnread(currentPolicy(recorded[name]!.card)));
-    }
-  });
-
-  it("adds the record's approved text to the fallback card, and keeps the rest of its historical card", async () => {
-    type Card = {
-      readonly decided: readonly unknown[]; readonly affected: readonly { readonly citation_index: number }[];
-      readonly people: readonly { readonly name: string; readonly items: readonly number[] }[]; readonly citations: readonly { readonly citation: unknown }[];
-    };
-    const observed = (await run("fallback_after_two_bad_replies", SCENARIOS.fallback_after_two_bad_replies!)).card as Card;
-    const recorded = currentPolicy((JSON.parse(readFileSync(HISTORICAL_FIXTURE, "utf8")) as Record<string, { readonly card: Card }>).fallback_after_two_bad_replies!.card);
-    // What was decided needs no model: the record's decision and action, in their approved words, cited first.
-    expect(observed.decided).toEqual([{ text: DECISION.text, citation_index: 0 }, { text: ACTION.text, citation_index: 1 }]);
-    expect(observed.citations.slice(0, 2).map(entry => entry.citation)).toEqual([DECISION.citation, ACTION.citation]);
-    // The rest is the historical card, its citations after the record's two.
-    const shift = (index: number) => index + 2;
-    expect(observed).toEqual({
-      ...recorded, decided: observed.decided, citations: [...observed.citations.slice(0, 2), ...recorded.citations],
-      affected: recorded.affected.map(entry => ({ ...entry, citation_index: shift(entry.citation_index) })),
-      people: recorded.people.map(entry => ({ ...entry, items: entry.items.map(shift) })),
-    });
-  });
-
   it("removes an unfulfilled planner need from the stopped-research card", async () => {
     const observed = await run("research_stopped_on_budget", SCENARIOS.research_stopped_on_budget!);
     expect((observed.card as { readonly unconfirmed?: readonly string[] }).unconfirmed)

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { validatePersonAnswerResponseV8 } from "@echo-brain/organization-api";
-import { gradeTrial, leadOf, loadCases, mentions, sharedRun, summarizeRules, words } from "../grade.mjs";
+import { gradeTrial, leadOf, loadCases, mentions, sharedRun, summarizeRules, words } from "../wording.mjs";
 
 const document = loadCases();
 const founder = document.cases.find((entry) => entry.id === "follow-up-owner-quoted-title");

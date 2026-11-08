@@ -68,7 +68,6 @@
         "export": "createPersonConnectionLifecycleV1"
       }
     ],
-    "compatibility_entrypoints": [],
-    "retired_source_paths": []
+    "compatibility_entrypoints": []
   }
 }

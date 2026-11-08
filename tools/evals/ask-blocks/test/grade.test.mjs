@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CATALOGS, CATALOG_IDS } from "../catalogs.mjs";
-import { HELD_OUT_COUNT, HELD_OUT_FILE, caseOrder, caseProblems, datesIn, decide, evidenceOf, factsOf, fits, groundingOf, loadCases, mainShape, shapesOf, summarizeRanks } from "../grade.mjs";
+import { caseProblems, datesIn, evidenceOf, factsOf, fits, groundingOf, loadCases, mainShape, shapesOf } from "../grade.mjs";
 
 const document = loadCases();
 const caseOf = (id) => document.cases.find((entry) => entry.id === id);
-const catalog = (id) => CATALOGS.find((entry) => entry.id === id);
 const evidence = evidenceOf(JSON.stringify({ today: "2026-10-30", evidence: [
   { id: "E1", kind: "decision", title: "DVT ship plan", date: "2026-10-28", text: "Before the DVT build ships: first flash firmware 2.3, then run the 72-hour soak, then Ana Silva signs off the test report, and only then Dev Mehta books the courier." },
   { id: "E2", kind: "follow_up", title: "Run the 72-hour soak test", dates: { created: "2026-10-28T12:00:00.000-07:00" }, attributes: { owner: "Priya Raman", status: "open", due_at: "2026-11-06" }, text: "Decided: Run the soak." },
@@ -19,18 +17,6 @@ test("registers exactly the fifteen cases, each with facts its items say", () =>
   const broken = structuredClone(document);
   broken.cases[0].expect.facts = [["Lena Brandt"]];
   assert.deepEqual(caseProblems(broken), ["case soak-owner: no item says Lena Brandt"]);
-  // The page's order is fixed by the case id alone.
-  assert.deepEqual(caseOrder("soak-owner"), caseOrder("soak-owner"));
-  assert.deepEqual([...caseOrder("soak-owner")].sort(), [...CATALOG_IDS].sort());
-});
-
-test("registers the quick-lead check's five held-out questions on another program, apart from the fifteen", () => {
-  const heldOut = loadCases(HELD_OUT_FILE, HELD_OUT_COUNT);
-  assert.equal(heldOut.cases.length, 5);
-  assert.deepEqual(caseProblems(heldOut), ["there are 5 cases, not 15"]);
-  assert.equal(heldOut.cases.filter((entry) => document.cases.some((other) => other.id === entry.id || other.question === entry.question)).length, 0);
-  const people = new Set(document.cases.flatMap((entry) => entry.expect.people));
-  assert.deepEqual(heldOut.cases.flatMap((entry) => entry.expect.people).filter((person) => person !== document.asker && people.has(person)), []);
 });
 
 test("reads ISO days and month names, in 2026 unless a year is named", () => {
@@ -86,38 +72,22 @@ test("tells the shapes an answer shows", () => {
   const shapes = (blocks) => [...shapesOf(blocks, evidence)].sort();
   assert.deepEqual(shapes([answer("Priya Raman owns it.", ["E2"])]), ["single"]);
   assert.deepEqual(shapes([answer("Three steps."), { kind: "list", ordered: true, claims: [{ text: "One.", evidence: ["E1"] }, { text: "Two.", evidence: ["E1"] }] }]), ["ordered"]);
-  assert.deepEqual(shapes([answer("Two owners."), { kind: "heading", text: "Owners" }, { kind: "table", columns: ["Action", "Due"], rows: [{ cells: ["Soak", "2026-11-06"], evidence: ["E2"] }, { cells: ["Courier", "2026-11-10"], evidence: ["E1"] }] },
+  assert.deepEqual(shapes([answer("Two owners."), { kind: "table", title: "Owners", columns: ["Action", "Due"], rows: [{ cells: ["Soak", "2026-11-06"], evidence: ["E2"] }, { cells: ["Courier", "2026-11-10"], evidence: ["E1"] }] },
     { kind: "list", ordered: false, title: "Notes", claims: [{ text: "Soak first.", evidence: ["E1"] }, { text: "Courier last.", evidence: ["E1"] }] }]), ["grid", "parallel", "sections", "sequence"]);
   assert.deepEqual(shapes([answer("It is one ticket."), { kind: "card", title: "THERM-488", card_kind: "ticket", facts: [{ label: "Status", value: "Blocked", evidence: ["E3"] }, { label: "Owner", value: "Dev Mehta", evidence: ["E3"] }] }]), ["profile"]);
   assert.deepEqual(shapes([answer("The plan says:"), { kind: "quote", text: "then run the 72-hour soak, then Ana Silva signs off the test report", from: "DVT ship plan", evidence: ["E1"] }]), ["verbatim"]);
   assert.deepEqual(shapes([answer("It says \"first flash firmware 2.3, then run the 72-hour soak\".")]), ["single", "verbatim"]);
-  assert.equal(mainShape([answer("Two steps."), { kind: "heading", text: "Steps" }, { kind: "list", ordered: true, claims: [{ text: "One.", evidence: ["E1"] }, { text: "Two.", evidence: ["E1"] }] }]), "ordered");
+  assert.equal(mainShape([answer("Two steps."), { kind: "list", ordered: true, title: "Steps", claims: [{ text: "One.", evidence: ["E1"] }, { text: "Two.", evidence: ["E1"] }] }]), "ordered");
   assert.equal(mainShape([answer("Priya Raman owns it.", ["E2"])]), "single");
 });
 
-test("fits within the catalog's own blocks, falling back only when it can show none of the case's shapes", () => {
-  const steps = caseOf("ship-steps");
+test("fits only an answer that shows one of the case's shapes, and a single case only a single answer", () => {
   const parallel = new Set(["parallel"]);
-  assert.equal(fits(steps, catalog("templates"), parallel), false);
-  // Templates cannot show sections, so review-multi falls back to its fallback shapes there, and only there.
-  assert.equal(fits(caseOf("review-multi"), catalog("templates"), parallel), true);
-  assert.equal(fits(caseOf("review-multi"), catalog("balanced"), parallel), false);
-  assert.equal(fits(caseOf("ticket-profile"), catalog("balanced"), new Set(["prose"])), false);
-  assert.equal(fits(caseOf("soak-owner"), catalog("balanced"), new Set(["prose"])), false);
-  assert.equal(fits(caseOf("trap-disagree"), catalog("templates"), new Set()), true);
-});
-
-test("summarizes the ranks and decides only when every case is ranked", () => {
-  const ranks = (balanced, templates) => ({ balanced, templates, primitives: 3 });
-  const founder = Object.fromEntries(document.cases.map((entry, at) => [entry.id, at < 10 ? ranks(1, 2) : ranks(2, 1)]));
-  const judge = Object.fromEntries(document.cases.map((entry) => [entry.id, ranks(1, 2)]));
-  const summary = summarizeRanks(founder, judge);
-  assert.deepEqual([summary.cases, summary.founder_mean_rank, summary.judge_mean_rank], [15, { templates: 1.67, balanced: 1.33, primitives: 3 }, { templates: 2, balanced: 1, primitives: 3 }]);
-  // The judge's top pick is the founder's in the ten cases the founder put balanced first; its order of balanced and
-  // templates is the founder's there too, and of each with primitives everywhere.
-  assert.deepEqual([summary.judge_top_pick_agrees, summary.judge_pairs_agree], [{ cases: 15, agreeing: 10 }, { pairs: 45, agreeing: 40 }]);
-  const passing = { valid: true, grounded: true, nothing_lost: true, fit: true, stable: true };
-  const catalogs = Object.fromEntries(CATALOG_IDS.map((id) => [id, { rules: passing, repairs: 0, output_tokens: 1 }]));
-  assert.deepEqual(decide(catalogs, null), { complete: false, right_size: null, eligible: [] });
-  assert.equal(decide(catalogs, summary).right_size, "balanced");
+  assert.equal(fits(caseOf("ship-steps"), parallel), false);
+  assert.equal(fits(caseOf("review-multi"), parallel), false);
+  assert.equal(fits(caseOf("review-multi"), new Set(["sections"])), true);
+  assert.equal(fits(caseOf("ticket-profile"), new Set(["prose"])), false);
+  assert.equal(fits(caseOf("soak-owner"), new Set(["prose"])), false);
+  assert.equal(fits(caseOf("soak-owner"), new Set(["single", "verbatim"])), true);
+  assert.equal(fits(caseOf("trap-disagree"), new Set()), true);
 });

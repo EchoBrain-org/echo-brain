@@ -3,14 +3,13 @@ import { randomUUID } from 'node:crypto';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonPageCitationV1, type PersonPageCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import { createAtlassianVerificationBatchV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
+import { createAtlassianVerificationBatchV1, verifyAtlassianConnectionV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
 import { boundUtf8V1, inBatchesOfFourV1 as parallel } from '@echo-brain/provider-runtime/person-provider-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { ConfluenceCloudTransportV1 } from './confluence-cloud-transport-v1.js';
 import { normalizeConfluencePageDocumentV1 } from './confluence-page-text-v1.js';
-import { verifyConfluenceConnectionV1 } from './confluence-payload-v1.js';
 import {
-  CONFLUENCE_ID as ID, confluenceArray, confluenceAtlasDocumentV1, confluenceFailure, confluenceNextCursorV1, confluenceRecord, confluenceString, confluenceVersionNumberV1,
+  CONFLUENCE_ID as ID, CONFLUENCE_PERSON_PROVIDER_V1, confluenceArray, confluenceAtlasDocumentV1, confluenceFailure, confluenceNextCursorV1, confluenceRecord, confluenceString, confluenceVersionNumberV1,
   copyConfluenceBindingV1,
 } from './confluence-validation-v1.js';
 
@@ -108,7 +107,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
   }
   const verifyQueued = createAtlassianVerificationBatchV1(async (signal?: AbortSignal): Promise<void> => {
     current(signal);
-    const result = await verifyConfluenceConnectionV1(fences, { signal, expected_origin: origin,
+    const result = await verifyAtlassianConnectionV1(CONFLUENCE_PERSON_PROVIDER_V1, fences, { signal, expected_origin: origin,
       require_account(account) { if (account !== binding.external_subject_id) confluenceFailure('unauthorized'); } });
     origin = result.origin;
     current(signal);

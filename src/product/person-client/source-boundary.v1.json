@@ -7,7 +7,6 @@
   "source_root": "src/product/person-client",
   "package_json": "src/product/person-client/package.json",
   "entry_points": [
-    "src/product/person-client/index.ts",
     "src/product/person-client/main.ts"
   ],
   "owned_source_paths": [
@@ -68,11 +67,7 @@
         "export": "readPersonOnboardingInvitation"
       }
     ],
-    "compatibility_entrypoints": [],
-    "retired_source_paths": [
-      "src/product/person-client/requests.ts",
-      "src/product/person-client/person-api-request-builders.ts"
-    ]
+    "compatibility_entrypoints": []
   },
   "layer_rules": [
     {
@@ -152,16 +147,6 @@
         "http",
         "util"
       ]
-    },
-    {
-      "name": "person-client-entry-exports-owned-modules",
-      "from": "src/product/person-client/index.ts",
-      "allowed_imports": [
-        "src/product/person-client/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
     },
     {
       "name": "person-session-store-owns-private-files",

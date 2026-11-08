@@ -54,9 +54,6 @@
         "export": "validateOrganizationPersonSlackIdentityLinkBeginRequest"
       }
     ],
-    "compatibility_entrypoints": [],
-    "retired_source_paths": [
-      "providers/slack/client/src/person/slack-commands.ts"
-    ]
+    "compatibility_entrypoints": []
   }
 }

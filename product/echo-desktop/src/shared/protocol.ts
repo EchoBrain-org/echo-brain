@@ -50,13 +50,6 @@ export interface ProjectPage {
   readonly next_cursor: string | null;
 }
 
-/** The receipt that settles a rename, archive or leave operation. */
-export interface ProjectSettingsReceipt {
-  readonly request_id: string;
-  readonly project_id: string;
-  readonly operation: 'rename' | 'archive' | 'leave';
-}
-
 /** Who can read an item: only you, everyone in the organization, or one or more projects' members. */
 export type Visibility = 'only-me' | 'team' | 'project';
 
@@ -140,7 +133,10 @@ export type ProjectChange =
   | { readonly kind: 'member-add' | 'member-remove'; readonly project_id: string; readonly membership_id: string }
   | { readonly kind: 'member-set'; readonly project_id: string; readonly membership_id: string; readonly role: 'lead' | 'member' }
   | { readonly kind: 'associate' | 'dissociate'; readonly project_id: string; readonly context_id: string }
-  | { readonly kind: 'document-associate' | 'document-dissociate'; readonly project_id: string; readonly document_id: string };
+  | { readonly kind: 'document-associate' | 'document-dissociate'; readonly project_id: string; readonly document_id: string }
+  // A project's own settings, each settled by its settings receipt.
+  | { readonly kind: 'rename'; readonly project_id: string; readonly name: string }
+  | { readonly kind: 'archive' | 'unarchive' | 'leave'; readonly project_id: string };
 
 /** A project the Authority made for one request. Its name and your role in it come from reading it. */
 export interface CreatedProject {
@@ -198,17 +194,11 @@ export interface Matches {
   readonly items: readonly Match[];
 }
 
-/**
- * Ask is always explicitly scoped; there is no default. Mine (only what you added) is never asked from the desktop any
- * more (ADR-0049): it stays for the turns kept on this computer that were asked in it.
- */
-export type AskScope = { readonly kind: 'global' } | ProjectScope | { readonly kind: 'mine' };
+/** Ask is always explicitly scoped; there is no default: everything you can read, or one project. */
+export type AskScope = { readonly kind: 'global' } | ProjectScope;
 
 /** An Ask in one project: the bar's chip. */
 export type ProjectScope = { readonly kind: 'project'; readonly project_id: string };
-
-/** A scope the desktop asks in: everything you can read, or one project. */
-export type AskedScope = Exclude<AskScope, { readonly kind: 'mine' }>;
 
 /** Immutable coordinates of one answer source; opaque to the renderer. */
 export interface SourceRef {
@@ -374,9 +364,8 @@ export interface AnswerPart {
 /** One thing a follow-up could be about, as Ask offers it to choose (ADR-0047): a short label, and the full question it asks. */
 export type AskChoice = PersonAnswerChoiceV1;
 
-/** An Agentic Ask answer. `text` is its plain reading, for Copy answer when its Markdown is too long. */
+/** An Agentic Ask answer. */
 export interface Answer {
-  readonly text: string;
   readonly scope: AskScope;
   readonly sources: readonly AnswerSource[];
   readonly direct?: AnswerStatement;
@@ -724,9 +713,6 @@ export interface HostMethods {
   'projects.change': { params: { expect: Expect; request_id: string; change: ProjectChange }; result: null };
   /** New project: made once per request id, and only the receipt says it was made. */
   'projects.create': { params: { expect: Expect; request_id: string; name: string }; result: CreatedProject };
-  'projects.rename': { params: { expect: Expect; request_id: string; project_id: string; name: string }; result: ProjectSettingsReceipt };
-  'projects.archive': { params: { expect: Expect; request_id: string; project_id: string; archived: boolean }; result: ProjectSettingsReceipt };
-  'projects.leave': { params: { expect: Expect; request_id: string; project_id: string }; result: ProjectSettingsReceipt };
   /** People & invites (owners only): everyone the organization invited, and where each stands. */
   'employees.list': { params: { expect: Expect }; result: Employees };
   /**
@@ -745,7 +731,7 @@ export interface HostMethods {
     result: Receipt;
   };
   /** `previous`: the earlier turn a follow-up or Ask again carries (C3). */
-  'ask.run': { params: { expect: Expect; question: string; scope: AskedScope; cancel_id: string; previous?: AskPrevious }; result: Answer };
+  'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious }; result: Answer };
   /** The account's Ask timeline on this device, oldest first; an unreadable file reads as empty (ADR-0047). */
   'timeline.read': { params: { expect: Expect }; result: { turns: TimelineTurn[] } };
   /** Keeps one turn: a new one at the end, or one already kept in its place; then the oldest past the bounds go. */
@@ -839,8 +825,7 @@ export const HOST_TIMEOUT_MS: Readonly<Record<HostMethodName, number>> = {
   'ask.run': 145_000, 'ask.cancel': 5_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
   'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000,
   'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000,
-  'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'projects.rename': 45_000, 'projects.archive': 45_000,
-  'projects.leave': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
+  'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
   'employees.reissue': 45_000, 'employees.revoke': 45_000,
   'projects.jiraRead': 45_000, 'projects.jiraSet': 90_000, 'projects.confluenceRead': 45_000, 'projects.confluenceSet': 90_000, 'projects.confluenceSpaces': 45_000,
   'tools.meetings': 90_000, 'runs': 45_000, 'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
@@ -854,7 +839,7 @@ export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
 ];
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
-  'notes.submit', 'documents.upload', 'documents.retry', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.invite', 'employees.reissue',
+  'notes.submit', 'documents.upload', 'documents.retry', 'projects.change', 'projects.create', 'employees.invite', 'employees.reissue',
   'employees.revoke', 'tools.meetings', 'runs', 'tools.disconnect', 'projects.jiraSet', 'projects.confluenceSet',
   'reviews',
 ]);

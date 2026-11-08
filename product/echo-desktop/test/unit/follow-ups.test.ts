@@ -211,4 +211,18 @@ describe('a follow-up\'s page', () => {
     };
     expect(elements(FollowUp({ state: getState(), page })).some(node => node.type === 'button' && node.props.children === 'Try again')).toBe(true);
   });
+
+  it('offers Open in its tool only for an item ECHO opened for you just now', async () => {
+    const { getState } = await import('../../src/renderer/store.js');
+    const { FollowUp } = await import('../../src/renderer/screens/follow-ups.js');
+    const item = followUp(1, { kind: 'ticket' });
+    const source = { kind: 'ticket' as const, tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink: 'https://example.atlassian.net/browse/ECHO-12' };
+    const page = (live: ItemPage['live']): ItemPage => ({
+      kind: 'item', seq: 1, item_id: item.item_id, item, live, loading: false, send: null, busy: false, said: null, picker: null, stale: false,
+    });
+    const opens = (live: ItemPage['live']) => elements(render(FollowUp({ state: getState(), page: page(live) }))).filter(node => node.type === 'button' && text(node).startsWith('Open in '));
+    expect(opens({ [item.item_id]: { reach: 'opened', current: { source, says_now: 'Pilot launch' } } }).map(node => [text(node), node.props.title]))
+      .toEqual([['Open in Jira', source.permalink]]);
+    expect(opens({ [item.item_id]: { reach: 'unavailable' } })).toEqual([]);
+  });
 });

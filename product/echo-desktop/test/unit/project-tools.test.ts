@@ -208,8 +208,20 @@ describe('the project Tools sheet', () => {
     expect(store.getState().projectSettings?.confluence?.pickerFailure?.code).toBe('unavailable');
     expect(store.projectToolsSavable(store.getState().projectSettings!)).toBe(false);
     expect(text(byTestId(await settingsView(store), 'project-confluence-picker-error'))).toContain('ECHO is unavailable right now. Try again.');
-    store.clearProjectTool('confluence'); await store.saveProjectTools();
+    store.clearProjectTool('confluence');
+    // Until Save, the row says what stops, and Stop reading goes.
+    const stopping = await settingsView(store);
+    expect(text(byTestId(stopping, 'project-confluence-current'))).toBe('Reads 1 space · stops on Save');
+    expect(byTestId(stopping, 'project-confluence-remove')).toHaveLength(0);
+    await store.saveProjectTools();
     expect(confluenceSets()).toEqual([null]); expect(store.getState().toast).toBe('Apollo no longer reads Confluence');
+  });
+
+  it('names a mapped Jira project by its key, and says Connected beside each tool you linked', async () => {
+    jira = 'ECHO';
+    const shown = await settingsView(await openTools());
+    expect(text(byTestId(shown, 'project-jira-current'))).toBe('Reads ECHO');
+    expect(['jira', 'confluence'].map(tool => text(byTestId(shown, `project-${tool}-linked`)))).toEqual(['Connected', 'Connected']);
   });
 
   it('a stale change keeps Tools up and Reload reads it without resending', async () => {

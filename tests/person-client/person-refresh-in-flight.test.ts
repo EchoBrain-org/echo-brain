@@ -524,7 +524,7 @@ it('reports a wait that runs out as ECHO unavailable, not as a sign-in requireme
   await refreshing;
   const settled = Promise.allSettled([refresh]);
   try {
-    const create = client.createProject({ schema_version: 1, kind: 'echo-project-create-v1', request_id: randomUUID(), name: 'Waiting project' });
+    const create = client.context('createProject', { schema_version: 1, kind: 'echo-project-create-v1', request_id: randomUUID(), name: 'Waiting project' });
     const failed = create.then(() => undefined, (error: unknown) => error as PersonContextMutationError);
     await setTimeout(50);
     const realNow = Date.now.bind(Date);

@@ -310,7 +310,7 @@ Restart the same `echo-organization-authority-serve serve` command. Optional
 startup, the runtime reconciles the search index once, then each cycle recovers
 decided approvals whose record was not appended, polls the personal meeting
 sources and freezes one proposal per meeting, publishes the decisions made since
-(one V4 record per approval, then the after-record hooks), and reconciles the
+(one V4 record per approval, then the after-record hook), and reconciles the
 search index again. Only recovery, approval publication and bounded operator
 mutations hold the writer gate. Up to three personal sources run their meeting
 pass at once, in lanes that outlive the cycle; a meeting whose extraction fails

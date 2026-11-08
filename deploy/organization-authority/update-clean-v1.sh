@@ -241,16 +241,20 @@ names = {
     'ECHO_CLEAN_RELEASE_SOURCE_SHA': source_sha,
     'ECHO_CLEAN_RUNTIME_PROFILE_SHA256': profile_sha,
     'ECHO_CLEAN_RUNTIME_PROFILE_VERSION': profile_version,
-    # These are the only non-identity candidate configuration values derived
-    # from a release record. Do not accept arbitrary environment names.
-    'ECHO_AGENTIC_ASK_V1': agentic_ask_v1,
-    'ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT': small_scope_shortcut,
+    # Retired Ask switches: the Authority ignores the first (ADR-0022) and
+    # Compose defaults both to false, so neither is written or carried
+    # forward. An older record's true shortcut is still written so the
+    # Authority keeps refusing to start with it. Do not accept arbitrary names.
+    'ECHO_AGENTIC_ASK_V1': None,
+    'ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT': 'true' if small_scope_shortcut == 'true' else None,
 }
 for name in names:
     if sum(line.startswith(name + '=') for line in lines) > 1:
         raise SystemExit('Authority deployment environment has duplicate ' + name)
-payload = [line for line in lines if not any(line.startswith(name + '=') for name in names)]
-payload.extend(name + '=' + value for name, value in names.items())
+# Older prepares wrote this content telemetry switch; nothing reads it.
+retired = tuple(names) + ('ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1',)
+payload = [line for line in lines if not any(line.startswith(name + '=') for name in retired)]
+payload.extend(name + '=' + value for name, value in names.items() if value is not None)
 destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 os.chmod(destination.parent, 0o700)
 # tempfile.mkstemp reifies relative dirs through abspath, losing the pinned cwd.

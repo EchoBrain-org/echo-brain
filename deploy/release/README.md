@@ -484,24 +484,25 @@ sudo ./update-clean-v1.sh stage --release /absolute/private/candidate-release.js
   --runtime-profile /absolute/private/candidate-runtime-profile.json
 ```
 
-Apart from its release identity and the release-bound `agentic_ask_v1` and
-`small_scope_shortcut` switches,
-the candidate's saved environment carries forward every accepted setting, including the retired
-`ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1` line that older rehearsals wrote and nothing reads. It never
-modifies the accepted snapshot. Do not change telemetry or any other setting by
+Apart from its release identity, the candidate's saved environment carries
+forward every accepted setting except three retired lines:
+`ECHO_AGENTIC_ASK_V1` and the `ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1` line
+that older rehearsals wrote, which no current Authority image reads, and
+`ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT`, which the Authority reads only to refuse
+`true`. It never modifies the accepted snapshot. Do not change telemetry or any other setting by
 editing `.env.clean-v1` after promotion: that creates environment drift and
 blocks the next release.
 
-`agentic_ask_v1` and `small_scope_shortcut` are the only candidate
-configuration settings in the release record: booleans materialized as
-`ECHO_AGENTIC_ASK_V1` and `ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT` in the
-candidate's saved environment tuple, and covered by the record SHA bound to the
-staging request. A true `small_scope_shortcut` requires `agentic_ask_v1=true`.
-Since [ADR-0022](../../docs/decisions/ADR-0022-agentic-ask-only.md) the
-Authority ignores `ECHO_AGENTIC_ASK_V1`; set it to `true` in new records. The
-small-scope shortcut was removed on 2026-10-19: the Authority refuses to start
-with `ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT=true`, so set `small_scope_shortcut`
-to `false` in new records.
+`agentic_ask_v1` and `small_scope_shortcut` are retired release-record
+switches: `create` refuses a draft that sets either, so new records omit both,
+while `validate` and `field` still read an older record that has them. Since
+[ADR-0022](../../docs/decisions/ADR-0022-agentic-ask-only.md) the Authority
+ignores `ECHO_AGENTIC_ASK_V1`, so a candidate whose older record sets
+`agentic_ask_v1: true` now runs with Compose's default `false`, which no image
+built since then reads. The small-scope shortcut was removed on
+2026-10-19 and the Authority refuses to start with
+`ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT=true`, so `stage` still writes that line
+for an older record whose `small_scope_shortcut` is `true`.
 Rollback restores the accepted tuple verbatim. No command accepts arbitrary
 environment names or values.
 

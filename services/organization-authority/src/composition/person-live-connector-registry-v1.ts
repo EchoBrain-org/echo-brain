@@ -1,8 +1,14 @@
-import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
+import { join } from 'node:path';
+import type Database from 'better-sqlite3';
+import type { OrganizationPersonToolV4, PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import type { EvidenceSourceCapabilitiesV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
+import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
+import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type {
-  OpenedPersonLiveConnectorV1, PersonContextLiveApplicationV1, PersonLiveConnectorDefinitionV1,
+  OpenedPersonLiveConnectorV1, PersonContextLiveApplicationV1, PersonContextProjectAuthorizationV1, PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1,
 } from '../application/ports/person-context-live-runtime-v1.js';
+import { openPersonProviderDatabaseV1 } from './person-provider-state-v1.js';
+import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 
 /**
  * What each connector's sources can do (research tool contract v1), beside their descriptors. Each reader applies
@@ -114,6 +120,67 @@ export function personToolLiveConnectorsV1<R extends PersonToolLiveRuntimeV1>(co
       return Object.freeze({ application: Object.freeze({ source: (input: Parameters<R['application']['containerSource']>[0]) => runtime.application.containerSource(input) }), close });
     } }),
   ]);
+}
+
+/** A connected tool's explicit selecting configuration (Jira, Confluence), absent until enabled by an operator. */
+export interface PersonToolLiveConfigurationV1 {
+  readonly enabled: true;
+  readonly cloud_id: string;
+  readonly integration_id: string;
+  readonly nango_authorization: () => string;
+}
+/** What tests and the staging rehearsal supply in place of the tool's own database, Nango client and fetch. */
+export interface PersonToolLiveRuntimeSeamsV1<N> {
+  readonly database?: Database.Database;
+  readonly nango?: N;
+  readonly fetch?: typeof fetch;
+}
+export interface PersonToolLiveOpenOptionsV1<N> {
+  readonly state_directory: string;
+  readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
+  readonly configuration: PersonToolLiveConfigurationV1;
+  readonly seams?: PersonToolLiveRuntimeSeamsV1<N>;
+  readonly authorize_project?: PersonContextProjectAuthorizationV1;
+  /** Lets a tool's container item name the ECHO projects mapped to it (research tool contract v1). */
+  readonly project_names?: PersonContextProjectNamesV1;
+}
+
+/**
+ * One tool's live runtime, opened the same way for every tool: its private provider database in the state directory
+ * (`bind` is the tool's lineage binding where it keeps one), then `build`, which constructs the tool's connection from
+ * `connection(createNango)`, the options every tool's connection takes in the same order. The person's link to the tool
+ * is the connection's own; closing closes the database. A failed build closes it too.
+ */
+export function openPersonToolLiveRuntimeV1<N, B extends { readonly application: { tool(input: { readonly access_token: string }): OrganizationPersonToolV4 }; readonly connection_http: ProviderHttpApplicationV1 }>(
+  options: PersonToolLiveOpenOptionsV1<N>, tool: {
+    readonly name: string; readonly file: string; readonly bind?: (database: Database.Database) => void;
+    readonly build: (database: Database.Database, connection: (createNango: (input: { readonly integration_id: string; readonly authorization: () => string; readonly fetch: typeof fetch }) => N) => {
+      readonly authorize_project?: PersonContextProjectAuthorizationV1; readonly project_names?: PersonContextProjectNamesV1;
+      readonly nango: N; readonly cloud_id: string; readonly fetch: typeof fetch; readonly authenticate: ReturnType<typeof personToolAuthenticationV1>;
+    }) => B;
+  },
+): B & { tools(access_token: string): Promise<readonly OrganizationPersonToolV4[]>; close(): void } {
+  if (options.configuration.enabled !== true) throw new Error(`${tool.name} live evidence is not enabled`);
+  const opened = openPersonProviderDatabaseV1(join(options.state_directory, tool.file),
+    options.seams?.database !== undefined ? { supplied: options.seams.database } : tool.bind === undefined ? {} : { bind: tool.bind });
+  try {
+    const transport = options.seams?.fetch ?? fetch;
+    const built = tool.build(opened.database, createNango => ({
+      ...(options.authorize_project === undefined ? {} : { authorize_project: options.authorize_project }),
+      ...(options.project_names === undefined ? {} : { project_names: options.project_names }),
+      nango: options.seams?.nango ?? createNango({ integration_id: options.configuration.integration_id, authorization: options.configuration.nango_authorization, fetch: transport }),
+      cloud_id: options.configuration.cloud_id,
+      fetch: transport,
+      authenticate: personToolAuthenticationV1(options.sessions),
+    }));
+    return Object.freeze({
+      ...built,
+      async tools(access_token: string): Promise<readonly OrganizationPersonToolV4[]> {
+        return Object.freeze([built.application.tool({ access_token })]);
+      },
+      close() { opened.close(); },
+    });
+  } catch (error) { opened.close(); throw error; }
 }
 
 /** One translation at the boundary; all lifecycle and request code consumes the registry. */

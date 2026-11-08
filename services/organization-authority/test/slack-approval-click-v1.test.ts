@@ -102,7 +102,7 @@ async function fixtureWithRuns() {
   const f = await fixture();
   const runs = new SqliteTriggerRunsV1(f.db);
   const core = await f.create({}, {
-    after_record: [enqueueApprovedRecordRunV1(runs)],
+    after_record: enqueueApprovedRecordRunV1(runs),
   });
   return {
     ...f,

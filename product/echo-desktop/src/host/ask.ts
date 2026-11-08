@@ -5,7 +5,7 @@
 import {
   PERSON_ASK_CHECK_REQUEST_KIND_V1, validatePersonAnswerRequestV3, validatePersonAskCheckRequestV1, validatePersonQueryText, validateProjectIdV1,
 } from '@echo-brain/organization-api';
-import type { AskedScope, AskPrevious, AskProgressNotice, AskScope, AskStep, Expect, RecordRef, SourceRef } from '../shared/protocol.js';
+import type { AskPrevious, AskProgressNotice, AskScope, AskStep, Expect, RecordRef, SourceRef } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { jsonLines } from './cli.js';
 import { askStepView } from './views.js';
@@ -18,7 +18,7 @@ import { askStepView } from './views.js';
  * step is the client's own. A follow-up or Ask again carries the earlier turn
  * (`previous`, ADR-0047), already checked by askPrevious.
  */
-export function askArgv(text: string, scope: AskedScope, previous?: AskPrevious): string[] {
+export function askArgv(text: string, scope: AskScope, previous?: AskPrevious): string[] {
   return ['ask', `--question=${text}`, '--progress',
     ...(scope.kind === 'project' ? [`--project=${scope.project_id}`] : []),
     ...(previous === undefined ? [] : [`--previous=${JSON.stringify(previous)}`])];
@@ -35,7 +35,7 @@ const checks = (validate: (value: unknown) => unknown, value: unknown): boolean 
  * own is the client's to report, as it does with or without the earlier turn,
  * so then the turn goes as it came.
  */
-export function askPrevious(value: unknown, question: string, scope: AskedScope): AskPrevious | null {
+export function askPrevious(value: unknown, question: string, scope: AskScope): AskPrevious | null {
   if (!checks(validatePersonQueryText, question) || (scope.kind === 'project' && !checks(validateProjectIdV1, scope.project_id))) return value as AskPrevious;
   const where = scope.kind === 'project' ? { project_id: scope.project_id } : {};
   try {
@@ -64,8 +64,7 @@ export function askRecordArgv(record: RecordRef): string[] {
 
 /**
  * The client command that reads one cited passage of an original, where it
- * was cited: in the project asked, or else under all you may read. What you
- * added is a part of that, so a mine answer's sources read there.
+ * was cited: in the project asked, or else under all you may read.
  */
 export function askSourceArgv(ref: SourceRef, scope: AskScope): string[] {
   return ['ask-source', `--source-id=${ref.source_id}`, `--revision-id=${ref.revision_id}`, `--source-sha256=${ref.source_sha256}`,

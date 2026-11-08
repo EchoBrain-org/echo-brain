@@ -5,10 +5,11 @@ import { validatePersonTicketCitationV1, type PersonTicketCitationV1 } from '@ec
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { observeCoreRuntimeDiagnosticV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
-import { createAtlassianVerificationBatchV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
+import { createAtlassianVerificationBatchV1, verifyAtlassianConnectionV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
+import { guardedPersonProviderOperationV1 } from '@echo-brain/provider-runtime/person-provider-v1';
 import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
-import { jiraProjectMatches, parseJiraIssueV1, parseJiraProject, verifyJiraConnectionV1, type ParsedJiraIssueV1 } from './jira-payload-v1.js';
-import { copyJiraBindingV1, JIRA_ID, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
+import { jiraProjectMatches, parseJiraIssueV1, parseJiraProject, type ParsedJiraIssueV1 } from './jira-payload-v1.js';
+import { copyJiraBindingV1, JIRA_ID, JIRA_PERSON_PROVIDER_V1, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
 
 const INVENTORY_FIELDS = 'summary,project,created,updated,status,assignee,duedate';
 const TEXT_FIELDS = `${INVENTORY_FIELDS},description`;
@@ -135,23 +136,12 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
   let pinnedOrigin: string | undefined = options.expected_origin;
   let pinnedProject: ReturnType<typeof parseJiraProject> | undefined;
 
-  async function safe<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-    signal?.throwIfAborted();
-    try {
-      const result = await operation();
-      signal?.throwIfAborted();
-      return result;
-    } catch (error) {
-      signal?.throwIfAborted();
-      if (error instanceof AuthorityOperationError && ['invalid_request', 'invalid_output', 'unauthorized', 'not_found', 'stale_access_state', 'unavailable', 'rate_limited'].includes(error.code)) jiraFailure(error.code as Parameters<typeof jiraFailure>[0]);
-      jiraFailure('unavailable');
-    }
-  }
+  const safe = <T>(operation: () => Promise<T>, signal?: AbortSignal) => guardedPersonProviderOperationV1(jiraFailure, operation, signal);
 
   const verificationBatch = createAtlassianVerificationBatchV1(async (signal?: AbortSignal) => {
     const previousOrigin = pinnedOrigin;
     const previousProjectId = pinnedProject?.id;
-    const { origin } = await verifyJiraConnectionV1(transport, { signal, expected_origin: previousOrigin });
+    const { origin } = await verifyAtlassianConnectionV1(JIRA_PERSON_PROVIDER_V1, transport, { signal, expected_origin: previousOrigin });
     let project: ReturnType<typeof parseJiraProject> | undefined;
     if (fixedProject !== undefined) {
       project = parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${fixedProject}`, query: { expand: 'projectKeys' }, signal }), origin, apiPrefix);

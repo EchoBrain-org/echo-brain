@@ -29,7 +29,6 @@ export function meetingSourceEnvelopeV1(meeting: MeetingDocument): SourceEnvelop
       // The canonical meeting is inline retained content, not a separately
       // materialized representation. Only actual stored outputs may be refs.
       representation_refs: [],
-      ...(provenance.previous_revision === undefined ? {} : { previous_revision_id: provenance.previous_revision }),
     },
     content,
   };

@@ -117,7 +117,6 @@ describe("V4 organization-record append", () => {
         },
       } as V4RecordEnvelopeView & JsonObject;
       const projectors = createRecordPolicyFactProjectorRegistryV1([{
-        id: "test-project-action-v1",
         matches: () => true,
         project: () => ({ facts: [], policy_fact_outcome: { kind: "appended", policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID } }),
         policyBinding: () => ({ policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, policy_contract_sha256: sha256Digest("project-policy-contract") }),
@@ -175,7 +174,6 @@ describe("V4 organization-record append", () => {
       /** The retired organization-wide (Team) policy, which no record can carry. */
       const TEAM_POLICY_ID = "organization-member-readable-person-v2";
       const projectors = (policy_id: string) => createRecordPolicyFactProjectorRegistryV1([{
-        id: "test-private-action-v1",
         matches: () => true,
         // The reviewer facts are written after the association rows, so the baseline binds those rows through the envelope.
         project: ({ envelope, record_position }) => {
@@ -274,7 +272,6 @@ describe("V4 organization-record append", () => {
         },
       } as V4RecordEnvelopeView & JsonObject;
       const fakeProjector: RecordPolicyFactProjectorV1 = {
-        id: "test-local-approval-v1",
         matches: (candidate) =>
           (candidate.body.human_act_resolution_ref as { readonly kind?: unknown })
             .kind ===

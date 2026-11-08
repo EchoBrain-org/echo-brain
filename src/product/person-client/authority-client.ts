@@ -1,100 +1,44 @@
-import { PERSON_DIAGNOSTICS_PATH_V1, PERSON_DIAGNOSTICS_MAX_RESPONSE_BYTES_V1, validatePersonDiagnosticsRequestV1, validatePersonDiagnosticsResultV1, type PersonDiagnosticCaptureIdV1, type PersonDiagnosticsRequestV1, type PersonDiagnosticsResultsV1 } from '@echo-brain/organization-api';
-import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, validatePersonDocumentAssociationReceiptV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
-import { PERSON_CHANGES_ROUTE_V1, validatePersonChangesV1, type PersonChangesV1 } from '@echo-brain/organization-api';
-import { PERSON_PROJECT_ACTIVITY_PATH_V1, validatePersonProjectActivityV1, type PersonProjectActivityV1 } from '@echo-brain/organization-api';
-import { PERSON_ASK_CHECK_LIMITS_V1, PERSON_ASK_CHECK_PATH_V1, validatePersonAskCheckRequestV1, validatePersonAskCheckV1, type PersonAskCheckRequestV1, type PersonAskCheckV1 } from '@echo-brain/organization-api';
-import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
-import { PERSON_RECORDS_PATH_V1, validatePersonRecordListV1, validatePersonRecordSearchRequestV2, validatePersonRecordSearchV2, type PersonRecordListV1, type PersonRecordSearchV2 } from '@echo-brain/organization-api';
-import { PERSON_EMPLOYEES_PATH_V1, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, type EmployeeInvitationV1, type EmployeeRosterV1 } from '@echo-brain/organization-api';
-import { PersonQueryInputError } from "@echo-brain/organization-api";
-import {
-  PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1,
-  createPersonAskProgressDecoderV3, type PersonAskProgressStepEventV3, type PersonAskProgressTerminalEventV3, type PersonAskReceiptV3,
-} from '@echo-brain/organization-api';
-import {
-  PERSON_ASK_GAP_DETAILS_HEADER_V1, PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
-  PERSON_ANSWER_PATH_V7,
-  PERSON_EVIDENCE_SEARCH_PATH_V1,
-  PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1,
-  PERSON_RESEARCH_EVAL_READ_PATH_V1,
-  PERSON_RESEARCH_EVAL_START_PATH_V1,
-  PERSON_RUNS_PATH_V1,
-  PERSON_RUNS_MAX_RESPONSE_BYTES_V1,
-  validatePersonRunsRequestV1,
-  validatePersonRunsResultV1,
-  type PersonRunsRequestV1,
-  type PersonRunsResultsV1,
-  validatePersonResearchEvalReadRequestV1,
-  validatePersonResearchEvalReadResponseV1,
-  validatePersonResearchEvalStartReceiptV1,
-  validatePersonResearchEvalStartRequestV1,
-  type PersonResearchEvalReadResponseV1,
-  type PersonResearchEvalStartReceiptV1,
-  type PersonResearchEvalStartRequestV1,
-  PERSON_SOURCE_EVIDENCE_PATH_V1,
-  PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1, PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_VALUE_V1,
-  PERSON_LIST_PATH_V1,
-  PERSON_OPEN_PATH_V1,
-  PERSON_LIST_RESPONSE_MAX_BYTES_V1,
-  PERSON_OPEN_RESPONSE_MAX_BYTES_V1,
-  personRefKindV1,
-  validatePersonListRequestV1,
-  validatePersonListResponseV1,
-  validatePersonOpenRequestV1,
-  validatePersonOpenResponseV1,
-  validatePersonAnswerRequestV3,
-  validatePersonAnswerResponseV8,
-  validatePersonEvidenceSearchRequestV1,
-  validatePersonEvidenceDeskResponseV1,
-  validatePersonSourceEvidenceReadRequestV1,
-  validatePersonSourceEvidenceV1,
-  type PersonAnswerResponseV8 as OrganizationPersonAnswerV8,
-  type PersonEvidenceSearchRequestV1,
-  type PersonEvidenceDeskResponseV1,
-  type PersonSourceEvidenceReadRequestV1,
-  type PersonSourceEvidenceV1,
-  type PersonListRequestV1,
-  type PersonListResponseV1,
-  type PersonOpenRequestV1,
-  type PersonOpenResponseV1,
-  type PersonAnswerPreviousV1,
-  type ProjectIdV1,
-} from '@echo-brain/organization-api';
-import {
-  PERSON_PROJECTS_PATH_V2,
-  validateProjectContextSearchResultV2,
-  validateProjectPageRequestV2, validateProjectListV2, validateProjectSummaryV2, type ProjectPageRequestV2,
-} from '@echo-brain/organization-api';
-import { ORGANIZATION_API_PERSON_TOOLS_PATH_V4, validateOrganizationPersonToolsV4, type PersonToolTransportV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
-import { PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV2, validatePersonDocumentStatusV2, validatePersonDocumentMetadataV2, validatePersonDocumentSearchV2, validatePersonDocumentSearchResultV2, type PersonDocumentSearchV2 } from '@echo-brain/organization-api';
-import type { DocumentSnapshot } from './document-file.js';
-import {
-  PERSON_DIRECTORY_PATH_V1, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, type OrganizationDirectorySearchV1,
-} from '@echo-brain/organization-api';
-import {
-  PERSON_PROJECTS_PATH_V1, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V2, PROJECT_CONTEXT_RESPONSE_MAX_BYTES,
-  validateProjectCreateV1, validateProjectCreateReceiptV1,
-  validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1, validateProjectSettingsReceiptV1,
-  validateProjectIdV1, validateProjectContextBrowseV1, validateProjectMembersV1,
-  validateProjectDirectorySearchV1, validateProjectDirectoryV1, validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1,
-  validateProjectMutationReceiptV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1,
-  validateProjectContextSearchV1,
-  validatePersonUploadSearchV2, validatePersonUploadSearchResultV2,
-  type ProjectCreateV1, type ProjectContextBrowseV1, type ProjectDirectorySearchV1,
-  type ProjectRenameV1, type ProjectArchiveV1, type ProjectLeaveV1,
-  type ProjectMemberAddV1, type ProjectMemberSetV1, type ProjectMemberRemoveV1, type ProjectContextAssociateV1, type ProjectContextDissociateV1,
-  type ProjectContextSearchV1, type PersonUploadSearchV2,
-} from '@echo-brain/organization-api';
-import {
-  PERSON_UPDATES_PATH_V3,
-  validatePersonUpdateSubmitV3, validatePersonUpdateReceiptV3, validatePersonUpdateStatusResultV3,
-  validatePersonUploadSearchV3, validatePersonUploadSearchResultV3,
-  type PersonUpdateSubmitV3, type PersonUploadSearchV3,
-} from '@echo-brain/organization-api';
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_REQUEST_MAX_BYTES_V1 } from '@echo-brain/organization-api';
-import { MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH, ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, isOrganizationApiValidationError, validateOrganizationApiError, validateOrganizationAuthorityDescriptorResponse, validateOrganizationPersonOidcBeginRequest, validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, type OrganizationAuthorityDescriptorResponseV1, type OrganizationPersonOidcBeginRequestV2, type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
+import {
+  MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH,
+  ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, ORGANIZATION_API_PERSON_TOOLS_PATH_V4, PERSON_ANSWER_PATH_V7, PERSON_ASK_CHECK_LIMITS_V1, PERSON_ASK_CHECK_PATH_V1,
+  PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_GAP_DETAILS_HEADER_V1, PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_HEADER_V1,
+  PERSON_ASK_PROGRESS_HEADER_VALUE_V3, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, PERSON_CHANGES_ROUTE_V1, PERSON_DIAGNOSTICS_MAX_RESPONSE_BYTES_V1,
+  PERSON_DIAGNOSTICS_PATH_V1, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, PERSON_EMPLOYEES_PATH_V1,
+  PERSON_EVIDENCE_SEARCH_PATH_V1, PERSON_LIST_PATH_V1, PERSON_LIST_RESPONSE_MAX_BYTES_V1, PERSON_OPEN_PATH_V1, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, PERSON_PROJECTS_PATH_V1,
+  PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_ACTIVITY_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_PROJECT_RENAME_PATH_V1, PERSON_RECORDS_PATH_V1,
+  PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, PERSON_RESEARCH_EVAL_READ_PATH_V1, PERSON_RESEARCH_EVAL_START_PATH_V1, PERSON_RUNS_MAX_RESPONSE_BYTES_V1, PERSON_RUNS_PATH_V1,
+  PERSON_SOURCE_EVIDENCE_PATH_V1, PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1, PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_VALUE_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1,
+  PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PersonQueryInputError, createPersonAskProgressDecoderV3,
+  isOrganizationApiValidationError, personRefKindV1, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, validateOrganizationApiError,
+  validateOrganizationAuthorityDescriptorResponse, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, validateOrganizationPersonOidcBeginRequest,
+  validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, validateOrganizationPersonToolsV4,
+  validatePersonAnswerRequestV3, validatePersonAnswerResponseV8, validatePersonAskCheckRequestV1, validatePersonAskCheckV1, validatePersonChangesV1,
+  validatePersonDiagnosticsRequestV1, validatePersonDiagnosticsResultV1, validatePersonDocumentAssociateV1, validatePersonDocumentAssociationReceiptV1,
+  validatePersonDocumentDissociateV1, validatePersonDocumentIdV1, validatePersonDocumentMetadataV2, validatePersonDocumentSearchResultV2, validatePersonDocumentSearchV2,
+  validatePersonDocumentStatusV2, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV2, validatePersonEvidenceDeskResponseV1,
+  validatePersonEvidenceSearchRequestV1, validatePersonListRequestV1, validatePersonListResponseV1, validatePersonOpenRequestV1, validatePersonOpenResponseV1,
+  validatePersonProjectActivityV1, validatePersonRecordListV1, validatePersonRecordSearchRequestV2, validatePersonRecordSearchV2, validatePersonResearchEvalReadRequestV1,
+  validatePersonResearchEvalReadResponseV1, validatePersonResearchEvalStartReceiptV1, validatePersonResearchEvalStartRequestV1, validatePersonRunsRequestV1,
+  validatePersonRunsResultV1, validatePersonSourceEvidenceReadRequestV1, validatePersonSourceEvidenceV1, validatePersonUpdateReceiptV3, validatePersonUpdateRequestId,
+  validatePersonUpdateStatusResultV3, validatePersonUpdateSubmitV3, validatePersonUploadSearchResultV2, validatePersonUploadSearchResultV3, validatePersonUploadSearchV2,
+  validatePersonUploadSearchV3, validateProjectArchiveV1, validateProjectContextAssociateV1, validateProjectContextBrowseV1, validateProjectContextDissociateV1,
+  validateProjectContextSearchResultV2, validateProjectContextSearchV1, validateProjectCreateReceiptV1, validateProjectCreateV1, validateProjectDirectorySearchV1,
+  validateProjectDirectoryV1, validateProjectIdV1, validateProjectLeaveV1, validateProjectListV2, validateProjectMemberAddV1, validateProjectMemberRemoveV1,
+  validateProjectMemberSetV1, validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectPageRequestV2, validateProjectRenameV1,
+  validateProjectSettingsReceiptV1, validateProjectSummaryV2,
+  type EmployeeInvitationV1, type EmployeeRosterV1, type OrganizationAuthorityDescriptorResponseV1, type OrganizationPersonOidcBeginRequestV2,
+  type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2, type PersonAnswerPreviousV1, type PersonAnswerResponseV8 as OrganizationPersonAnswerV8,
+  type PersonAskCheckRequestV1, type PersonAskCheckV1, type PersonAskProgressStepEventV3, type PersonAskProgressTerminalEventV3, type PersonAskReceiptV3,
+  type PersonChangesV1, type PersonDiagnosticCaptureIdV1, type PersonDiagnosticsRequestV1, type PersonDiagnosticsResultsV1, type PersonDocumentAssociateV1,
+  type PersonDocumentDissociateV1, type PersonDocumentSearchV2, type PersonEvidenceDeskResponseV1, type PersonEvidenceSearchRequestV1, type PersonListRequestV1,
+  type PersonListResponseV1, type PersonOpenRequestV1, type PersonOpenResponseV1, type PersonProjectActivityV1, type PersonRecordListV1, type PersonRecordSearchV2,
+  type PersonResearchEvalReadResponseV1, type PersonResearchEvalStartReceiptV1, type PersonResearchEvalStartRequestV1, type PersonRunsRequestV1, type PersonRunsResultsV1,
+  type PersonSourceEvidenceReadRequestV1, type PersonSourceEvidenceV1, type PersonToolGetRequestV1, type PersonToolJsonRequestV1, type PersonToolTransportV1,
+  type PersonUpdateSubmitV3, type ProjectIdV1,
+} from "@echo-brain/organization-api";
+import type { DocumentSnapshot } from './document-file.js';
 
 export const DEFAULT_TIMEOUT_MS = 15_000;
 export const ASK_TIMEOUT_MS = 135_000;
@@ -134,12 +78,7 @@ export class PersonAuthorityClientError extends Error {
   /** The request never left this machine: no connection was made. */
   readonly unsent: boolean;
 
-  constructor(
-    public readonly code: string,
-    public readonly status: number | null,
-    message: string,
-    options: { readonly unsent?: boolean } = {},
-  ) {
+  constructor(public readonly code: string, public readonly status: number | null, message: string, options: { readonly unsent?: boolean } = {}) {
     super(message);
     this.name = "PersonAuthorityClientError";
     this.unsent = options.unsent === true;
@@ -168,6 +107,7 @@ function neverSent(error: unknown, depth = 0): boolean {
   return neverSent(cause, depth + 1);
 }
 
+/** The one mutation-outcome error of project context, updates and documents: whether the change was submitted. */
 export class PersonContextMutationError extends PersonAuthorityClientError {
   constructor(
     code: string,
@@ -204,31 +144,18 @@ export interface PersonAuthorityClientOptions {
 
 function normalizeOrigin(value: string, allowInsecureLoopback: boolean): URL {
   let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new Error("Person Authority origin is invalid");
-  }
+  try { url = new URL(value); } catch { throw new Error("Person Authority origin is invalid"); }
   const loopback = url.hostname === "127.0.0.1" || url.hostname === "[::1]";
-  if (
-    url.username !== "" ||
-    url.password !== "" ||
-    url.search !== "" ||
-    url.hash !== "" ||
-    (url.pathname !== "" && url.pathname !== "/") ||
-    (url.protocol !== "https:" &&
-      !(allowInsecureLoopback && url.protocol === "http:" && loopback))
-  ) {
+  if (url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "" || (url.pathname !== "" && url.pathname !== "/") ||
+      (url.protocol !== "https:" && !(allowInsecureLoopback && url.protocol === "http:" && loopback))) {
     throw new Error("Person Authority must be one HTTPS origin");
   }
   url.pathname = "/";
   return url;
 }
 
-async function readBoundedBody(
-  response: Response,
-  maximumBytes: number,
-): Promise<string> {
+/** At most `maximumBytes` of a JSON reply's body, as UTF-8 text (a streamed Ask is read by readAskProgressStream). */
+async function readBoundedBody(response: Response, maximumBytes: number): Promise<string> {
   if (response.body === null) return "";
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -240,42 +167,23 @@ async function readBoundedBody(
       size += next.value.byteLength;
       if (size > maximumBytes) {
         await reader.cancel();
-        throw new PersonAuthorityClientError(
-          "response_too_large",
-          response.status,
-          "Person Authority response exceeded its bound",
-        );
+        throw new PersonAuthorityClientError("response_too_large", response.status, "Person Authority response exceeded its bound");
       }
       chunks.push(next.value);
     }
   } finally {
     reader.releaseLock();
   }
-  const bytes = Buffer.concat(
-    chunks.map((chunk) => Buffer.from(chunk)),
-    size,
-  );
+  const bytes = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), size);
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch (error) {
-    throw new PersonAuthorityClientError(
-      "invalid_response",
-      response.status,
-      `Person Authority returned invalid UTF-8: ${String(error)}`,
-    );
+    throw new PersonAuthorityClientError("invalid_response", response.status, `Person Authority returned invalid UTF-8: ${String(error)}`);
   }
 }
 
 function parsedJson(text: string, status: number): unknown {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    throw new PersonAuthorityClientError(
-      "invalid_response",
-      status,
-      "Person Authority returned invalid JSON",
-    );
-  }
+  try { return JSON.parse(text) as unknown; } catch { throw new PersonAuthorityClientError("invalid_response", status, "Person Authority returned invalid JSON"); }
 }
 
 function parsedContextJson(text: string, status: number): unknown {
@@ -410,22 +318,116 @@ const CLOSED_CONTEXT_ERROR_CODES: ReadonlySet<string> = new Set([
   'invalid_request', 'conflict', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable',
 ]);
 
-function validateSuccess<T>(
-  value: unknown,
-  status: number,
-  validate: (input: unknown) => T,
-): T {
+function validateSuccess<T>(value: unknown, status: number, validate: (input: unknown) => T): T {
   try {
     return validate(value);
   } catch (error) {
     if (!isOrganizationApiValidationError(error)) throw error;
-    throw new PersonAuthorityClientError(
-      "invalid_response",
-      status,
-      "Person Authority returned a malformed response",
-    );
+    throw new PersonAuthorityClientError("invalid_response", status, "Person Authority returned a malformed response");
   }
 }
+
+/** What a closed family (project context, documents) says when its reply is not one of its own. */
+interface ClosedFamily {
+  readonly not_json: string;
+  readonly noncanonical: string;
+  readonly rejected: string;
+  readonly unexpected_status: string;
+  /** A document reply that is not JSON is dropped unread. */
+  readonly cancel: boolean;
+}
+const CONTEXT_FAMILY: ClosedFamily = Object.freeze({ not_json: 'Person Authority returned a non-JSON response', noncanonical: 'Person Authority returned a noncanonical error',
+  rejected: 'Person Authority rejected the request', unexpected_status: 'Person Authority returned an unexpected status', cancel: false });
+const DOCUMENT_FAMILY: ClosedFamily = Object.freeze({ not_json: 'Document response was not JSON.', noncanonical: 'Document error response was invalid.',
+  rejected: 'Document request was rejected.', unexpected_status: 'Document response status was unexpected.', cancel: true });
+
+/**
+ * A closed family's reply: canonical JSON within `maximumBytes`, an error only with one of the family's codes (thrown
+ * as `rejected` makes it, by default the family's rejection), and success only with `expectedStatus`.
+ */
+async function closedReply<T>(response: Response, family: ClosedFamily, maximumBytes: number, validate: (value: unknown) => T, expectedStatus: number,
+  rejected: (code: string) => PersonAuthorityClientError = code => new PersonAuthorityClientError(code, response.status, family.rejected)): Promise<T> {
+  if (!isJsonResponse(response)) {
+    if (family.cancel) await response.body?.cancel();
+    throw new PersonAuthorityClientError('invalid_response', response.status, family.not_json);
+  }
+  const value = parsedContextJson(await readBoundedBody(response, maximumBytes), response.status);
+  if (!response.ok) {
+    const failure = validateSuccess(value, response.status, validateOrganizationApiError);
+    // The generic API envelope permits extension codes; these closed families cannot infer rejection from one.
+    if (!CLOSED_CONTEXT_ERROR_CODES.has(failure.error.code)) throw new PersonAuthorityClientError('invalid_response', response.status, family.noncanonical);
+    throw rejected(failure.error.code);
+  }
+  if (response.status !== expectedStatus) throw new PersonAuthorityClientError('invalid_response', response.status, family.unexpected_status);
+  return validateSuccess(value, response.status, validate);
+}
+
+/**
+ * A project-context route (project context v1, its V2 reads and V3 updates): its request, its closed reply and how the
+ * reply is bound to the request. A GET route carries its request in its path. A mutation carries its request ID, so its
+ * outcome is never left unsaid (PersonContextMutationError); an upload's unknown outcome says how to check it.
+ */
+interface ContextRoute<Q, R> {
+  readonly request: (value: unknown) => Q;
+  readonly path: (request: Q) => string;
+  readonly get?: true;
+  readonly status?: number;
+  readonly mutation?: 'change' | 'upload';
+  readonly response: (value: unknown) => R;
+  readonly matches: (response: R, request: Q) => boolean;
+}
+const route = <Q, R>(value: ContextRoute<Q, R>): ContextRoute<Q, R> => Object.freeze(value);
+const fits = (items: readonly unknown[], request: { readonly limit?: number }) => items.length <= (request.limit ?? 10);
+/** A change's receipt is for its request, in its project. */
+const applied = (result: { readonly request_id: string; readonly project_id: string }, request: { readonly request_id: string; readonly project_id: string }) =>
+  result.request_id === request.request_id && result.project_id === request.project_id;
+
+/** Every project-context route, by the name callers ask for it with. */
+export const CONTEXT_ROUTES = Object.freeze({
+  projectsV2: route({ request: validateProjectPageRequestV2, get: true, response: validateProjectListV2,
+    path: request => `${PERSON_PROJECTS_PATH_V2}?${new URLSearchParams({ limit: String(request.limit), status: request.status ?? 'active', ...(request.cursor === undefined ? {} : { cursor: request.cursor }) })}`,
+    matches: (result, request) => fits(result.items, request) && result.items.every(item => item.status === (request.status ?? 'active')) }),
+  createProject: route({ request: validateProjectCreateV1, path: () => PERSON_PROJECTS_PATH_V1, status: 201, mutation: 'change', response: validateProjectCreateReceiptV1,
+    matches: (result, request) => result.request_id === request.request_id }),
+  readProjectV2: route({ request: validateProjectIdV1, path: project => `${PERSON_PROJECTS_PATH_V2}/${project}`, get: true, response: validateProjectSummaryV2,
+    matches: (result, project) => result.project_id === project }),
+  renameProject: route({ request: validateProjectRenameV1, path: () => PERSON_PROJECT_RENAME_PATH_V1, mutation: 'change', response: validateProjectSettingsReceiptV1,
+    matches: (result, request) => result.operation === 'rename' && applied(result, request) }),
+  archiveProject: route({ request: validateProjectArchiveV1, path: () => PERSON_PROJECT_ARCHIVE_PATH_V1, mutation: 'change', response: validateProjectSettingsReceiptV1,
+    matches: (result, request) => result.operation === 'archive' && applied(result, request) }),
+  leaveProject: route({ request: validateProjectLeaveV1, path: () => PERSON_PROJECT_LEAVE_PATH_V1, mutation: 'change', response: validateProjectSettingsReceiptV1,
+    matches: (result, request) => result.operation === 'leave' && applied(result, request) }),
+  projectMembers: route({ request: validateProjectContextBrowseV1, path: () => `${PERSON_PROJECTS_PATH_V1}/members`, response: validateProjectMembersV1,
+    matches: (result, request) => result.project_id === request.project_id && fits(result.items, request) }),
+  projectDirectory: route({ request: validateProjectDirectorySearchV1, path: () => `${PERSON_PROJECTS_PATH_V1}/directory`, response: validateProjectDirectoryV1,
+    matches: (result, request) => result.project_id === request.project_id && fits(result.items, request) }),
+  /** Active people in the signed-in person's own organization; no project needed. */
+  organizationDirectory: route({ request: validateOrganizationDirectorySearchV1, path: () => PERSON_DIRECTORY_PATH_V1, response: validateOrganizationDirectoryV1,
+    matches: (result, request) => fits(result.items, request) }),
+  addProjectMember: route({ request: validateProjectMemberAddV1, path: () => `${PERSON_PROJECTS_PATH_V1}/members/add`, mutation: 'change', response: validateProjectMutationReceiptV1,
+    matches: (result, request) => result.operation === 'member_set' && result.membership_id === request.membership_id && applied(result, request) }),
+  setProjectMember: route({ request: validateProjectMemberSetV1, path: () => `${PERSON_PROJECTS_PATH_V1}/members/set`, mutation: 'change', response: validateProjectMutationReceiptV1,
+    matches: (result, request) => result.operation === 'member_set' && result.membership_id === request.membership_id && applied(result, request) }),
+  removeProjectMember: route({ request: validateProjectMemberRemoveV1, path: () => `${PERSON_PROJECTS_PATH_V1}/members/remove`, mutation: 'change', response: validateProjectMutationReceiptV1,
+    matches: (result, request) => result.operation === 'member_remove' && result.membership_id === request.membership_id && applied(result, request) }),
+  associateProjectContext: route({ request: validateProjectContextAssociateV1, path: () => `${PERSON_PROJECTS_PATH_V1}/context/associate`, mutation: 'change',
+    response: validateProjectMutationReceiptV1, matches: (result, request) => result.operation === 'associate' && result.context_id === request.context_id && applied(result, request) }),
+  dissociateProjectContext: route({ request: validateProjectContextDissociateV1, path: () => `${PERSON_PROJECTS_PATH_V1}/context/dissociate`, mutation: 'change',
+    response: validateProjectMutationReceiptV1, matches: (result, request) => result.operation === 'dissociate' && result.context_id === request.context_id && applied(result, request) }),
+  searchProjectContextV2: route({ request: validateProjectContextSearchV1, path: () => `${PERSON_PROJECTS_PATH_V2}/context/search`, response: validateProjectContextSearchResultV2,
+    matches: (result, request) => result.project_id === request.project_id && fits(result.items, request) }),
+  searchUploadsV2: route({ request: validatePersonUploadSearchV2, path: () => `${PERSON_UPDATES_PATH_V2}/search`, response: validatePersonUploadSearchResultV2,
+    matches: (result, request) => fits(result.results, request) }),
+  submitUpdateV3: route({ request: validatePersonUpdateSubmitV3, path: () => PERSON_UPDATES_PATH_V3, status: 202, mutation: 'upload', response: validatePersonUpdateReceiptV3,
+    matches: (result, request) => result.request_id === request.request_id &&
+      canonicalJson(result.association_project_ids) === canonicalJson(request.association_project_ids) && canonicalJson(result.audience) === canonicalJson(request.audience) }),
+  updateStatusV3: route({ request: validatePersonUpdateRequestId, path: requestId => `${PERSON_UPDATES_PATH_V3}/${requestId}`, get: true, response: validatePersonUpdateStatusResultV3,
+    matches: (result, requestId) => result.request_id === requestId }),
+  searchUploadsV3: route({ request: validatePersonUploadSearchV3, path: () => `${PERSON_UPDATES_PATH_V3}/search`, response: validatePersonUploadSearchResultV3,
+    matches: (result, request) => fits(result.results, request) }),
+});
+export type ContextRouteName = keyof typeof CONTEXT_ROUTES;
+export type ContextReply<K extends ContextRouteName> = ReturnType<(typeof CONTEXT_ROUTES)[K]['response']>;
 
 interface JsonRequest {
   readonly path: string;
@@ -438,51 +440,35 @@ interface JsonRequest {
   readonly maximum_request_bytes?: number;
 }
 
+/** A bodied request's validated canonical JSON, within its bound. */
+function requestBody(input: Pick<JsonRequest, 'body' | 'validate_request' | 'maximum_request_bytes'>): string {
+  const body = canonicalJson(input.validate_request(input.body));
+  if (Buffer.byteLength(body) > (input.maximum_request_bytes ?? MAX_ORGANIZATION_API_BODY_BYTES)) throw new Error("Person Authority request exceeds its body bound");
+  return body;
+}
+
 export class PersonAuthorityClient {
   private readonly origin: URL;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
 
   constructor(options: PersonAuthorityClientOptions) {
-    this.origin = normalizeOrigin(
-      options.authority_origin,
-      options.allow_insecure_loopback === true,
-    );
+    this.origin = normalizeOrigin(options.authority_origin, options.allow_insecure_loopback === true);
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     this.timeoutMs = options.timeout_ms ?? DEFAULT_TIMEOUT_MS;
-    if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs <= 0) {
-      throw new Error("Person Authority timeout must be positive");
-    }
+    if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs <= 0) throw new Error("Person Authority timeout must be positive");
   }
 
-  private async send(
-    path: string,
-    init: Omit<RequestInit, "redirect" | "signal">,
-    timeoutMs = this.timeoutMs,
-    signal?: AbortSignal,
-  ): Promise<Response> {
+  private async send(path: string, init: Omit<RequestInit, "redirect" | "signal">, timeoutMs = this.timeoutMs, signal?: AbortSignal): Promise<Response> {
     return this.sendUntil(path, init, requestSignal(timeoutMs, signal));
   }
 
   /** `deadline` is the request's whole timeout and cancellation, which a streamed body is read under too. */
-  private async sendUntil(
-    path: string,
-    init: Omit<RequestInit, "redirect" | "signal">,
-    deadline: AbortSignal,
-  ): Promise<Response> {
+  private async sendUntil(path: string, init: Omit<RequestInit, "redirect" | "signal">, deadline: AbortSignal): Promise<Response> {
     try {
-      return await this.fetchImpl(new URL(path, this.origin), {
-        ...init,
-        redirect: "error",
-        signal: deadline,
-      });
+      return await this.fetchImpl(new URL(path, this.origin), { ...init, redirect: "error", signal: deadline });
     } catch (error) {
-      throw new PersonAuthorityClientError(
-        "transport_failed",
-        null,
-        "Person Authority request failed",
-        { unsent: neverSent(error) },
-      );
+      throw new PersonAuthorityClientError("transport_failed", null, "Person Authority request failed", { unsent: neverSent(error) });
     }
   }
 
@@ -495,61 +481,28 @@ export class PersonAuthorityClient {
     readonly signal?: AbortSignal;
   }): Promise<T> {
     const response = await this.post(input, requestSignal(input.timeout_ms ?? this.timeoutMs, input.signal));
-    const value = await this.jsonValue(response,
-      input.maximum_response_bytes ?? MAXIMUM_ORDINARY_RESPONSE_BYTES, input.expected_status);
+    const value = await this.jsonValue(response, input.maximum_response_bytes ?? MAXIMUM_ORDINARY_RESPONSE_BYTES, input.expected_status);
     return validateSuccess(value, response.status, input.validate_response);
   }
 
   /** Sends one validated, bounded JSON request; reading the reply is the caller's. */
   private async post(input: JsonRequest, deadline: AbortSignal): Promise<Response> {
-    const request = input.validate_request(input.body);
-    const body = canonicalJson(request);
-    if (Buffer.byteLength(body) > (input.maximum_request_bytes ?? MAX_ORGANIZATION_API_BODY_BYTES)) {
-      throw new Error("Person Authority request exceeds its body bound");
-    }
-    return this.sendUntil(
-      input.path,
-      {
-        method: input.method ?? "POST",
-        headers: {
-          accept: "application/json",
-          "content-type": "application/json",
-          ...(input.access_token === undefined
-            ? {}
-            : { authorization: `Bearer ${input.access_token}` }),
-          ...input.headers,
-        },
-        body,
-      },
-      deadline,
-    );
+    const body = requestBody(input);
+    return this.sendUntil(input.path, { method: input.method ?? "POST", headers: { accept: "application/json", "content-type": "application/json",
+      ...(input.access_token === undefined ? {} : { authorization: `Bearer ${input.access_token}` }), ...input.headers }, body }, deadline);
   }
 
   private async jsonValue(response: Response, maximumBytes: number, expectedStatus?: number): Promise<unknown> {
-    if (!isJsonResponse(response)) {
-      throw new PersonAuthorityClientError(
-        "invalid_response",
-        response.status,
-        "Person Authority returned a non-JSON response",
-      );
-    }
+    if (!isJsonResponse(response)) throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a non-JSON response");
     const value = parsedJson(await readBoundedBody(response, maximumBytes), response.status);
     if (!response.ok) {
       let code = "request_failed";
       try {
         code = validateOrganizationApiError(value).error.code;
       } catch {
-        throw new PersonAuthorityClientError(
-          "invalid_response",
-          response.status,
-          "Person Authority returned a malformed error",
-        );
+        throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a malformed error");
       }
-      throw new PersonAuthorityClientError(
-        code,
-        response.status,
-        "Person Authority rejected the request",
-      );
+      throw new PersonAuthorityClientError(code, response.status, "Person Authority rejected the request");
     }
     if (expectedStatus !== undefined && response.status !== expectedStatus) {
       throw new PersonAuthorityClientError('invalid_response', response.status, 'Person Authority returned an unexpected status');
@@ -562,26 +515,14 @@ export class PersonAuthorityClient {
     readonly access_token: string;
     readonly validate_response: (value: unknown) => T;
     readonly maximum_response_bytes: number;
-    readonly headers?: Readonly<Record<string, string>>;
     readonly signal?: AbortSignal;
   }): Promise<T> {
-    const response = await this.send(input.path, {
-      method: "GET",
-      headers: {
-        ...input.headers,
-        accept: "application/json",
-        authorization: `Bearer ${input.access_token}`,
-      },
-    }, undefined, input.signal);
+    const response = await this.send(input.path, { method: "GET", headers: { accept: "application/json", authorization: `Bearer ${input.access_token}` } }, undefined, input.signal);
     const value = await this.jsonValue(response, input.maximum_response_bytes);
     try {
       return input.validate_response(value);
     } catch {
-      throw new PersonAuthorityClientError(
-        "invalid_response",
-        response.status,
-        "Person Authority returned a malformed response",
-      );
+      throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a malformed response");
     }
   }
 
@@ -593,6 +534,7 @@ export class PersonAuthorityClient {
     validate: (value: unknown) => T;
     matches?: (response: T) => boolean;
     request_id?: string;
+    upload?: boolean;
   }): Promise<T> {
     const body = input.body === undefined ? undefined : canonicalJson(input.body);
     if (body !== undefined && Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
@@ -602,59 +544,42 @@ export class PersonAuthorityClient {
     try {
       const response = await this.send(input.path, {
         method: body === undefined ? 'GET' : 'POST',
-        headers: { accept: 'application/json', authorization: `Bearer ${accessToken}`,
-          ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+        headers: { accept: 'application/json', authorization: `Bearer ${accessToken}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
         ...(body === undefined ? {} : { body }),
       });
       status = response.status;
-      if (!isJsonResponse(response)) {
-        throw new PersonAuthorityClientError('invalid_response', status, 'Person Authority returned a non-JSON response');
-      }
-      const text = await readBoundedBody(response, PROJECT_CONTEXT_RESPONSE_MAX_BYTES);
-      const value = parsedContextJson(text, status);
-      if (!response.ok) {
-        const error = validateSuccess(value, status, validateOrganizationApiError);
-        // The generic API envelope permits extension codes; this frozen
-        // project/V2 family is closed and cannot infer rejection from one.
-        if (!CLOSED_CONTEXT_ERROR_CODES.has(error.error.code)) {
-          throw new PersonAuthorityClientError('invalid_response', status, 'Person Authority returned a noncanonical error');
-        }
-        if (input.request_id !== undefined && status >= 400 && status < 500) {
-          throw new PersonContextMutationError(error.error.code, status, 'Person Authority rejected the request', input.request_id, 'not_submitted');
-        }
-        throw new PersonAuthorityClientError(error.error.code, status, 'Person Authority rejected the request');
-      }
-      if (status !== (input.status ?? 200)) {
-        throw new PersonAuthorityClientError('invalid_response', status, 'Person Authority returned an unexpected status');
-      }
-      const result = validateSuccess(value, status, input.validate);
+      const { request_id: requestId } = input;
+      const result = await closedReply(response, CONTEXT_FAMILY, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, input.validate, input.status ?? 200,
+        requestId !== undefined && response.status >= 400 && response.status < 500
+          ? code => new PersonContextMutationError(code, response.status, CONTEXT_FAMILY.rejected, requestId, 'not_submitted') : undefined);
       if (input.matches !== undefined && !input.matches(result)) {
         throw new PersonAuthorityClientError('invalid_response', status, 'Person Authority returned different request coordinates');
       }
       return result;
     } catch (error) {
       if (error instanceof PersonContextMutationError) throw error;
-      if (input.request_id !== undefined) throw unknownContextMutation(input.request_id, input.path === PERSON_UPDATES_PATH_V3, status);
+      if (input.request_id !== undefined) throw unknownContextMutation(input.request_id, input.upload === true, status);
       if (error instanceof PersonAuthorityClientError) throw error;
       throw new PersonAuthorityClientError('invalid_response', status, 'Person Authority returned a malformed response');
     }
   }
 
-  private async documentResponse<T>(response: Response, validate: (value: unknown) => T, expectedStatus = 200): Promise<T> {
-    if (!isJsonResponse(response)) {
-      await response.body?.cancel();
-      throw new PersonAuthorityClientError('invalid_response', response.status, 'Document response was not JSON.');
-    }
-    const value = parsedContextJson(await readBoundedBody(response, PERSON_DOCUMENT_JSON_MAX_BYTES), response.status);
-    if (!response.ok) {
-      const failure = validateSuccess(value, response.status, validateOrganizationApiError);
-      if (!CLOSED_CONTEXT_ERROR_CODES.has(failure.error.code)) {
-        throw new PersonAuthorityClientError('invalid_response', response.status, 'Document error response was invalid.');
-      }
-      throw new PersonAuthorityClientError(failure.error.code, response.status, 'Document request was rejected.');
-    }
-    if (response.status !== expectedStatus) throw new PersonAuthorityClientError('invalid_response', response.status, 'Document response status was unexpected.');
-    return validateSuccess(value, response.status, validate);
+  /** One project-context route (CONTEXT_ROUTES), its request validated before it is sent. */
+  async context<K extends ContextRouteName>(accessToken: string, name: K, value: unknown): Promise<ContextReply<K>> {
+    const selected = CONTEXT_ROUTES[name] as unknown as ContextRoute<unknown, ContextReply<K>>;
+    const request = selected.request(value);
+    return this.contextRequest(accessToken, { path: selected.path(request), ...(selected.get === true ? {} : { body: request }),
+      ...(selected.status === undefined ? {} : { status: selected.status }),
+      ...(selected.mutation === undefined ? {} : { request_id: (request as { readonly request_id: string }).request_id, upload: selected.mutation === 'upload' }),
+      validate: selected.response, matches: result => selected.matches(result, request) });
+  }
+
+  submitUpdateV3(accessToken: string, value: PersonUpdateSubmitV3) {
+    return this.context(accessToken, 'submitUpdateV3', value);
+  }
+
+  private documentResponse<T>(response: Response, validate: (value: unknown) => T, expectedStatus = 200): Promise<T> {
+    return closedReply(response, DOCUMENT_FAMILY, PERSON_DOCUMENT_JSON_MAX_BYTES, validate, expectedStatus);
   }
 
   async uploadDocument(accessToken: string, snapshot: DocumentSnapshot) {
@@ -736,304 +661,64 @@ export class PersonAuthorityClient {
     return response;
   }
 
-  async projectsV2(accessToken: string, value: ProjectPageRequestV2 = {}) {
-    const request = validateProjectPageRequestV2(value);
-    const query = new URLSearchParams({ limit: String(request.limit), status: request.status ?? 'active' });
-    if (request.cursor !== undefined) query.set('cursor', request.cursor);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V2}?${query}`, validate: validateProjectListV2,
-      matches: result => result.items.length <= (request.limit ?? 10) && result.items.every(item => item.status === (request.status ?? 'active')) });
-  }
-
-  async createProject(accessToken: string, value: ProjectCreateV1) {
-    const request = validateProjectCreateV1(value);
-    return this.contextRequest(accessToken, { path: PERSON_PROJECTS_PATH_V1, body: request, status: 201,
-      request_id: request.request_id, validate: validateProjectCreateReceiptV1,
-      matches: result => result.request_id === request.request_id });
-  }
-
-  async readProjectV2(accessToken: string, projectId: string) {
-    const project = validateProjectIdV1(projectId);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V2}/${project}`, validate: validateProjectSummaryV2,
-      matches: result => result.project_id === project });
-  }
-
-  async renameProject(accessToken: string, value: ProjectRenameV1) {
-    const request = validateProjectRenameV1(value);
-    return this.contextRequest(accessToken, { path: PERSON_PROJECT_RENAME_PATH_V1, body: request,
-      request_id: request.request_id, validate: validateProjectSettingsReceiptV1,
-      matches: result => result.operation === 'rename' && result.request_id === request.request_id && result.project_id === request.project_id });
-  }
-
-  async archiveProject(accessToken: string, value: ProjectArchiveV1) {
-    const request = validateProjectArchiveV1(value);
-    return this.contextRequest(accessToken, { path: PERSON_PROJECT_ARCHIVE_PATH_V1, body: request,
-      request_id: request.request_id, validate: validateProjectSettingsReceiptV1,
-      matches: result => result.operation === 'archive' && result.request_id === request.request_id && result.project_id === request.project_id });
-  }
-
-  async leaveProject(accessToken: string, value: ProjectLeaveV1) {
-    const request = validateProjectLeaveV1(value);
-    return this.contextRequest(accessToken, { path: PERSON_PROJECT_LEAVE_PATH_V1, body: request,
-      request_id: request.request_id, validate: validateProjectSettingsReceiptV1,
-      matches: result => result.operation === 'leave' && result.request_id === request.request_id && result.project_id === request.project_id });
-  }
-
-  async projectMembers(accessToken: string, value: ProjectContextBrowseV1) {
-    const request = validateProjectContextBrowseV1(value);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/members`, body: request, validate: validateProjectMembersV1,
-      matches: result => result.project_id === request.project_id && result.items.length <= (request.limit ?? 10) });
-  }
-
-  async projectDirectory(accessToken: string, value: ProjectDirectorySearchV1) {
-    const request = validateProjectDirectorySearchV1(value);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/directory`, body: request, validate: validateProjectDirectoryV1,
-      matches: result => result.project_id === request.project_id && result.items.length <= (request.limit ?? 10) });
-  }
-
-  /** Active people in the signed-in person's own organization; no project needed. */
-  async organizationDirectory(accessToken: string, value: OrganizationDirectorySearchV1 = {}) {
-    const request = validateOrganizationDirectorySearchV1(value);
-    return this.contextRequest(accessToken, { path: PERSON_DIRECTORY_PATH_V1, body: request, validate: validateOrganizationDirectoryV1,
-      matches: result => result.items.length <= (request.limit ?? 10) });
-  }
-
-  async addProjectMember(accessToken: string, value: ProjectMemberAddV1) {
-    const request = validateProjectMemberAddV1(value);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/members/add`, body: request,
-      request_id: request.request_id, validate: validateProjectMutationReceiptV1,
-      matches: result => result.operation === 'member_set' && result.request_id === request.request_id &&
-        result.project_id === request.project_id && result.membership_id === request.membership_id });
-  }
-
-  async setProjectMember(accessToken: string, value: ProjectMemberSetV1) {
-    const request = validateProjectMemberSetV1(value);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/members/set`, body: request,
-      request_id: request.request_id, validate: validateProjectMutationReceiptV1,
-      matches: result => result.operation === 'member_set' && result.request_id === request.request_id &&
-        result.project_id === request.project_id && result.membership_id === request.membership_id });
-  }
-
-  async removeProjectMember(accessToken: string, value: ProjectMemberRemoveV1) {
-    const request = validateProjectMemberRemoveV1(value);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/members/remove`, body: request,
-      request_id: request.request_id, validate: validateProjectMutationReceiptV1,
-      matches: result => result.operation === 'member_remove' && result.request_id === request.request_id &&
-        result.project_id === request.project_id && result.membership_id === request.membership_id });
-  }
-
-  async associateProjectContext(accessToken: string, value: ProjectContextAssociateV1) {
-    const request = validateProjectContextAssociateV1(value);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/context/associate`, body: request,
-      request_id: request.request_id, validate: validateProjectMutationReceiptV1,
-      matches: result => result.operation === 'associate' && result.request_id === request.request_id &&
-        result.project_id === request.project_id && result.context_id === request.context_id });
-  }
-
-  async dissociateProjectContext(accessToken: string, value: ProjectContextDissociateV1) {
-    const request = validateProjectContextDissociateV1(value);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/context/dissociate`, body: request,
-      request_id: request.request_id, validate: validateProjectMutationReceiptV1,
-      matches: result => result.operation === 'dissociate' && result.request_id === request.request_id &&
-        result.project_id === request.project_id && result.context_id === request.context_id });
-  }
-
-  async searchProjectContextV2(accessToken: string, value: ProjectContextSearchV1) {
-    const request = validateProjectContextSearchV1(value);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V2}/context/search`, body: request, validate: validateProjectContextSearchResultV2,
-      matches: result => result.project_id === request.project_id && result.items.length <= (request.limit ?? 10) });
-  }
-
-  async searchUploadsV2(accessToken: string, value: PersonUploadSearchV2) {
-    const request = validatePersonUploadSearchV2(value);
-    return this.contextRequest(accessToken, { path: `${PERSON_UPDATES_PATH_V2}/search`, body: request, validate: validatePersonUploadSearchResultV2,
-      matches: result => result.results.length <= (request.limit ?? 10) });
-  }
-
-  async submitUpdateV3(accessToken: string, value: PersonUpdateSubmitV3) {
-    const request = validatePersonUpdateSubmitV3(value);
-    return this.contextRequest(accessToken, { path: PERSON_UPDATES_PATH_V3, body: request, status: 202,
-      request_id: request.request_id, validate: validatePersonUpdateReceiptV3,
-      matches: result => result.request_id === request.request_id &&
-        canonicalJson(result.association_project_ids) === canonicalJson(request.association_project_ids) &&
-        canonicalJson(result.audience) === canonicalJson(request.audience) });
-  }
-
-  async updateStatusV3(accessToken: string, requestId: string) {
-    validatePersonUpdateRequestId(requestId);
-    return this.contextRequest(accessToken, { path: `${PERSON_UPDATES_PATH_V3}/${requestId}`, validate: validatePersonUpdateStatusResultV3,
-      matches: result => result.request_id === requestId });
-  }
-
-  async searchUploadsV3(accessToken: string, value: PersonUploadSearchV3) {
-    const request = validatePersonUploadSearchV3(value);
-    return this.contextRequest(accessToken, { path: `${PERSON_UPDATES_PATH_V3}/search`, body: request, validate: validatePersonUploadSearchResultV3,
-      matches: result => result.results.length <= (request.limit ?? 10) });
-  }
-
   async descriptor(): Promise<OrganizationAuthorityDescriptorResponseV1> {
-    const response = await this.send(
-      ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
-      {
-        method: "GET",
-        headers: { accept: "application/json" },
-      },
-    );
-    if (!isJsonResponse(response)) {
-      throw new PersonAuthorityClientError(
-        "invalid_response",
-        response.status,
-        "Person Authority returned a non-JSON descriptor",
-      );
-    }
-    const value = parsedJson(
-      await readBoundedBody(response, MAXIMUM_ORDINARY_RESPONSE_BYTES),
-      response.status,
-    );
-    if (!response.ok) {
-      throw new PersonAuthorityClientError(
-        "request_failed",
-        response.status,
-        "Person Authority rejected the descriptor request",
-      );
-    }
-    return validateSuccess(
-      value,
-      response.status,
-      validateOrganizationAuthorityDescriptorResponse,
-    );
+    const response = await this.send(ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, { method: "GET", headers: { accept: "application/json" } });
+    if (!isJsonResponse(response)) throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a non-JSON descriptor");
+    const value = parsedJson(await readBoundedBody(response, MAXIMUM_ORDINARY_RESPONSE_BYTES), response.status);
+    if (!response.ok) throw new PersonAuthorityClientError("request_failed", response.status, "Person Authority rejected the descriptor request");
+    return validateSuccess(value, response.status, validateOrganizationAuthorityDescriptorResponse);
   }
 
-  private async noContent(input: {
-    readonly path: string;
-    readonly body: unknown;
-    readonly validate_request: (value: unknown) => unknown;
-    readonly access_token: string;
-    readonly method?: "POST" | "DELETE";
-  }): Promise<void> {
-    const request = input.validate_request(input.body);
-    const body = canonicalJson(request);
-    if (Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
-      throw new Error("Person Authority request exceeds its body bound");
-    }
-    const response = await this.send(input.path, {
-      method: input.method ?? "POST",
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${input.access_token}`,
-        "content-type": "application/json",
-      },
-      body,
-    });
-    const text = await readBoundedBody(
-      response,
-      MAXIMUM_ORDINARY_RESPONSE_BYTES,
-    );
+  private async noContent(input: Omit<JsonRequest, 'method' | 'headers' | 'maximum_request_bytes'> & { readonly access_token: string; readonly method?: "POST" | "DELETE" }): Promise<void> {
+    const body = requestBody(input);
+    const response = await this.send(input.path, { method: input.method ?? "POST",
+      headers: { accept: "application/json", authorization: `Bearer ${input.access_token}`, "content-type": "application/json" }, body });
+    const text = await readBoundedBody(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
     if (response.status === 204 && text === "") return;
     if (!response.ok) {
       const value = parsedJson(text, response.status);
       try {
         const error = validateOrganizationApiError(value);
-        throw new PersonAuthorityClientError(
-          error.error.code,
-          response.status,
-          "Person Authority rejected the request",
-        );
+        throw new PersonAuthorityClientError(error.error.code, response.status, "Person Authority rejected the request");
       } catch (error) {
         if (error instanceof PersonAuthorityClientError) throw error;
       }
     }
-    throw new PersonAuthorityClientError(
-      "invalid_response",
-      response.status,
-      "Person Authority returned an invalid no-content response",
-    );
+    throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned an invalid no-content response");
   }
 
-  beginOidcLogin(
-    request: OrganizationPersonOidcBeginRequestV2,
-  ): Promise<OrganizationPersonOidcBeginResponseV2> {
-    return this.json({
-      path: ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH,
-      body: request,
-      validate_request: validateOrganizationPersonOidcBeginRequest,
-      validate_response: validateOrganizationPersonOidcBeginResponse,
-    });
+  beginOidcLogin(request: OrganizationPersonOidcBeginRequestV2): Promise<OrganizationPersonOidcBeginResponseV2> {
+    return this.json({ path: ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, body: request,
+      validate_request: validateOrganizationPersonOidcBeginRequest, validate_response: validateOrganizationPersonOidcBeginResponse });
   }
 
   refresh(refreshToken: string): Promise<OrganizationPersonSessionV2> {
-    return this.json({
-      path: ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH,
-      body: { refresh_token: refreshToken },
-      validate_request: validateOrganizationPersonSessionRefreshRequest,
-      validate_response: validateOrganizationPersonSession,
-    });
+    return this.json({ path: ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH, body: { refresh_token: refreshToken },
+      validate_request: validateOrganizationPersonSessionRefreshRequest, validate_response: validateOrganizationPersonSession });
   }
 
   logout(accessToken: string): Promise<void> {
-    return this.noContent({
-      path: ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH,
-      body: {},
+    return this.noContent({ path: ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, body: {}, access_token: accessToken,
       validate_request: (value) => {
-        if (
-          value === null ||
-          typeof value !== "object" ||
-          Array.isArray(value) ||
-          Object.keys(value).length !== 0
-        ) {
-          throw new Error("Person logout request must be empty");
-        }
+        if (value === null || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== 0) throw new Error("Person logout request must be empty");
         return value;
-      },
-      access_token: accessToken,
-    });
+      } });
   }
 
-  records(
-    accessToken: string,
-    limit?: number,
-    recordSha256?: `sha256:${string}`,
-  ): Promise<PersonRecordListV1> {
-    if (
-      limit !== undefined &&
-      (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
-    ) {
+  records(accessToken: string, limit?: number, recordSha256?: `sha256:${string}`): Promise<PersonRecordListV1> {
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)) {
       throw new PersonQueryInputError("invalid_limit", "Person record limit must be an integer from 1 to 100");
     }
-    if (
-      recordSha256 !== undefined &&
-      !/^sha256:[a-f0-9]{64}$/.test(recordSha256)
-    ) {
-      throw new Error("Person record SHA-256 is invalid");
-    }
+    if (recordSha256 !== undefined && !/^sha256:[a-f0-9]{64}$/.test(recordSha256)) throw new Error("Person record SHA-256 is invalid");
     return this.getJson({
-      path:
-        recordSha256 !== undefined
-          ? `${PERSON_RECORDS_PATH_V1}?record_sha256=${recordSha256}`
-          : limit === undefined
-          ? PERSON_RECORDS_PATH_V1
-          : `${PERSON_RECORDS_PATH_V1}?limit=${limit}`,
-      access_token: accessToken,
-      validate_response: validatePersonRecordListV1,
-      maximum_response_bytes: MAXIMUM_RECORDS_RESPONSE_BYTES,
+      path: recordSha256 !== undefined ? `${PERSON_RECORDS_PATH_V1}?record_sha256=${recordSha256}` : limit === undefined ? PERSON_RECORDS_PATH_V1 : `${PERSON_RECORDS_PATH_V1}?limit=${limit}`,
+      access_token: accessToken, validate_response: validatePersonRecordListV1, maximum_response_bytes: MAXIMUM_RECORDS_RESPONSE_BYTES,
     });
   }
 
-  searchRecords(
-    accessToken: string,
-    query: string,
-    limit?: number,
-  ): Promise<PersonRecordSearchV2> {
-    return this.json({
-      path: PERSON_RECORDS_PATH_V1,
-      body: {
-        query,
-        ...(limit === undefined ? {} : { limit }),
-      },
-      validate_request: validatePersonRecordSearchRequestV2,
-      validate_response: validatePersonRecordSearchV2,
-      access_token: accessToken,
-      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
-    });
+  searchRecords(accessToken: string, query: string, limit?: number): Promise<PersonRecordSearchV2> {
+    return this.json({ path: PERSON_RECORDS_PATH_V1, body: { query, ...(limit === undefined ? {} : { limit }) }, validate_request: validatePersonRecordSearchRequestV2,
+      validate_response: validatePersonRecordSearchV2, access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES });
   }
 
   /**
@@ -1041,13 +726,8 @@ export class PersonAuthorityClient {
    * no content. Every Authority serves it (ADR-0048).
    */
   changes(accessToken: string, signal?: AbortSignal): Promise<PersonChangesV1> {
-    return this.getJson({
-      path: PERSON_CHANGES_ROUTE_V1,
-      access_token: accessToken,
-      validate_response: validatePersonChangesV1,
-      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
-      signal,
-    });
+    return this.getJson({ path: PERSON_CHANGES_ROUTE_V1, access_token: accessToken, validate_response: validatePersonChangesV1,
+      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, signal });
   }
 
   /**
@@ -1055,39 +735,24 @@ export class PersonAuthorityClient {
    * else that they can read, and no content; 500 projects fit the ordinary bound. Every Authority serves it (ADR-0048).
    */
   projectActivity(accessToken: string, signal?: AbortSignal): Promise<PersonProjectActivityV1> {
-    return this.getJson({
-      path: PERSON_PROJECT_ACTIVITY_PATH_V1,
-      access_token: accessToken,
-      validate_response: validatePersonProjectActivityV1,
-      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
-      signal,
-    });
+    return this.getJson({ path: PERSON_PROJECT_ACTIVITY_PATH_V1, access_token: accessToken, validate_response: validatePersonProjectActivityV1,
+      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, signal });
   }
 
   /**
-   * Ask (`/v7`, the V8 answer, research tool contract v1): global by default, and a supplied project ID is a strict
-   * project-only scope. The answer may cite live tickets and pages, follow-ups, and the asker's projects, people, tools
-   * and tool containers, and must echo the requested scope. The request may carry the asker's previous turn (ADR-0047).
-   */
-  async askV7(accessToken: string, question: string, scope?: ProjectIdV1, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1, previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
-    const response = await this.json({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, captureId, previous), headers: askHeaders(),
-      validate_request: validatePersonAnswerRequestV3, validate_response: validatePersonAnswerResponseV8,
-      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
-    return inAskScope(response, scope, previous);
-  }
-
-  /**
-   * `askV7` streamed in Ask progress V3 (ADR-0039): each step event reaches
-   * `onProgress` as it arrives, and the answer comes back with the receipt the
-   * Authority built after its final check. An Authority that does not stream
-   * answers with the JSON answer, returned without a receipt, and an error
-   * inside the stream is the error its JSON response would have had. The ask
-   * timeout and the caller's signal bound the whole stream.
+   * The Ask's one transport (`/v7`, the V8 answer, research tool contract v1), streamed in Ask progress V3 (ADR-0039):
+   * global by default, and a supplied project ID is a strict project-only scope. The answer may cite live tickets and
+   * pages, follow-ups, and the asker's projects, people, tools and tool containers, and must echo the requested scope.
+   * The request may carry the asker's previous turn (ADR-0047) and a diagnostic capture. Each step event reaches
+   * `onProgress` as it arrives, and the answer comes back with the receipt the Authority built after its final check.
+   * An Authority that does not stream answers with the JSON answer, returned without a receipt, and an error inside
+   * the stream is the error its JSON response would have had. The ask timeout and the caller's signal bound the whole
+   * stream.
    */
   async askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
+    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonLiveAnswerV3> {
     const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
-    const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, undefined, previous), validate_request: validatePersonAnswerRequestV3,
+    const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, captureId, previous), validate_request: validatePersonAnswerRequestV3,
       access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json`, [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 } }, deadline);
     if (!isAskProgressStream(response)) {
       const value = await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
@@ -1184,21 +849,12 @@ export class PersonAuthorityClient {
 
   async askSourceEvidence(accessToken: string, value: PersonSourceEvidenceReadRequestV1): Promise<PersonAskSourceEvidenceV1> {
     const request = validatePersonSourceEvidenceReadRequestV1(value);
-    const response = await this.json({
-      path: PERSON_SOURCE_EVIDENCE_PATH_V1,
-      body: request,
+    const response = await this.json({ path: PERSON_SOURCE_EVIDENCE_PATH_V1, body: request,
       headers: { [PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1]: PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_VALUE_V1 },
-      validate_request: validatePersonSourceEvidenceReadRequestV1,
-      validate_response: validatePersonSourceEvidenceV1,
-      access_token: accessToken,
-      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
-      timeout_ms: ASK_TIMEOUT_MS,
-    });
+      validate_request: validatePersonSourceEvidenceReadRequestV1, validate_response: validatePersonSourceEvidenceV1,
+      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS });
     const { label: _label, ...citation } = response.citation;
-    if (
-      canonicalJson(response.scope) !== canonicalJson(request.scope) ||
-      canonicalJson(citation) !== canonicalJson(request.citation)
-    ) {
+    if (canonicalJson(response.scope) !== canonicalJson(request.scope) || canonicalJson(citation) !== canonicalJson(request.citation)) {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different source evidence coordinates');
     }
     return response;
@@ -1219,7 +875,7 @@ export class PersonAuthorityClient {
       }
     };
     return Object.freeze({
-      json: async <T>(input: import('@echo-brain/organization-api').PersonToolJsonRequestV1<T>): Promise<T> => {
+      json: async <T>(input: PersonToolJsonRequestV1<T>): Promise<T> => {
         assertPath(input.path);
         assertBounds(input.maximum_response_bytes ?? MAXIMUM_ORDINARY_RESPONSE_BYTES, input.timeout_ms, input.maximum_request_bytes);
         return this.json({ path: input.path, body: input.body, validate_request: input.validate_request,
@@ -1227,7 +883,7 @@ export class PersonAuthorityClient {
           ...(input.maximum_request_bytes === undefined ? {} : { maximum_request_bytes: input.maximum_request_bytes }),
           timeout_ms: input.timeout_ms, access_token: accessToken, signal });
       },
-      getJson: async <T>(input: import('@echo-brain/organization-api').PersonToolGetRequestV1<T>): Promise<T> => {
+      getJson: async <T>(input: PersonToolGetRequestV1<T>): Promise<T> => {
         assertPath(input.path);
         assertBounds(input.maximum_response_bytes);
         return this.getJson({ path: input.path, validate_response: input.validate_response,
@@ -1242,48 +898,22 @@ export class PersonAuthorityClient {
   }
 
   employees(accessToken: string): Promise<EmployeeRosterV1> {
-    return this.getJson({
-      path: PERSON_EMPLOYEES_PATH_V1,
-      access_token: accessToken,
-      validate_response: validateEmployeeRosterV1,
-      maximum_response_bytes: MAXIMUM_RECORDS_RESPONSE_BYTES,
-    });
+    return this.getJson({ path: PERSON_EMPLOYEES_PATH_V1, access_token: accessToken, validate_response: validateEmployeeRosterV1,
+      maximum_response_bytes: MAXIMUM_RECORDS_RESPONSE_BYTES });
   }
 
-  inviteEmployee(
-    input: { name: string; email: string },
-    accessToken: string,
-  ): Promise<EmployeeInvitationV1> {
-    return this.json({
-      path: PERSON_EMPLOYEES_PATH_V1,
-      body: input,
-      validate_request: (value) => validateEmployeeRequestV1(value, true),
-      validate_response: validateEmployeeInvitationV1,
-      access_token: accessToken,
-    });
+  inviteEmployee(input: { name: string; email: string }, accessToken: string): Promise<EmployeeInvitationV1> {
+    return this.json({ path: PERSON_EMPLOYEES_PATH_V1, body: input, validate_request: (value) => validateEmployeeRequestV1(value, true),
+      validate_response: validateEmployeeInvitationV1, access_token: accessToken });
   }
 
-  reissueEmployee(
-    input: { email: string },
-    accessToken: string,
-  ): Promise<EmployeeInvitationV1> {
-    return this.json({
-      path: PERSON_EMPLOYEES_PATH_V1,
-      body: input,
-      validate_request: (value) => validateEmployeeRequestV1(value, false),
-      validate_response: validateEmployeeInvitationV1,
-      access_token: accessToken,
-      method: "PUT",
-    });
+  reissueEmployee(input: { email: string }, accessToken: string): Promise<EmployeeInvitationV1> {
+    return this.json({ path: PERSON_EMPLOYEES_PATH_V1, body: input, validate_request: (value) => validateEmployeeRequestV1(value, false),
+      validate_response: validateEmployeeInvitationV1, access_token: accessToken, method: "PUT" });
   }
 
   revokeEmployee(input: { email: string }, accessToken: string): Promise<void> {
-    return this.noContent({
-      path: PERSON_EMPLOYEES_PATH_V1,
-      body: input,
-      validate_request: (value) => validateEmployeeRequestV1(value, false),
-      access_token: accessToken,
-      method: "DELETE",
-    });
+    return this.noContent({ path: PERSON_EMPLOYEES_PATH_V1, body: input, validate_request: (value) => validateEmployeeRequestV1(value, false),
+      access_token: accessToken, method: "DELETE" });
   }
 }

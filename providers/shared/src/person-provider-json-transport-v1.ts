@@ -3,14 +3,13 @@ import { observeProviderHttpRequestV1, providerUpstreamServiceV1 } from './provi
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
-import type { PersonProviderV1 } from './person-provider-v1.js';
+import { PERSON_PROVIDER_FAILURE_CODES_V1, type PersonProviderV1 } from './person-provider-v1.js';
 
 export interface PersonProviderAuthenticatedFetchV1 {
   readonly binding: PersonConnectorReadBindingV1;
   fetch(url: string, init: RequestInit): Promise<Response>;
 }
 export const PERSON_PROVIDER_RESPONSE_MAX_BYTES_V1 = 1024 * 1024;
-const SAFE_ERRORS = new Set(['invalid_request', 'invalid_output', 'unauthorized', 'not_found', 'stale_access_state', 'unavailable', 'rate_limited']);
 
 /** The product owns endpoint/selector validation; this owns the bounded authenticated JSON exchange. */
 export function createPersonProviderJsonTransportV1<Input extends { readonly signal?: AbortSignal }>(
@@ -62,7 +61,7 @@ export function createPersonProviderJsonTransportV1<Input extends { readonly sig
       } catch (error) {
         input.signal?.throwIfAborted();
         if (error instanceof BoundedJsonResponseErrorV1 && error.code !== 'transport') failure('invalid_output');
-        if (error instanceof AuthorityOperationError && SAFE_ERRORS.has(error.code)) failure(error.code as Parameters<typeof failure>[0]);
+        if (error instanceof AuthorityOperationError && PERSON_PROVIDER_FAILURE_CODES_V1.has(error.code)) failure(error.code as Parameters<typeof failure>[0]);
         failure('unavailable');
       } finally { disposeProviderResponseV1(response); }
     },

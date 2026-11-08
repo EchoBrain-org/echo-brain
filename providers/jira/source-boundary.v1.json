@@ -69,10 +69,6 @@
         "export": "createJiraPersonConnectionHttpApplicationV1"
       }
     ],
-    "compatibility_entrypoints": [],
-    "retired_source_paths": [
-      "providers/jira/src/jira-context-source-v1.ts",
-      "providers/jira/src/jira-context-payload-v1.ts"
-    ]
+    "compatibility_entrypoints": []
   }
 }

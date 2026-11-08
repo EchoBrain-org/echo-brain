@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView, membersView, noteMatchesView,
-  noteTitle, openItemsView, openItemView, openView, revokedView, projectActivityView, projectMatchesView, projectSettingsView, projectView, receiptView, recordView,
+  noteTitle, openItemsView, openItemView, openView, revokedView, projectActivityView, projectMatchesView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 import { personCitedRecordV1, personRecordAtomIdV1, validatePersonRecordListV1 } from '@echo-brain/organization-api';
@@ -192,8 +192,6 @@ describe('view models copy only what the renderer may see', () => {
       { kind: 'original', label: 'Pricing call', ref: { source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
         representation_sha256: sha('5'), anchor_sha256: sha('6') } },
     ]);
-    // One part answers the question itself: its plain text does not repeat it.
-    expect(answer.text).toBe('Ship it.');
   });
 
   it('maps Agentic Ask statements to their exact sources, including project records and fallback whitespace; the notice stays behind', () => {
@@ -210,17 +208,16 @@ describe('view models copy only what the renderer may see', () => {
       direct: { private: false, citation_indexes: [0] }, parts: [{ status: 'records_only', records: [{ text: 'Exact\n  fallback' }] }],
       sources: [{ kind: 'record', label: 'Project review', record: { policy_id: 'project-members-readable-person-v1' } }],
     });
-    // The page no longer shows what research did not cover (ADR-0047): neither the notice nor a gap reaches it, nor its plain reading.
+    // The page no longer shows what research did not cover (ADR-0047): the notice does not reach it.
     expect(answer).not.toHaveProperty('notice');
-    expect(answer.text).toBe('A summary.\nExact\n  fallback');
   });
 
-  it('keeps a not-found outcome, whose plain reading leaves its gap out', () => {
+  it('keeps a not-found outcome and its gap', () => {
     const project = { kind: 'project', project_id: 'prj_11111111-1111-4111-8111-111111111111' } as const;
     const empty = (outcome: string) => ({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: project, outcome, citations: [],
       parts: [{ question: 'Who owns pricing?', status: 'not_found', statements: [], gap: 'Not found.' }] });
     expect(answerView({ ok: true, result: empty('not_found') }, project)).toEqual({
-      text: '', scope: project, sources: [], outcome: 'not_found',
+      scope: project, sources: [], outcome: 'not_found',
       parts: [{ question: 'Who owns pricing?', status: 'not_found', statements: [], gap: 'Not found.' }],
     });
   });
@@ -265,10 +262,9 @@ describe('live matches', () => {
     expect(() => projectMatchesView(reply, 'prj_22222222-2222-4222-8222-222222222222')).toThrow(ViewError);
   });
 
-  it('saved notes of either version are the same matches, each opened by its ref', () => {
+  it('saved notes are matches, each opened by its ref, and who can read one stays behind', () => {
     const results = [{ ...item, audience: { kind: 'team' } }];
-    expect(noteMatchesView({ schema_version: 3, kind: 'echo-person-upload-search-v3', results }, 3)).toEqual([item]);
-    expect(noteMatchesView({ schema_version: 2, kind: 'echo-person-upload-search-v2', results }, 2)).toEqual([item]);
+    expect(noteMatchesView({ schema_version: 3, kind: 'echo-person-upload-search-v3', results })).toEqual([item]);
   });
 });
 
@@ -593,9 +589,11 @@ describe('documents, members and project changes', () => {
   it('a project setting is made only by its matching V1 receipt', () => {
     const receipt = { schema_version: 1, kind: 'echo-project-settings-receipt-v1', request_id: REQUEST('1'), project_id: PROJECT,
       operation: 'archive', received_at: AT, state: 'applied' };
-    expect(projectSettingsView(receipt, REQUEST('1'), PROJECT, 'archive')).toEqual({ request_id: REQUEST('1'), project_id: PROJECT, operation: 'archive' });
-    expect(() => projectSettingsView(receipt, REQUEST('2'), PROJECT, 'archive')).toThrow(ViewError);
-    expect(() => projectSettingsView({ ...receipt, operation: 'leave' }, REQUEST('1'), PROJECT, 'archive')).toThrow(ViewError);
+    // Archive and unarchive are both settled by an archive receipt.
+    for (const kind of ['archive', 'unarchive'] as const) expect(changeView(receipt, REQUEST('1'), { kind, project_id: PROJECT })).toBeNull();
+    expect(() => changeView(receipt, REQUEST('2'), { kind: 'archive', project_id: PROJECT })).toThrow(ViewError);
+    expect(() => changeView({ ...receipt, operation: 'leave' }, REQUEST('1'), { kind: 'archive', project_id: PROJECT })).toThrow(ViewError);
+    expect(() => changeView(receipt, REQUEST('1'), { kind: 'rename', project_id: PROJECT, name: 'Apollo' })).toThrow(ViewError);
   });
 
   it('employees keep their name, email and standing; an invitation says only when it expires, and only for the file asked for', () => {
@@ -766,36 +764,26 @@ describe('a streamed answer\'s receipt (ADR-0039, ADR-0040, ADR-0043)', () => {
       .toEqual({ looked_through: receipt.looked_through, rows });
   });
 
-  it('comes only with a streamed answer, and never with an answer from before V8, which no Ask asks now', () => {
+  // What the result line may hold (V8 only, a receipt that covers its rows) is the contract's to test (organization-api
+  // person-ask-progress-v3 and person-answer-v8): here, that the view reads it through the contract.
+  it('comes only with a streamed answer, and never with an answer from before V8', () => {
     expect(answerView({ ok: true, result: v8([named]) }, { kind: 'global' }).receipt).toBeUndefined();
-    expect(() => answerView({ ok: true, result: v8([named]), receipt: { ...meetings, looked_through: -1 } }, { kind: 'global' })).toThrow(ViewError);
-    for (const version of [4, 5, 6, 7]) {
-      const older = { ...v8([named]), schema_version: version, kind: `echo-clean-person-answer-v${version}` };
-      expect(() => answerView({ ok: true, result: older }, { kind: 'global' })).toThrow(ViewError);
-      expect(() => answerView({ ok: true, result: older, receipt: meetings }, { kind: 'global' })).toThrow(ViewError);
-    }
+    expect(() => answerView({ ok: true, result: { ...v8([named]), schema_version: 7, kind: 'echo-clean-person-answer-v7' } }, { kind: 'global' })).toThrow(ViewError);
   });
 
-  it('refuses a Mine answer, a scope no Ask answers any more, with or without its receipt', () => {
-    const mine = { kind: 'mine' } as const;
-    const answer = { ...v8([named]), scope: mine };
-    expect(() => answerView({ ok: true, result: answer }, mine)).toThrow(ViewError);
-    expect(() => answerView({ ok: true, result: answer, receipt: meetings }, mine)).toThrow(ViewError);
-  });
 });
 
 describe('an answer arranged in blocks (answer layout v2, ADR-0051)', () => {
   const scope = { kind: 'global' } as const;
   const question = 'Can THERM start PVT?';
 
-  it('carries the fixture\'s blocks as the client validated them, every block, and reads its sentences one a line', () => {
+  it('carries the fixture\'s blocks as the client validated them, every block', () => {
     const arranged = answerView({ ok: true, result: blocksAnswer(question, scope) }, scope);
     const blocks = arranged.parts[0]!.blocks!;
     expect(blocks.map(block => block.kind)).toEqual(['answer', 'table', 'timeline', 'card', 'points', 'text', 'quote']);
     expect(blocks[2]).toMatchObject({ kind: 'timeline', title: 'Soak test', statements: [2, 3], events: [{ date: '2026-10-20', who: 'Noor Haddad' }, { date: '2026-10-23' }] });
     expect(blocks[3]).toMatchObject({ kind: 'card', title: 'THERM-48', entity: 'ticket', facts: [{ label: 'Status', value: 'In review' }, { label: 'Owner', value: 'Tomas Okafor' }] });
     expect(arranged.parts[0]).not.toHaveProperty('layout');
-    expect(arranged.text).toBe(arranged.parts[0]!.statements.map(statement => statement.text).join('\n'));
   });
 
   it('marks a cited item only you or the approver can read as private, for the lock on its source row', () => {
@@ -807,27 +795,6 @@ describe('an answer arranged in blocks (answer layout v2, ADR-0051)', () => {
     // A progress row's items and a receipt's never carry it: only an answer's sources do.
     expect(askStepView({ ok: true, progress: { type: 'read', items: [ticket] } })).toEqual({ type: 'read', items: [
       { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7' }] });
-  });
-
-  it('refuses statements without blocks, blocks without statements, a part laid out by retired layout v1, blocks that leave a statement out, and a row that cites what its statements do not', () => {
-    const answer = blocksAnswer(question, scope) as { parts: { blocks: Record<string, unknown>[] }[] };
-    const [part] = answer.parts;
-    const { blocks: _blocks, ...bare } = part!;
-    // Every part with statements is arranged (ADR-0051): there is no answer without blocks, and a part with none has none.
-    expect(() => answerView({ ok: true, result: { ...answer, parts: [bare] } }, scope)).toThrow(ViewError);
-    const nothing = { ...answer, outcome: 'not_found', citations: [], parts: [{ question, status: 'not_found', statements: [] }] };
-    expect(answerView({ ok: true, result: nothing }, scope).parts[0]).not.toHaveProperty('blocks');
-    expect(() => answerView({ ok: true, result: { ...nothing, parts: [{ ...nothing.parts[0], blocks: [{ kind: 'text', statements: [] }] }] } }, scope)).toThrow(ViewError);
-    const layout = [{ kind: 'paragraph', statements: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] }];
-    for (const laidOut of [{ ...answer, parts: [{ ...bare, layout }] }, { ...answer, parts: [{ ...part, layout }] }]) {
-      expect(() => answerView({ ok: true, result: laidOut }, scope)).toThrow(ViewError);
-    }
-    const dropped = { ...answer, parts: [{ ...part, blocks: part!.blocks.slice(0, 6) }] };
-    expect(() => answerView({ ok: true, result: dropped }, scope)).toThrow(ViewError);
-    const table = part!.blocks[1] as { rows: { cells: string[]; citation_indexes: number[] }[] };
-    const wrong = { ...answer, parts: [{ ...part, blocks: part!.blocks.map((block, at) => at === 1 ? { ...table, rows: [{ ...table.rows[0], citation_indexes: [0] }, table.rows[1]] }
-      : block) }] };
-    expect(() => answerView({ ok: true, result: wrong }, scope)).toThrow(ViewError);
   });
 });
 
@@ -854,28 +821,20 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
   it('reads the full question an answer answers, and Ask again\'s "since", whose citations are the answer\'s own', () => {
     const since = { statements: [{ text: 'ECHO-7 moved to In Progress.', citation_indexes: [0], private: true }] };
     const answer = answerView(line({ question: 'Who owns ECHO-7?', since }), scope);
-    expect(answer).toMatchObject({ outcome: 'answered', question: 'Who owns ECHO-7?', since: since.statements, text: 'Ship it.' });
+    expect(answer).toMatchObject({ outcome: 'answered', question: 'Who owns ECHO-7?', since: since.statements });
     // Nothing material changed: an empty list, which the page says as "Nothing changed since".
     expect(answerView(line({ question: 'Who owns ECHO-7?', since: { statements: [] } }), scope).since).toEqual([]);
-    // A "since" sentence that cites what the answer does not is not the client's output.
-    expect(() => answerView(line({ question: 'Who owns ECHO-7?', since: { statements: [{ text: 'Moved.', citation_indexes: [1], private: false }] } }), scope))
-      .toThrow(ViewError);
-    expect(() => answerView(line({ question: 7 }), scope)).toThrow(ViewError);
     // An answer to an Ask that carried nothing says none of it.
     const plain = answerView(line({}), scope);
     for (const key of ['question', 'since', 'choices']) expect(plain).not.toHaveProperty(key);
   });
 
-  it('reads "Which one?": two to four choices, and no part; never the off_scope outcome that left the contract', () => {
+  // Its bounds (two to four choices, each a label and a full question; no off_scope outcome) are the contract's to test
+  // (organization-api person-answer-previous-v1).
+  it('reads "Which one?": its choices and the question asked, and no part', () => {
     const choices = [{ label: 'THERM-482 · Sensor drift', question: 'Who owns THERM-482?' }, { label: 'THERM-490 · DVT retest', question: 'Who owns THERM-490?' }];
-    // "Which one?" names the question asked, and says nothing else.
-    const clarify = (fields: Record<string, unknown>) => line({ outcome: 'clarify', citations: [], parts: [], question: 'Who owns it?', choices, ...fields });
-    expect(answerView(clarify({}), scope)).toEqual({ text: '', scope, sources: [], parts: [], outcome: 'clarify', question: 'Who owns it?', choices });
-    expect(() => answerView(clarify({ choices: choices.slice(0, 1) }), scope)).toThrow(ViewError);
-    expect(() => answerView(line({ outcome: 'clarify', citations: [], parts: [], question: 'Who owns it?' }), scope)).toThrow(ViewError);
-    expect(() => answerView(clarify({ choices: [...choices, { label: 'More' }] }), scope)).toThrow(ViewError);
-    // `off_scope` left the contract (C4; no current path produces it): an answer that says it is not one the page reads.
-    expect(() => answerView(line({ outcome: 'off_scope' }), scope)).toThrow(ViewError);
+    const clarify = line({ outcome: 'clarify', citations: [], parts: [], question: 'Who owns it?', choices });
+    expect(answerView(clarify, scope)).toEqual({ scope, sources: [], parts: [], outcome: 'clarify', question: 'Who owns it?', choices });
   });
 
   it('reads a source check (C1): a state per item asked, in order, and a readable ticket\'s marker; anything else is not its output', () => {
@@ -884,11 +843,8 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
     expect(askCheckView(check([{ state: 'same', marker }, { state: 'changed' }, { state: 'unreadable' }, { state: 'unknown' }]), 4))
       .toEqual({ items: [{ state: 'same', marker }, { state: 'changed' }, { state: 'unreadable' }, { state: 'unknown' }] });
     expect(() => askCheckView(check([{ state: 'same' }]), 2)).toThrow(ViewError);
+    // Its states, markers and keys are the contract's to test (organization-api person-ask-check-v1).
     expect(() => askCheckView(check([{ state: 'gone' }]), 1)).toThrow(ViewError);
-    expect(() => askCheckView(check([{ state: 'same', marker: 'v2' }]), 1)).toThrow(ViewError);
-    expect(() => askCheckView(check([{ state: 'same', why: 'deleted' }]), 1)).toThrow(ViewError);
-    expect(() => askCheckView({ ...check([{ state: 'same' }]), text: 'x' }, 1)).toThrow(ViewError);
-    expect(() => askCheckView({ ...check([{ state: 'same' }]), kind: 'echo-person-ask-check-v2' }, 1)).toThrow(ViewError);
   });
 
   it('reads project activity (C2): each project you are in once, with its newest arrival or none', () => {
@@ -896,11 +852,8 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
     const other = 'prj_22222222-2222-4222-8222-222222222222';
     expect(projectActivityView(activity([{ project_id: PROJECT, latest_at: AT }, { project_id: other, latest_at: null }])))
       .toEqual({ items: [{ project_id: PROJECT, latest_at: AT }, { project_id: other, latest_at: null }] });
+    // Its bounds (each project once, a project id, a time or null, its keys, 500 at most) are the contract's to test
+    // (organization-api person-project-activity-v1).
     expect(() => projectActivityView(activity([{ project_id: PROJECT, latest_at: AT }, { project_id: PROJECT, latest_at: null }]))).toThrow(ViewError);
-    expect(() => projectActivityView(activity([{ project_id: 'Apollo', latest_at: null }]))).toThrow(ViewError);
-    expect(() => projectActivityView(activity([{ project_id: PROJECT, latest_at: 'yesterday' }]))).toThrow(ViewError);
-    expect(() => projectActivityView(activity([{ project_id: PROJECT, latest_at: null, by: MEMBER }]))).toThrow(ViewError);
-    expect(() => projectActivityView(activity(Array.from({ length: 501 }, (_, at) => ({ project_id: `prj_${String(at).padStart(8, '0')}-2222-4222-8222-222222222222`,
-      latest_at: null }))))).toThrow(ViewError);
   });
 });

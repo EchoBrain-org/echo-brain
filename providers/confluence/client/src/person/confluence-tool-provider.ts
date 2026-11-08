@@ -5,15 +5,16 @@ export function createConfluencePersonToolProviderV1(): PersonToolProviderV1 {
   const verbs: PersonToolProviderV1["verbs"] = {
     ...createPersonToolConnectionVerbsV1("Confluence", host => new ConfluencePersonClientV1(host)),
     project: {
-      description: 'Lists, reads or changes an ECHO project’s Confluence spaces. Leads set --space-ids (comma-separated stable space IDs) or --clear with --mapping-revision and --mapping-request.',
-      options: { 'echo-project': { type: 'string' }, 'space-ids': { type: 'string' }, 'list': { type: 'boolean' }, 'spaces': { type: 'boolean' }, 'space-cursor': { type: 'string' }, 'clear': { type: 'boolean' }, 'mapping-revision': { type: 'string' }, 'mapping-request': { type: 'string' } },
+      description: 'Reads or changes an ECHO project’s Confluence spaces; --spaces lists the spaces you can choose. Leads set --space-ids (comma-separated stable space IDs) or --clear with --mapping-revision and --mapping-request.',
+      options: { 'echo-project': { type: 'string' }, 'space-ids': { type: 'string' }, 'spaces': { type: 'boolean' }, 'space-cursor': { type: 'string' }, 'clear': { type: 'boolean' }, 'mapping-revision': { type: 'string' }, 'mapping-request': { type: 'string' } },
       run: async context => {
         const values = context.values;
         const client = new ConfluencePersonClientV1(context.host);
-        if (values.list === true || values.spaces === true) {
-          if (values.list === true && values.spaces === true) throw new Error('Choose --list or --spaces');
+        if (values.spaces === true) {
           if (values['echo-project'] !== undefined || values['space-ids'] !== undefined || values.clear === true || values['mapping-revision'] !== undefined || values['mapping-request'] !== undefined) throw new Error('Listing cannot be combined with a mapping option');
-          if (values.spaces === true) { const cursor = values['space-cursor']; if (cursor !== undefined && typeof cursor !== 'string') throw new Error('--cursor is invalid'); context.print({ ok: true, result: await client.spaces({ schema_version: 1, ...(cursor === undefined ? {} : { cursor }) }) }); } else context.print({ ok: true, result: await client.projectList() });
+          const cursor = values['space-cursor'];
+          if (cursor !== undefined && typeof cursor !== 'string') throw new Error('--cursor is invalid');
+          context.print({ ok: true, result: await client.spaces({ schema_version: 1, ...(cursor === undefined ? {} : { cursor }) }) });
           return;
         }
         const project_id = values['echo-project'];

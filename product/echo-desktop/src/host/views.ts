@@ -5,14 +5,14 @@
 // the renderer needs, so nothing else the client prints can reach it.
 import type {
   Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskRead, AskScope, AskSearched, AskStep, Audience, ConnectedTools,
-  CreatedProject, DocumentSummary, Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, MemberPage, Opened,
-  ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef,
+  CreatedProject, DocumentSummary, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, MemberPage, Opened,
+  ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef,
   RecordSection, SourceEvidence, SourceRef, ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
 import {
-  validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
+  validateEmployeeRosterV1, validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
-  validatePersonUploadSearchResultV2, validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2,
+  validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2,
   validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1,
   type PersonAnswerCitationV8, type PersonAskReceiptRowV3, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
   type PersonOpenItemV1, type PersonOpenMeetingAtomV1, type PersonOpenMeetingV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
@@ -28,10 +28,6 @@ function object(value: unknown): Json {
 }
 function text(value: unknown): string {
   if (typeof value !== 'string') throw new ViewError();
-  return value;
-}
-function list(value: unknown): unknown[] {
-  if (!Array.isArray(value)) throw new ViewError();
   return value;
 }
 
@@ -95,13 +91,6 @@ export function projectView(raw: unknown, projectId: string): ProjectSummary {
   const project = validated(validateProjectSummaryV2, raw);
   if (project.project_id !== projectId) throw new ViewError();
   return projectSummary(project);
-}
-
-/** A rename, archive/unarchive, or leave receipt, checked against exactly the request we sent. */
-export function projectSettingsView(raw: unknown, requestId: string, projectId: string, operation: ProjectSettingsReceipt['operation']): ProjectSettingsReceipt {
-  const receipt = validated(validateProjectSettingsReceiptV1, raw);
-  if (receipt.request_id !== requestId || receipt.project_id !== projectId || receipt.operation !== operation) throw new ViewError();
-  return { request_id: requestId, project_id: projectId, operation };
 }
 
 /** Who can read an item, in the list's three words: a project row says nothing more about its projects. */
@@ -197,8 +186,12 @@ export function directoryView(raw: unknown): MemberPage {
   return { items: page.items.map(({ membership_id, display_name }) => ({ membership_id, display_name })), next_cursor: page.next_cursor };
 }
 
+/** A project's own setting: rename, archive or unarchive, leave. */
+type ProjectSetting = Extract<ProjectChange, { readonly kind: 'rename' | 'archive' | 'unarchive' | 'leave' }>;
+const isSetting = (change: ProjectChange): change is ProjectSetting => ['rename', 'archive', 'unarchive', 'leave'].includes(change.kind);
+
 /** What a change's receipt says it did: its operation, and the member, note or document it names. */
-function receiptOf(change: ProjectChange): readonly [string, string] {
+function receiptOf(change: Exclude<ProjectChange, ProjectSetting>): readonly [string, string] {
   switch (change.kind) {
     case 'member-add':
     case 'member-set': return ['member_set', change.membership_id];
@@ -210,8 +203,16 @@ function receiptOf(change: ProjectChange): readonly [string, string] {
   }
 }
 
-/** The receipt for exactly the change that was sent: applied. */
+/** The receipt for exactly the change that was sent: applied. A setting (rename, archive or unarchive, leave) has its own receipt. */
 export function changeView(raw: unknown, requestId: string, change: ProjectChange): null {
+  if (isSetting(change)) {
+    // A setting's receipt names its operation: archive for unarchive too.
+    const settled = validated(validateProjectSettingsReceiptV1, raw);
+    if (settled.request_id !== requestId || settled.project_id !== change.project_id || settled.operation !== (change.kind === 'unarchive' ? 'archive' : change.kind)) {
+      throw new ViewError();
+    }
+    return null;
+  }
   const receipt = change.kind === 'document-associate' || change.kind === 'document-dissociate'
     ? validated(validatePersonDocumentAssociationReceiptV1, unwrap(raw)) : validated(validateProjectMutationReceiptV1, raw);
   const [operation, id] = receiptOf(change);
@@ -227,25 +228,10 @@ export function createdView(raw: unknown, requestId: string): CreatedProject {
   return { project_id: receipt.project_id };
 }
 
-const MEMBERSHIPS: ReadonlySet<string> = new Set<Employee['membership']>(['active', 'revoked']);
-const INVITATIONS: ReadonlySet<string> = new Set<Employee['invitation']>(['pending', 'expired', 'redeemed', 'none']);
-
-/** The owner's list of employees: each one's name, email and where they stand. */
+/** The owner's list of employees, as the client checked it: each one's name, email and where they stand. */
 export function employeesView(raw: unknown): Employees {
-  const value = object(unwrap(raw));
-  if (value.schema_version !== 1 || value.kind !== 'echo-clean-person-employee-roster-v1') throw new ViewError();
-  return {
-    items: list(value.employees).map(entry => {
-      const employee = object(entry);
-      const membership = text(employee.membership_status);
-      const invitation = text(employee.invitation_state);
-      if (!MEMBERSHIPS.has(membership) || !INVITATIONS.has(invitation)) throw new ViewError();
-      return {
-        email: text(employee.email), display_name: text(employee.display_name),
-        membership: membership as Employee['membership'], invitation: invitation as Employee['invitation'],
-      };
-    }),
-  };
+  return { items: validated(validateEmployeeRosterV1, unwrap(raw)).employees.map(({ email, display_name, membership_status, invitation_state }) =>
+    ({ email, display_name, membership: membership_status, invitation: invitation_state })) };
 }
 
 /** An invitation written exactly where main said. The path stays behind. */
@@ -274,10 +260,9 @@ export function projectMatchesView(raw: unknown, projectId: string): Matches {
   return { items: page.items.map(match) };
 }
 
-/** Saved notes of one version found by a search. Either version opens by its ref. */
-export function noteMatchesView(raw: unknown, version: 2 | 3): Match[] {
-  const page = version === 3 ? validated(validatePersonUploadSearchResultV3, raw) : validated(validatePersonUploadSearchResultV2, raw);
-  return page.results.map(match);
+/** Saved notes found by a search, each opened by its ref. */
+export function noteMatchesView(raw: unknown): Match[] {
+  return validated(validatePersonUploadSearchResultV3, raw).results.map(match);
 }
 
 /** A cited passage of an original, as the contract has it. */
@@ -308,19 +293,14 @@ export function isRecordRef(value: unknown): value is RecordRef {
  * research tool contract v1). An answer to an Ask that carried `previous`
  * (ADR-0047) also says the full question it answers, Ask again's "since" (its
  * citations among the answer's), or, asking which one (`clarify`), the
- * choices and no part. Its diagnostic notice and gaps stay out of the plain
- * reading; the desktop and Copy derive actionable explanations from gap_details.
+ * choices and no part. Its diagnostic notice stays out; the desktop and Copy
+ * derive actionable explanations from gap_details.
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const { result, receipt } = validated(validatePersonAskProgressResultLineV3, raw);
   const { direct, parts, outcome } = result;
   const sources = result.citations.map(citedSource);
-  // One part answers the question itself, so its question is not repeated.
-  const single = parts.length === 1;
-  const textValue = [direct?.text, ...parts.flatMap(part => [single ? undefined : part.question, ...part.statements.map(statement => statement.text),
-    ...(part.records?.map(record => record.text) ?? [])])]
-    .filter((line): line is string => typeof line === 'string' && line !== '').join('\n');
-  return { text: textValue, scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
+  return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
     ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through, rows: receipt.rows.map(askRow) } }),
     ...(result.question === undefined ? {} : { question: result.question }),
     ...(result.since === undefined ? {} : { since: result.since.statements }),

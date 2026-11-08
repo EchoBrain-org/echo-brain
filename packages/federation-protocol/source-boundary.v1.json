@@ -21,7 +21,6 @@
         "export": "verifyP256LowSSignature"
       }
     ],
-    "retired_source_paths": ["packages/federation-protocol/src/signed-document.ts"],
     "compatibility_entrypoints": []
   },
   "layer_rules": [

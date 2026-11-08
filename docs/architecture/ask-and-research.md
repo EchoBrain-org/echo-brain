@@ -146,8 +146,8 @@ selection facts; empty subsets of incomplete or unchecked lists do not qualify.
 ## Evaluation
 
 `tools/evals/research-loop` (`npm run eval:research-loop`) runs scripted
-questions against a staging Authority; `agentic-ask`, `ask-follow-up`,
-`ask-wording` and `ask-blocks` under `tools/evals/` check the engine offline.
+questions against a staging Authority; `ask-follow-up` and `ask-blocks` (the
+Ask writer gate) under `tools/evals/` check the engine offline.
 Their unit tests run in CI's tail leg.
 
 See also: [impact checks and open items](impact-checks-and-open-items.md),

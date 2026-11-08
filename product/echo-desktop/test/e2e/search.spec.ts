@@ -40,8 +40,9 @@ test('in a project the bar shows its matches as you type, a match reads in place
   await expect(page.getByTestId('matches-head')).toHaveText('Matches in all context');
   await expect(page.getByTestId('match-ask')).toContainText('Ask ECHO about “ship”');
   await expect(page.getByTestId('match-row')).toHaveText([/Apollo update/]);
+  // One search of your saved notes: no note is stored as V2 any more.
   expect(searches('/v3/person/updates/search').map(call => call.body)).toEqual([{ query: 'ship', limit: 10 }]);
-  expect(searches('/v2/person/updates/search').map(call => call.body)).toEqual([{ query: 'ship', limit: 10 }]);
+  expect(searches('/v2/person/updates/search')).toEqual([]);
   await field.fill('apollo');
   await expect(page.getByTestId('match-row')).toHaveText([/Pricing decision from Tuesday sync · “Apollo moves to/, /Apollo update/]);
   await field.fill('ship');

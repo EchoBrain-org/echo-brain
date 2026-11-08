@@ -4,10 +4,12 @@
 // turns past 90 days and all but the newest 200; it writes a private temporary
 // file and renames it over the old one, so a reader never meets half a file.
 // A file that cannot be read, or is not what a put writes, reads as empty and
-// is replaced by the next put. Our own sign-out deletes the account's file;
-// reading one account's timeline deletes any other account's, so an account
-// change leaves nothing of the last one here. Kept apart from host.ts so all
-// of it is tested on a real folder.
+// is replaced by the next put; a turn an older desktop saved that no page
+// draws now goes on its own (so does a malformed one that merely looks like
+// it, rather than emptying the file), and the next put writes the rest. Our own
+// sign-out deletes the account's file; reading one account's timeline deletes
+// any other account's, so an account change leaves nothing of the last one
+// here. Kept apart from host.ts so all of it is tested on a real folder.
 import { PERSON_ANSWER_CARD_ENTITIES_V2, validatePersonAnswerGapDetailsV1, validateProjectIdV1 } from '@echo-brain/organization-api';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
@@ -63,7 +65,7 @@ export function readTimeline(personDirectory: string, account: Expect): Timeline
     const value = JSON.parse(readFileSync(path, 'utf8')) as unknown;
     const file = value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
     if (Object.keys(file).sort().join() !== 'kind,schema_version,turns' || file.schema_version !== 1 || file.kind !== KIND || !Array.isArray(file.turns)) return [];
-    const turns = file.turns.map(timelineTurn);
+    const turns = file.turns.filter(turn => !retired(turn)).map(timelineTurn);
     return turns.every((turn): turn is TimelineTurn => turn !== null) && new Set(turns.map(turn => turn.id)).size === turns.length ? turns : [];
   } catch {
     return [];
@@ -165,8 +167,7 @@ const ENTITIES: ReadonlySet<unknown> = new Set(PERSON_ANSWER_CARD_ENTITIES_V2);
 function scope(value: unknown): value is AskScope {
   if (!record(value)) return false;
   const keys = Object.keys(value).sort().join();
-  return value.kind === 'project' ? keys === 'kind,project_id' && projectId(value.project_id)
-    : (value.kind === 'global' || value.kind === 'mine') && keys === 'kind';
+  return value.kind === 'project' ? keys === 'kind,project_id' && projectId(value.project_id) : value.kind === 'global' && keys === 'kind';
 }
 
 function statement(value: unknown): value is AnswerStatement {
@@ -238,36 +239,34 @@ function gapDetails(value: unknown): boolean {
   try { validatePersonAnswerGapDetailsV1(value); return true; } catch { return false; }
 }
 
-/** An answer as the timeline keeps it: what the page reads back of a turn (TimelineAnswer). */
+/**
+ * An answer as the timeline keeps it: what the page reads back of a turn
+ * (TimelineAnswer). A part with statements has them in blocks (answer layout
+ * v2, ADR-0051), one with none has nothing to arrange, and none carries a
+ * retired v1 layout: what a read drops, a put never writes.
+ */
 function answer(value: unknown): value is TimelineAnswer {
-  if (!record(value) || !string(value.text, 200_000) || !scope(value.scope) || !OUTCOMES.has(value.outcome)) return false;
+  if (!record(value) || !scope(value.scope) || !OUTCOMES.has(value.outcome)) return false;
   if (!Array.isArray(value.sources) || value.sources.length > MOST || !value.sources.every(source)) return false;
   if (value.direct !== undefined && !statement(value.direct)) return false;
-  return Array.isArray(value.parts) && value.parts.length <= 64 && value.parts.every(part => record(part) && string(part.question) && STATUSES.has(part.status)
+  return Array.isArray(value.parts) && value.parts.length <= 64 && value.parts.every(part => record(part) && !Object.hasOwn(part, 'layout') && string(part.question) && STATUSES.has(part.status)
     && statements(part.statements) && (part.gap === undefined || string(part.gap)) && (part.gap_details === undefined || gapDetails(part.gap_details)) && (part.records === undefined || statements(part.records))
-    && (part.blocks === undefined || arranged(part.blocks, (part.statements as unknown[]).length)));
+    && (part.blocks === undefined ? part.statements.length === 0 : part.statements.length > 0 && arranged(part.blocks, part.statements.length)));
 }
-
-/** Whether the page draws a part as it was saved: its statements in blocks (answer layout v2, ADR-0051), or none to arrange, and no retired layout. */
-const inBlocks = (part: Json) => !Object.hasOwn(part, 'layout') && (part.blocks !== undefined || (part.statements as unknown[]).length === 0);
 
 /**
- * A turn as the page draws it, every part with statements in blocks (answer
- * layout v2, ADR-0051). A part saved without them, a plain answer's or one
- * an older desktop saved with answer layout v1 (ADR-0045, retired since),
- * reads as the plain answer did, a paragraph a statement: an untitled text
- * block each. What a v1 layout held is never read, and the next put writes
- * the turn so. Any other turn is itself.
+ * A turn an older desktop saved that no page draws now, dropped on read while
+ * the rest of its file stays: one asked in Mine (ADR-0049), or one with a part
+ * whose statements have no blocks, plain or laid out by answer layout v1
+ * (ADR-0045, ADR-0051).
  */
-function withBlocks(turn: Json): TimelineTurn {
-  const kept = turn.answer as Json;
-  if ((kept.parts as Json[]).every(inBlocks)) return turn as unknown as TimelineTurn;
-  const parts = (kept.parts as Json[]).map(({ layout: _retired, ...part }) => inBlocks(part) ? part
-    : { ...part, blocks: (part.statements as unknown[]).map((_, at) => ({ kind: 'text', statements: [at] })) });
-  return { ...turn, answer: { ...kept, parts } } as unknown as TimelineTurn;
+function retired(turn: unknown): boolean {
+  const parts = record(turn) && record(turn.answer) && Array.isArray(turn.answer.parts) ? turn.answer.parts : [];
+  return (record(turn) && record(turn.scope) && turn.scope.kind === 'mine')
+    || parts.some(part => record(part) && (Object.hasOwn(part, 'layout') || (part.blocks === undefined && Array.isArray(part.statements) && part.statements.length > 0)));
 }
 
-/** A turn as a put writes it, or null for anything else. A part saved without blocks comes in them. */
+/** A turn as a put writes it, or null for anything else. */
 export function timelineTurn(value: unknown): TimelineTurn | null {
   if (!record(value) || !string(value.id) || !ID.test(value.id) || !time(value.asked_at) || !string(value.text, 2_000) || !string(value.question, 2_000)
       || !scope(value.scope) || !answer(value.answer)) return null;
@@ -282,5 +281,5 @@ export function timelineTurn(value: unknown): TimelineTurn | null {
       && value.unreadable.every(at => at < sources))) {
     return null;
   }
-  return withBlocks(value);
+  return value as unknown as TimelineTurn;
 }

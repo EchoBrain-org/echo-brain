@@ -24,8 +24,7 @@ beforeEach(() => {
       : { signed_in: false, account: null }),
     'projects.members': () => ok({ items: members, next_cursor: null }),
     'projects.read': () => ok(apollo),
-    'projects.rename': params => ok({ request_id: params.request_id, project_id: params.project_id, operation: 'rename' }),
-    'projects.leave': () => ok({}),
+    'projects.change': () => ok(null),
     'people.directory': params => {
       directories.push({ query: params.query as string | undefined, cursor: params.cursor as string | undefined });
       // Like the Authority, a cursor belongs to the query it was issued for.
@@ -280,7 +279,7 @@ describe('project permissions and dialogs', () => {
     store.toggleProjectSettings(apollo, origin); store.accountCommand('signout');
     expect(store.getState().sheet?.kind).toBe('signout'); expect(store.getState().projectSettings?.menu).toBeFalsy();
     store.closeSheet(); expect(store.getState().sheet).toBeNull(); expect(store.getState().projectSettings?.menu).toBeFalsy();
-    expect(rpc.mock.calls.filter(([method]) => ['projects.rename', 'projects.archive', 'projects.leave'].includes(method))).toHaveLength(0);
+    expect(rpc.mock.calls.filter(([method]) => method === 'projects.change')).toHaveLength(0);
   });
 
   it('Rename and project Tools stay in front: Capture opens nothing under them', async () => {
@@ -299,13 +298,13 @@ describe('project permissions and dialogs', () => {
     expect(store.projectRenameValid('   ', 'Apollo')).toBe(false);
     expect(store.projectRenameValid(' Apollo 2 ', 'Apollo')).toBe(true);
     store.toggleProjectSettings(apollo, 'header'); store.beginProjectRename(); store.setProjectRename('   '); store.confirmProjectSetting(); await flush();
-    expect(rpc.mock.calls.filter(([method]) => method === 'projects.rename')).toHaveLength(0);
+    expect(rpc.mock.calls.filter(([method]) => method === 'projects.change')).toHaveLength(0);
     expect(store.getState().projectSettings?.rename).toBe('   ');
   });
 
   it('a last lead is told to promote another lead before leaving, and stays', async () => {
     const store = await startStore(); await store.openProject(apollo);
-    held.hold('projects.leave')(fail('conflict', { mutation_outcome: 'not_submitted' }));
+    held.hold('projects.change')(fail('conflict', { mutation_outcome: 'not_submitted' }));
     store.toggleProjectSettings(apollo, 'header'); store.askProjectSetting('leave'); store.confirmProjectSetting(); await flush();
     expect(store.getState().projectSettings?.write).toMatchObject({ operation: 'leave', status: 'failed', failure: { code: 'conflict' } });
     const { ProjectSettings } = await import('../../src/renderer/screens/project-settings.js');

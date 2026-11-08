@@ -1,5 +1,6 @@
 # Architecture and release governance. The main-branch ruleset requires Code Owner
-# approval for these paths; keep this list aligned with the architecture test.
+# approval for these paths. tests/architecture/github-governance.test.ts checks that
+# each path exists and that every bootstrap entry point stays owned.
 /.github/ @EchoBrain-org
 /tools/ @EchoBrain-org
 /deploy/release/ @EchoBrain-org

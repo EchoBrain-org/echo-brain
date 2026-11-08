@@ -1,34 +1,17 @@
-import { PERSON_DOCUMENT_TRANSFER_DEADLINE_MS } from '@echo-brain/organization-api';
-import type { PersonAnswerPreviousV1, PersonDiagnosticCaptureIdV1, PersonDiagnosticsRequestV1, PersonDiagnosticsResultsV1 } from '@echo-brain/organization-api';
-import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
-import { validatePersonDocumentIdV1, validatePersonDocumentSearchV2, type PersonDocumentSearchV2 } from '@echo-brain/organization-api';
-import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots, abandonDocumentSnapshot, reconcileDocumentSnapshot, saveDocumentDownload, type DocumentFileUploadV2, type DocumentSnapshot } from './document-file.js';
-import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
-import { validatePersonQueryText } from '@echo-brain/organization-api';
-import { validatePersonSourceEvidenceReadRequestV1, type PersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
-import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
-import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
-import type { PersonChangesV1 } from '@echo-brain/organization-api';
-import type { PersonProjectActivityV1 } from '@echo-brain/organization-api';
-import type { PersonResearchEvalReadResponseV1, PersonResearchEvalStartReceiptV1, PersonResearchEvalStartRequestV1 } from '@echo-brain/organization-api';
-import type { PersonRunsRequestV1, PersonRunsResultsV1 } from '@echo-brain/organization-api';
-import type { PersonAskCheckRequestV1, PersonAskCheckV1 } from '@echo-brain/organization-api';
-import {
-  validateProjectPageRequestV2, validateProjectCreateV1, validateProjectIdV1,
-  validateProjectContextBrowseV1, validateProjectDirectorySearchV1,
-  validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1,
-  validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1,
-  validateProjectContextSearchV1, validatePersonUploadSearchV2,
-  type ProjectPageRequestV2, type ProjectCreateV1, type ProjectContextBrowseV1, type ProjectDirectorySearchV1,
-  type ProjectMemberAddV1, type ProjectMemberSetV1, type ProjectMemberRemoveV1, type ProjectContextAssociateV1, type ProjectContextDissociateV1,
-  type ProjectRenameV1, type ProjectArchiveV1, type ProjectLeaveV1,
-  type ProjectContextSearchV1, type PersonUploadSearchV2, type ProjectIdV1,
-} from '@echo-brain/organization-api';
-import { validatePersonUpdateSubmitV3, validatePersonUploadSearchV3, type PersonUpdateSubmitV3, type PersonUploadSearchV3 } from '@echo-brain/organization-api';
-import { validateOrganizationDirectorySearchV1, type OrganizationDirectorySearchV1 } from '@echo-brain/organization-api';
 import { randomBytes, randomUUID } from "node:crypto";
-import { isCanonicalPersonEmail, isExpectedPersonEmail, validateOrganizationPersonSession, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
 import {
+  PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, isCanonicalPersonEmail, isExpectedPersonEmail, validateOrganizationPersonSession, validatePersonDocumentAssociateV1,
+  validatePersonDocumentDissociateV1, validatePersonDocumentIdV1, validatePersonDocumentSearchV2, validatePersonListRequestV1, validatePersonOpenRequestV1,
+  validatePersonQueryText, validatePersonSourceEvidenceReadRequestV1, validatePersonUpdateRequestId, validateProjectIdV1,
+  type OrganizationDirectorySearchV1, type OrganizationPersonSessionV2, type PersonAnswerPreviousV1, type PersonAskCheckRequestV1, type PersonAskCheckV1,
+  type PersonChangesV1, type PersonDiagnosticCaptureIdV1, type PersonDiagnosticsRequestV1, type PersonDiagnosticsResultsV1, type PersonDocumentAssociateV1,
+  type PersonDocumentDissociateV1, type PersonDocumentSearchV2, type PersonListRequestV1, type PersonOpenRequestV1, type PersonProjectActivityV1,
+  type PersonResearchEvalReadResponseV1, type PersonResearchEvalStartReceiptV1, type PersonResearchEvalStartRequestV1, type PersonRunsRequestV1,
+  type PersonRunsResultsV1, type PersonSourceEvidenceReadRequestV1, type PersonToolSessionV1, type PersonUpdateSubmitV3, type ProjectIdV1, type ProjectPageRequestV2,
+} from '@echo-brain/organization-api';
+import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots, abandonDocumentSnapshot, reconcileDocumentSnapshot, saveDocumentDownload, type DocumentFileUploadV2, type DocumentSnapshot } from './document-file.js';
+import {
+  CONTEXT_ROUTES,
   PersonAuthorityClient,
   DEFAULT_TIMEOUT_MS, ASK_TIMEOUT_MS, ASK_CHECK_TIMEOUT_MS,
   PersonAuthorityClientError,
@@ -46,6 +29,8 @@ import {
   type PersonOpenV1,
   type PersonRecordListV1,
   type PersonRecordSearchV2,
+  type ContextReply,
+  type ContextRouteName,
 } from "./authority-client.js";
 import {
   PersonClientSessionUnavailableError,
@@ -71,6 +56,11 @@ export interface PersonClientOptions {
   readonly now?: () => string;
   readonly random_bytes?: (size: number) => Uint8Array;
   readonly random_uuid?: () => string;
+  /**
+   * The one account a pinned run is for: under its lease, each operation is refused before its own request goes out as
+   * another. A refresh the lease needs is not pinned; it renews whatever session is stored, as before.
+   */
+  readonly account?: { readonly authority: string; readonly membership_id: string };
 }
 
 export interface PersonClientSessionSummary {
@@ -85,119 +75,56 @@ export interface PersonClientSessionSummary {
   readonly hard_reauthentication_at: string;
 }
 
-export type EmployeeMutationErrorCode =
-  | "invalid_email"
-  | "invalid_name"
-  | "invitation_output_invalid"
-  | "employee_already_exists"
-  | "employee_onboarding_complete"
-  | "owner_access_required"
-  | "sign_in_required"
-  | "reauthentication_required"
-  | "invitation_save_failed"
-  | "request_rejected"
-  | "outcome_unknown";
+export type EmployeeMutationErrorCode = "invalid_email" | "invalid_name" | "invitation_output_invalid" | "employee_already_exists" | "employee_onboarding_complete"
+  | "owner_access_required" | "sign_in_required" | "reauthentication_required" | "invitation_save_failed" | "request_rejected" | "outcome_unknown";
 
-export type EmployeeMutationOutcome =
-  | "not_submitted"
-  | "rejected"
-  | "committed"
-  | "unknown";
+export type EmployeeMutationOutcome = "not_submitted" | "rejected" | "committed" | "unknown";
 
 export class EmployeeMutationError extends Error {
-  constructor(
-    public readonly code: EmployeeMutationErrorCode,
-    public readonly mutation_outcome: EmployeeMutationOutcome,
-    message: string,
-  ) {
+  constructor(public readonly code: EmployeeMutationErrorCode, public readonly mutation_outcome: EmployeeMutationOutcome, message: string) {
     super(message);
     this.name = "EmployeeMutationError";
   }
 }
 
-function employeeRequestFailure(
-  error: unknown,
-  conflictCode: "employee_already_exists" | "employee_onboarding_complete" | undefined,
-): EmployeeMutationError {
+function employeeRequestFailure(error: unknown, conflictCode: "employee_already_exists" | "employee_onboarding_complete" | undefined): EmployeeMutationError {
   if (error instanceof EmployeeMutationError) return error;
-  if (error instanceof PersonClientSessionUnavailableError) {
-    return new EmployeeMutationError("sign_in_required", "not_submitted", error.message);
-  }
+  if (error instanceof PersonClientSessionUnavailableError) return new EmployeeMutationError("sign_in_required", "not_submitted", error.message);
   if (error instanceof PersonAuthorityClientError) {
     // Status alone cannot establish a rejected mutation. The Authority
     // client's error code is validated from its error envelope; malformed
     // error bodies retain their HTTP status but are `invalid_response`.
     if (error.code === "conflict" && error.status === 409 && conflictCode !== undefined) {
-      return new EmployeeMutationError(
-        conflictCode,
-        "rejected",
-        conflictCode === "employee_onboarding_complete"
-          ? "Employee identity onboarding is already complete; use person login with the Authority URL on the employee machine."
-          : error.message,
-      );
+      return new EmployeeMutationError(conflictCode, "rejected", conflictCode === "employee_onboarding_complete"
+        ? "Employee identity onboarding is already complete; use person login with the Authority URL on the employee machine." : error.message);
     }
-    if (error.code === "unauthorized" && error.status === 401) {
-      // The employee-management request itself reached the Authority. A
-      // current session may have lost owner eligibility between the local
-      // check and this write, so this is a rejected write, not a preflight.
-      return new EmployeeMutationError("owner_access_required", "rejected", error.message);
-    }
-    if (
-      error.status !== null &&
-      error.status < 500 &&
-      error.code !== "invalid_response"
-    ) {
-      return new EmployeeMutationError("request_rejected", "rejected", error.message);
-    }
+    // The employee-management request itself reached the Authority. A
+    // current session may have lost owner eligibility between the local
+    // check and this write, so this is a rejected write, not a preflight.
+    if (error.code === "unauthorized" && error.status === 401) return new EmployeeMutationError("owner_access_required", "rejected", error.message);
+    if (error.status !== null && error.status < 500 && error.code !== "invalid_response") return new EmployeeMutationError("request_rejected", "rejected", error.message);
   }
-  return new EmployeeMutationError(
-    "outcome_unknown",
-    "unknown",
-    error instanceof Error ? error.message : "Employee request outcome is unknown",
-  );
+  return new EmployeeMutationError("outcome_unknown", "unknown", error instanceof Error ? error.message : "Employee request outcome is unknown");
 }
 
 function employeeSessionFailure(error: unknown): EmployeeMutationError {
   if (error instanceof EmployeeMutationError) return error;
-  if (error instanceof PersonClientSessionUnavailableError) {
-    return new EmployeeMutationError(error.code ?? "sign_in_required", "not_submitted", error.message);
-  }
+  if (error instanceof PersonClientSessionUnavailableError) return new EmployeeMutationError(error.code ?? "sign_in_required", "not_submitted", error.message);
   if (error instanceof PersonAuthorityClientError && error.code === "unauthorized" && error.status === 401) {
     return new EmployeeMutationError("sign_in_required", "not_submitted", error.message);
   }
-  return new EmployeeMutationError(
-    "outcome_unknown",
-    "not_submitted",
-    error instanceof Error ? error.message : "Employee request could not start",
-  );
+  return new EmployeeMutationError("outcome_unknown", "not_submitted", error instanceof Error ? error.message : "Employee request could not start");
 }
 
 function validateEmployeeDisplayName(name: string): void {
-  if (
-    name.length < 1 ||
-    name.length > 200 ||
-    name !== name.trim() ||
-    name !== name.normalize("NFC") ||
-    /[\u0000-\u001f\u007f]/.test(name)
-  ) {
-    throw new EmployeeMutationError(
-      "invalid_name",
-      "not_submitted",
-      "Employee name is invalid",
-    );
+  if (name.length < 1 || name.length > 200 || name !== name.trim() || name !== name.normalize("NFC") || /[\u0000-\u001f\u007f]/.test(name)) {
+    throw new EmployeeMutationError("invalid_name", "not_submitted", "Employee name is invalid");
   }
 }
 
 function invitationOutputPath(path: string): string {
-  try {
-    return preflightPersonOnboardingInvitationOutput(path);
-  } catch (error) {
-    throw new EmployeeMutationError(
-      "invitation_output_invalid",
-      "not_submitted",
-      (error as Error).message,
-    );
-  }
+  try { return preflightPersonOnboardingInvitationOutput(path); }
+  catch (error) { throw new EmployeeMutationError("invitation_output_invalid", "not_submitted", (error as Error).message); }
 }
 
 /** Preserve the public query error type before transport schema validation. */
@@ -216,38 +143,16 @@ function sameAccount(current: StoredPersonClientSessionV1, stored: StoredPersonC
     current.session.session_family_id === stored.session.session_family_id;
 }
 
-function summary(
-  stored: StoredPersonClientSessionV1,
-): PersonClientSessionSummary {
-  return Object.freeze({
-    authority_origin: stored.authority_origin,
-    authority_id: stored.authority_id,
-    organization_id: stored.session.organization_id,
-    principal_id: stored.session.principal_id,
-    membership_id: stored.session.membership_id,
-    display_name: stored.session.display_name,
-    membership_type: stored.session.membership_type,
-    access_expires_at: stored.session.access_expires_at,
-    hard_reauthentication_at: stored.session.hard_reauthentication_at,
-  });
+function summary(stored: StoredPersonClientSessionV1): PersonClientSessionSummary {
+  const { session } = stored;
+  return Object.freeze({ authority_origin: stored.authority_origin, authority_id: stored.authority_id, organization_id: session.organization_id,
+    principal_id: session.principal_id, membership_id: session.membership_id, display_name: session.display_name, membership_type: session.membership_type,
+    access_expires_at: session.access_expires_at, hard_reauthentication_at: session.hard_reauthentication_at });
 }
 
-function assertRefreshIdentity(
-  previous: OrganizationPersonSessionV2,
-  next: OrganizationPersonSessionV2,
-): void {
-  for (const key of [
-    "organization_id",
-    "principal_id",
-    "membership_id",
-    "membership_type",
-    "identity_binding_id",
-    "session_family_id",
-    "hard_reauthentication_at",
-  ] as const) {
-    if (previous[key] !== next[key]) {
-      throw new PersonClientSessionUnavailableError(`Person session refresh changed ${key}; sign in again`, { code: "sign_in_required" });
-    }
+function assertRefreshIdentity(previous: OrganizationPersonSessionV2, next: OrganizationPersonSessionV2): void {
+  for (const key of ["organization_id", "principal_id", "membership_id", "membership_type", "identity_binding_id", "session_family_id", "hard_reauthentication_at"] as const) {
+    if (previous[key] !== next[key]) throw new PersonClientSessionUnavailableError(`Person session refresh changed ${key}; sign in again`, { code: "sign_in_required" });
   }
   if (previous.refresh_token === next.refresh_token) {
     throw new PersonClientSessionUnavailableError("Person session refresh did not rotate its refresh token; sign in again", { code: "sign_in_required" });
@@ -270,76 +175,44 @@ export class PersonClient {
   }
 
   private authority(origin: string): PersonAuthorityClient {
-    return new PersonAuthorityClient({
-      authority_origin: origin,
-      ...(this.options.fetch === undefined
-        ? {}
-        : { fetch: this.options.fetch }),
-      allow_insecure_loopback: this.options.allow_insecure_loopback === true,
-    });
+    return new PersonAuthorityClient({ authority_origin: origin, ...(this.options.fetch === undefined ? {} : { fetch: this.options.fetch }),
+      allow_insecure_loopback: this.options.allow_insecure_loopback === true });
   }
 
   private currentTime(): number {
     const value = Date.parse(this.now());
-    if (!Number.isFinite(value))
-      throw new Error("Person client clock is invalid");
+    if (!Number.isFinite(value)) throw new Error("Person client clock is invalid");
     return value;
   }
 
-  private requestId(
-    prefix: string,
-  ): string {
+  /** The signed-in session, refused unless it is the account this client is pinned to. */
+  private readPinned(): StoredPersonClientSessionV1 {
+    const stored = this.store.read();
+    const pin = this.options.account;
+    if (pin !== undefined && (stored.authority_origin !== pin.authority || stored.session.membership_id !== pin.membership_id)) {
+      throw new PersonAuthorityClientError('stale_access_state', null, 'Person account changed during the request');
+    }
+    return stored;
+  }
+
+  private requestId(prefix: string): string {
     if (!/^[a-z][a-z0-9]{0,15}$/.test(prefix)) throw new Error("Person request identifier prefix is invalid");
     return `${prefix}_${this.randomUuid()}`;
   }
 
-  async beginLogin(
-    authorityOrigin: string,
-    loginGrant?: string,
-    loopbackHandoff?: PersonOidcLoopbackHandoff,
-    loginHint?: string,
-  ) {
-    return await this.authority(authorityOrigin).beginOidcLogin(
-      loginGrant === undefined
-        ? {
-            kind: "existing_identity_login",
-            ...(loopbackHandoff === undefined
-              ? {}
-              : { loopback_handoff: loopbackHandoff }),
-          }
-        : {
-            kind: "identity_bootstrap",
-            login_grant: loginGrant,
-            ...(loginHint === undefined ? {} : { login_hint: loginHint }),
-            ...(loopbackHandoff === undefined
-              ? {}
-              : { loopback_handoff: loopbackHandoff }),
-          },
-    );
+  async beginLogin(authorityOrigin: string, loginGrant?: string, loopbackHandoff?: PersonOidcLoopbackHandoff, loginHint?: string) {
+    const handoff = loopbackHandoff === undefined ? {} : { loopback_handoff: loopbackHandoff };
+    return await this.authority(authorityOrigin).beginOidcLogin(loginGrant === undefined
+      ? { kind: "existing_identity_login", ...handoff }
+      : { kind: "identity_bootstrap", login_grant: loginGrant, ...(loginHint === undefined ? {} : { login_hint: loginHint }), ...handoff });
   }
 
-  async installSession(
-    authorityOrigin: string,
-    value: unknown,
-  ): Promise<PersonClientSessionSummary> {
+  async installSession(authorityOrigin: string, value: unknown): Promise<PersonClientSessionSummary> {
     const session = validateOrganizationPersonSession(value);
-    if (this.currentTime() >= Date.parse(session.hard_reauthentication_at)) {
-      throw new Error("Person session is already past hard reauthentication");
-    }
+    if (this.currentTime() >= Date.parse(session.hard_reauthentication_at)) throw new Error("Person session is already past hard reauthentication");
     const descriptor = await this.authority(authorityOrigin).descriptor();
-    if (
-      descriptor.authority_descriptor.organization_id !==
-      session.organization_id
-    ) {
-      throw new Error("Person session belongs to another organization");
-    }
-    return summary(
-      this.store.install(
-        authorityOrigin,
-        descriptor.authority_descriptor.authority_id,
-        session,
-      ),
-    );
+    if (descriptor.authority_descriptor.organization_id !== session.organization_id) throw new Error("Person session belongs to another organization");
+    return summary(this.store.install(authorityOrigin, descriptor.authority_descriptor.authority_id, session));
   }
 
   sessionSummary(): PersonClientSessionSummary {
@@ -405,7 +278,7 @@ export class PersonClient {
     let refreshed = false;
     while (true) {
       const result = await this.operations.read(async () => {
-        const stored = this.store.read();
+        const stored = this.readPinned();
         if (Date.parse(stored.session.access_expires_at) - this.currentTime() < headroomMs) {
           if (refreshed) throw new PersonClientSessionUnavailableError('Refreshed Person session is too short for this request');
           return { kind: 'refresh' as const };
@@ -429,13 +302,7 @@ export class PersonClient {
     let started = false;
     try {
       return await this.withSession(async stored => {
-        if (stored.session.membership_type !== "owner") {
-          throw new EmployeeMutationError(
-            "owner_access_required",
-            "not_submitted",
-            "Employee management requires owner access",
-          );
-        }
+        if (stored.session.membership_type !== "owner") throw new EmployeeMutationError("owner_access_required", "not_submitted", "Employee management requires owner access");
         started = true;
         return operation(stored);
       });
@@ -448,22 +315,12 @@ export class PersonClient {
   async logout(): Promise<void> {
     const claimed = this.store.claimLogout();
     try {
-      await this.authority(claimed.authority_origin).logout(
-        claimed.session.access_token,
-      );
+      await this.authority(claimed.authority_origin).logout(claimed.session.access_token);
     } catch (error) {
       // A membership revocation has already invalidated this credential. The
       // Authority's explicit 401 is therefore a successful terminal result
       // for local sign-out. Transport and server failures remain visible.
-      if (
-        !(
-          error instanceof PersonAuthorityClientError &&
-          error.code === "unauthorized" &&
-          error.status === 401
-        )
-      ) {
-        throw error;
-      }
+      if (!(error instanceof PersonAuthorityClientError && error.code === "unauthorized" && error.status === 401)) throw error;
     } finally {
       this.store.finishLogout();
     }
@@ -510,13 +367,6 @@ export class PersonClient {
     return JSON.stringify([stored.authority_origin, stored.authority_id, stored.session.organization_id, stored.session.membership_id]);
   }
 
-  private assertDocumentAccount(stored: StoredPersonClientSessionV1, requestId: string, expected: { expected_authority?: string; expected_membership_id?: string }): void {
-    if ((expected.expected_authority !== undefined || expected.expected_membership_id !== undefined) &&
-        (expected.expected_authority !== stored.authority_origin || expected.expected_membership_id !== stored.session.membership_id)) {
-      throw new PersonContextMutationError('stale_access_state', null, 'The signed-in account changed before the document operation. Restore the selected account before retrying.', requestId, 'not_submitted');
-    }
-  }
-
   private async submitDocumentSnapshot(stored: StoredPersonClientSessionV1, snapshot: DocumentSnapshot) {
     let submitted = false;
     try {
@@ -534,31 +384,26 @@ export class PersonClient {
 
   async uploadDocumentV2(input: DocumentFileUploadV2) {
     validatePersonUpdateRequestId(input.request_id);
-    return this.withSession(async stored => {
-      this.assertDocumentAccount(stored, input.request_id, input);
-      return this.submitDocumentSnapshot(stored, prepareDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), input));
-    }, undefined, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS + 2 * DEFAULT_TIMEOUT_MS);
+    return this.withSession(async stored => this.submitDocumentSnapshot(stored, prepareDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), input)),
+      undefined, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS + 2 * DEFAULT_TIMEOUT_MS);
   }
 
-  async retryDocument(requestId: string, expected: { expected_authority?: string; expected_membership_id?: string } = {}) {
+  async retryDocument(requestId: string) {
     validatePersonUpdateRequestId(requestId);
-    return this.withSession(async stored => {
-      this.assertDocumentAccount(stored, requestId, expected);
-      return this.submitDocumentSnapshot(stored, resumeDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), requestId));
-    }, undefined, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS + 2 * DEFAULT_TIMEOUT_MS);
+    return this.withSession(async stored => this.submitDocumentSnapshot(stored, resumeDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), requestId)),
+      undefined, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS + 2 * DEFAULT_TIMEOUT_MS);
   }
 
   pendingDocuments() {
-    const stored = this.store.read();
+    const stored = this.readPinned();
     const snapshots = listDocumentSnapshots(this.options.home_directory, this.documentBinding(stored));
     this.assertCurrentSession(stored);
     return { schema_version: 1, kind: 'echo-person-document-pending-v1', snapshots };
   }
 
-  abandonDocument(requestId: string, expected: { expected_authority?: string; expected_membership_id?: string } = {}) {
+  abandonDocument(requestId: string) {
     validatePersonUpdateRequestId(requestId);
-    const stored = this.store.read();
-    this.assertDocumentAccount(stored, requestId, expected);
+    const stored = this.readPinned();
     this.assertCurrentSession(stored);
     const removed = abandonDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), requestId);
     this.assertCurrentSession(stored);
@@ -566,11 +411,9 @@ export class PersonClient {
       local_snapshot_removed: removed, authority_outcome: 'unchanged' };
   }
 
-  async changeDocumentAssociation(value: PersonDocumentAssociateV1 | PersonDocumentDissociateV1,
-    expected: { expected_authority?: string; expected_membership_id?: string } = {}) {
+  async changeDocumentAssociation(value: PersonDocumentAssociateV1 | PersonDocumentDissociateV1) {
     const request = value.kind === 'echo-person-document-associate-v1' ? validatePersonDocumentAssociateV1(value) : validatePersonDocumentDissociateV1(value);
     return this.withSession(async stored => {
-      this.assertDocumentAccount(stored, request.request_id, expected);
       const result = await this.authority(stored.authority_origin).changeDocumentAssociation(stored.session.access_token, request);
       try { this.assertCurrentSession(stored); } catch { throw unknownContextMutation(request.request_id, false, null); }
       return result;
@@ -605,120 +448,26 @@ export class PersonClient {
     }, undefined, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS + 2 * DEFAULT_TIMEOUT_MS);
   }
 
-  async projectsV2(value: ProjectPageRequestV2 = {}) {
-    const request = validateProjectPageRequestV2(value);
-    return this.withContextSession((authority, token) => authority.projectsV2(token, request));
+  /**
+   * One project-context route (CONTEXT_ROUTES): its request is validated before the session is used, and a mutation's
+   * outcome is never left unsaid (PersonContextMutationError).
+   */
+  async context<K extends ContextRouteName>(name: K, value: unknown): Promise<ContextReply<K>> {
+    const selected = CONTEXT_ROUTES[name];
+    const request = selected.request(value);
+    return this.withContextSession((authority, token) => authority.context(token, name, request),
+      selected.mutation === undefined ? undefined : { request_id: (request as { readonly request_id: string }).request_id, upload: selected.mutation === 'upload' });
   }
 
-  async createProject(value: ProjectCreateV1) {
-    const request = validateProjectCreateV1(value);
-    return this.withContextSession((authority, token) => authority.createProject(token, request), request);
-  }
+  projectsV2(value: ProjectPageRequestV2 = {}) { return this.context('projectsV2', value); }
+  organizationDirectory(value: OrganizationDirectorySearchV1 = {}) { return this.context('organizationDirectory', value); }
+  submitUpdateV3(value: PersonUpdateSubmitV3) { return this.context('submitUpdateV3', value); }
+  updateStatusV3(requestId: string) { return this.context('updateStatusV3', requestId); }
 
-  async readProjectV2(projectId: string) {
-    const project = validateProjectIdV1(projectId);
-    return this.withContextSession((authority, token) => authority.readProjectV2(token, project));
-  }
-
-  async renameProject(value: ProjectRenameV1) {
-    const request = validateProjectRenameV1(value);
-    return this.withContextSession((authority, token) => authority.renameProject(token, request), request);
-  }
-
-  async archiveProject(value: ProjectArchiveV1) {
-    const request = validateProjectArchiveV1(value);
-    return this.withContextSession((authority, token) => authority.archiveProject(token, request), request);
-  }
-
-  async leaveProject(value: ProjectLeaveV1) {
-    const request = validateProjectLeaveV1(value);
-    return this.withContextSession((authority, token) => authority.leaveProject(token, request), request);
-  }
-
-  async projectMembers(value: ProjectContextBrowseV1) {
-    const request = validateProjectContextBrowseV1(value);
-    return this.withContextSession((authority, token) => authority.projectMembers(token, request));
-  }
-
-  async projectDirectory(value: ProjectDirectorySearchV1) {
-    const request = validateProjectDirectorySearchV1(value);
-    return this.withContextSession((authority, token) => authority.projectDirectory(token, request));
-  }
-
-  async organizationDirectory(value: OrganizationDirectorySearchV1 = {}) {
-    const request = validateOrganizationDirectorySearchV1(value);
-    return this.withContextSession((authority, token) => authority.organizationDirectory(token, request));
-  }
-
-  async addProjectMember(value: ProjectMemberAddV1) {
-    const request = validateProjectMemberAddV1(value);
-    return this.withContextSession((authority, token) => authority.addProjectMember(token, request), request);
-  }
-
-  async setProjectMember(value: ProjectMemberSetV1) {
-    const request = validateProjectMemberSetV1(value);
-    return this.withContextSession((authority, token) => authority.setProjectMember(token, request), request);
-  }
-
-  async removeProjectMember(value: ProjectMemberRemoveV1) {
-    const request = validateProjectMemberRemoveV1(value);
-    return this.withContextSession((authority, token) => authority.removeProjectMember(token, request), request);
-  }
-
-  async associateProjectContext(value: ProjectContextAssociateV1) {
-    const request = validateProjectContextAssociateV1(value);
-    return this.withContextSession((authority, token) => authority.associateProjectContext(token, request), request);
-  }
-
-  async dissociateProjectContext(value: ProjectContextDissociateV1) {
-    const request = validateProjectContextDissociateV1(value);
-    return this.withContextSession((authority, token) => authority.dissociateProjectContext(token, request), request);
-  }
-
-  async searchProjectContextV2(value: ProjectContextSearchV1) {
-    const request = validateProjectContextSearchV1(value);
-    return this.withContextSession((authority, token) => authority.searchProjectContextV2(token, request));
-  }
-
-  async searchUploadsV2(value: PersonUploadSearchV2) {
-    const request = validatePersonUploadSearchV2(value);
-    return this.withContextSession((authority, token) => authority.searchUploadsV2(token, request));
-  }
-
-  async submitUpdateV3(value: PersonUpdateSubmitV3) {
-    const request = validatePersonUpdateSubmitV3(value);
-    return this.withContextSession((authority, token) => authority.submitUpdateV3(token, request), { request_id: request.request_id, upload: true });
-  }
-
-  async updateStatusV3(requestId: string) {
-    validatePersonUpdateRequestId(requestId);
-    return this.withContextSession((authority, token) => authority.updateStatusV3(token, requestId));
-  }
-
-  async searchUploadsV3(value: PersonUploadSearchV3) {
-    const request = validatePersonUploadSearchV3(value);
-    return this.withContextSession((authority, token) => authority.searchUploadsV3(token, request));
-  }
-
-  async records(
-    limit?: number,
-    query?: string,
-    recordSha256?: `sha256:${string}`,
-  ): Promise<PersonRecordListV1 | PersonRecordSearchV2> {
-    return this.withSession(async stored => {
-      if (query !== undefined) {
-        return await this.authority(stored.authority_origin).searchRecords(
-          stored.session.access_token,
-          query,
-          limit,
-        );
-      }
-      return await this.authority(stored.authority_origin).records(
-        stored.session.access_token,
-        limit,
-        recordSha256,
-      );
-    });
+  async records(limit?: number, query?: string, recordSha256?: `sha256:${string}`): Promise<PersonRecordListV1 | PersonRecordSearchV2> {
+    return this.withSession(async stored => query !== undefined
+      ? await this.authority(stored.authority_origin).searchRecords(stored.session.access_token, query, limit)
+      : await this.authority(stored.authority_origin).records(stored.session.access_token, limit, recordSha256));
   }
 
   /**
@@ -726,17 +475,17 @@ export class PersonClient {
    * request-advertised live evidence sources, ECHO's shared follow-ups
    * (ADR-0040), and the asker's projects, people, tools and tool containers
    * (research tool contract v1). It may carry the asker's previous turn
-   * (ADR-0047).
+   * (ADR-0047) and a diagnostic capture. It is the one streamed Ask
+   * (askWithLiveProgress) with its steps unread.
    */
   async askWithLiveSources(question: string, scope?: ProjectIdV1, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1,
     previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
-    validateAskInput(question, scope);
-    return this.withReadSession((authority, token) => authority.askV7(token, question, scope, signal, captureId, previous), signal, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
+    return (await this.askWithLiveProgress(question, scope, signal, () => undefined, previous, captureId)).result;
   }
 
   /**
-   * `askWithLiveSources` with Ask progress V3 (ADR-0039): each step event
-   * reaches `onProgress` as it arrives, and may name a follow-up, a project, a
+   * Every Ask, in Ask progress V3 (ADR-0039): each step event reaches
+   * `onProgress` as it arrives, and may name a follow-up, a project, a
    * person, a tool or a tool container; the answer carries its receipt only
    * when the Authority streamed. A JSON answer comes back without progress or a
    * receipt.
@@ -744,20 +493,15 @@ export class PersonClient {
    * A step is passed on only while the account that asked is the signed-in
    * one. Another account stops the Ask at once. A step that arrives while no
    * session can be read (a refresh elsewhere, or a sign-out) is withheld, and
-   * the final account check decides, as it does for every read. A caller that
-   * names its account (`expected`, both parts, as the desktop does) is never
+   * the final account check decides, as it does for every read. A client
+   * pinned to its account (`account`, as the desktop's runs are) is never
    * asked for as another: a session another sign-in installed first is
-   * refused before anything is sent, so no step of that account reaches it.
+   * refused before the Ask is sent, so no step of that account reaches it.
    */
   async askWithLiveProgress(question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV3, expected: { readonly expected_authority?: string; readonly expected_membership_id?: string } = {},
-    previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
+    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonLiveAnswerV3> {
     validateAskInput(question, scope);
     return this.withSession(async stored => {
-      if ((expected.expected_authority !== undefined || expected.expected_membership_id !== undefined) &&
-          (expected.expected_authority !== stored.authority_origin || expected.expected_membership_id !== stored.session.membership_id)) {
-        throw new Error("Person tool operation did not match the current account");
-      }
       const authority = this.authority(stored.authority_origin);
       const token = stored.session.access_token;
       const forward: PersonAskProgressSinkV3 = event => {
@@ -769,7 +513,7 @@ export class PersonClient {
         if (!sameAccount(current, stored)) throw new Error("Person tool operation did not match the current account");
         onProgress(event);
       };
-      const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous);
+      const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous, captureId);
       this.assertCurrentSession(stored);
       return answer;
     }, signal, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
@@ -863,128 +607,51 @@ export class PersonClient {
   }
 
   async employees(): Promise<EmployeeRosterV1> {
-    return this.withSession(async stored => {
-      return await this.authority(stored.authority_origin).employees(
-        stored.session.access_token,
-      );
-    });
+    return this.withSession(async stored => await this.authority(stored.authority_origin).employees(stored.session.access_token));
   }
 
-  async inviteEmployee(input: {
-    name: string;
-    email: string;
-    output_path: string;
-  }): Promise<{ output_path: string; expires_at: string }> {
+  async inviteEmployee(input: { name: string; email: string; output_path: string }): Promise<{ output_path: string; expires_at: string }> {
     validateEmployeeDisplayName(input.name);
-    if (!isExpectedPersonEmail(input.email)) {
-      throw new EmployeeMutationError(
-        "invalid_email",
-        "not_submitted",
-        "Employee email must be a canonical lowercase mailbox",
-      );
-    }
-    const outputPath = invitationOutputPath(input.output_path);
-    return this.withEmployeeSession(async stored => {
-      try {
-        return await this.issueEmployeeInvitation(outputPath, input.email, "invite", () =>
-          this.authority(stored.authority_origin).inviteEmployee(
-            { name: input.name, email: input.email },
-            stored.session.access_token,
-          ), stored.authority_origin);
-      } catch (error) {
-        throw employeeRequestFailure(error, "employee_already_exists");
-      }
-    });
+    if (!isExpectedPersonEmail(input.email)) throw new EmployeeMutationError("invalid_email", "not_submitted", "Employee email must be a canonical lowercase mailbox");
+    return this.issueEmployeeInvitation(invitationOutputPath(input.output_path), input.email, "invite",
+      stored => this.authority(stored.authority_origin).inviteEmployee({ name: input.name, email: input.email }, stored.session.access_token));
   }
 
-  async reissueEmployee(input: {
-    email: string;
-    output_path: string;
-  }): Promise<{ output_path: string; expires_at: string }> {
-    if (!isCanonicalPersonEmail(input.email)) {
-      throw new EmployeeMutationError(
-        "invalid_email",
-        "not_submitted",
-        "Employee email must be a canonical durable identity",
-      );
-    }
-    const outputPath = invitationOutputPath(input.output_path);
-    return this.withEmployeeSession(async stored => {
-      try {
-        return await this.issueEmployeeInvitation(
-          outputPath,
-          input.email,
-          "reissue",
-          () =>
-            this.authority(stored.authority_origin).reissueEmployee(
-              { email: input.email },
-              stored.session.access_token,
-            ),
-          stored.authority_origin,
-        );
-      } catch (error) {
-        throw employeeRequestFailure(error, "employee_onboarding_complete");
-      }
-    });
+  async reissueEmployee(input: { email: string; output_path: string }): Promise<{ output_path: string; expires_at: string }> {
+    if (!isCanonicalPersonEmail(input.email)) throw new EmployeeMutationError("invalid_email", "not_submitted", "Employee email must be a canonical durable identity");
+    return this.issueEmployeeInvitation(invitationOutputPath(input.output_path), input.email, "reissue",
+      stored => this.authority(stored.authority_origin).reissueEmployee({ email: input.email }, stored.session.access_token));
   }
 
   async revokeEmployee(email: string): Promise<void> {
-    if (!isCanonicalPersonEmail(email)) {
-      throw new EmployeeMutationError(
-        "invalid_email",
-        "not_submitted",
-        "Employee email must be a canonical durable identity",
-      );
-    }
+    if (!isCanonicalPersonEmail(email)) throw new EmployeeMutationError("invalid_email", "not_submitted", "Employee email must be a canonical durable identity");
     return this.withEmployeeSession(async stored => {
-      try {
-        await this.authority(stored.authority_origin).revokeEmployee(
-          { email },
-          stored.session.access_token,
-        );
-      } catch (error) {
-        throw employeeRequestFailure(error, undefined);
-      }
+      try { await this.authority(stored.authority_origin).revokeEmployee({ email }, stored.session.access_token); }
+      catch (error) { throw employeeRequestFailure(error, undefined); }
     });
   }
 
-  private async issueEmployeeInvitation(
-    outputPath: string,
-    email: string,
-    mode: "invite" | "reissue",
-    issue: () => Promise<{ login_grant: string; expires_at: string }>,
-    authorityOrigin: string,
-  ): Promise<{ output_path: string; expires_at: string }> {
-    const issued = await issue();
-    // A different local writer can win after preflight. O_EXCL leaves its
-    // file untouched; the owner can safely reissue the one-time grant.
-    try {
-      writePersonOnboardingInvitation(
-        outputPath,
-        mode === "invite" || isExpectedPersonEmail(email)
-          ? {
-            schema_version: 2,
-            kind: "echo-person-onboarding-invitation",
-            authority_url: authorityOrigin,
-            login_grant: issued.login_grant,
-            expires_at: issued.expires_at,
-            expected_email: email,
-          }
-          : {
-            schema_version: 1,
-            kind: "echo-person-onboarding-invitation",
-            authority_url: authorityOrigin,
-            login_grant: issued.login_grant,
-            expires_at: issued.expires_at,
-          },
-      );
-    } catch (error) {
-      throw new EmployeeMutationError(
-        "invitation_save_failed",
-        "committed",
-        error instanceof Error ? error.message : "Employee invitation could not be saved",
-      );
-    }
-    return Object.freeze({ output_path: outputPath, expires_at: issued.expires_at });
+  /** An owner's one-time invitation, issued under the owner's session and saved privately; a reissued legacy identity gets a v1 file. */
+  private async issueEmployeeInvitation(outputPath: string, email: string, mode: "invite" | "reissue",
+    issue: (stored: StoredPersonClientSessionV1) => Promise<{ login_grant: string; expires_at: string }>): Promise<{ output_path: string; expires_at: string }> {
+    return this.withEmployeeSession(async stored => {
+      try {
+        const issued = await issue(stored);
+        // A different local writer can win after preflight. O_EXCL leaves its
+        // file untouched; the owner can safely reissue the one-time grant.
+        try {
+          writePersonOnboardingInvitation(outputPath, mode === "invite" || isExpectedPersonEmail(email)
+            ? { schema_version: 2, kind: "echo-person-onboarding-invitation", authority_url: stored.authority_origin, login_grant: issued.login_grant,
+              expires_at: issued.expires_at, expected_email: email }
+            : { schema_version: 1, kind: "echo-person-onboarding-invitation", authority_url: stored.authority_origin, login_grant: issued.login_grant,
+              expires_at: issued.expires_at });
+        } catch (error) {
+          throw new EmployeeMutationError("invitation_save_failed", "committed", error instanceof Error ? error.message : "Employee invitation could not be saved");
+        }
+        return Object.freeze({ output_path: outputPath, expires_at: issued.expires_at });
+      } catch (error) {
+        throw employeeRequestFailure(error, mode === "invite" ? "employee_already_exists" : "employee_onboarding_complete");
+      }
+    });
   }
 }

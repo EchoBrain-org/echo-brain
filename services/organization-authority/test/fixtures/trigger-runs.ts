@@ -16,7 +16,7 @@ export async function approvedRunFixture(options: { readonly runs?: number; read
   for (const approvalId of approvals) {
     f.core.decide('desktop', f.approve({ approval_id: approvalId, command_id: `approve-${approvalId}` }), () => f.session);
   }
-  const publisher = f.publisher([hook]);
+  const publisher = f.publisher(hook);
   await publisher.appendFinalizedApprovalsToV4(signal());
   return {
     ...f, runs, approvals,

@@ -1,8 +1,8 @@
 // The Ask timeline on the host (ADR-0047): its file, on a real folder (one per
 // account, owner-only, written whole through a temporary file, at most 200
 // turns and 90 days, a bad file read as empty, a turn an older desktop saved
-// without blocks read in them, our sign-out deleting it and an account change
-// deleting the last one's), and the checks of what the page sends with an Ask
+// dropped on its own, our sign-out deleting it and an account change deleting
+// the last one's), and the checks of what the page sends with an Ask
 // and a source check before the client sees it.
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -42,7 +42,7 @@ function turn(daysAgo = 0, extra: Partial<TimelineTurn> = {}): TimelineTurn {
   return {
     id: randomUUID(), asked_at: new Date(NOW - daysAgo * DAY).toISOString(), text: 'what is open?', question: 'What is open on THERM?', scope: { kind: 'global' },
     answer: {
-      text: 'THERM-482 is open.', scope: { kind: 'global' }, outcome: 'answered',
+      scope: { kind: 'global' }, outcome: 'answered',
       sources: [{ kind: 'ticket', tool_id: 'jira', label: 'THERM-482 · Sensor drift', permalink: ticketCitation.permalink, private: true, cited }],
       parts: [{ question: 'What is open on THERM?', status: 'answered', statements: [{ text: 'THERM-482 is open.', citation_indexes: [0], private: true }],
         blocks: [{ kind: 'text', statements: [0] }] }],
@@ -132,38 +132,20 @@ describe('the timeline file (C5)', () => {
     expect(readTimeline(person, ARI)).toEqual([fresh]);
   });
 
-  it('reads a part an older desktop saved without blocks, plain or with answer layout v1 (ADR-0045), as a paragraph a statement, and the next put writes it so', () => {
-    const [older, plain, laidOut, newer] = [turn(4), turn(3), turn(2), turn(1)];
-    const said = (text: string) => ({ text, citation_indexes: [0], private: true });
-    const { blocks: _blocks, ...part } = { ...plain.answer.parts[0]!, statements: [said('THERM-482 is open.'), said('Dev owns it.'), said('Its fix is due Oct 30.')] };
-    // What research found nothing for has nothing to arrange.
-    const nothing = { question: 'Who signs it off?', status: 'not_found' as const, statements: [] };
-    // As the page draws it now: an untitled text block a statement, each its own paragraph as before.
-    const arranged = { ...part, blocks: [0, 1, 2].map(at => ({ kind: 'text' as const, statements: [at] })) };
-    const drawn = (saved: TimelineTurn): TimelineTurn => ({ ...saved, answer: { ...saved.answer, outcome: 'partial', parts: [arranged, nothing] } });
-    // As a desktop from before layout v2 saved them: a part's statements alone, and with how the part read beside them.
-    const saved = [
-      { ...plain, answer: { ...plain.answer, outcome: 'partial', parts: [part, nothing] } },
-      { ...laidOut, answer: { ...laidOut.answer, outcome: 'partial', parts: [{ ...part, layout: [
-        { kind: 'lead', statements: [0] }, { kind: 'heading', text: 'Owner' }, { kind: 'bullets', statements: [1] },
-        { kind: 'table', statements: [2], columns: ['Ticket', 'Due'], rows: [{ cells: ['THERM-482', '2026-10-30'], citation_indexes: [0] }] },
-      ] }, nothing] } },
-    ];
+  it('drops a turn an older desktop saved, asked in Mine or with a part without blocks (plain, or laid out by layout v1), and keeps the rest of the file', () => {
     mkdirSync(folder(), { mode: 0o700 });
     const path = timelinePath(person, ARI);
-    writeFileSync(path, JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [older, ...saved, newer] }), { mode: 0o600 });
-    const read = readTimeline(person, ARI);
-    expect(read).toEqual([older, drawn(plain), drawn(laidOut), newer]);
-    expect(read[2]!.answer.parts[0]).not.toHaveProperty('layout');
-    // No turn is lost, and the next put writes every one in blocks.
+    const current = turn(1);
+    const { blocks: _blocks, ...bare } = current.answer.parts[0]!;
+    for (const old of [{ ...turn(2), scope: { kind: 'mine' }, answer: { ...current.answer, scope: { kind: 'mine' } } }, { ...turn(2), answer: { ...current.answer, parts: [bare] } },
+      { ...turn(2), answer: { ...current.answer, parts: [{ ...current.answer.parts[0]!, layout: [{ kind: 'lead', statements: [0] }] }] } }]) {
+      writeFileSync(path, JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [old, current] }), { mode: 0o600 });
+      expect(readTimeline(person, ARI)).toEqual([current]);
+    }
+    // The next put writes the file without it.
     const fresh = turn();
     putTimeline(person, ARI, fresh, NOW);
-    const { turns } = JSON.parse(readFileSync(path, 'utf8')) as { turns: TimelineTurn[] };
-    expect(turns).toEqual([older, drawn(plain), drawn(laidOut), newer, fresh]);
-    expect(turns.flatMap(each => each.answer.parts).filter(each => each.statements.length > 0).every(each => each.blocks !== undefined)).toBe(true);
-    // What the layout held is never read: whatever it is, it goes. A turn in blocks already is itself.
-    expect(timelineTurn({ ...saved[1], answer: { ...saved[1]!.answer, parts: [{ ...part, layout: 'retired' }, nothing] } })).toEqual(drawn(laidOut));
-    expect(timelineTurn(older)).toBe(older);
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { turns: TimelineTurn[] }).turns).toEqual([current, fresh]);
   });
 
   it('never uses a folder that is a link, nor reads one open to others; a put makes it owner-only again', () => {
@@ -230,7 +212,14 @@ describe('the timeline file (C5)', () => {
   it('takes only a turn as a put writes it: a page that sends anything else is refused', () => {
     const good = turn(0, { since: [], again_of: randomUUID(), markers: { 0: sha('b') }, unreadable: [0] });
     expect(timelineTurn(good)).toEqual(good);
+    const { blocks: _blocks, ...bare } = good.answer.parts[0]!;
     for (const bad of [
+      // Never what a put writes now: a part's statements without blocks (ADR-0051), plain or laid out by retired layout v1 (ADR-0045), a
+      // turn asked in Mine, and blocks with nothing to arrange.
+      { ...good, answer: { ...good.answer, parts: [bare] } }, { ...good, answer: { ...good.answer, parts: [{ ...bare, layout: [{ kind: 'lead', statements: [0] }] }] } },
+      { ...good, scope: { kind: 'mine' } }, { ...good, answer: { ...good.answer, parts: [{ ...good.answer.parts[0]!, statements: [] }] } },
+      // A v1 layout even beside valid blocks: what a read drops, a put never writes.
+      { ...good, answer: { ...good.answer, parts: [{ ...good.answer.parts[0]!, layout: [{ kind: 'lead', statements: [0] }] }] } },
       { ...good, id: 'turn-1' }, { ...good, asked_at: 'yesterday' }, { ...good, scope: { kind: 'project', project_id: 'Apollo' } },
       { ...good, again_of: 'turn-0' }, { ...good, markers: { 0: 'v1' } }, { ...good, markers: { first: sha('b') } },
       // What a check found unreadable: distinct places among the answer's own sources.

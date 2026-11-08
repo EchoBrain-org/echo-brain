@@ -1,59 +1,37 @@
-# Ask block catalog evaluation
+# Ask writer gate
 
-On 2026-11-02 the founder asked whether "model-arranged" Ask answers hold up:
-treat each UI block as a tool the writer can pick, describe blocks the way
-research sources are described, and find the block size that balances how
-many blocks the model chooses from against how flexible each one is. This
-opt-in evaluation answers that offline, before any product change.
-
-It measures only the writer of a laid-out answer
-([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md), and
-[ADR-0045](../../../docs/decisions/ADR-0045-ask-answer-layout.md) until it was
-retired). Research is
-scripted, as in the [wording evaluation](../ask-wording/README.md): for each
-case one search returns its synthetic items and research opens them all, so
-every trial hands the writer the same evidence. The writer is the product's
-model route (OpenRouter, `anthropic/claude-sonnet-5.5`, ADR-0037). Only the
-layout part of the writer's instructions, the catalog it is shown and its
-reply schema change between catalogs. Nothing is read from any tool, and no
-product code changes.
+This opt-in evaluation is the gate on Ask's built writer: the writer of an
+answer in blocks
+([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md)), the
+answer every Ask gets. It has two case sets, each decided on its own: the 15
+block cases (`--case-set main`, the default; rules 1 to 5 below) and the 10
+[wording cases](#wording-cases-pre-registered) (`--case-set wording`, three
+rules). Research is scripted: for each case one search returns
+its synthetic items and research opens them all, so every trial hands the
+writer the same evidence. Ask runs through the kernel end to end; only the
+writer's call goes to the model, through the product's route (OpenRouter,
+`anthropic/claude-sonnet-5.5`, ADR-0037) or the personal Claude account
+writer. Nothing is read from any tool, and no product code changes.
 
 ```sh
 npm run build:workspaces
-node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory
+node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory \
+  --writer claude-account --claude-executable /absolute/path/to/claude
 ```
 
-`--out` must be a private directory outside the repository. Unlike the wording
-evaluation, the report keeps full traces: every writer and judge prompt, raw
-reply, repair and check. Every case is synthetic, so the prompts carry no
-person's data; the credential is read only by the product bundle and never
-written. `--cases`, `--catalogs` and `--trials` make a smaller diagnostic run,
-which never decides anything.
+`--out` must be a private directory outside the repository. A block run's
+report keeps full traces: every writer prompt, raw reply and repair, and the
+released answer. Every case is synthetic, so the prompts carry no person's
+data; the credential is read only by the product bundle and never written.
+(A wording run keeps less: see below.) `--cases` and `--trials` make a smaller
+diagnostic run, which never decides anything. A block run exits 0 when it
+completes, and 2 on a usage error.
 
-## Catalogs (pre-registered)
-
-Each catalog entry follows the research tool contract
-([ADR-0042](../../../docs/decisions/ADR-0042-research-tool-contract.md)): a
-name the model passes, a `description` that says only what the entry shows,
-and `params`, each field it takes with what it means and its limits. The
-catalog reaches the writer as data beside `source_catalog`, and its reply
-schema and checks are built from the same entries. There are no "use this
-when" rules: the model picks from what entries show and what the evidence
-holds. The entries are in [`catalogs.mjs`](catalogs.mjs).
-
-| Catalog | Modeled on | What the writer picks |
-| --- | --- | --- |
-| `today` | Production layout v1 (ADR-0045), retired on 2026-11-04 | A form for each sentence (lead, prose, bullet, table row), sections and tables, in the production prompt and schema, unchanged |
-| `templates` | OpenAI ChatKit widget templates, Microsoft Adaptive Card templates | One whole-answer template of 5 (`fact`, `list`, `report`, `story`, `profile`), filled |
-| `balanced` | Vercel json-render style meaning-sized components | Any sequence of 7 blocks: `answer`, `text`, `points`, `table`, `timeline`, `card`, `quote` |
-| `primitives` | Google A2UI's basic catalog, without its media and input components | A flat tree of 7 components: `Column`, `Row`, `List`, `Card`, `Tabs`, `Divider`, `Text` |
-
-For `templates`, `balanced` and `primitives`, the system prompt is the
-production writer prompt with its layout part replaced by the catalog's. Each
-catalog's layout part keeps production's two wording rules word for word
-(answer without restating the question; a long identifier at most once), says
-that every item cites its evidence, and asks for the conclusion first. Every
-catalog gets up to 3,000 output tokens, as `today` did.
+The evaluation began on 2026-11-02 as a comparison of block catalogs, with a
+model judge, the founder's blind ranking page, held-out quick-lead questions
+and `--resume`. Those were decided and closed (the dated records below); their
+code left the tree on 2026-11-08 and remains in Git, with the full original
+description, at [`1f2e20e`](https://github.com/EchoBrain-org/echo-brain/blob/1f2e20e3627ce2f0e8bedf753f4333526fa8a084/tools/evals/ask-blocks/README.md).
 
 ## Cases (pre-registered)
 
@@ -82,35 +60,32 @@ people it may name, and, for two cases, a trap.
 
 ## Procedure
 
-1. For each case, Ask runs as the kernel runs it with answer layout v2, over
-   the scripted desk, with a writer that answers nothing; this records the
-   writer's exact prompts without a network call.
-2. Each catalog writes every case three times. A reply that fails its
-   catalog's checks gets one repair, with the production repair instruction
-   naming the first problem. Calls run four at a time.
-3. Each reply is read into common blocks (answer, prose, list, table,
-   timeline, card, quote, heading) for grading. `primitives` components have
-   no meaning of their own, so code infers tables, cards and quotes from their
-   structure, as an app drawing them would have to: a `Column` of two or more
-   `Row`s of `Text` is a table, a `Card` holding label and value pairs is a
-   card, a `Text` that is a quotation is a quote.
-4. A model judge on the same route ranks each case's three trial-1 answers,
-   shown as text with the evidence, once in the page's order and once
-   reversed. It is reported beside the founder's ranking and decides nothing.
-5. The founder ranks the same three answers per case on a private page, blind:
-   labels A to C in a fixed random order per case, every catalog drawn in one
-   style. After ranking, the page reveals the catalogs, the judge's ranks, the
-   grades and every trial's full trace.
+1. For each case, Ask runs as the kernel runs it, over the scripted desk, with
+   a writer that answers nothing; this records the writer's exact prompts and
+   the evidence it is given, without a network call.
+2. Each case runs three times through the kernel end to end. Only the
+   writer's call goes to the model. The kernel's own prompt, block catalog,
+   reply schema and output room (2,000 tokens), its reading and checks, its
+   one repair and its downgrades decide what is released; the harness adds no
+   repair. The report keeps each writer call's prompts, raw reply and usage,
+   and the released answer. Calls run four at a time.
+3. What is graded is the released answer: its part's `blocks`, read into
+   common blocks: the answer block's statements as the answer's claims, a
+   text block as prose, points as a list, ordered or not, and a table, a
+   timeline, a card and a quote as themselves, each with its title. Each
+   claim's evidence is the evidence ids of its statement's citations, or of a
+   table row's own: each of the answer's citations is mapped back, by its
+   citation, to the case item it cites, whose id is `E1` to `En` in the order
+   research opened the items, as the writer saw them.
 
 ## Measures
 
 A **claim** is a unit a reader takes as a fact: an answer or prose sentence, a
-list item, a table row, a timeline event, a card fact, a quote. A `primitives`
-`Text` is a claim when it is body or caption text of four words or more and
-not a table's header row. Headings, titles, column names and labels are not.
+list item, a table row, a timeline event, a card fact, a quote. Titles and
+column names are not.
 
-- **Valid:** the reply passes its catalog's checks, at once or after its one
-  repair. `today` used production's own reading of the reply.
+- **Valid:** the answer was released with `blocks`; an answer released
+  without them is not valid and passes nothing.
 - **Grounded:** every claim cites at least one evidence id, and every cited id
   is one the writer was given; each date a claim writes (`YYYY-MM-DD`, or a
   month name with a day, read in 2026 unless it names a year) is today or a
@@ -124,58 +99,38 @@ not a table's header row. Headings, titles, column names and labels are not.
   answer (one alternative of each). In a case marked "in order", the facts
   first appear in the listed order in the blocks after the answer block (in
   the answer block itself when it is the only block).
-- **Fit**, within the catalog's own blocks: the answer shows one of the
-  case's shapes, or, only when the catalog cannot show any of them, one of the
-  case's fallback shapes. A `single` case fits only a single answer: the
-  answer block, at most one prose block of up to two sentences, nothing else,
-  and at most three claims in all. Fit cannot compare catalogs (each
-  catalog's own blocks decide what it can show); the founder's ranking does.
+- **Fit:** the answer shows one of the case's shapes. A `single` case fits
+  only a single answer: the answer block, at most one prose block of up to two
+  sentences, nothing else, and at most three claims in all.
 - **Stable:** in at least two of a case's three trials, the first block after
   the answer has the same shape (or there is none in both).
-- **Ranks:** the founder's rank for each catalog's trial-1 answer per case, 1
-  best, ties allowed; a trial with no valid answer is shown as having none and
-  ranks last. The judge's rank is the mean of its two orders.
 
 Shapes: **single** as above; **prose** a prose block; **parallel** a list of two
-or more items; **ordered** a list marked ordered (only `balanced` and
-`primitives` can mark one); **grid** a table of two or more rows and columns;
-**sequence** a timeline of two or more events whose dates never go back, or a
-table with a date, day, when or due column whose rows never go back, or a list
-whose every item writes a date and never goes back; **profile** a card with
-two or more facts; **verbatim** a quote, or a quoted span, that passes the
-word-for-word check; **sections** two or more headings or titles, each with a
-claim under it.
-
-What each catalog can show, for the fallback rule: `templates` single, prose,
-parallel, grid, sequence, profile, verbatim; `balanced` and `primitives` all
-nine. `today` could show single, prose, parallel, grid, sequence, verbatim and
-sections.
+or more items; **ordered** a list marked ordered; **grid** a table of two or
+more rows and columns; **sequence** a timeline of two or more events whose
+dates never go back, or a table with a date, day, when or due column whose rows
+never go back, or a list whose every item writes a date and never goes back;
+**profile** a card with two or more facts; **verbatim** a quote, or a quoted
+span, that passes the word-for-word check; **sections** two or more titled
+blocks, each with a claim under it.
 
 Reported beside them, never as rules: valid at once, repairs, blocks and
-claims per answer, which blocks each catalog used, output tokens and latency.
+claims per answer, which blocks were used, output tokens and latency.
 
 ## Pre-registered rules
 
-Written before any run, over 45 trials per catalog (15 cases, 3 trials):
+Written before any run, over 45 trials (15 cases, 3 trials):
 
 1. **Valid:** at least 43 of 45.
 2. **Grounded:** at least 43 of 45.
 3. **Nothing lost:** at least 41 of 45.
 4. **Fit:** at least 36 of 45.
 5. **Stable:** at least 12 of 15 cases.
-6. **Ranked by the founder:** `balanced` ranked at least as high as `today` in
-   at least 9 of 15 cases.
 
-The model-arranged direction is sound when `balanced` passes all six. The
-right block size is the catalog with the lowest mean founder rank among those
-that pass rules 1 to 3; a tie (mean ranks within 0.1) goes to fewer repairs,
-then to fewer output tokens. The judge's mean ranks, and how often its top
-pick and its order of each pair of catalogs match the founder's, are reported
-beside it.
-
-Rule 6 compares `balanced` with `today`, which no longer runs ("Layout v1
-retired, 2026-11-04"): the code counts rules 1 to 5, and its decision gives
-the right block size only.
+**The gate passes** when the built writer meets all five in a complete run:
+every case, three trials (the report's `complete` and `decision.passes`). Any
+other run is a diagnostic and decides nothing. The founder's check on the
+desktop stands in for the blind ranking the catalogs had.
 
 ## Changes after the diagnostic run
 
@@ -193,17 +148,7 @@ rule, threshold or catalog entry changed.
   `dvt-date-moves` each move's reason sat beside its new date, where a writer
   may name either first; the case now checks the three dates, in order.
 
-## Resuming
-
-A run that loses calls to a provider failure is resumed with
-`--resume <earlier report>`. It carries every call that got a reply, reads
-and checks each again with the current code, and makes only the calls a
-trial still needs: the repair after a carried refused reply, or the whole
-trial when its first call failed. A judged order is carried when it judged the
-same trial-1 answers. The earlier report must be this evaluation's, over the
-same cases, from the same writer (its route, adapter and answer model, so one
-model's replies never stand for another's), with the same writer prompts; the
-new report names what it carried and counts the calls that still failed.
+## The first full run, 2026-11-02
 
 The first full run (2026-11-02, at `2834997`) lost calls when OpenRouter
 refused them with HTTP 402, for lack of credit: trial 1 was complete, trial 2
@@ -212,14 +157,89 @@ report and decides nothing.
 
 ## Writer route
 
-The founder had ranked nothing yet, so the run of record re-ran every trial
-and the judge through the product's personal Claude account writer instead
+The runs of record use the product's personal Claude account writer
 (`--writer claude-account --claude-executable <signed-in claude binary>`,
 `providers/openrouter/src/claude-research`): the same model,
 `claude-sonnet-5-5`, through the Claude Agent SDK and the founder's own
 `claude` sign-in, with the SDK's JSON-schema output in place of OpenRouter's.
-Every answer of the run of record comes from that one route; the report names
-it under `model.route`.
+The report names the route under `model.route`.
+
+## Wording cases (pre-registered)
+
+On 2026-10-26 the founder's staging Ask answered "Who owns the follow-up
+'Approve release clean-v1-20261026-ask-timeline-aa79d90 and choose who can read
+it.'?" with "Zhen Ye owns the follow-up "Approve release
+clean-v1-20261026-ask-timeline-aa79d90 and choose who can read it."": the lead
+restated the question, and the release name was written again. The wording
+cases measure how often the writer does that, before and after a change to its
+wording rules. They run through the same gate, asked at 2026-10-26T17:00Z, with
+a 60-second default timeout per trial (85 seconds at most):
+
+```sh
+node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory \
+  --case-set wording --writer claude-account --claude-executable /absolute/path/to/claude
+```
+
+They were their own evaluation, `tools/evals/ask-wording`, until 2026-11-08,
+when its runner was folded into this one; its cases moved here byte for byte,
+so their SHA-256 is unchanged, and its grading is unchanged; its records follow
+the block records below. A wording run's report keeps, as its own did, case
+ids, each trial's statements, lead and grade (synthetic text), the writer
+prompt's SHA-256 and model metadata; never prompts, raw replies, credentials
+or provider payloads. It exits 0 when a complete run passes all three rules
+(the wording ships), 1 otherwise, and 2 on a usage error.
+
+Written before any run. Cases live in [`wording-cases.json`](wording-cases.json);
+`wording.mjs` refuses a different set. The asker is Noor Haddad; today is
+2026-10-26 in America/Los_Angeles.
+
+| Case | Group | The question |
+| --- | --- | --- |
+| `follow-up-owner-quoted-title` | names a long id | The founder's question, about a follow-up the asker owns |
+| `release-decision-named-id` | names a long id | What a review decided for a named release |
+| `follow-up-due-quoted-title` | names a long id | When a follow-up, quoted by its title, is due |
+| `ticket-status-key-and-title` | names a long id | A Jira issue's status, by key and quoted title |
+| `decision-approver-quoted-title` | names a long id | Who approved a decision, quoted by its text |
+| `rollback-named-id` | names a long id | What a named release's rollout plan says, which names another release |
+| `review-decision-plain` | plain | What a review decided |
+| `owner-plain` | plain | Who owns a piece of work |
+| `blocker-plain` | plain | What blocks a gate |
+| `which-release-plain` | plain | Which release a review approved: the answer must name it |
+
+Each case declares its long identifiers (release names, one word to the
+grader), the facts the answer must say (each a list of alternatives) and the
+kinds of item it must cite.
+
+### Rules
+
+Written before any run. Three trials per case, 30 in all. Grading is
+deterministic: no model judge.
+
+- **Words** are runs of letters and digits, joined across an inner hyphen, dot,
+  underscore or apostrophe, ignoring case: a release name is one word, quotes
+  and punctuation are none.
+- **The lead** is the statements of the answer's first part's `answer` block
+  (layout v1's `lead` block in the 2026-10-26 result), or, without one, its
+  first statement.
+- **The answer's text** is every part's statements and gap.
+
+1. **Answer, don't restate:** in at least 90% of trials, the lead shares at
+   most 4 consecutive words with the question.
+2. **Long identifiers once:** in at least 90% of trials, no long identifier is
+   written more than once in the answer's text, and the lead writes none that
+   the question names.
+3. **Nothing lost:** in at least 90% of trials, the outcome is `answered`,
+   every statement cites a source, the case's item kinds are cited, and the
+   statements say every required fact.
+
+A trial with no statement (an error, or code's fallback when the writer gave
+nothing usable) passes no rule. The wording ships when all three rules pass in
+a complete run, all 10 cases three times (the report's `decision.passes` and
+`summary.wording_ships`, which a smaller run sets to false; its `summary` keeps
+each rule's count, each group's and the measures). The same run
+on the code before a change is reported beside it, with each trial's mean and
+longest shared run, its lead's length, and how many times long identifiers were
+written.
 
 ## Result, 2026-11-02 (rules 1 to 5)
 
@@ -369,7 +389,7 @@ or more" where `balanced` said "1 to 4" or "2 to 12".
 Written before any run.
 [ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md) left
 tuning the block descriptions for later, where this evaluation and the
-[wording evaluation](../ask-wording/README.md) found them weak. A change to
+[wording evaluation](#wording-cases-pre-registered) found them weak. A change to
 them changes every desktop answer, so it is measured before and after, and the
 founder decides.
 
@@ -621,7 +641,7 @@ change.
   owner and due date, and none has been checked yet.").
 
 **Held-out questions.** Because the rule was chosen on these 15 cases, five
-new questions in [`held-out-cases.json`](held-out-cases.json), written before
+new questions in [`held-out-cases.json`](https://github.com/EchoBrain-org/echo-brain/blob/1f2e20e3627ce2f0e8bedf753f4333526fa8a084/tools/evals/ask-blocks/held-out-cases.json), written before
 any run, ask about another synthetic program (HELIX, with other people), each
 with a list for an answer: decisions and next steps (`ho-review-next`),
 blockers (`ho-launch-blockers`), steps in order (`ho-release-steps`), a status
@@ -737,11 +757,14 @@ that is a patch". It is reverted (`630efd8`), so the writer is PR #394's
 again, and ADR-0051 records the rejection beside its other rejected repair.
 
 This record, the held-out questions in
-[`held-out-cases.json`](held-out-cases.json) and `--case-set held-out` stay:
+[`held-out-cases.json`](https://github.com/EchoBrain-org/echo-brain/blob/1f2e20e3627ce2f0e8bedf753f4333526fa8a084/tools/evals/ask-blocks/held-out-cases.json) and `--case-set held-out` stay:
 the founder preferred the check's answers in all 7 questions it changed, so a
 short answer with its list below is the shape a later attempt should reach,
 without a second writer call, and the held-out questions can test it beyond
 the 15 cases.
+
+2026-11-08: lean-down wave 1 (ASK-3) retired the held-out questions and
+`--case-set held-out`; they can be restored from `1f2e20e`.
 
 ## Quick lead on the first try, 2026-11-02 (pre-registered)
 
@@ -883,6 +906,9 @@ needed. i want to use it live". ADR-0051 lists this change beside the check
 among its rejected options. This record, the held-out questions and
 `--case-set held-out` stay.
 
+2026-11-08: lean-down wave 1 (ASK-3) retired the held-out questions and
+`--case-set held-out`; they can be restored from `1f2e20e`.
+
 ## Layout v1 retired, 2026-11-04
 
 Answer layout v1
@@ -1011,14 +1037,198 @@ through the founder's Claude account (`claude-sonnet-5-5`): 45 gate trials and
 The founder saw these results, `trap-disagree`'s answers before and after
 among them, and kept the change: "Keep the change".
 
+## Wording records
+
+The wording evaluation's dated records, as they were written and run; "this
+evaluation" in them is the wording cases.
+
+### Result, 2026-10-26
+
+Cases `sha256:6ad26dc1…6a2bfa`, the product route `anthropic/claude-sonnet-5.5`
+through OpenRouter, 30 trials a run, no errors and no repairs. Before is the
+writer at `7d28e8f` (main's prompt, `sha256:9363a07e…`); after is the change
+at `daa503d` (`sha256:f575af97…`). Rules 1 and 2 failed before; all three
+passed after, so the wording ships.
+
+| | Before | After |
+| --- | --- | --- |
+| 1. Answer, don't restate (27 of 30 to pass) | 22 | 28 |
+| 2. Long identifiers once (27 of 30 to pass) | 23 | 30 |
+| 3. Nothing lost (27 of 30 to pass) | 30 | 30 |
+| Words shared with the question, mean and longest run | 5.3, 16 | 2.0, 5 |
+| Lead length, mean words | 18.4 | 10.2 |
+| Long identifiers written | 13 | 6, each one the answer had to name |
+| Leads writing an identifier the question named | 7 | 0 |
+
+The same trials, before and after:
+
+| Case | Before | After |
+| --- | --- | --- |
+| `follow-up-owner-quoted-title` | Noor Haddad (you) owns the follow-up "Approve release clean-v1-20261026-ask-timeline-aa79d90 and choose who can read it."; its status is open. | You own it. |
+| `follow-up-due-quoted-title` | The follow-up "Publish the release notes for clean-v1-20261020-meeting-routing-b62b11b to the team space" is due on 2026-10-30. | It is due Oct 30, 2026. |
+| `decision-approver-quoted-title` | Lena Brandt approved the decision "Ship fan curve v2 before DVT and hold PVT until the soak passes" on 2026-10-14. | Lena Brandt approved it. |
+| `release-decision-named-id` | The release review decided that clean-v1-20261022-ask-layout-56461ff may go to staging once the desktop layout check passes, then waits one day in staging before production. | It may go to staging once the desktop layout check passes, then waits one day there before production. |
+
+Both trials that failed rule 1 after the change are `blocker-plain`, whose leads
+said THERM-482 "is blocking the DVT gate", 5 words of the question; one of its
+three trials did so before too.
+
+### Layout v2, 2026-11-02 (pre-registered)
+
+Written before any run. Every desktop and `person ask` will send
+`x-echo-answer-layout: 2`
+([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md)): the
+writer arranges the answer from seven blocks. Its prompt is the answer prompt
+followed by a blocks layout part whose two wording rules are layout v1's word
+for word, its input carries `block_catalog` beside `source_catalog`, and it
+replies with blocks. That change ships only when this evaluation still passes
+its three rules on it
+([Ask answer layout v2](../../../docs/product/2026-11-02-ask-answer-layout-v2.md),
+"Gates"), so the evaluation now measures the v2 writer: Ask runs with answer
+layout v2, and the kernel reads, checks and releases the answer as it does for
+the desktop.
+
+- **The same cases:** `cases.json` is unchanged (`sha256:6ad26dc1…6a2bfa`).
+- **The same three rules and thresholds,** each at least 27 of 30 trials,
+  graded as above. The lead is the statements of the first part's `answer`
+  block, layout v2's lead, or, without one, its first statement. The answer's
+  text is still every part's statements and gap, as the audit reads them, so
+  it includes the statements code writes for a table row, a timeline event, a
+  card fact and a quote: a long identifier that titles a card is written once
+  in each of its facts.
+- **The writer route:** the personal Claude account writer (`--writer
+  claude-account`): `claude-sonnet-5-5` through the Claude Agent SDK and the
+  signed-in `claude` binary, the route of the block evaluation's run of record
+  and of its gate. The report names it under `model.route`.
+- **Decided by a complete run:** all 10 cases, 3 trials each. The v2 writer
+  passes when all three rules pass (the report's `wording_ships`). A smaller
+  run decides nothing. Since the plain answer was retired on 2026-11-05 every
+  writer is given the block catalog, so a report no longer records
+  `writer_layout` or `answer_layout`.
+
+The 2026-10-26 results above measured layout v1 through OpenRouter and stay as
+they are.
+
+### Result, layout v2, 2026-11-02
+
+At `e9ccc09` with no uncommitted change, through the founder's Claude account
+(`claude-sonnet-5-5`): 30 trials, every writer given the block catalog, no
+errors and no repairs. All three rules pass, so the v2 writer's wording ships.
+This is the writer with no count of statements or citations (ADR-0051's second
+amendment), whose prompt adds that the answer prompt's "up to 10" does not
+apply; its answers held 2.0 statements on average. The run at `b48c2d7` is the
+writer with no count caps (its first amendment; 1.73 statements). The layout
+v1 column is the 2026-10-26 run after its change, through OpenRouter: another
+route to the same model. Two earlier complete v2 runs passed too: at
+`4769016` (30, 30, 30; leads of 17.7 words) and at `294bf37`, with the caps
+and the review's fixes (29, 30, 30; 14.9 words; its one miss was
+`blocker-plain` saying "is blocking the DVT gate", as v1's misses did).
+
+| | Layout v1, 2026-10-26 | Layout v2, no count caps (`b48c2d7`) | Layout v2, no count of statements or citations (`e9ccc09`) |
+| --- | --- | --- | --- |
+| 1. Answer, don't restate (27 of 30 to pass) | 28 | 30 | 30 |
+| 2. Long identifiers once (27 of 30 to pass) | 30 | 30 | 30 |
+| 3. Nothing lost (27 of 30 to pass) | 30 | 30 | 30 |
+| Words shared with the question, mean and longest run | 2.0, 5 | 2.4, 4 | 2.4, 4 |
+| Lead length, mean words | 10.2 | 17.2 | 15.2 |
+| Long identifiers written | 6 | 6 | 6 |
+| Leads writing an identifier the question named | 0 | 0 | 0 |
+
+The v2 lead, the answer block, is longer: it often adds a second sentence or a
+qualifier ("The soak cannot finish until the fixture holds 45 °C. The ticket is
+In Progress and owned by Dev Okafor."). No rule measures its length; it belongs
+with tuning the block descriptions, which the design leaves for later.
+
+### Block description tuning, 2026-11-02 (pre-registered)
+
+Written before any run. Tuning layout v2's block descriptions and layout
+prompt is pre-registered in the
+block records above ("Tuning the block descriptions"),
+and needs this evaluation's three rules to pass on the tuned writer. The same
+cases (`sha256:6ad26dc1…6a2bfa`), rules and thresholds; one complete run on
+the writer before the change and one after, each 10 cases and 3 trials through
+the founder's Claude account (`--writer claude-account`). The lead's length,
+its mean and per case, is reported beside them; no rule measures it.
+
+### Result, block description tuning, 2026-11-02
+
+Through the founder's Claude account (`claude-sonnet-5-5`), 30 trials each, no
+errors and no repairs; the block evaluation's README gives the two rounds.
+All three rules pass on both tuned writers.
+
+| | Before (`67c6351`) | Round 1 (`ef42144`) | Round 2 (`7c7345b`) |
+| --- | --- | --- | --- |
+| 1. Answer, don't restate (27 of 30 to pass) | 30 | 30 | 30 |
+| 2. Long identifiers once (27 of 30 to pass) | 30 | 30 | 30 |
+| 3. Nothing lost (27 of 30 to pass) | 30 | 30 | 30 |
+| Words shared with the question, mean and longest run | 2.3, 4 | 2.3, 4 | 2.1, 4 |
+| Lead length, mean words | 14.7 | 13.0 | 12.5 |
+
+The before prompt's earlier runs led with 14.9 and 17.7 words. Round 2's
+one-fact leads say only what was asked ("Dev Okafor owns it.", "Lena Brandt
+approved it."); the longest stay where the lead opens with the record that
+decided ("The release review decided the build may go to staging ...", 23 to
+25 words), as before. The founder's blind ranking preferred neither tuned
+writer to the one before, so the tuning is not proposed and PR #394 keeps its
+prompt (block evaluation README, "Result of rule 3 and the decision").
+
+The quick lead check that followed (block evaluation README, "Quick lead
+check") keeps all three rules: 30, 30 and 30 at `ca9b9a5`, leads of 15.3
+words. It sent no wording trial back: these one-fact questions write out no
+list. The founder rejected that check for its second writer call, and it is
+reverted; PR #394's prompt and writer stand.
+
+The quick lead on the first try (block evaluation README, "Quick lead on the
+first try") keeps all three rules too: 30, 30 and 30, as PR #394's writer at
+`e9ccc09` does, with leads of 16.3 words against 13.8. The founder's blind
+ranking preferred PR #394's writer in 4 of the 5 questions it changed, so it
+is reverted as well.
+
+### The writer prompt without the plain answer, 2026-11-05 (pre-registered)
+
+Written before any run. Taking the plain writer's wording out of the answer
+prompt, once every answer is in blocks, is pre-registered in the
+block records above ("The writer prompt without the
+plain answer"), and needs this evaluation's three rules to pass on the changed
+writer. The same cases (`sha256:6ad26dc1…6a2bfa`), rules and thresholds; one
+complete run on the writer before the change and one after, each 10 cases and
+3 trials through the founder's Claude account (`--writer claude-account`), on
+the same day. The run at `e9ccc09` above is reported beside them. The lead's
+length, its mean and per case, and the statements per answer are reported
+beside them; no rule measures them.
+
+### Result, the writer prompt without the plain answer, 2026-11-05
+
+Before at `d257bd6` and after at `24101b2`, through the founder's Claude
+account (`claude-sonnet-5-5`): 30 trials each, no errors and no repairs. All
+three rules pass on both sides, so this evaluation does not hold the change
+back; the block evaluation's README gives the decision.
+
+| | `e9ccc09` (2026-11-02) | Before | After |
+| --- | --- | --- | --- |
+| 1. Answer, don't restate (27 of 30 to pass) | 30 | 30 | 28 |
+| 2. Long identifiers once (27 of 30 to pass) | 30 | 30 | 30 |
+| 3. Nothing lost (27 of 30 to pass) | 30 | 30 | 30 |
+| Words shared with the question, mean and longest run | 2.4, 4 | 2.2, 4 | 2.5, 5 |
+| Lead length, mean words | 15.2 | 15.3 | 13.9 |
+| Statements per answer, mean | 2.0 | 2.0 | 2.0 |
+| Long identifiers written | 6 | 6 | 6 |
+
+- After's two misses are `blocker-plain`, whose leads say "Ticket THERM-482
+  is blocking the DVT gate", 5 words of the question, as layout v1's misses
+  and the run at `294bf37` did.
+- The lead shortens where the question asks one thing:
+  `follow-up-due-quoted-title` leads "It is due Oct 30, 2026." (5.7 words a
+  trial) where before added the owner and the latest check (23.0); after
+  gives them in the next statement.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model
   step: research is scripted and reads no list, so code-written list tables
   are not exercised.
-- The page draws every catalog in one plain style, not the desktop's; how the
-  desktop would draw a new block is not measured.
-- The judge reads answers as text, not as drawn, and is the writer's own model.
-- The founder's ranking is one reader's.
-- Inferring `primitives` structure is code's reading; another app could read a
-  tree differently.
+- How the desktop draws an answer is not measured; the founder's check on the
+  desktop is. Nor are the source labels it shows under an answer, and the
+  question above it, which are not the writer's.
+- No wording case names two long identifiers at once; there a short reference
+  could be unclear, and wording rule 2 would not apply as written.

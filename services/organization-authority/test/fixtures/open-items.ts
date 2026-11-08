@@ -134,7 +134,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
   }
   f.core.decide('desktop', f.approve({ routes: f.routes([f.projectA]) }), () => f.session);
   const runs = new SqliteTriggerRunsV1(db, () => now);
-  await f.publisher([enqueueApprovedRecordRunV1(runs)]).appendFinalizedApprovalsToV4(signal());
+  await f.publisher(enqueueApprovedRecordRunV1(runs)).appendFinalizedApprovalsToV4(signal());
   const run = runs.list(f.person, 1)[0]!;
   const recordSha256 = run.record_sha256!;
   const items = new SqliteImpactItemsV1(db, () => now);

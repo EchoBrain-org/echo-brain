@@ -3,10 +3,20 @@ import { generateKeyPairSync, sign } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isAbsentClientUpdateHead, executeClientUpdatePublish, planClientUpdatePublish, statusClientUpdatePublish, executeClientUpdateReplacement, planClientUpdateReplacement, statusClientUpdateReplacement, type ClientUpdatePublicationDependencies } from '../../tools/client-update-publish.mjs';
-import { parseUpdateConfig, parseUpdateManifest, updateDigest } from '../../src/product/person-client/client-update-contract.js';
+import { isAbsentClientUpdateHead, executeClientUpdatePublish, planClientUpdatePublish, statusClientUpdatePublish, executeClientUpdateReplacement, planClientUpdateReplacement, statusClientUpdateReplacement } from '../../tools/client-update-publish.mjs';
+import { parseUpdateConfig, parseUpdateManifest, updateDigest, type ClientUpdateConfig, type ClientUpdateManifest } from '../../src/product/person-client/client-update-contract.js';
 
 const directories: string[] = [];
+// The publisher's injectable seams; a PUT passes its own size-scaled timeout.
+type ClientUpdatePublicationDependencies = {
+  verifyServer?: (path: string | undefined, expected: ClientUpdateManifest, dependencies: { now: () => number }) => unknown;
+  aws?: (args: string[], options?: { timeout?: number }) => any;
+  runtime?: () => string;
+  now?: () => number;
+  readTemplate?: () => Buffer;
+  fetch?: typeof globalThis.fetch;
+  validatePrepared?: (options: { prepared: string; authorizationPath: string; now?: number; allowExpired?: boolean }) => { config: ClientUpdateConfig; manifest: ClientUpdateManifest; feedBytes: Buffer };
+};
 const SOURCE = 'a'.repeat(40);
 const BUCKET = 'echo-client-update-staging-s3-v1-feedbucket-abcdefghijkl';
 const FEED = `https://${BUCKET}.s3.us-west-2.amazonaws.com/feed.json`;
@@ -132,10 +142,10 @@ function fixture(options: { expiresAt?: number; previousExpiresAt?: number; prev
     return { config, manifest, feedBytes };
   } };
   const plan = () => planClientUpdatePublish({ hostingReceipt, prepared, authorization, output: receipt }, dependencies);
-  const execute = () => executeClientUpdatePublish({ receipt, approveManifest: updateDigest(payload) }, dependencies);
+  const execute = () => executeClientUpdatePublish({ receipt, approveManifest: updateDigest(payload), serverStatus: undefined }, dependencies);
   const status = () => statusClientUpdatePublish({ receipt }, dependencies);
   const replacePlan = () => planClientUpdateReplacement({ hostingReceipt, prepared, authorization, output: receipt, expectedPredecessor: previousFeedBytes ? updateDigest(previousFeedBytes) : '0'.repeat(64) }, dependencies);
-  const replaceExecute = () => executeClientUpdateReplacement({ receipt, approveManifest: updateDigest(payload) }, dependencies);
+  const replaceExecute = () => executeClientUpdateReplacement({ receipt, approveManifest: updateDigest(payload), serverStatus: undefined }, dependencies);
   const replaceStatus = () => statusClientUpdateReplacement({ receipt }, dependencies);
   const sizes = [...artifacts.map(artifact => artifact.bytes.length), feedBytes.length];
   const keyOf = (name: Artifact) => artifacts.find(artifact => artifact.name === name)!.key;
@@ -305,7 +315,7 @@ describe('bounded first S3 client update publication', () => {
 
   it('binds execution to the exact manifest approval and clean committed runtime', async () => {
     const f = fixture(); await f.plan();
-    await expect(executeClientUpdatePublish({ receipt: f.receipt, approveManifest: 'f'.repeat(64) }, f.dependencies)).rejects.toThrow('exact_manifest_approval_required');
+    await expect(executeClientUpdatePublish({ receipt: f.receipt, approveManifest: 'f'.repeat(64), serverStatus: undefined }, f.dependencies)).rejects.toThrow('exact_manifest_approval_required');
     f.dependencies.runtime = () => 'c'.repeat(40);
     await expect(f.execute()).rejects.toThrow('exact_reviewed_runtime_required');
     expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
