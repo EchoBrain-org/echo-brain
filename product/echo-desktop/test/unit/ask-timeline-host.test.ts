@@ -77,7 +77,7 @@ describe('the timeline file (C5)', () => {
     const [first, second] = [turn(2), turn(1)];
     putTimeline(person, ARI, first, NOW);
     putTimeline(person, ARI, second, NOW);
-    const marked = { ...first, markers: { 0: sha('b') } };
+    const marked = { ...first, unreadable: [0] };
     putTimeline(person, ARI, marked, NOW);
     expect(readTimeline(person, ARI)).toEqual([marked, second]);
     expect(readdirSync(folder()).filter(name => name.endsWith('.tmp'))).toEqual([]);
@@ -148,6 +148,22 @@ describe('the timeline file (C5)', () => {
     expect((JSON.parse(readFileSync(path, 'utf8')) as { turns: TimelineTurn[] }).turns).toEqual([current, fresh]);
   });
 
+  it('reads a turn an older desktop saved with its tickets\' baseline markers without them, and never writes them again', () => {
+    mkdirSync(folder(), { mode: 0o700 });
+    const path = timelinePath(person, ARI);
+    const [older, malformed] = [turn(2), turn(1)];
+    const saved = [{ ...older, markers: { 0: sha('b') } }, { ...malformed, markers: { first: 'v1' } }];
+    writeFileSync(path, JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: saved }), { mode: 0o600 });
+    // Retired, so not checked: even a malformed one leaves its turn and the file as they are.
+    expect(readTimeline(person, ARI)).toEqual([older, malformed]);
+    // A put of a turn that still carries one, as an older page would send, writes it and the rest without them.
+    const fresh = turn();
+    const sent = timelineTurn({ ...fresh, markers: { 0: sha('c') } });
+    expect(sent).toEqual(fresh);
+    putTimeline(person, ARI, sent!, NOW);
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { turns: unknown[] }).turns).toEqual([older, malformed, fresh]);
+  });
+
   it('never uses a folder that is a link, nor reads one open to others; a put makes it owner-only again', () => {
     const elsewhere = mkdtempSync(join(tmpdir(), 'echo-elsewhere-'));
     try {
@@ -210,7 +226,7 @@ describe('the timeline file (C5)', () => {
   });
 
   it('takes only a turn as a put writes it: a page that sends anything else is refused', () => {
-    const good = turn(0, { since: [], again_of: randomUUID(), markers: { 0: sha('b') }, unreadable: [0] });
+    const good = turn(0, { since: [], again_of: randomUUID(), unreadable: [0] });
     expect(timelineTurn(good)).toEqual(good);
     const { blocks: _blocks, ...bare } = good.answer.parts[0]!;
     for (const bad of [
@@ -221,7 +237,7 @@ describe('the timeline file (C5)', () => {
       // A v1 layout even beside valid blocks: what a read drops, a put never writes.
       { ...good, answer: { ...good.answer, parts: [{ ...good.answer.parts[0]!, layout: [{ kind: 'lead', statements: [0] }] }] } },
       { ...good, id: 'turn-1' }, { ...good, asked_at: 'yesterday' }, { ...good, scope: { kind: 'project', project_id: 'Apollo' } },
-      { ...good, again_of: 'turn-0' }, { ...good, markers: { 0: 'v1' } }, { ...good, markers: { first: sha('b') } },
+      { ...good, again_of: 'turn-0' },
       // What a check found unreadable: distinct places among the answer's own sources.
       { ...good, unreadable: [0, 0] }, { ...good, unreadable: [good.answer.sources.length] }, { ...good, unreadable: [-1] }, { ...good, unreadable: ['0'] },
       { ...good, answer: { ...good.answer, outcome: 'clarify' } }, { ...good, answer: { ...good.answer, sources: [{ kind: 'ticket', label: 'T' }] } },
@@ -316,14 +332,14 @@ describe('what the page sends with an Ask and a check', () => {
     expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(401), citation_indexes: [0] }] })).toBeNull();
   });
 
-  it('checks 1 to 100 items, each a citation that can change or go, a ticket\'s marker only on a ticket, within 64 KiB', () => {
-    const item = { asked_at: '2026-10-25T11:30:00.000Z', citation: ticketCitation, marker: sha('b') };
+  it('checks 1 to 100 items, each a citation that can go, within 64 KiB', () => {
+    const item = { asked_at: '2026-10-25T11:30:00.000Z', citation: ticketCitation };
     const record = { asked_at: item.asked_at, citation: { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' } };
     const followUp = { asked_at: item.asked_at, citation: { kind: 'follow_up', item_id: 'itm_timeline-1' } };
     const request = askCheckRequest([item, record, followUp]);
     expect(JSON.parse(request!)).toEqual({ schema_version: 1, kind: 'echo-person-ask-check-request-v1', items: [item, record, followUp] });
     expect(askCheckArgv(request!)).toEqual(['ask-check', `--request=${request}`]);
-    for (const bad of [[], Array.from({ length: 101 }, () => item), [{ ...item, asked_at: 'now' }], [{ ...item, marker: 'v1' }], [{ ...record, marker: sha('b') }],
+    for (const bad of [[], Array.from({ length: 101 }, () => item), [{ ...item, asked_at: 'now' }],
       [{ asked_at: item.asked_at, citation: { kind: 'person', membership_id: ARI.membership_id } }], [{ ...followUp, citation: { kind: 'follow_up', item_id: 'x' } }],
       [{ ...item, extra: 1 }], 'items']) expect(askCheckRequest(bad)).toBeNull();
     const long = { ...ticketCitation, permalink: `https://example.atlassian.net/browse/${'T'.repeat(1_900)}` };

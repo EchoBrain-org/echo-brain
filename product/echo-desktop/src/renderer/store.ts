@@ -3694,8 +3694,7 @@ export function checksOf(turn: TimelineTurn, current: State = state): TurnChecks
 
 /**
  * What the page shows of what is known of a turn's sources: on one asked in
- * this Ask, which is current, only what a check found unreadable, never a
- * Changed tag or note.
+ * this Ask, which is current, only what a check found unreadable.
  */
 export function shownChecks(turn: TimelineTurn, current: State = state): TurnChecks | undefined {
   return current.ask?.asked.includes(turn.id) ? knownStates(undefined, turn.unreadable) : checksOf(turn, current);
@@ -3776,11 +3775,11 @@ function threadKey(scope: AskScope): string {
 }
 
 /**
- * Ask opened: what changed of what the newest ten turns its place's thread
- * shows cited, in one check (C5), unless that place's last one went under
- * five minutes ago (ADR-0049); and of the turn a suggestion opened it at
- * (`opened`), first in that check or in one of its own, unless what its
- * sources are now is known or on its way.
+ * Ask opened: whether you can still read what the newest ten turns its
+ * place's thread shows cited, in one check (C5), unless that place's last one
+ * went under five minutes ago (ADR-0049); and what the turn a suggestion
+ * opened it at (`opened`) cited, first in that check or in one of its own,
+ * unless what its sources are now is known or on its way.
  */
 function checkTimeline(opened?: TimelineTurn): Promise<void> {
   const key = threadKey(state.barScope);
@@ -3804,14 +3803,12 @@ function checkTurn(turn: TimelineTurn): Promise<void> {
  * of each turn it speaks for is good for five minutes from when it went, and
  * stands over what an earlier check said of that turn, never over what a
  * later one did; a turn citing nothing a check asks about is spoken for
- * without asking. It fails quietly, with no tags, when any of its requests
- * does: it speaks for no turn, and what an earlier check said that is no
- * longer good goes with it; only what a request that came back found you can
- * no longer read stays, hidden as the turn's unreadable sources and over what
- * a check still good said of them. A ticket it reads for the first time
- * keeps the marker it read as its baseline. `newest`: the place (`threadKey`)
- * whose newest turns Ask opening checked, made again there five minutes after
- * it went.
+ * without asking. It fails quietly when any of its requests does: it speaks
+ * for no turn, and what an earlier check said that is no longer good goes
+ * with it; only what a request that came back found you can no longer read
+ * stays, hidden as the turn's unreadable sources and over what a check still
+ * good said of them. `newest`: the place (`threadKey`) whose newest turns Ask
+ * opening checked, made again there five minutes after it went.
  */
 function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null): Promise<void> {
   const account = expect();
@@ -3824,7 +3821,7 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
     if (asked === null) return;
     const found = checkedOf(plan, asked.results);
     const before = state.timeline.checks;
-    const latest = Object.entries(found.turns).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at);
+    const latest = Object.entries(found).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at);
     if (asked.failure !== undefined) {
       const gone = ACCOUNT_GONE.includes(asked.failure.code);
       if (gone) accountLost(asked.failure);
@@ -3835,7 +3832,6 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
     }
     if (newest !== null) newestCheckedAt.set(newest, at);
     keepChecks({ ...before, ...Object.fromEntries(latest.map(([id, states]) => [id, { at, states }])) });
-    keepBaselines(found.markers);
     keepUnreadable(latest);
   };
   const run = check();
@@ -3873,15 +3869,6 @@ function keepUnreadable(checked: readonly (readonly [string, TurnChecks])[]): vo
   }
 }
 
-/** Tickets with no marker yet keep the one a check read: what the next check compares them with. */
-function keepBaselines(markers: Readonly<Record<string, Readonly<Record<string, string>>>>): void {
-  for (const [id, read] of Object.entries(markers)) {
-    const turn = turnOf(id);
-    const missing = turn ? Object.entries(read).filter(([at]) => turn.markers?.[at] === undefined) : [];
-    if (turn && missing.length > 0) keepTurn({ ...turn, markers: { ...turn.markers, ...Object.fromEntries(missing) } });
-  }
-}
-
 /**
  * A check's requests, one after another: the results of each that came
  * back, and the failure that ended it, if one did; null once a reply no
@@ -3896,17 +3883,6 @@ async function askChecks(account: Expect, plan: CheckPlan, wanted: () => boolean
     results.push(result.value.items);
   }
   return { results };
-}
-
-/** A new answer's tickets: one check, for their markers now, the baseline a later check compares with (C5). Quiet. */
-async function baseline(turn: TimelineTurn): Promise<void> {
-  const account = expect();
-  if (!account) return;
-  const plan = checkPlan([turn], source => source.kind === 'ticket');
-  if (plan.requests.length === 0) return;
-  const asked = await askChecks(account, plan, () => sameAccount(account));
-  if (asked === null || asked.failure !== undefined) return;
-  keepBaselines(checkedOf(plan, asked.results).markers);
 }
 
 /** Ask, opened over the page: the latest turn in full, nothing asked or opened in it yet, the older earlier questions folded. */
@@ -3930,12 +3906,11 @@ export function fullTurns(view: AskState): readonly string[] {
  * carries the turn it asks again. Either carries that turn's sentences only
  * once what they cite is known now: a check of the last five minutes, waited
  * for or made while the question shows on its way; none when no check can
- * say (C5). Asked from a page, it opens Ask, which checks what changed of the
- * newest turns. The answer is kept at the end of the timeline, in full, and
- * its tickets' markers are read as their baseline; "Which one?" waits for a
- * choice and is kept nowhere. While it works, the steps the host reports show
- * under it (ADR-0039); with no answer, they go, and so does any item they
- * opened in the pane.
+ * say (C5). Asked from a page, it opens Ask, which checks what you can still
+ * read of the newest turns. The answer is kept at the end of the timeline, in
+ * full; "Which one?" waits for a choice and is kept nowhere. While it works,
+ * the steps the host reports show under it (ADR-0039); with no answer, they
+ * go, and so does any item they opened in the pane.
  */
 export async function ask(question: string, scope: AskScope = state.barScope, how?: AskHow): Promise<void> {
   const account = expect();
@@ -3998,7 +3973,6 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const shown = receipt !== undefined && took >= PROGRESS_AFTER_MS ? { ...current.took, [turn.id]: { receipt, took } } : current.took;
   set({ ask: { ...current, asking: null, asked: [...current.asked, turn.id], took: shown } });
   startSources(answerNames(answer), turn.id);
-  void baseline(turn);
 }
 
 /** The items the audited answer names: its receipt's reads, and its sources. */
@@ -4120,9 +4094,9 @@ export function toggleEarlier(): void {
  * instead of asking it again (ADR-0047), and brought into view, the line of
  * the earlier questions open when it is one of them. A turn shown in full
  * (the latest) stays so. Either way it is the turn the next question
- * continues, however long ago it was asked, and what changed of its sources
- * is checked with the newest turns', first, when nothing in the last five
- * minutes said. Suggestions show only while Ask is closed.
+ * continues, however long ago it was asked, and its sources are checked with
+ * the newest turns', first, when nothing in the last five minutes said.
+ * Suggestions show only while Ask is closed.
  */
 function openTurn(id: string): void {
   const turn = turnOf(id);

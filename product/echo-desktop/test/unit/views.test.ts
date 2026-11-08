@@ -837,11 +837,11 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
     expect(answerView(clarify, scope)).toEqual({ scope, sources: [], parts: [], outcome: 'clarify', question: 'Who owns it?', choices });
   });
 
-  it('reads a source check (C1): a state per item asked, in order, and a readable ticket\'s marker; anything else is not its output', () => {
+  it('reads a source check (C1): a state per item asked, in order, never a ticket\'s marker; anything else is not its output', () => {
     const check = (items: unknown[]) => ({ schema_version: 1, kind: 'echo-person-ask-check-v1', items });
-    const marker = sha('c');
-    expect(askCheckView(check([{ state: 'same', marker }, { state: 'changed' }, { state: 'unreadable' }, { state: 'unknown' }]), 4))
-      .toEqual({ items: [{ state: 'same', marker }, { state: 'changed' }, { state: 'unreadable' }, { state: 'unknown' }] });
+    // A readable ticket's marker, which the Authority still sends for a release, never reaches the page.
+    expect(askCheckView(check([{ state: 'same', marker: sha('c') }, { state: 'changed' }, { state: 'unreadable' }, { state: 'unknown' }]), 4))
+      .toStrictEqual({ items: [{ state: 'same' }, { state: 'changed' }, { state: 'unreadable' }, { state: 'unknown' }] });
     expect(() => askCheckView(check([{ state: 'same' }]), 2)).toThrow(ViewError);
     // Its states, markers and keys are the contract's to test (organization-api person-ask-check-v1).
     expect(() => askCheckView(check([{ state: 'gone' }]), 1)).toThrow(ViewError);

@@ -314,7 +314,7 @@ const PRIVATE_VISIBILITY: ReadonlySet<string> = new Set(['only_me', 'approver_on
  * An answer's cited item, and whether only you can read it: its source row
  * shows the lock when ECHO keeps it for you alone (ADR-0049). It keeps the
  * citation as the response carried it, for a later follow-up's `previous`
- * and, when it can change or go, a later check (ADR-0047).
+ * and, when it can go, a later check (ADR-0047).
  */
 function citedSource(citation: PersonAnswerCitationV8): AnswerSource {
   const source = { ...answerSource(citation), cited: citation };
@@ -323,13 +323,13 @@ function citedSource(citation: PersonAnswerCitationV8): AnswerSource {
 
 /**
  * What `person ask-check` printed (C1), as the page may see it: one state per
- * item asked, in their order, and a readable ticket's current marker. A reply
- * with another number of items, or anything else, is not its output.
+ * item asked, in their order; a ticket's marker never reaches the page. A
+ * reply with another number of items, or anything else, is not its output.
  */
 export function askCheckView(raw: unknown, asked: number): { items: AskCheckResult[] } {
   const check = validated(validatePersonAskCheckV1, raw);
   if (check.items.length !== asked) throw new ViewError();
-  return { items: check.items.map(({ state, marker }) => ({ state, ...(marker === undefined ? {} : { marker }) })) };
+  return { items: check.items.map(({ state }) => ({ state })) };
 }
 
 /**

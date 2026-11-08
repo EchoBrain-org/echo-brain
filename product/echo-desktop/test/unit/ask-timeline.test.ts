@@ -1,8 +1,7 @@
 // The Ask timeline (ADR-0047), in the store and on the page: which turns show
 // in full and which fold, the timeline kept through navigation and read again
 // at sign-in; one check of the newest turns' sources when Ask opens, kept five minutes, quiet when it
-// fails, turned into Changed tags, lit sentences and sentences left out; the
-// earlier turn a follow-up or Ask again carries, and how it is trimmed; "Which
+// fails, turned into sentences left out; the earlier turn a follow-up or Ask again carries, and how it is trimmed; "Which
 // one?"; the sidebar's dots with a project's New rows; and the earlier
 // questions past the newest three folded into one line, with the sidebar's Ask
 // going back to where you left Ask.
@@ -11,8 +10,7 @@ import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, AskScope, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
 import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS } from '../../src/shared/protocol.js';
 import {
-  allOmitted, answeredNow, askedAgain, askedSuggestions, checkedOf, checkPlan, followedTurn, markOf, previousOf, shownInFull, threadOf, turnChanged, turnGroups, turnNote,
-  visibleTurns,
+  allOmitted, answeredNow, askedSuggestions, checkedOf, checkPlan, followedTurn, previousOf, shownInFull, showsOf, threadOf, turnGroups, visibleTurns,
 } from '../../src/renderer/timeline.js';
 import { suggestedQuestions } from '../../src/renderer/bar.js';
 import { askedWhen } from '../../src/renderer/format.js';
@@ -82,7 +80,7 @@ const status = () => answerOf('What is open on THERM?', [ticket('THERM-482', '20
   [['THERM-482, Sensor drift, is open.', [0]], ['The DVT plan moved the retest to Oct 30.', [1]], ['Confirm the trace is still open.', [2]]]);
 
 let held: Held;
-let checks: ((items: readonly { citation: { kind: string }; marker?: string }[]) => unknown) | null;
+let checks: ((items: readonly { citation: { kind: string } }[]) => unknown) | null;
 let activity: (() => unknown) | null;
 let feed: ListItem[];
 let storage: Map<string, string>;
@@ -163,20 +161,18 @@ describe('the timeline\'s rules', () => {
 });
 
 describe('what a check asks, and what it says of a turn', () => {
-  it('asks once per citation of a turn, newest turn first, with a ticket\'s baseline, at most 100 items a request', () => {
+  it('asks once per citation of a turn, newest turn first, with when it was asked and never a ticket\'s marker, at most 100 items a request', () => {
     const repeated = answerOf('Q?', [ticket('THERM-482', '20482'), ticket('THERM-482', '20482'), mara, page('31010')], [['A.', [0, 1]], ['B.', [2, 3]]]);
-    const [older, newer] = [turn('Older?', 2 * DAY, status(), { markers: { 0: sha('m1') } }), turn('Newer?', DAY, repeated)];
+    const [older, newer] = [turn('Older?', 2 * DAY, status()), turn('Newer?', DAY, repeated)];
     const plan = checkPlan([newer!, older!]);
     // The same ticket twice in a turn is asked about once; a person never.
     expect(plan.requests).toHaveLength(1);
-    expect(plan.requests[0]!.items.map(item => [item.citation.kind, item.asked_at, item.marker ?? null])).toEqual([
-      ['ticket', newer!.asked_at, null], ['page', newer!.asked_at, null],
-      ['ticket', older!.asked_at, sha('m1')], ['page', older!.asked_at, null], ['follow_up', older!.asked_at, null],
+    expect(plan.requests[0]!.items.map(item => [item.citation.kind, item.asked_at])).toEqual([
+      ['ticket', newer!.asked_at], ['page', newer!.asked_at], ['ticket', older!.asked_at], ['page', older!.asked_at], ['follow_up', older!.asked_at],
     ]);
+    expect(plan.requests[0]!.items.map(item => Object.keys(item).sort())).toEqual(Array(5).fill(['asked_at', 'citation']));
     expect(plan.requests[0]!.places).toEqual([{ turn: newer!.id, sources: [0, 1] }, { turn: newer!.id, sources: [3] }, { turn: older!.id, sources: [0] },
       { turn: older!.id, sources: [1] }, { turn: older!.id, sources: [2] }]);
-    // A new answer's tickets alone, for their baseline.
-    expect(checkPlan([newer!], source => source.kind === 'ticket').requests.map(request => request.items.length)).toEqual([1]);
     // At most 100 items a request, every source asked about: a turn the first request cuts short goes on in the next.
     const wide = answerOf('Wide?', Array.from({ length: 30 }, (_, at) => ticket(`T-${at}`, String(1000 + at))), [['All of them.', [0]]]);
     const turns = Array.from({ length: 5 }, (_, at) => turn(`W${at}?`, at * HOUR, wide));
@@ -186,24 +182,23 @@ describe('what a check asks, and what it says of a turn', () => {
     expect(split.turns).toEqual(turns.map(value => value.id));
   });
 
-  it('turns the results into each turn\'s sources\' states and its tickets\' markers', () => {
+  it('turns the results into each turn\'s sources\' states', () => {
     const one = turn('One?', DAY, status());
     const plan = checkPlan([one]);
-    const found = checkedOf(plan, [[{ state: 'same', marker: sha('m2') }, { state: 'changed' }, { state: 'unreadable' }]]);
-    expect(found).toEqual({ turns: { [one.id]: { 0: 'same', 1: 'changed', 2: 'unreadable' } }, markers: { [one.id]: { 0: sha('m2') } } });
+    const found = checkedOf(plan, [[{ state: 'same' }, { state: 'changed' }, { state: 'unreadable' }]]);
+    expect(found).toEqual({ [one.id]: { 0: 'same', 1: 'changed', 2: 'unreadable' } });
   });
 
-  it('lights a sentence a changed source supports, leaves out one whose source you can no longer read, and tags the turn unless asked again', () => {
+  it('leaves out a sentence whose source you can no longer read, and nothing else: a changed source reads as the same', () => {
     const one = turn('One?', DAY, status());
     const states = { 0: 'same', 1: 'changed', 2: 'unreadable' } as const;
-    expect(one.answer.parts[0]!.statements.map(statement => markOf(statement.citation_indexes, states))).toEqual([null, 'changed', 'omitted']);
+    const shows = showsOf(states);
+    expect(one.answer.parts[0]!.statements.map(statement => shows(statement.citation_indexes))).toEqual([true, true, false]);
     // Unreadable wins: a sentence citing both is left out.
-    expect(markOf([1, 2], states)).toBe('omitted');
-    expect(markOf([1], undefined)).toBeNull();
-    expect(turnChanged(one, states, askedAgain([one]))).toBe(true);
-    expect(turnChanged(one, { 0: 'same', 1: 'unknown', 2: 'same' }, askedAgain([one]))).toBe(false);
-    // Asked again later: no tag.
-    expect(turnChanged(one, states, askedAgain([one, turn('One?', HOUR, status(), { again_of: one.id })]))).toBe(false);
+    expect(shows([1, 2])).toBe(false);
+    // Nothing known, or a check that could not tell: it shows.
+    expect(showsOf(undefined)([2])).toBe(true);
+    expect(showsOf({ 2: 'unknown' })([2])).toBe(true);
     expect(allOmitted(one, { 0: 'unreadable', 1: 'unreadable', 2: 'unreadable' })).toBe(true);
     expect(allOmitted(one, states)).toBe(false);
   });
@@ -336,7 +331,7 @@ describe('Ask on the timeline', () => {
     expect(byTestId(thread(store), 'timeline-question').map(text)).toEqual(['What is open on THERM?', 'What else?', 'Who owns THERM-482?']);
   });
 
-  it('checks the newest ten turns\' sources once when Ask opens, keeps that five minutes, and tags, lights and leaves out by it', async () => {
+  it('checks the newest ten turns\' sources once when Ask opens, keeps that five minutes, and leaves out by it', async () => {
     const turns = Array.from({ length: 11 }, (_, at) => turn(`Turn ${at}?`, (11 - at) * DAY, status()));
     seed(...turns);
     checks = items => ok({ items: items.map(item => (item.citation.kind === 'page' ? { state: 'changed' } : item.citation.kind === 'follow_up'
@@ -349,24 +344,23 @@ describe('Ask on the timeline', () => {
     expect((asked!.items as unknown[]).length).toBe(30);
     expect((asked!.items as { asked_at: string }[])[0]!.asked_at).toBe(turns[10]!.asked_at);
     expect(Object.keys(store.getState().timeline.checks)).toHaveLength(10);
-    // A ticket a check read for the first time keeps its marker as its baseline.
-    expect(kept().find(each => each.id === turns[5]!.id)?.markers).toEqual({ 0: sha('m1') });
+    // A ticket's marker in what a check said is never kept: a turn keeps no baseline.
+    expect(kept().filter(each => Object.hasOwn(each, 'markers'))).toEqual([]);
     const thread = await view();
-    // Past the newest three, earlier questions fold into one line: opened, every line shows.
+    // Past the newest three, earlier questions fold into one line: opened, every line shows. The latest is in full.
     store.toggleEarlier();
-    const rows = byTestId(thread(store), 'timeline-row');
-    // The oldest turn was not checked: no tag. The latest is in full.
-    expect(rows.map(row => byTestId(row, 'changed-tag').length)).toEqual([0, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+    expect(byTestId(thread(store), 'timeline-row')).toHaveLength(10);
     store.toggleTurn(turns[3]!.id);
     const opened = byTestId(thread(store), 'opened-turn')[0]!;
     const statements = byTestId(opened, 'statement');
+    // The follow-up is no longer yours to read: its sentence is left out. The changed DVT plan reads as any other.
     expect(statements.map(node => text(byTestId(node, 'statement-text')))).toEqual(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
-    expect(statements.map(node => node.props['data-mark'] ?? null)).toEqual([null, 'changed']);
+    expect(statements.map(node => classes(node))).toEqual([['claim'], ['claim']]);
     expect(classes(byTestId(opened, 'answer')[0])).toContain('dimmed');
-    expect(text(byTestId(opened, 'changed-since'))).toBe(`Changed since ${askedWhen(turns[3]!.asked_at, NOW.getTime())}`);
+    expect(byTestId(opened, 'changed-since')).toEqual([]);
     expect(byTestId(opened, 'ask-again')).toHaveLength(1);
-    // Within five minutes Ask opens on what that check said; after, it checks again. (Each new answer's ticket has its own baseline read.)
-    const opening = () => calls('ask.check').filter(call => (call.items as unknown[]).length > 1);
+    // Within five minutes Ask opens on what that check said; after, it checks again.
+    const opening = () => calls('ask.check');
     store.closeAsk();
     await store.ask('Again?');
     await flush();
@@ -500,24 +494,15 @@ describe('Ask on the timeline', () => {
     expect(byTestId(pane, 'source-review-state').map(text)).toEqual(badges);
   });
 
-  it('says nothing when nothing changed (ADR-0049), and with every sentence left out shows only Ask again', async () => {
+  it('with every sentence left out, shows only Ask again', async () => {
     const [one, two] = [turn('One?', 2 * DAY, status()), turn('Two?', DAY, status())];
     seed(one, two);
-    checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
+    checks = items => ok({ items: items.map(() => ({ state: 'unreadable' })) });
     const store = await startStore();
     store.pickSuggestion({ question: 'One?', turn: one.id });
     await flush();
-    const thread = await view();
-    expect(byTestId(thread(store), 'changed-since')).toEqual([]);
-    expect(text(thread(store))).not.toContain('Nothing changed');
-    checks = items => ok({ items: items.map(() => ({ state: 'unreadable' })) });
-    store.closeAsk();
-    vi.setSystemTime(NOW.getTime() + 6 * 60_000);
-    store.pickSuggestion({ question: 'One?', turn: one.id });
-    await flush();
-    const opened = byTestId(thread(store), 'opened-turn')[0]!;
+    const opened = byTestId((await view())(store), 'opened-turn')[0]!;
     expect(byTestId(opened, 'answer')).toEqual([]);
-    expect(byTestId(opened, 'changed-since')).toEqual([]);
     expect(byTestId(opened, 'ask-again')).toHaveLength(1);
   });
 
@@ -546,39 +531,7 @@ describe('Ask on the timeline', () => {
     expect(calls('clipboard.writeText').at(-1)).toEqual({ text: messages.join('\n\n') });
   });
 
-  it('says nothing changed only when every source its sentences cite was checked and is the same, and nothing when the check could not tell', async () => {
-    const [one, two] = [turn('One?', 2 * DAY, status()), turn('Two?', DAY, status())];
-    seed(one, two);
-    // The ticket and the follow-up are as they were; the DVT plan's tool could not be read.
-    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'unknown' : 'same' })) });
-    const store = await startStore();
-    store.pickSuggestion({ question: 'One?', turn: one.id });
-    await flush();
-    const thread = await view();
-    // No line under the turn opened, nor under the latest, asked before this Ask; Ask again stays, and nothing is tagged.
-    const opened = byTestId(thread(store), 'opened-turn')[0]!;
-    expect(byTestId(opened, 'changed-since')).toEqual([]);
-    expect(byTestId(opened, 'ask-again')).toHaveLength(1);
-    const latest = byTestId(thread(store), 'turn').find(node => node.props['data-turn'] === two.id)!;
-    expect(byTestId(latest, 'changed-since')).toEqual([]);
-    expect(byTestId(latest, 'ask-again')).toHaveLength(1);
-    expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
-    // What the line says, sentence by sentence: the same only when every source they cite was checked and is the same.
-    expect(turnNote(one, { 0: 'same', 1: 'same', 2: 'same' })).toBe('same');
-    expect(turnNote(one, { 0: 'same', 1: 'unknown', 2: 'same' })).toBeNull();
-    expect(turnNote(one, { 0: 'same', 2: 'same' })).toBeNull();
-    expect(turnNote(one, undefined)).toBeNull();
-    // Changed whenever a sentence it shows cites a source that changed, whatever else could not be told.
-    expect(turnNote(one, { 0: 'unknown', 1: 'changed' })).toBe('changed');
-    // A sentence left out says nothing: the rest are the same.
-    expect(turnNote(one, { 0: 'same', 1: 'same', 2: 'unreadable' })).toBe('same');
-    expect(turnNote(one, { 0: 'unreadable', 1: 'unreadable', 2: 'unreadable' })).toBeNull();
-    // A source no check asks about (a person) is never known to be the same.
-    const named = turn('Who owns it?', DAY, answerOf('Who owns it?', [ticket('THERM-482', '20482'), mara], [['Mara owns THERM-482.', [0, 1]]]));
-    expect(turnNote(named, { 0: 'same' })).toBeNull();
-  });
-
-  it('shows no tag or line from a check once it is five minutes old, nor from one that fails then, and still hides what cites an unreadable source', async () => {
+  it('still hides what cites an unreadable source once its check is five minutes old, and after one that fails then', async () => {
     const [one, two] = [turn('One?', 2 * DAY, status()), turn('Two?', DAY, status())];
     seed(one, two);
     let failing = false;
@@ -588,16 +541,12 @@ describe('Ask on the timeline', () => {
     store.pickSuggestion({ question: 'One?', turn: one.id });
     await flush();
     const thread = await view();
-    const marks = () => byTestId(byTestId(thread(store), 'opened-turn')[0], 'statement').map(node => node.props['data-mark'] ?? null);
-    // The line opened says it in the answer, not as a tag; so does the latest, asked before this Ask.
-    expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
-    expect(byTestId(thread(store), 'changed-since')).toHaveLength(2);
-    expect(marks()).toEqual([null, 'changed']);
-    // Five minutes on, Ask still open: no tag, no line, nothing highlighted; the follow-up the check could not read stays out.
+    const said = () => byTestId(byTestId(thread(store), 'opened-turn')[0], 'statement-text').map(text);
+    const readable = ['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.'];
+    expect(said()).toEqual(readable);
+    // Five minutes on, Ask still open: the follow-up the check could not read stays out.
     vi.setSystemTime(NOW.getTime() + 5 * 60_000);
-    expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
-    expect(byTestId(thread(store), 'changed-since')).toEqual([]);
-    expect(marks()).toEqual([null, null]);
+    expect(said()).toEqual(readable);
     expect(store.checksOf(one)).toEqual({ 2: 'unreadable' });
     // Ask opened again: its check fails, and what the last one said goes with it, but not what it could not read.
     store.closeAsk();
@@ -606,8 +555,7 @@ describe('Ask on the timeline', () => {
     await flush();
     expect(calls('ask.check')).toHaveLength(2);
     expect(store.getState().timeline.checks).toEqual({});
-    expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
-    expect(marks()).toEqual([null, null]);
+    expect(said()).toEqual(readable);
   });
 
   it('keeps what cites a source a check found unreadable hidden, in the file too, until a check finds it readable again', async () => {
@@ -669,22 +617,21 @@ describe('Ask on the timeline', () => {
     expect(store.getState().timeline.checks).toEqual({});
   });
 
-  it('fails quietly, with no tags, and the next Ask opening checks again', async () => {
+  it('fails quietly, hiding nothing, and the next Ask opening checks again', async () => {
     seed(turn('One?', 2 * DAY, status()), turn('Two?', DAY, status()));
     const store = await startStore();
     await store.ask('What changed?');
     await flush();
     const thread = await view();
-    expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
+    expect(byTestId(thread(store), 'statement-text').map(text)).toEqual([...status().parts[0]!.statements.map(statement => statement.text), 'THERM-482 is open.']);
     // The check of the newest turns, as Ask opened.
-    const newest = () => calls('ask.check').filter(call => (call.items as unknown[]).length > 1);
+    const newest = () => calls('ask.check');
     expect(newest()).toHaveLength(1);
     store.closeAsk();
     vi.setSystemTime(NOW.getTime() + 10 * 60_000);
     await store.ask('Still?');
     await flush();
     expect(newest()).toHaveLength(2);
-    expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
   });
 
   it('copies Ask again\'s "Since" first, as the page shows it: with its numbers, "Nothing changed" for an empty one, and nothing a check left out', async () => {
@@ -773,14 +720,13 @@ describe('Ask on the timeline', () => {
     expect((opening.items as { citation: unknown }[])[0]!.citation).toEqual(ticket('THERM-482', '20482').cited!.citation);
   });
 
-  it('reads a new answer\'s tickets once, for the baseline a later check compares with', async () => {
-    checks = items => ok({ items: items.map(() => ({ state: 'same', marker: sha('base') })) });
+  it('reads nothing of a new answer\'s tickets: a turn keeps no baseline', async () => {
+    checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
     const store = await startStore();
     await store.ask('What is open?');
     await flush();
-    const [baseline] = calls('ask.check');
-    expect(baseline!.items).toEqual([{ asked_at: latestTurn(store)!.asked_at, citation: ticket('THERM-482', '20482').cited!.citation }]);
-    expect(kept()[0]!.markers).toEqual({ 0: sha('base') });
+    expect(calls('ask.check')).toEqual([]);
+    expect(kept()[0]).not.toHaveProperty('markers');
   });
 });
 
@@ -842,9 +788,9 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     // The newest ten, when Ask opened: the oldest two were not checked.
     const [opening] = calls('ask.check');
     expect(new Set((opening!.items as { asked_at: string }[]).map(item => item.asked_at)).has(turns[0]!.asked_at)).toBe(false);
+    expect(new Set(Object.keys(store.getState().timeline.checks))).toEqual(new Set(turns.slice(2).map(each => each.id)));
     const thread = await view();
     store.toggleEarlier();
-    expect(byTestId(thread(store), 'timeline-row').map(row => byTestId(row, 'changed-tag').length)).toEqual([0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
     // Opened: its own check, whose reply waits here.
     const release = held.hold('ask.check');
     store.toggleTurn(turns[0]!.id);
@@ -857,13 +803,14 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     await flush();
     expect(calls('ask.run')).toHaveLength(asked);
     expect(store.getState().ask?.asking?.question).toBe('who owns it?');
-    release(ok({ items: [{ state: 'same', marker: sha('m') }, { state: 'changed' }, { state: 'unreadable' }] }));
+    // A changed source (as an Authority before checks said only readability answers) is as readable as one the same.
+    release(ok({ items: [{ state: 'same' }, { state: 'changed' }, { state: 'unreadable' }] }));
     await following;
     expect((calls('ask.run').at(-1)!.previous as AskPrevious).statements.map(statement => statement.text))
       .toEqual(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
-    // Opened, its line is its heading: what changed is said in the answer, not as a tag.
-    expect(byTestId(thread(store), 'timeline-row').map(row => byTestId(row, 'changed-tag').length)).toEqual([0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
-    expect(byTestId(byTestId(thread(store), 'opened-turn')[0], 'changed-since')).toHaveLength(1);
+    // Opened, it leaves out what you can no longer read.
+    expect(byTestId(byTestId(thread(store), 'opened-turn')[0], 'statement-text').map(text))
+      .toEqual(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
   });
 
   it('opens a suggestion past the newest ten checked first, in the one check Ask opening makes', async () => {
@@ -878,8 +825,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect((opening!.items as { asked_at: string }[]).slice(0, 3).map(item => item.asked_at)).toEqual(Array(3).fill(turns[0]!.asked_at));
     expect((opening!.items as unknown[]).length).toBe(33);
     const opened = byTestId((await view())(store), 'opened-turn')[0]!;
-    expect(byTestId(opened, 'statement').map(node => node.props['data-mark'] ?? null)).toEqual([null, 'changed', null]);
-    expect(text(byTestId(opened, 'changed-since'))).toContain('Changed since');
+    expect(byTestId(opened, 'statement-text').map(text)).toEqual(status().parts[0]!.statements.map(statement => statement.text));
   });
 
   it('carries no sentence of a turn whose sources no check could read now, only its question', async () => {
@@ -961,7 +907,8 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     store.pickSuggestion({ question: one.question, turn: one.id });
     await flush();
     const thread = await view();
-    expect(byTestId(byTestId(thread(store), 'opened-turn')[0], 'changed-since')).toHaveLength(1);
+    // What a check found changed says nothing over the old answer: only Ask again's own list says what changed since.
+    expect(byTestId(byTestId(thread(store), 'opened-turn')[0], 'changed-since')).toEqual([]);
     store.askAgain(one.id);
     await flush();
     expect(calls('ask.run')[0]).toMatchObject({ question: 'What is open on THERM?', scope: { kind: 'global' },
@@ -969,7 +916,6 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect(latestTurn(store)).toMatchObject({ again_of: one.id, since: [{ text: 'THERM-482 moved to In Progress.' }] });
     expect(store.getState().ask?.opened).toBeNull();
     const shown = thread(store);
-    expect(byTestId(shown, 'changed-tag')).toEqual([]);
     // The question shows once: the old turn folds away, and the new answer stands for it.
     expect(byTestId(shown, 'timeline-question').map(text)).not.toContain(one.question);
     expect(byTestId(shown, 'question').map(text).filter(question => question === one.question)).toHaveLength(1);

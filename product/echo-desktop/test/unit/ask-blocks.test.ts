@@ -4,8 +4,8 @@
 // in mono, a timeline with each event's day down the side, a card headed by
 // its kind, and a quote with its source under it. Each item is a sentence
 // with its sources' numbers, lit on its own; a check leaves out what you can
-// no longer read and lights what changed (ADR-0047), and a block left with
-// nothing to show goes with its title. For every answer: the sources start as
+// no longer read (ADR-0047), and a block left with nothing to show goes with
+// its title. For every answer: the sources start as
 // one closed line, partial-answer explanations remain visible, and Copy
 // answer writes Markdown.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -278,19 +278,18 @@ describe('an arranged part reads as its blocks', () => {
 });
 
 describe('a check of an arranged answer (ADR-0047)', () => {
-  it('leaves out an item whose source you can no longer read, and lights one whose source changed, each on its own', async () => {
-    // The soak plan and THERM-55 are no longer yours to read; THERM-48 changed.
+  it('leaves out an item whose source you can no longer read, each on its own, and shows one whose source changed as any other', async () => {
+    // The soak plan and THERM-55 are no longer yours to read; THERM-48 changed, as an Authority before checks said only readability answers.
     const { thread } = await reopened({ 31020: 'unreadable', 20055: 'unreadable', 20048: 'changed' }, kept('1', therm()));
     const answer = byTestId(thread(), 'answer')[0]!;
     const [timeline] = byClass(answer, 'answer-timeline');
     expect(byType(timeline, 'li').map(node => [text(byType(node, 'time')), words(node)])).toEqual([['Oct 23', 'The 72-hour soak passed.']]);
-    expect(byClass(answer, 'answer-fact').map(node => [node.props['data-mark'], classes(node)])).toEqual([
-      ['changed', ['answer-fact', 'changed']], ['changed', ['answer-fact', 'changed']]]);
+    expect(byClass(answer, 'answer-fact').map(node => [words(node), classes(node)])).toEqual([
+      ['In review', ['answer-fact']], ['Tomas Okafor', ['answer-fact']]]);
     // A row is judged by what it cites itself: THERM-52's stays.
     expect(byTestId(answer, 'answer-row').map(row => text(byType(row, 'td')[0]).replace(/\d+$/u, ''))).toEqual(['THERM-52 · Thermal pad supplier']);
-    // The title of a block with something left to show stays; nothing else is marked.
+    // The title of a block with something left to show stays.
     expect(byType(answer, 'h3').map(text)).toEqual(['Soak test', 'Before PVT', 'Open risk']);
-    expect(byTestId(answer, 'statement').filter(node => node.props['data-mark'] !== undefined)).toHaveLength(2);
   });
 
   it('takes away a block left with nothing to show, and its title with it', async () => {

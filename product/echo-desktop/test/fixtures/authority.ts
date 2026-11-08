@@ -330,17 +330,14 @@ function timelineAnswer(question: string, scope: Record<string, unknown>, previo
     cites(citations, 'Confirm the trace is still open.', [2])]);
 }
 
-/** The DVT plan changed, the follow-up is no longer readable, and the ticket reports its current marker. */
-function timelineCheck(items: readonly { citation: Record<string, unknown>; marker?: string }[]): Record<string, unknown> {
-  return { schema_version: 1, kind: 'echo-person-ask-check-v1', items: items.map(item => {
-    const citation = item.citation;
-    if (citation.kind === 'ticket') {
-      const marker = digestOf(`marker:${String(citation.ticket_id)}`);
-      return { state: item.marker === undefined || item.marker === marker ? 'same' : 'changed', marker };
-    }
-    if (citation.kind === 'page') return { state: 'changed' };
-    if (citation.kind === 'follow_up') return { state: 'unreadable' };
-    return { state: 'same' };
+/**
+ * Readability only: the follow-up is no longer readable, everything else is. A readable ticket still carries a marker, as
+ * the Authority keeps sending one for a release (SVC-13) and released clients refuse a readable ticket without it.
+ */
+function timelineCheck(items: readonly { citation: Record<string, unknown> }[]): Record<string, unknown> {
+  return { schema_version: 1, kind: 'echo-person-ask-check-v1', items: items.map(({ citation }) => {
+    if (citation.kind === 'ticket') return { state: 'same', marker: digestOf(`marker:${String(citation.ticket_id)}`) };
+    return { state: citation.kind === 'follow_up' ? 'unreadable' : 'same' };
   }) };
 }
 
