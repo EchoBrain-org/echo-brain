@@ -56,7 +56,10 @@ export interface PersonClientOptions {
   readonly now?: () => string;
   readonly random_bytes?: (size: number) => Uint8Array;
   readonly random_uuid?: () => string;
-  /** The one account a pinned run is for: under its lease, each operation is refused before it reads or sends anything as another. */
+  /**
+   * The one account a pinned run is for: under its lease, each operation is refused before its own request goes out as
+   * another. A refresh the lease needs is not pinned; it renews whatever session is stored, as before.
+   */
   readonly account?: { readonly authority: string; readonly membership_id: string };
 }
 
@@ -187,7 +190,7 @@ export class PersonClient {
     const stored = this.store.read();
     const pin = this.options.account;
     if (pin !== undefined && (stored.authority_origin !== pin.authority || stored.session.membership_id !== pin.membership_id)) {
-      throw new Error("Person tool operation did not match the current account");
+      throw new PersonAuthorityClientError('stale_access_state', null, 'Person account changed during the request');
     }
     return stored;
   }
@@ -493,7 +496,7 @@ export class PersonClient {
    * the final account check decides, as it does for every read. A client
    * pinned to its account (`account`, as the desktop's runs are) is never
    * asked for as another: a session another sign-in installed first is
-   * refused before anything is sent, so no step of that account reaches it.
+   * refused before the Ask is sent, so no step of that account reaches it.
    */
   async askWithLiveProgress(question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonLiveAnswerV3> {

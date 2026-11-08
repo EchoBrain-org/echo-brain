@@ -565,7 +565,6 @@ function contextCliFailure(action: string, error: unknown, values: Record<Option
   };
 }
 
-
 /** These act on the session itself; every other command acts for one account, and takes a pin. */
 const SESSION_ACTIONS: ReadonlySet<string> = new Set(["login", "status", "session-refresh", "logout"]);
 const PIN_OPTIONS: readonly Option[] = ["expected-membership-id", "expected-authority"];
@@ -1124,7 +1123,8 @@ export async function runPersonClientCli(
 
   const client = new PersonClient({
     home_directory: dependencies.home_directory,
-    // A pinned run's every operation is refused under its session lease while another account is signed in.
+    // A pinned run's own requests are refused under the session lease while another account is signed in. A refresh the
+    // lease needs is not pinned: it renews whatever session is stored, as before.
     ...(pin === undefined ? {} : { account: pin }),
     ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }),
     allow_insecure_loopback: dependencies.allow_insecure_loopback === true,
@@ -1372,7 +1372,8 @@ export async function runPersonClientCli(
         print(stdout, { ok: true, revoked: true });
         break;
       default: {
-        const command = CONTEXT_COMMANDS[action];
+        // Own entries only: an Object.prototype name (toString, __proto__ ...) is no project-context command.
+        const command = Object.hasOwn(CONTEXT_COMMANDS, action) ? CONTEXT_COMMANDS[action] : undefined;
         if (command === undefined) break;
         const [route, request] = command(values);
         print(stdout, await client.context(route, request));

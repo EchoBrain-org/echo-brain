@@ -355,7 +355,7 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     await expect(pending).rejects.toMatchObject({ code: 'transport_failed' });
   });
 
-  it('asks only as the account its client is pinned to: another sign-in that came first is refused before anything is sent', async () => {
+  it('asks only as the account its client is pinned to: another sign-in that came first is refused before the Ask is sent', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
     const home = sessionHome();
     const progress: PersonAskProgressStepEventV3[] = [];
@@ -364,7 +364,7 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       { authority: 'https://other.example.test', membership_id: SESSION.membership_id },
     ]) {
       await expect(new PersonClient({ home_directory: home, now: () => NOW, fetch, account }).askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event)))
-        .rejects.toThrow('did not match the current account');
+        .rejects.toMatchObject({ name: 'PersonAuthorityClientError', code: 'stale_access_state', status: null, message: 'Person account changed during the request' });
     }
     expect(fetch).not.toHaveBeenCalled();
     expect(progress).toEqual([]);

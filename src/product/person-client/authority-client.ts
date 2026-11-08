@@ -154,7 +154,7 @@ function normalizeOrigin(value: string, allowInsecureLoopback: boolean): URL {
   return url;
 }
 
-/** The one bounded reader: at most `maximumBytes` of a reply's body, as UTF-8 text. */
+/** At most `maximumBytes` of a JSON reply's body, as UTF-8 text (a streamed Ask is read by readAskProgressStream). */
 async function readBoundedBody(response: Response, maximumBytes: number): Promise<string> {
   if (response.body === null) return "";
   const reader = response.body.getReader();
@@ -332,14 +332,14 @@ interface ClosedFamily {
   readonly not_json: string;
   readonly noncanonical: string;
   readonly rejected: string;
-  readonly status: string;
+  readonly unexpected_status: string;
   /** A document reply that is not JSON is dropped unread. */
   readonly cancel: boolean;
 }
 const CONTEXT_FAMILY: ClosedFamily = Object.freeze({ not_json: 'Person Authority returned a non-JSON response', noncanonical: 'Person Authority returned a noncanonical error',
-  rejected: 'Person Authority rejected the request', status: 'Person Authority returned an unexpected status', cancel: false });
+  rejected: 'Person Authority rejected the request', unexpected_status: 'Person Authority returned an unexpected status', cancel: false });
 const DOCUMENT_FAMILY: ClosedFamily = Object.freeze({ not_json: 'Document response was not JSON.', noncanonical: 'Document error response was invalid.',
-  rejected: 'Document request was rejected.', status: 'Document response status was unexpected.', cancel: true });
+  rejected: 'Document request was rejected.', unexpected_status: 'Document response status was unexpected.', cancel: true });
 
 /**
  * A closed family's reply: canonical JSON within `maximumBytes`, an error only with one of the family's codes (thrown
@@ -358,7 +358,7 @@ async function closedReply<T>(response: Response, family: ClosedFamily, maximumB
     if (!CLOSED_CONTEXT_ERROR_CODES.has(failure.error.code)) throw new PersonAuthorityClientError('invalid_response', response.status, family.noncanonical);
     throw rejected(failure.error.code);
   }
-  if (response.status !== expectedStatus) throw new PersonAuthorityClientError('invalid_response', response.status, family.status);
+  if (response.status !== expectedStatus) throw new PersonAuthorityClientError('invalid_response', response.status, family.unexpected_status);
   return validateSuccess(value, response.status, validate);
 }
 
@@ -739,7 +739,6 @@ export class PersonAuthorityClient {
       maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, signal });
   }
 
-
   /**
    * The Ask's one transport (`/v7`, the V8 answer, research tool contract v1), streamed in Ask progress V3 (ADR-0039):
    * global by default, and a supplied project ID is a strict project-only scope. The answer may cite live tickets and
@@ -847,7 +846,6 @@ export class PersonAuthorityClient {
     }
     return response;
   }
-
 
   async askSourceEvidence(accessToken: string, value: PersonSourceEvidenceReadRequestV1): Promise<PersonAskSourceEvidenceV1> {
     const request = validatePersonSourceEvidenceReadRequestV1(value);
