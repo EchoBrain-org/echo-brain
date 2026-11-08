@@ -402,10 +402,9 @@ export function answerMarkdown(answer: Answer, names: readonly string[], groups:
 
 /**
  * Copy answer's plain reading of what the page shows, for an answer whose
- * Markdown is longer than Copy answer takes: as the answer's own `text` reads
- * (its sentences one a line, each part's question first when there are
- * several), without what a check left out, then its explanations, or
- * `nothing`, as the Markdown ends.
+ * Markdown is longer than Copy answer takes: its sentences one a line, each
+ * part's question first when there are several, without what a check left
+ * out, then its explanations, or `nothing`, as the Markdown ends.
  */
 export function answerText(answer: Answer, shows: Shows, since?: CopiedSince, nothing = nothingMatched(answer)): string {
   const said = (statements: readonly AnswerStatement[]) => statements.filter(statement => shows(statement.citation_indexes)).map(statement => statement.text);

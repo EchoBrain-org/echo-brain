@@ -1,8 +1,8 @@
 // The Ask timeline on the host (ADR-0047): its file, on a real folder (one per
 // account, owner-only, written whole through a temporary file, at most 200
-// turns and 90 days, a bad file read as empty, one holding a turn an older
-// desktop saved without blocks too, our sign-out deleting it and an account
-// change deleting the last one's), and the checks of what the page sends with an Ask
+// turns and 90 days, a bad file read as empty, a turn an older desktop saved
+// dropped on its own, our sign-out deleting it and an account change deleting
+// the last one's), and the checks of what the page sends with an Ask
 // and a source check before the client sees it.
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -132,6 +132,22 @@ describe('the timeline file (C5)', () => {
     expect(readTimeline(person, ARI)).toEqual([fresh]);
   });
 
+  it('drops a turn an older desktop saved, asked in Mine or with a part without blocks (plain, or laid out by layout v1), and keeps the rest of the file', () => {
+    mkdirSync(folder(), { mode: 0o700 });
+    const path = timelinePath(person, ARI);
+    const current = turn(1);
+    const { blocks: _blocks, ...bare } = current.answer.parts[0]!;
+    for (const old of [{ ...turn(2), scope: { kind: 'mine' }, answer: { ...current.answer, scope: { kind: 'mine' } } }, { ...turn(2), answer: { ...current.answer, parts: [bare] } },
+      { ...turn(2), answer: { ...current.answer, parts: [{ ...current.answer.parts[0]!, layout: [{ kind: 'lead', statements: [0] }] }] } }]) {
+      writeFileSync(path, JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [old, current] }), { mode: 0o600 });
+      expect(readTimeline(person, ARI)).toEqual([current]);
+    }
+    // The next put writes the file without it.
+    const fresh = turn();
+    putTimeline(person, ARI, fresh, NOW);
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { turns: TimelineTurn[] }).turns).toEqual([current, fresh]);
+  });
+
   it('never uses a folder that is a link, nor reads one open to others; a put makes it owner-only again', () => {
     const elsewhere = mkdtempSync(join(tmpdir(), 'echo-elsewhere-'));
     try {
@@ -198,8 +214,8 @@ describe('the timeline file (C5)', () => {
     expect(timelineTurn(good)).toEqual(good);
     const { blocks: _blocks, ...bare } = good.answer.parts[0]!;
     for (const bad of [
-      // What an older desktop saved, so its file reads as empty: a part's statements without blocks (ADR-0051), plain or laid out by retired
-      // layout v1 (ADR-0045), and a turn asked in Mine; and blocks with nothing to arrange.
+      // Never what a put writes now: a part's statements without blocks (ADR-0051), plain or laid out by retired layout v1 (ADR-0045), a
+      // turn asked in Mine, and blocks with nothing to arrange.
       { ...good, answer: { ...good.answer, parts: [bare] } }, { ...good, answer: { ...good.answer, parts: [{ ...bare, layout: [{ kind: 'lead', statements: [0] }] }] } },
       { ...good, scope: { kind: 'mine' } }, { ...good, answer: { ...good.answer, parts: [{ ...good.answer.parts[0]!, statements: [] }] } },
       { ...good, id: 'turn-1' }, { ...good, asked_at: 'yesterday' }, { ...good, scope: { kind: 'project', project_id: 'Apollo' } },
