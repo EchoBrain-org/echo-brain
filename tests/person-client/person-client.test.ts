@@ -140,14 +140,29 @@ async function signedInClient(
     new URL(String(input)).pathname === "/v1/authority-descriptor" ? json({ authority_descriptor: authority }) : handler(input, init));
 }
 
-function writeInvitation(path: string, fields: { login_grant: string; expires_at: string; expected_email?: string }): void {
+const GRANT = "G".repeat(43);
+const AUTHORIZATION_URL = "https://identity.example/authorize?state=state";
+const PRIVATE_EMAIL = "founder+private@example.com";
+const UNAUTHORIZED = () => json({ error: { code: "unauthorized", message: "request failed" } }, 401);
+
+/** This home's private invitation for GRANT, valid until 00:15 unless `fields` say otherwise; returns its path. */
+function invitation(home: string, fields: { expires_at?: string; expected_email?: string } = {}): string {
+  const path = join(home, "person-onboarding.json");
   writeFileSync(path, `${canonicalJson({
     schema_version: fields.expected_email === undefined ? 1 : 2,
     kind: "echo-person-onboarding-invitation",
     authority_url: "https://authority.example",
+    login_grant: GRANT,
+    expires_at: "2026-08-18T00:15:00.000Z",
     ...fields,
   })}\n`, { mode: 0o600 });
   chmodSync(path, 0o600);
+  return path;
+}
+
+/** None of `values` appears in any of `outputs`. */
+function expectAbsent(outputs: readonly string[], values: readonly string[]): void {
+  for (const output of outputs) for (const value of values) expect(output).not.toContain(value);
 }
 
 /** The fixture identity provider finishes the CLI's one-use loopback handoff. */
@@ -188,6 +203,18 @@ function loginAuthority(
     deliverHandoff(request.loopback_handoff as Record<string, unknown>, result);
     return json({ authorization_url: authorizationUrl, expires_at: "2026-08-18T00:10:00.000Z" }, 201);
   };
+}
+
+/** `person login <argv>` against loginAuthority; with `open`, opening a browser records the URL and returns `open`. */
+async function login(home: string, argv: readonly string[], onBegin: Parameters<typeof loginAuthority>[1],
+  options: { readonly authorization_url?: string; readonly open?: boolean; readonly descriptor?: boolean } = {}) {
+  const opened: string[] = [];
+  const run = await runCli(["login", ...argv], {
+    home_directory: home, now: () => NOW,
+    ...(options.open === undefined ? {} : { open_authorization_url: (url: string) => { opened.push(url); return options.open === true; } }),
+    fetch: loginAuthority(options.authorization_url ?? AUTHORIZATION_URL, onBegin, { descriptor: options.descriptor }),
+  });
+  return { ...run, opened, lines: run.stdout.split("\n").filter((line) => line !== "").map((line) => JSON.parse(line) as Record<string, unknown>) };
 }
 
 /** A valid Ask (V8) response: one answered statement per citation, or not found. */
@@ -1701,199 +1728,68 @@ describe("Person client", () => {
     });
   });
 
-  it("writes an owner-issued employee invitation privately without rendering its grant or IDs", async () => {
+  it.each(["invite", "reissue"] as const)("writes an owner's employee %s privately, naming the expected account, without printing its grant", async (op) => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      const outputPath = join(home, "employee-onboarding.json");
-      const loginGrant = "G".repeat(43);
-      await new PersonClient({
-        home_directory: home,
-        now: () => "2026-08-18T00:00:00.000Z",
-        fetch: async () => json({ authority_descriptor: authority }),
-      }).installSession("https://authority.example", OWNER_SESSION_EXPIRED);
-      const { code: status, stdout } = await runCli(
-        [
-          "employee",
-          "invite",
-          "--name",
-          "Jane Doe",
-          "--email",
-          "jane@example.com",
-          "--out",
-          outputPath,
-        ],
-        {
-          home_directory: home,
-          now: () => "2026-08-18T00:00:00.000Z",
-          fetch: async (input, init) => {
-            expect(new URL(String(input)).pathname).toBe("/v1/person/employees");
-            expect(init?.method).toBe("POST");
-            expect(new Headers(init?.headers).get("authorization")).toBe(
-              `Bearer ${SESSION.access_token}`,
-            );
-            expect(JSON.parse(String(init?.body))).toEqual({
-              name: "Jane Doe",
-              email: "jane@example.com",
-            });
-            return json({ login_grant: loginGrant, expires_at: "2026-08-18T00:15:00.000Z" }, 201);
-          },
+      await installFixtureSession(home, OWNER_SESSION);
+      const out = join(home, "employee-onboarding.json");
+      const { code, stdout } = await runCli(["employee", op, ...(op === "invite" ? ["--name", "Jane Doe"] : []), "--email", "jane@example.com", "--out", out], {
+        home_directory: home, now: () => NOW,
+        fetch: async (input, init) => {
+          expect([new URL(String(input)).pathname, init?.method, new Headers(init?.headers).get("authorization")])
+            .toEqual(["/v1/person/employees", op === "invite" ? "POST" : "PUT", `Bearer ${OWNER_SESSION.access_token}`]);
+          expect(JSON.parse(String(init?.body))).toEqual(op === "invite" ? { name: "Jane Doe", email: "jane@example.com" } : { email: "jane@example.com" });
+          return json({ login_grant: GRANT, expires_at: "2026-08-18T00:15:00.000Z" }, 201);
         },
-      );
-      expect(status).toBe(0);
-      expect(JSON.parse(stdout)).toEqual({
-        ok: true,
-        output_path: outputPath,
-        expires_at: "2026-08-18T00:15:00.000Z",
       });
-      expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
-        schema_version: 2,
-        login_grant: loginGrant,
-        expected_email: "jane@example.com",
-      });
-      expect(lstatSync(outputPath).mode & 0o777).toBe(0o600);
-    });
-  });
-
-  it("writes a versioned expected-account artifact when reissuing an employee invitation", async () => {
-    await withHome(async (home) => {
-      const outputPath = join(home, "employee-reissued-onboarding.json");
-      const client = await signedInClient(home, async (input, init) => {
-          expect(new URL(String(input)).pathname).toBe("/v1/person/employees");
-          expect(init?.method).toBe("PUT");
-          expect(JSON.parse(String(init?.body))).toEqual({
-            email: "jane@example.com",
-          });
-          return json(
-            {
-              login_grant: "G".repeat(43),
-              expires_at: "2026-08-18T00:15:00.000Z",
-            },
-            201,
-          );
-        }, OWNER_SESSION);
-
-      await client.reissueEmployee({
-        email: "jane@example.com",
-        output_path: outputPath,
-      });
-
-      expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
-        schema_version: 2,
-        expected_email: "jane@example.com",
-      });
-      expect(lstatSync(outputPath).mode & 0o777).toBe(0o600);
+      expect(code).toBe(0);
+      expect(JSON.parse(stdout)).toEqual({ ok: true, output_path: out, expires_at: "2026-08-18T00:15:00.000Z" });
+      expect(JSON.parse(readFileSync(out, "utf8"))).toMatchObject({ schema_version: 2, login_grant: GRANT, expected_email: "jane@example.com" });
+      expect(lstatSync(out).mode & 0o777).toBe(0o600);
     });
   });
 
   it("keeps legacy durable employee identities usable without emitting an expected-email artifact", async () => {
     await withHome(async (home) => {
-      const outputPath = join(home, "legacy-employee-reissued-onboarding.json");
+      const out = join(home, "legacy-employee-reissued-onboarding.json");
       const observed: Array<{ path: string; method: string; body?: unknown }> = [];
       const client = await signedInClient(home, async (input, init) => {
-          const path = new URL(String(input)).pathname;
-          observed.push({
-            path,
-            method: init?.method ?? "GET",
-            ...(init?.body === undefined
-              ? {}
-              : { body: JSON.parse(String(init.body)) }),
-          });
-          if (init?.method === "GET") {
-            return json({
-              schema_version: 1,
-              kind: "echo-clean-person-employee-roster-v1",
-              employees: [
-                {
-                  email: "alice@localhost",
-                  display_name: "Alice Legacy",
-                  membership_status: "active",
-                  invitation_state: "pending",
-                },
-              ],
-            });
-          }
-          if (init?.method === "PUT") {
-            return json({
-              login_grant: "G".repeat(43),
-              expires_at: "2026-08-18T00:15:00.000Z",
-            }, 201);
-          }
-          return new Response(null, { status: 204 });
-        }, OWNER_SESSION);
+        observed.push({ path: new URL(String(input)).pathname, method: init?.method ?? "GET", ...(init?.body === undefined ? {} : { body: JSON.parse(String(init.body)) }) });
+        if (init?.method === "GET") {
+          return json({ schema_version: 1, kind: "echo-clean-person-employee-roster-v1",
+            employees: [{ email: "alice@localhost", display_name: "Alice Legacy", membership_status: "active", invitation_state: "pending" }] });
+        }
+        return init?.method === "PUT" ? json({ login_grant: GRANT, expires_at: "2026-08-18T00:15:00.000Z" }, 201) : new Response(null, { status: 204 });
+      }, OWNER_SESSION);
 
-      await expect(client.employees()).resolves.toMatchObject({
-        employees: [expect.objectContaining({ email: "alice@localhost" })],
-      });
-      await client.reissueEmployee({
-        email: "alice@localhost",
-        output_path: outputPath,
-      });
+      await expect(client.employees()).resolves.toMatchObject({ employees: [expect.objectContaining({ email: "alice@localhost" })] });
+      await client.reissueEmployee({ email: "alice@localhost", output_path: out });
       await expect(client.revokeEmployee("alice@localhost")).resolves.toBeUndefined();
-      await expect(
-        client.inviteEmployee({
-          name: "Alice Legacy",
-          email: "alice@localhost",
-          output_path: join(home, "strict-new-invite.json"),
-        }),
-      ).rejects.toThrow(/canonical lowercase mailbox/);
-
+      await expect(client.inviteEmployee({ name: "Alice Legacy", email: "alice@localhost", output_path: join(home, "strict-new-invite.json") }))
+        .rejects.toThrow(/canonical lowercase mailbox/);
       expect(observed).toEqual([
         { path: "/v1/person/employees", method: "GET" },
-        {
-          path: "/v1/person/employees",
-          method: "PUT",
-          body: { email: "alice@localhost" },
-        },
-        {
-          path: "/v1/person/employees",
-          method: "DELETE",
-          body: { email: "alice@localhost" },
-        },
+        { path: "/v1/person/employees", method: "PUT", body: { email: "alice@localhost" } },
+        { path: "/v1/person/employees", method: "DELETE", body: { email: "alice@localhost" } },
       ]);
-      expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
-        schema_version: 1,
-        kind: "echo-person-onboarding-invitation",
-        authority_url: "https://authority.example",
-        login_grant: "G".repeat(43),
-        expires_at: "2026-08-18T00:15:00.000Z",
-      });
+      expect(JSON.parse(readFileSync(out, "utf8"))).toEqual({ schema_version: 1, kind: "echo-person-onboarding-invitation",
+        authority_url: "https://authority.example", login_grant: GRANT, expires_at: "2026-08-18T00:15:00.000Z" });
     });
   });
 
   it("renders the owner employee roster without local database access or lifecycle identifiers", async () => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      const client = new PersonClient({
-        home_directory: home,
-        now: () => "2026-08-18T00:00:00.000Z",
-        fetch: async () => json({ authority_descriptor: authority }),
-      });
-      await client.installSession("https://authority.example", OWNER_SESSION_EXPIRED);
-      const roster = {
-        schema_version: 1,
-        kind: "echo-clean-person-employee-roster-v1",
-        employees: [
-          {
-            email: "jane@example.com",
-            display_name: "Jane Doe",
-            membership_status: "active",
-            invitation_state: "pending",
-          },
-        ],
-      };
-      const { code: status, stdout } = await runCli(["employee", "list"], {
-        home_directory: home,
-        now: () => "2026-08-18T00:00:00.000Z",
+      await installFixtureSession(home, OWNER_SESSION);
+      const roster = { schema_version: 1, kind: "echo-clean-person-employee-roster-v1",
+        employees: [{ email: "jane@example.com", display_name: "Jane Doe", membership_status: "active", invitation_state: "pending" }] };
+      const { code, stdout } = await runCli(["employee", "list"], {
+        home_directory: home, now: () => NOW,
         fetch: async (input, init) => {
-          expect(new URL(String(input)).pathname).toBe("/v1/person/employees");
-          expect(init?.method).toBe("GET");
-          expect(new Headers(init?.headers).get("authorization")).toBe(
-            `Bearer ${SESSION.access_token}`,
-          );
+          expect([new URL(String(input)).pathname, init?.method, new Headers(init?.headers).get("authorization")])
+            .toEqual(["/v1/person/employees", "GET", `Bearer ${OWNER_SESSION.access_token}`]);
           return json(roster);
         },
       });
-      expect(status).toBe(0);
+      expect(code).toBe(0);
       expect(JSON.parse(stdout)).toEqual({ ok: true, result: roster });
     });
   });
@@ -1914,10 +1810,7 @@ describe("Person client", () => {
         await expect(op === "invite"
           ? client.inviteEmployee({ name: "Jane Doe", email: "jane@example.com", output_path: output })
           : client.reissueEmployee({ email: "jane@example.com", output_path: output }),
-        ).rejects.toMatchObject({
-          code: "invitation_output_invalid",
-          mutation_outcome: "not_submitted",
-        } satisfies Partial<EmployeeMutationError>);
+        ).rejects.toMatchObject({ code: "invitation_output_invalid", mutation_outcome: "not_submitted" } satisfies Partial<EmployeeMutationError>);
       } finally {
         chmodSync(home, 0o700);
       }
@@ -1930,14 +1823,10 @@ describe("Person client", () => {
       const output = join(home, "invite.json");
       const client = await signedInClient(home, async () => {
         writeFileSync(output, "created by another local writer\n", { mode: 0o600 });
-        return json({ login_grant: "G".repeat(43), expires_at: "2026-08-18T00:15:00.000Z" }, 201);
+        return json({ login_grant: GRANT, expires_at: "2026-08-18T00:15:00.000Z" }, 201);
       }, OWNER_SESSION);
-      await expect(
-        client.inviteEmployee({ name: "Jane Doe", email: "jane@example.com", output_path: output }),
-      ).rejects.toMatchObject({
-        code: "invitation_save_failed",
-        mutation_outcome: "committed",
-      } satisfies Partial<EmployeeMutationError>);
+      await expect(client.inviteEmployee({ name: "Jane Doe", email: "jane@example.com", output_path: output }))
+        .rejects.toMatchObject({ code: "invitation_save_failed", mutation_outcome: "committed" } satisfies Partial<EmployeeMutationError>);
       expect(readFileSync(output, "utf8")).toBe("created by another local writer\n");
     });
   });
@@ -1973,181 +1862,72 @@ describe("Person client", () => {
   it("reports a duplicate employee as a typed rejected CLI mutation", async () => {
     await withHome(async (home) => {
       await installFixtureSession(home, OWNER_SESSION);
-      let stderr = "";
-      const outputPath = join(home, "employee-invitation.json");
-      const status = await runPersonClientCli(
-        [
-          "employee",
-          "invite",
-          "--name",
-          "Jane Doe",
-          "--email",
-          "jane@example.com",
-          "--out",
-          outputPath,
-        ],
-        {
-          stderr: { write: (value) => ((stderr += String(value)), true) },
-          stdout: { write: () => true },
-          home_directory: home,
-          now: () => NOW,
-          fetch: async (input) => {
-            expect(new URL(String(input)).pathname).toBe("/v1/person/employees");
-            return json({ error: { code: "conflict", message: "request failed" } }, 409);
-          },
+      const out = join(home, "employee-invitation.json");
+      const { code, stderr } = await runCli(["employee", "invite", "--name", "Jane Doe", "--email", "jane@example.com", "--out", out], {
+        home_directory: home, now: () => NOW,
+        fetch: async (input) => {
+          expect(new URL(String(input)).pathname).toBe("/v1/person/employees");
+          return json({ error: { code: "conflict", message: "request failed" } }, 409);
         },
-      );
-
-      expect(status).toBe(1);
-      expect(existsSync(outputPath)).toBe(false);
+      });
+      expect(code).toBe(1);
+      expect(existsSync(out)).toBe(false);
       expect(JSON.parse(stderr)).toMatchObject({
-        ok: false,
-        action: "employee-invite",
-        code: "employee_already_exists",
-        mutation_outcome: "rejected",
-        error: "Person Authority rejected the request",
+        ok: false, action: "employee-invite", code: "employee_already_exists", mutation_outcome: "rejected", error: "Person Authority rejected the request",
       });
     });
   });
 
-  it("completes invitation login through a one-use loopback browser handoff", async () => {
+  it("completes invitation login through a one-use loopback browser handoff, even when this clock is past the invitation", async () => {
     await withHome(async (home) => {
-      const invitationPath = join(home, "person-onboarding.json");
-      const loginGrant = "G".repeat(43);
-      writeInvitation(invitationPath, {
-        login_grant: loginGrant,
-        expires_at: "2026-08-18T00:15:00.000Z",
+      // The invitation's own expiry is before NOW: whether it is still usable is the Authority's to say.
+      const { code, stdout, stderr, lines } = await login(home, ["--invitation", invitation(home, { expires_at: "2026-08-18T00:01:00.000Z" })], (request) => {
+        expect(request).toMatchObject({ kind: "identity_bootstrap", login_grant: GRANT });
+        const handoff = request.loopback_handoff as Record<string, unknown>;
+        expect(handoff.url).toMatch(/^http:\/\/127\.0\.0\.1:[1-9][0-9]*\/[A-Za-z0-9_-]{43}$/);
+        expect(handoff.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        return { session: SESSION };
       });
-      const { code: status, stdout } = await runCli(
-        ["login", "--invitation", invitationPath],
-        {
-          home_directory: home,
-          now: () => NOW,
-          fetch: loginAuthority("https://identity.example/authorize?state=state", (request) => {
-            expect(request).toMatchObject({
-              kind: "identity_bootstrap",
-              login_grant: loginGrant,
-            });
-            const handoff = request.loopback_handoff as Record<string, unknown>;
-            expect(handoff.url).toMatch(/^http:\/\/127\.0\.0\.1:[1-9][0-9]*\/[A-Za-z0-9_-]{43}$/);
-            expect(handoff.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
-            return { session: SESSION };
-          }),
-        },
-      );
-
-      expect(status).toBe(0);
-      const lines = stdout
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
+      expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
       expect(lines).toHaveLength(2);
-      expect(lines[0]).toMatchObject({
-        phase: "open-browser",
-        authorization_url: "https://identity.example/authorize?state=state",
-      });
-      expect(lines[1]).toMatchObject({ phase: "installed", ok: true });
-      expect(lines[0].instruction).toBe(
-        "Open authorization_url to complete sign-in in your browser.",
-      );
-      expect(stdout).not.toContain(loginGrant);
-      expect(stdout).not.toContain(SESSION.access_token);
-      expect(stdout).not.toContain(SESSION.refresh_token);
+      expect(lines[0]).toMatchObject({ phase: "open-browser", authorization_url: AUTHORIZATION_URL, instruction: "Open authorization_url to complete sign-in in your browser." });
+      expect(lines[1]).toMatchObject({ ok: true, phase: "installed", membership_type: "employee", authority_origin: "https://authority.example" });
+      expectAbsent([stdout], [GRANT, SESSION.access_token, SESSION.refresh_token]);
     });
   });
 
   it("keeps an invitation account private while preserving a manual-browser fallback", async () => {
     await withHome(async (home) => {
-      const invitationPath = join(home, "person-onboarding.json");
-      const expectedEmail = "founder+private@example.com";
-      const loginGrant = "G".repeat(43);
-      const hintedAuthorizationUrl = `https://identity.example/authorize?state=state&login_hint=${encodeURIComponent(expectedEmail)}&prompt=select_account`;
-      writeInvitation(invitationPath, {
-        login_grant: loginGrant,
-        expires_at: "2026-08-18T00:15:00.000Z",
-        expected_email: expectedEmail,
-      });
-      const opened: string[] = [];
-      const { code: status, stdout } = await runCli(
-        ["login", "--invitation", invitationPath],
-        {
-          home_directory: home,
-          now: () => NOW,
-          open_authorization_url: (url) => {
-            opened.push(url);
-            return false;
-          },
-          fetch: loginAuthority(hintedAuthorizationUrl, (request) => {
-            expect(request.login_hint).toBe(expectedEmail);
-            return { session: ROTATED_SESSION };
-          }),
-        },
-      );
-
-      expect(status).toBe(0);
-      // Without --open-browser nothing is opened, and the manual URL never
-      // writes private invitation metadata to stdout. The wrong-account test
-      // below covers the directly opened URL, which remains hinted.
+      const { code, stdout, lines, opened } = await login(home, ["--invitation", invitation(home, { expected_email: PRIVATE_EMAIL })], (request) => {
+        expect(request.login_hint).toBe(PRIVATE_EMAIL);
+        return { session: ROTATED_SESSION };
+      }, { authorization_url: `${AUTHORIZATION_URL}&login_hint=${encodeURIComponent(PRIVATE_EMAIL)}&prompt=select_account`, open: false });
+      expect(code).toBe(0);
+      // Without --open-browser nothing is opened, and the manual URL never writes private invitation metadata to stdout.
+      // The wrong-account test below covers the directly opened URL, which remains hinted.
       expect(opened).toEqual([]);
-      const lines = stdout
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
       expect(lines[0]).toMatchObject({
-        phase: "open-browser",
-        authorization_url:
-          "https://identity.example/authorize?state=state&prompt=select_account",
-        instruction:
-          "Sign in with the account named in the private invitation. Open authorization_url to complete sign-in in your browser.",
+        phase: "open-browser", authorization_url: `${AUTHORIZATION_URL}&prompt=select_account`,
+        instruction: "Sign in with the account named in the private invitation. Open authorization_url to complete sign-in in your browser.",
       });
       expect(lines[0]).not.toHaveProperty("expected_account");
-      expect(stdout).not.toContain(expectedEmail);
-      expect(stdout).not.toContain(encodeURIComponent(expectedEmail));
-      expect(stdout).not.toContain("login_hint");
+      expectAbsent([stdout], [PRIVATE_EMAIL, encodeURIComponent(PRIVATE_EMAIL), "login_hint"]);
     });
   });
 
   it("does not leak a private invitation account after a wrong-account sign-in", async () => {
     await withHome(async (home) => {
-      const invitationPath = join(home, "person-onboarding.json");
-      const expectedEmail = "founder+private@example.com";
-      const hintedAuthorizationUrl = `https://identity.example/authorize?state=state&login_hint=${encodeURIComponent(expectedEmail)}`;
-      writeInvitation(invitationPath, {
-        login_grant: "G".repeat(43),
-        expires_at: "2026-08-18T00:15:00.000Z",
-        expected_email: expectedEmail,
-      });
-      const opened: string[] = [];
-      const { code: status, stdout, stderr } = await runCli(
-        ["login", "--invitation", invitationPath, "--open-browser"],
-        {
-          home_directory: home,
-          now: () => NOW,
-          open_authorization_url: (url) => {
-            opened.push(url);
-            return true;
-          },
-          fetch: loginAuthority(hintedAuthorizationUrl, (request) => {
-            expect(request.login_hint).toBe(expectedEmail);
-            return { error: "retryable" };
-          }, { descriptor: false }),
-        },
-      );
-
-      expect(status).toBe(1);
-      expect(opened).toEqual([hintedAuthorizationUrl]);
-      const openBrowserReceipt = JSON.parse(stdout.trim()) as Record<string, unknown>;
-      expect(openBrowserReceipt).not.toHaveProperty("authorization_url");
-      expect(stdout).not.toContain("https://identity.example/authorize");
-      expect(stdout).not.toContain("state=state");
-      for (const output of [stdout, stderr]) {
-        expect(output).not.toContain(expectedEmail);
-        expect(output).not.toContain(encodeURIComponent(expectedEmail));
-        expect(output).not.toContain("login_hint");
-        expect(output).not.toContain(
-          "echo-organization-authority-person-admin",
-        );
-      }
+      const hinted = `${AUTHORIZATION_URL}&login_hint=${encodeURIComponent(PRIVATE_EMAIL)}`;
+      const { code, stdout, stderr, lines, opened } = await login(home, ["--invitation", invitation(home, { expected_email: PRIVATE_EMAIL }), "--open-browser"], (request) => {
+        expect(request.login_hint).toBe(PRIVATE_EMAIL);
+        return { error: "retryable" };
+      }, { authorization_url: hinted, open: true, descriptor: false });
+      expect(code).toBe(1);
+      expect(opened).toEqual([hinted]);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).not.toHaveProperty("authorization_url");
+      expectAbsent([stdout], ["https://identity.example/authorize", "state=state"]);
+      expectAbsent([stdout, stderr], [PRIVATE_EMAIL, encodeURIComponent(PRIVATE_EMAIL), "login_hint", "echo-organization-authority-person-admin"]);
       expect(stderr).toContain("invitation remains usable");
       expect(stderr).toContain("account named in the private invitation");
     });
@@ -2155,281 +1935,98 @@ describe("Person client", () => {
 
   it("lets the Authority distinguish expired unused invitations from existing identities", async () => {
     await withHome(async (home) => {
-      const invitationPath = join(home, "expired-person-onboarding.json");
-      const loginGrant = "G".repeat(43);
-      writeInvitation(invitationPath, {
-        login_grant: loginGrant,
-        expires_at: "2026-08-18T00:01:00.000Z",
-      });
-
-      for (const argv of [
-        ["login", "--invitation", invitationPath],
-      ]) {
-        let browserOpened = false;
-        let authorityRequests = 0;
-        const begins: Record<string, unknown>[] = [];
-        const { code: status, stdout, stderr } = await runCli(argv, {
-          home_directory: home,
-          now: () => NOW,
-          open_authorization_url: () => {
-            browserOpened = true;
-            return true;
-          },
-          fetch: async (input, init) => {
-            expect(new URL(String(input)).pathname).toBe("/v2/session/oidc/begin");
-            authorityRequests += 1;
-            begins.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-            return json({ error: { code: "unauthorized", message: "request failed" } }, 401);
-          },
-        });
-
-        expect(status).toBe(1);
-        expect(stdout).toBe("");
-        expect(browserOpened).toBe(false);
-        expect(authorityRequests).toBe(2);
-        expect(begins[0]).toMatchObject({
-          kind: "identity_bootstrap",
-          login_grant: loginGrant,
-        });
-        expect(begins[1]).toMatchObject({ kind: "existing_identity_login" });
-        expect(begins[1]).not.toHaveProperty("login_grant");
-        expect(JSON.parse(stderr)).toMatchObject({
-          ok: false,
-          action: argv[0],
-          error: expect.stringContaining("no existing ECHO identity was found"),
-        });
-        expect(stderr).toContain("reissue");
-        expect(stderr).not.toContain(loginGrant);
-      }
-    });
-  });
-
-  it("lets the Authority accept an invitation despite modest client clock skew", async () => {
-    await withHome(async (home) => {
-      const invitationPath = join(home, "person-onboarding.json");
-      const loginGrant = "G".repeat(43);
-      writeInvitation(invitationPath, {
-        login_grant: loginGrant,
-        expires_at: "2026-08-18T00:01:00.000Z",
-      });
-      const opened: string[] = [];
-      const { code: status, stdout, stderr } = await runCli(
-        ["login", "--invitation", invitationPath, "--open-browser"],
-        {
-          home_directory: home,
-          now: () => NOW,
-          open_authorization_url: (url) => {
-            opened.push(url);
-            return true;
-          },
-          fetch: loginAuthority("https://identity.example/authorize?state=state", (request) => {
-            expect(request).toMatchObject({
-              kind: "identity_bootstrap",
-              login_grant: loginGrant,
-            });
-            return { session: ROTATED_SESSION };
-          }),
-        },
-      );
-
-      expect(status).toBe(0);
-      expect(stderr).toBe("");
-      expect(opened).toEqual([
-        "https://identity.example/authorize?state=state",
-      ]);
-      const lines = stdout.trim().split("\n").map((line) => JSON.parse(line));
-      expect(lines.at(-1)).toMatchObject({
-        ok: true,
-        phase: "installed",
-        membership_type: "employee",
-        authority_origin: "https://authority.example",
-      });
-      expect(stdout).not.toContain(loginGrant);
-      expect(stdout).not.toContain(ROTATED_SESSION.access_token);
-      expect(stdout).not.toContain(ROTATED_SESSION.refresh_token);
+      const begins: Record<string, unknown>[] = [];
+      const { code, stdout, stderr, opened } = await login(home, ["--invitation", invitation(home, { expires_at: "2026-08-18T00:01:00.000Z" })], (request) => {
+        begins.push(request);
+        return UNAUTHORIZED();
+      }, { open: true, descriptor: false });
+      expect(code).toBe(1);
+      expect(stdout).toBe("");
+      expect(opened).toEqual([]);
+      expect(begins).toHaveLength(2);
+      expect(begins[0]).toMatchObject({ kind: "identity_bootstrap", login_grant: GRANT });
+      expect(begins[1]).toMatchObject({ kind: "existing_identity_login" });
+      expect(begins[1]).not.toHaveProperty("login_grant");
+      expect(JSON.parse(stderr)).toMatchObject({ ok: false, action: "login", error: expect.stringContaining("no existing ECHO identity was found") });
+      expect(stderr).toContain("reissue");
+      expect(stderr).not.toContain(GRANT);
     });
   });
 
   it("refuses browser login while this Mac already has a Person session", async () => {
     await withHome(async (home) => {
       await installFixtureSession(home);
-      let networkCalls = 0;
-      const { code: status, stdout, stderr } = await runCli(
-        ["login", "--authority-url", "https://authority.example"],
-        {
-          home_directory: home,
-          now: () => NOW,
-          fetch: async () => {
-            networkCalls += 1;
-            throw new Error("browser login must not start for an existing session");
-          },
-        },
-      );
-
-      expect(status).toBe(1);
-      expect(networkCalls).toBe(0);
+      const fetch = vi.fn<typeof globalThis.fetch>();
+      const { code, stdout, stderr } = await runCli(["login", "--authority-url", "https://authority.example"], { home_directory: home, now: () => NOW, fetch });
+      expect(code).toBe(1);
+      expect(fetch).not.toHaveBeenCalled();
       expect(stdout).toBe("");
-      expect(JSON.parse(stderr)).toMatchObject({
-        ok: false,
-        action: "login",
-        error: expect.stringContaining("already signed in"),
-      });
+      expect(JSON.parse(stderr)).toMatchObject({ ok: false, action: "login", error: expect.stringContaining("already signed in") });
     });
   });
 
-  it("reauthenticates through the same loopback handoff without an invitation", async () => {
+  it.each([false, true])("reauthenticates through the same loopback handoff without an invitation, opening a browser only when asked (%s)", async (openBrowser) => {
     await withHome(async (home) => {
-      const { code: status, stdout } = await runCli(
-        ["login", "--authority-url", "https://authority.example"],
-        {
-          home_directory: home,
-          now: () => NOW,
-          fetch: loginAuthority("https://identity.example/authorize?state=state", (request) => {
-            expect(request.kind).toBe("existing_identity_login");
-            return { session: SESSION };
-          }),
-        },
-      );
-      expect(status).toBe(0);
-      expect(stdout).toContain('"phase":"installed"');
-    });
-  });
-
-  it("opens the existing-identity browser handoff only when requested", async () => {
-    await withHome(async (home) => {
-      const authorizationUrl = "https://identity.example/authorize?state=state";
-      const opened: string[] = [];
-      const { code: status, stdout, stderr } = await runCli(
-        ["login", "--authority-url", "https://authority.example", "--open-browser"],
-        {
-          home_directory: home,
-          now: () => NOW,
-          open_authorization_url: (url) => {
-            opened.push(url);
-            return true;
-          },
-          fetch: loginAuthority(authorizationUrl, (request) => {
-            expect(request.kind).toBe("existing_identity_login");
-            return { session: ROTATED_SESSION };
-          }),
-        },
-      );
-
-      expect(status).toBe(0);
-      expect(stderr).toBe("");
-      expect(opened).toEqual([authorizationUrl]);
-      const lines = stdout.trim().split("\n").map((line) => JSON.parse(line));
+      const { code, stdout, stderr, lines, opened } = await login(home, ["--authority-url", "https://authority.example", ...(openBrowser ? ["--open-browser"] : [])], (request) => {
+        expect(request.kind).toBe("existing_identity_login");
+        return { session: ROTATED_SESSION };
+      }, { open: true });
+      expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+      expect(opened).toEqual(openBrowser ? [AUTHORIZATION_URL] : []);
       expect(lines).toHaveLength(2);
-      expect(lines[0]).toMatchObject({ ok: true, phase: "open-browser", browser_opened: true });
-      expect(lines[0]).not.toHaveProperty("authorization_url");
+      expect(lines[0]).toMatchObject(openBrowser ? { ok: true, phase: "open-browser", browser_opened: true } : { ok: true, phase: "open-browser", authorization_url: AUTHORIZATION_URL });
+      if (openBrowser) {
+        expect(lines[0]).not.toHaveProperty("authorization_url");
+        expect(stdout).not.toContain(AUTHORIZATION_URL);
+      }
       expect(lines[1]).toMatchObject({ ok: true, phase: "installed" });
-      expect(stdout).not.toContain(authorizationUrl);
-      expect(stdout).not.toContain(ROTATED_SESSION.access_token);
-      expect(stdout).not.toContain(ROTATED_SESSION.refresh_token);
-      expect(new PersonClient({ home_directory: home }).sessionSummary()).toMatchObject({
-        membership_type: "employee",
-      });
+      expectAbsent([stdout], [ROTATED_SESSION.access_token, ROTATED_SESSION.refresh_token]);
+      expect(new PersonClient({ home_directory: home }).sessionSummary()).toMatchObject({ membership_type: "employee" });
     });
   });
 
   it("fails a requested browser launch without installing a Person session", async () => {
     await withHome(async (home) => {
-      const authorizationUrl = "https://identity.example/authorize?state=state";
-      const opened: string[] = [];
-      const { code: status, stdout, stderr } = await runCli(
-        ["login", "--authority-url", "https://authority.example", "--open-browser"],
-        {
-          home_directory: home,
-          now: () => NOW,
-          open_authorization_url: (url) => {
-            opened.push(url);
-            return false;
-          },
-          fetch: async (input) => {
-            expect(new URL(String(input)).pathname).toBe("/v2/session/oidc/begin");
-            return json({ authorization_url: authorizationUrl, expires_at: "2026-08-18T00:10:00.000Z" }, 201);
-          },
-        },
-      );
-
-      expect(status).toBe(1);
-      expect(opened).toEqual([authorizationUrl]);
+      const { code, stdout, stderr, opened } = await login(home, ["--authority-url", "https://authority.example", "--open-browser"],
+        () => json({ authorization_url: AUTHORIZATION_URL, expires_at: "2026-08-18T00:10:00.000Z" }, 201), { open: false, descriptor: false });
+      expect(code).toBe(1);
+      expect(opened).toEqual([AUTHORIZATION_URL]);
       expect(stdout).toBe("");
       expect(stderr).toContain("Person browser could not be opened");
-      expect(stderr).not.toContain(authorizationUrl);
+      expect(stderr).not.toContain(AUTHORIZATION_URL);
       expect(() => new PersonClient({ home_directory: home }).sessionSummary()).toThrow();
     });
   });
 
   it("recovers an expired consumed invitation through existing-identity login", async () => {
     await withHome(async (home) => {
-      const invitationPath = join(home, "person-onboarding.json");
-      writeInvitation(invitationPath, {
-        login_grant: "G".repeat(43),
-        expires_at: "2026-08-18T00:01:00.000Z",
-      });
       const begins: Record<string, unknown>[] = [];
-      const { code: status, stdout } = await runCli(
-        ["login", "--invitation", invitationPath],
-        {
-          home_directory: home,
-          now: () => NOW,
-          fetch: loginAuthority("https://identity.example/authorize?state=state", (request) => {
-            begins.push(request);
-            if (begins.length === 1) {
-              return json({ error: { code: "unauthorized", message: "request failed" } }, 401);
-            }
-            expect(request.kind).toBe("existing_identity_login");
-            expect(request).not.toHaveProperty("login_grant");
-            return { session: SESSION };
-          }),
-        },
-      );
-      expect(status).toBe(0);
+      const { code, stdout } = await login(home, ["--invitation", invitation(home, { expires_at: "2026-08-18T00:01:00.000Z" })], (request) => {
+        begins.push(request);
+        if (begins.length === 1) return UNAUTHORIZED();
+        expect(request.kind).toBe("existing_identity_login");
+        expect(request).not.toHaveProperty("login_grant");
+        return { session: SESSION };
+      });
+      expect(code).toBe(0);
       expect(begins).toHaveLength(2);
-      expect(stdout).toContain(
-        "An existing ECHO identity was found.",
-      );
+      expect(stdout).toContain("An existing ECHO identity was found.");
       expect(stdout).toContain('"phase":"installed"');
     });
   });
 
   it("promptly asks for invitation reissue when recovery finds no bound identity", async () => {
     await withHome(async (home) => {
-      const invitationPath = join(home, "expired-person-onboarding.json");
-      writeInvitation(invitationPath, {
-        login_grant: "G".repeat(43),
-        expires_at: "2026-08-18T00:01:00.000Z",
-      });
       const begins: Record<string, unknown>[] = [];
-      const { code: status, stdout, stderr } = await runCli(
-        ["login", "--invitation", invitationPath],
-        {
-          home_directory: home,
-          now: () => NOW,
-          fetch: loginAuthority("https://identity.example/authorize?state=state", (request) => {
-            begins.push(request);
-            if (begins.length === 1) {
-              return json(
-                { error: { code: "unauthorized", message: "request failed" } },
-                401,
-              );
-            }
-            return { error: "identity_not_bound" };
-          }, { descriptor: false }),
-        },
-      );
-
-      expect(status).toBe(1);
-      expect(begins.map((request) => request.kind)).toEqual([
-        "identity_bootstrap",
-        "existing_identity_login",
-      ]);
+      const { code, stdout, stderr } = await login(home, ["--invitation", invitation(home, { expires_at: "2026-08-18T00:01:00.000Z" })], (request) => {
+        begins.push(request);
+        return begins.length === 1 ? UNAUTHORIZED() : { error: "identity_not_bound" };
+      }, { descriptor: false });
+      expect(code).toBe(1);
+      expect(begins.map((request) => request.kind)).toEqual(["identity_bootstrap", "existing_identity_login"]);
       expect(stdout).toContain('"phase":"open-browser"');
       expect(stdout).not.toContain('"phase":"installed"');
-      expect(stderr).toContain("no active ECHO identity");
-      expect(stderr).toContain("Select the invited Google account");
-      expect(stderr).toContain("reissue the invitation");
+      for (const text of ["no active ECHO identity", "Select the invited Google account", "reissue the invitation"]) expect(stderr).toContain(text);
     });
   });
 
