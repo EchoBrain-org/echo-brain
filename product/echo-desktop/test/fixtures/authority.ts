@@ -556,8 +556,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // signed-out-not-bound: a Google account the organization never invited; the callback page says so instead.
     const form = new URLSearchParams(mode === 'signed-out-not-bound' ? { token: handoff.token, error: 'identity_not_bound' }
       : { token: handoff.token, session: Buffer.from(JSON.stringify(signedIn)).toString('base64url') });
-    const post = () => { globalThis.fetch(handoff.url, { method: 'POST', body: form }).catch(() => undefined); };
-    post();
+    const post = async () => {
+      // Hold the browser callback until the test has put ECHO in the background.
+      for (let waited = 0; existsSync(join(home, 'hold-signin')) && waited < 30_000; waited += 25) await new Promise(resolve => setTimeout(resolve, 25));
+      await globalThis.fetch(handoff.url, { method: 'POST', body: form }).catch(() => undefined);
+    };
+    void post();
     return true;
   };
 

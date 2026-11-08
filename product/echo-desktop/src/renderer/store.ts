@@ -5189,7 +5189,8 @@ const projectShown = () => (state.route.page === 'project' ? state.route.project
 
 const SURFACES: readonly Surface[] = [
   // Home, and the decision page over it: their rows, and the decision's check (only new rows read live, but on a return).
-  { areas: ['follow_ups', 'reviews'], shows: () => (state.route.page === 'home' || state.route.page === 'decision') && state.home !== null, read: back => loadHome(back) },
+  // Sign-in can finish behind the browser, before Home has loaded. Returning must also read that uninitialized Home.
+  { areas: ['follow_ups', 'reviews'], shows: () => state.route.page === 'home' || state.route.page === 'decision', read: back => loadHome(back) },
   // Home's altitudes: your projects' follow-ups, and the live titles of the project or person it is zoomed on.
   { areas: ['follow_ups'], shows: () => state.route.page === 'home', read: () => loadAltitude() },
   // The decision page's records: each finished check's follow-ups.
@@ -5331,6 +5332,8 @@ export type NeedRow =
 interface HomeState {
   seq: number;
   loading: boolean;
+  /** At least one whole rows load has settled for this account, including reviews and runs. */
+  settled: boolean;
   failure?: Failure;
   /** Each part keeps its last good value when a later read of it fails. */
   reviews: readonly PersonMeetingReviewV2[];
@@ -5777,7 +5780,7 @@ async function loadHomeOnce(fresh: boolean): Promise<void> {
   stopRunPolling();
   homeLoads += 1;
   const mine = ++seq;
-  const previous: Omit<HomeState, 'seq' | 'loading'> = state.home ?? { reviews: [], runs: [], open: null, live: {}, reading: false };
+  const previous: Omit<HomeState, 'seq' | 'loading'> = state.home ?? { settled: false, reviews: [], runs: [], open: null, live: {}, reading: false };
   // An earlier load's live read, still on its way, is no longer Home's: it says nothing of this one's.
   set({ home: { ...previous, seq: mine, loading: true, failure: undefined, reading: false } });
   await readHome(mine, false, fresh);
@@ -5863,7 +5866,7 @@ async function readHome(mine: number, poll: boolean, fresh = true): Promise<void
     }
     return;
   }
-  set({ home: { ...home, loading: false, failure: reviews.status === 'fulfilled' ? undefined : poll ? home.failure : reviewsFailure ?? { code: 'unavailable', retryable: true } } });
+  set({ home: { ...home, loading: false, settled: true, failure: reviews.status === 'fulfilled' ? undefined : poll ? home.failure : reviewsFailure ?? { code: 'unavailable', retryable: true } } });
   if (checkSwept) sweepOwed = null;
   if (waiting) openUnread = unread !== undefined;
   // A check that ended owes a read of what it found (set as its list showed); only a read that brings its rows pays it.
