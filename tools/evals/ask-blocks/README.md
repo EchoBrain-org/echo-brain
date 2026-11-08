@@ -132,6 +132,29 @@ every case, three trials (the report's `complete` and `decision.passes`). Any
 other run is a diagnostic and decides nothing. The founder's check on the
 desktop stands in for the blind ranking the catalogs had.
 
+## Changes after the diagnostic run
+
+A diagnostic run on 2026-11-02 (three cases, one trial, at `9d626c2`) decided
+nothing and found two faults in the harness, fixed before the full run. No
+rule, threshold or catalog entry changed.
+
+- The provider refused the `templates` reply schema, a template given as a
+  choice of five object shapes, on every call (HTTP 400). The schema is now one
+  template object whose `name` is one of the five, and code refuses a field the
+  named template does not take, as the five shapes did.
+- Two order facts could not tell order. In `week-events` the fourth event's
+  fact was "certificate", which the second event's text also says; it is now
+  the certificate's date, Nov 3, which only the fourth event says. In
+  `dvt-date-moves` each move's reason sat beside its new date, where a writer
+  may name either first; the case now checks the three dates, in order.
+
+## The first full run, 2026-11-02
+
+The first full run (2026-11-02, at `2834997`) lost calls when OpenRouter
+refused them with HTTP 402, for lack of credit: trial 1 was complete, trial 2
+lost 15 calls, trial 3 113, and the judge 57 of 59. It is kept as a partial
+report and decides nothing.
+
 ## Writer route
 
 The runs of record use the product's personal Claude account writer
@@ -212,34 +235,11 @@ deterministic: no model judge.
 A trial with no statement (an error, or code's fallback when the writer gave
 nothing usable) passes no rule. The wording ships when all three rules pass in
 a complete run, all 10 cases three times (the report's `decision.passes` and
-`summary.wording_ships`, which a smaller run never sets; its `summary` keeps
+`summary.wording_ships`, which a smaller run sets to false; its `summary` keeps
 each rule's count, each group's and the measures). The same run
 on the code before a change is reported beside it, with each trial's mean and
 longest shared run, its lead's length, and how many times long identifiers were
 written.
-
-## Changes after the diagnostic run
-
-A diagnostic run on 2026-11-02 (three cases, one trial, at `9d626c2`) decided
-nothing and found two faults in the harness, fixed before the full run. No
-rule, threshold or catalog entry changed.
-
-- The provider refused the `templates` reply schema, a template given as a
-  choice of five object shapes, on every call (HTTP 400). The schema is now one
-  template object whose `name` is one of the five, and code refuses a field the
-  named template does not take, as the five shapes did.
-- Two order facts could not tell order. In `week-events` the fourth event's
-  fact was "certificate", which the second event's text also says; it is now
-  the certificate's date, Nov 3, which only the fourth event says. In
-  `dvt-date-moves` each move's reason sat beside its new date, where a writer
-  may name either first; the case now checks the three dates, in order.
-
-## The first full run, 2026-11-02
-
-The first full run (2026-11-02, at `2834997`) lost calls when OpenRouter
-refused them with HTTP 402, for lack of credit: trial 1 was complete, trial 2
-lost 15 calls, trial 3 113, and the judge 57 of 59. It is kept as a partial
-report and decides nothing.
 
 ## Result, 2026-11-02 (rules 1 to 5)
 
