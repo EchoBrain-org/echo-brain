@@ -410,7 +410,7 @@ describe("Organization Authority clean-v1 release record", () => {
     expect(result.stdout).toBe("initial_onboarding\n");
   });
 
-  it("preserves legacy release bytes while binding the allowlisted Ask switches in new records", () => {
+  it("still reads older records' retired Ask switches but refuses them in new records", () => {
     const legacy = writeRecord(record());
     const enabled = writeRecord({ ...record(), agentic_ask_v1: true });
     const disabled = writeRecord({ ...record(), agentic_ask_v1: false });
@@ -442,6 +442,12 @@ describe("Organization Authority clean-v1 release record", () => {
     const shortcutWithoutAsk = writeRecord({ ...record(), small_scope_shortcut: true });
     expect(run(process.execPath, [TOOL, "validate", shortcutWithoutAsk]).status).toBe(1);
     expect(run("python3", [DEPLOY_TOOL, "validate", shortcutWithoutAsk]).status).toBe(1);
+    for (const draft of [enabled, disabled, shortcut]) {
+      const created = run(process.execPath, [TOOL, "create", draft, join(dirname(draft), "created.json")]);
+      expect(created.status).toBe(1);
+      expect(created.stderr).toBe("clean-v1 release record: agentic_ask_v1 and small_scope_shortcut are retired; omit them from new records\n");
+      expect(existsSync(join(dirname(draft), "created.json"))).toBe(false);
+    }
   });
 
   it("reads several fields of one validated record in the order asked", () => {
@@ -1543,9 +1549,9 @@ fi
     expect(result.stderr).toContain(diagnostic);
   });
 
-  it("carries onboarding's unterminated telemetry line and only the candidate's Ask switches into the candidate, and rollback restores the accepted bytes", () => {
+  it("carries an unterminated setting but no retired switch into the candidate, and rollback restores the accepted bytes", () => {
     const fixture = environmentDriftFixture();
-    const original = fixture.original + "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true";
+    const original = fixture.original + "ECHO_AGENTIC_ASK_V1=true\nECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true\nOPERATOR_SETTING=kept";
     writeFileSync(fixture.envFile, original);
     writeFileSync(fixture.snapshot, original);
     const candidateRecord = releaseWithRuntimeProfile(fixture.profile, {
@@ -1559,11 +1565,12 @@ fi
     expect(stage.status, stage.stderr).toBe(0);
     const candidateSnapshot = readFileSync(acceptedRuntimeEnvironment(fixture.state, candidateRecord.release_id), "utf8");
     const staged = readFileSync(fixture.envFile, "utf8");
-    for (const line of ["ECHO_AGENTIC_ASK_V1=true\n", "ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT=true\n"]) {
-      expect(candidateSnapshot).toContain(line);
-      expect(staged).toContain(line);
-    }
-    expect(staged).toContain("ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true\n");
+    expect(staged).toBe(candidateSnapshot);
+    expect(staged).toContain("OPERATOR_SETTING=kept\n");
+    // An older record's true shortcut still reaches the Authority, which refuses it.
+    expect(staged).toContain("ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT=true\n");
+    expect(staged).not.toContain("ECHO_AGENTIC_ASK_V1=");
+    expect(staged).not.toContain("ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=");
     expect(readFileSync(fixture.snapshot, "utf8")).toBe(original);
     expect(fixture.execute("rollback").status).toBe(0);
     expect(readFileSync(fixture.envFile, "utf8")).toBe(original);
