@@ -24,30 +24,32 @@ function alternate(): RecordInputCodecV4 {
   };
 }
 
-describe("closed V4 record codec composition", () => {
-  it("selects an independent exact contract without changing the envelope or generic decoder", () => {
-    const registry = createRecordInputCodecRegistryV4([APPROVAL_DECISION_RECORD_INPUT_CODEC_V2, alternate()]);
+describe("the one V4 record codec", () => {
+  it("joins the codec's own exact contract to its field, kind and version", () => {
+    const registry = createRecordInputCodecRegistryV4([alternate()]);
     const input = { fixture_resolution_ref: reference, event: { kind: "approved" } };
     expect(registry.validateInput(input)).toEqual(registry.fromReference(reference, input.event));
     expect(() => registry.fromReference({ ...reference, schema_version: 2 }, input.event)).toThrow("unknown");
-    expect(() => registry.validateInput({ ...input, approval_decision_ref_v2: reference })).toThrow("ambiguous");
     expect(() => registry.validateInput({ unknown_resolution_ref: reference, event: input.event })).toThrow("unknown");
+    expect(() => registry.validateInput([input])).toThrow("must be an object");
     expect(() => registry.fromReference({ ...reference, approval_id: "changed" }, input.event)).toThrow("exact contract");
+    const decision = createRecordInputCodecRegistryV4([APPROVAL_DECISION_RECORD_INPUT_CODEC_V2]);
+    expect(() => decision.validateInput(input)).toThrow("unknown");
+    expect(() => decision.fromReference(reference, input.event)).toThrow("unknown");
   });
 
-  it("rejects duplicate selectors and snapshots descriptors instead of admitting later registration or mutation", () => {
+  it("keeps its own frozen copy of the codec, whose functions it calls as methods", () => {
     const codec = alternate();
-    expect(() => createRecordInputCodecRegistryV4([codec, { ...codec, reference_kind: "different-kind" }])).toThrow("ambiguous");
-    expect(() => createRecordInputCodecRegistryV4([codec, { ...codec, input_reference_field: "different_field" }])).toThrow("ambiguous");
-    const list = [codec];
-    const registry = createRecordInputCodecRegistryV4(list);
-    list.length = 0;
+    const registry = createRecordInputCodecRegistryV4([codec]);
     Object.assign(codec, { reference_kind: "changed", fromReference: () => { throw new Error("mutated"); } });
     expect(registry.fromReference(reference, { kind: "approved" }).human_act_resolution_ref).toEqual(reference);
     expect(Object.isFrozen(registry)).toBe(true);
+    const methods = alternate();
+    const viaThis: RecordInputCodecV4 = { ...methods, fromReference(this: RecordInputCodecV4, ref, event) { return methods.fromReference({ ...(ref as object), kind: this.reference_kind }, event); } };
+    expect(createRecordInputCodecRegistryV4([viaThis]).fromReference(reference, { kind: "approved" }).human_act_resolution_ref).toEqual(reference);
   });
 
-  it("rejects a decoder returning a different registered contract or a rejection", () => {
+  it("rejects a decoder returning a different contract or a rejection", () => {
     const codec = alternate();
     const original = codec.fromReference(reference, { kind: "approved" });
     const registry = createRecordInputCodecRegistryV4([{ ...codec, fromReference: () => ({ ...original, human_act_resolution_ref: { ...reference, kind: "other-kind" } }) }]);

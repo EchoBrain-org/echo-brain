@@ -5,6 +5,7 @@ import type {
   MeetingBatch,
   MeetingDocument,
   MeetingParticipant,
+  MeetingParticipantIdentity,
 } from "./meeting.js";
 
 function object(value: unknown, label: string): Record<string, unknown> {
@@ -102,596 +103,269 @@ function array(value: unknown, label: string, maximum: number): unknown[] {
   return value;
 }
 
-function participant(value: unknown, label: string): asserts value is MeetingParticipant {
+/** One field's check: its value, its label, and the object that holds it. */
+type Check = (value: unknown, label: string, record: Record<string, unknown>) => void;
+
+/**
+ * Checks `value` is an object holding only `checks`' keys, then runs each check
+ * in order on its field, labelled `<label>.<key>`.
+ */
+function fields(
+  value: unknown,
+  label: string,
+  checks: Readonly<Record<string, Check>>,
+): Record<string, unknown> {
   const record = object(value, label);
-  onlyKeys(
-    record,
-    [
-      'id',
-      'display_name',
-      'identities',
-      'roles',
-      'response_status',
-      'attendance',
-      'organization',
-      'is_external',
-      'metadata',
-    ],
-    label,
-  );
-  nonEmptyString(record['id'], `${label}.id`);
-  optionalNonEmptyString(record['display_name'], `${label}.display_name`);
-  if (record['identities'] !== undefined) {
-    const identities = array(record['identities'], `${label}.identities`, 100);
-    const seen = new Set<string>();
-    for (const [index, value] of identities.entries()) {
-      const identity = object(value, `${label}.identities[${index}]`);
-      onlyKeys(identity, ['kind', 'value'], `${label}.identities[${index}]`);
-      oneOf(
-        identity['kind'],
-        ['source', 'email', 'phone', 'other'],
-        `${label}.identities[${index}].kind`,
-      );
-      nonEmptyString(identity['value'], `${label}.identities[${index}].value`);
-      const key = `${identity['kind']}:${identity['value']}`;
-      if (seen.has(key)) throw new Error(`${label}.identities must be unique`);
-      seen.add(key);
-    }
-  }
-  if (record['roles'] !== undefined) {
-    const roles = array(record['roles'], `${label}.roles`, 20);
-    const seen = new Set<string>();
-    for (const [index, role] of roles.entries()) {
-      oneOf(
-        role,
-        ['organizer', 'host', 'invitee', 'attendee', 'speaker', 'note_taker', 'bot'],
-        `${label}.roles[${index}]`,
-      );
-      if (seen.has(role)) throw new Error(`${label}.roles must be unique`);
-      seen.add(role);
-    }
-  }
-  if (record['response_status'] !== undefined) {
-    oneOf(
-      record['response_status'],
-      ['accepted', 'declined', 'tentative', 'unknown'],
-      `${label}.response_status`,
-    );
-  }
-  if (record['attendance'] !== undefined) {
-    oneOf(record['attendance'], ['attended', 'no_show', 'unknown'], `${label}.attendance`);
-  }
-  if (record['organization'] !== undefined) {
-    const organization = object(record['organization'], `${label}.organization`);
-    onlyKeys(organization, ['name', 'domain'], `${label}.organization`);
-    optionalNonEmptyString(organization['name'], `${label}.organization.name`);
-    optionalNonEmptyString(organization['domain'], `${label}.organization.domain`);
-  }
-  if (record['is_external'] !== undefined && typeof record['is_external'] !== 'boolean') {
-    throw new Error(`${label}.is_external must be a boolean`);
-  }
-  metadata(record['metadata'], `${label}.metadata`);
+  onlyKeys(record, Object.keys(checks), label);
+  for (const [key, check] of Object.entries(checks)) check(record[key], `${label}.${key}`, record);
+  return record;
 }
 
-function validateCapture(value: unknown): void {
-  const capture = object(value, 'meeting.capture');
-  onlyKeys(capture, ['state', 'components', 'warnings'], 'meeting.capture');
-  oneOf(
-    capture['state'],
-    ['complete', 'partial', 'processing', 'unavailable', 'deleted'],
-    'meeting.capture.state',
-  );
-  const components = array(capture['components'], 'meeting.capture.components', 100);
-  for (const [index, value] of components.entries()) {
-    const component = object(value, `meeting.capture.components[${index}]`);
-    onlyKeys(
-      component,
-      ['kind', 'state', 'reason', 'metadata'],
-      `meeting.capture.components[${index}]`,
-    );
-    oneOf(
-      component['kind'],
-      [
-        'metadata',
-        'participants',
-        'agenda',
-        'summary',
-        'notes',
-        'transcript',
-        'chat',
-        'recording',
-        'attachments',
-        'artifacts',
-        'other',
-      ],
-      `meeting.capture.components[${index}].kind`,
-    );
-    oneOf(
-      component['state'],
-      ['available', 'empty', 'pending', 'not_provided', 'forbidden', 'failed'],
-      `meeting.capture.components[${index}].state`,
-    );
-    optionalNonEmptyString(component['reason'], `meeting.capture.components[${index}].reason`);
-    metadata(component['metadata'], `meeting.capture.components[${index}].metadata`);
-  }
-  if (capture['warnings'] !== undefined) {
-    const warnings = array(capture['warnings'], 'meeting.capture.warnings', 1_000);
-    warnings.forEach((warning, index) =>
-      nonEmptyString(warning, `meeting.capture.warnings[${index}]`),
-    );
-  }
+function optional(check: Check): Check {
+  return (value, label, record) => {
+    if (value !== undefined) check(value, label, record);
+  };
 }
 
-function validateMeetingTime(value: unknown): void {
-  if (value === undefined) return;
-  const time = object(value, 'meeting.time');
-  onlyKeys(
-    time,
-    [
-      'scheduled_start_at',
-      'scheduled_end_at',
-      'actual_start_at',
-      'actual_end_at',
-      'timezone',
-      'all_day',
-    ],
-    'meeting.time',
-  );
-  for (const key of [
-    'scheduled_start_at',
-    'scheduled_end_at',
-    'actual_start_at',
-    'actual_end_at',
-  ] as const) {
-    optionalTimestamp(time[key], `meeting.time.${key}`);
-  }
-  if (
-    typeof time['scheduled_start_at'] === 'string' &&
-    typeof time['scheduled_end_at'] === 'string' &&
-    time['scheduled_start_at'] > time['scheduled_end_at']
-  ) {
-    throw new Error('meeting.time scheduled end precedes its start');
-  }
-  if (
-    typeof time['actual_start_at'] === 'string' &&
-    typeof time['actual_end_at'] === 'string' &&
-    time['actual_start_at'] > time['actual_end_at']
-  ) {
-    throw new Error('meeting.time actual end precedes its start');
-  }
-  optionalNonEmptyString(time['timezone'], 'meeting.time.timezone');
-  if (time['all_day'] !== undefined && typeof time['all_day'] !== 'boolean') {
-    throw new Error('meeting.time.all_day must be a boolean');
-  }
+const text: Check = (value, label) => nonEmptyString(value, label);
+const optionalText: Check = (value, label) => optionalNonEmptyString(value, label);
+const optionalAt: Check = (value, label) => optionalTimestamp(value, label);
+const json: Check = (value, label) => metadata(value, label);
+const flag: Check = (value, label) => {
+  if (typeof value !== 'boolean') throw new Error(`${label} must be a boolean`);
+};
+
+function among(...allowed: string[]): (value: unknown, label: string) => void {
+  return (value, label) => oneOf(value, allowed, label);
 }
+
+/**
+ * A dense array of at most `maximum` items, each checked as `<label>[<index>]`;
+ * with `key`, an item whose key repeats an earlier one's is refused at once.
+ */
+function list<T>(maximum: number, check: (item: unknown, label: string) => void, key?: (item: T) => unknown): Check {
+  return (value, label) => {
+    const seen = new Set<unknown>();
+    for (const [index, item] of array(value, label, maximum).entries()) {
+      check(item, `${label}[${index}]`);
+      if (key === undefined) continue;
+      const id = key(item as T);
+      if (seen.has(id)) throw new Error(`${label} must be unique`);
+      seen.add(id);
+    }
+  };
+}
+
+function record(checks: Readonly<Record<string, Check>>): (value: unknown, label: string) => void {
+  return (value, label) => {
+    fields(value, label, checks);
+  };
+}
+
+const PARTICIPANT: Readonly<Record<string, Check>> = {
+  id: text,
+  display_name: optionalText,
+  identities: optional(list(100, record({ kind: among('source', 'email', 'phone', 'other'), value: text }),
+    (identity: MeetingParticipantIdentity) => `${identity.kind}:${identity.value}`)),
+  roles: optional(list(20, among('organizer', 'host', 'invitee', 'attendee', 'speaker', 'note_taker', 'bot'), (role: string) => role)),
+  response_status: optional(among('accepted', 'declined', 'tentative', 'unknown')),
+  attendance: optional(among('attended', 'no_show', 'unknown')),
+  organization: optional(record({ name: optionalText, domain: optionalText })),
+  is_external: optional(flag),
+  metadata: json,
+};
+
+const CAPTURE: Readonly<Record<string, Check>> = {
+  state: among('complete', 'partial', 'processing', 'unavailable', 'deleted'),
+  components: list(100, record({
+    kind: among('metadata', 'participants', 'agenda', 'summary', 'notes', 'transcript', 'chat', 'recording', 'attachments', 'artifacts', 'other'),
+    state: among('available', 'empty', 'pending', 'not_provided', 'forbidden', 'failed'),
+    reason: optionalText,
+    metadata: json,
+  })),
+  warnings: optional(list(1_000, (warning, label) => nonEmptyString(warning, label))),
+};
+
+const TIMES = ['scheduled_start_at', 'scheduled_end_at', 'actual_start_at', 'actual_end_at'] as const;
+
+/** The four times, then both orders, then the timezone and the all-day flag. */
+function meetingTime(value: unknown, label: string): void {
+  const time = object(value, label);
+  onlyKeys(time, [...TIMES, 'timezone', 'all_day'], label);
+  for (const key of TIMES) optionalTimestamp(time[key], `${label}.${key}`);
+  for (const which of ['scheduled', 'actual'] as const) {
+    const start = time[`${which}_start_at`];
+    const end = time[`${which}_end_at`];
+    if (typeof start === 'string' && typeof end === 'string' && start > end) throw new Error(`${label} ${which} end precedes its start`);
+  }
+  optionalNonEmptyString(time['timezone'], `${label}.timezone`);
+  if (time['all_day'] !== undefined && typeof time['all_day'] !== 'boolean') throw new Error(`${label}.all_day must be a boolean`);
+}
+
+const NON_NEGATIVE_INTEGER: Check = (value, label) => {
+  if (value !== undefined && (!Number.isSafeInteger(value) || (value as number) < 0)) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+};
+
+/** A content block, against the meeting's participant ids and its running text total. */
+function contentBlock(participants: ReadonlyMap<string, MeetingParticipant>, blockIds: Set<string>, total: { bytes: number }): Readonly<Record<string, Check>> {
+  const block = (label: string) => label.slice(0, label.lastIndexOf('.'));
+  return {
+    id: (value, label) => {
+      nonEmptyString(value, label);
+      if (blockIds.has(value)) throw new Error('meeting content block ids must be unique');
+      blockIds.add(value);
+    },
+    kind: among('summary', 'note', 'agenda', 'transcript', 'caption', 'chat_message', 'chapter', 'provider_action_item', 'provider_decision', 'artifact_text', 'other'),
+    text: (value, label) => {
+      nonEmptyString(value, label);
+      const bytes = Buffer.byteLength(value, 'utf8');
+      if (bytes > 4 * 1024 * 1024) throw new Error(`${label} exceeds the safety limit`);
+      total.bytes += bytes;
+      if (total.bytes > 16 * 1024 * 1024) throw new Error('meeting content text exceeds the aggregate safety limit');
+    },
+    speaker_participant_id: optional((value, label) => {
+      nonEmptyString(value, label);
+      if (!participants.has(value)) throw new Error(`${label} does not resolve`);
+    }),
+    started_at: optionalAt,
+    ended_at: (value, label, content) => {
+      optionalTimestamp(value, label);
+      if (typeof content['started_at'] === 'string' && typeof value === 'string' && content['started_at'] > value) {
+        throw new Error(`${block(label)} ends before it starts`);
+      }
+    },
+    sequence: NON_NEGATIVE_INTEGER,
+    start_offset_ms: NON_NEGATIVE_INTEGER,
+    end_offset_ms: (value, label, content) => {
+      NON_NEGATIVE_INTEGER(value, label, content);
+      if (typeof content['start_offset_ms'] === 'number' && typeof value === 'number' && content['start_offset_ms'] > value) {
+        throw new Error(`${block(label)} offset end precedes its start`);
+      }
+    },
+    language: optionalText,
+    confidence: (value, label) => {
+      if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1)) {
+        throw new Error(`${label} must be between 0 and 1`);
+      }
+    },
+    origin: optional(among('human', 'source_ai', 'imported', 'unknown')),
+    source_external_id: optionalText,
+    metadata: json,
+  };
+}
+
+function provenance(expectedSource: (AdapterIdentity & { kind: 'meeting-source' }) | undefined): Check {
+  return (value, label) => {
+    const result = fields(value, label, {
+      source: record({
+        kind: (kind, kindLabel) => {
+          if (kind !== 'meeting-source') throw new Error(`${kindLabel} must be meeting-source`);
+        },
+        adapter_id: text,
+        instance_id: text,
+        version: text,
+      }),
+      external_id: text,
+      canonical_revision: text,
+      observed_at: (observed, observedLabel) => timestamp(observed, observedLabel),
+      normalizer_version: text,
+      source_revision: optionalText,
+      source_created_at: optionalAt,
+      source_updated_at: optionalAt,
+      source_url: optionalText,
+      metadata: json,
+    });
+    const source = result['source'] as Record<string, unknown>;
+    if (
+      expectedSource !== undefined &&
+      (source['adapter_id'] !== expectedSource.adapter_id ||
+        source['instance_id'] !== expectedSource.instance_id ||
+        source['version'] !== expectedSource.version)
+    ) {
+      throw new Error('meeting provenance does not match the meeting-source adapter instance');
+    }
+  };
+}
+
+function context(participantsById: ReadonlyMap<string, MeetingParticipant>): Readonly<Record<string, Check>> {
+  return {
+    owner_participant_id: optional((value, label) => {
+      nonEmptyString(value, label);
+      const owner = participantsById.get(value);
+      if (owner === undefined) throw new Error(`${label} does not resolve`);
+      const ownerEmails = (owner.identities ?? []).filter(
+        (identity) => identity.kind === 'email' && isCanonicalPersonEmail(identity.value),
+      );
+      if (ownerEmails.length !== 1) throw new Error(`${label} must resolve to one canonical email identity`);
+    }),
+    calendar: optional(record({
+      event_id: optionalText,
+      organizer_participant_id: optional((value, label) => {
+        nonEmptyString(value, label);
+        if (!participantsById.has(value)) throw new Error(`${label} does not resolve`);
+      }),
+    })),
+    location: optional(record({ kind: optional(among('virtual', 'physical', 'hybrid')), name: optionalText, join_reference: optionalText })),
+    scopes: optional(list(1_000, record({
+      kind: among('domain', 'team', 'project', 'customer', 'topic'),
+      value: text,
+      origin: among('source', 'adapter_config'),
+    }))),
+    labels: optional(list(1_000, (label_, label) => nonEmptyString(label_, label))),
+    language: optionalText,
+    meeting_type: optionalText,
+    metadata: json,
+  };
+}
+
+const GOVERNANCE: Readonly<Record<string, Check>> = {
+  sensitivity: optional(among('public', 'internal', 'confidential', 'restricted')),
+  consent: optional(list(100, record({
+    purpose: among('recording', 'transcription', 'analysis', 'distribution'),
+    status: among('granted', 'denied', 'unknown', 'not_required'),
+    recorded_at: optionalAt,
+    source_reference: optionalText,
+  }))),
+  retention_until: optionalAt,
+  redaction_state: optional(among('none', 'partial', 'full')),
+  metadata: json,
+};
 
 export function assertCanonicalMeetingDocument(
   value: unknown,
   expectedSource?: AdapterIdentity & { kind: 'meeting-source' },
 ): asserts value is MeetingDocument {
-  const meeting = object(value, 'meeting');
-  onlyKeys(
-    meeting,
-    [
-      'schema_version',
-      'id',
-      'provenance',
-      'capture',
-      'participants',
-      'content',
-      'artifacts',
-      'title',
-      'description',
-      'lifecycle',
-      'time',
-      'context',
-      'governance',
-      'extensions',
-    ],
-    'meeting',
-  );
-  if (meeting['schema_version'] !== 1) throw new Error('meeting.schema_version must be 1');
-  nonEmptyString(meeting['id'], 'meeting.id');
-  optionalNonEmptyString(meeting['title'], 'meeting.title');
-  optionalNonEmptyString(meeting['description'], 'meeting.description');
-  if (meeting['lifecycle'] !== undefined) {
-    oneOf(
-      meeting['lifecycle'],
-      ['scheduled', 'active', 'completed', 'cancelled', 'deleted', 'unknown'],
-      'meeting.lifecycle',
-    );
-  }
-  validateMeetingTime(meeting['time']);
-  validateCapture(meeting['capture']);
-
-  const participants = array(meeting['participants'], 'meeting.participants', 10_000);
-  const participantIds = new Set<string>();
   const participantsById = new Map<string, MeetingParticipant>();
-  for (const [index, value] of participants.entries()) {
-    participant(value, `meeting.participants[${index}]`);
-    if (participantIds.has(value.id)) throw new Error('meeting participant ids must be unique');
-    participantIds.add(value.id);
-    participantsById.set(value.id, value);
-  }
-
-  const artifacts = array(meeting['artifacts'], 'meeting.artifacts', 10_000);
-  const artifactIds = new Set<string>();
-  for (const [index, value] of artifacts.entries()) {
-    const artifact = object(value, `meeting.artifacts[${index}]`);
-    onlyKeys(
-      artifact,
-      [
-        'id',
-        'kind',
-        'availability',
-        'title',
-        'mime_type',
-        'language',
-        'external_id',
-        'source_url',
-        'content_hash',
-        'metadata',
-      ],
-      `meeting.artifacts[${index}]`,
-    );
-    nonEmptyString(artifact['id'], `meeting.artifacts[${index}].id`);
-    if (artifactIds.has(artifact['id'])) throw new Error('meeting artifact ids must be unique');
-    artifactIds.add(artifact['id']);
-    oneOf(
-      artifact['kind'],
-      [
-        'audio',
-        'video',
-        'transcript',
-        'document',
-        'slides',
-        'whiteboard',
-        'chat',
-        'image',
-        'attachment',
-        'link',
-        'raw_payload',
-        'other',
-      ],
-      `meeting.artifacts[${index}].kind`,
-    );
-    oneOf(
-      artifact['availability'],
-      ['available', 'pending', 'forbidden', 'missing', 'expired', 'redacted', 'unknown'],
-      `meeting.artifacts[${index}].availability`,
-    );
-    for (const key of [
-      'title',
-      'mime_type',
-      'language',
-      'external_id',
-      'source_url',
-      'content_hash',
-    ] as const) {
-      optionalNonEmptyString(artifact[key], `meeting.artifacts[${index}].${key}`);
-    }
-    metadata(artifact['metadata'], `meeting.artifacts[${index}].metadata`);
-  }
-
-  const content = array(meeting['content'], 'meeting.content', 10_000);
   const blockIds = new Set<string>();
-  let totalTextBytes = 0;
-  for (const [index, item] of content.entries()) {
-    const block = object(item, `meeting.content[${index}]`);
-    onlyKeys(
-      block,
-      [
-        'id',
-        'kind',
-        'text',
-        'artifact_id',
-        'author_participant_id',
-        'speaker_participant_id',
-        'sequence',
-        'started_at',
-        'ended_at',
-        'start_offset_ms',
-        'end_offset_ms',
-        'language',
-        'confidence',
-        'origin',
-        'source_external_id',
-        'metadata',
-      ],
-      `meeting.content[${index}]`,
-    );
-    nonEmptyString(block['id'], `meeting.content[${index}].id`);
-    if (blockIds.has(block['id'])) throw new Error('meeting content block ids must be unique');
-    blockIds.add(block['id']);
-    oneOf(
-      block['kind'],
-      [
-        'summary',
-        'note',
-        'agenda',
-        'transcript',
-        'caption',
-        'chat_message',
-        'chapter',
-        'provider_action_item',
-        'provider_decision',
-        'artifact_text',
-        'other',
-      ],
-      `meeting.content[${index}].kind`,
-    );
-    nonEmptyString(block['text'], `meeting.content[${index}].text`);
-    const textBytes = Buffer.byteLength(block['text'], 'utf8');
-    if (textBytes > 4 * 1024 * 1024) {
-      throw new Error(`meeting.content[${index}].text exceeds the safety limit`);
-    }
-    totalTextBytes += textBytes;
-    if (totalTextBytes > 16 * 1024 * 1024) {
-      throw new Error('meeting content text exceeds the aggregate safety limit');
-    }
-    for (const key of ['author_participant_id', 'speaker_participant_id'] as const) {
-      if (block[key] !== undefined) {
-        nonEmptyString(block[key], `meeting.content[${index}].${key}`);
-        if (!participantIds.has(block[key])) {
-          throw new Error(`meeting.content[${index}].${key} does not resolve`);
-        }
-      }
-    }
-    if (block['artifact_id'] !== undefined) {
-      nonEmptyString(block['artifact_id'], `meeting.content[${index}].artifact_id`);
-      if (!artifactIds.has(block['artifact_id'])) {
-        throw new Error(`meeting.content[${index}].artifact_id does not resolve`);
-      }
-    }
-    if (block['started_at'] !== undefined) {
-      timestamp(block['started_at'], `meeting.content[${index}].started_at`);
-    }
-    if (block['ended_at'] !== undefined) {
-      timestamp(block['ended_at'], `meeting.content[${index}].ended_at`);
-    }
-    if (
-      typeof block['started_at'] === 'string' &&
-      typeof block['ended_at'] === 'string' &&
-      block['started_at'] > block['ended_at']
-    ) {
-      throw new Error(`meeting.content[${index}] ends before it starts`);
-    }
-    for (const key of ['sequence', 'start_offset_ms', 'end_offset_ms'] as const) {
-      if (
-        block[key] !== undefined &&
-        (!Number.isSafeInteger(block[key]) || (block[key] as number) < 0)
-      ) {
-        throw new Error(`meeting.content[${index}].${key} must be a non-negative integer`);
-      }
-    }
-    if (
-      typeof block['start_offset_ms'] === 'number' &&
-      typeof block['end_offset_ms'] === 'number' &&
-      block['start_offset_ms'] > block['end_offset_ms']
-    ) {
-      throw new Error(`meeting.content[${index}] offset end precedes its start`);
-    }
-    optionalNonEmptyString(block['language'], `meeting.content[${index}].language`);
-    if (
-      block['confidence'] !== undefined &&
-      (typeof block['confidence'] !== 'number' ||
-        !Number.isFinite(block['confidence']) ||
-        block['confidence'] < 0 ||
-        block['confidence'] > 1)
-    ) {
-      throw new Error(`meeting.content[${index}].confidence must be between 0 and 1`);
-    }
-    if (block['origin'] !== undefined) {
-      oneOf(
-        block['origin'],
-        ['human', 'source_ai', 'imported', 'unknown'],
-        `meeting.content[${index}].origin`,
-      );
-    }
-    optionalNonEmptyString(
-      block['source_external_id'],
-      `meeting.content[${index}].source_external_id`,
-    );
-    metadata(block['metadata'], `meeting.content[${index}].metadata`);
-  }
-
-  const provenance = object(meeting['provenance'], 'meeting.provenance');
-  onlyKeys(
-    provenance,
-    [
-      'source',
-      'external_id',
-      'canonical_revision',
-      'observed_at',
-      'normalizer_version',
-      'source_revision',
-      'previous_revision',
-      'source_created_at',
-      'source_updated_at',
-      'source_url',
-      'metadata',
-    ],
-    'meeting.provenance',
-  );
-  const source = object(provenance['source'], 'meeting.provenance.source');
-  onlyKeys(source, ['kind', 'adapter_id', 'instance_id', 'version'], 'meeting.provenance.source');
-  if (source['kind'] !== 'meeting-source') {
-    throw new Error('meeting.provenance.source.kind must be meeting-source');
-  }
-  nonEmptyString(source['adapter_id'], 'meeting.provenance.source.adapter_id');
-  nonEmptyString(source['instance_id'], 'meeting.provenance.source.instance_id');
-  nonEmptyString(source['version'], 'meeting.provenance.source.version');
-  nonEmptyString(provenance['external_id'], 'meeting.provenance.external_id');
-  nonEmptyString(provenance['canonical_revision'], 'meeting.provenance.canonical_revision');
-  timestamp(provenance['observed_at'], 'meeting.provenance.observed_at');
-  nonEmptyString(provenance['normalizer_version'], 'meeting.provenance.normalizer_version');
-  optionalNonEmptyString(provenance['source_revision'], 'meeting.provenance.source_revision');
-  optionalNonEmptyString(provenance['previous_revision'], 'meeting.provenance.previous_revision');
-  optionalTimestamp(provenance['source_created_at'], 'meeting.provenance.source_created_at');
-  optionalTimestamp(provenance['source_updated_at'], 'meeting.provenance.source_updated_at');
-  optionalNonEmptyString(provenance['source_url'], 'meeting.provenance.source_url');
-  metadata(provenance['metadata'], 'meeting.provenance.metadata');
-  if (
-    expectedSource !== undefined &&
-    (source['adapter_id'] !== expectedSource.adapter_id ||
-      source['instance_id'] !== expectedSource.instance_id ||
-      source['version'] !== expectedSource.version)
-  ) {
-    throw new Error('meeting provenance does not match the meeting-source adapter instance');
-  }
-
-  if (meeting['context'] !== undefined) {
-    const context = object(meeting['context'], 'meeting.context');
-    onlyKeys(
-      context,
-      [
-        'owner_participant_id',
-        'calendar',
-        'location',
-        'scopes',
-        'labels',
-        'language',
-        'meeting_type',
-        'metadata',
-      ],
-      'meeting.context',
-    );
-    if (context['owner_participant_id'] !== undefined) {
-      nonEmptyString(context['owner_participant_id'], 'meeting.context.owner_participant_id');
-      const owner = participantsById.get(context['owner_participant_id']);
-      if (owner === undefined) {
-        throw new Error('meeting.context.owner_participant_id does not resolve');
-      }
-      const ownerEmails = (owner.identities ?? []).filter(
-        (identity) =>
-          identity.kind === 'email' && isCanonicalPersonEmail(identity.value),
-      );
-      if (ownerEmails.length !== 1) {
-        throw new Error(
-          'meeting.context.owner_participant_id must resolve to one canonical email identity',
-        );
-      }
-    }
-    if (context['calendar'] !== undefined) {
-      const calendar = object(context['calendar'], 'meeting.context.calendar');
-      onlyKeys(
-        calendar,
-        ['event_id', 'series_id', 'recurrence_id', 'organizer_participant_id'],
-        'meeting.context.calendar',
-      );
-      for (const key of ['event_id', 'series_id', 'recurrence_id'] as const) {
-        optionalNonEmptyString(calendar[key], `meeting.context.calendar.${key}`);
-      }
-      if (calendar['organizer_participant_id'] !== undefined) {
-        nonEmptyString(
-          calendar['organizer_participant_id'],
-          'meeting.context.calendar.organizer_participant_id',
-        );
-        if (!participantIds.has(calendar['organizer_participant_id'])) {
-          throw new Error('meeting.context.calendar.organizer_participant_id does not resolve');
-        }
-      }
-    }
-    if (context['location'] !== undefined) {
-      const location = object(context['location'], 'meeting.context.location');
-      onlyKeys(location, ['kind', 'name', 'join_reference'], 'meeting.context.location');
-      if (location['kind'] !== undefined) {
-        oneOf(location['kind'], ['virtual', 'physical', 'hybrid'], 'meeting.context.location.kind');
-      }
-      optionalNonEmptyString(location['name'], 'meeting.context.location.name');
-      optionalNonEmptyString(location['join_reference'], 'meeting.context.location.join_reference');
-    }
-    if (context['scopes'] !== undefined) {
-      const scopes = array(context['scopes'], 'meeting.context.scopes', 1_000);
-      for (const [index, value] of scopes.entries()) {
-        const scope = object(value, `meeting.context.scopes[${index}]`);
-        onlyKeys(scope, ['kind', 'value', 'origin'], `meeting.context.scopes[${index}]`);
-        oneOf(
-          scope['kind'],
-          ['domain', 'team', 'project', 'customer', 'topic'],
-          `meeting.context.scopes[${index}].kind`,
-        );
-        nonEmptyString(scope['value'], `meeting.context.scopes[${index}].value`);
-        oneOf(
-          scope['origin'],
-          ['source', 'adapter_config'],
-          `meeting.context.scopes[${index}].origin`,
-        );
-      }
-    }
-    if (context['labels'] !== undefined) {
-      const labels = array(context['labels'], 'meeting.context.labels', 1_000);
-      labels.forEach((value, index) =>
-        nonEmptyString(value, `meeting.context.labels[${index}]`),
-      );
-    }
-    optionalNonEmptyString(context['language'], 'meeting.context.language');
-    optionalNonEmptyString(context['meeting_type'], 'meeting.context.meeting_type');
-    metadata(context['metadata'], 'meeting.context.metadata');
-  }
-
-  if (meeting['governance'] !== undefined) {
-    const governance = object(meeting['governance'], 'meeting.governance');
-    onlyKeys(
-      governance,
-      [
-        'sensitivity',
-        'consent',
-        'retention_until',
-        'deletion_requested_at',
-        'redaction_state',
-        'metadata',
-      ],
-      'meeting.governance',
-    );
-    if (governance['sensitivity'] !== undefined) {
-      oneOf(
-        governance['sensitivity'],
-        ['public', 'internal', 'confidential', 'restricted'],
-        'meeting.governance.sensitivity',
-      );
-    }
-    if (governance['consent'] !== undefined) {
-      const consent = array(governance['consent'], 'meeting.governance.consent', 100);
-      for (const [index, value] of consent.entries()) {
-        const record = object(value, `meeting.governance.consent[${index}]`);
-        onlyKeys(
-          record,
-          ['purpose', 'status', 'recorded_at', 'source_reference'],
-          `meeting.governance.consent[${index}]`,
-        );
-        oneOf(
-          record['purpose'],
-          ['recording', 'transcription', 'analysis', 'distribution'],
-          `meeting.governance.consent[${index}].purpose`,
-        );
-        oneOf(
-          record['status'],
-          ['granted', 'denied', 'unknown', 'not_required'],
-          `meeting.governance.consent[${index}].status`,
-        );
-        optionalTimestamp(record['recorded_at'], `meeting.governance.consent[${index}].recorded_at`);
-        optionalNonEmptyString(
-          record['source_reference'],
-          `meeting.governance.consent[${index}].source_reference`,
-        );
-      }
-    }
-    optionalTimestamp(governance['retention_until'], 'meeting.governance.retention_until');
-    optionalTimestamp(
-      governance['deletion_requested_at'],
-      'meeting.governance.deletion_requested_at',
-    );
-    if (governance['redaction_state'] !== undefined) {
-      oneOf(
-        governance['redaction_state'],
-        ['none', 'partial', 'full'],
-        'meeting.governance.redaction_state',
-      );
-    }
-    metadata(governance['metadata'], 'meeting.governance.metadata');
-  }
-  metadata(meeting['extensions'], 'meeting.extensions');
+  const total = { bytes: 0 };
+  fields(value, 'meeting', {
+    schema_version: (version, label) => {
+      if (version !== 1) throw new Error(`${label} must be 1`);
+    },
+    id: text,
+    title: optionalText,
+    description: optionalText,
+    lifecycle: optional(among('scheduled', 'active', 'completed', 'cancelled', 'deleted', 'unknown')),
+    time: optional(meetingTime),
+    capture: record(CAPTURE),
+    participants: list(10_000, (item, label) => {
+      fields(item, label, PARTICIPANT);
+      const participant = item as MeetingParticipant;
+      if (participantsById.has(participant.id)) throw new Error('meeting participant ids must be unique');
+      participantsById.set(participant.id, participant);
+    }),
+    // No source sends an artifact: every document carries the empty array.
+    artifacts: (artifacts, label) => {
+      if (array(artifacts, label, 10_000).length !== 0) throw new Error(`${label} must be empty`);
+    },
+    content: list(10_000, record(contentBlock(participantsById, blockIds, total))),
+    provenance: provenance(expectedSource),
+    context: optional(record(context(participantsById))),
+    governance: optional(record(GOVERNANCE)),
+    extensions: json,
+  });
 }
 
 export function assertCanonicalMeetingBatch(
@@ -741,19 +415,7 @@ function assertSignalArray(
         : signal['kind'] === 'action'
           ? ['owner', 'due_at']
           : 'supports_signal_ids';
-    onlyKeys(
-      signal,
-      [
-        'id',
-        'kind',
-        'text',
-        'subject',
-        'confidence',
-        'evidence',
-        ...(Array.isArray(capabilityKey) ? capabilityKey : [capabilityKey]),
-      ],
-      `${label}[${index}]`,
-    );
+    onlyKeys(signal, ['id', 'kind', 'text', 'subject', 'confidence', 'evidence', ...(Array.isArray(capabilityKey) ? capabilityKey : [capabilityKey])], `${label}[${index}]`);
     nonEmptyString(signal['text'], `${label}[${index}].text`);
     if (!(signal['subject'] === null || typeof signal['subject'] === 'string')) {
       throw new Error(`${label}[${index}].subject must be a string or null`);
@@ -780,11 +442,7 @@ function assertSignalArray(
         evidenceValue,
         `${label}[${index}].evidence[${evidenceIndex}]`,
       );
-      onlyKeys(
-        evidence,
-        ['meeting_id', 'block_id', 'quote', 'started_at', 'ended_at'],
-        `${label}[${index}].evidence[${evidenceIndex}]`,
-      );
+      onlyKeys(evidence, ['meeting_id', 'block_id', 'quote', 'started_at', 'ended_at'], `${label}[${index}].evidence[${evidenceIndex}]`);
       if (evidence['meeting_id'] !== meeting.id) {
         throw new Error('signal evidence meeting_id does not match its meeting');
       }
@@ -845,41 +503,29 @@ export function assertCanonicalDecisionSet(
   meeting: MeetingDocument,
   expectedProcessor: AdapterIdentity & { kind: 'decision-processor' },
 ): asserts value is DecisionSet {
-  const decisions = object(value, 'decision_set');
-  onlyKeys(
-    decisions,
-    [
-      'schema_version',
-      'meeting_id',
-      'meeting_revision',
-      'processor',
-      'generated_at',
-      'signals',
-    ],
-    'decision_set',
-  );
-  if (decisions['schema_version'] !== 1) throw new Error('decision_set.schema_version must be 1');
-  if (
-    decisions['meeting_id'] !== meeting.id ||
-    decisions['meeting_revision'] !== meeting.provenance.canonical_revision
-  ) {
-    throw new Error('decision processor returned a result for a different meeting revision');
-  }
-  const processor = object(decisions['processor'], 'decision_set.processor');
-  onlyKeys(
-    processor,
-    ['kind', 'adapter_id', 'instance_id', 'version'],
-    'decision_set.processor',
-  );
-  if (
-    processor['kind'] !== 'decision-processor' ||
-    processor['adapter_id'] !== expectedProcessor.adapter_id ||
-    processor['instance_id'] !== expectedProcessor.instance_id ||
-    processor['version'] !== expectedProcessor.version
-  ) {
-    throw new Error('decision processor result identity does not match the configured adapter');
-  }
-  timestamp(decisions['generated_at'], 'decision_set.generated_at');
-  const signals = assertSignalArray(decisions['signals'], 'decision_set.signals', meeting);
-  assertRationaleLinks(signals);
+  const anything: Check = () => {};
+  fields(value, 'decision_set', {
+    schema_version: (version, label) => {
+      if (version !== 1) throw new Error(`${label} must be 1`);
+    },
+    meeting_id: (id, _label, decisions) => {
+      if (id !== meeting.id || decisions['meeting_revision'] !== meeting.provenance.canonical_revision) {
+        throw new Error('decision processor returned a result for a different meeting revision');
+      }
+    },
+    meeting_revision: anything,
+    processor: (value, label) => {
+      const processor = fields(value, label, { kind: anything, adapter_id: anything, instance_id: anything, version: anything });
+      if (
+        processor['kind'] !== 'decision-processor' ||
+        processor['adapter_id'] !== expectedProcessor.adapter_id ||
+        processor['instance_id'] !== expectedProcessor.instance_id ||
+        processor['version'] !== expectedProcessor.version
+      ) {
+        throw new Error('decision processor result identity does not match the configured adapter');
+      }
+    },
+    generated_at: (generatedAt, label) => timestamp(generatedAt, label),
+    signals: (signals, label) => assertRationaleLinks(assertSignalArray(signals, label, meeting)),
+  });
 }

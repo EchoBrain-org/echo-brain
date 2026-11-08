@@ -8,7 +8,7 @@ encoders:
 - Versioned Person wire DTOs: answers, citations, source evidence, tools,
   connector access, documents and upload sharing, lists, updates, project
   context and the research evaluation (`person-*-v*`,
-  `person-answer-*-citations`, `project-context-v1`).
+  `person-answer-citation-kinds`, `project-context-v1`).
 
 Wire compatibility assertions intentionally retain the existing URL paths,
 JSON fields, and serialized `kind` values even when source names are more

@@ -58,38 +58,28 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-/** A closed snapshot, constructed once by composition; no runtime registration. */
-export function createRecordInputCodecRegistryV4(codecs: readonly RecordInputCodecV4[]): RecordInputCodecRegistryV4 {
-  const fields = new Set<string>();
-  const kinds = new Set<string>();
-  const selected = codecs.map((codec) => {
-    const key = `${codec.reference_kind}:${codec.reference_schema_version}`;
-    if (!/^[a-z][a-z0-9_]{0,127}$/.test(codec.input_reference_field) ||
-        !/^[a-z][a-z0-9-]{0,127}$/.test(codec.reference_kind) ||
-        !Number.isSafeInteger(codec.reference_schema_version) || codec.reference_schema_version < 1 ||
-        fields.has(codec.input_reference_field) || kinds.has(key) ||
-        typeof codec.validateInput !== "function" || typeof codec.fromReference !== "function") fail("V4 record codecs are invalid or ambiguous");
-    fields.add(codec.input_reference_field); kinds.add(key);
-    return Object.freeze({ input_reference_field: codec.input_reference_field, reference_kind: codec.reference_kind,
-      reference_schema_version: codec.reference_schema_version, validateInput: codec.validateInput, fromReference: codec.fromReference });
-  });
-  function check(codec: RecordInputCodecV4, result: ValidatedRecordInputV4): ValidatedRecordInputV4 {
-    if (result.human_act_resolution_ref.kind !== codec.reference_kind || result.human_act_resolution_ref.schema_version !== codec.reference_schema_version ||
+/**
+ * The one record codec (approval-decision V2, the only record the publisher writes), frozen once by composition with
+ * the joins every envelope relies on; no runtime registration. The registry keeps its own frozen copy of the codec and
+ * calls its functions as that copy's methods, so a codec may use `this` and later mutation of the codec changes nothing.
+ */
+export function createRecordInputCodecRegistryV4([codec]: readonly [RecordInputCodecV4]): RecordInputCodecRegistryV4 {
+  const selected: RecordInputCodecV4 = Object.freeze({ input_reference_field: codec.input_reference_field, reference_kind: codec.reference_kind,
+    reference_schema_version: codec.reference_schema_version, validateInput: codec.validateInput, fromReference: codec.fromReference });
+  function check(result: ValidatedRecordInputV4): ValidatedRecordInputV4 {
+    if (result.human_act_resolution_ref.kind !== selected.reference_kind || result.human_act_resolution_ref.schema_version !== selected.reference_schema_version ||
         result.event.kind !== "approved") fail("V4 record codec returned a different contract");
     return result;
   }
   return Object.freeze({
     validateInput(value: unknown) {
-      const input = object(value);
-      const matches = selected.filter((codec) => Object.hasOwn(input, codec.input_reference_field));
-      if (matches.length !== 1) fail("V4 record input codec is unknown or ambiguous");
-      return check(matches[0]!, matches[0]!.validateInput(value));
+      if (!Object.hasOwn(object(value), selected.input_reference_field)) fail("V4 record input codec is unknown or ambiguous");
+      return check(selected.validateInput(value));
     },
     fromReference(value: unknown, event: unknown) {
       const reference = object(value);
-      const codec = selected.find((candidate) => candidate.reference_kind === reference.kind && candidate.reference_schema_version === reference.schema_version);
-      if (!codec) fail("V4 record resolution codec is unknown");
-      return check(codec, codec.fromReference(value, event));
+      if (reference.kind !== selected.reference_kind || reference.schema_version !== selected.reference_schema_version) fail("V4 record resolution codec is unknown");
+      return check(selected.fromReference(value, event));
     },
   });
 }

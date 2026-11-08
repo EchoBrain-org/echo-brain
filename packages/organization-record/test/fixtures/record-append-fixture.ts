@@ -152,7 +152,6 @@ export function approvalDecisionTestProjector(): RecordPolicyFactProjectorV1 {
     event: envelope.body.event,
   });
   return Object.freeze({
-    id: APPROVAL_DECISION_REF_KIND_V2,
     matches: (envelope: RecordPolicyFactEnvelopeV1) =>
       (envelope.body.human_act_resolution_ref as { readonly kind?: unknown }).kind === APPROVAL_DECISION_REF_KIND_V2,
     policyBinding(envelope: RecordPolicyFactEnvelopeV1) {

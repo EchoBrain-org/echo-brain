@@ -112,10 +112,10 @@ target of the presentation (connection, identity link, subject and app) is still
 current. A changed connection or link never posts or redraws a card through the
 new target, and the proposal stays decidable on the desktop.
 
-Within one record-log lineage, the approved-record policy-projector registry
-is additive across a change of approval surface: it MUST keep a projector for
-every record protocol that has rows in the log, as well as the selected
-protocol. A fresh-lineage reset under
+Within one record-log lineage, the approved-record policy projection MUST keep
+a projector for every record protocol that has rows in the log, as well as the
+selected protocol: today one protocol and one projector, so a second protocol
+restores the multi-member registry first. A fresh-lineage reset under
 [ADR-0031](../decisions/ADR-0031-unified-meeting-approval-core.md) (an empty
 record log at Authority baseline V12 or later) may drop protocols with no
 surviving rows; `authority-record-protocols-v1.ts` lists only the protocols the
