@@ -2,7 +2,6 @@ import type {
   OrganizationRecordApprovalPayloadV1,
   OrganizationRecordDecisionBriefV1,
   OrganizationRecordSignalV1,
-  OrganizationRecordSourceLocatorV1,
 } from "./contracts.js";
 import {
   asRecord,
@@ -49,12 +48,6 @@ const PARTICIPANT_RESPONSE_STATUSES = [
 ] as const;
 const PARTICIPANT_ATTENDANCE = ["attended", "no_show", "unknown"] as const;
 const DECISION_STATUSES = ["proposed", "decided", "unresolved"] as const;
-const MEETING_TIME_KEYS = [
-  "scheduled_start_at",
-  "scheduled_end_at",
-  "actual_start_at",
-  "actual_end_at",
-] as const;
 
 function assertNonEmptyString(
   value: unknown,
@@ -119,161 +112,122 @@ function assertMetadata(value: unknown, label: string, depth = 0): void {
   }
 }
 
-function assertMeetingTime(value: unknown, label: string): void {
-  if (value === undefined) return;
-  const time = asRecord(value, label);
-  for (const key of Object.keys(time)) {
-    if (
-      !MEETING_TIME_KEYS.includes(key as (typeof MEETING_TIME_KEYS)[number]) &&
-      key !== "timezone" &&
-      key !== "all_day"
-    ) {
-      organizationProtocolValidationFailure(`${label} has an unexpected shape`);
-    }
+/** One field's check: its value, its label (`<object>.<key>`), and the object that holds it. */
+type Check = (value: unknown, label: string, record: Record<string, unknown>) => void;
+
+/**
+ * Checks `value` is an object whose keys are among `checks`' (all of them when
+ * `exact`), then runs each check in order on its field.
+ */
+function fields(
+  value: unknown,
+  label: string,
+  checks: Readonly<Record<string, Check>>,
+  exact = false,
+): Record<string, unknown> {
+  const record = asRecord(value, label);
+  if (exact) assertExactKeys(record, Object.keys(checks), label);
+  else if (Object.keys(record).some((key) => !Object.hasOwn(checks, key))) {
+    organizationProtocolValidationFailure(`${label} has an unexpected shape`);
   }
-  for (const key of MEETING_TIME_KEYS) {
-    assertOptionalTimestamp(time[key], `${label}.${key}`);
-  }
-  if (
-    typeof time.scheduled_start_at === "string" &&
-    typeof time.scheduled_end_at === "string" &&
-    time.scheduled_start_at > time.scheduled_end_at
-  ) {
-    organizationProtocolValidationFailure(
-      `${label} scheduled end precedes its start`,
-    );
-  }
-  if (
-    typeof time.actual_start_at === "string" &&
-    typeof time.actual_end_at === "string" &&
-    time.actual_start_at > time.actual_end_at
-  ) {
-    organizationProtocolValidationFailure(
-      `${label} actual end precedes its start`,
-    );
-  }
-  assertOptionalNonEmptyString(time.timezone, `${label}.timezone`);
-  if (time.all_day !== undefined && typeof time.all_day !== "boolean") {
-    organizationProtocolValidationFailure(`${label}.all_day must be a boolean`);
-  }
+  for (const [key, check] of Object.entries(checks)) check(record[key], `${label}.${key}`, record);
+  return record;
 }
 
-function assertParticipant(value: unknown, label: string): void {
-  const participant = asRecord(value, label);
-  for (const key of Object.keys(participant)) {
-    if (
-      ![
-        "id",
-        "display_name",
-        "identities",
-        "roles",
-        "response_status",
-        "attendance",
-        "organization",
-        "is_external",
-        "metadata",
-      ].includes(key)
-    ) {
-      organizationProtocolValidationFailure(`${label} has an unexpected shape`);
-    }
-  }
-  assertNonEmptyString(participant.id, `${label}.id`);
-  assertOptionalNonEmptyString(participant.display_name, `${label}.display_name`);
-  if (participant.identities !== undefined) {
-    const identities = assertArray(
-      participant.identities,
-      `${label}.identities`,
-      MAX_RECORD_PARTICIPANT_IDENTITIES,
-    );
-    const seen = new Set<string>();
-    identities.forEach((item, index) => {
-      const identity = asRecord(item, `${label}.identities[${index}]`);
-      assertExactKeys(
-        identity,
-        ["kind", "value"],
-        `${label}.identities[${index}]`,
-      );
-      assertOneOf(
-        identity.kind,
-        PARTICIPANT_IDENTITY_KINDS,
-        `${label}.identities[${index}].kind`,
-      );
-      assertNonEmptyString(
-        identity.value,
-        `${label}.identities[${index}].value`,
-      );
-      const key = `${String(identity.kind)}:${String(identity.value)}`;
-      if (seen.has(key)) {
-        organizationProtocolValidationFailure(
-          `${label}.identities must be unique`,
-        );
-      }
-      seen.add(key);
-    });
-  }
-  if (participant.roles !== undefined) {
-    const roles = assertArray(
-      participant.roles,
-      `${label}.roles`,
-      MAX_RECORD_PARTICIPANT_ROLES,
-    );
-    const seen = new Set<unknown>();
-    roles.forEach((role, index) => {
-      assertOneOf(role, PARTICIPANT_ROLES, `${label}.roles[${index}]`);
-      if (seen.has(role)) {
-        organizationProtocolValidationFailure(`${label}.roles must be unique`);
-      }
-      seen.add(role);
-    });
-  }
-  if (participant.response_status !== undefined) {
-    assertOneOf(
-      participant.response_status,
-      PARTICIPANT_RESPONSE_STATUSES,
-      `${label}.response_status`,
-    );
-  }
-  if (participant.attendance !== undefined) {
-    assertOneOf(
-      participant.attendance,
-      PARTICIPANT_ATTENDANCE,
-      `${label}.attendance`,
-    );
-  }
-  if (participant.organization !== undefined) {
-    const organization = asRecord(
-      participant.organization,
-      `${label}.organization`,
-    );
-    for (const key of Object.keys(organization)) {
-      if (key !== "name" && key !== "domain") {
-        organizationProtocolValidationFailure(
-          `${label}.organization has an unexpected shape`,
-        );
-      }
-    }
-    assertOptionalNonEmptyString(
-      organization.name,
-      `${label}.organization.name`,
-    );
-    assertOptionalNonEmptyString(
-      organization.domain,
-      `${label}.organization.domain`,
-    );
-  }
-  if (
-    participant.is_external !== undefined &&
-    typeof participant.is_external !== "boolean"
-  ) {
-    organizationProtocolValidationFailure(
-      `${label}.is_external must be a boolean`,
-    );
-  }
-  if (participant.metadata !== undefined) {
-    asRecord(participant.metadata, `${label}.metadata`);
-    assertMetadata(participant.metadata, `${label}.metadata`);
-  }
+const text: Check = (value, label) => assertNonEmptyString(value, label);
+const optionalText: Check = (value, label) => assertOptionalNonEmptyString(value, label);
+const optionalAt: Check = (value, label) => assertOptionalTimestamp(value, label);
+
+function optionalAmong(allowed: readonly string[]): Check {
+  return (value, label) => {
+    if (value !== undefined) assertOneOf(value, allowed, label);
+  };
 }
+
+/**
+ * At most `maximum` items, each checked as `<label>[<index>]` (an array's holes
+ * are skipped); an item whose `key` repeats an earlier one's is refused at once.
+ */
+function eachUnique(
+  value: unknown,
+  label: string,
+  maximum: number,
+  check: (item: unknown, label: string) => void,
+  key: (item: never) => unknown,
+): void {
+  const seen = new Set<unknown>();
+  assertArray(value, label, maximum).forEach((item, index) => {
+    check(item, `${label}[${index}]`);
+    if (seen.has(key(item as never))) {
+      organizationProtocolValidationFailure(`${label} must be unique`);
+    }
+    seen.add(key(item as never));
+  });
+}
+
+const TIME_CHECKS: Readonly<Record<string, Check>> = {
+  scheduled_start_at: optionalAt,
+  scheduled_end_at: optionalAt,
+  actual_start_at: optionalAt,
+  // All four times are checked before either order.
+  actual_end_at: (value, label, time) => {
+    assertOptionalTimestamp(value, label);
+    const meetingTime = label.slice(0, label.lastIndexOf("."));
+    if (
+      typeof time.scheduled_start_at === "string" &&
+      typeof time.scheduled_end_at === "string" &&
+      time.scheduled_start_at > time.scheduled_end_at
+    ) {
+      organizationProtocolValidationFailure(`${meetingTime} scheduled end precedes its start`);
+    }
+    if (
+      typeof time.actual_start_at === "string" &&
+      typeof time.actual_end_at === "string" &&
+      time.actual_start_at > time.actual_end_at
+    ) {
+      organizationProtocolValidationFailure(`${meetingTime} actual end precedes its start`);
+    }
+  },
+  timezone: optionalText,
+  all_day: (value, label) => {
+    if (value !== undefined && typeof value !== "boolean") {
+      organizationProtocolValidationFailure(`${label} must be a boolean`);
+    }
+  },
+};
+
+const PARTICIPANT_CHECKS: Readonly<Record<string, Check>> = {
+  id: text,
+  display_name: optionalText,
+  identities: (value, label) => {
+    if (value === undefined) return;
+    eachUnique(value, label, MAX_RECORD_PARTICIPANT_IDENTITIES, (item, itemLabel) => {
+      fields(item, itemLabel, {
+        kind: (kind, kindLabel) => assertOneOf(kind, PARTICIPANT_IDENTITY_KINDS, kindLabel),
+        value: text,
+      }, true);
+    }, (identity: Record<string, unknown>) => `${String(identity.kind)}:${String(identity.value)}`);
+  },
+  roles: (value, label) => {
+    if (value === undefined) return;
+    eachUnique(value, label, MAX_RECORD_PARTICIPANT_ROLES, (role, roleLabel) => assertOneOf(role, PARTICIPANT_ROLES, roleLabel), (role: unknown) => role);
+  },
+  response_status: optionalAmong(PARTICIPANT_RESPONSE_STATUSES),
+  attendance: optionalAmong(PARTICIPANT_ATTENDANCE),
+  organization: (value, label) => {
+    if (value !== undefined) fields(value, label, { name: optionalText, domain: optionalText });
+  },
+  is_external: (value, label) => {
+    if (value !== undefined && typeof value !== "boolean") {
+      organizationProtocolValidationFailure(`${label} must be a boolean`);
+    }
+  },
+  metadata: (value, label) => {
+    if (value === undefined) return;
+    asRecord(value, label);
+    assertMetadata(value, label);
+  },
+};
 
 function assertEvidence(
   value: unknown,
@@ -284,27 +238,15 @@ function assertEvidence(
     organizationProtocolValidationFailure(`${label} must not be empty`);
   }
   (value as unknown[]).forEach((item, index) => {
-    const span = asRecord(item, `${label}[${index}]`);
-    for (const key of Object.keys(span)) {
-      if (
-        !["meeting_id", "block_id", "quote", "started_at", "ended_at"].includes(
-          key,
-        )
-      ) {
-        organizationProtocolValidationFailure(
-          `${label}[${index}] has an unexpected shape`,
-        );
-      }
-    }
-    if (span.meeting_id !== meetingId) {
-      organizationProtocolValidationFailure(
-        `${label}[${index}].meeting_id does not match its meeting`,
-      );
-    }
-    assertNonEmptyString(span.block_id, `${label}[${index}].block_id`);
-    assertOptionalNonEmptyString(span.quote, `${label}[${index}].quote`);
-    assertOptionalTimestamp(span.started_at, `${label}[${index}].started_at`);
-    assertOptionalTimestamp(span.ended_at, `${label}[${index}].ended_at`);
+    fields(item, `${label}[${index}]`, {
+      meeting_id: (id, idLabel) => {
+        if (id !== meetingId) organizationProtocolValidationFailure(`${idLabel} does not match its meeting`);
+      },
+      block_id: text,
+      quote: optionalText,
+      started_at: optionalAt,
+      ended_at: optionalAt,
+    });
   });
 }
 
@@ -417,166 +359,79 @@ function assertOrganizationRecordDecisionBrief(
   label: string,
 ): asserts value is OrganizationRecordDecisionBriefV1 {
   const brief = asRecord(value, label);
-  assertExactKeys(
-    brief,
-    [
-      "schema_version",
-      "id",
-      "meeting",
-      "decisions",
-      "actions",
-      "rationales",
-      "provenance",
-    ],
-    label,
-  );
+  assertExactKeys(brief, ["schema_version", "id", "meeting", "decisions", "actions", "rationales", "provenance"], label);
   assertLiteral(brief.schema_version, 1, `${label} schema_version`);
   assertNonEmptyString(brief.id, `${label}.id`);
 
-  const meeting = asRecord(brief.meeting, `${label}.meeting`);
-  for (const key of Object.keys(meeting)) {
-    if (!["id", "title", "time", "participants"].includes(key)) {
-      organizationProtocolValidationFailure(
-        `${label}.meeting has an unexpected shape`,
-      );
-    }
-  }
-  assertNonEmptyString(meeting.id, `${label}.meeting.id`);
-  assertOptionalNonEmptyString(meeting.title, `${label}.meeting.title`);
-  assertMeetingTime(meeting.time, `${label}.meeting.time`);
-  const participants = assertArray(
-    meeting.participants,
-    `${label}.meeting.participants`,
-    MAX_RECORD_PARTICIPANTS,
-  );
-  // Deliberately stricter than core, which tolerates repeated participant ids.
-  // Derive keys a participant observation by (meeting snapshot, participant),
-  // so a duplicate id would either collide on insert or silently drop a
-  // distinct observation. Every protocol-valid payload must be derivable.
-  const participantIds = new Set<unknown>();
-  participants.forEach((participant, index) => {
-    const participantLabel = `${label}.meeting.participants[${index}]`;
-    assertParticipant(participant, participantLabel);
-    const id = (participant as Record<string, unknown>).id;
-    if (participantIds.has(id)) {
-      organizationProtocolValidationFailure(
-        `${label}.meeting.participants must have unique ids`,
-      );
-    }
-    participantIds.add(id);
+  const meeting = fields(brief.meeting, `${label}.meeting`, {
+    id: text,
+    title: optionalText,
+    time: (time, timeLabel) => {
+      if (time !== undefined) fields(time, timeLabel, TIME_CHECKS);
+    },
+    // Deliberately stricter than core, which tolerates repeated participant ids.
+    // Derive keys a participant observation by (meeting snapshot, participant),
+    // so a duplicate id would either collide on insert or silently drop a
+    // distinct observation. Every protocol-valid payload must be derivable.
+    participants: (participants, participantsLabel) => {
+      const participantIds = new Set<unknown>();
+      assertArray(participants, participantsLabel, MAX_RECORD_PARTICIPANTS).forEach((participant, index) => {
+        fields(participant, `${participantsLabel}[${index}]`, PARTICIPANT_CHECKS);
+        const id = (participant as Record<string, unknown>).id;
+        if (participantIds.has(id)) {
+          organizationProtocolValidationFailure(`${participantsLabel} must have unique ids`);
+        }
+        participantIds.add(id);
+      });
+    },
   });
 
-  const provenance = asRecord(brief.provenance, `${label}.provenance`);
-  assertExactKeys(
-    provenance,
-    ["meeting_revision", "processor", "generated_at"],
-    `${label}.provenance`,
-  );
-  assertNonEmptyString(
-    provenance.meeting_revision,
-    `${label}.provenance.meeting_revision`,
-  );
-  assertTimestamp(provenance.generated_at, `${label}.provenance.generated_at`);
-  const processor = asRecord(
-    provenance.processor,
-    `${label}.provenance.processor`,
-  );
-  assertExactKeys(
-    processor,
-    ["kind", "adapter_id", "instance_id", "version"],
-    `${label}.provenance.processor`,
-  );
-  assertLiteral(
-    processor.kind,
-    "decision-processor",
-    `${label}.provenance.processor kind`,
-  );
-  assertNonEmptyString(
-    processor.adapter_id,
-    `${label}.provenance.processor.adapter_id`,
-  );
-  assertNonEmptyString(
-    processor.instance_id,
-    `${label}.provenance.processor.instance_id`,
-  );
-  assertNonEmptyString(
-    processor.version,
-    `${label}.provenance.processor.version`,
-  );
+  fields(brief.provenance, `${label}.provenance`, {
+    meeting_revision: text,
+    generated_at: (generatedAt, generatedAtLabel) => assertTimestamp(generatedAt, generatedAtLabel),
+    processor: (processor, processorLabel) => {
+      fields(processor, processorLabel, {
+        kind: (kind) => assertLiteral(kind, "decision-processor", `${processorLabel} kind`),
+        adapter_id: text,
+        instance_id: text,
+        version: text,
+      }, true);
+    },
+  }, true);
 
   const meetingId = meeting.id as string;
   const ids = new Set<string>();
   assertRationaleLinks([
-    ...assertSignalArray(
-      brief.decisions,
-      `${label}.decisions`,
-      "decision",
-      meetingId,
-      ids,
-    ),
-    ...assertSignalArray(
-      brief.actions,
-      `${label}.actions`,
-      "action",
-      meetingId,
-      ids,
-    ),
-    ...assertSignalArray(
-      brief.rationales,
-      `${label}.rationales`,
-      "rationale",
-      meetingId,
-      ids,
-    ),
+    ...assertSignalArray(brief.decisions, `${label}.decisions`, "decision", meetingId, ids),
+    ...assertSignalArray(brief.actions, `${label}.actions`, "action", meetingId, ids),
+    ...assertSignalArray(brief.rationales, `${label}.rationales`, "rationale", meetingId, ids),
   ]);
-}
-
-function assertOrganizationRecordSourceLocator(
-  value: unknown,
-  label: string,
-): asserts value is OrganizationRecordSourceLocatorV1 {
-  const locator = asRecord(value, label);
-  assertExactKeys(
-    locator,
-    ["adapter_id", "instance_id", "external_id"],
-    label,
-  );
-  assertNonEmptyString(locator.adapter_id, `${label}.adapter_id`);
-  assertNonEmptyString(locator.instance_id, `${label}.instance_id`);
-  assertNonEmptyString(locator.external_id, `${label}.external_id`);
 }
 
 export function assertOrganizationRecordApprovalPayload(
   value: unknown,
   label: string,
 ): asserts value is OrganizationRecordApprovalPayloadV1 {
-  const payload = asRecord(value, label);
-  assertExactKeys(
-    payload,
-    ["brief", "source", "alternatives", "links", "reviewed_at", "surface"],
-    label,
-  );
-  assertOrganizationRecordDecisionBrief(payload.brief, `${label}.brief`);
-  assertOrganizationRecordSourceLocator(payload.source, `${label}.source`);
-  // Carried for shape stability; V1 derives nothing from either, so accepting
-  // content nothing validates would put unreadable facts in an immutable log.
-  if (!Array.isArray(payload.alternatives) || payload.alternatives.length > 0) {
-    organizationProtocolValidationFailure(
-      `${label}.alternatives must be an empty array in schema version 1`,
-    );
-  }
-  if (payload.links !== null) {
-    organizationProtocolValidationFailure(
-      `${label}.links must be null in schema version 1`,
-    );
-  }
-  assertTimestamp(payload.reviewed_at, `${label}.reviewed_at`);
-  if (
-    typeof payload.surface !== "string" ||
-    !SURFACE_PATTERN.test(payload.surface)
-  ) {
-    organizationProtocolValidationFailure(
-      `${label}.surface must be a canonical surface name`,
-    );
-  }
+  fields(value, label, {
+    brief: (brief, briefLabel) => assertOrganizationRecordDecisionBrief(brief, briefLabel),
+    source: (source, sourceLabel) => {
+      fields(source, sourceLabel, { adapter_id: text, instance_id: text, external_id: text }, true);
+    },
+    // Carried for shape stability; V1 derives nothing from either, so accepting
+    // content nothing validates would put unreadable facts in an immutable log.
+    alternatives: (alternatives, alternativesLabel) => {
+      if (!Array.isArray(alternatives) || alternatives.length > 0) {
+        organizationProtocolValidationFailure(`${alternativesLabel} must be an empty array in schema version 1`);
+      }
+    },
+    links: (links, linksLabel) => {
+      if (links !== null) organizationProtocolValidationFailure(`${linksLabel} must be null in schema version 1`);
+    },
+    reviewed_at: (reviewedAt, reviewedAtLabel) => assertTimestamp(reviewedAt, reviewedAtLabel),
+    surface: (surface, surfaceLabel) => {
+      if (typeof surface !== "string" || !SURFACE_PATTERN.test(surface)) {
+        organizationProtocolValidationFailure(`${surfaceLabel} must be a canonical surface name`);
+      }
+    },
+  }, true);
 }
