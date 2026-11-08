@@ -263,6 +263,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
   const app = {
     list: (input: Parameters<typeof runsApp.list>[0]) => runsApp.list(input).then(value => validatePersonRunsResultV1('list', value)),
     start: (input: Parameters<typeof runsApp.start>[0]) => runsApp.start(input).then(value => validatePersonRunsResultV1('start', value)),
+    next: (input: Parameters<typeof runsApp.next>[0]) => runsApp.next(input).then(value => validatePersonRunsResultV1('next', value)),
     retry: (input: Parameters<typeof runsApp.retry>[0]) => runsApp.retry(input).then(value => validatePersonRunsResultV1('retry', value)),
     view: (input: Parameters<typeof runsApp.view>[0]) => runsApp.view(input).then(value => validatePersonRunsResultV1('view', value)),
     // Home's request is optional here: a plain Home read unless a test asks for rows only.

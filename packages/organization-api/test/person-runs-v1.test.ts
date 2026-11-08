@@ -82,6 +82,7 @@ describe('runs API request', () => {
     for (const request of [
       { schema_version: 1, operation: 'list' },
       { schema_version: 1, operation: 'start', run_id: id },
+      { schema_version: 1, operation: 'next' },
       { schema_version: 1, operation: 'retry', run_id: id },
       { schema_version: 1, operation: 'view', run_id: id },
     ]) {
@@ -101,6 +102,11 @@ describe('runs API request', () => {
     ['list with an extra key', { schema_version: 1, operation: 'list', limit: 5 }],
     ['start without a run id', { schema_version: 1, operation: 'start' }],
     ['start with an extra key', { schema_version: 1, operation: 'start', run_id: id, force: true }],
+    // `next` names no run: the Authority picks the caller's oldest queued one.
+    ['next with a run id', { schema_version: 1, operation: 'next', run_id: id }],
+    ['next with a capture id', { schema_version: 1, operation: 'next', capture_id: 'cap_0f6c1a2e-3b4d-4c5e-8f90-123456789abc' }],
+    ['next with an extra key', { schema_version: 1, operation: 'next', scope: 'mine' }],
+    ['next with another schema version', { schema_version: 2, operation: 'next' }],
     ['retry with an extra key', { schema_version: 1, operation: 'retry', run_id: id, attempts: 0 }],
     ['view with an extra key', { schema_version: 1, operation: 'view', run_id: id, project_id: 'prj_x' }],
     ['a run id without the prefix', { schema_version: 1, operation: 'start', run_id: 'rr_0f6c1a2e-3b4d' }],
@@ -170,12 +176,25 @@ describe('runs API list result', () => {
   });
 });
 
-describe('runs API start and retry results', () => {
+describe('runs API start, next and retry results', () => {
   it('accepts a start state from the closed set', () => {
     for (const state of ['pending', 'running', 'busy', 'done', 'failed'] as const) expect(validatePersonRunsResultV1('start', { state })).toEqual({ state });
     for (const [label, value] of [
       ['an unknown state', { state: 'queued' }], ['an extra key', { state: 'running', run_id: 'run_abcd' }], ['no state', {}], ['a non-string state', { state: 1 }],
     ] as const) refused(() => validatePersonRunsResultV1('start', value), label);
+  });
+
+  it('accepts a next state from its own closed set, with exactly its keys', () => {
+    for (const state of ['idle', 'pending', 'running', 'busy'] as const) {
+      const result = validatePersonRunsResultV1('next', { state });
+      expect(result).toEqual({ state });
+      expect(Object.isFrozen(result)).toBe(true);
+    }
+    for (const [label, value] of [
+      // A check-in never answers a run's end: a claim that finds the run done or failed has nothing left to start (idle).
+      ['done', { state: 'done' }], ['failed', { state: 'failed' }], ['an unknown state', { state: 'queued' }],
+      ['an extra key', { state: 'running', run_id: 'run_abcd' }], ['no state', {}], ['a non-string state', { state: 1 }],
+    ] as const) refused(() => validatePersonRunsResultV1('next', value), label);
   });
 
   it('accepts only pending as a retry result', () => {
