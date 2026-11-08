@@ -5,12 +5,12 @@
 // the renderer needs, so nothing else the client prints can reach it.
 import type {
   Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskRead, AskScope, AskSearched, AskStep, Audience, ConnectedTools,
-  CreatedProject, DocumentSummary, Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, MemberPage, Opened,
+  CreatedProject, DocumentSummary, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, MemberPage, Opened,
   ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef,
   RecordSection, SourceEvidence, SourceRef, ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
 import {
-  validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
+  validateEmployeeRosterV1, validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
   validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2,
   validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1,
@@ -28,10 +28,6 @@ function object(value: unknown): Json {
 }
 function text(value: unknown): string {
   if (typeof value !== 'string') throw new ViewError();
-  return value;
-}
-function list(value: unknown): unknown[] {
-  if (!Array.isArray(value)) throw new ViewError();
   return value;
 }
 
@@ -232,25 +228,10 @@ export function createdView(raw: unknown, requestId: string): CreatedProject {
   return { project_id: receipt.project_id };
 }
 
-const MEMBERSHIPS: ReadonlySet<string> = new Set<Employee['membership']>(['active', 'revoked']);
-const INVITATIONS: ReadonlySet<string> = new Set<Employee['invitation']>(['pending', 'expired', 'redeemed', 'none']);
-
-/** The owner's list of employees: each one's name, email and where they stand. */
+/** The owner's list of employees, as the client checked it: each one's name, email and where they stand. */
 export function employeesView(raw: unknown): Employees {
-  const value = object(unwrap(raw));
-  if (value.schema_version !== 1 || value.kind !== 'echo-clean-person-employee-roster-v1') throw new ViewError();
-  return {
-    items: list(value.employees).map(entry => {
-      const employee = object(entry);
-      const membership = text(employee.membership_status);
-      const invitation = text(employee.invitation_state);
-      if (!MEMBERSHIPS.has(membership) || !INVITATIONS.has(invitation)) throw new ViewError();
-      return {
-        email: text(employee.email), display_name: text(employee.display_name),
-        membership: membership as Employee['membership'], invitation: invitation as Employee['invitation'],
-      };
-    }),
-  };
+  return { items: validated(validateEmployeeRosterV1, unwrap(raw)).employees.map(({ email, display_name, membership_status, invitation_state }) =>
+    ({ email, display_name, membership: membership_status, invitation: invitation_state })) };
 }
 
 /** An invitation written exactly where main said. The path stays behind. */
