@@ -56,19 +56,7 @@
         "export": "RecordRetrievalSourceSnapshotPortV1"
       }
     ],
-    "compatibility_entrypoints": [],
-    "retired_source_paths": [
-      "packages/organization-record/src/persistence/baseline.ts",
-      "packages/organization-record/src/organization-record-service-v1.ts",
-      "packages/organization-record/src/organization-record-runtime-v1.ts",
-      "packages/organization-record/src/persistence/open-unmigrated-database.ts",
-      "packages/organization-record/src/retrieve/clean-person-record-reader-v1.ts",
-      "packages/organization-record/src/retrieve/clean-v4-layer1-snapshot.ts",
-      "packages/organization-record/src/new-lineage-v1.ts",
-      "packages/organization-record/src/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.ts",
-      "packages/organization-record/src/retrieve/approved-meeting-transcript-grant-reader-v1.ts",
-      "packages/organization-record/src/application/person-policy-facts-v2.ts"
-    ]
+    "compatibility_entrypoints": []
   },
   "layer_rules": [
     {
