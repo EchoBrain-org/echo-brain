@@ -42,9 +42,11 @@ const RELEASE_BOUND_ENVIRONMENT_FIELDS = Object.freeze([
   "ECHO_CLEAN_RUNTIME_PROFILE_VERSION",
 ]);
 // The only settings that staging prepare writes beside the identity fields,
-// with their allowed values, plus the retired switches older releases wrote:
-// the agentic Ask flags (older updates) and content telemetry (older prepares).
-// Any other name, or a selected connector rehearsal, is refused.
+// with their allowed values, plus the retired switches that restored state and
+// rollback targets can still hold: the agentic Ask flags older updates wrote
+// (stage still writes a true shortcut, which the Authority refuses) and the
+// content telemetry switch older prepares wrote. Any other name, or a selected
+// connector rehearsal, is refused.
 const OPTIONAL_ENVIRONMENT_VALUES = Object.freeze({
   ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE: [""],
   ECHO_AGENTIC_ASK_V1: ["true", "false"],
