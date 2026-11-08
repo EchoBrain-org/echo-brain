@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import type { ProviderHttpRequestV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import {
-  PERSON_CONFLUENCE_PROJECT_LIST_PATH_V1, PERSON_CONFLUENCE_PROJECT_READ_PATH_V1, PERSON_CONFLUENCE_PROJECT_SET_PATH_V1, PERSON_CONFLUENCE_SPACES_LIST_PATH_V1,
+  PERSON_CONFLUENCE_PROJECT_READ_PATH_V1, PERSON_CONFLUENCE_PROJECT_SET_PATH_V1, PERSON_CONFLUENCE_SPACES_LIST_PATH_V1,
 } from '@echo-brain/provider-confluence-client/organization-api/confluence-project-mapping-v1';
 import { createConfluencePersonConnectionHttpApplicationV1, type ConfluencePersonConnectionHttpPortV1 } from '../src/confluence-person-connection-http-application-v1.js';
 
@@ -23,7 +23,7 @@ function fixture() {
     status: vi.fn(async () => ({ schema_version: 1 as const, attempt, expires_at: '2026-10-01T00:30:00.000Z', status: 'pending' as const, failure_reason: null })),
     cancel: vi.fn(async () => ({ schema_version: 1 as const, attempt, expires_at: '2026-10-01T00:30:00.000Z', status: 'cancelled' as const, failure_reason: null })),
     disconnect: vi.fn(async () => ({ schema_version: 1 as const, connected: false as const })),
-    projectRead: vi.fn(() => mapping), projectSet: vi.fn(async () => mapping), projectList: vi.fn(() => ({ schema_version: 1 as const, mappings: [mapping] })),
+    projectRead: vi.fn(() => mapping), projectSet: vi.fn(async () => mapping),
     spacesList: vi.fn(async () => ({ schema_version: 1 as const, items: [{ id: '123', key: '~person', name: 'Personal space' }], next_cursor: null })),
   };
   return { connection, application: createConfluencePersonConnectionHttpApplicationV1(connection) };
@@ -33,14 +33,16 @@ it('owns lifecycle, project mapping, and permission-filtered space picker routes
   const f = fixture();
   expect(f.application.routes.map(route => route.path)).toEqual(expect.arrayContaining([
     PERSON_CONFLUENCE_CONNECT_PATH_V1, PERSON_CONFLUENCE_STATUS_PATH_V1, PERSON_CONFLUENCE_CANCEL_PATH_V1, PERSON_CONFLUENCE_DISCONNECT_PATH_V1,
-    PERSON_CONFLUENCE_PROJECT_READ_PATH_V1, PERSON_CONFLUENCE_PROJECT_SET_PATH_V1, PERSON_CONFLUENCE_PROJECT_LIST_PATH_V1, PERSON_CONFLUENCE_SPACES_LIST_PATH_V1,
+    PERSON_CONFLUENCE_PROJECT_READ_PATH_V1, PERSON_CONFLUENCE_PROJECT_SET_PATH_V1, PERSON_CONFLUENCE_SPACES_LIST_PATH_V1,
   ]));
+  // The retired project-list route is neither mounted nor answered.
+  expect(f.application.routes.map(route => route.path)).not.toContain('/v1/person/tools/confluence/project/list');
+  await expect(f.application.accept(request('confluence-project-list', '/v1/person/tools/confluence/project/list', { schema_version: 1 }))).rejects.toMatchObject({ code: 'not_found' });
   await expect(f.application.accept(request('confluence-connect', PERSON_CONFLUENCE_CONNECT_PATH_V1, { schema_version: 1 }))).resolves.toMatchObject({ status: 201, body: { attempt } });
   await expect(f.application.accept(request('confluence-status', PERSON_CONFLUENCE_STATUS_PATH_V1, { schema_version: 1, attempt }))).resolves.toMatchObject({ status: 200, body: { status: 'pending' } });
   await expect(f.application.accept(request('confluence-cancel', PERSON_CONFLUENCE_CANCEL_PATH_V1, { schema_version: 1, attempt }))).resolves.toMatchObject({ status: 200, body: { status: 'cancelled' } });
   await expect(f.application.accept(request('confluence-disconnect', PERSON_CONFLUENCE_DISCONNECT_PATH_V1, { schema_version: 1 }))).resolves.toMatchObject({ status: 200, body: { connected: false } });
   await expect(f.application.accept(request('confluence-project-read', PERSON_CONFLUENCE_PROJECT_READ_PATH_V1, { schema_version: 1, project_id: project }))).resolves.toMatchObject({ body: { mapping: { space_ids: ['123'] } } });
-  await expect(f.application.accept(request('confluence-project-list', PERSON_CONFLUENCE_PROJECT_LIST_PATH_V1, { schema_version: 1 }))).resolves.toMatchObject({ body: { mappings: [expect.objectContaining({ project_id: project })] } });
   await expect(f.application.accept(request('confluence-spaces-list', PERSON_CONFLUENCE_SPACES_LIST_PATH_V1, { schema_version: 1 }))).resolves.toMatchObject({ body: { items: [{ id: '123', key: '~person' }] } });
   await expect(f.application.accept(request('confluence-project-set', PERSON_CONFLUENCE_PROJECT_SET_PATH_V1, { schema_version: 1, project_id: project, request_id: '00000000-0000-4000-8000-000000000012', expected_revision: revision, space_ids: ['123'] }))).resolves.toMatchObject({ body: { revision } });
   expect(f.connection.spacesList).toHaveBeenCalledWith(expect.objectContaining({ access_token: 'synthetic-person' }));

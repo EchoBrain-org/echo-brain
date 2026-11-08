@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { validatePersonToolConnectV1, type PersonToolHostV1, type PersonToolVerbContextV1 } from '@echo-brain/organization-api';
 import { createConfluencePersonToolProviderV1 } from '@echo-brain/provider-confluence-client/person/confluence-tool-provider';
 import { createJiraPersonToolProviderV1 } from '@echo-brain/provider-jira-client/person/jira-tool-provider';
-import { validateConfluenceProjectMappingsV1, validateConfluenceSpacesPageV1 } from '@echo-brain/provider-confluence-client/organization-api/confluence-project-mapping-v1';
+import { validateConfluenceSpacesPageV1 } from '@echo-brain/provider-confluence-client/organization-api/confluence-project-mapping-v1';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
 
 const uuid = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
@@ -67,13 +67,6 @@ describe('Person tool response byte budgets', () => {
     expect(fixture.bytes).toBeGreaterThan(8192);
     await expect(callTool(fixture.host, 'confluence', 'project', { spaces: true })).resolves.toMatchObject({ printed: [{ ok: true, result: response }] });
     expect(fixture.fetch).toHaveBeenCalledOnce();
-  });
-
-  it('accepts 100 maximum-size mappings using the list contract', async () => {
-    const response = validateConfluenceProjectMappingsV1({ schema_version: 1, mappings: Array.from({ length: 100 }, (_, index) => mapping(index)) });
-    const fixture = hostFor(response);
-    expect(fixture.bytes).toBeGreaterThan(64 * 1024);
-    await expect(callTool(fixture.host, 'confluence', 'project', { list: true })).resolves.toMatchObject({ printed: [{ ok: true, result: response }] });
   });
 
   it.each(['jira', 'confluence'] as const)('retains the small budget for maximum valid %s single mappings', async provider => {

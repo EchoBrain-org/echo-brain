@@ -1,10 +1,9 @@
 import { createPersonConnectionLifecycleV1, type PersonConnectionAuthorizationV1 } from '@echo-brain/provider-runtime/person-connection-lifecycle-v1';
 import { createPersonProjectMappingAccessV1, type PersonProjectAuthorizationV1, type PersonProjectNamesV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
-import { validateConfluenceProjectReadV1, validateConfluenceProjectSetV1, validateConfluenceProjectMappingsV1, validateConfluenceSpacesPageV1, type ConfluenceProjectMappingV1, type ConfluenceProjectMappingsV1, type ConfluenceSpacesPageV1 } from '@echo-brain/provider-confluence-client/organization-api/confluence-project-mapping-v1';
+import { validateConfluenceProjectReadV1, validateConfluenceProjectSetV1, validateConfluenceSpacesPageV1, type ConfluenceProjectMappingV1, type ConfluenceSpacesPageV1 } from '@echo-brain/provider-confluence-client/organization-api/confluence-project-mapping-v1';
 import { randomUUID } from 'node:crypto';
 import type { ConfluenceProjectMappingStoreV1 } from './confluence-project-mapping-store-v1.js';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonPageCitationV1 } from '@echo-brain/organization-api';
 import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { ConfluenceConnectionStoreV1 } from './confluence-connection-store-v1.js';
@@ -38,19 +37,6 @@ export function createConfluencePersonConnectionV1(options: {
   /** Request-local picker cursors, fenced to both person tenure and live grant. */
   const space_cursors = new Map<string, Readonly<{ person_sha256: Sha256Digest; grant_sha256: Sha256Digest; provider_cursor?: string }>>();
   const access = createPersonProjectMappingAccessV1(CONFLUENCE_PERSON_PROVIDER_V1, options);
-  function visibleProjectMappings(accessToken: string, organizationId: string): readonly ConfluenceProjectMappingV1[] {
-    if (options.project_mappings === undefined || options.authorize_project === undefined) confluenceFailure('unavailable');
-    const selected: ConfluenceProjectMappingV1[] = [];
-    for (const mapping of options.project_mappings.list(organizationId)) {
-      try { options.authorize_project(accessToken, mapping.project_id); selected.push(mapping); }
-      catch (error) {
-        // Project membership is an authorization boundary. A denied project is
-        // omitted rather than revealing its ECHO project id or mapping.
-        if (!(error instanceof AuthorityOperationError) || error.code !== 'unauthorized') throw error;
-      }
-    }
-    return Object.freeze(selected);
-  }
   /** This person's own current connection, for the Ask source check; with none, `unauthorized`. */
   function checkTransport(input: { readonly access_token: string; readonly signal?: AbortSignal }): ConfluenceCloudTransportV1 {
     const { person, requirePerson } = actor(input.access_token);
@@ -60,12 +46,6 @@ export function createConfluencePersonConnectionV1(options: {
     ...shared.application,
     projectRead: (input: { readonly access_token: string; readonly request: unknown }): ConfluenceProjectMappingV1 =>
       access.read({ lifecycle: shared, validate: validateConfluenceProjectReadV1 }, input),
-    projectList(input: { readonly access_token: string }): ConfluenceProjectMappingsV1 {
-      const { person, requirePerson } = actor(input.access_token);
-      const mappings = visibleProjectMappings(input.access_token, person.organization_id);
-      requirePerson();
-      return validateConfluenceProjectMappingsV1({ schema_version: 1, mappings });
-    },
     async spacesList(input: { readonly access_token: string; readonly cursor?: string; readonly signal?: AbortSignal }): Promise<ConfluenceSpacesPageV1> {
       const { person, requirePerson } = actor(input.access_token);
       const { stored, current, transport: authenticatedFetch } = shared.open(person, requirePerson, input.signal);
