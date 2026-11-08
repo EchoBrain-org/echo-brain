@@ -524,6 +524,10 @@ describe("Person Layer 2 route", () => {
         query: "benchmark0 benchmark1 benchmark2 benchmark3",
       });
       expect(benchmark.response.items).toHaveLength(10);
+      // The same read again, a millisecond later (its audit row differs only by that time), answers the same bytes.
+      const ownerTuple = authorizations["owner-bearer"];
+      const again = createRoute(value, { record, sessions: { authenticateAccess: () => ({ ...ownerTuple, checked_at: new Date(Date.parse(ownerTuple.checked_at) + 1).toISOString() }) } });
+      expect(again.searchBatch({ access_token: "owner-bearer", query: "benchmark0 benchmark1 benchmark2 benchmark3" }).response).toEqual(benchmark.response);
       expect(
         benchmark.response.items.every(
           (item) =>
