@@ -1,11 +1,10 @@
-import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import { applyOrganizationControlBaselineV4, openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
+import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_CANCEL_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1, type OrganizationSlackInstallFailureReasonV1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
 import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
@@ -21,13 +20,12 @@ import { slackConnectionVerificationEvidenceSha256V1 } from "../../src/organizat
 import { readActiveSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { SlackOrganizationSetupWorkflowV1 } from "../../src/organization-setup/slack-organization-setup-workflow-v1.js";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../../src/person-identity/slack-person-external-identity-runtime-bundle-v1.js";
+import { COORDINATES, openSlackControlDatabase, seedSlackIdentityLink, slackStateDirectory } from "../control-database-fixture.js";
 
 /** The six scopes the retired public-channel option granted; a legacy token may still hold them. */
 const LEGACY_SIX_SCOPES = Object.freeze(["channels:history", "channels:read", ...SLACK_PRIVATE_APP_BOT_SCOPES_V1]);
 
-const AUTHORITY_ID = "oau_00000000-0000-4000-8000-000000000001";
-const ORGANIZATION_ID = "org_00000000-0000-4000-8000-000000000001";
-const STATE_LINEAGE_ID = "lineage-00000000-0000-4000-8000-000000000001";
+const { authority_id: AUTHORITY_ID, organization_id: ORGANIZATION_ID, state_lineage_id: STATE_LINEAGE_ID } = COORDINATES;
 const AUTHORITY_URL = "https://authority.example.com";
 const NANGO_CALLBACK = "https://api.nango.dev/oauth/callback";
 const T0 = "2026-09-30T00:00:00.000Z";
@@ -58,7 +56,6 @@ const authentication = {
   },
 };
 
-const directories: string[] = [];
 const contexts: { outputs: unknown[] }[] = [];
 const closers: (() => void)[] = [];
 
@@ -67,18 +64,11 @@ afterEach(() => {
   // Never echoes secrets: every response and thrown error of every test.
   const text = JSON.stringify(contexts.splice(0).flatMap((context) => context.outputs));
   for (const secret of SECRETS) expect(text).not.toContain(secret);
-  for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
 function controlDatabase(): { directory: string; database: Database.Database } {
-  const directory = realpathSync(mkdtempSync(join(tmpdir(), "echo-slack-setup-")));
-  directories.push(directory);
-  const database = openOrganizationControlDatabase(join(directory, "integrations.sqlite"));
-  applyOrganizationControlBaselineV4(database);
-  database.prepare(`INSERT INTO organization_control_plane_metadata (singleton, control_plane_id, organization_id, authority_id,
-    authority_descriptor_sha256, created_at) VALUES (1, ?, ?, ?, ?, ?)`)
-    .run(`ocp_${uuid(1)}`, ORGANIZATION_ID, AUTHORITY_ID, canonicalSha256({ descriptor: "test" }), T0);
-  return { directory, database };
+  const directory = slackStateDirectory();
+  return { directory, database: openSlackControlDatabase(directory) };
 }
 
 function fakes() {
@@ -152,8 +142,8 @@ function recorded<T extends object>(target: T, outputs: unknown[]): T {
 }
 
 function setup() {
-  const { database } = controlDatabase();
-  const secrets = new FileOrganizationSecretStore(join(directories.at(-1)!, "secrets"));
+  const { directory, database } = controlDatabase();
+  const secrets = new FileOrganizationSecretStore(join(directory, "secrets"));
   const health = new SlackConnectionHealthV1();
   const f = fakes();
   const context = { outputs: [] as unknown[], clock: T0 };
@@ -181,11 +171,8 @@ function setup() {
 }
 
 function seedOwnerLink(database: Database.Database): void {
-  const active = readActiveSlackConnectionV1(database)!;
-  const linkSha = canonicalSha256({ link: "owner" });
-  database.prepare("INSERT INTO organization_external_human_link_contracts VALUES (?, ?, ?, ?)").run("clm_owner", linkSha, '{"link":"owner"}', T0);
-  database.prepare("INSERT INTO organization_external_human_link_current VALUES (?, ?, 'https://slack.com', 'workspace', ?, NULL, 'U_OWNER', 'prn_owner', 'mem_owner', 'active', ?)")
-    .run("clm_owner", linkSha, active.connection.provider_tenant_id, T0);
+  seedSlackIdentityLink(database, { external_identity_link_id: "clm_owner", provider_tenant_id: readActiveSlackConnectionV1(database)!.connection.provider_tenant_id,
+    provider_subject_id: "U_OWNER", principal_id: "prn_owner", membership_id: "mem_owner" });
 }
 
 function linkRows(database: Database.Database): unknown[] {

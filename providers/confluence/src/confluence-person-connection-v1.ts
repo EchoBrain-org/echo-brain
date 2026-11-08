@@ -1,10 +1,9 @@
 import { createPersonConnectionLifecycleV1, type PersonConnectionAuthorizationV1 } from '@echo-brain/provider-runtime/person-connection-lifecycle-v1';
 import { createPersonProjectMappingAccessV1, type PersonProjectAuthorizationV1, type PersonProjectNamesV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
-import { validateConfluenceProjectReadV1, validateConfluenceProjectSetV1, validateConfluenceProjectMappingsV1, validateConfluenceSpacesPageV1, type ConfluenceProjectMappingV1, type ConfluenceProjectMappingsV1, type ConfluenceSpacesPageV1 } from '@echo-brain/provider-confluence-client/organization-api/confluence-project-mapping-v1';
+import { validateConfluenceProjectReadV1, validateConfluenceProjectSetV1, validateConfluenceSpacesPageV1, type ConfluenceProjectMappingV1, type ConfluenceSpacesPageV1 } from '@echo-brain/provider-confluence-client/organization-api/confluence-project-mapping-v1';
 import { randomUUID } from 'node:crypto';
 import type { ConfluenceProjectMappingStoreV1 } from './confluence-project-mapping-store-v1.js';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonPageCitationV1 } from '@echo-brain/organization-api';
 import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { ConfluenceConnectionStoreV1 } from './confluence-connection-store-v1.js';
@@ -13,7 +12,7 @@ import { readConfluencePageSectionsV1, readConfluencePageVersionsV1 } from './co
 import { createConfluencePersonLiveContainerReaderV1 } from './confluence-person-live-container-reader-v1.js';
 import { createConfluencePersonLiveEvidenceReaderV1 } from './confluence-person-live-evidence-reader-v1.js';
 import type { ConfluenceNangoV1 } from './confluence-nango-v1.js';
-import { verifyConfluenceConnectionV1 } from './confluence-payload-v1.js';
+import { verifyAtlassianConnectionV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
 import { CONFLUENCE_ID, CONFLUENCE_PERSON_PROVIDER_V1, confluenceArray, confluenceFailure, confluenceNextCursorV1, confluenceString, confluenceRecord } from './confluence-validation-v1.js';
 
 type ConfluencePersonAuthorizationV1 = PersonConnectionAuthorizationV1;
@@ -32,25 +31,12 @@ export function createConfluencePersonConnectionV1(options: {
 }) {
   const cloud = options.cloud_id;
   const shared = createPersonConnectionLifecycleV1({ ...options, scope_id: options.cloud_id, provider: CONFLUENCE_PERSON_PROVIDER_V1,
-    verify: (authenticated, input) => verifyConfluenceConnectionV1(createConfluenceCloudTransportV1(authenticated), input),
+    verify: (authenticated, input) => verifyAtlassianConnectionV1(CONFLUENCE_PERSON_PROVIDER_V1, createConfluenceCloudTransportV1(authenticated), input),
   });
   const { actor } = shared;
   /** Request-local picker cursors, fenced to both person tenure and live grant. */
   const space_cursors = new Map<string, Readonly<{ person_sha256: Sha256Digest; grant_sha256: Sha256Digest; provider_cursor?: string }>>();
   const access = createPersonProjectMappingAccessV1(CONFLUENCE_PERSON_PROVIDER_V1, options);
-  function visibleProjectMappings(accessToken: string, organizationId: string): readonly ConfluenceProjectMappingV1[] {
-    if (options.project_mappings === undefined || options.authorize_project === undefined) confluenceFailure('unavailable');
-    const selected: ConfluenceProjectMappingV1[] = [];
-    for (const mapping of options.project_mappings.list(organizationId)) {
-      try { options.authorize_project(accessToken, mapping.project_id); selected.push(mapping); }
-      catch (error) {
-        // Project membership is an authorization boundary. A denied project is
-        // omitted rather than revealing its ECHO project id or mapping.
-        if (!(error instanceof AuthorityOperationError) || error.code !== 'unauthorized') throw error;
-      }
-    }
-    return Object.freeze(selected);
-  }
   /** This person's own current connection, for the Ask source check; with none, `unauthorized`. */
   function checkTransport(input: { readonly access_token: string; readonly signal?: AbortSignal }): ConfluenceCloudTransportV1 {
     const { person, requirePerson } = actor(input.access_token);
@@ -60,12 +46,6 @@ export function createConfluencePersonConnectionV1(options: {
     ...shared.application,
     projectRead: (input: { readonly access_token: string; readonly request: unknown }): ConfluenceProjectMappingV1 =>
       access.read({ lifecycle: shared, validate: validateConfluenceProjectReadV1 }, input),
-    projectList(input: { readonly access_token: string }): ConfluenceProjectMappingsV1 {
-      const { person, requirePerson } = actor(input.access_token);
-      const mappings = visibleProjectMappings(input.access_token, person.organization_id);
-      requirePerson();
-      return validateConfluenceProjectMappingsV1({ schema_version: 1, mappings });
-    },
     async spacesList(input: { readonly access_token: string; readonly cursor?: string; readonly signal?: AbortSignal }): Promise<ConfluenceSpacesPageV1> {
       const { person, requirePerson } = actor(input.access_token);
       const { stored, current, transport: authenticatedFetch } = shared.open(person, requirePerson, input.signal);
@@ -74,7 +54,7 @@ export function createConfluencePersonConnectionV1(options: {
       if (input.cursor !== undefined && (cursor === undefined || cursor.person_sha256 !== person_sha256 || cursor.grant_sha256 !== stored.binding.read_grant_sha256)) confluenceFailure('invalid_request');
       current();
       const transport = createConfluenceCloudTransportV1(authenticatedFetch);
-      await verifyConfluenceConnectionV1(transport, { expected_origin: stored.site, signal: input.signal });
+      await verifyAtlassianConnectionV1(CONFLUENCE_PERSON_PROVIDER_V1, transport, { expected_origin: stored.site, signal: input.signal });
       const raw = confluenceRecord(await transport.request({ path: '/api/v2/spaces', query: { limit: '20', ...(cursor?.provider_cursor === undefined ? {} : { cursor: cursor.provider_cursor }) }, signal: input.signal }));
       const results = confluenceArray(raw.results, 20).map(value => {
         const space = confluenceRecord(value);
@@ -102,7 +82,7 @@ export function createConfluencePersonConnectionV1(options: {
       lifecycle: shared, validate: validateConfluenceProjectSetV1, selection: request => request.space_ids,
       async resolve(space_ids, connection, signal) {
         const transport = createConfluenceCloudTransportV1(connection.transport);
-        await verifyConfluenceConnectionV1(transport, { expected_origin: connection.stored.site, signal });
+        await verifyAtlassianConnectionV1(CONFLUENCE_PERSON_PROVIDER_V1, transport, { expected_origin: connection.stored.site, signal });
         for (const id of space_ids) {
           const space = confluenceRecord(await transport.request({ path: `/api/v2/spaces/${encodeURIComponent(id)}`, signal }));
           if (confluenceString(space.id, 128) !== id) confluenceFailure('invalid_output');

@@ -151,6 +151,25 @@ describe('Slack approval presenter V1', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('leaves empty action and rationale lists out of the review, and shows an unlisted decision status as unresolved', async () => {
+    const review = async (brief: Record<string, unknown>) => {
+      const f = fixture(), id = f.stage();
+      f.proposal = { ...proposal(id), snapshot_json: JSON.stringify({ approved_payload: { brief } }) };
+      await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+      const card = f.cards[0]!;
+      // The review is everything above the card's controls, which start at its divider.
+      return { card, blocks: card.blocks.slice(0, card.blocks.findIndex(block => block.type === 'divider')) };
+    };
+    const nextSteps = await review({ meeting: { title: 'Roadmap' }, decisions: [], actions: [{ text: 'Send draft', evidence: [{ block_id: 'blk_1' }] }], rationales: [] });
+    expect(nextSteps.blocks.map(block => block.type)).toEqual(['header', 'context', 'container']);
+    expect(nextSteps.blocks[2]).toMatchObject({ title: { text: 'Next steps from this meeting' }, child_blocks: [{ text: { text: '*Next steps*\n• Send draft' } }] });
+    expect(JSON.stringify(nextSteps.card)).not.toContain('Additional');
+    const decisionOnly = await review({ meeting: { title: 'Roadmap' }, decisions: [{ id: 'dec_1', text: 'Ship it', status: 'maybe', evidence: [{ block_id: 'blk_2' }] }], actions: [], rationales: [] });
+    expect(decisionOnly.blocks.map(block => block.type)).toEqual(['header', 'context', 'container']);
+    expect(JSON.stringify(decisionOnly.card)).not.toContain('Next steps');
+    expect(decisionOnly.card.text).toContain('Status: unresolved');
+  });
+
   it('starts from an eligible staged proposal and posts exactly one first marker', async () => {
     const f = fixture(); f.stage();
     await f.presenter.reconcile(signal());

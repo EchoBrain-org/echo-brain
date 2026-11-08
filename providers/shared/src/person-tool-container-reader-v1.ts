@@ -6,7 +6,7 @@ import type {
   PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1,
 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { EvidenceDateFilterV1 } from '@echo-brain/organization-authority-kernel/shared/temporal-query-v1';
-import { boundUtf8V1 as bound, inBatchesOfFourV1, type PersonProviderFailureCodeV1 } from './person-provider-v1.js';
+import { boundUtf8V1 as bound, guardedPersonProviderOperationV1, inBatchesOfFourV1, type PersonProviderFailureCodeV1 } from './person-provider-v1.js';
 
 type Citation = PersonToolContainerCitationV1;
 type Page = PersonLiveEvidencePageV1<Citation>;
@@ -72,7 +72,6 @@ const MAX_HANDLES = 512;
 const NAMES_SHOWN = 10;
 const LABEL_BYTES = 256;
 const TEXT_BYTES = 1024;
-const PROVIDER_CODES = new Set<string>(['invalid_request', 'invalid_output', 'unauthorized', 'not_found', 'stale_access_state', 'unavailable', 'rate_limited']);
 
 interface Released { readonly container: PersonToolContainerV1; readonly value: Omit<PersonLiveEvidenceValueV1<Citation>, 'handle'> }
 
@@ -105,18 +104,7 @@ export async function createPersonToolContainerReaderV1(options: {
   const issued = new Map<string, readonly Released[]>();
   const cursors = new Map<string, { readonly selection: string; readonly token: string }>();
 
-  async function safe<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-    signal?.throwIfAborted();
-    try {
-      const value = await operation();
-      signal?.throwIfAborted();
-      return value;
-    } catch (error) {
-      signal?.throwIfAborted();
-      if (error instanceof AuthorityOperationError && PROVIDER_CODES.has(error.code)) failure(error.code as PersonProviderFailureCodeV1);
-      return failure('unavailable');
-    }
-  }
+  const safe = <T>(operation: () => Promise<T>, signal?: AbortSignal) => guardedPersonProviderOperationV1(failure, operation, signal);
   /** The connection checked, between two fences of the reader's own binding. */
   async function verify(signal?: AbortSignal): Promise<void> {
     provider.fence();

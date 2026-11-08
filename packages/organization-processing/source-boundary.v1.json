@@ -26,7 +26,6 @@
     "packages/organization-processing/src/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.ts",
     "packages/organization-processing/src/ports/approval-workflow-bundle-v1.ts",
     "packages/organization-processing/src/ports/decision-processor-bundle-v1.ts",
-    "packages/organization-processing/src/admitted-meeting-processing/decision-processor-admission-commitment.ts",
     "packages/organization-processing/src/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1.ts",
     "packages/organization-processing/src/adapters/persistence/sqlite-extraction-attempt-store-v1.ts"
   ],

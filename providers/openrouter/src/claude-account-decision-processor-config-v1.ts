@@ -2,6 +2,7 @@ import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-proto
 import type { AdapterConfig } from '@echo-brain/organization-processing/core/contracts/adapter';
 import { llmProcessingVersion, LLM_DECISION_PROCESSOR_PROMPT_VERSION, LLM_DECISION_PROCESSOR_SCHEMA_VERSION } from '@echo-brain/organization-processing/llm/llm-decision-processor';
 import { assertClaudeAccountProfileV1, CLAUDE_ACCOUNT_MODEL_V1, type ClaudeAccountProfileV1 } from './claude-research/account-profile.js';
+import { credentialReferenceSha256V1 } from './fixed-decision-processor-bundle-v1.js';
 
 export const CLAUDE_ACCOUNT_DECISION_PROCESSOR_PROVIDER_V1 = 'claude-account';
 export const CLAUDE_ACCOUNT_DECISION_PROCESSOR_TRANSPORT_V1 = 'claude-account-sdk-single-generation-v1';
@@ -39,16 +40,5 @@ export function claudeAccountDecisionProcessorConfigurationSha256V1(): Sha256Dig
 
 /** Hashes the non-secret reference, never native credential bytes. */
 export function claudeAccountDecisionProcessorCredentialReferenceSha256V1(reference: string): Sha256Digest {
-  return canonicalSha256({ schema_version: 1, kind: 'echo-claude-account-processor-credential-reference-v1', reference });
-}
-
-export function assertClaudeAccountDecisionProcessorRuntimeCommitmentsV1(input: {
-  readonly adapter_id: string; readonly version: string; readonly configuration_sha256: Sha256Digest;
-  readonly credential_reference_sha256: Sha256Digest; readonly credential_reference: string;
-}): void {
-  if (input.adapter_id !== 'llm' || input.version !== CLAUDE_ACCOUNT_DECISION_PROCESSOR_RUNTIME_VERSION_V1 ||
-      input.configuration_sha256 !== claudeAccountDecisionProcessorConfigurationSha256V1() ||
-      input.credential_reference_sha256 !== claudeAccountDecisionProcessorCredentialReferenceSha256V1(input.credential_reference)) {
-    throw new Error('Claude account processor configuration differs from the admitted processor commitment');
-  }
+  return credentialReferenceSha256V1('echo-claude-account-processor-credential-reference-v1', reference);
 }

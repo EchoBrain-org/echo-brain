@@ -2,6 +2,23 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 
 export type PersonProviderFailureCodeV1 = 'invalid_request' | 'invalid_output' | 'unauthorized' | 'not_found' | 'stale_access_state' | 'unavailable' | 'rate_limited';
+/** The failures a provider read surfaces as they are; any other error is `unavailable`. */
+export const PERSON_PROVIDER_FAILURE_CODES_V1: ReadonlySet<string> = new Set<PersonProviderFailureCodeV1>(
+  ['invalid_request', 'invalid_output', 'unauthorized', 'not_found', 'stale_access_state', 'unavailable', 'rate_limited']);
+
+/** One provider operation between abort checks, its failure re-raised as the provider's own: unknown errors are `unavailable`. */
+export async function guardedPersonProviderOperationV1<T>(failure: (code: PersonProviderFailureCodeV1) => never, operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  signal?.throwIfAborted();
+  try {
+    const value = await operation();
+    signal?.throwIfAborted();
+    return value;
+  } catch (error) {
+    signal?.throwIfAborted();
+    if (error instanceof AuthorityOperationError && PERSON_PROVIDER_FAILURE_CODES_V1.has(error.code)) failure(error.code as PersonProviderFailureCodeV1);
+    return failure('unavailable');
+  }
+}
 
 /** Fixed server composition. Product adapters retain their existing validation and error contracts. */
 export interface PersonProviderV1 {

@@ -21,10 +21,6 @@
       "types": "./dist/openrouter-decision-processor-config-v1.d.ts",
       "import": "./dist/openrouter-decision-processor-config-v1.js"
     },
-    "./openrouter-decision-processor-admission-commitment": {
-      "types": "./dist/openrouter-decision-processor-admission-commitment.d.ts",
-      "import": "./dist/openrouter-decision-processor-admission-commitment.js"
-    },
     "./openrouter-telemetry-vocabulary-v1": {
       "types": "./dist/openrouter-telemetry-vocabulary-v1.d.ts",
       "import": "./dist/openrouter-telemetry-vocabulary-v1.js"

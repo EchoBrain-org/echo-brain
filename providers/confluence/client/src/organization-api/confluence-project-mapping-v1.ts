@@ -3,7 +3,6 @@ import { asEnumerableRecord, assertExactKeys, fail } from '@echo-brain/organizat
 
 export const PERSON_CONFLUENCE_PROJECT_READ_PATH_V1 = '/v1/person/tools/confluence/project/read';
 export const PERSON_CONFLUENCE_PROJECT_SET_PATH_V1 = '/v1/person/tools/confluence/project/set';
-export const PERSON_CONFLUENCE_PROJECT_LIST_PATH_V1 = '/v1/person/tools/confluence/project/list';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SPACE_ID = /^[1-9][0-9]{0,19}$/;
 const CONFLUENCE_PROJECT_MAX_SPACES_V1 = 20;
@@ -19,7 +18,6 @@ export interface ConfluenceProjectMappingV1 extends ConfluenceProjectReadV1 {
   readonly revision: string | null;
   readonly mapping: Readonly<{ cloud_id: string; space_ids: readonly string[] }> | null;
 }
-export interface ConfluenceProjectMappingsV1 { readonly schema_version: 1; readonly mappings: readonly ConfluenceProjectMappingV1[] }
 function uuid(value: unknown): string {
   if (typeof value !== 'string' || !UUID.test(value)) fail('Confluence project revision is invalid');
   return value;
@@ -55,14 +53,6 @@ export function validateConfluenceProjectMappingV1(value: unknown): ConfluencePr
     mapping = Object.freeze({ cloud_id: selected.cloud_id, space_ids: spaces(selected.space_ids, 'Confluence space IDs') });
   }
   return Object.freeze({ ...base(record), revision, mapping });
-}
-export function validateConfluenceProjectMappingsV1(value: unknown): ConfluenceProjectMappingsV1 {
-  const record = asEnumerableRecord(value, 'Confluence project mappings');
-  assertExactKeys(record, ['schema_version', 'mappings'], 'Confluence project mappings');
-  if (record.schema_version !== 1 || !Array.isArray(record.mappings) || record.mappings.length > 100) fail('Confluence project mappings are invalid');
-  const mappings = Object.freeze(record.mappings.map(validateConfluenceProjectMappingV1));
-  if (new Set(mappings.map(mapping => mapping.project_id)).size !== mappings.length) fail('Confluence project mappings are duplicated');
-  return Object.freeze({ schema_version: 1, mappings });
 }
 
 export const PERSON_CONFLUENCE_SPACES_LIST_PATH_V1 = '/v1/person/tools/confluence/spaces/list';

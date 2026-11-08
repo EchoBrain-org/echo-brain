@@ -1,4 +1,4 @@
-import { PERSON_CONFLUENCE_PROJECT_READ_PATH_V1, PERSON_CONFLUENCE_PROJECT_SET_PATH_V1, PERSON_CONFLUENCE_PROJECT_LIST_PATH_V1, PERSON_CONFLUENCE_SPACES_LIST_PATH_V1, validateConfluenceProjectReadV1, validateConfluenceProjectSetV1, validateConfluenceProjectMappingV1, validateConfluenceProjectMappingsV1, validateConfluenceSpaceListV1, validateConfluenceSpacesPageV1, type ConfluenceSpaceListV1, type ConfluenceSpacesPageV1, type ConfluenceProjectSetV1, type ConfluenceProjectMappingV1, type ConfluenceProjectMappingsV1 } from '../organization-api/confluence-project-mapping-v1.js';
+import { PERSON_CONFLUENCE_PROJECT_READ_PATH_V1, PERSON_CONFLUENCE_PROJECT_SET_PATH_V1, PERSON_CONFLUENCE_SPACES_LIST_PATH_V1, validateConfluenceProjectReadV1, validateConfluenceProjectSetV1, validateConfluenceProjectMappingV1, validateConfluenceSpaceListV1, validateConfluenceSpacesPageV1, type ConfluenceSpaceListV1, type ConfluenceSpacesPageV1, type ConfluenceProjectSetV1, type ConfluenceProjectMappingV1 } from '../organization-api/confluence-project-mapping-v1.js';
 import { PersonToolConnectionClientV1, PERSON_TOOL_SMALL_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, type PersonToolHostV1 } from "@echo-brain/organization-api";
 
 const CONFLUENCE_TOOL_TIMEOUT_MS = 75_000;
@@ -13,10 +13,6 @@ export class ConfluencePersonClientV1 extends PersonToolConnectionClientV1 {
   }
   projectSet(request: ConfluenceProjectSetV1): Promise<ConfluenceProjectMappingV1> {
     return this.projectRequest(PERSON_CONFLUENCE_PROJECT_SET_PATH_V1, validateConfluenceProjectSetV1(request), validateConfluenceProjectSetV1);
-  }
-  projectList(): Promise<ConfluenceProjectMappingsV1> {
-    // 100 mappings with 20 maximum-width space IDs serialize to 66,333 bytes.
-    return this.host.withToolSession(session => session.transport.json({ path: PERSON_CONFLUENCE_PROJECT_LIST_PATH_V1, body: { schema_version: 1 }, validate_request: value => { if (typeof value !== 'object' || value === null || (value as { schema_version?: unknown }).schema_version !== 1) throw new Error('Confluence project list request is invalid'); return { schema_version: 1 as const }; }, validate_response: validateConfluenceProjectMappingsV1, maximum_response_bytes: PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, timeout_ms: CONFLUENCE_TOOL_TIMEOUT_MS }));
   }
   spaces(input: ConfluenceSpaceListV1): Promise<ConfluenceSpacesPageV1> {
     // 20 spaces at six JSON bytes per key/name code unit plus cursor: 66,563 bytes.

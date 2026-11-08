@@ -11,7 +11,6 @@
     "providers/openrouter/src/openrouter-decision-processor-bundle-v1.ts",
     "providers/openrouter/src/openrouter-answer-composition-generation-bundle-v1.ts",
     "providers/openrouter/src/openrouter-decision-processor-config-v1.ts",
-    "providers/openrouter/src/openrouter-decision-processor-admission-commitment.ts",
     "providers/openrouter/src/openrouter-telemetry-vocabulary-v1.ts",
     "providers/openrouter/src/claude-account-answer-composition-generation-bundle-v1.ts",
     "providers/openrouter/src/claude-account-decision-processor-bundle-v1.ts",

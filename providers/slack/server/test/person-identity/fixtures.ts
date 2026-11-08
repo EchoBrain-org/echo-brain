@@ -1,23 +1,21 @@
 /** Slack identity-link workflow fixtures shared by the provider's tests and the Authority HTTP-server test. */
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import Database from "better-sqlite3";
-import { afterEach, vi } from "vitest";
+import type Database from "better-sqlite3";
+import { vi } from "vitest";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
-import { applyOrganizationControlBaselineV4 } from "../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 import type { SlackIdentityProviderV1 } from "../../src/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { activateNangoSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, type OrganizationSecretStore } from "../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { serializeSlackAppCredentialsV1 } from "../../src/organization-control-plane/application/slack-app-credentials-v1.js";
 import { createSqliteSlackPersonIdentityLinkWorkflowV1, type CreateSqliteSlackPersonIdentityLinkWorkflowV1Input, type SlackBotTokenAccessV1 } from "../../src/person-identity/sqlite-slack-person-identity-link-repository-v1.js";
+import { CONNECTION_ID, COORDINATES, openSlackControlDatabase } from "../control-database-fixture.js";
 
 export const NOW = "2026-08-22T00:00:00.000Z";
-export const AUTHORITY_ID = "oau_00000000-0000-4000-8000-000000000001";
-export const ORGANIZATION_ID = "org_00000000-0000-4000-8000-000000000001";
-const LINEAGE_ID = "lineage-00000000-0000-4000-8000-000000000001";
-const CONNECTION_ID = "con_00000000-0000-4000-8000-000000000001";
+export const { authority_id: AUTHORITY_ID, organization_id: ORGANIZATION_ID } = COORDINATES;
+const LINEAGE_ID = COORDINATES.state_lineage_id;
 export const PRINCIPAL_ID = "prn_00000000-0000-4000-8000-000000000001";
 export const MEMBERSHIP_ID = "mem_00000000-0000-4000-8000-000000000001";
 export const CODE = Buffer.alloc(32).toString("base64url");
@@ -43,8 +41,6 @@ export const authorization: PersonAccessAuthorization = {
   session_state_sha256: canonicalSha256("session"),
   checked_at: NOW,
 };
-
-const databases: Database.Database[] = [];
 
 export function beginRequest(requestId = "psb_00000000-0000-4000-8000-000000000001", code = CODE) {
   return {
@@ -77,24 +73,7 @@ export async function setup(
   slack: SlackIdentityProviderV1;
   application: ReturnType<typeof createSqliteSlackPersonIdentityLinkWorkflowV1>;
 }> {
-  const database = new Database(":memory:");
-  databases.push(database);
-  applyOrganizationControlBaselineV4(database);
-  database
-    .prepare(
-      `INSERT INTO organization_control_plane_metadata
-       (singleton, control_plane_id, organization_id, authority_id,
-        authority_descriptor_sha256, created_at)
-       VALUES (1, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      "ocp_00000000-0000-4000-8000-000000000001",
-      ORGANIZATION_ID,
-      AUTHORITY_ID,
-      canonicalSha256("authority"),
-      NOW,
-    );
-
+  const database = openSlackControlDatabase();
   const slack: SlackIdentityProviderV1 = {
     openIdentityLinkDirectMessage: vi.fn(async () => ({ team_id: "T12345678", channel_id: "D12345678", recipient_user_id: "U12345679" })),
     verifyConnection: vi.fn(async () => ({
@@ -169,7 +148,3 @@ async function activateNango(database: Database.Database, slack: SlackIdentityPr
     now: () => NOW, new_connection_id: () => CONNECTION_ID,
   });
 }
-
-afterEach(() => {
-  for (const database of databases.splice(0)) database.close();
-});

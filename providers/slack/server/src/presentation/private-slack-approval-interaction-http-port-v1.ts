@@ -1,13 +1,8 @@
 export const PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1 =
   "/v2/integrations/slack/interactions" as const;
 
-/**
- * What the HTTP layer answers Slack: an empty acknowledgement, or a fixed
- * ephemeral reply shown only to the person who clicked.
- */
-export type PrivateSlackApprovalInteractionReplyV1 =
-  | { readonly kind: "acknowledged" }
-  | { readonly kind: "ephemeral"; readonly text: string };
+/** What the HTTP layer answers Slack: always an empty acknowledgement. Feedback goes to the click's response URL. */
+export type PrivateSlackApprovalInteractionReplyV1 = { readonly kind: "acknowledged" };
 
 /**
  * Narrow signed-provider ingress seam. The HTTP server owns exact raw bytes;

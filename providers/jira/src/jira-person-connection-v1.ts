@@ -9,9 +9,10 @@ import { createJiraCloudTransportV1, type JiraCloudTransportV1 } from './jira-cl
 import { createJiraPersonLiveContainerReaderV1 } from './jira-person-live-container-reader-v1.js';
 import { createJiraPersonLiveEvidenceReaderV1 } from './jira-person-live-evidence-reader-v1.js';
 import type { JiraNangoV1 } from './jira-nango-v1.js';
-import { jiraProjectMatches, parseJiraProject, readJiraAssigneeAccountsV1, readJiraTicketMarkersV1, verifyJiraConnectionV1 } from './jira-payload-v1.js';
+import { verifyAtlassianConnectionV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
+import { jiraProjectMatches, parseJiraProject, readJiraAssigneeAccountsV1, readJiraTicketMarkersV1 } from './jira-payload-v1.js';
 export { jiraTicketMarkerV1 } from './jira-payload-v1.js';
-import { copyJiraBindingV1, JIRA_ID, JIRA_PERSON_PROVIDER_V1, jiraFailure } from './jira-validation-v1.js';
+import { JIRA_ID, JIRA_PERSON_PROVIDER_V1, jiraFailure } from './jira-validation-v1.js';
 
 type JiraPersonAuthorizationV1 = PersonConnectionAuthorizationV1;
 export function createJiraPersonConnectionV1(options: {
@@ -29,26 +30,17 @@ export function createJiraPersonConnectionV1(options: {
 }) {
   const cloud = options.cloud_id;
   const shared = createPersonConnectionLifecycleV1({ ...options, scope_id: options.cloud_id, provider: JIRA_PERSON_PROVIDER_V1,
-    verify: (authenticated, input) => verifyJiraConnectionV1(createJiraCloudTransportV1(authenticated), input),
+    verify: (authenticated, input) => verifyAtlassianConnectionV1(JIRA_PERSON_PROVIDER_V1, createJiraCloudTransportV1(authenticated), input),
   });
-  const { actor, tags, authenticated } = shared;
   const access = createPersonProjectMappingAccessV1(JIRA_PERSON_PROVIDER_V1, options);
-  /** This person's current connection as a transport, fenced on the same actor and grant before every request. */
-  function openTransport(input: { readonly access_token: string; readonly signal?: AbortSignal }): JiraCloudTransportV1 {
-    const { person, requirePerson } = actor(input.access_token); input.signal?.throwIfAborted();
-    const stored = options.store.current(person);
-    if (stored === undefined || !stored.active) jiraFailure('unauthorized');
-    const binding = copyJiraBindingV1(stored.binding);
-    const current = () => { requirePerson(); options.store.requireCurrent(binding); };
-    current(); input.signal?.throwIfAborted();
-    return createJiraCloudTransportV1(authenticated(binding, stored.reference, tags(person, stored.attempt), current));
-  }
   /** A bulk issue read with this person's own connection, of the distinct valid issue ids among `ticket_ids`; none reads nothing. */
   async function readTickets<T>(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal },
     read: (transport: JiraCloudTransportV1, request: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }) => Promise<ReadonlyMap<string, T>>): Promise<ReadonlyMap<string, T>> {
     const ticket_ids = [...new Set(input.ticket_ids)].filter(id => JIRA_ID.test(id));
     if (ticket_ids.length === 0) return new Map();
-    return read(openTransport(input), { cloud_id: cloud, ticket_ids, signal: input.signal });
+    // This person's current connection, fenced on the same actor and grant before every request.
+    const { person, requirePerson } = shared.actor(input.access_token);
+    return read(createJiraCloudTransportV1(shared.open(person, requirePerson, input.signal).transport), { cloud_id: cloud, ticket_ids, signal: input.signal });
   }
   return Object.freeze({
     ...shared.application,
@@ -59,7 +51,7 @@ export function createJiraPersonConnectionV1(options: {
       lifecycle: shared, validate: validateJiraProjectSetV1, selection: request => request.jira_project,
       async resolve(project, connection, signal) {
         const transport = createJiraCloudTransportV1(connection.transport);
-        const { origin } = await verifyJiraConnectionV1(transport, { expected_origin: connection.stored.site, signal });
+        const { origin } = await verifyAtlassianConnectionV1(JIRA_PERSON_PROVIDER_V1, transport, { expected_origin: connection.stored.site, signal });
         const selected = parseJiraProject(await transport.request({ path: `/ex/jira/${cloud}/rest/api/3/project/${project}`, query: { expand: 'projectKeys' }, signal }), origin, `https://api.atlassian.com/ex/jira/${cloud}`);
         if (!jiraProjectMatches(selected, project)) jiraFailure('invalid_output');
         return Object.freeze({ cloud_id: cloud, project_id: selected.id, project_key: selected.key });
