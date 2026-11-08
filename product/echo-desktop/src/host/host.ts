@@ -656,8 +656,8 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
           stdout => projectMatchesView(lastJson(stdout), scope.project_id));
       }
       if (scope?.kind !== 'global') return code('invalid_request');
-      // All context: your saved notes. No note is stored as V2 since the client stopped writing them (30 Sep), so the
-      // V3 search finds every one.
+      // All context: your saved notes. None can be stored as V2: ADR-0048 (494c62a) retired the V2 write before the V16
+      // baseline (4df2de2), the only state an Authority opens, so the V3 search finds every one.
       return forAccount(method, expect, ['updates', 'search-v3', ...terms], stdout => ({ items: noteMatchesView(lastJson(stdout)) }));
     }
     case 'writes.status': {
