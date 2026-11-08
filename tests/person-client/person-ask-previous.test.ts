@@ -74,7 +74,7 @@ describe('the previous turn on the Person client (ADR-0047)', () => {
   it('streams on /v7 alone with the previous turn in the request, and returns what the answer names', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream([{ type: 'stage', stage: 'checking_access' },
       { type: 'answer', response: clarified, receipt: { looked_through: 0, elapsed_ms: 900, rows: [] } }]));
-    const result = await client(fetch).askWithLiveProgress(QUESTION, undefined, undefined, () => undefined, {}, PREVIOUS);
+    const result = await client(fetch).askWithLiveProgress(QUESTION, undefined, undefined, () => undefined, PREVIOUS);
     expect(result).toEqual({ result: clarified, receipt: { looked_through: 0, elapsed_ms: 900, rows: [] } });
     const [url, init] = fetch.mock.calls[0]!;
     expect(pathOf(url)).toBe('/v7/person/ask');
@@ -91,7 +91,7 @@ describe('the previous turn on the Person client (ADR-0047)', () => {
     for (const [reply, code, status] of [[json({ error: { code: 'not_found', message: 'request failed' } }, 404), 'not_found', 404], [json({ error: { code: 'invalid_request', message: 'request failed' } }, 400), 'invalid_request', 400]] as const) {
       for (const ask of [
         (fetch: typeof globalThis.fetch) => client(fetch).askWithLiveSources(QUESTION, undefined, undefined, undefined, PREVIOUS),
-        (fetch: typeof globalThis.fetch) => client(fetch).askWithLiveProgress(QUESTION, undefined, undefined, () => undefined, {}, PREVIOUS),
+        (fetch: typeof globalThis.fetch) => client(fetch).askWithLiveProgress(QUESTION, undefined, undefined, () => undefined, PREVIOUS),
       ]) {
         const refused = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(reply.clone());
         await expect(ask(refused)).rejects.toMatchObject({ code, status });

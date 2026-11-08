@@ -39,11 +39,12 @@ async function run(home: string, argv: readonly string[], fetch: typeof globalTh
 }
 
 /** Another person's session, installed over this one as a sign-in elsewhere does. */
-function switchAccount(home: string): void {
+function switchAccount(home: string, membership_id = OTHER): void {
   const store = new PersonSessionStore(home);
   const stored = store.read();
-  store.install(stored.authority_origin, stored.authority_id, { ...stored.session, membership_id: OTHER });
+  store.install(stored.authority_origin, stored.authority_id, { ...stored.session, membership_id });
 }
+const switchBack = (home: string) => switchAccount(home, MEMBERSHIP);
 
 describe('a run pinned to an account', () => {
   it('runs as usual for the signed-in account', async () => {
@@ -77,6 +78,26 @@ describe('a run pinned to an account', () => {
     expect(store.readEnded()).toMatchObject({ reason: 'reauthentication_required' });
     // Every pinned run after it says so too.
     expect(await run(home, ['changes', ...pin()], fetch)).toMatchObject({ code: 1, failure: { code: 'reauthentication_required', sent: false } });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing as another account that signed in after the run began: the request\'s own session lease checks the pin', async () => {
+    const home = sessionHome();
+    const read = PersonSessionStore.prototype.read;
+    let reads = 0;
+    // The run's first read is its own check; another sign-in lands before the request's lease reads the session.
+    const spy = vi.spyOn(PersonSessionStore.prototype, 'read').mockImplementation(function (this: PersonSessionStore) {
+      if (++reads === 2) switchAccount(home);
+      return read.call(this);
+    });
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    try {
+      for (const argv of [['changes'], ['documents', 'pending']]) {
+        switchBack(home);
+        reads = 0;
+        expect(await run(home, [...argv, ...pin()], fetch)).toMatchObject({ code: 1, stdout: '', failure: { code: 'account_changed' } });
+      }
+    } finally { spy.mockRestore(); }
     expect(fetch).not.toHaveBeenCalled();
   });
 

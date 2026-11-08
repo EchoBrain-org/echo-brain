@@ -9,7 +9,6 @@ import { personSessionStorePaths } from './session-store.js';
 export interface DocumentFileUploadV2 {
   readonly file: string; readonly request_id: string; readonly title: string;
   readonly audience: PersonUploadAudienceV3; readonly association_project_ids: readonly ProjectIdV1[];
-  readonly expected_membership_id?: string; readonly expected_authority?: string;
 }
 
 export class DocumentFileError extends Error {

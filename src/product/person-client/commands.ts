@@ -101,12 +101,12 @@ type Option = string;
 const RULES: Readonly<
   Record<string, { accepts?: readonly Option[]; requires?: readonly Option[] }>
 > = {
-  "documents-upload-v2": { accepts: ["file", "audience", "audience-project-id", "association-project-ids-json", "audience-project-ids-json", "title", "request-id", "expected-membership-id", "expected-authority"], requires: ["file", "title", "request-id"] },
-  "documents-associate": { accepts: ["request-id", "document-id", "project-id", "expected-membership-id", "expected-authority"], requires: ["request-id", "document-id", "project-id"] },
-  "documents-dissociate": { accepts: ["request-id", "document-id", "project-id", "expected-membership-id", "expected-authority"], requires: ["request-id", "document-id", "project-id"] },
+  "documents-upload-v2": { accepts: ["file", "audience", "audience-project-id", "association-project-ids-json", "audience-project-ids-json", "title", "request-id"], requires: ["file", "title", "request-id"] },
+  "documents-associate": { accepts: ["request-id", "document-id", "project-id"], requires: ["request-id", "document-id", "project-id"] },
+  "documents-dissociate": { accepts: ["request-id", "document-id", "project-id"], requires: ["request-id", "document-id", "project-id"] },
   "documents-pending": { accepts: [], requires: [] },
-  "documents-retry": { accepts: ["request-id", "expected-membership-id", "expected-authority"], requires: ["request-id"] },
-  "documents-abandon": { accepts: ["request-id", "expected-membership-id", "expected-authority"], requires: ["request-id"] },
+  "documents-retry": { accepts: ["request-id"], requires: ["request-id"] },
+  "documents-abandon": { accepts: ["request-id"], requires: ["request-id"] },
   "documents-status-v2": { accepts: ["request-id"], requires: ["request-id"] },
   "documents-search-v2": { accepts: ["project-id", "query", "limit", "cursor"] },
   "documents-download-v2": { accepts: ["document-id", "out", "project-id"], requires: ["document-id", "out"] },
@@ -137,7 +137,7 @@ const RULES: Readonly<
   "session-refresh": {},
   logout: {},
   ask: {
-    accepts: ["question", "project", "progress", "expected-membership-id", "expected-authority", "previous"],
+    accepts: ["question", "project", "progress", "previous"],
     requires: ["question"],
   },
   list: { accepts: ["project", "only-me", "cursor"] },
@@ -565,13 +565,6 @@ function contextCliFailure(action: string, error: unknown, values: Record<Option
   };
 }
 
-/** Optional paired options that bind a document operation to its captured account. */
-function expectedAccount(values: Record<Option, string | boolean | undefined>) {
-  return {
-    ...(values['expected-membership-id'] === undefined ? {} : { expected_membership_id: requiredText(values, 'expected-membership-id') }),
-    ...(values['expected-authority'] === undefined ? {} : { expected_authority: requiredText(values, 'expected-authority') }),
-  };
-}
 
 /** These act on the session itself; every other command acts for one account, and takes a pin. */
 const SESSION_ACTIONS: ReadonlySet<string> = new Set(["login", "status", "session-refresh", "logout"]);
@@ -1098,6 +1091,8 @@ export async function runPersonClientCli(
 
   const client = new PersonClient({
     home_directory: dependencies.home_directory,
+    // A pinned run's every operation is refused under its session lease while another account is signed in.
+    ...(pin === undefined ? {} : { account: pin }),
     ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }),
     allow_insecure_loopback: dependencies.allow_insecure_loopback === true,
     ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
@@ -1137,8 +1132,7 @@ export async function runPersonClientCli(
         const requestId = validatePersonUpdateRequestId(requiredText(values, 'request-id'));
         printDocument(stdout, await client.uploadDocumentV2({ file: requiredText(values, 'file'), request_id: requestId,
           title: requiredText(values, 'title'), audience: uploadAudienceV3(values),
-          association_project_ids: canonicalProjectIdArray(values['association-project-ids-json'], '--association-project-ids-json'),
-          ...expectedAccount(values) }));
+          association_project_ids: canonicalProjectIdArray(values['association-project-ids-json'], '--association-project-ids-json') }));
         break;
       }
       case 'documents-associate':
@@ -1146,7 +1140,7 @@ export async function runPersonClientCli(
         const validate = action === 'documents-associate' ? validatePersonDocumentAssociateV1 : validatePersonDocumentDissociateV1;
         const request = validate({ schema_version: 1, kind: action === 'documents-associate' ? 'echo-person-document-associate-v1' : 'echo-person-document-dissociate-v1',
           request_id: requiredText(values, 'request-id'), document_id: requiredText(values, 'document-id'), project_id: requiredText(values, 'project-id') });
-        printDocument(stdout, await client.changeDocumentAssociation(request, expectedAccount(values)));
+        printDocument(stdout, await client.changeDocumentAssociation(request));
         break;
       }
       case 'documents-pending':
@@ -1154,9 +1148,8 @@ export async function runPersonClientCli(
         break;
       case 'documents-retry':
       case 'documents-abandon': {
-        const expected = expectedAccount(values);
         const requestId = requiredText(values, 'request-id');
-        printDocument(stdout, action === 'documents-retry' ? await client.retryDocument(requestId, expected) : client.abandonDocument(requestId, expected));
+        printDocument(stdout, action === 'documents-retry' ? await client.retryDocument(requestId) : client.abandonDocument(requestId));
         break;
       }
       case 'documents-status-v2':
@@ -1322,7 +1315,7 @@ export async function runPersonClientCli(
           // One line per step event as it arrives; the last line is the answer's, with the receipt when the Authority streamed.
           // Progress V3 lines: a step may name a follow-up, a project, a person, a tool or a tool container.
           const answer = await client.askWithLiveProgress(question, scope, dependencies.abort_signal,
-            progress => print(stdout, validatePersonAskProgressLineV3({ ok: true, progress })), expectedAccount(values), askPrevious);
+            progress => print(stdout, validatePersonAskProgressLineV3({ ok: true, progress })), askPrevious);
           print(stdout, validatePersonAskProgressResultLineV3({ ok: true, result: answer.result, ...(answer.receipt === undefined ? {} : { receipt: answer.receipt }) }));
           break;
         }

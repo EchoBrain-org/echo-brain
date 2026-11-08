@@ -71,6 +71,8 @@ export interface PersonClientOptions {
   readonly now?: () => string;
   readonly random_bytes?: (size: number) => Uint8Array;
   readonly random_uuid?: () => string;
+  /** The one account a pinned run is for: under its lease, each operation is refused before it reads or sends anything as another. */
+  readonly account?: { readonly authority: string; readonly membership_id: string };
 }
 
 export interface PersonClientSessionSummary {
@@ -286,6 +288,16 @@ export class PersonClient {
     return value;
   }
 
+  /** The signed-in session, refused unless it is the account this client is pinned to. */
+  private readPinned(): StoredPersonClientSessionV1 {
+    const stored = this.store.read();
+    const pin = this.options.account;
+    if (pin !== undefined && (stored.authority_origin !== pin.authority || stored.session.membership_id !== pin.membership_id)) {
+      throw new Error("Person tool operation did not match the current account");
+    }
+    return stored;
+  }
+
   private requestId(
     prefix: string,
   ): string {
@@ -405,7 +417,7 @@ export class PersonClient {
     let refreshed = false;
     while (true) {
       const result = await this.operations.read(async () => {
-        const stored = this.store.read();
+        const stored = this.readPinned();
         if (Date.parse(stored.session.access_expires_at) - this.currentTime() < headroomMs) {
           if (refreshed) throw new PersonClientSessionUnavailableError('Refreshed Person session is too short for this request');
           return { kind: 'refresh' as const };
@@ -510,13 +522,6 @@ export class PersonClient {
     return JSON.stringify([stored.authority_origin, stored.authority_id, stored.session.organization_id, stored.session.membership_id]);
   }
 
-  private assertDocumentAccount(stored: StoredPersonClientSessionV1, requestId: string, expected: { expected_authority?: string; expected_membership_id?: string }): void {
-    if ((expected.expected_authority !== undefined || expected.expected_membership_id !== undefined) &&
-        (expected.expected_authority !== stored.authority_origin || expected.expected_membership_id !== stored.session.membership_id)) {
-      throw new PersonContextMutationError('stale_access_state', null, 'The signed-in account changed before the document operation. Restore the selected account before retrying.', requestId, 'not_submitted');
-    }
-  }
-
   private async submitDocumentSnapshot(stored: StoredPersonClientSessionV1, snapshot: DocumentSnapshot) {
     let submitted = false;
     try {
@@ -534,31 +539,26 @@ export class PersonClient {
 
   async uploadDocumentV2(input: DocumentFileUploadV2) {
     validatePersonUpdateRequestId(input.request_id);
-    return this.withSession(async stored => {
-      this.assertDocumentAccount(stored, input.request_id, input);
-      return this.submitDocumentSnapshot(stored, prepareDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), input));
-    }, undefined, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS + 2 * DEFAULT_TIMEOUT_MS);
+    return this.withSession(async stored => this.submitDocumentSnapshot(stored, prepareDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), input)),
+      undefined, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS + 2 * DEFAULT_TIMEOUT_MS);
   }
 
-  async retryDocument(requestId: string, expected: { expected_authority?: string; expected_membership_id?: string } = {}) {
+  async retryDocument(requestId: string) {
     validatePersonUpdateRequestId(requestId);
-    return this.withSession(async stored => {
-      this.assertDocumentAccount(stored, requestId, expected);
-      return this.submitDocumentSnapshot(stored, resumeDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), requestId));
-    }, undefined, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS + 2 * DEFAULT_TIMEOUT_MS);
+    return this.withSession(async stored => this.submitDocumentSnapshot(stored, resumeDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), requestId)),
+      undefined, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS + 2 * DEFAULT_TIMEOUT_MS);
   }
 
   pendingDocuments() {
-    const stored = this.store.read();
+    const stored = this.readPinned();
     const snapshots = listDocumentSnapshots(this.options.home_directory, this.documentBinding(stored));
     this.assertCurrentSession(stored);
     return { schema_version: 1, kind: 'echo-person-document-pending-v1', snapshots };
   }
 
-  abandonDocument(requestId: string, expected: { expected_authority?: string; expected_membership_id?: string } = {}) {
+  abandonDocument(requestId: string) {
     validatePersonUpdateRequestId(requestId);
-    const stored = this.store.read();
-    this.assertDocumentAccount(stored, requestId, expected);
+    const stored = this.readPinned();
     this.assertCurrentSession(stored);
     const removed = abandonDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), requestId);
     this.assertCurrentSession(stored);
@@ -566,11 +566,9 @@ export class PersonClient {
       local_snapshot_removed: removed, authority_outcome: 'unchanged' };
   }
 
-  async changeDocumentAssociation(value: PersonDocumentAssociateV1 | PersonDocumentDissociateV1,
-    expected: { expected_authority?: string; expected_membership_id?: string } = {}) {
+  async changeDocumentAssociation(value: PersonDocumentAssociateV1 | PersonDocumentDissociateV1) {
     const request = value.kind === 'echo-person-document-associate-v1' ? validatePersonDocumentAssociateV1(value) : validatePersonDocumentDissociateV1(value);
     return this.withSession(async stored => {
-      this.assertDocumentAccount(stored, request.request_id, expected);
       const result = await this.authority(stored.authority_origin).changeDocumentAssociation(stored.session.access_token, request);
       try { this.assertCurrentSession(stored); } catch { throw unknownContextMutation(request.request_id, false, null); }
       return result;
@@ -744,20 +742,15 @@ export class PersonClient {
    * A step is passed on only while the account that asked is the signed-in
    * one. Another account stops the Ask at once. A step that arrives while no
    * session can be read (a refresh elsewhere, or a sign-out) is withheld, and
-   * the final account check decides, as it does for every read. A caller that
-   * names its account (`expected`, both parts, as the desktop does) is never
+   * the final account check decides, as it does for every read. A client
+   * pinned to its account (`account`, as the desktop's runs are) is never
    * asked for as another: a session another sign-in installed first is
    * refused before anything is sent, so no step of that account reaches it.
    */
   async askWithLiveProgress(question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV3, expected: { readonly expected_authority?: string; readonly expected_membership_id?: string } = {},
-    previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
+    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
     validateAskInput(question, scope);
     return this.withSession(async stored => {
-      if ((expected.expected_authority !== undefined || expected.expected_membership_id !== undefined) &&
-          (expected.expected_authority !== stored.authority_origin || expected.expected_membership_id !== stored.session.membership_id)) {
-        throw new Error("Person tool operation did not match the current account");
-      }
       const authority = this.authority(stored.authority_origin);
       const token = stored.session.access_token;
       const forward: PersonAskProgressSinkV3 = event => {

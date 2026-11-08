@@ -354,24 +354,22 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     await expect(pending).rejects.toMatchObject({ code: 'transport_failed' });
   });
 
-  it('asks only as the account its caller expects: another sign-in that came first is refused before anything is sent', async () => {
+  it('asks only as the account its client is pinned to: another sign-in that came first is refused before anything is sent', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
-    const client = new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch });
+    const home = sessionHome();
     const progress: PersonAskProgressStepEventV3[] = [];
-    for (const expected of [
-      { expected_authority: ORIGIN, expected_membership_id: 'mem_00000000-0000-4000-8000-000000000002' },
-      { expected_authority: 'https://other.example.test', expected_membership_id: SESSION.membership_id },
-      // A pin is both or it is refused.
-      { expected_membership_id: SESSION.membership_id },
+    for (const account of [
+      { authority: ORIGIN, membership_id: 'mem_00000000-0000-4000-8000-000000000002' },
+      { authority: 'https://other.example.test', membership_id: SESSION.membership_id },
     ]) {
-      await expect(client.askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event), expected))
+      await expect(new PersonClient({ home_directory: home, now: () => NOW, fetch, account }).askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event)))
         .rejects.toThrow('did not match the current account');
     }
     expect(fetch).not.toHaveBeenCalled();
     expect(progress).toEqual([]);
     fetch.mockResolvedValueOnce(sse(STREAM_V3));
-    await expect(client.askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event),
-      { expected_authority: ORIGIN, expected_membership_id: SESSION.membership_id })).resolves.toEqual({ result: answerV8(), receipt: receiptV3() });
+    await expect(new PersonClient({ home_directory: home, now: () => NOW, fetch, account: { authority: ORIGIN, membership_id: SESSION.membership_id } })
+      .askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event))).resolves.toEqual({ result: answerV8(), receipt: receiptV3() });
     expect(progress).toEqual(STEPS_V3);
   });
 
