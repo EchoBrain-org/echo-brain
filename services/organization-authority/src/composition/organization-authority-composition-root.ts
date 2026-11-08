@@ -312,13 +312,10 @@ export async function openOrganizationAuthorityService(
           provider_applications: [interaction],
           ...(sharedConfig.core_runtime_observation === undefined ? {} : { observation: sharedConfig.core_runtime_observation }),
           approval_core: {
-            after_record: [
-              enqueueApprovedRecordRunV1(
-                new SqliteTriggerRunsV1(resources.database),
-              ),
-            ],
-            presenters: [
-              (core) =>
+            after_record: enqueueApprovedRecordRunV1(
+              new SqliteTriggerRunsV1(resources.database),
+            ),
+            presenter: (core) =>
                 createSlackApprovalPresenterV1({
                   database: resources.database,
                   core,
@@ -378,7 +375,6 @@ export async function openOrganizationAuthorityService(
                       readonly name: string;
                     }[],
                 }),
-            ],
           },
         });
         if (synthetic !== undefined)

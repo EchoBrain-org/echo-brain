@@ -19,7 +19,7 @@ const COORDINATES = { authority_id: 'oau_00000000-0000-4000-8000-000000000001', 
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); vi.mocked(createApprovalCoreV1).mockClear(); });
 
-async function open(approval_core?: { readonly after_record: readonly AfterApprovedRecordHookV1[] }) {
+async function open(approval_core?: { readonly after_record: AfterApprovedRecordHookV1 }) {
   const state_directory = mkdtempSync(join(tmpdir(), 'person-meetings-'));
   const authority = new Database(':memory:'), record = new Database(':memory:');
   applyOrganizationRecordLogBaselineV6(record);
@@ -39,7 +39,7 @@ async function open(approval_core?: { readonly after_record: readonly AfterAppro
 describe('Personal meeting runtime opener', () => {
   it('forwards approval_core to the shared approval core', async () => {
     const hook: AfterApprovedRecordHookV1 = () => {};
-    expect(await open({ after_record: [hook] })).toMatchObject({ after_record: [hook] });
+    expect(await open({ after_record: hook })).toMatchObject({ after_record: hook });
     expect(await open()).not.toHaveProperty('after_record');
   });
 });

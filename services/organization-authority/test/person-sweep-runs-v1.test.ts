@@ -90,7 +90,7 @@ async function sweepFixture(options: OpenItemsFixtureOptionsV1 & { readonly owne
     async approveAnother() {
       const other = await f.otherProposal();
       f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: 'approve-other', routes: f.routes([f.projectA], other.approvalId) }), () => f.session);
-      await f.publisher([enqueueApprovedRecordRunV1(f.runs)]).appendFinalizedApprovalsToV4(new AbortController().signal);
+      await f.publisher(enqueueApprovedRecordRunV1(f.runs)).appendFinalizedApprovalsToV4(new AbortController().signal);
       // The run's event is the record's own approval id: the one project A destination of that meeting.
       return f.runs.list(f.person, 10).find(run => run.trigger === 'approved_record' && run.event_ref === approvalRecordIdV2(other.approvalId, [f.projectA]))!.run_id;
     },

@@ -49,7 +49,7 @@ export interface AfterApprovedRecordEventV1 {
  * `transaction` only, never another connection. It must be synchronous: an async function is refused at registration, and a
  * call that returns a thenable is refused (its rejection is swallowed, but work it scheduled may still run after the rollback,
  * outside the transaction). Any other return value is ignored. A throw rolls back the receipt and every hook write of every
- * record. The next pass retries: each append returns `duplicate`, the UPDATE changes 1 row, and the hooks run again. Hooks
+ * record. The next pass retries: each append returns `duplicate`, the UPDATE changes 1 row, and the hook runs again. It
  * must be total (e.g. INSERT … ON CONFLICT DO NOTHING).
  */
 export type AfterApprovedRecordHookV1 = (transaction: Database.Database, event: AfterApprovedRecordEventV1) => void;
@@ -73,18 +73,17 @@ async function publisherAppendOptionsV1(context: ApprovalWorkflowContextV1): Pro
 
 /**
  * The one publisher: appends every approved, unpublished decision as one echo-approval-decision-ref-v2 record per destination
- * group, then writes its receipt and runs the after-record hooks once per record in that receipt's transaction. Each decision
+ * group, then writes its receipt and runs the after-record hook once per record in that receipt's transaction. Each decision
  * is isolated, shows as a failed record_append span, and is retried on every pass. Append rethrows the first decision failure
  * after the pass; recovery does not, so one unpublishable decision cannot stop startup or the rest of a cycle. A failure of the
  * whole pass (signer, page query, abort) throws from both. The core adds reconcileApprovalPresentations when it has
  * presenters; the lifecycle requests search and presentation after each cycle and publication wake.
  */
 export function createApprovalPublisherV1(database: Database.Database, context: ApprovalWorkflowContextV1,
-  hooks: readonly AfterApprovedRecordHookV1[]): ApprovalWorkflowProcessingV1 {
-  if (!Array.isArray(hooks) || hooks.some(hook => typeof hook !== 'function')) throw new TypeError('after-record hooks must be functions');
+  hook: AfterApprovedRecordHookV1 | undefined): ApprovalWorkflowProcessingV1 {
+  if (hook !== undefined && typeof hook !== 'function') throw new TypeError('the after-record hook must be a function');
   // An async function cannot run inside the receipt transaction. Refusing it here means its body never starts, so it can never leave an unhandled rejection.
-  if (hooks.some(hook => ASYNC_TAGS.has(Object.prototype.toString.call(hook)))) throw new TypeError('after-record hooks must be synchronous functions');
-  const after = Object.freeze([...hooks]);
+  if (hook !== undefined && ASYNC_TAGS.has(Object.prototype.toString.call(hook))) throw new TypeError('the after-record hook must be a synchronous function');
   // The signer is inspected at construction (a broken signer shows up as early as eager inspection did) and awaited on every pass.
   // A failed inspection is not cached, so the next pass retries it. The brief's synchronous signature is kept.
   let factories: Promise<RecordAppendFactoryOptionsV4> | undefined;
@@ -140,21 +139,19 @@ export function createApprovalPublisherV1(database: Database.Database, context: 
         record_sha256: result.record_sha256 as Sha256Digest, receipt: result.receipt, event });
     }
     const receipt_json = approvalDecisionReceiptJsonV1(appended);
-    // A nested .immediate() would be a savepoint, so the hooks would commit with someone else's outer transaction.
+    // A nested .immediate() would be a savepoint, so the hook would commit with someone else's outer transaction.
     if (database.inTransaction) throw new Error('Approval receipts need an idle Authority transaction');
     // [T3] authority.sqlite: one BEGIN IMMEDIATE transaction, with no await inside.
     const committed = database.transaction(() => {
       const changes = writeReceipt.run(receipt_json, row.approval_id).changes;
       if (changes === 1) {
-        // The receipt is visible inside this transaction. Each record in group order, each hook in registration order; the first throw rolls all back.
-        for (const { event } of appended) {
-          for (const hook of after) {
-            const returned: unknown = hook(database, event);
-            if (isThenable(returned)) {
-              // Adopt and swallow its outcome first, so a late rejection cannot become an unhandled rejection.
-              void Promise.resolve(returned).catch(() => undefined);
-              throw new Error('An after-record hook must be synchronous; it returned a promise');
-            }
+        // The receipt is visible inside this transaction. The hook runs for each record in group order; the first throw rolls all back.
+        if (hook !== undefined) for (const { event } of appended) {
+          const returned: unknown = hook(database, event);
+          if (isThenable(returned)) {
+            // Adopt and swallow its outcome first, so a late rejection cannot become an unhandled rejection.
+            void Promise.resolve(returned).catch(() => undefined);
+            throw new Error('An after-record hook must be synchronous; it returned a promise');
           }
         }
         return true;
@@ -166,7 +163,7 @@ export function createApprovalPublisherV1(database: Database.Database, context: 
       }
       return false;
     }).immediate();
-    // Publish correlation only after the receipt and all hook writes have committed. The source revision joins the earlier
+    // Publish correlation only after the receipt and every hook write have committed. The source revision joins the earlier
     // intake; each record's event (its own approval id, the run's event_ref) joins its later research run. Each record has
     // its own span, so a decision or a batch cannot overwrite another record's links.
     const source_revision = coreRuntimeIdentityV1('source_revision', JSON.stringify([provenance.external_id, provenance.canonical_revision]));

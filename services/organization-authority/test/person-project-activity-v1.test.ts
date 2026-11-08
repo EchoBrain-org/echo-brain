@@ -106,7 +106,7 @@ const grant = (f: OpenItemsFixtureV1, who: FixturePerson, project_id: string) =>
 async function approveAnother(f: OpenItemsFixtureV1, projectIds: readonly string[], external: string): Promise<Sha256Digest> {
   const other = await f.otherProposal(true, external);
   f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: `desk-approve-${external}`, routes: f.routes(projectIds, other.approvalId) }), () => f.session);
-  await f.publisher([]).appendFinalizedApprovalsToV4(new AbortController().signal);
+  await f.publisher(null).appendFinalizedApprovalsToV4(new AbortController().signal);
   return f.recordLog.prepare('SELECT record_sha256 FROM organization_record_log ORDER BY position DESC LIMIT 1').pluck().get() as Sha256Digest;
 }
 
@@ -128,7 +128,7 @@ function moreFollowUps(f: OpenItemsFixtureV1, count: number): string[] {
 async function approveWithFollowUps(f: OpenItemsFixtureV1, projectIds: readonly string[], external: string, count: number): Promise<{ readonly record: Sha256Digest; readonly items: string[] }> {
   const other = await f.otherProposal(true, external);
   f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: `desk-approve-${external}`, routes: f.routes(projectIds, other.approvalId) }), () => f.session);
-  await f.publisher([enqueueApprovedRecordRunV1(f.runs)]).appendFinalizedApprovalsToV4(new AbortController().signal);
+  await f.publisher(enqueueApprovedRecordRunV1(f.runs)).appendFinalizedApprovalsToV4(new AbortController().signal);
   const record = f.recordLog.prepare('SELECT record_sha256 FROM organization_record_log ORDER BY position DESC LIMIT 1').pluck().get() as Sha256Digest;
   const [run] = f.runs.impactRunsFor([record]);
   const lease = f.runs.claim(f.person, run!.run_id, 60_000);

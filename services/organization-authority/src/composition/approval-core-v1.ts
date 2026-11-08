@@ -102,9 +102,9 @@ export interface ApprovalDecisionBodyV1 {
 }
 
 /**
- * Static, core-independent options. `presenters` are factories, where
+ * Static, core-independent options. `presenter` is a factory, where
  * `ApprovalPresenterFactoryV1 = (core: Pick<ApprovalCoreV1, 'proposal' | 'ownerProposals'>) => ApprovalPresenterV1`;
- * createApprovalCoreV1 calls each factory once with its own frozen core object. A presenter is never passed as an instance.
+ * createApprovalCoreV1 calls it once with its own frozen core object. A presenter is never passed as an instance.
  */
 export interface ApprovalCoreOptionsV1 {
   /** Project ids to freeze as one meeting's suggestions: the meeting's recorded suggestions plus its still-pending import
@@ -116,11 +116,11 @@ export interface ApprovalCoreOptionsV1 {
   readonly projects: (actor: ApprovalActorV1, projectIds: readonly string[]) => void;
   /** Test seam for decided_at; must return canonical UTC milliseconds. */
   readonly now?: () => string;
-  /** Run inside the receipt transaction only when that transaction's UPDATE changed one row; synchronous functions only
-   *  (async functions are refused at creation); Authority rows only. */
-  readonly after_record?: readonly AfterApprovedRecordHookV1[];
-  /** Optional delivery-only surfaces. Factories receive only safe read views of this core. */
-  readonly presenters?: readonly ApprovalPresenterFactoryV1[];
+  /** Runs inside the receipt transaction only when that transaction's UPDATE changed one row; a synchronous function only
+   *  (an async function is refused at creation); Authority rows only. */
+  readonly after_record?: AfterApprovedRecordHookV1;
+  /** An optional delivery-only surface. Its factory receives only safe read views of this core. */
+  readonly presenter?: ApprovalPresenterFactoryV1;
 }
 export interface ApprovalPresenterV1 {
   reconcile(signal: AbortSignal): Promise<'rendered' | 'idle' | 'uncertain'>;
@@ -133,8 +133,8 @@ export interface ApprovalCoreV1 {
   /** Same stager, but its reconcilePendingDeliveries only touches one source, so one person's broken proposal never fails
    *  another person's intake cycle. The runtime's lanes use this. */
   stagerForSource(sourceKey: string): ApprovalWorkflowStagerV1;
-  /** The publisher (approval-publisher-v1.ts) with this core's after_record hooks; reconcileApprovalPresentations runs each
-   *  presenter in turn, and is undefined when there are none. */
+  /** The publisher (approval-publisher-v1.ts) with this core's after_record hook; reconcileApprovalPresentations runs the
+   *  presenter, and is undefined when there is none. */
   readonly processing: ApprovalWorkflowProcessingV1;
   decide(surface: ApprovalSurfaceV1, request: ApprovalDecisionRequestV1, authorize: () => ApprovalAuthorizationV1): ApprovalDecideResultV1;
   proposal(approvalId: string): ApprovalProposalViewV1 | undefined;
@@ -302,7 +302,7 @@ function statusOf(row: Pick<ProposalRow, 'action' | 'receipt_json' | 'state'>): 
 
 export async function createApprovalCoreV1(database: Database.Database, context: ApprovalWorkflowContextV1, options: ApprovalCoreOptionsV1): Promise<ApprovalCoreV1> {
   // Throws TypeError on a non-function or async hook, so a bad registration fails core creation.
-  const processing = createApprovalPublisherV1(database, context, options.after_record ?? []);
+  const processing = createApprovalPublisherV1(database, context, options.after_record);
   const organizationId = context.coordinates.organization_id;
   const now = options.now ?? (() => new Date().toISOString());
 
@@ -541,19 +541,13 @@ export async function createApprovalCoreV1(database: Database.Database, context:
     return Object.freeze(ownerProposalsFor(approvalId, meeting, decisions).map(item => Object.freeze({ signal_id: item.signal_id, action: item.action, proposed: item.proposed })));
   }
 
-  const views = Object.freeze({ proposal, ownerProposals });
-  const presenters = Object.freeze((options.presenters ?? []).map(factory => factory(views)));
-  const withPresentations: ApprovalWorkflowProcessingV1 = presenters.length === 0 ? processing : Object.freeze({
+  const presenter = options.presenter?.(Object.freeze({ proposal, ownerProposals }));
+  const withPresentations: ApprovalWorkflowProcessingV1 = presenter === undefined ? processing : Object.freeze({
     ...processing,
     async reconcileApprovalPresentations(signal: AbortSignal) {
-      let rendered = false;
-      for (const presenter of presenters) {
-        signal.throwIfAborted();
-        const result = await presenter.reconcile(signal);
-        if (result === 'uncertain') return 'uncertain';
-        rendered ||= result === 'rendered';
-      }
-      return rendered ? 'rendered' : 'idle';
+      signal.throwIfAborted();
+      const result = await presenter.reconcile(signal);
+      return result === 'uncertain' || result === 'rendered' ? result : 'idle';
     },
   });
   return Object.freeze({ stager: stagerFor(undefined), stagerForSource: (sourceKey: string) => stagerFor(sourceKey), processing: withPresentations,
