@@ -5,18 +5,9 @@ interface PrivateSlackApprovalReviewItemV1 {
   readonly evidence_reference: string;
 }
 
-interface PrivateSlackApprovalDecisionItemV1
-  extends PrivateSlackApprovalReviewItemV1 {
-  readonly status: "proposed" | "decided" | "unresolved";
-}
-
-/** V1 actions deliberately have no assignee, relation, or deadline presentation. */
-type PrivateSlackApprovalActionItemV1 =
-  PrivateSlackApprovalReviewItemV1;
-
 interface PrivateSlackApprovalDecisionGroupV1 {
   readonly id: string;
-  readonly decision: PrivateSlackApprovalDecisionItemV1;
+  readonly decision: PrivateSlackApprovalReviewItemV1 & { readonly status: "proposed" | "decided" | "unresolved" };
   readonly rationales: readonly PrivateSlackApprovalReviewItemV1[];
 }
 
@@ -25,30 +16,18 @@ export interface PrivateSlackApprovalBlockKitCardInputV1 {
   readonly approval_id: string;
   readonly meeting_title: string;
   readonly decision_groups: readonly PrivateSlackApprovalDecisionGroupV1[];
-  readonly ungrouped_actions?: readonly PrivateSlackApprovalActionItemV1[];
+  /** V1 actions deliberately have no assignee, relation, or deadline presentation. */
+  readonly ungrouped_actions?: readonly PrivateSlackApprovalReviewItemV1[];
   readonly ungrouped_rationales?: readonly PrivateSlackApprovalReviewItemV1[];
 }
 
-interface PlainTextV1 {
-  readonly type: "plain_text";
-  readonly text: string;
-  readonly emoji: false;
-}
-
-interface MrkdwnTextV1 {
-  readonly type: "mrkdwn";
-  readonly text: string;
-  readonly verbatim: true;
-}
-
 interface PrivateSlackApprovalReviewV1 {
-  /**
-   * Plain-text review for the card's notification and assistive-tool
-   * alternative; the card appends its own control instructions.
-   */
+  /** Plain-text review for the card's notification and assistive-tool alternative; the card appends its own control instructions. */
   readonly text: string;
   readonly blocks: readonly Readonly<Record<string, unknown>>[];
 }
+
+type Block = Readonly<Record<string, unknown>>;
 
 const MAX_TITLE = 150;
 const MAX_SECTION = 3_000;
@@ -70,134 +49,36 @@ function invalid(detail: string): never {
   throw new Error(`private approval Block Kit card ${detail}`);
 }
 
-function exactObject(
-  value: unknown,
-  required: readonly string[],
-  optional: readonly string[],
-  label: string,
-): void {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    invalid(`${label} must be a plain object`);
-  }
-  const keys = Object.keys(value);
-  const allowed = new Set([...required, ...optional]);
-  if (
-    required.some((key) => !Object.hasOwn(value, key)) ||
-    keys.some((key) => !allowed.has(key))
-  ) {
-    invalid(`${label} has an unexpected shape`);
-  }
-}
-
-function exactArray(value: unknown, label: string): asserts value is unknown[] {
-  if (!Array.isArray(value)) invalid(`${label} must be an array`);
-}
-
-function boundedText(
-  value: unknown,
-  maximum: number,
-  label: string,
-  controls = DISPLAY_CONTROLS,
-): asserts value is string {
-  if (
-    typeof value !== "string" ||
-    value.trim().length === 0 ||
-    value !== value.trim() ||
-    value.length > maximum ||
-    controls.test(value)
-  ) {
+/** Text Slack shows as given: canonically trimmed, non-empty, bounded, and free of control characters. */
+function checkText(value: string, maximum: number, label: string, controls = DISPLAY_CONTROLS): void {
+  if (typeof value !== "string" || value.length === 0 || value !== value.trim() || value.length > maximum || controls.test(value)) {
     invalid(`${label} must be canonically trimmed, bounded display text`);
   }
 }
 
-function identifier(value: unknown, label: string): asserts value is string {
-  if (
-    typeof value !== "string" ||
-    value.length > MAX_APPROVAL_ID ||
-    !IDENTIFIER.test(value)
-  ) {
-    invalid(`${label} must be a bounded canonical identifier`);
-  }
+function checkItem(item: PrivateSlackApprovalReviewItemV1, label: string): void {
+  checkText(item.text, MAX_SECTION, `${label}.text`);
+  checkText(item.evidence_reference, MAX_SECTION, `${label}.evidence_reference`);
 }
 
-function validateReviewItem(
-  item: PrivateSlackApprovalReviewItemV1,
-  label: string,
-  extraKeys: readonly string[] = [],
-): void {
-  exactObject(item, ["text", "evidence_reference", ...extraKeys], [], label);
-  boundedText(item.text, MAX_SECTION, `${label}.text`);
-  boundedText(
-    item.evidence_reference,
-    MAX_SECTION,
-    `${label}.evidence_reference`,
-  );
-}
-
-function validateDecisionItem(
-  item: PrivateSlackApprovalDecisionItemV1,
-  label: string,
-): void {
-  validateReviewItem(item, label, ["status"]);
-  if (!(["proposed", "decided", "unresolved"] as const).includes(item.status)) {
-    invalid(`${label}.status must be a decision status`);
-  }
-}
-
+/**
+ * Refuses a review Slack cannot show as given. The presenter builds the input's shape itself from the frozen snapshot,
+ * so what is checked here are that snapshot's values: the approval id, every text, and the card's block count.
+ */
 function validateInput(input: PrivateSlackApprovalBlockKitCardInputV1): void {
-  exactObject(
-    input,
-    ["schema_version", "approval_id", "meeting_title", "decision_groups"],
-    ["ungrouped_actions", "ungrouped_rationales"],
-    "input",
-  );
-  if (input.schema_version !== 1) invalid("schema_version must equal 1");
-  identifier(input.approval_id, "approval_id");
-  boundedText(input.meeting_title, MAX_TITLE, "meeting_title", PLAIN_CONTROLS);
-  exactArray(input.decision_groups, "decision_groups");
-
-  const ids = new Set<string>();
+  if (typeof input.approval_id !== "string" || input.approval_id.length > MAX_APPROVAL_ID || !IDENTIFIER.test(input.approval_id)) {
+    invalid("approval_id must be a bounded canonical identifier");
+  }
+  checkText(input.meeting_title, MAX_TITLE, "meeting_title", PLAIN_CONTROLS);
   input.decision_groups.forEach((group, index) => {
-    const label = `decision_groups[${index}]`;
-    exactObject(group, ["id", "decision", "rationales"], [], label);
-    identifier(group.id, `${label}.id`);
-    if (ids.has(group.id)) invalid("decision_groups contain duplicate ids");
-    ids.add(group.id);
-    validateDecisionItem(group.decision, `${label}.decision`);
-    exactArray(group.rationales, `${label}.rationales`);
-    group.rationales.forEach((item, itemIndex) =>
-      validateReviewItem(item, `${label}.rationales[${itemIndex}]`),
-    );
+    checkItem(group.decision, `decision_groups[${index}].decision`);
+    group.rationales.forEach((item, itemIndex) => checkItem(item, `decision_groups[${index}].rationales[${itemIndex}]`));
   });
-
-  if (input.ungrouped_actions !== undefined) {
-    exactArray(input.ungrouped_actions, "ungrouped_actions");
-    if (input.ungrouped_actions.length === 0) {
-      invalid("ungrouped_actions must be omitted when empty");
-    }
-    input.ungrouped_actions.forEach((item, index) =>
-      validateReviewItem(item, `ungrouped_actions[${index}]`),
-    );
-  }
-  if (input.ungrouped_rationales !== undefined) {
-    exactArray(input.ungrouped_rationales, "ungrouped_rationales");
-    if (input.ungrouped_rationales.length === 0) {
-      invalid("ungrouped_rationales must be omitted when empty");
-    }
-    input.ungrouped_rationales.forEach((item, index) =>
-      validateReviewItem(item, `ungrouped_rationales[${index}]`),
-    );
-  }
-
+  input.ungrouped_actions?.forEach((item, index) => checkItem(item, `ungrouped_actions[${index}]`));
+  input.ungrouped_rationales?.forEach((item, index) => checkItem(item, `ungrouped_rationales[${index}]`));
   // Header and context, plus the card's five control blocks.
-  const blockCount =
-    7 +
-    input.decision_groups.length +
-    Number(
-      input.ungrouped_actions !== undefined ||
-        input.ungrouped_rationales !== undefined,
-    );
-  if (blockCount > MAX_BLOCKS) invalid("card exceeds Slack's 50-block limit");
+  const followUp = input.ungrouped_actions !== undefined || input.ungrouped_rationales !== undefined;
+  if (7 + input.decision_groups.length + Number(followUp) > MAX_BLOCKS) invalid("card exceeds Slack's 50-block limit");
 }
 
 function escapeMrkdwn(text: string): string {
@@ -207,186 +88,78 @@ function escapeMrkdwn(text: string): string {
     .replaceAll(">", "&gt;");
 }
 
-function plainText(text: string): PlainTextV1 {
-  return Object.freeze({ type: "plain_text", text, emoji: false });
+const plainText = (text: string) => ({ type: "plain_text", text, emoji: false });
+const mrkdwnText = (text: string) => ({ type: "mrkdwn", text, verbatim: true });
+const bullets = (items: readonly PrivateSlackApprovalReviewItemV1[]) => items.map((item) => `• ${escapeMrkdwn(item.text)}`);
+
+function key(...parts: readonly string[]): string {
+  return createHash("sha256").update(["echo-private-approval-v1", ...parts].join("\u0000")).digest("hex").slice(0, 32);
 }
 
-function mrkdwnText(text: string): MrkdwnTextV1 {
-  return Object.freeze({ type: "mrkdwn", text, verbatim: true });
+function blockId(approvalId: string, name: string): string {
+  return `echo-private-approval-v1-${key(approvalId)}-${name}-v1`;
 }
 
-function cardKey(approvalId: string): string {
-  return createHash("sha256")
-    .update(`echo-private-approval-v1\u0000${approvalId}`)
-    .digest("hex")
-    .slice(0, 32);
+function sectionBlock(label: string, lines: readonly string[]): Block {
+  const text = `*${label}*\n${lines.join("\n")}`;
+  if (text.length > MAX_SECTION) invalid(`${label} section exceeds Slack's text limit`);
+  return { type: "section", text: mrkdwnText(text) };
 }
 
-function blockId(
-  input: Pick<PrivateSlackApprovalBlockKitCardInputV1, "approval_id">,
-  name: string,
-): string {
-  return `echo-private-approval-v1-${cardKey(input.approval_id)}-${name}-v1`;
-}
-
-function decisionBlockId(
-  input: Pick<PrivateSlackApprovalBlockKitCardInputV1, "approval_id">,
-  decisionId: string,
-): string {
-  const key = createHash("sha256")
-    .update(`echo-private-approval-v1\u0000${input.approval_id}\u0000${decisionId}`)
-    .digest("hex")
-    .slice(0, 32);
-  return `echo-private-approval-v1-${key}-decision-v1`;
+function collapsed(blockIdValue: string, title: string, subtitle: string | undefined, childBlocks: readonly Block[]): Block {
+  return {
+    type: "container",
+    block_id: blockIdValue,
+    title: plainText(title),
+    ...(subtitle === undefined ? {} : { subtitle: mrkdwnText(subtitle) }),
+    is_collapsible: true,
+    default_collapsed: true,
+    width: "full",
+    child_blocks: childBlocks,
+  };
 }
 
 /**
- * The group title is legacy presentation metadata.  What the reviewer sees
- * must always be a (bounded) excerpt of the exact decision they authorize.
+ * The group title is legacy presentation metadata. What the reviewer sees is always a (bounded) excerpt of the exact
+ * decision they authorize, numbered by position.
  */
-function displayDecisionTitle(
-  decision: PrivateSlackApprovalDecisionItemV1,
-  position: number,
-): string {
+function decisionContainer(approvalId: string, group: PrivateSlackApprovalDecisionGroupV1, position: number): Block {
   const prefix = `${position} · `;
   const available = MAX_TITLE - prefix.length;
-  const text = decision.text;
-  const presentationText =
-    text.length <= available ? text : `${text.slice(0, available - 1)}…`;
-  return `${prefix}${presentationText}`;
+  const text = group.decision.text;
+  const title = `${prefix}${text.length <= available ? text : `${text.slice(0, available - 1)}…`}`;
+  const whys = group.rationales.length;
+  const childBlocks = [sectionBlock("Decision", [escapeMrkdwn(text)])];
+  if (whys > 0) childBlocks.push(sectionBlock("Why", bullets(group.rationales)));
+  return collapsed(
+    `echo-private-approval-v1-${key(approvalId, group.id)}-decision-v1`,
+    title,
+    whys === 0 ? undefined : `${whys} ${whys === 1 ? "why" : "whys"}`,
+    childBlocks,
+  );
 }
 
-function decisionSubtitle(group: PrivateSlackApprovalDecisionGroupV1): string | undefined {
-  if (group.rationales.length === 0) return undefined;
-  return `${group.rationales.length} ${group.rationales.length === 1 ? "why" : "whys"}`;
-}
-
-function section(label: string, lines: readonly string[]): string {
-  const text = `*${label}*\n${lines.join("\n")}`;
-  if (text.length > MAX_SECTION) {
-    invalid(`${label} section exceeds Slack's text limit`);
-  }
-  return text;
-}
-
-function reviewLines(item: PrivateSlackApprovalReviewItemV1): string[] {
-  return [`• ${escapeMrkdwn(item.text)}`];
-}
-
-function decisionContainer(
-  input: PrivateSlackApprovalBlockKitCardInputV1,
-  group: PrivateSlackApprovalDecisionGroupV1,
-  position: number,
-): Readonly<Record<string, unknown>> {
-  const childBlocks: Readonly<Record<string, unknown>>[] = [
-    {
-      type: "section",
-      text: mrkdwnText(
-        section("Decision", [
-          escapeMrkdwn(group.decision.text),
-        ]),
-      ),
-    },
-  ];
-  if (group.rationales.length > 0) {
-    childBlocks.push({
-      type: "section",
-      text: mrkdwnText(section("Why", group.rationales.flatMap(reviewLines))),
-    });
-  }
-  return {
-    type: "container",
-    block_id: decisionBlockId(input, group.id),
-    title: plainText(displayDecisionTitle(group.decision, position)),
-    ...(decisionSubtitle(group) === undefined
-      ? {}
-      : { subtitle: mrkdwnText(decisionSubtitle(group)!) }),
-    is_collapsible: true,
-    default_collapsed: true,
-    width: "full",
-    child_blocks: childBlocks,
-  };
-}
-
-function meetingFollowUp(
-  input: PrivateSlackApprovalBlockKitCardInputV1,
-): Readonly<Record<string, unknown>> | undefined {
-  const actions = input.ungrouped_actions;
-  const context = input.ungrouped_rationales;
-  const hasActions = actions !== undefined;
-  const hasContext = context !== undefined;
-  if (!hasActions && !hasContext) {
-    return undefined;
-  }
-  const childBlocks: Readonly<Record<string, unknown>>[] = [];
-  if (hasActions) {
-    childBlocks.push({
-      type: "section",
-      text: mrkdwnText(section("Next steps", actions.flatMap(reviewLines))),
-    });
-  }
-  if (hasContext) {
-    childBlocks.push({
-      type: "section",
-      text: mrkdwnText(
-        section(
-          "Additional context",
-          context.flatMap(reviewLines),
-        ),
-      ),
-    });
-  }
-  const title = hasActions
-    ? hasContext
-      ? "Next steps and context"
-      : "Next steps from this meeting"
-    : "Additional meeting context";
-  return {
-    type: "container",
-    block_id: blockId(input, "other-meeting-items"),
-    title: plainText(title),
-    is_collapsible: true,
-    default_collapsed: true,
-    width: "full",
-    child_blocks: childBlocks,
-  };
+function meetingFollowUp(input: PrivateSlackApprovalBlockKitCardInputV1): Block[] {
+  const { ungrouped_actions: actions, ungrouped_rationales: context } = input;
+  if (actions === undefined && context === undefined) return [];
+  const childBlocks: Block[] = [];
+  if (actions !== undefined) childBlocks.push(sectionBlock("Next steps", bullets(actions)));
+  if (context !== undefined) childBlocks.push(sectionBlock("Additional context", bullets(context)));
+  const title = actions === undefined ? "Additional meeting context" : context === undefined ? "Next steps from this meeting" : "Next steps and context";
+  return [collapsed(blockId(input.approval_id, "other-meeting-items"), title, undefined, childBlocks)];
 }
 
 function fallback(input: PrivateSlackApprovalBlockKitCardInputV1): string {
-  const lines = [
-    "Private meeting-owner approval requested.",
-    `Meeting: ${input.meeting_title}`,
-    "Frozen review:",
-  ];
+  const lines = ["Private meeting-owner approval requested.", `Meeting: ${input.meeting_title}`, "Frozen review:"];
   for (const [index, group] of input.decision_groups.entries()) {
-    lines.push(
-      `Decision ${index + 1}: ${group.decision.text}`,
-      `Status: ${group.decision.status}`,
-      `Evidence: ${group.decision.evidence_reference}`,
-    );
-    for (const rationale of group.rationales) {
-      lines.push(
-        `Why: ${rationale.text}`,
-        `Evidence: ${rationale.evidence_reference}`,
-      );
-    }
+    const decision = group.decision;
+    lines.push(`Decision ${index + 1}: ${decision.text}`, `Status: ${decision.status}`, `Evidence: ${decision.evidence_reference}`);
+    for (const rationale of group.rationales) lines.push(`Why: ${rationale.text}`, `Evidence: ${rationale.evidence_reference}`);
   }
-  if (input.ungrouped_actions !== undefined) {
-    lines.push("Next steps from this meeting:");
-  }
-  for (const action of input.ungrouped_actions ?? []) {
-    lines.push(`Next step: ${action.text}`);
-    lines.push(`Evidence: ${action.evidence_reference}`);
-  }
-  if (input.ungrouped_rationales !== undefined) {
-    lines.push("Additional meeting context:");
-  }
-  for (const rationale of input.ungrouped_rationales ?? []) {
-    lines.push(
-      `Context: ${rationale.text}`,
-      `Evidence: ${rationale.evidence_reference}`,
-    );
-  }
+  if (input.ungrouped_actions !== undefined) lines.push("Next steps from this meeting:");
+  for (const action of input.ungrouped_actions ?? []) lines.push(`Next step: ${action.text}`, `Evidence: ${action.evidence_reference}`);
+  if (input.ungrouped_rationales !== undefined) lines.push("Additional meeting context:");
+  for (const rationale of input.ungrouped_rationales ?? []) lines.push(`Context: ${rationale.text}`, `Evidence: ${rationale.evidence_reference}`);
   lines.push(NON_RELEASE_TEXT);
   const text = lines.join("\n");
   if (text.length > MAX_REVIEW_TEXT) invalid("fallback exceeds Slack's text limit");
@@ -408,26 +181,16 @@ export function buildPrivateSlackApprovalReviewV1(
   input: PrivateSlackApprovalBlockKitCardInputV1,
 ): PrivateSlackApprovalReviewV1 {
   validateInput(input);
-  const blocks: Readonly<Record<string, unknown>>[] = [
-    {
-      type: "header",
-      block_id: blockId(input, "title"),
-      text: plainText(input.meeting_title),
-    },
+  const decisions = input.decision_groups.length;
+  const blocks: Block[] = [
+    { type: "header", block_id: blockId(input.approval_id, "title"), text: plainText(input.meeting_title) },
     {
       type: "context",
-      block_id: blockId(input, "context"),
-      elements: [
-        mrkdwnText(
-          `${input.decision_groups.length} ${input.decision_groups.length === 1 ? "decision" : "decisions"}  •  Private until approved`,
-        ),
-      ],
+      block_id: blockId(input.approval_id, "context"),
+      elements: [mrkdwnText(`${decisions} ${decisions === 1 ? "decision" : "decisions"}  •  Private until approved`)],
     },
-    ...input.decision_groups.map((group, index) =>
-      decisionContainer(input, group, index + 1),
-    ),
+    ...input.decision_groups.map((group, index) => decisionContainer(input.approval_id, group, index + 1)),
+    ...meetingFollowUp(input),
   ];
-  const followUp = meetingFollowUp(input);
-  if (followUp !== undefined) blocks.push(followUp);
   return deepFreeze({ text: fallback(input), blocks });
 }
