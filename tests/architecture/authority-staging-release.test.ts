@@ -1,12 +1,32 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { verifyAcceptedStagingRelease, executeStagingRelease, planStagingRelease, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
+import * as releaseTool from '../../tools/authority-staging-release.mjs';
 import { cleanReleaseRecord, cleanRuntimeProfile, deployRuntimeProfileFiles } from '../support/clean-v1-release.js';
 import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
+
+// allowJs infers these results as any; type what the tests read so a misspelled field fails tsc.
+type ReleaseSummary = Readonly<{
+  schema_version: 1; kind: string; action: string; operation_id: string; instance_id: string;
+  accepted_release_id: string; candidate_release_id: string;
+  state: 'planned' | 'submitting' | 'submitted' | 'succeeded' | 'failed' | 'unconfirmed';
+  command_id: string | null;
+  outcome: Readonly<{ ok: boolean; code: string; action: string; diagnostic: unknown }> | null;
+}>;
+type PlanOptions = Readonly<{
+  action: string; acceptedRelease: string; release: string; runtimeProfile: string; output: string;
+  previousToolingSource?: string; approval?: string; inspection?: string;
+}>;
+const planStagingRelease = releaseTool.planStagingRelease as (options: PlanOptions, dependencies?: object) => ReleaseSummary;
+const executeStagingRelease = releaseTool.executeStagingRelease as (path: string, dependencies?: object, pollOnly?: boolean) => ReleaseSummary;
+const verifyAcceptedStagingRelease = releaseTool.verifyAcceptedStagingRelease as (path: string, expected: Readonly<{ release_id: string; release_sha256: string }>, dependencies?: object) => ReleaseSummary;
+const stagingReleaseTarget = releaseTool.stagingReleaseTarget as (aws?: (args: string[]) => unknown) => Readonly<{
+  account: string; region: string; stack_id: string; instance_id: string; volume_id: string;
+}>;
+const { releaseSsmParameters, safeReleaseOutcome, validateReleaseRequest } = releaseTool;
 
 const temporary: string[] = [];
 const REPO = resolve(import.meta.dirname, '../..');
@@ -358,6 +378,16 @@ describe('bounded staging release operator', () => {
     expect(() => executeStagingRelease(f.options.output, f.dependencies)).toThrow();
     expect(readFileSync(f.options.output, 'utf8')).not.toContain('must-not-leak');
     expect(readFileSync(f.options.output, 'utf8')).not.toContain('private/path');
+  });
+
+  it.each(['status', 'stage'])('refuses an approval file on %s, which is not a promotion', action => {
+    const f = fixture();
+    const approval = join(f.directory, 'approval.json');
+    const candidate = JSON.parse(readFileSync(f.options.release, 'utf8'));
+    write(approval, { kind: 'echo-staging-release-founder-authorization-v1', release_sha256: digest(readFileSync(f.options.release)), person_client_sha256: candidate.person_client.artifact_sha256, slack_approved: true, person_records_passed: true, person_ask_passed: true, release_authorized: true });
+    expect(() => planStagingRelease({ ...f.options, action, approval }, f.dependencies)).toThrow('unexpected_approval');
+    expect(existsSync(f.options.output)).toBe(false);
+    expect(f.state.submissions).toBe(0);
   });
 
   it('requires an explicit exact-release founder authorization for promotion', () => {
