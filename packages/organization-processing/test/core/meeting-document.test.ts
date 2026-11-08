@@ -57,21 +57,11 @@ describe('canonical meeting document validator', () => {
           roles: ['organizer', 'speaker'],
         },
       ],
-      artifacts: [
-        {
-          id: 'artifact-1',
-          kind: 'document',
-          availability: 'available',
-          mime_type: 'text/markdown',
-        },
-      ],
       content: [
         {
           id: 'agenda-1',
           kind: 'agenda',
           text: 'Confirm the normalized boundary.',
-          author_participant_id: 'participant-1',
-          artifact_id: 'artifact-1',
           origin: 'human',
         },
         {
@@ -124,7 +114,7 @@ describe('canonical meeting document validator', () => {
     expect(() => assertCanonicalMeetingDocument(removedShape, source)).toThrow();
   });
 
-  it('rejects dangling participant and artifact references at runtime', () => {
+  it('rejects dangling participant references at runtime', () => {
     const invalid = {
       ...minimalMeeting,
       content: [
@@ -133,12 +123,25 @@ describe('canonical meeting document validator', () => {
           kind: 'other',
           text: 'Unresolved references are not evidence-safe.',
           speaker_participant_id: 'missing-participant',
-          artifact_id: 'missing-artifact',
         },
       ],
     };
 
     expect(() => assertCanonicalMeetingDocument(invalid, source)).toThrow(/does not resolve/);
+  });
+
+  it('holds only what a source sends: no artifact, and none of the fields no source fills', () => {
+    const block = { id: 'block-1', kind: 'note', text: 'A note.' };
+    expect(() => assertCanonicalMeetingDocument({ ...minimalMeeting, artifacts: [{ id: 'artifact-1', kind: 'document', availability: 'available' }] }, source))
+      .toThrow('meeting.artifacts must be empty');
+    for (const [field, invalid] of [
+      ['meeting.content[0].artifact_id', { ...minimalMeeting, content: [{ ...block, artifact_id: 'artifact-1' }] }],
+      ['meeting.content[0].author_participant_id', { ...minimalMeeting, content: [{ ...block, author_participant_id: 'participant-1' }] }],
+      ['meeting.provenance.previous_revision', { ...minimalMeeting, provenance: { ...minimalMeeting.provenance, previous_revision: 'r0' } }],
+      ['meeting.context.calendar.series_id', { ...minimalMeeting, context: { calendar: { series_id: 'series-1' } } }],
+      ['meeting.context.calendar.recurrence_id', { ...minimalMeeting, context: { calendar: { recurrence_id: 'recurrence-1' } } }],
+      ['meeting.governance.deletion_requested_at', { ...minimalMeeting, governance: { deletion_requested_at: '2026-07-16T20:00:00.000Z' } }],
+    ] as const) expect(() => assertCanonicalMeetingDocument(invalid, source)).toThrow(`${field} is not part of the canonical shape`);
   });
 
   it('requires the canonical meeting owner to resolve', () => {

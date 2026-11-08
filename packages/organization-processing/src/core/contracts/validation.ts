@@ -314,63 +314,8 @@ export function assertCanonicalMeetingDocument(
     participantsById.set(value.id, value);
   }
 
-  const artifacts = array(meeting['artifacts'], 'meeting.artifacts', 10_000);
-  const artifactIds = new Set<string>();
-  for (const [index, value] of artifacts.entries()) {
-    const artifact = object(value, `meeting.artifacts[${index}]`);
-    onlyKeys(
-      artifact,
-      [
-        'id',
-        'kind',
-        'availability',
-        'title',
-        'mime_type',
-        'language',
-        'external_id',
-        'source_url',
-        'content_hash',
-        'metadata',
-      ],
-      `meeting.artifacts[${index}]`,
-    );
-    nonEmptyString(artifact['id'], `meeting.artifacts[${index}].id`);
-    if (artifactIds.has(artifact['id'])) throw new Error('meeting artifact ids must be unique');
-    artifactIds.add(artifact['id']);
-    oneOf(
-      artifact['kind'],
-      [
-        'audio',
-        'video',
-        'transcript',
-        'document',
-        'slides',
-        'whiteboard',
-        'chat',
-        'image',
-        'attachment',
-        'link',
-        'raw_payload',
-        'other',
-      ],
-      `meeting.artifacts[${index}].kind`,
-    );
-    oneOf(
-      artifact['availability'],
-      ['available', 'pending', 'forbidden', 'missing', 'expired', 'redacted', 'unknown'],
-      `meeting.artifacts[${index}].availability`,
-    );
-    for (const key of [
-      'title',
-      'mime_type',
-      'language',
-      'external_id',
-      'source_url',
-      'content_hash',
-    ] as const) {
-      optionalNonEmptyString(artifact[key], `meeting.artifacts[${index}].${key}`);
-    }
-    metadata(artifact['metadata'], `meeting.artifacts[${index}].metadata`);
+  if (array(meeting['artifacts'], 'meeting.artifacts', 10_000).length !== 0) {
+    throw new Error('meeting.artifacts must be empty');
   }
 
   const content = array(meeting['content'], 'meeting.content', 10_000);
@@ -384,8 +329,6 @@ export function assertCanonicalMeetingDocument(
         'id',
         'kind',
         'text',
-        'artifact_id',
-        'author_participant_id',
         'speaker_participant_id',
         'sequence',
         'started_at',
@@ -429,18 +372,10 @@ export function assertCanonicalMeetingDocument(
     if (totalTextBytes > 16 * 1024 * 1024) {
       throw new Error('meeting content text exceeds the aggregate safety limit');
     }
-    for (const key of ['author_participant_id', 'speaker_participant_id'] as const) {
-      if (block[key] !== undefined) {
-        nonEmptyString(block[key], `meeting.content[${index}].${key}`);
-        if (!participantIds.has(block[key])) {
-          throw new Error(`meeting.content[${index}].${key} does not resolve`);
-        }
-      }
-    }
-    if (block['artifact_id'] !== undefined) {
-      nonEmptyString(block['artifact_id'], `meeting.content[${index}].artifact_id`);
-      if (!artifactIds.has(block['artifact_id'])) {
-        throw new Error(`meeting.content[${index}].artifact_id does not resolve`);
+    if (block['speaker_participant_id'] !== undefined) {
+      nonEmptyString(block['speaker_participant_id'], `meeting.content[${index}].speaker_participant_id`);
+      if (!participantIds.has(block['speaker_participant_id'])) {
+        throw new Error(`meeting.content[${index}].speaker_participant_id does not resolve`);
       }
     }
     if (block['started_at'] !== undefined) {
@@ -505,7 +440,6 @@ export function assertCanonicalMeetingDocument(
       'observed_at',
       'normalizer_version',
       'source_revision',
-      'previous_revision',
       'source_created_at',
       'source_updated_at',
       'source_url',
@@ -526,7 +460,6 @@ export function assertCanonicalMeetingDocument(
   timestamp(provenance['observed_at'], 'meeting.provenance.observed_at');
   nonEmptyString(provenance['normalizer_version'], 'meeting.provenance.normalizer_version');
   optionalNonEmptyString(provenance['source_revision'], 'meeting.provenance.source_revision');
-  optionalNonEmptyString(provenance['previous_revision'], 'meeting.provenance.previous_revision');
   optionalTimestamp(provenance['source_created_at'], 'meeting.provenance.source_created_at');
   optionalTimestamp(provenance['source_updated_at'], 'meeting.provenance.source_updated_at');
   optionalNonEmptyString(provenance['source_url'], 'meeting.provenance.source_url');
@@ -576,12 +509,10 @@ export function assertCanonicalMeetingDocument(
       const calendar = object(context['calendar'], 'meeting.context.calendar');
       onlyKeys(
         calendar,
-        ['event_id', 'series_id', 'recurrence_id', 'organizer_participant_id'],
+        ['event_id', 'organizer_participant_id'],
         'meeting.context.calendar',
       );
-      for (const key of ['event_id', 'series_id', 'recurrence_id'] as const) {
-        optionalNonEmptyString(calendar[key], `meeting.context.calendar.${key}`);
-      }
+      optionalNonEmptyString(calendar['event_id'], 'meeting.context.calendar.event_id');
       if (calendar['organizer_participant_id'] !== undefined) {
         nonEmptyString(
           calendar['organizer_participant_id'],
@@ -638,7 +569,6 @@ export function assertCanonicalMeetingDocument(
         'sensitivity',
         'consent',
         'retention_until',
-        'deletion_requested_at',
         'redaction_state',
         'metadata',
       ],
@@ -678,10 +608,6 @@ export function assertCanonicalMeetingDocument(
       }
     }
     optionalTimestamp(governance['retention_until'], 'meeting.governance.retention_until');
-    optionalTimestamp(
-      governance['deletion_requested_at'],
-      'meeting.governance.deletion_requested_at',
-    );
     if (governance['redaction_state'] !== undefined) {
       oneOf(
         governance['redaction_state'],

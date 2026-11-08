@@ -112,8 +112,6 @@ export interface MeetingContentBlock {
   id: string;
   kind: MeetingContentKind;
   text: string;
-  artifact_id?: string;
-  author_participant_id?: string;
   speaker_participant_id?: string;
   sequence?: number;
   started_at?: string;
@@ -127,40 +125,6 @@ export interface MeetingContentBlock {
   metadata?: Readonly<JsonObject>;
 }
 
-export type MeetingArtifactKind =
-  | 'audio'
-  | 'video'
-  | 'transcript'
-  | 'document'
-  | 'slides'
-  | 'whiteboard'
-  | 'chat'
-  | 'image'
-  | 'attachment'
-  | 'link'
-  | 'raw_payload'
-  | 'other';
-
-export interface MeetingArtifact {
-  id: string;
-  kind: MeetingArtifactKind;
-  availability:
-    | 'available'
-    | 'pending'
-    | 'forbidden'
-    | 'missing'
-    | 'expired'
-    | 'redacted'
-    | 'unknown';
-  title?: string;
-  mime_type?: string;
-  language?: string;
-  external_id?: string;
-  source_url?: string;
-  content_hash?: string;
-  metadata?: Readonly<JsonObject>;
-}
-
 export interface MeetingContext {
   /**
    * The person responsible for this meeting, when the source can establish
@@ -170,8 +134,6 @@ export interface MeetingContext {
   owner_participant_id?: string;
   calendar?: {
     event_id?: string;
-    series_id?: string;
-    recurrence_id?: string;
     organizer_participant_id?: string;
   };
   location?: {
@@ -199,7 +161,6 @@ export interface MeetingGovernance {
     source_reference?: string;
   }[];
   retention_until?: string;
-  deletion_requested_at?: string;
   redaction_state?: 'none' | 'partial' | 'full';
   metadata?: Readonly<JsonObject>;
 }
@@ -211,7 +172,6 @@ export interface MeetingProvenance {
   observed_at: string;
   normalizer_version: string;
   source_revision?: string;
-  previous_revision?: string;
   source_created_at?: string;
   source_updated_at?: string;
   source_url?: string;
@@ -221,8 +181,8 @@ export interface MeetingProvenance {
 /**
  * Canonical tool-agnostic meeting context baseline.
  *
- * Only identity, provenance, capture state, and the three evidence-bearing
- * collections are required. Adapters preserve whichever optional context their
+ * Only identity, provenance, capture state, and the three collections are
+ * required. Adapters preserve whichever optional context their
  * source can actually provide; missing source facts remain absent.
  */
 export interface MeetingDocument {
@@ -232,7 +192,8 @@ export interface MeetingDocument {
   capture: MeetingCaptureState;
   participants: readonly MeetingParticipant[];
   content: readonly MeetingContentBlock[];
-  artifacts: readonly MeetingArtifact[];
+  /** No source sends artifacts: every document carries this empty array, which hashes and stored bytes keep. */
+  artifacts: readonly never[];
   title?: string;
   description?: string;
   lifecycle?: MeetingLifecycle;
