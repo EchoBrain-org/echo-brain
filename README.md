@@ -142,7 +142,7 @@ Choose the smallest check that covers the change while iterating:
 | Editing workspace dependencies or deployment tooling | `npm run test:architecture` | Cross-workspace and tooling behavior |
 | Checking dependency boundaries quickly | `npm run check:architecture-boundaries` | Forbidden imports and package boundaries |
 | Editing docs and evidence references | `npm run check:docs` | Documentation structure and Git proof references |
-| Editing the core evaluation harness | `npm run test:capacity` | Contract and verifier tests in `tools/evals/authority-core` |
+| Editing the core evaluation harness | `npm run test:capacity` | Corpus, oracle, ranking and core component tests in `tools/evals/authority-core` |
 | Editing the research-loop evaluator | `npm run test:research-loop-eval` | `node --test` suites in `tools/evals/research-loop` |
 | Editing the follow-up resolution evaluator | `npm run test:ask-follow-up-eval` | `node --test` suites in `tools/evals/ask-follow-up` |
 | Editing the Ask writer gate | `npm run test:ask-blocks-eval` | `node --test` suites in `tools/evals/ask-blocks` |
@@ -161,9 +161,9 @@ documentation checks, TypeScript checking, linting, and the complete root
 Vitest suite. It does not run the desktop app's tests or the `node --test`
 evaluator suites; when a change touches them, also run their commands from
 the table above or the [test map](tests/README.md).
-CI also runs both core evaluation commands above, the research-loop, synthetic
-Ask, follow-up resolution and Ask wording evaluator tests, and the desktop app
-in its own job. Locally the root suite uses at most
+CI also runs both core evaluation commands above, the research-loop and
+follow-up resolution evaluator tests, the Ask writer gate's tests, and the
+desktop app in its own job. Locally the root suite uses at most
 two isolated test workers (CI's Vitest leg uses three); mutable Git and
 packaging fixtures use temporary checkouts.
 
