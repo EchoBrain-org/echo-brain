@@ -31,7 +31,7 @@ async function fixture(options: { readonly anchor?: () => typeof record; readonl
   let now = new Date('2026-10-07T10:00:00.000Z');
   const f = await approvalCoreFixture(); const runs = new SqliteTriggerRunsV1(f.db, () => now);
   f.core.decide('desktop', f.approve(options.split === true ? { routes: f.routes(id => id === 'decision-1' ? [] : [f.projectA]) } : {}), () => f.session);
-  await f.publisher([enqueueApprovedRecordRunV1(runs)]).appendFinalizedApprovalsToV4(new AbortController().signal);
+  await f.publisher(enqueueApprovedRecordRunV1(runs)).appendFinalizedApprovalsToV4(new AbortController().signal);
   const row = runs.list(f.person, 1)[0]!;
   const auth = (token: string) => token === 'approver' && options.rotated?.() !== true ? { ...f.person, session_family_id: 'family', checked_at: now.toISOString() } :
     token === 'other' ? { ...f.person, principal_id: 'prn_00000000-0000-4000-8000-0000000000f1', membership_id: 'mem_00000000-0000-4000-8000-0000000000f2', session_family_id: 'other', checked_at: now.toISOString() } : (() => { throw new AuthorityOperationError('unauthorized', 'bad token'); })();
@@ -91,7 +91,7 @@ describe('durable approved-record trigger runs', () => {
     f.advance(1_000);
     const other = await f.otherProposal();
     f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: 'approve-other' }), () => f.session);
-    await f.publisher([enqueueApprovedRecordRunV1(f.runs)]).appendFinalizedApprovalsToV4(new AbortController().signal);
+    await f.publisher(enqueueApprovedRecordRunV1(f.runs)).appendFinalizedApprovalsToV4(new AbortController().signal);
     const newer = f.runs.list(f.person, 1, 'approved_record')[0]!.run_id;
     const { runs } = await f.app.list({ access_token: 'approver' });
     // Newest first overall, as before: the 20 newest sweeps among the impact runs.

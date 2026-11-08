@@ -28,9 +28,9 @@ describe('approval publisher: the brief', () => {
   it('links each committed publication to intake and its later research event outside the receipt transaction', async () => {
     const observations: CoreRuntimeObservationV1[] = [];
     const publicationStates: unknown[] = [];
-    const f = await approvalCoreFixture({ after_record: [(tx, event) => {
+    const f = await approvalCoreFixture({ after_record: (tx, event) => {
       tx.prepare("INSERT INTO temp.hook_log VALUES (?, 'committed')").run(event.approval_id);
-    }] });
+    } });
     hookLog(f);
     f.core.decide('desktop', f.approve(), () => f.session);
     await observeCoreRuntimeV1('worker_execution', () => f.core.processing.appendFinalizedApprovalsToV4(signal()), {
@@ -57,7 +57,7 @@ describe('approval publisher: the brief', () => {
   });
   it('does not claim publication when a hook rolls back and observation failures cannot undo a later commit', async () => {
     let fail = true;
-    const f = await approvalCoreFixture({ after_record: [() => { if (fail) throw new Error('hook failed'); }] });
+    const f = await approvalCoreFixture({ after_record: () => { if (fail) throw new Error('hook failed'); } });
     f.core.decide('desktop', f.approve(), () => f.session);
     const observations: CoreRuntimeObservationV1[] = [];
     await expect(observeCoreRuntimeV1('worker_execution', () => f.core.processing.appendFinalizedApprovalsToV4(signal()), {
@@ -72,9 +72,9 @@ describe('approval publisher: the brief', () => {
     expect(publishedCount(f)).toBe(1);
     expect(f.recordCount()).toBe(1);
   });
-  it('runs every hook once inside the receipt transaction, even after a crash between append and receipt', async () => {
+  it('runs the hook once inside the receipt transaction, even after a crash between append and receipt', async () => {
     const calls: unknown[] = [];
-    const f = await approvalCoreFixture({ after_record: [(tx, event) => { expect(tx.inTransaction).toBe(true); calls.push(event); }] });
+    const f = await approvalCoreFixture({ after_record: (tx, event) => { expect(tx.inTransaction).toBe(true); calls.push(event); } });
     f.core.decide('desktop', f.approve(), () => f.session);
     const interrupted = await f.withAppend(async (input, append) => { await append(input); throw new Error('crash after append'); });
     await expect(interrupted.processing.appendFinalizedApprovalsToV4(new AbortController().signal)).rejects.toThrow('crash');
@@ -88,7 +88,7 @@ describe('approval publisher: the brief', () => {
   });
   it('writes no record and runs no hook for a rejection', async () => {
     const calls: unknown[] = [];
-    const f = await approvalCoreFixture({ after_record: [(_tx, e) => calls.push(e)] });
+    const f = await approvalCoreFixture({ after_record: (_tx, e) => calls.push(e) });
     f.core.decide('desktop', f.reject(), () => f.session);
     await f.core.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
     expect(f.recordCount()).toBe(0);
@@ -99,13 +99,13 @@ describe('approval publisher: the brief', () => {
 });
 
 describe('approval publisher: hooks', () => {
-  it('gives each hook the transaction, the written receipt, the record and its proposal, the reviewer and the decision time', async () => {
+  it('gives the hook the transaction, the written receipt, the record and its proposal, the reviewer and the decision time', async () => {
     const seen: { event: AfterApprovedRecordEventV1; in_transaction: boolean; stored: unknown }[] = [];
-    const f = await approvalCoreFixture({ after_record: [(tx, event) => {
+    const f = await approvalCoreFixture({ after_record: (tx, event) => {
       seen.push({ event, in_transaction: tx.inTransaction,
         stored: tx.prepare(`SELECT json_extract(record.value, '$.record_sha256') FROM authority_approval_decisions_v1, json_each(receipt_json, '$.records') AS record
           WHERE approval_id=? AND json_extract(record.value, '$.approval_id')=?`).pluck().get(event.proposal_approval_id, event.approval_id) });
-    }] });
+    } });
     f.core.decide('desktop', f.approve(), () => f.session);
     await f.core.processing.appendFinalizedApprovalsToV4(signal());
     expect(seen).toHaveLength(1);
@@ -123,52 +123,69 @@ describe('approval publisher: hooks', () => {
     expect(Object.isFrozen(event)).toBe(true);
     expect(Object.isFrozen(event.reviewer)).toBe(true);
   });
-  it('runs hooks in registration order and rolls the receipt back when one throws', async () => {
+  it('rolls the receipt and the hook\'s writes back when the hook throws, then runs it once on the retry', async () => {
     let failures = 1;
-    const f = await approvalCoreFixture({ after_record: [
-      (tx, e) => { tx.prepare("INSERT INTO temp.hook_log VALUES (?, 'A')").run(e.approval_id); },
-      (tx, e) => { if (failures-- > 0) throw new Error('hook B failed'); tx.prepare("INSERT INTO temp.hook_log VALUES (?, 'B')").run(e.approval_id); },
-    ] });
+    const f = await approvalCoreFixture({ after_record: (tx, e) => {
+      tx.prepare("INSERT INTO temp.hook_log VALUES (?, 'A')").run(e.approval_id);
+      if (failures-- > 0) throw new Error('hook failed');
+    } });
     hookLog(f);
     f.core.decide('desktop', f.approve(), () => f.session);
-    await expect(f.core.processing.appendFinalizedApprovalsToV4(signal())).rejects.toThrow('hook B failed');
+    await expect(f.core.processing.appendFinalizedApprovalsToV4(signal())).rejects.toThrow('hook failed');
     expect(f.receipt()).toBeNull();
     expect(logged(f)).toEqual([]);
     expect(f.recordCount()).toBe(1);
     await f.core.processing.appendFinalizedApprovalsToV4(signal());
-    expect(logged(f)).toEqual(['A', 'B']);
+    expect(logged(f)).toEqual(['A']);
     expect(publishedCount(f)).toBe(1);
     await f.core.processing.appendFinalizedApprovalsToV4(signal());
-    expect(logged(f)).toEqual(['A', 'B']);
+    expect(logged(f)).toEqual(['A']);
   });
-  it('accepts synchronous hooks that return a value', async () => {
-    const calls: AfterApprovedRecordEventV1[] = [];
-    // Each returns a value (a RunResult, a number); only a thenable is refused.
-    const returning: ((tx: import('better-sqlite3').Database, e: AfterApprovedRecordEventV1) => unknown)[] = [
-      (tx, e) => tx.prepare("INSERT INTO temp.hook_log VALUES (?, 'run')").run(e.approval_id),
-      (_tx, e) => calls.push(e),
-    ];
-    const f = await approvalCoreFixture({ after_record: returning as AfterApprovedRecordHookV1[] });
+  it('rolls back the hook\'s writes for an earlier record of the group when it throws on a later one', async () => {
+    let calls = 0;
+    const f = await approvalCoreFixture({ after_record: (tx, e) => {
+      tx.prepare("INSERT INTO temp.hook_log VALUES (?, 'A')").run(e.approval_id);
+      if (++calls === 2) throw new Error('second record failed');
+    } });
+    hookLog(f);
+    f.core.decide('desktop', f.approve({ routes: f.routes(id => ({ 'decision-1': [f.projectA], 'act-1': [f.projectA, f.projectB], 'act-2': [] })[id] ?? null) }), () => f.session);
+    await expect(f.core.processing.appendFinalizedApprovalsToV4(signal())).rejects.toThrow('second record failed');
+    expect(f.receipt()).toBeNull();
+    expect(logged(f)).toEqual([]);
+    expect(f.recordCount()).toBe(3);
+    await f.core.processing.appendFinalizedApprovalsToV4(signal());
+    expect(logged(f)).toHaveLength(3);
+    expect(publishedCount(f)).toBe(1);
+  });
+  it('accepts a synchronous hook that returns a value, an object or a number', async () => {
+    // A RunResult, then push's length; only a thenable is refused.
+    const returning: (tx: import('better-sqlite3').Database, e: AfterApprovedRecordEventV1) => unknown =
+      (tx, e) => tx.prepare("INSERT INTO temp.hook_log VALUES (?, 'run')").run(e.approval_id);
+    const f = await approvalCoreFixture({ after_record: returning as AfterApprovedRecordHookV1 });
     hookLog(f);
     f.core.decide('desktop', f.approve(), () => f.session);
     await f.core.processing.appendFinalizedApprovalsToV4(signal());
     expect(publishedCount(f)).toBe(1);
     expect(logged(f)).toEqual(['run']);
+    const calls: AfterApprovedRecordEventV1[] = [];
+    const g = await approvalCoreFixture({ after_record: (_tx, e) => calls.push(e) });
+    g.core.decide('desktop', g.approve(), () => g.session);
+    await g.core.processing.appendFinalizedApprovalsToV4(signal());
+    expect(publishedCount(g)).toBe(1);
     expect(calls).toHaveLength(1);
   });
-  it('refuses async hook functions and after_record entries that are not functions at registration', async () => {
+  it('refuses an async hook function and an after_record that is not a function at registration', async () => {
     const f = await approvalCoreFixture();
     let ran = 0;
     const hook = async () => { ran++; throw new Error('x'); };
-    expect(() => createApprovalPublisherV1(f.db, f.context, [hook as unknown as AfterApprovedRecordHookV1])).toThrow(TypeError);
-    expect(() => createApprovalPublisherV1(f.db, f.context, [hook as unknown as AfterApprovedRecordHookV1])).toThrow(/synchronous/);
-    await expect(f.create({}, { after_record: [async () => {}] as unknown as AfterApprovedRecordHookV1[] })).rejects.toThrow(TypeError);
-    await expect(createApprovalCoreV1(f.db, f.context, { suggestions: () => [], projects: () => {}, after_record: [async function* () {}] as unknown as AfterApprovedRecordHookV1[] })).rejects.toThrow(/synchronous/);
-    for (const bad of [[1], [null], ['hook'], [{}]] as unknown as AfterApprovedRecordHookV1[][]) {
+    expect(() => createApprovalPublisherV1(f.db, f.context, hook as unknown as AfterApprovedRecordHookV1)).toThrow(TypeError);
+    expect(() => createApprovalPublisherV1(f.db, f.context, hook as unknown as AfterApprovedRecordHookV1)).toThrow(/synchronous/);
+    await expect(f.create({}, { after_record: (async () => {}) as unknown as AfterApprovedRecordHookV1 })).rejects.toThrow(TypeError);
+    await expect(createApprovalCoreV1(f.db, f.context, { suggestions: () => [], projects: () => {}, after_record: (async function* () {}) as unknown as AfterApprovedRecordHookV1 })).rejects.toThrow(/synchronous/);
+    for (const bad of [1, null, 'hook', {}, [() => {}]] as unknown as AfterApprovedRecordHookV1[]) {
       expect(() => createApprovalPublisherV1(f.db, f.context, bad)).toThrow(TypeError);
       await expect(f.create({}, { after_record: bad })).rejects.toThrow(TypeError);
     }
-    expect(() => createApprovalPublisherV1(f.db, f.context, 'hooks' as unknown as AfterApprovedRecordHookV1[])).toThrow(TypeError);
     f.core.decide('desktop', f.approve(), () => f.session);
     await f.core.processing.appendFinalizedApprovalsToV4(signal());
     expect(ran).toBe(0);
@@ -179,7 +196,7 @@ describe('approval publisher: hooks', () => {
     restore.push(() => process.off('unhandledRejection', unhandled));
     const f = await approvalCoreFixture();
     f.core.decide('desktop', f.approve(), () => f.session);
-    const promising = f.publisher([(() => Promise.reject(new Error('late'))) as unknown as AfterApprovedRecordHookV1]);
+    const promising = f.publisher((() => Promise.reject(new Error('late'))) as unknown as AfterApprovedRecordHookV1);
     await expect(promising.appendFinalizedApprovalsToV4(signal())).rejects.toThrow('returned a promise');
     expect(f.receipt()).toBeNull();
     expect(f.recordCount()).toBe(1);
@@ -187,7 +204,7 @@ describe('approval publisher: hooks', () => {
     await new Promise(resolve => setImmediate(resolve));
     expect(unhandled).not.toHaveBeenCalled();
     let calls = 0;
-    await f.publisher([() => { calls++; }]).appendFinalizedApprovalsToV4(signal());
+    await f.publisher(() => { calls++; }).appendFinalizedApprovalsToV4(signal());
     expect(calls).toBe(1);
     expect(publishedCount(f)).toBe(1);
     expect(f.recordCount()).toBe(1);
@@ -205,8 +222,8 @@ describe('approval publisher: R30(d) two publishers', () => {
     const gate = new Promise<void>(resolve => { release = resolve; });
     const reached = new Promise<void>(resolve => { appended = resolve; });
     const shared = f.context.record_append;
-    const p1 = f.publisher([counter], undefined, { async append(input) { const result = await shared.append(input); appended(); await gate; return result; } });
-    const p2 = f.publisher([counter], peer);
+    const p1 = f.publisher(counter, undefined, { async append(input) { const result = await shared.append(input); appended(); await gate; return result; } });
+    const p2 = f.publisher(counter, peer);
     const first = p1.appendFinalizedApprovalsToV4(signal());
     await reached;
     await p2.appendFinalizedApprovalsToV4(signal());
@@ -227,13 +244,13 @@ describe('approval publisher: R30(d) two publishers', () => {
     let gateRelease!: () => void, reached!: () => void;
     const gate = new Promise<void>(resolve => { gateRelease = resolve; });
     const reachedP = new Promise<void>(resolve => { reached = resolve; });
-    const stub = f.publisher([() => { count++; }], undefined, { async append(input) {
+    const stub = f.publisher(() => { count++; }, undefined, { async append(input) {
       const result = await shared.append(input);
       reached(); await gate;
       const other = canonicalSha256('another record');
       return { ...result, record_sha256: other, receipt: { ...(result.receipt as object), body: { ...(result.receipt as { body: object }).body, record_sha256: other } } } as typeof result;
     } });
-    const real = f.publisher([() => { count++; }]);
+    const real = f.publisher(() => { count++; });
     const pending = stub.appendFinalizedApprovalsToV4(signal());
     await reachedP;
     await real.appendFinalizedApprovalsToV4(signal());
@@ -383,7 +400,7 @@ describe('approval publisher: records', () => {
     f.core.decide('desktop', f.approve({ routes: f.routes(id => id === 'decision-1' ? [f.projectA] : []) }), () => f.session);
     const captured: { approval_id: string; record_sha256: string; receipt: unknown }[] = [];
     const shared = f.context.record_append;
-    await f.publisher([], undefined, { async append(input) { const result = await shared.append(input); captured.push({ approval_id: input.approval_id, ...result }); return result; } })
+    await f.publisher(null, undefined, { async append(input) { const result = await shared.append(input); captured.push({ approval_id: input.approval_id, ...result }); return result; } })
       .appendFinalizedApprovalsToV4(signal());
     const records = receiptRecords(f);
     expect(records.map(record => [record.approval_id, record.project_ids])).toEqual([
@@ -410,12 +427,12 @@ describe('approval publisher: records', () => {
 });
 
 /** A meeting for THERM (project A), ECHO (project B) and its reviewer: three decisions, three actions with proposed owners, and four reasons. */
-async function destinationsFixture(after_record: readonly AfterApprovedRecordHookV1[] = []) {
+async function destinationsFixture(after_record?: AfterApprovedRecordHookV1) {
   const f = await approvalCoreFixture({
     decisions: [{ id: 'dec-1' }, { id: 'dec-2' }, { id: 'dec-3' }],
     actions: [{ id: 'act-1', owner: 'Rafael Moreno' }, { id: 'act-2', owner: 'Ana Lima' }, { id: 'act-3', owner: 'Jules Ortega' }],
     rationales: [{ id: 'why-1', supports: ['dec-1', 'dec-2'] }, { id: 'why-2', supports: ['dec-3'] }, { id: 'why-3', supports: [] }, { id: 'why-4', supports: ['act-3'] }, { id: 'why-5', supports: ['dec-1', 'act-2'] }],
-    after_record,
+    ...(after_record === undefined ? {} : { after_record }),
   });
   const THERM = [f.projectA], BOTH = [f.projectA, f.projectB];
   const to: Readonly<Record<string, readonly string[] | null>> = { 'dec-1': THERM, 'dec-2': BOTH, 'dec-3': null, 'act-1': BOTH, 'act-2': THERM, 'act-3': [] };
@@ -427,7 +444,7 @@ const ids = (signals: readonly { readonly id: string }[]) => signals.map(signal 
 describe('approval publisher: destinations', () => {
   it('publishes one record per destination group, each holding only its own items, reasons and owners', async () => {
     const events: AfterApprovedRecordEventV1[] = [];
-    const f = await destinationsFixture([(_tx, event) => { events.push(event); }]);
+    const f = await destinationsFixture((_tx, event) => { events.push(event); });
     expect(f.core.decide('desktop', f.request, () => f.session).kind).toBe('decided');
     await f.core.processing.appendFinalizedApprovalsToV4(signal());
     const records = f.records();
@@ -513,7 +530,7 @@ describe('approval publisher: destinations', () => {
   });
   it('retries after a partial append: the groups already in the log return duplicate, and one receipt names them all', async () => {
     const events: AfterApprovedRecordEventV1[] = [];
-    const f = await destinationsFixture([(_tx, event) => { events.push(event); }]);
+    const f = await destinationsFixture((_tx, event) => { events.push(event); });
     f.core.decide('desktop', f.request, () => f.session);
     let calls = 0;
     const interrupted = f.withAppend(async (input, append) => { if (++calls === 2) throw new Error('crash before the second group'); return append(input); });
@@ -552,7 +569,7 @@ describe('approval publisher: kept private inside a project (ADR-0049)', () => {
     const note = 'Totals show two decimals. Keep the supplier reserve SILVER-95.';
     const f = await approvalCoreFixture({ decisions: [{ id: 'dec-1' }, { id: 'dec-2' }], actions: [{ id: 'act-1' }, { id: 'act-2' }], note,
       rationales: [{ id: 'why-1', supports: ['dec-1', 'act-2'] }, { id: 'why-2', supports: [] }, { id: 'why-3', supports: ['dec-2'] }, { id: 'why-4', supports: ['dec-1', 'act-1'] }],
-      after_record: [(_tx, event) => { events.push(event); }] });
+      after_record: (_tx, event) => { events.push(event); } });
     const A = [f.projectA];
     // dec-1 and act-2 kept for the reviewer alone in A, dec-2 shared with A, act-1 Only me.
     const routes = f.routes(id => ({ 'dec-1': A, 'dec-2': A, 'act-1': [], 'act-2': A })[id] ?? null)
@@ -638,7 +655,7 @@ describe('approval publisher: failures', () => {
     const f = await approvalCoreFixture();
     f.core.decide('desktop', f.approve(), () => f.session);
     // Someone opens a transaction on the Authority handle while the append is in flight; a nested .immediate() would be a savepoint.
-    const open = f.publisher([], undefined, { append: async (input) => { const result = await f.context.record_append.append(input); f.db.exec('BEGIN'); return result; } });
+    const open = f.publisher(null, undefined, { append: async (input) => { const result = await f.context.record_append.append(input); f.db.exec('BEGIN'); return result; } });
     await expect(open.appendFinalizedApprovalsToV4(signal())).rejects.toThrow('idle Authority transaction');
     f.db.exec('ROLLBACK');
     expect(f.receipt()).toBeNull();
@@ -650,7 +667,7 @@ describe('approval publisher: failures', () => {
     f.core.decide('desktop', f.approve(), () => f.session);
     let ready = false, inspections = 0;
     const inspect = f.context.signer.inspect.bind(f.context.signer);
-    const publisher = createApprovalPublisherV1(f.db, { ...f.context, signer: { ...f.context.signer, inspect: async () => { inspections++; if (!ready) throw new Error('signer unavailable'); return inspect(); } } }, []);
+    const publisher = createApprovalPublisherV1(f.db, { ...f.context, signer: { ...f.context.signer, inspect: async () => { inspections++; if (!ready) throw new Error('signer unavailable'); return inspect(); } } }, undefined);
     await expect(publisher.appendFinalizedApprovalsToV4(signal())).rejects.toThrow('signer unavailable');
     expect(f.recordCount()).toBe(0);
     ready = true;

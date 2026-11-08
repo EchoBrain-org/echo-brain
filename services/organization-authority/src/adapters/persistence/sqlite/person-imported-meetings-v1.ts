@@ -17,7 +17,7 @@ interface ImportedMeetingTextV1 {
   readonly packet_title: string;
   readonly received_at: string;
   readonly source_id: string; readonly revision_id: string; readonly source_sha256: Sha256Digest; readonly representation_sha256: Sha256Digest;
-  readonly source_content_sha256: string; readonly manifest_json: string; readonly source_content_json: string; readonly lexical_score: number;
+  readonly source_content_sha256: string; readonly manifest_json: string; readonly source_content_json: string;
 }
 interface SourceRow {
   context_id: `cap_${string}`; source_id: string; revision_id: string; captured_at: string; revision_sha256: string; content_sha256: string; manifest_json: string; content_json: string;
@@ -84,7 +84,7 @@ export class SqlitePersonImportedMeetingsV1 {
       return { dates: meetingEvidenceDatesV1(meeting.time), api_version: 0, context_id: row.context_id, title: `Imported meeting: ${meeting.title ?? 'Untitled'}`, text, packet_title: importedMeetingPacketTitleV1(meeting),
         received_at: row.captured_at,
         source_id: row.source_id, revision_id: row.revision_id, source_sha256: `sha256:${row.revision_sha256}`, representation_sha256: canonicalSha256({ kind: 'imported-meeting-notes-v1', text }),
-        source_content_sha256: row.content_sha256, manifest_json: row.manifest_json, source_content_json: row.content_json, lexical_score: 0 };
+        source_content_sha256: row.content_sha256, manifest_json: row.manifest_json, source_content_json: row.content_json };
     });
   }
 

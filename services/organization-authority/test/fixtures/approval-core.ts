@@ -111,8 +111,8 @@ interface ApprovalCoreFixtureOptionsV1 {
   /** False leaves the first revision's source content unretained. */
   readonly retained?: boolean;
   readonly core?: Pick<ApprovalCoreOptionsV1, 'now' | 'after_record'>;
-  /** After-record hooks of every core and publisher the fixture builds (merged into `core`). */
-  readonly after_record?: readonly AfterApprovedRecordHookV1[];
+  /** The after-record hook of every core and publisher the fixture builds (merged into `core`). */
+  readonly after_record?: AfterApprovedRecordHookV1;
   readonly wake?: () => void;
 }
 
@@ -177,7 +177,7 @@ async function buildApprovalCoreFixture(base: ApprovalContextFixtureV1, options:
   const idle = (handle: Database.Database) => () => { if (handle.inTransaction) throw new Error('Shared approval port called inside a transaction'); };
   const boundState = bindApprovalWorkflowStateV1(state, idle(db));
   let wakes = 0;
-  const hooks = options.after_record ?? options.core?.after_record ?? [];
+  const hook = options.after_record ?? options.core?.after_record;
   const context: ApprovalWorkflowContextV1 = { ...base.context, state: boundState, on_terminal_action_queued: () => { wakes++; options.wake?.(); } };
   const coreOptions = (handle: Database.Database): ApprovalCoreOptionsV1 => {
     const handleIntake = handle === db ? intake : new SqlitePersonMeetingIntakeV1(handle, fixtureCheckpointCodec);
@@ -253,15 +253,15 @@ async function buildApprovalCoreFixture(base: ApprovalContextFixtureV1, options:
     recordCount: () => record.prepare('SELECT count(*) FROM organization_record_log').pluck().get() as number,
     decisionCount: () => db.prepare('SELECT count(*) FROM authority_approval_decisions_v1').pluck().get() as number,
     receipt: (id = approvalId) => db.prepare('SELECT receipt_json FROM authority_approval_decisions_v1 WHERE approval_id=?').pluck().get(id) as string | null | undefined,
-    /** A publisher on this handle with the fixture's hooks whose append goes through `wrap` (the shared appender is its second argument). */
+    /** A publisher on this handle with the fixture's hook whose append goes through `wrap` (the shared appender is its second argument). */
     withAppend: (wrap: (input: AppendInputV1, append: (input: AppendInputV1) => ReturnType<AppendV1>) => ReturnType<AppendV1>): { readonly processing: ApprovalWorkflowProcessingV1 } =>
-      ({ processing: createApprovalPublisherV1(db, { ...context, record_append: { append: input => wrap(input, next => base.context.record_append.append(next)) } }, hooks) }),
+      ({ processing: createApprovalPublisherV1(db, { ...context, record_append: { append: input => wrap(input, next => base.context.record_append.append(next)) } }, hook) }),
     create,
-    /** A publisher with these hooks (default: the fixture's) on this handle or a peer's, optionally through another append. */
-    publisher: (with_hooks: readonly AfterApprovedRecordHookV1[] = hooks, handle?: { readonly db: Database.Database; readonly context: ApprovalWorkflowContextV1 },
+    /** A publisher with this hook (default: the fixture's; null: none) on this handle or a peer's, optionally through another append. */
+    publisher: (with_hook: AfterApprovedRecordHookV1 | null = hook ?? null, handle?: { readonly db: Database.Database; readonly context: ApprovalWorkflowContextV1 },
       append: ApprovalWorkflowContextV1['record_append'] = base.context.record_append): ApprovalWorkflowProcessingV1 => {
       const target = handle ?? { db, context };
-      return createApprovalPublisherV1(target.db, { ...target.context, record_append: append }, with_hooks);
+      return createApprovalPublisherV1(target.db, { ...target.context, record_append: append }, with_hook ?? undefined);
     },
     /** The search snapshot's atoms of the record log, read with the production record protocols. */
     snapshotAtoms: (tamper?: (envelope: ReturnType<typeof verifyOrganizationRecordEnvelopeV4>) => unknown,

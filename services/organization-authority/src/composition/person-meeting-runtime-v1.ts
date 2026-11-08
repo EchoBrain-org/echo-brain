@@ -110,8 +110,8 @@ export function createPersonMeetingRuntimeV1(options: {
   /** One provider per tool; a stored source belongs to the provider whose cursor policy names its source adapter. */
   readonly providers: readonly PersonMeetingProviderV1[]; readonly processor: DecisionProcessorBundleV1;
   readonly approval: Omit<ApprovalWorkflowContextV1, 'state'>; readonly extraction_attempts: ExtractionAttemptStoreV1;
-  /** Static, core-independent approval core options: the decided_at test seam and the after-record hooks. */
-  readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'now' | 'after_record' | 'presenters'>;
+  /** Static, core-independent approval core options: the decided_at test seam, the after-record hook and the presenter. */
+  readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'now' | 'after_record' | 'presenter'>;
   /** Provider routes composed around the shared personal Authority runtime. */
   readonly provider_applications?: readonly ProviderHttpApplicationV1[];
   /** Test seam for MEETING_LANES. */
@@ -550,8 +550,8 @@ export function openPersonMeetingRuntimeV1(options: {
   readonly state_directory: string; readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
   readonly resources: PersonHttpRuntimeResourcesV1; readonly processor: DecisionProcessorBundleV1;
   readonly projectors: RecordPolicyFactProjectorRegistryV1; readonly providers: readonly PersonMeetingProviderV1[];
-  /** After-record hooks and presenters of the shared approval core. */
-  readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'after_record' | 'presenters'>;
+  /** The after-record hook and presenter of the shared approval core. */
+  readonly approval_core?: Pick<ApprovalCoreOptionsV1, 'after_record' | 'presenter'>;
   readonly provider_applications?: readonly ProviderHttpApplicationV1[];
   /** The service's observation scope, for the meeting lanes' roots. */
   readonly observation?: CoreRuntimeObservationScopeV1;
