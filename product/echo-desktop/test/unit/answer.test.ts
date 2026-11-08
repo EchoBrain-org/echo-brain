@@ -330,15 +330,16 @@ describe('an arranged answer (answer layout v2, ADR-0051)', () => {
     expect(written).toContain('\n\n> Start PVT once the soak passes. [3]\n\nSources\n');
   });
 
-  it('leaves out what the page does not show: an item a check left out, and a block left with nothing to show, with its title', () => {
-    // The soak plan, the readiness review and THERM-48 are not shown: one event goes, and the card, the steps and the quote with all they say.
-    const hidden = new Set([0, 2, 3]);
+  it('leaves out what the page does not show: an item a check left out, a table row, and a block left with nothing to show, with its title', () => {
+    // The soak plan, the readiness review, THERM-48 and THERM-55 are not shown: one event and one row go, and the card, the steps and the quote
+    // with all they say.
+    const hidden = new Set([0, 2, 3, 5]);
     const answer = arranged();
     const written = answerMarkdown(answer, BLOCK_NAMES, sourceGroups(answer.sources), citations => !citations.some(at => hidden.has(at)));
     expect(written).toBe([
       'Yes, PVT can start: the 72-hour soak passed on Oct 23. [2]', '',
       '2 Jira tickets are open', '', '| Item | Status | Owner | Due |', '| --- | --- | --- | --- |',
-      '| THERM-52 · Thermal pad supplier [5] | In Progress | Tomas Okafor | 2026-11-04 |', '| THERM-55 · Line fixture [6] | To Do | You | 2026-10-30 |', '',
+      '| THERM-52 · Thermal pad supplier [5] | In Progress | Tomas Okafor | 2026-11-04 |', '',
       '### Soak test', '', '- Oct 23, Noor Haddad: The 72-hour soak passed. [2]', '',
       '### Open risk', '', 'Sensor self-heating is still unexplained, so the soak report keeps it on the PVT watch list. [2]', '',
       ...BLOCK_SOURCES,

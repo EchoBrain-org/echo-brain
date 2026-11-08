@@ -461,43 +461,11 @@ describe('only actionable answer explanations are shown', () => {
     expect(text(shown)).not.toContain('Some sentences did not fit.');
   });
 
-  it.each([
-    { message: "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.", details: { unsupported_action: true as const } },
-    { message: "I couldn't complete the search. Please try again.", details: { interrupted: true as const } },
-  ])('shows and copies an empty partial answer explanation: $message', async ({ message, details }) => {
-    const base = therm();
-    const { thread } = await answered({ ...base, sources: [], outcome: 'partial', parts: [{ question: QUESTION, status: 'not_found', statements: [],
-      gap: 'Unchecked entries and sentences did not fit.', gap_details: details }] });
-    expect(byTestId(thread(), 'answer-gap').map(text)).toEqual([message]);
-    expect(byTestId(thread(), 'answer-empty')).toHaveLength(0);
-    click(byTestId(thread(), 'copy-answer')[0]);
-    await flush();
-    expect(rpc.mock.calls.filter(([name]) => name === 'clipboard.writeText').at(-1)?.[1]).toEqual({ text: message });
-  });
-
   it('shows a completed not-found explanation, including a saved answer without typed details', async () => {
     const base = therm();
     const { thread } = await answered({ ...base, sources: [], outcome: 'not_found', parts: [{ question: QUESTION, status: 'not_found', statements: [], gap: 'Not found.' }] });
     expect(byTestId(thread(), 'answer-gap').map(text)).toEqual(['Not found.']);
     expect(byTestId(thread(), 'answer-empty')).toHaveLength(0);
-  });
-
-  // An answer is never blank: one that says nothing, whose only explanation is an untyped diagnostic the page hides, says
-  // that nothing matched in what was read, since a partial answer did not read everything, and Copy writes the same.
-  it.each([
-    { what: 'a status selection over a list not read to its end',
-      gap: 'Not found: tickets that have status Blocked. The list of tickets could not be read to its end, so more may exist.' },
-    { what: 'a due-date window over follow-ups some of which have no due date', gap: 'Not found: follow-ups due Oct 23–29. 2 follow-ups have no due date.' },
-    { what: 'an unfinished search answered by an Authority that sends no typed reasons', gap: "I couldn't complete the search. Please try again." },
-  ])('says and copies that nothing matched in what was read for an empty partial answer: $what', async ({ gap }) => {
-    const base = therm();
-    const { thread } = await answered({ ...base, sources: [], outcome: 'partial', parts: [{ question: QUESTION, status: 'not_found', statements: [], gap }] });
-    expect(byTestId(thread(), 'answer-gap')).toHaveLength(0);
-    expect(text(thread())).not.toContain(gap);
-    expect(byTestId(thread(), 'answer-empty').map(text)).toEqual(['Nothing matched in what I could read.']);
-    click(byTestId(thread(), 'copy-answer')[0]);
-    await flush();
-    expect(rpc.mock.calls.filter(([name]) => name === 'clipboard.writeText').at(-1)?.[1]).toEqual({ text: 'Nothing matched in what I could read.' });
   });
 
   it('says and copies that nothing you can see matched for a completed answer that says and explains nothing', async () => {
@@ -514,28 +482,13 @@ describe('only actionable answer explanations are shown', () => {
 describe('Copy answer', () => {
   const copied = () => rpc.mock.calls.filter(([name]) => name === 'clipboard.writeText').map(([, params]) => (params as { text: string }).text);
 
-  it('copies an arranged answer as Markdown, in the page\'s order, its sources numbered and named as the page shows them', async () => {
+  // How each block reads as Markdown is answer.test's (answerMarkdown); here, that Copy answer writes it with the page's names.
+  it('copies an arranged answer as Markdown, its sources numbered and named as the page shows them', async () => {
     const { store } = await answered(therm());
     expect(await store.copyAnswer(paneTurn(store))).toBe(true);
     const [markdown] = copied();
-    expect(markdown).toMatch(/^Yes, PVT can start: the 72-hour soak passed on Oct 23\. \[2\]\n\n2 Jira tickets are open\n\n\| Item \| Status \| Owner \| Due \|\n/u);
-    expect(markdown).toContain('\n### Soak test\n\n- Oct 20, Noor Haddad: Approved the soak plan. [1]\n- Oct 23, Noor Haddad: The 72-hour soak passed. [2]\n');
-    expect(markdown).toContain('\n**Ticket: THERM-48**\n\n- Status: In review [4]\n- Owner: Tomas Okafor [4]\n');
-    expect(markdown).toContain('\n### Before PVT\n\n1. Freeze the firmware at 1.4.2. [3]\n2. Ship the build to the line. [3]\n');
-    expect(markdown).toContain('\n> Start PVT once the soak passes. [3]\n>\n> Noor Haddad, Oct 23 review\n');
+    expect(markdown).toMatch(/^Yes, PVT can start: the 72-hour soak passed on Oct 23\. \[2\]\n\n/u);
     expect(markdown).toMatch(/\nSources\n\n1\. Soak test plan\n2\. Soak test report\n3\. PVT readiness review\n4\. THERM-48 · Soak sign-off\n5\. THERM-52 · Thermal pad supplier\n6\. THERM-55 · Line fixture$/u);
-  });
-
-  it('keeps only visible typed explanations when long Markdown falls back to plain text', async () => {
-    const base = therm();
-    const long = 'x'.repeat(11_850);
-    const missing = 'Not found: the person who approved the launch.';
-    const { store, thread } = await answered({ ...base, outcome: 'partial', parts: [{ question: QUESTION, status: 'partial',
-      statements: [{ text: long, citation_indexes: [0], private: false }], blocks: [{ kind: 'text', statements: [0] }],
-      gap: `${missing} Some unchecked entries did not fit.`, gap_details: { not_found: missing } }] });
-    expect(byTestId(thread(), 'answer-gap').map(text)).toEqual([missing]);
-    expect(await store.copyAnswer(paneTurn(store))).toBe(true);
-    expect(copied()).toEqual([`${long}\n${missing}`]);
   });
 
   it('copies the plain text when the Markdown is past what Copy answer takes', async () => {

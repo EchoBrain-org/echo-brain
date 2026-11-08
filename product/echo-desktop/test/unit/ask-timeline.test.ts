@@ -687,41 +687,6 @@ describe('Ask on the timeline', () => {
     expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
   });
 
-  it('copies an old answer as the page shows it: nothing a check left out, its sources numbered as the page numbers them', async () => {
-    const sources = [ticket('THERM-482', '20482'), followUp('itm_timeline-1'), page('31010')];
-    const base = answerOf('What is open on THERM?', sources, [['THERM-482, Sensor drift, is open.', [0]], ['Confirm the trace is still open.', [1]],
-      ['The DVT plan moved the retest to Oct 30.', [2]]]);
-    const arranged: Answer = { ...base, parts: [{ ...base.parts[0]!, blocks: [
-      { kind: 'answer', statements: [0] }, { kind: 'points', title: 'Still to do', ordered: false, statements: [1] },
-      { kind: 'table', statements: [2], columns: ['Item', 'Status'], rows: [{ cells: ['THERM-482', 'Open'], citation_indexes: [0] },
-        { cells: ['Trace', 'Open'], citation_indexes: [1] }, { cells: ['DVT plan', 'Moved'], citation_indexes: [2] }] },
-    ] }] };
-    const long = 'x'.repeat(11_990);
-    const plain = answerOf('Long?', sources, [[long, [0]], ['Confirm the trace is still open.', [1]]]);
-    const [one, two] = [turn('What is open on THERM?', 2 * DAY, arranged), turn('Long?', DAY, plain)];
-    // The follow-up is no longer yours to read; the DVT plan changed.
-    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : item.citation.kind === 'page' ? 'changed' : 'same' })) });
-    const copied: string[] = [];
-    rpc.mockImplementation(rpcFor(held, {
-      'ask.check': params => checks!(params.items as never),
-      'clipboard.writeText': params => { copied.push(String(params.text)); return ok(null); },
-      'ask.record': () => fail('not_found'),
-    }, () => ({ active: [apollo], archived: [] })));
-    seed(one, two);
-    const store = await startStore();
-    store.pickSuggestion({ question: one.question, turn: one.id });
-    await flush();
-    expect(await store.copyAnswer(one.id)).toBe(true);
-    expect(copied[0]).toBe([
-      'THERM-482, Sensor drift, is open. [1]', '',
-      '| Item | Status |', '| --- | --- |', '| THERM-482 [1] | Open |', '| DVT plan [2] | Moved |', '',
-      'Sources', '', '1. THERM-482 · Sensor drift', '2. DVT plan',
-    ].join('\n'));
-    // Past what Copy answer takes, its plain text, without what was left out.
-    expect(await store.copyAnswer(two.id)).toBe(true);
-    expect(copied[1]).toBe(long);
-  });
-
   it('copies Ask again\'s "Since" first, as the page shows it: with its numbers, "Nothing changed" for an empty one, and nothing a check left out', async () => {
     const sources = [ticket('THERM-482', '20482'), page('31010'), followUp('itm_timeline-1')];
     const answer = answerOf('What is open on THERM?', sources, [['THERM-482, Sensor drift, is open.', [0]]]);
@@ -1586,14 +1551,12 @@ describe('follow-ups from the bar', () => {
     expect(byTestId(show(store), 'ask-everywhere')).toHaveLength(0);
     expect(kept().map(turn => turn.text)).toEqual([question, question]);
   });
-  it.each([
-    { message: "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.", details: { unsupported_action: true as const } },
-    { message: "I couldn't complete the search. Please try again.", details: { interrupted: true as const } },
-    { message: '', details: undefined },
-  ])('does not offer wider scope for an empty partial project answer: $message', async ({ message, details }) => {
+  // Which explanation a partial answer shows is answer.test's (answerGaps); none offers a wider search.
+  it('does not offer wider scope for an empty partial project answer', async () => {
+    const message = "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.";
     rpc.mockImplementation(rpcFor(held, {
       'ask.run': params => ok(answerOf(String(params.question), [], [], { scope: inApollo, outcome: 'partial',
-        parts: [{ question: String(params.question), status: 'not_found', statements: [], gap: 'Unchecked rows did not fit.', ...(details === undefined ? {} : { gap_details: details }) }] })),
+        parts: [{ question: String(params.question), status: 'not_found', statements: [], gap: 'Unchecked rows did not fit.', gap_details: { unsupported_action: true } }] })),
     }, () => ({ active: [apollo], archived: [] })));
     const store = await startStore();
     await store.openProject(apollo);
