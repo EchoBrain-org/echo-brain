@@ -124,9 +124,8 @@ export function Bar({ state }: { state: State }) {
 
 /**
  * One turn's answer as the page shows it (ADR-0047): its sources, numbered as
- * its sentences cite them, what the last check found of them, when one
- * applies (never to a turn asked in this Ask), and so which sentences and rows
- * it shows.
+ * its sentences cite them, what a check found unreadable, and so which
+ * sentences and rows it shows.
  */
 interface TurnView {
   readonly id: string;

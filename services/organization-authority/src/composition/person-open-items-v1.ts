@@ -531,7 +531,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
     async home(input: Parameters<PersonOpenItemsApplicationV1['home']>[0]) {
       const viewer = viewerOf(input.access_token, input.signal);
       const actor = { organization_id: viewer.organization, principal_id: viewer.principal, membership_id: viewer.membership };
-      const unsent =options.items.involving(viewer.organization, viewer.membership, { states: ['unsent'], limit: INVOLVING_MAX }).filter(row => approvedBy(row, viewer));
+      const unsent = options.items.involving(viewer.organization, viewer.membership, { states: ['unsent'], limit: INVOLVING_MAX }).filter(row => approvedBy(row, viewer));
       const open = new Map<string, ImpactItemRowV1>();
       // Leads take an item when its approver and owner have both left.
       for (const row of [...options.items.involving(viewer.organization, viewer.membership, { states: ['open'], limit: INVOLVING_MAX }), ...options.items.orphaned(viewer.organization, { limit: INVOLVING_MAX })]) {

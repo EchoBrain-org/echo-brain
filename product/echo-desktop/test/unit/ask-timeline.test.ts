@@ -1620,3 +1620,34 @@ describe('follow-ups from the bar', () => {
   });
 
 });
+
+describe('a number chosen after a check hid a source before it', () => {
+  it('opens and reads the record that number names, never the one the check hid', async () => {
+    const record = (digit: string, label: string): AnswerSource => {
+      const citation = { kind: 'approved_record', atom_id: sha(`a${digit}`), record_sha256: sha(`r${digit}`), policy_id: 'project-members-readable-person-v1' } as const;
+      return { kind: 'record', label, record: { record_sha256: citation.record_sha256, policy_id: citation.policy_id }, atom_id: citation.atom_id,
+        cited: { citation, kind: 'decision', label, visibility: 'team', ref: `meeting:${citation.record_sha256}` } as PersonAnswerCitationV8 };
+    };
+    const [hiddenOne, readOne] = [record('1', 'Pricing review'), record('2', 'Tuesday sync')];
+    const answer = answerOf('One?', [hiddenOne, readOne], [['Price held.', [0]], ['Pilot next week.', [1]]]);
+    // rpcFor clears the timeline files, so the turn is seeded after it.
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.check': params => ok({ items: (params.items as unknown[]).map((_, at) => ({ state: at === 0 ? 'unreadable' : 'same' })) }),
+      'ask.record': () => fail('unavailable'),
+    }, () => ({ active: [apollo], archived: [] })));
+    const one: TimelineTurn = { id: '00000000-0000-4000-8000-000000000001', asked_at: new Date(NOW.getTime() - DAY).toISOString(), text: 'One?',
+      question: 'One?', scope: answer.scope, answer };
+    seed(one);
+    const store = await startStore();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    await flush();
+    expect(store.checksOf(store.getState().timeline.turns[0]!)).toMatchObject({ 0: 'unreadable' });
+    const before = rpc.mock.calls.length;
+    store.chooseSource(0, null, one.id);
+    await flush();
+    expect(store.paneTarget()?.sources).toEqual([readOne]);
+    const reads = rpc.mock.calls.slice(before).filter(([method]) => method === 'ask.record')
+      .map(([, params]) => (params as { record: { record_sha256: string } }).record.record_sha256);
+    expect(reads).toEqual([sha('r2')]);
+  });
+});

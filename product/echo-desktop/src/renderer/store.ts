@@ -4211,8 +4211,8 @@ async function readRecords(gen: number): Promise<void> {
 }
 
 /**
- * A follow-up's row, as Home reads it now (rows only, ADR-0033): who owns it,
- * its status and its latest check. One the account can no longer see says
+ * A follow-up's row, as Home reads it now (rows only, ADR-0033): who owns it
+ * and its status. One the account can no longer see says
  * so; an account that is gone ends everything, as every read's does.
  */
 async function readFollowUpRow(gen: number, item_id: string): Promise<void> {

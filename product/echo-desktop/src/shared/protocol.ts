@@ -231,7 +231,7 @@ export type AnswerSource = (
   | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef; readonly item?: ItemRef }
   /**
    * One of ECHO's shared follow-ups (ADR-0040), by its item id: it opens its
-   * item page, where its owner, status and check are read again as Home shows them.
+   * item page, where its owner and status are read again as Home shows them.
    */
   | { readonly kind: 'follow_up'; readonly label: string; readonly item_id: string }
   /** One of your projects (research tool contract v1), by its id: it opens the project, as the sidebar does. */
