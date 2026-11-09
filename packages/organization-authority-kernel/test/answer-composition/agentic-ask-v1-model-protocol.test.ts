@@ -60,6 +60,9 @@ function corrected(read: () => unknown): CoreRuntimeModelCorrectionsV1 {
   return events.at(-1)!.model_corrections ?? {};
 }
 
+/** The tools a step schema offers, in its order. */
+const toolsOf = (schema: Schema): readonly string[] => ((schema.properties as Schema).actions.items.anyOf as Schema[]).map(variant => variant.properties.tool.enum[0] as string);
+
 describe("agentic Ask model protocol parity", () => {
   it("uses portable closed strings for request-scoped action choices", () => {
     const schema = createStepSchema(["meetings", "tickets"], ["E3", "E17"]);
@@ -95,25 +98,31 @@ describe("agentic Ask model protocol parity", () => {
   });
 
   it("can withhold finish without widening the discovery action set", () => {
-    const schema = createStepSchema(["meetings"], [], false);
-    const variants = ((schema.properties as Schema).actions as Schema).items as Schema;
-    const tools = (variants.anyOf as Schema[]).map(variant => ((variant.properties as Schema).tool as Schema).enum![0]);
-    expect(tools).toEqual(["search", "list"]);
+    expect(toolsOf(createStepSchema(["meetings"], [], false))).toEqual(["search", "list"]);
   });
 
-  it("can withhold list for a search-only run, in the schema and in the prompt", () => {
-    const schema = createStepSchema(["meetings", "tickets"], ["E1"], true, false);
-    const variants = ((schema.properties as Schema).actions as Schema).items as Schema;
-    expect((variants.anyOf as Schema[]).map(variant => ((variant.properties as Schema).tool as Schema).enum![0])).toEqual(["search", "open", "finish"]);
-    // Each step prompt describes the tools its schema offers: Ask's and a task's every tool the parser handles, a search-only
-    // run's all but list. Their wording is reviewed and measured by the research test, not pinned here (T-5).
-    const described = (prompt: string) => ["search", "open", "list", "finish"].filter(tool => prompt.includes(`${tool}, args`));
-    expect([ASK_STEP_PROMPT, STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT].map(described)).toEqual([["search", "open", "list", "finish"], ["search", "open", "list", "finish"], ["search", "open", "finish"]]);
+  it("can withhold list for a search-only run", () => {
+    expect(toolsOf(createStepSchema(["meetings", "tickets"], ["E1"], true, false))).toEqual(["search", "open", "finish"]);
   });
 
-  it("shows Ask's research an example step the parser reads as written (ADR-0041)", () => {
-    const example = JSON.parse(ASK_STEP_PROMPT.split("\n").at(-1)!) as unknown;
-    expect(corrected(() => parseStep(example, { lists: true }))).toEqual({});
+  // A step prompt as code reads it, never its wording (T-5): the tools it describes, the fields of the reply shape it shows,
+  // and its example steps, against the schema its run is given and the parser (ADR-0041 for Ask's).
+  it.each([
+    ["Ask's", ASK_STEP_PROMPT, createStepSchema(["meetings"], ["E1"], true, true, true), { lists: true }],
+    ["a task's", STEP_PROMPT, createStepSchema(["meetings"], ["E1"]), {}],
+    ["a search-only task's", SEARCH_ONLY_STEP_PROMPT, createStepSchema(["meetings"], ["E1"], true, false), {}],
+  ] as const)("shows %s research its schema's tools and fields, and example steps the parser reads as written", (_run, prompt, schema, options) => {
+    const every = toolsOf(createStepSchema(["meetings"], ["E1"]));
+    expect(every.filter(tool => prompt.includes(`${tool}, args`))).toEqual(toolsOf(schema));
+    // The first reply in the prompt is the shape it asks for; the others are examples.
+    const [shape, ...examples] = prompt.split("\n").filter(line => line.startsWith('{"parts":'));
+    const fields = (value: Schema) => Object.keys(value).sort();
+    const reply = JSON.parse(shape!) as Schema;
+    const part = (schema.properties as Schema).parts.items as Schema;
+    expect([fields(reply), fields(reply.parts[0]), fields(reply.parts[0].needs[0])])
+      .toEqual([fields(schema.properties as Schema), fields(part.properties), fields(part.properties.needs.items.properties)]);
+    expect(examples.length).toBeGreaterThan(0);
+    for (const example of examples) expect(corrected(() => parseStep(JSON.parse(example), options))).toEqual({});
   });
 
   it("requires a need kind in Ask's step schema only with the list tool (ADR-0041)", () => {
@@ -583,6 +592,72 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     const variants = (((answerBlocksSchema.properties as Schema).blocks as Schema).items as Schema).anyOf as Schema[];
     const most = (value: Schema): readonly string[] => Object.entries(value).flatMap(([key, child]) => key === "maxItems" ? [String(child)] : child !== null && typeof child === "object" ? most(child as Schema) : []);
     expect([(answerBlocksSchema.properties as Schema).blocks.maxItems, ...variants.map(variant => most(variant).join(","))]).toEqual([undefined, "2,12", "12", "12", "12", "12", "12", "12"]);
+  });
+
+  it("bounds each list and text in its reply schemas exactly where the parser cuts it", () => {
+    type Path = readonly (string | number)[];
+    // A reply with every field the schemas take, which the parser reads with no correction.
+    const full = {
+      lists: [{ id: "L1", where: { field: "owner", value: "Dana" }, members: ["E1"] }, { id: "L2", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } }],
+      blocks: [
+        { block: "answer", sentences: [{ text: "One.", evidence: ["E1"] }] },
+        { block: "text", title: "Why", sentences: [{ text: "Two.", evidence: ["E1"] }] },
+        { block: "points", title: "Next", ordered: true, items: [{ text: "Three.", evidence: ["E1"], member: "E1" }] },
+        { block: "table", title: "Owners", columns: ["Item", "Owner"], rows: [{ cells: ["Fix", "Ana"], evidence: ["E1"], member: "E1" }] },
+        { block: "timeline", title: "Week", events: [{ date: "2026-10-20", text: "Four.", who: "Ana", evidence: ["E1"] }] },
+        { block: "card", title: "THERM-48", kind: "ticket", facts: [{ label: "Status", value: "Open", evidence: ["E1"] }] },
+        { block: "quote", text: "Five.", from: "Ana", evidence: ["E1"] },
+      ],
+      not_found: ["the due date"],
+      since: [{ text: "Six.", evidence: ["E1"] }],
+    };
+    const put = (path: Path, value: unknown) => {
+      const copy = structuredClone(full) as Record<string, any>;
+      path.slice(0, -1).reduce((node, key) => node[key], copy)[path.at(-1)!] = value;
+      return copy;
+    };
+    /** `count` entries like `first`, each one the parser keeps: other ids, other words, or copies. */
+    const entries = (first: unknown, count: number) => Array.from({ length: count }, (_, at) => typeof first === "string"
+      ? (/^[EL]\d+$/u.test(first) ? `${first[0]}${at + 1}` : `${first} ${at + 1}`)
+      : (first as Schema).id === undefined ? structuredClone(first) : { ...(first as Schema), id: `L${at + 1}` });
+    /** Every list and every free text or id a schema takes, by name. */
+    const fieldsOf = (node: Schema, name: string): string[] => node.anyOf !== undefined ? (node.anyOf as Schema[]).flatMap(variant => fieldsOf(variant, `${name}(${variant.properties.block.enum[0]})`))
+      : node.type === "object" ? Object.entries(node.properties as Schema).flatMap(([key, child]) => fieldsOf(child, `${name}.${key}`))
+      : node.type === "array" ? [name, ...fieldsOf(node.items as Schema, `${name}[]`)]
+      : node.type === "string" && node.enum === undefined && node.pattern === undefined ? [name] : [];
+    for (const schema of [answerBlocksSchema, answerBlocksSinceSchema]) {
+      const since = schema === answerBlocksSinceSchema;
+      const read = (reply: unknown) => corrected(() => parseBlocksAnswer(reply, { since }));
+      const cuts = (path: Path, length: number) => "model_text_truncated" in read(put(path, "x".repeat(length)));
+      const caps = (path: Path, first: unknown, count: number) => "model_items_capped" in read(put(path, entries(first, count)));
+      expect(read(full)).toEqual({});
+      const seen = new Set<string>(); const differ: string[] = []; const ids = { list: [] as number[], item: [] as number[] };
+      const visit = (node: Schema, value: any, path: Path, name: string): void => {
+        if (node.anyOf !== undefined) return visit((node.anyOf as Schema[]).find(variant => variant.properties.block.enum[0] === value.block)!, value, path, `${name}(${value.block})`);
+        if (node.type === "object") { for (const [key, child] of Object.entries(node.properties as Schema)) if (key in value) visit(child, value[key], [...path, key], `${name}.${key}`); return; }
+        if (node.type === "array") {
+          seen.add(name);
+          const most = node.maxItems as number | undefined;
+          // Past its bound the answer's sentences read as text; every other list is cut at its bound, and the cut counted.
+          const kept = name.endsWith("(answer).sentences")
+            ? parseBlocksAnswer(put(path, entries(value[0], 64)), { since }).sentences.filter(sentence => sentence.item?.kind === "answer").length === most
+            : most === undefined ? !caps(path, value[0], 64) : !caps(path, value[0], most) && caps(path, value[0], most + 1);
+          if (!kept) differ.push(`${name}: ${most}`);
+          (value as unknown[]).forEach((entry, at) => visit(node.items as Schema, entry, [...path, at], `${name}[]`));
+          return;
+        }
+        if (node.type !== "string" || node.enum !== undefined || node.pattern !== undefined) return;
+        seen.add(name);
+        // An id is read by its form, E or L and up to four digits, and never cut: its bound is the room the schema gives it.
+        if (/\.(id|member|members\[\]|evidence\[\])$/u.test(name)) { ids[name.endsWith(".id") ? "list" : "item"].push(node.maxLength as number); return; }
+        const most = node.maxLength as number | undefined;
+        if (most === undefined ? cuts(path, 4_096) : cuts(path, most) || !cuts(path, most + 1)) differ.push(`${name}: ${most}`);
+      };
+      visit(schema, full, [], "reply");
+      expect([...seen].sort()).toEqual([...new Set(fieldsOf(schema, "reply"))].sort());
+      expect(differ).toEqual([]);
+      expect({ list: [...new Set(ids.list)], item: [...new Set(ids.item)] }).toEqual({ list: [8], item: [16] });
+    }
   });
 
   it("reads a reply's lists, what it did not find and, asked again, since, beside its blocks", () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { askQuestionCompletionProblemsV1, askResearchCompletionProblemsV1, type AskResearchListV1 } from "../../src/answer-composition/agentic-ask-research-state-v1.js";
 import { createAgenticAskV5 } from "../../src/answer-composition/agentic-ask-v1.js";
+import { ANSWER_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { agenticStartingSlotV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
 import { agenticListMembershipV1 } from "../../src/answer-composition/agentic-list-evidence-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
@@ -114,7 +115,7 @@ function askedByMara(replies: (input: StructuredGenerationInput) => unknown, des
 // ---- the runner ---------------------------------------------------------------------------------------------
 
 const prompts = (inputs: readonly StructuredGenerationInput[], writer: boolean) =>
-  inputs.filter(input => input.system_prompt.startsWith("You write") === writer).map(input => JSON.parse(input.user_prompt) as Prompt);
+  inputs.filter(input => input.system_prompt.startsWith(ANSWER_PROMPT) === writer).map(input => JSON.parse(input.user_prompt) as Prompt);
 /** Scripted replies: research's steps in order, with the question and need texts filled in, and the writer's replies in order. */
 function script(q: string, needs: readonly string[], steps: readonly Step[], writes: readonly unknown[]) {
   const queue = steps.map((value, index) => !("needs" in value) ? value : {
@@ -122,7 +123,7 @@ function script(q: string, needs: readonly string[], steps: readonly Step[], wri
     actions: value.actions,
   });
   const written = [...writes];
-  return { replies: (input: StructuredGenerationInput) => (input.system_prompt.startsWith("You write") ? written : queue).shift(), left: () => ({ steps: queue, writes: written }) };
+  return { replies: (input: StructuredGenerationInput) => (input.system_prompt.startsWith(ANSWER_PROMPT) ? written : queue).shift(), left: () => ({ steps: queue, writes: written }) };
 }
 async function run(row: Row) {
   const { replies, left } = script(row.q, row.needs ?? [row.need!], row.steps, row.w);
@@ -366,7 +367,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
           id: "L1", source: "pages", filter: OCT4_FILTER, filter_applied: OCT4_APPLIED, complete: true, count: 8, checked: 0, read_at: LIST_READ_AT, stated: true,
           members: PAGES.map((page, index) => ({ id: `E${index + 1}`, kind: "page", title: OCT4_TITLES[index], dates: page.dates, date: page.occurred_at, date_kind: "version_created", status: "current", checked: false })),
         }]);
-        const prompt = h.inputs.find(input => input.system_prompt.startsWith("You write"))!.user_prompt;
+        const prompt = h.inputs.find(input => input.system_prompt.startsWith(ANSWER_PROMPT))!.user_prompt;
         for (const page of PAGES) for (const hidden of [page.id, page.receipt_sha256, (page.citation as { permalink: string }).permalink]) expect(prompt).not.toContain(hidden);
       } },
     ...[EMPTY, useL1].map((writer): Row => ({
@@ -420,7 +421,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       // Only Ask's list rows read the line: research steps and citations keep the label (X12).
       check: ({ h, writer, response }) => {
         expect(writer[0]!.lists[0].members.map((member: { title: string }) => member.title)).toEqual(LINES);
-        for (const input of h.inputs.filter(value => !value.system_prompt.startsWith("You write"))) for (const line of LINES) expect(input.user_prompt).not.toContain(line);
+        for (const input of h.inputs.filter(value => !value.system_prompt.startsWith(ANSWER_PROMPT))) for (const line of LINES) expect(input.user_prompt).not.toContain(line);
         expect(response.citations.map((value: { label: string }) => value.label)).toEqual(Array.from({ length: 3 }, () => "DVT review (2026-10-01)")); } },
     ...([[WI, "C7b, CF9d"], [WS, "C7d"]] as const).map(([kind, id]): Row => ({
       id, name: kind === WI ? "states the complete meeting-action list beside the opened subset's sentence" : "notes the same sentence for a which_say need checking the list", ...MARA,

@@ -2,6 +2,7 @@ import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonAnswerResponseV8 } from '@echo-brain/organization-api';
 import { describe, expect, it, vi } from 'vitest';
 import { createAgenticAskV5, type AgenticAskAuditEntryV1 } from '../../src/answer-composition/agentic-ask-v1.js';
+import { ANSWER_BLOCKS_PROMPT, ANSWER_PROMPT, ASK_STEP_PROMPT } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
@@ -76,7 +77,7 @@ describe('Agentic Ask ticket release', () => {
       ]));
       expect(input.system_prompt).not.toContain('Documents (source "document") are PRDs, MRDs');
       expect(input.system_prompt).not.toContain('Look for Slack context when the question asks about current status');
-      if (input.system_prompt.startsWith('You write')) continue;
+      if (input.system_prompt.startsWith(ANSWER_PROMPT)) continue;
       const actions = (input.schema as { properties: { actions: { items: { anyOf: { properties: { tool: { enum: string[] }; args: { properties: { source?: { enum: string[] } } } } }[] } } } }).properties.actions.items.anyOf;
       for (const name of ['search', 'list']) {
         const action = actions.find((value: { properties: { tool: { enum: string[] } } }) => value.properties.tool.enum[0] === name);
@@ -185,9 +186,11 @@ describe('Agentic Ask ticket release', () => {
       expect(input.user_prompt).not.toContain('atlassian.net');
       expect(input.user_prompt).not.toContain('10001');
       expect(JSON.parse(input.user_prompt).source_catalog).toEqual(expect.arrayContaining([expect.objectContaining({ source: "tickets", metadata_only_list: true })]));
-      expect(input.system_prompt).toContain("Use each source's selector and capabilities from source_catalog");
-      expect(input.system_prompt).toContain("The server already applies scope and permissions");
     }
+    // A connected tool's guidance follows each base prompt as one paragraph, the same for research's steps and the writer.
+    const live = f.inputs[0]!.system_prompt.slice(`${ASK_STEP_PROMPT}\n\n`.length);
+    expect(live).toMatch(/^[^\n]+$/u);
+    expect(f.inputs.map(input => input.system_prompt)).toEqual([...f.inputs.slice(0, -1).map(() => `${ASK_STEP_PROMPT}\n\n${live}`), `${ANSWER_PROMPT}\n\n${live}\n\n${ANSWER_BLOCKS_PROMPT}`]);
     expect(f.auditEntries[0]).toMatchObject({ outcome: 'answered', model_calls: 4, citation_count: 1, receipt_digests: [metadata.receipt_sha256, uncitedMetadata.receipt_sha256, opened.receipt_sha256], response_sha256: canonicalSha256(answer) });
     expect(JSON.stringify(f.auditEntries)).not.toContain(body);
     expect(JSON.stringify(f.auditEntries)).not.toContain('atlassian.net');

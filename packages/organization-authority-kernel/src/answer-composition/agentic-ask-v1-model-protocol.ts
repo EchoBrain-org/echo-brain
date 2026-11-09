@@ -1036,8 +1036,8 @@ export const ANSWER_PROMPT = [
 ].join("\n");
 
 /** The two wording rules of an answer in blocks (tools/evals/ask-blocks, its wording cases): ANSWER_BLOCKS_PROMPT says them word for word. */
-export const NO_RESTATING_RULE = "- The app shows the answer right under the question, so never restate the question: the lead answers it at once. Call what the question already names \"it\" or a word or two (\"the follow-up\", \"the release\"), not its full title or identifier; name a follow-up by its title only when the question does not name it. Asked when \"Renew the vendor contract\" is due, the lead is \"It is due Nov 3.\", not \"The follow-up 'Renew the vendor contract' is due Nov 3.\"";
-export const LONG_IDS_ONCE_RULE = "- Write a long identifier, such as a release or build name, at most once in the answer, and only where a short reference would not be clear.";
+const NO_RESTATING_RULE = "- The app shows the answer right under the question, so never restate the question: the lead answers it at once. Call what the question already names \"it\" or a word or two (\"the follow-up\", \"the release\"), not its full title or identifier; name a follow-up by its title only when the question does not name it. Asked when \"Renew the vendor contract\" is due, the lead is \"It is due Nov 3.\", not \"The follow-up 'Renew the vendor contract' is due Nov 3.\"";
+const LONG_IDS_ONCE_RULE = "- Write a long identifier, such as a release or build name, at most once in the answer, and only where a short reference would not be clear.";
 
 const BLOCK_TITLE = "optional: a heading of a few words";
 /**

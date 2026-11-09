@@ -49,8 +49,8 @@ function scripted(replies: unknown[]) {
   const inputs: StructuredGenerationInput[] = [];
   return {
     inputs,
-    steps: () => inputs.filter(input => input.system_prompt.startsWith("You are Echo's research agent")),
-    writer: () => inputs.find(input => input.system_prompt.startsWith("You write Echo's final answer")),
+    steps: () => inputs.filter(input => input.system_prompt.startsWith(ASK_STEP_PROMPT)),
+    writer: () => inputs.find(input => input.system_prompt.startsWith(ANSWER_PROMPT)),
     model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); return replies.shift() ?? writerReply([]); } },
   };
 }
@@ -77,8 +77,10 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     const withTools = scripted([step('open', [{ tool: 'finish', args: {} }])]);
     await createAgenticAskV5({ desk: deskWith([JIRA, FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: withTools.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
     const toolsPrompt = withTools.steps()[0]!.system_prompt;
-    expect(toolsPrompt.startsWith(`${ASK_STEP_PROMPT}\n\nLive sources report current tool context`)).toBe(true);
-    expect(toolsPrompt.endsWith(`\n\n${FOLLOW_UPS_STEP_GUIDANCE}`)).toBe(true);
+    // The tools' live guidance, one paragraph, comes before the follow-ups guidance.
+    const live = toolsPrompt.slice(`${ASK_STEP_PROMPT}\n\n`.length, -`\n\n${FOLLOW_UPS_STEP_GUIDANCE}`.length);
+    expect(toolsPrompt).toBe(`${ASK_STEP_PROMPT}\n\n${live}\n\n${FOLLOW_UPS_STEP_GUIDANCE}`);
+    expect(live).toMatch(/^[^\n]+$/u);
     expect(listSources(withTools.steps()[0]!)).toEqual(['meetings', 'documents', 'tickets', 'follow_ups']);
 
     // A desk without follow-ups, as task research binds, leaves its prompts exactly what they were before follow-ups existed.

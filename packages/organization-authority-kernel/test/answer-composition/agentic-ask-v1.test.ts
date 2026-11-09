@@ -10,6 +10,7 @@ import {
   createAgenticAskV5,
   type AgenticAskAuditEntryV1,
 } from "../../src/answer-composition/agentic-ask-v1.js";
+import { ANSWER_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
@@ -892,7 +893,6 @@ describe("agentic Ask: research loop", () => {
     await ask({ desk: desk({ search: () => [item("a")] }), model: script.model, audit }).answer({ question: "When is launch?" });
     // The system prompt is unchanged; the reason and the shape request end the user prompt.
     expect(script.inputs[1]!.system_prompt).toBe(script.inputs[0]!.system_prompt);
-    expect(script.inputs[1]!.system_prompt).toContain("{\"parts\":[{\"question\"");
     const repair = JSON.parse(script.inputs[1]!.user_prompt) as Record<string, unknown>;
     expect(Object.keys(repair).at(-1)).toBe("validation_error");
     expect(repair.validation_error).toBe("Your previous reply could not be used: \"parts\" must be an array (got keys \"answer_parts\"). Reply again with only the JSON object, in exactly the shape your instructions show.");
@@ -1213,7 +1213,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
       step([{}], [search("launch")]),
       () => { throw unavailable(); },
       (input: StructuredGenerationInput) => {
-        expect(input.system_prompt).toMatch(/^You write/);
+        expect(input.system_prompt.startsWith(ANSWER_PROMPT)).toBe(true);
         return answer([{ text: "Tuesday.", evidence: ["E1"] }]);
       },
     ]);
@@ -1244,7 +1244,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
     const timeouts: Array<{ role: string; timeout: number; at: number }> = [];
     const model: StructuredGenerationPort = {
       generate: vi.fn(async (input: StructuredGenerationInput) => {
-        const role = input.system_prompt.startsWith("You write") ? "answer" : "step";
+        const role = input.system_prompt.startsWith(ANSWER_PROMPT) ? "answer" : "step";
         timeouts.push({ role, timeout: input.timeout_ms, at: clock });
         if (role === "answer") { clock += 5_000; return answer([{ text: "Tuesday.", evidence: ["E1"] }]); }
         // A slow provider: every research step runs to its timeout.

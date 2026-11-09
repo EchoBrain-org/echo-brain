@@ -2,6 +2,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { validatePersonAnswerResponseV8, validatePersonFollowUpEvidenceV1, type PersonAskProgressStepEventV3 } from '@echo-brain/organization-api';
 import { describe, expect, it, vi } from 'vitest';
 import { createAgenticAskV5 } from '../../src/answer-composition/agentic-ask-v1.js';
+import { ASK_STEP_PROMPT } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from '../../src/shared/evidence-desk-v2.js';
@@ -31,7 +32,7 @@ const finish = (evidence: readonly string[] = ['L1']) => step([{ tool: 'finish',
 function scripted(replies: unknown[]) {
   const inputs: StructuredGenerationInput[] = [];
   return {
-    steps: () => inputs.filter(input => input.system_prompt.startsWith("You are Echo's research agent")),
+    steps: () => inputs.filter(input => input.system_prompt.startsWith(ASK_STEP_PROMPT)),
     model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); return replies.shift() ?? writerReply([]); } },
   };
 }

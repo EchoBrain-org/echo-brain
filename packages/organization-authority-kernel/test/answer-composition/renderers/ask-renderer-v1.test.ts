@@ -179,7 +179,7 @@ describe("Ask renderer", () => {
     expect(corrections).toEqual({ writer_unknown_id_dropped: 1, writer_uncited_sentence_dropped: 1 });
   });
 
-  // The Ask golden replays this fallback too, end to end.
+  // agentic-diagnostics-v1.test.ts replays this fallback too, end to end.
   it("falls back only to items research read in full when the writer fails", async () => {
     const read = record("read", "Approved: ship the enclosure in October.");
     const previewed = record("previewed", "Approved: the enclosure vendor changed.");

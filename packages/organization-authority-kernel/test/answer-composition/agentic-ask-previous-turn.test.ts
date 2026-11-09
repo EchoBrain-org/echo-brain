@@ -9,7 +9,7 @@ import {
 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
 import { createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
-import { ANSWER_SINCE_PROMPT, answerBlocksSchema, answerBlocksSinceSchema } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
+import { ANSWER_PROMPT, ANSWER_SINCE_PROMPT, answerBlocksSchema, answerBlocksSinceSchema } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { agenticAskAnswerSha256V1, compactAndValidateAgenticAskResponseV1 } from "../../src/answer-composition/agentic-ask-v1-response.js";
 import { FOLLOW_UP_RESOLVER_PROMPT, followUpResolutionSchema } from "../../src/answer-composition/agentic-follow-up-resolver-v1.js";
 import { AgenticAskDeadlineErrorV1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
@@ -53,7 +53,7 @@ function scripted(script: { readonly resolver?: readonly unknown[]; readonly ste
   const inputs: StructuredGenerationInput[] = [];
   const queue = { resolver: [...(script.resolver ?? [])], step: [...(script.steps ?? [])], writer: [...(script.writer ?? [])] };
   const roleOf = (input: StructuredGenerationInput) => input.system_prompt === FOLLOW_UP_RESOLVER_PROMPT ? "resolver" as const
-    : input.system_prompt.startsWith("You write Echo's final answer") ? "writer" as const : "step" as const;
+    : input.system_prompt.startsWith(ANSWER_PROMPT) ? "writer" as const : "step" as const;
   return {
     inputs, of: (role: "resolver" | "step" | "writer") => inputs.filter(input => roleOf(input) === role),
     model: { generate: async (input: StructuredGenerationInput) => {
@@ -263,7 +263,7 @@ describe("an Ask without the previous turn is today's, byte for byte (ADR-0047)"
     expect(plain.of("resolver")).toEqual([]);
     const [writer] = plain.of("writer");
     expect(writer!.schema).toBe(answerBlocksSchema);
-    expect(writer!.system_prompt).not.toContain("Asked again");
+    expect(writer!.system_prompt).not.toContain(ANSWER_SINCE_PROMPT);
     expect(JSON.parse(writer!.user_prompt)).not.toHaveProperty("earlier");
     for (const key of ["question", "since", "choices"]) expect(absent).not.toHaveProperty(key);
   });
