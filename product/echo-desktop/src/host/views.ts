@@ -6,7 +6,7 @@
 import type {
   Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskRead, AskScope, AskSearched, AskStep, Audience, ConnectedTools,
   CreatedProject, DocumentSummary, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, MemberPage, Opened,
-  ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef,
+  ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordPolicy, RecordRead,
   RecordSection, SourceEvidence, SourceRef, ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
 import {
@@ -15,7 +15,7 @@ import {
   validateProjectCreateReceiptV1, validateProjectListV2,
   validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1,
   type PersonAnswerCitationV8, type PersonAskReceiptRowV3, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
-  type PersonOpenItemV1, type PersonOpenMeetingAtomV1, type PersonOpenMeetingV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
+  type PersonOpenItemV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
   type PersonCitedRecordSectionV1,
 } from '@echo-brain/organization-api';
 import { externalSourcePermalink } from '../shared/protocol.js';
@@ -130,11 +130,11 @@ export function listView(raw: unknown, scope: ListScope): ListPage {
 }
 
 /**
- * The item asked for, opened by its ref: a note's text, one page of a
- * document's text, or one page of a meeting's approved record. `first` says
- * the page was read without a cursor.
+ * The item asked for, opened by its ref: a note's text, or one page of an
+ * imported meeting's or a document's text. A meeting is never opened here:
+ * the reader reads its record as the source pane does (recordView).
  */
-export function openView(raw: unknown, ref: ItemRef, first: boolean): Opened {
+export function openView(raw: unknown, ref: ItemRef): Opened {
   const opened = validated(validatePersonOpenResponseV1, unwrap(raw));
   if (opened.ref !== `${ref.kind}:${ref.id}` || !('item' in opened)) throw new ViewError();
   const item = listItem(opened.item);
@@ -162,7 +162,7 @@ export function openView(raw: unknown, ref: ItemRef, first: boolean): Opened {
       } };
     }
     case 'meeting':
-      return { kind: 'meeting', record: meetingRecord(opened as PersonOpenMeetingV1, item, first), next_cursor: next };
+      throw new ViewError();
   }
 }
 
@@ -261,11 +261,16 @@ const SHA256 = /^sha256:[a-f0-9]{64}$/;
 const REVISION = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const POLICIES: ReadonlySet<string> = new Set<RecordPolicy>(['restricted-reviewer-person-v2', 'project-members-readable-person-v1']);
 
-/** A record the page may ask the host to read: a well-formed digest and a known policy. */
-export function isRecordRef(value: unknown): value is RecordRef {
+/**
+ * A record the page may ask the host to read: a well-formed digest, and a known policy when an answer cites it; a
+ * meeting the reader opens by its ref names none. Anything else is null.
+ */
+export function recordRead(value: unknown): RecordRead | null {
   const record = value !== null && typeof value === 'object' ? value as Json : {};
-  return typeof record.record_sha256 === 'string' && SHA256.test(record.record_sha256) &&
-    typeof record.policy_id === 'string' && POLICIES.has(record.policy_id);
+  if (typeof record.record_sha256 !== 'string' || !SHA256.test(record.record_sha256)) return null;
+  if (record.policy_id === undefined) return { record_sha256: record.record_sha256 };
+  return typeof record.policy_id === 'string' && POLICIES.has(record.policy_id)
+    ? { record_sha256: record.record_sha256, policy_id: record.policy_id as RecordPolicy } : null;
 }
 
 /**
@@ -418,10 +423,8 @@ export function openItemsView(result: PersonRunsResultsV1['items']): OpenItemsVi
   return { items: result.items.map(openItemView), next_cursor: result.next_cursor, summary: result.summary, stages: result.stages };
 }
 
-/** Longest text the source pane shows, in characters; longer is cut and marked. */
+/** Longest text the source pane shows, in characters; longer is cut and marked. The reader shows each whole. */
 const MAX_SOURCE_TEXT = 2_000;
-/** Longest part of an approved item the reader shows, in characters: more than one part holds (3 KiB). */
-const MAX_READER_TEXT = 4_000;
 
 /**
  * Text as the source pane or the reader may show it: control and format
@@ -446,125 +449,34 @@ const RECORD_VISIBILITY: Readonly<Record<RecordPolicy, ApprovedRecord['visibilit
   'project-members-readable-person-v1': 'project', 'restricted-reviewer-person-v2': 'approver',
 };
 
-/** A section of a cited record, as the pane shows it: only a decision still open says so, and each item keeps the atom id its citations carry. */
-function citedSection({ items, more }: PersonCitedRecordSectionV1): RecordSection {
-  return { more, items: items.map(({ atom_id, text: itemText, status, owner, quotes }) => ({
-    text: sourceText(itemText)!, ...(status === 'proposed' || status === 'unresolved' ? { status } : {}), ...(owner === undefined ? {} : { owner }),
-    excerpts: quotes.map(({ quote, started_at }) => ({ quote: sourceText(quote)!, ...(started_at === undefined ? {} : { at: started_at }) })), atom_id,
-  })) };
-}
-
 /**
  * The one approved record asked for, as `person records --record-sha256
- * --brief` prints it (organization-api's cited record): only the record and
- * policy the answer cited, each text as the pane shows it.
+ * --brief` prints it (organization-api's cited record), only that record: one
+ * an answer cites, only under the policy it cited, as the source pane shows
+ * it, each text at most 2,000 characters; or, asked with no policy, a meeting
+ * opened by its ref, as the reader shows it, every text whole and without the
+ * quotes the reader never shows (ADR-0024). Only a decision still open says
+ * so, and each item keeps the atom id its citations carry.
  */
-export function recordView(raw: unknown, asked: RecordRef): ApprovedRecord {
+export function recordView(raw: unknown, asked: RecordRead): ApprovedRecord {
   const record = validated(validatePersonCitedRecordV1, unwrap(raw));
-  if (record.record_sha256 !== asked.record_sha256 || record.policy_id !== asked.policy_id) throw new ViewError();
+  const pane = asked.policy_id !== undefined;
+  if (record.record_sha256 !== asked.record_sha256 || (pane && record.policy_id !== asked.policy_id)) throw new ViewError();
+  const shown = (value: string) => sourceText(value, pane ? MAX_SOURCE_TEXT : Number.POSITIVE_INFINITY)!;
+  const section = ({ items }: PersonCitedRecordSectionV1): RecordSection => ({ items: items.map(({ atom_id, text: itemText, status, owner, quotes }) => ({
+    text: shown(itemText), ...(status === 'proposed' || status === 'unresolved' ? { status } : {}), ...(owner === undefined ? {} : { owner }),
+    excerpts: pane ? quotes.map(({ quote, started_at }) => ({ quote: shown(quote), ...(started_at === undefined ? {} : { at: started_at }) })) : [], atom_id,
+  })) });
   return {
-    ...(record.title === undefined ? {} : { title: sourceText(record.title)! }),
+    ...(record.title === undefined ? {} : { title: shown(record.title) }),
+    ...(record.approved_at === undefined ? {} : { approved_at: record.approved_at }),
     ...(record.started_at === undefined ? {} : { started_at: record.started_at }),
     ...(record.timezone === undefined ? {} : { timezone: record.timezone }),
     all_day: record.all_day,
-    ...(record.approved_by === undefined ? {} : { approved_by: sourceText(record.approved_by)! }),
-    participants: record.participants.map(name => sourceText(name)!), participants_more: record.participants_more,
+    ...(record.approved_by === undefined ? {} : { approved_by: shown(record.approved_by) }),
+    participants: record.participants.map(shown), participants_more: record.participants_more,
     visibility: RECORD_VISIBILITY[record.policy_id],
-    decisions: citedSection(record.decisions), actions: citedSection(record.actions), rationales: citedSection(record.rationales),
-  };
-}
-
-const SECTIONS: Readonly<Record<PersonOpenMeetingAtomV1['kind'], 'decisions' | 'actions' | 'rationales'>> = { decision: 'decisions', action: 'actions', rationale: 'rationales' };
-
-/**
- * One part of a long approved item: controls made spaces, but not trimmed,
- * since the parts join exactly as they were cut.
- */
-function partText(text: string): string {
-  return text.replace(/[\p{Cc}\p{Cf}]/gu, ' ');
-}
-
-/** Text the reader shows, controls made spaces and trimmed: a page with nothing left of it is refused. */
-function shownText(text: string): string {
-  const shown = sourceText(text, MAX_READER_TEXT);
-  if (shown === undefined) throw new ViewError();
-  return shown;
-}
-
-/** A long item whose parts are all read: its whole text, trimmed, and no parts left to join. */
-function whole(item: RecordItem): RecordItem {
-  const { parts: _parts, ...rest } = item;
-  const joined = item.text.trim();
-  if (joined === '') throw new ViewError();
-  return { ...rest, text: joined };
-}
-
-/**
- * One page of a meeting's approved record, as the reader shows it. Only the
- * first page describes the meeting (when, who was there, who approved it).
- * A long item comes in parts: each part goes on the item before it, and only
- * a page read with a cursor may begin with a part that goes on the page
- * before. Who can read it follows the row: everyone, a project's members, or
- * the approver. Every id stays behind.
- */
-function meetingRecord(page: PersonOpenMeetingV1, item: ListItem, first: boolean): ApprovedRecord {
-  if ((page.meeting !== undefined) !== first) throw new ViewError();
-  const sections: Record<'decisions' | 'actions' | 'rationales', RecordItem[]> = { decisions: [], actions: [], rationales: [] };
-  // The section of a long item whose parts are not all read yet: the next part must go on it.
-  let open: 'decisions' | 'actions' | 'rationales' | null = null;
-  page.atoms.forEach((atom, position) => {
-    const section = SECTIONS[atom.kind];
-    const items = sections[section];
-    const part = atom.part ?? null;
-    if (part && part.index > 1) {
-      const { index, count } = part;
-      const last = items.at(-1);
-      let joined: RecordItem;
-      if (open === section && last?.parts && last.parts.to === index - 1 && last.parts.count === count) {
-        joined = { ...last, text: last.text + partText(atom.text), parts: { ...last.parts, to: index } };
-        items[items.length - 1] = joined;
-      } else if (position === 0 && !first) {
-        joined = { text: partText(atom.text), excerpts: [], parts: { from: index, to: index, count } };
-        items.push(joined);
-      } else {
-        throw new ViewError();
-      }
-      open = index === count ? null : section;
-      // Every part read here: the item is whole. One begun on the page before stays in parts, to be joined.
-      if (index === count && joined.parts!.from === 1) items[items.length - 1] = whole(joined);
-      return;
-    }
-    // A long item's parts all come before the next item.
-    if (open !== null) throw new ViewError();
-    // Only a decision has a status, and only an action an owner.
-    const status = atom.status === 'proposed' || atom.status === 'unresolved' ? atom.status : undefined;
-    const owner = sourceText(atom.owner);
-    const attributes = { ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }) };
-    if (part) {
-      items.push({ text: partText(atom.text), ...attributes, excerpts: [], parts: { from: 1, to: 1, count: part.count } });
-      open = section;
-      return;
-    }
-    items.push({ text: shownText(atom.text), ...attributes, excerpts: [] });
-  });
-
-  const meeting = page.meeting;
-  const participants = meeting?.participants.map(shownText) ?? [];
-  if (new Set(participants).size !== participants.length) throw new ViewError();
-  // Its approver or a project's members read an approved meeting: no record is organization-wide since the Team policy went.
-  if (item.visibility === 'team') throw new ViewError();
-  const approver = sourceText(meeting?.approved_by);
-  return {
-    title: item.title, added_at: item.added_at,
-    ...(meeting?.started_at === undefined ? {} : { started_at: meeting.started_at }),
-    ...(meeting?.timezone === undefined ? {} : { timezone: meeting.timezone }),
-    all_day: meeting?.all_day === true,
-    ...(approver === undefined ? {} : { approved_by: approver }),
-    participants, participants_more: meeting?.participants_more === true,
-    visibility: item.visibility === 'project' ? 'project' : 'approver',
-    decisions: { items: sections.decisions, more: false },
-    actions: { items: sections.actions, more: false },
-    rationales: { items: sections.rationales, more: false },
+    decisions: section(record.decisions), actions: section(record.actions), rationales: section(record.rationales),
   };
 }
 

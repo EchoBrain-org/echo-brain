@@ -162,7 +162,7 @@ async function authority(method: string, params: { project_id?: string; request?
     case 'projects.list': return ok({ items: [], next_cursor: null });
     case 'projects.members': return ok({ items: [], next_cursor: null });
     case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
-    case 'open.ref': return unavailable;
+    case 'open.ref': case 'ask.record': return unavailable;
     // A project's tools line: it reads nothing.
     case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
     case 'app.setUnresolved': case 'notice.show': case 'log.changes': return ok(null);

@@ -203,6 +203,15 @@ export interface RecordRef {
   readonly policy_id: RecordPolicy;
 }
 
+/**
+ * A record the host reads with `person records --record-sha256 --brief`: one an answer cites, under the policy it
+ * cited, for the source pane; or a meeting the reader opens by its ref, by its digest alone.
+ */
+export interface RecordRead {
+  readonly record_sha256: string;
+  readonly policy_id?: RecordPolicy;
+}
+
 /** What a connected tool keeps its items in: a Jira project or a Confluence space. */
 export type ToolContainerKind = 'jira_project' | 'confluence_space';
 
@@ -447,7 +456,10 @@ export interface SourceEvidence {
   readonly imported_meeting_review?: 'not_reviewed' | 'reviewed' | 'nothing_to_review';
 }
 
-/** One approved decision, action or rationale, with up to three excerpts that support it. */
+/**
+ * One approved decision, action or rationale: in the source pane with up to three excerpts that support it, in the
+ * reader with none (ADR-0024).
+ */
 export interface RecordItem {
   readonly text: string;
   /** Only a decision still open says so. */
@@ -455,26 +467,20 @@ export interface RecordItem {
   /** An action's owner, only as the approver confirmed it at approval. */
   readonly owner?: string;
   readonly excerpts: readonly { readonly quote: string; readonly at?: string }[];
-  /**
-   * A long item read in parts, while some are still unread: its text holds
-   * parts `from` to `to` of `count`, and the next page's first part goes on.
-   */
-  readonly parts?: { readonly from: number; readonly to: number; readonly count: number };
-  /** The item's id as an answer cites it (a digest, never its text): only on a record read for Ask's side panel. */
-  readonly atom_id?: string;
+  /** The item's id as an answer cites it (a digest, never its text): what the pane and the reader light it by. */
+  readonly atom_id: string;
 }
 
-/** At most 32 items; `more` says some were left out. */
+/** Every item of one kind, in the record's order. */
 export interface RecordSection {
   readonly items: readonly RecordItem[];
-  readonly more: boolean;
 }
 
-/** An approved meeting record, as the source pane or the reader shows it. The pane's texts are at most 2,000 characters; the reader's at most 4,000 a part, and a long item's parts are joined. */
+/** An approved meeting record, as the source pane or the reader shows it: the pane's texts at most 2,000 characters, the reader's whole. */
 export interface ApprovedRecord {
   readonly title?: string;
-  /** When it was approved (ISO 8601), as its row shows it: only on a record opened by its ref. */
-  readonly added_at?: string;
+  /** When it was approved (ISO 8601). */
+  readonly approved_at?: string;
   /** When the meeting started (ISO 8601), in which time zone, and whether it was all day. */
   readonly started_at?: string;
   readonly timezone?: string;
@@ -489,12 +495,11 @@ export interface ApprovedRecord {
   readonly rationales: RecordSection;
 }
 
-/** One item opened by its ref: a note's text, a page of a document's text, or a page of a meeting's approved record. */
+/** One item opened by its ref: an imported meeting's or a note's text, or a page of a document's text. A meeting opens with `ask.record`. */
 export type Opened =
   | { readonly kind: 'imported_meeting'; readonly content: ContextContent; readonly next_cursor: string | null }
   | { readonly kind: 'note'; readonly content: ContextContent }
-  | { readonly kind: 'document'; readonly document: DocumentText }
-  | { readonly kind: 'meeting'; readonly record: ApprovedRecord; readonly next_cursor: string | null };
+  | { readonly kind: 'document'; readonly document: DocumentText };
 
 /** One audience per item: only you, one project's members, several projects' members, or everyone. */
 export type Audience =
@@ -681,7 +686,7 @@ export interface HostMethods {
   'changes.read': { params: { expect: Expect }; result: PersonChangesV1 };
   /** One page of what you added, or of one project's notes, documents and meetings, newest first. */
   'list.page': { params: { expect: Expect; scope: ListScope; cursor?: string }; result: ListPage };
-  /** One item by its ref, under your current access: a document's text or a meeting's record a page at a time. */
+  /** One item by its ref, under your current access: a note's text, or an imported meeting's or a document's a page at a time. Never a meeting: the reader reads one with `ask.record`. */
   'open.ref': { params: { expect: Expect; ref: ItemRef; cursor?: string }; result: Opened };
   /** Save original…: the renderer names the file only by a handle main issued; main swaps in the path. */
   'documents.save': { params: { expect: Expect; document_id: string; save_handle: string }; result: null };
@@ -727,8 +732,11 @@ export interface HostMethods {
   /** Cancels an active Ask by its renderer-issued opaque id. */
   'ask.cancel': { params: { cancel_id: string }; result: null };
   'ask.source':{ params: { expect: Expect; scope: AskScope; ref: SourceRef }; result: SourceEvidence };
-  /** Reads one approved record an answer cites. */
-  'ask.record': { params: { expect: Expect; record: RecordRef }; result: ApprovedRecord };
+  /**
+   * Reads one approved record, whole: one an answer cites, under its policy, as the source pane shows it; or, with no
+   * policy, a meeting opened by its ref, as the reader shows it, with none of the quotes the reader never shows (ADR-0024).
+   */
+  'ask.record': { params: { expect: Expect; record: RecordRead }; result: ApprovedRecord };
   'writes.status': { params: { expect: Expect; request_id: string; kind: 'note' | 'document' }; result: WriteStatus };
   /** Resends a document's retained original under the same request. */
   'documents.retry': { params: { expect: Expect; request_id: string; audience: Audience }; result: Receipt };

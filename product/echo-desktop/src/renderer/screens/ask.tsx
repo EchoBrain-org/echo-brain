@@ -21,7 +21,7 @@ import {
   fullPageOffered, litAtoms, nothingLine, openCompose, openFullPage, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, setBarText, sourceName, submitBar, suggestionsShown, toggleEarlier, toggleSourceList, toggleTurn, turnOf, widenScope,
   UNTITLED,
-  type AskClarify, type AskTook, type PaneTarget, type Read, type RecordSectionKey, type State,
+  type AskClarify, type AskTook, type PaneTarget, type Read, type State,
 } from '../store.js';
 import { MAX_QUESTION, questionCount } from '../bar.js';
 import {
@@ -1080,32 +1080,31 @@ function Item({ item, on }: { item: RecordItem; on: boolean }) {
   );
 }
 
-const SECTIONS = [['decisions', 'Decisions', 'decision'], ['actions', 'Actions', 'action'], ['rationales', 'Rationale', 'rationale']] as const;
+const SECTIONS = [['decisions', 'Decisions'], ['actions', 'Actions'], ['rationales', 'Rationale']] as const;
 
 const VISIBILITY: Record<ApprovedRecord['visibility'], string> = { project: 'Visible to project members', approver: 'Only the approver' };
 
-/** Whether an item of a record is lit: by its section, its place there, and the item. */
-export type LitItem = (section: RecordSectionKey, index: number, item: RecordItem) => boolean;
+/** Whether an item of a record is lit. */
+export type LitItem = (item: RecordItem) => boolean;
 
-/** The items an answer or a named item cites, by atom id: as the pane lights them. */
-function byAtom(atoms: ReadonlySet<string>): LitItem {
-  return (_section, _index, item) => item.atom_id !== undefined && atoms.has(item.atom_id);
+/** The items an answer or a named item cites, by atom id: as the pane and the reader light them. */
+export function byAtom(atoms: ReadonlySet<string>): LitItem {
+  return item => atoms.has(item.atom_id);
 }
 
 /**
  * MEETING · APPROVED RECORD: who approved it, who was there, who can read it,
  * and what was approved. In the source pane, and in the reader, whose own
  * head names it and who can read it (`headed` false). The items an answer or
- * a named item cites are lit (`lit`): in the pane by atom id, in the reader
- * by their place. The first is scrolled into view once it shows.
+ * a named item cites are lit (`lit`), by atom id. The first is scrolled into
+ * view once it shows.
  */
 export function RecordDetail({ record, headed = true, lit }: { record: ApprovedRecord; headed?: boolean; lit?: LitItem }) {
   const participants = [...record.participants, ...(record.participants_more ? ['Additional participants not shown'] : [])];
   const detail = useRef<HTMLDivElement>(null);
-  const on = (section: RecordSectionKey, index: number, item: RecordItem) => lit?.(section, index, item) === true;
-  const found = SECTIONS.flatMap(([key]) => record[key].items.map((item, index) => [key, index, item] as const)).find(([key, index, item]) => on(key, index, item));
-  // Which item is first lit, so a later page read under it never scrolls back.
-  const first = found === undefined ? undefined : `${found[0]}:${found[1]}:${found[2].atom_id ?? ''}`;
+  const on = (item: RecordItem) => lit?.(item) === true;
+  // Which item is first lit, so the record read again never scrolls back to it.
+  const first = SECTIONS.flatMap(([key]) => record[key].items).find(on)?.atom_id;
   useLayoutEffect(() => {
     if (first !== undefined) detail.current?.querySelector('[data-cited="true"]')?.scrollIntoView({ block: 'center' });
   }, [first]);
@@ -1118,14 +1117,13 @@ export function RecordDetail({ record, headed = true, lit }: { record: ApprovedR
         {participants.length > 0 && <><dt>Participants</dt><dd>{participants.join(', ')}</dd></>}
         {headed && <><dt>Visibility</dt><dd data-testid="record-visibility">{VISIBILITY[record.visibility]}</dd></>}
       </dl>
-      {SECTIONS.map(([key, heading, kind]) => {
+      {SECTIONS.map(([key, heading]) => {
         const section = record[key];
         if (section.items.length === 0) return null;
         return (
           <div key={key} class="record-section" data-testid={`record-${key}`}>
             <div class="section-label">{heading}</div>
-            {section.items.map((item, index) => <Item key={index} item={item} on={on(key, index, item)} />)}
-            {section.more && <div class="record-item">Additional approved {kind} items are not shown.</div>}
+            {section.items.map((item, index) => <Item key={index} item={item} on={on(item)} />)}
           </div>
         );
       })}

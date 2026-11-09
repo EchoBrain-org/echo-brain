@@ -2,18 +2,13 @@ import type { ApprovedRecord, Visibility } from '../../shared/protocol.js';
 import { documentDetail, when } from '../format.js';
 import { message } from '../messages.js';
 import {
-  addToProject, canFile, changeBlocked, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreImportedMeeting, moreRecord, nextTextPage, projectChoices, refreshDocument, removableFrom, removeFromProject, retryLineCheck, saveOriginal, showProjectChoices, toggleReaderMenu, UNTITLED, type CitedItem, type ReaderState,
+  addToProject, canFile, changeBlocked, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreImportedMeeting, nextTextPage, projectChoices, refreshDocument, removableFrom, removeFromProject, retryLineCheck, saveOriginal, showProjectChoices, toggleReaderMenu, UNTITLED, type ReaderState,
   type State,
 } from '../store.js';
-import { RecordDetail, type LitItem } from './ask.js';
+import { byAtom, RecordDetail } from './ask.js';
 import { ChangeLine, changeShownInPlace, within } from './change.js';
 import { Chevron, Ellipsis } from './icons.js';
 import { FollowUpsLabel, meetingFollowUps } from './impact-card.js';
-
-/** The items Ask cited, by their place in the meeting: the reader's record carries no atom ids. */
-function litPlaces(cited: readonly CitedItem[]): LitItem {
-  return (section, index) => cited.some(item => item.section === section && item.index === index);
-}
 
 /** Who can read it, when that is not a project's members: the words Capture uses. */
 function readersWord(audience: Visibility | undefined): string | null {
@@ -99,15 +94,15 @@ function ImpactLine({ state, reader, title }: { state: State; reader: ReaderStat
 
 /**
  * An item, read in place of the page's list: a note's text as it was saved,
- * a document's text a page at a time, or a meeting's approved record, read on
- * with More. Back returns to the list.
+ * a document's text a page at a time, or a meeting's approved record, whole,
+ * the items Ask cited lit, and no quote (ADR-0024). Back returns to the list.
  */
 export function Reader({ state, reader, backTo }: { state: State; reader: ReaderState; backTo: string }) {
   const content = reader.content;
   const document = reader.document;
   const record = reader.record;
   const title = content?.title ?? document?.document.title ?? (record ? record.title ?? UNTITLED : undefined);
-  const received = content?.received_at ?? document?.document.received_at ?? record?.added_at;
+  const received = content?.received_at ?? document?.document.received_at ?? record?.approved_at;
   const audience = content?.audience ?? document?.document.audience ?? (record ? RECORD_AUDIENCE[record.visibility] : undefined);
   const meta = [readersWord(audience), received ? when(received) : null,
     document ? documentDetail(document.document) : null].filter(Boolean).join(' · ');
@@ -149,10 +144,7 @@ export function Reader({ state, reader, backTo }: { state: State; reader: Reader
           ))}
         </div>
       ))}
-      {record && <RecordDetail record={record} headed={false} lit={reader.cited && litPlaces(reader.cited)} />}
-      {record && reader.recordNext && (
-        <button type="button" class="link-button more" data-testid="reader-more" disabled={reader.loading} onClick={moreRecord}>More</button>
-      )}
+      {record && <RecordDetail record={record} headed={false} lit={reader.cited && byAtom(new Set(reader.cited))} />}
       <div class="actions"><button type="button" class="link-button" onClick={closeReader}>Back to {backTo}</button></div>
     </article>
   );

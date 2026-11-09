@@ -21,9 +21,9 @@ import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.
 import { lost, pinRefusal, refreshStops } from './session.js';
 import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timelineTurn } from './timeline.js';
 import {
-  abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
+  abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, listView,
   membersView, noteTitle, openItemsView, openItemView, openView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectView,
-  projectActivityView, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
+  projectActivityView, receiptView, recordRead, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -452,13 +452,13 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       return forAccount(method, expect, ['list', ...where, ...(cursor ? [option('cursor', cursor)] : [])], stdout => listView(lastJson(stdout), asked));
     }
     case 'open.ref': {
-      // Opened under your current access, wherever it was listed: a note has one page.
+      // Opened under your current access, wherever it was listed: a note has one page. A meeting is read with ask.record, whole,
+      // as the source pane reads it.
       const { expect, ref, cursor } = params as Params<'open.ref'>;
       const argument = refArgument(ref);
-      if (argument === null || !cursorOk(cursor) || (ref.kind === 'note' && cursor !== undefined)) return code('invalid_request');
+      if (argument === null || ref.kind === 'meeting' || !cursorOk(cursor) || (ref.kind === 'note' && cursor !== undefined)) return code('invalid_request');
       const asked: ItemRef = { kind: ref.kind, id: ref.id };
-      return forAccount(method, expect, ['open', argument, ...(cursor ? [option('cursor', cursor)] : [])],
-        stdout => openView(lastJson(stdout), asked, cursor === undefined));
+      return forAccount(method, expect, ['open', argument, ...(cursor ? [option('cursor', cursor)] : [])], stdout => openView(lastJson(stdout), asked));
     }
     case 'documents.save': {
       // Main put the chosen file here in place of the page's handle.
@@ -641,9 +641,10 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       return forAccount(method, expect, askSourceArgv(ref, scope), stdout => evidenceView(lastJson(stdout)));
     }
     case 'ask.record': {
+      // An answer's record, under the policy it cited, for the source pane; or, with no policy, a meeting the reader opened by its ref.
       const { expect, record } = params as Params<'ask.record'>;
-      if (!isRecordRef(record)) return code('invalid_request');
-      const asked = { record_sha256: record.record_sha256, policy_id: record.policy_id };
+      const asked = recordRead(record);
+      if (asked === null) return code('invalid_request');
       return forAccount(method, expect, askRecordArgv(asked), stdout => recordView(lastJson(stdout), asked));
     }
     case 'writes.status': {

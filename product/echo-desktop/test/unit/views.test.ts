@@ -1,18 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView, membersView,
-  noteTitle, openItemsView, openItemView, openView, revokedView, projectActivityView, projectView, receiptView, recordView,
+  abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, listView, membersView,
+  noteTitle, openItemsView, openItemView, openView, revokedView, projectActivityView, projectView, receiptView, recordRead, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 import { personCitedRecordV1, personRecordAtomIdV1, validatePersonRecordListV1 } from '@echo-brain/organization-api';
-import type { ApprovedRecord } from '../../src/shared/protocol.js';
 import { checkOf } from '../../src/shared/protocol.js';
 import { askText } from '../../src/shared/query.js';
 import { blocksAnswer } from '../fixtures/authority.js';
-
-// The store reads the preload's bridge when it loads; its record join needs none.
-(globalThis as { window?: unknown }).window = { echo: {} };
-const { joinRecord } = await import('../../src/renderer/store.js');
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
 /** Ids and times in the API's own grammar. */
@@ -313,91 +308,28 @@ describe('an item opened by its ref', () => {
 
   it('a note is the one asked for, with where it is filed, as a row marks it', () => {
     const reply = opened(`note:${NOTE}`, { item: row(`note:${NOTE}`), text: 'Body' });
-    expect(openView(reply, { kind: 'note', id: NOTE }, true)).toEqual({ kind: 'note', content: {
+    expect(openView(reply, { kind: 'note', id: NOTE })).toEqual({ kind: 'note', content: {
       context_id: NOTE, title: 'Pricing review', text: 'Body', received_at: '2026-09-21T20:30:00.000Z', audience: 'only-me', project_ids: [APOLLO],
     } });
-    expect(() => openView(reply, { kind: 'note', id: `ctx_${'b'.repeat(64)}` }, true)).toThrow(ViewError);
-    expect(() => openView(reply.result, { kind: 'note', id: NOTE }, true)).toThrow(ViewError);
+    expect(() => openView(reply, { kind: 'note', id: `ctx_${'b'.repeat(64)}` })).toThrow(ViewError);
+    expect(() => openView(reply.result, { kind: 'note', id: NOTE })).toThrow(ViewError);
   });
 
   it('a document is a page of its text, and its file', () => {
     const reply = opened(`document:${DOC}`, { item: documentRow(), filename: 'Pricing memo.pdf', next_cursor: 'AQ',
       chunks: [{ anchor: { kind: 'page', start: 3 }, text: 'Hello' }] });
-    expect(openView(reply, { kind: 'document', id: DOC }, true)).toEqual({ kind: 'document', document: {
+    expect(openView(reply, { kind: 'document', id: DOC })).toEqual({ kind: 'document', document: {
       document: { document_id: DOC, title: 'Pricing review', filename: 'Pricing memo.pdf', received_at: '2026-09-21T20:30:00.000Z', type: 'pdf',
         size: 1_245_184, audience: 'only-me', extraction: 'ready', project_ids: [APOLLO] },
       chunks: [{ anchor: 'page', start: 3, text: 'Hello' }], next_cursor: 'AQ',
     } });
   });
 
-  const meeting = { started_at: '2026-09-21T19:00:00.000Z', timezone: 'America/Los_Angeles', all_day: false, participants: ['Ari', 'Maya Chen'],
-    participants_more: false, approved_by: 'Ari' };
-  const meetingPage = (atoms: unknown[], fields: Record<string, unknown> = {}) => opened(`meeting:${RECORD}`, {
-    item: row(`meeting:${RECORD}`), meeting, atoms, ...fields,
-  });
-  const ref = { kind: 'meeting', id: RECORD } as const;
-
-  it('a meeting\'s first page describes it; every id stays behind', () => {
-    const view = openView(meetingPage([
-      { kind: 'decision', text: 'Annual plans first.', status: 'decided' }, { kind: 'decision', text: 'Keep the pilot.', status: 'proposed' },
-      { kind: 'action', text: 'Send the sheet.', owner: 'Maya Chen', due_at: 'Friday' }, { kind: 'rationale', text: 'It funds the launch.' },
-    ]), ref, true);
-    expect(view).toEqual({ kind: 'meeting', next_cursor: null, record: {
-      title: 'Pricing review', added_at: '2026-09-21T20:30:00.000Z', started_at: '2026-09-21T19:00:00.000Z', timezone: 'America/Los_Angeles', all_day: false, approved_by: 'Ari',
-      participants: ['Ari', 'Maya Chen'], participants_more: false, visibility: 'approver',
-      decisions: { more: false, items: [{ text: 'Annual plans first.', excerpts: [] }, { text: 'Keep the pilot.', status: 'proposed', excerpts: [] }] },
-      actions: { more: false, items: [{ text: 'Send the sheet.', owner: 'Maya Chen', excerpts: [] }] },
-      rationales: { more: false, items: [{ text: 'It funds the launch.', excerpts: [] }] },
+  it('never a meeting: the reader reads its approved record whole, as the source pane does (recordView)', () => {
+    const page = opened(`meeting:${RECORD}`, { item: row(`meeting:${RECORD}`), atoms: [{ kind: 'decision', text: 'One.' }], meeting: {
+      started_at: '2026-09-21T19:00:00.000Z', timezone: 'America/Los_Angeles', all_day: false, participants: ['Ari'], participants_more: false, approved_by: 'Ari',
     } });
-    expect(JSON.stringify(view)).not.toMatch(/sha256|prj_/);
-    // No approved meeting is organization-wide since the Team policy went.
-    expect(() => openView(meetingPage([], { item: row(`meeting:${RECORD}`, { visibility: 'team' }) }), ref, true)).toThrow(ViewError);
-    const project = openView(meetingPage([], { item: row(`meeting:${RECORD}`, { visibility: 'project' }) }), ref, true);
-    expect(project.kind === 'meeting' && project.record.visibility).toBe('project');
-  });
-
-  it('only the first page describes the meeting', () => {
-    const atom = { kind: 'decision', text: 'One.' };
-    const later = { meeting: undefined };
-    expect(() => openView(meetingPage([atom]), ref, false)).toThrow(ViewError);
-    expect(() => openView(meetingPage([atom], later), ref, true)).toThrow(ViewError);
-    expect(openView(meetingPage([atom], later), ref, false).kind).toBe('meeting');
-  });
-
-  it('three parts of one action, across two pages, join into one action item', () => {
-    const [one, two, three] = ['First part, ', 'second part, ', 'and the third.'];
-    const first = openView(meetingPage([
-      { kind: 'decision', text: 'Annual plans first.' },
-      { kind: 'action', text: one, owner: 'Maya Chen', part: { index: 1, count: 3 } },
-      { kind: 'action', text: two, part: { index: 2, count: 3 } },
-    ], { next_cursor: 'AQ' }), ref, true);
-    const next = openView(meetingPage([
-      { kind: 'action', text: three, part: { index: 3, count: 3 } }, { kind: 'rationale', text: 'It funds the launch.' },
-    ], { meeting: undefined }), ref, false);
-    if (first.kind !== 'meeting' || next.kind !== 'meeting') throw new Error('not a meeting');
-    expect(first.record.actions.items).toEqual([{ text: `${one}${two}`, owner: 'Maya Chen', excerpts: [], parts: { from: 1, to: 2, count: 3 } }]);
-    expect(first.next_cursor).toBe('AQ');
-    const joined = joinRecord(first.record, next.record) as ApprovedRecord;
-    expect(joined.actions.items).toEqual([{ text: 'First part, second part, and the third.', owner: 'Maya Chen', excerpts: [] }]);
-    expect(joined.decisions.items).toHaveLength(1);
-    expect(joined.rationales.items).toEqual([{ text: 'It funds the launch.', excerpts: [] }]);
-    expect(joined.approved_by).toBe('Ari');
-    // Parts that do not follow on are never joined.
-    const skipped = openView(meetingPage([{ kind: 'action', text: 'late', part: { index: 3, count: 4 } }], { meeting: undefined }),
-      ref, false);
-    if (skipped.kind !== 'meeting') throw new Error('not a meeting');
-    expect(joinRecord(first.record, skipped.record)).toBeNull();
-    expect(joinRecord(first.record, first.record)).toBeNull();
-  });
-
-  it('a part goes on the part before it: never first on a first page, never after another item', () => {
-    const later = { kind: 'action', text: 'rest', part: { index: 2, count: 2 } };
-    expect(() => openView(meetingPage([later]), ref, true)).toThrow(ViewError);
-    expect(() => openView(meetingPage([{ kind: 'decision', text: 'One.' }, later], { meeting: undefined }), ref, false))
-      .toThrow(ViewError);
-    expect(() => openView(meetingPage([
-      { kind: 'action', text: 'start', part: { index: 1, count: 2 } }, { kind: 'decision', text: 'Between.' },
-    ]), ref, true)).toThrow(ViewError);
+    expect(() => openView(page, { kind: 'meeting', id: RECORD })).toThrow(ViewError);
   });
 });
 
@@ -439,27 +371,32 @@ describe('text the API accepts', () => {
 });
 
 describe('a record the page may ask the host to read', () => {
-  it('names a known record policy: Only me or projects, never the retired organization-wide (Team) policy', () => {
-    for (const policy_id of ['restricted-reviewer-person-v2', 'project-members-readable-person-v1']) expect(isRecordRef({ record_sha256: sha('5'), policy_id })).toBe(true);
-    expect(isRecordRef({ record_sha256: sha('5'), policy_id: 'organization-member-readable-person-v2' })).toBe(false);
+  it('names a known record policy, Only me or projects, never the retired organization-wide (Team) one; a meeting the reader opens names none', () => {
+    for (const policy_id of ['restricted-reviewer-person-v2', 'project-members-readable-person-v1'] as const) {
+      expect(recordRead({ record_sha256: sha('5'), policy_id, more: true })).toEqual({ record_sha256: sha('5'), policy_id });
+    }
+    expect(recordRead({ record_sha256: sha('5'), policy_id: 'organization-member-readable-person-v2' })).toBeNull();
+    expect(recordRead({ record_sha256: sha('5') })).toEqual({ record_sha256: sha('5') });
+    for (const bad of [null, sha('5'), { record_sha256: 'sha256:nope' }, { record_sha256: sha('5'), policy_id: 7 }]) expect(recordRead(bad)).toBeNull();
   });
 });
 
-describe('an approved record shows only what the source pane needs', () => {
+describe('an approved record shows only what the source pane or the reader needs', () => {
   const asked = { record_sha256: sha('5'), policy_id: 'project-members-readable-person-v1' } as const;
+  const APPROVED = '2026-09-15T18:30:00.000Z';
   const atom = (signal: string) => personRecordAtomIdV1(sha('5'), signal);
   const item = (kind: string, id: string, text: string, extra: Record<string, unknown> = {}) => ({ id, kind, text, ...extra });
   /** What `person records --record-sha256 --brief` prints for one listed record: the client's cited record. */
   const reply = (brief: Record<string, unknown>, policy = 'project-members-readable-person-v1', approver: string | null = 'Maya Chen') => ({ ok: true,
     result: JSON.parse(JSON.stringify(personCitedRecordV1(validatePersonRecordListV1({ schema_version: 1, kind: 'echo-clean-person-record-list-v1', records: [{
       position: 1, approval_id: 'apr_1', record_sha256: sha('5'),
-      envelope: { record_sha256: sha('5'), body: { event: { kind: 'approved', policy_id: policy, approved_snapshot: { approved_payload: { brief: {
+      envelope: { record_sha256: sha('5'), body: { issued_at: APPROVED, event: { kind: 'approved', policy_id: policy, approved_snapshot: { approved_payload: { brief: {
         meeting: { id: 'm1', title: 'Tuesday sync' }, decisions: [], actions: [], rationales: [], ...brief,
       } } } } } },
       ...(approver === null ? {} : { source_metadata: { record_approved_by: { display_name: approver } } }),
     }] }).records[0]!))) });
 
-  it('copies the meeting, who approved it, who was there, who can read it, and what was approved', () => {
+  it('copies the meeting, when it was approved, who approved it, who was there, who can read it, and what was approved', () => {
     const view = recordView(reply({
       meeting: {
         id: 'm1', title: 'Tuesday\u0000sync', time: { scheduled_start_at: '2026-09-15T17:00:00Z', timezone: 'America/Los_Angeles' },
@@ -471,29 +408,46 @@ describe('an approved record shows only what the source pane needs', () => {
       rationales: [item('rationale', 'r1', 'It funds the launch.')],
     }), asked);
     expect(view).toEqual({
-      title: 'Tuesday sync', started_at: '2026-09-15T17:00:00Z', timezone: 'America/Los_Angeles', all_day: false, approved_by: 'Maya Chen',
+      title: 'Tuesday sync', approved_at: APPROVED, started_at: '2026-09-15T17:00:00Z', timezone: 'America/Los_Angeles', all_day: false, approved_by: 'Maya Chen',
       participants: ['Maya Chen', 'Ari'], participants_more: false, visibility: 'project',
       // Only a decision still open says so.
-      decisions: { more: false, items: [
+      decisions: { items: [
         { text: 'Ship annual plans first.', status: 'proposed', excerpts: [{ quote: 'Annual first.', at: '2026-09-15T17:12:00Z' }, { quote: 'Two' }], atom_id: atom('d1') },
         { text: 'Keep monthly plans.', excerpts: [], atom_id: atom('d2') },
       ] },
-      actions: { more: false, items: [{ text: 'Update pricing.', excerpts: [], atom_id: atom('a1') }] },
-      rationales: { more: false, items: [{ text: 'It funds the launch.', excerpts: [], atom_id: atom('r1') }] },
+      actions: { items: [{ text: 'Update pricing.', excerpts: [], atom_id: atom('a1') }] },
+      rationales: { items: [{ text: 'It funds the launch.', excerpts: [], atom_id: atom('r1') }] },
     });
     expect(JSON.stringify(view)).not.toContain('private@example.test');
   });
 
-  it('shows at most 2,000 characters of any text, and what the record says of more items and participants', () => {
-    const decisions = Array.from({ length: 33 }, (_, index) => item('decision', `d${index}`, index === 0 ? 'x'.repeat(2_001) : `Decision ${index}`));
+  it('in the pane shows at most 2,000 characters of any text, every item, and what the record says of more participants', () => {
+    const decisions = Array.from({ length: 40 }, (_, index) => item('decision', `d${index}`, index === 0 ? 'x'.repeat(2_001) : `Decision ${index}`));
     const participants = Array.from({ length: 40 }, (_, index) => ({ id: `p${index}`, display_name: `Person ${index}` }));
     const view = recordView(reply({ meeting: { id: 'm1', participants }, decisions }), asked);
     expect(view.title).toBeUndefined();
-    expect(view.decisions.items).toHaveLength(32);
-    expect(view.decisions.more).toBe(true);
+    expect(view.decisions.items.map(entry => entry.atom_id)).toEqual(decisions.map(entry => atom(entry.id)));
     expect(view.decisions.items[0]!.text).toBe(`${'x'.repeat(1_999)}… (truncated)`);
     expect(view.participants).toHaveLength(32);
     expect(view.participants_more).toBe(true);
+  });
+
+  it('for the reader, asked by its digest alone, under either policy: every item, each text whole, its approval time, and no quote (ADR-0024)', () => {
+    const whole = 'x'.repeat(2_001);
+    const brief = {
+      decisions: [item('decision', 'd1', whole, { status: 'proposed', evidence: [{ quote: 'Annual first.', started_at: '2026-09-15T17:12:00Z' }] })],
+      actions: [item('action', 'a1', 'Update pricing.', { evidence: [{ quote: 'Maya will.' }] })],
+    };
+    for (const policy of ['restricted-reviewer-person-v2', 'project-members-readable-person-v1']) {
+      const view = recordView(reply(brief, policy), { record_sha256: sha('5') });
+      expect(view.visibility).toBe(policy === 'restricted-reviewer-person-v2' ? 'approver' : 'project');
+      expect(view.approved_at).toBe(APPROVED);
+      expect(view.decisions.items).toEqual([{ text: whole, status: 'proposed', excerpts: [], atom_id: atom('d1') }]);
+      expect(view.actions.items).toEqual([{ text: 'Update pricing.', excerpts: [], atom_id: atom('a1') }]);
+      expect(JSON.stringify(view)).not.toMatch(/Annual first|Maya will/);
+    }
+    // Still only the record asked for.
+    expect(() => recordView(reply(brief), { record_sha256: sha('6') })).toThrow(ViewError);
   });
 
   it('says who can read it by its policy', () => {

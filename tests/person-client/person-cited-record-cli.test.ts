@@ -17,7 +17,7 @@ const brief = {
   rationales: [],
 };
 const list = (records: readonly Record<string, unknown>[]) => ({ schema_version: 1, kind: 'echo-clean-person-record-list-v1', records });
-const record = (envelope: Record<string, unknown> = { record_sha256: RECORD, body: { event: {
+const record = (envelope: Record<string, unknown> = { record_sha256: RECORD, body: { issued_at: '2026-09-15T18:30:00.000Z', event: {
   kind: 'approved', policy_id: 'project-members-readable-person-v1', approved_snapshot: { approved_payload: { brief } },
 } } }) => ({ position: 3, approval_id: 'apr_1', record_sha256: RECORD, envelope, source_metadata: { record_approved_by: { display_name: 'Maya Chen' } } });
 
@@ -33,7 +33,7 @@ async function run(argv: readonly string[], fetch: typeof globalThis.fetch) {
 }
 
 describe('one cited record, as Ask cites it', () => {
-  it('reads the record as without --brief, and prints its meeting and items, each with its atom id, and no identity', async () => {
+  it('reads the record as without --brief, and prints its meeting, when it was approved and every item, each with its atom id, and no identity', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () => json(list([record()])));
     const cited = await run(['records', '--record-sha256', RECORD, '--brief'], fetch);
     expect(cited).toMatchObject({ code: 0, stderr: '' });
@@ -41,11 +41,13 @@ describe('one cited record, as Ask cites it', () => {
     expect(url.pathname + url.search).toBe(`/v1/person/records?record_sha256=${RECORD}`);
     const printed = JSON.parse(cited.stdout) as { ok: true; result: unknown };
     expect(printed.ok).toBe(true);
-    expect(validatePersonCitedRecordV1(printed.result)).toMatchObject({
-      record_sha256: RECORD, policy_id: 'project-members-readable-person-v1', title: 'Tuesday sync', approved_by: 'Maya Chen', participants: ['Maya Chen'],
+    expect(validatePersonCitedRecordV1(printed.result)).toEqual({
+      schema_version: 1, kind: 'echo-person-cited-record-v1', record_sha256: RECORD, policy_id: 'project-members-readable-person-v1', title: 'Tuesday sync',
+      approved_at: '2026-09-15T18:30:00.000Z', all_day: false, approved_by: 'Maya Chen', participants: ['Maya Chen'], participants_more: false,
       decisions: { items: [{ atom_id: personRecordAtomIdV1(RECORD, 'd1'), text: 'Ship annual plans first.', status: 'decided',
-        quotes: [{ quote: 'Annual first.', started_at: '2026-09-15T17:12:00Z' }] }], more: false },
-      actions: { items: [{ atom_id: personRecordAtomIdV1(RECORD, 'a1'), text: 'Maya updates the pricing page.', quotes: [] }], more: false },
+        quotes: [{ quote: 'Annual first.', started_at: '2026-09-15T17:12:00Z' }] }] },
+      actions: { items: [{ atom_id: personRecordAtomIdV1(RECORD, 'a1'), text: 'Maya updates the pricing page.', quotes: [] }] },
+      rationales: { items: [] },
     });
     expect(cited.stdout).not.toContain('private@example.test');
 
@@ -61,6 +63,16 @@ describe('one cited record, as Ask cites it', () => {
       vi.fn<typeof globalThis.fetch>(async () => json(list([record({ record_sha256: RECORD, body: { event: { kind: 'rejected' } } })]))));
     expect(unapproved).toMatchObject({ code: 1, stdout: '' });
     expect(JSON.parse(unapproved.stderr)).toMatchObject({ ok: false, action: 'records', code: 'invalid_response' });
+  });
+
+  it('says in its help that --brief keeps every item and when the record was approved', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const help = await run(['records', '--help'], fetch);
+    expect(help.code).toBe(0);
+    expect(help.stdout).toContain('when it was approved');
+    expect(help.stdout).toContain('every decision, action and rationale');
+    expect(help.stdout).not.toContain('up to 32 decisions');
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('takes --brief only with --record-sha256, before any network use', async () => {

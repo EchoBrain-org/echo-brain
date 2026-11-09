@@ -25,7 +25,7 @@ const answer = (withReceipt = true): Answer => ({
   ...(withReceipt ? { receipt } : {}),
 });
 const record = { title: 'Tuesday sync', all_day: false, participants: [], participants_more: false, visibility: 'project',
-  decisions: { items: [{ text: 'Ship it.', excerpts: [], atom_id: sha('1') }], more: false }, actions: { items: [], more: false }, rationales: { items: [], more: false } };
+  decisions: { items: [{ text: 'Ship it.', excerpts: [], atom_id: sha('1') }] }, actions: { items: [] }, rationales: { items: [] } };
 
 let held: Held;
 storeLifecycle();
@@ -35,7 +35,6 @@ beforeEach(() => {
   rpc.mockImplementation(rpcFor(held, {
     'ask.record': () => ok(record),
     'ask.source': () => ok({ label: 'Launch notes', text: 'We agreed to ship.' }),
-    'open.ref': () => ok({ kind: 'meeting', record, next_cursor: null }),
     'source.openExternal': () => ok(null),
   }, () => ({ active: [project(1, 30, { name: 'Apollo' })], archived: [] })));
 });
@@ -107,19 +106,16 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     await flush();
     expect(store.getState().ask).toBeNull();
     expect(store.getState().reader?.ref).toEqual({ kind: 'meeting', id: sha('2') });
-    expect(calls('open.ref').at(-1)).toMatchObject({ ref: { kind: 'meeting', id: sha('2') } });
+    // The reader reads the meeting as the pane did, by its digest alone.
+    expect(calls('ask.record').at(-1)).toEqual({ expect: EXPECT, record: { record_sha256: sha('2') } });
+    expect(calls('open.ref')).toHaveLength(0);
     expect(calls('ask.cancel')).toHaveLength(0);
   });
 
-  it('Open on a cited decision goes to its meeting\'s page with that item lit, read on until it shows', async () => {
-    // The cited decision is the meeting's second. The reader's record has no atom ids, and its first page holds only the first decision.
-    const first = { text: 'Hold monthly plans.', excerpts: [] };
-    const cited = { text: 'Ship it.', excerpts: [] };
-    const page = (items: readonly object[]) => ({ ...record, decisions: { items, more: false } });
-    rpc.mockImplementation(rpcFor(held, {
-      'ask.record': () => ok(page([{ ...first, atom_id: sha('9') }, { ...cited, atom_id: sha('1') }])),
-      'open.ref': params => ok(params.cursor === undefined ? { kind: 'meeting', record: page([first]), next_cursor: 'page-2' } : { kind: 'meeting', record: page([cited]), next_cursor: null }),
-    }, () => ({ active: [project(1, 30, { name: 'Apollo' })], archived: [] })));
+  it('Open on a cited decision goes to its meeting\'s page with that item lit by its atom id, in one read; from a list nothing is lit', async () => {
+    // The cited decision is the meeting's second, and the reader reads the whole record, as the pane does.
+    const whole = { ...record, decisions: { items: [{ text: 'Hold monthly plans.', excerpts: [], atom_id: sha('9') }, { text: 'Ship it.', excerpts: [], atom_id: sha('1') }] } };
+    rpc.mockImplementation(rpcFor(held, { 'ask.record': () => ok(whole) }, () => ({ active: [project(1, 30, { name: 'Apollo' })], archived: [] })));
     const { store, release, pane } = await asking();
     vi.advanceTimersByTime(3_000);
     release(ok(answer()));
@@ -132,13 +128,17 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     store.openFullPage();
     await flush();
     expect(store.getState().ask).toBeNull();
-    // Read on to the page that holds it, and lit where the pane lit it.
-    expect(calls('open.ref').map(params => params.cursor)).toEqual([undefined, 'page-2']);
-    expect(store.getState().reader).toMatchObject({ ref: { kind: 'meeting', id: sha('2') }, cited: [{ section: 'decisions', index: 1 }], recordNext: null });
+    // One read by its digest alone, lit by the atom ids the pane lit.
+    expect(calls('ask.record').at(-1)).toEqual({ expect: EXPECT, record: { record_sha256: sha('2') } });
+    expect(calls('open.ref')).toHaveLength(0);
+    expect(store.getState().reader).toMatchObject({ ref: { kind: 'meeting', id: sha('2') }, cited: [sha('1')], loading: false });
     expect(store.getState().reader?.record?.decisions.items.map(item => item.text)).toEqual(['Hold monthly plans.', 'Ship it.']);
 
     const { Reader } = await import('../../src/renderer/screens/reader.js');
-    expect(lit(render(Reader({ state: store.getState(), reader: store.getState().reader!, backTo: 'Home' }))).map(text)).toEqual(['Cited: Ship it.']);
+    const shown = (backTo: string) => render(Reader({ state: store.getState(), reader: store.getState().reader!, backTo }));
+    expect(lit(shown('Home')).map(text)).toEqual(['Cited: Ship it.']);
+    // The whole record is there: nothing reads on, and there is no More.
+    expect(byTestId(shown('Home'), 'reader-more')).toHaveLength(0);
 
     // The same meeting opened from a list lights nothing.
     store.closeReader();
@@ -147,13 +147,8 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     await flush();
     expect(store.getState().reader?.ref).toEqual({ kind: 'meeting', id: sha('2') });
     expect(store.getState().reader?.cited).toBeUndefined();
-    // Its More reads the record's next page, joined under what shows; with no page after it, More goes.
-    const shown = () => render(Reader({ state: store.getState(), reader: store.getState().reader!, backTo: 'Only me' }));
-    (byTestId(shown(), 'reader-more')[0]!.props.onClick as () => void)();
-    await flush();
-    expect(calls('open.ref').at(-1)).toMatchObject({ ref: { kind: 'meeting', id: sha('2') }, cursor: 'page-2' });
-    expect(store.getState().reader?.record?.decisions.items.map(item => item.text)).toEqual(['Hold monthly plans.', 'Ship it.']);
-    expect(byTestId(shown(), 'reader-more')).toHaveLength(0);
+    expect(lit(shown('Only me'))).toHaveLength(0);
+    expect(calls('open.ref')).toHaveLength(0);
   });
 
   it('a name of a place lights every item of it Ask read, and shows every passage', async () => {

@@ -14,6 +14,8 @@ const NOW = '2026-09-21T22:01:00.000Z';
 const LATER = '2026-09-21T22:30:00.000Z';
 /** Half an hour past the weekly sign-in of the session the fixture installs. */
 const WEEK_LATER = '2026-09-28T22:30:00.000Z';
+/** When the answer's meeting, Tuesday sync, was approved. */
+const TUESDAY_ADDED = '2026-09-15T18:00:00.000Z';
 
 interface Note{ context_id: string; received_at: string; audience: Record<string, unknown>; title: string; text: string }
 /** A saved document: its metadata, its original's text, and its extracted text in pages. */
@@ -656,6 +658,33 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     ref: `meeting:${meeting.record_sha256}`, kind: 'meeting', title: meeting.title, added_at: meeting.added_at, visibility: meeting.visibility,
     projects: rowProjects(meeting.project_ids), meeting_date: meeting.meeting_date,
   });
+  /**
+   * An approved record as `GET /v1/person/records?record_sha256` lists it, or null for none you can read: the answer's
+   * own (Tuesday sync), its brief as approved; or a meeting's, its atoms as the brief's signals, each with the transcript
+   * line it came from, its owners as the approver confirmed them. Its envelope was issued when the meeting was added.
+   */
+  const listedRecord = (digest: string): Record<string, unknown> | null => {
+    const meeting = meetings.find(entry => entry.record_sha256 === digest);
+    const answers = digest === desktop.record.record_sha256;
+    if (!answers && !meeting) return null;
+    const signals = (meeting?.atoms ?? []).map((atom, index) => ({ ...atom, id: `s${index + 1}` }));
+    const brief = answers ? desktop.record.brief : {
+      meeting: { id: digest, title: meeting!.title, time: { actual_start_at: meeting!.started_at, timezone: meeting!.timezone },
+        participants: meeting!.participants.map((name, index) => ({ id: `p${index + 1}`, display_name: name })) },
+      ...Object.fromEntries((['decision', 'action', 'rationale'] as const).map(kind => [`${kind}s`,
+        signals.filter(signal => signal.kind === kind).map(({ owner: _owner, ...signal }) => ({
+          ...signal, evidence: [{ quote: `[10:00] ${meeting!.participants[0]}: ${signal.text}` }],
+        }))])),
+    };
+    const owners = signals.flatMap(signal => (signal.owner === undefined ? [] : [{ signal_id: signal.id, owner: signal.owner }]));
+    const event = { kind: 'approved', policy_id: meeting?.visibility === 'only_me' ? 'restricted-reviewer-person-v2' : 'project-members-readable-person-v1',
+      approved_snapshot: { approved_payload: { brief } } };
+    return {
+      position: 1, approval_id: 'apr_fixture', record_sha256: digest,
+      envelope: { record_sha256: digest, body: { issued_at: meeting?.added_at ?? TUESDAY_ADDED, event, human_act_resolution_ref: { action_owners: owners } } },
+      source_metadata: { record_approved_by: { display_name: answers ? desktop.record.approved_by : meeting!.approved_by } },
+    };
+  };
   /** Ari's access admits a note or a document: any audience but Only me, and Only me when it is Ari's own (ADR-0049). */
   const readsNote = (id: string) => catalog.get(id)?.audience.kind !== 'only_me' || ownNotes.has(id);
   const readsDocument = (document: StoredDocument) => document.audience.kind !== 'only_me' || ownDocuments.has(document.document_id);
@@ -1456,17 +1485,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           next_cursor: from + 1 < document.pages.length ? pageCursor(request.ref, from + 1) : null,
         });
       }
-      const meeting = kind === 'meeting' ? meetings.find(entry => entry.record_sha256 === id) : undefined;
-      // Every meeting here is one page: a record's next page and its More are the reader's unit tests (ask-progress.test).
-      if (meeting) {
-        if (request.cursor !== undefined) return failure('not_found', 404);
-        return open({
-          item: meetingRow(meeting), atoms: meeting.atoms, next_cursor: null, meeting: {
-            started_at: meeting.started_at, timezone: meeting.timezone, all_day: false, participants: meeting.participants, participants_more: false,
-            approved_by: meeting.approved_by,
-          },
-        });
-      }
+      // A meeting is read as a record (GET /v1/person/records), whole: the desktop never opens one here.
       return failure('not_found', 404);
     }
 
@@ -1807,22 +1826,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         ...(importedNotes && review ? { imported_meeting_review: newer ? 'not_reviewed' : mode === 'ask-imported-mixed' || existsSync(join(home, 'imported-reviewed')) ? 'reviewed' : 'not_reviewed' } : {}),
       });
     }
-    // One approved record, by the digest an answer cited. A record the person
+    // One approved record, by the digest an answer cited or a meeting's row names. A record the person
     // cannot read comes back as an empty list, as the Authority's does.
     if (method === 'GET' && path === '/v1/person/records' && url.searchParams.has('record_sha256')) {
-      const { record_sha256: digest, approved_by: approver, brief } = desktop.record;
       if ([...url.searchParams.keys()].length !== 1) return failure('invalid_request', 400);
-      if (url.searchParams.get('record_sha256') !== digest) {
-        return json({ schema_version: 1, kind: 'echo-clean-person-record-list-v1', records: [] });
-      }
-      const event = { kind: 'approved', policy_id: 'project-members-readable-person-v1', approved_snapshot: { approved_payload: { brief } } };
-      return json({
-        schema_version: 1, kind: 'echo-clean-person-record-list-v1',
-        records: [{
-          position: 1, approval_id: 'apr_fixture', record_sha256: digest, envelope: { record_sha256: digest, body: { event } },
-          source_metadata: { record_approved_by: { display_name: approver } },
-        }],
-      });
+      const listed = listedRecord(url.searchParams.get('record_sha256')!);
+      return json({ schema_version: 1, kind: 'echo-clean-person-record-list-v1', records: listed === null ? [] : [listed] });
     }
     return failure('not_found', 404);
   };

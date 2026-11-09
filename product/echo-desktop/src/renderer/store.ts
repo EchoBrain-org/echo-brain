@@ -7,7 +7,7 @@ import { useEffect, useState } from 'preact/hooks';
 import type {
   Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
   ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Member, OpenItemsView, OpenItemView,
-  ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result,
+  ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
@@ -366,26 +366,12 @@ export interface OrganizationState {
   saved: { handle: string; action: 'invite' | 'reissue'; name: string; email: string; expires_at: string } | null;
 }
 
-/** A meeting record's sections, in the order its items come. */
-export const RECORD_SECTIONS = ['decisions', 'actions', 'rationales'] as const;
-export type RecordSectionKey = (typeof RECORD_SECTIONS)[number];
-
-/**
- * A meeting's item by its section and its place there. A cited item has the
- * same place in each read of its meeting, Ask's (with atom ids) and the
- * reader's (by its ref, with none), since both walk the brief in its order.
- */
-export interface CitedItem {
-  readonly section: RecordSectionKey;
-  readonly index: number;
-}
-
 /** Where an item was opened: a project's page (a row in it, or Ask's Open there), Only me, or Ask's Open in all context. */
 export type ReaderFrom = { kind: 'project'; project_id: string } | { kind: 'only-me' } | { kind: 'search' };
 
 /**
  * An item open in the reader, by its ref: a note's text, a document's text a
- * page at a time, or a meeting's approved record, read on with More.
+ * page at a time, or a meeting's approved record, whole.
  */
 export interface ReaderState {
   ref: ItemRef;
@@ -395,10 +381,8 @@ export interface ReaderState {
   importedNext?: string | null;
   document?: DocumentText;
   record?: ApprovedRecord;
-  /** The record's next page, until all of it is read. */
-  recordNext?: string | null;
-  /** The meeting's items Ask cited, when Open came from its pane: lit, and read on to until they show. */
-  cited?: readonly CitedItem[];
+  /** The atom ids of the meeting's items Ask cited, when Open came from its pane: lit, as the pane lit them. */
+  cited?: readonly string[];
   failure?: Failure;
   /** The ⋯ menu, and its list of projects to add to. */
   menu: 'closed' | 'open' | 'projects';
@@ -1840,41 +1824,32 @@ function sameRef(a: ItemRef | undefined, b: ItemRef): boolean {
   return a?.kind === b.kind && a.id === b.id;
 }
 
-/** Pages the reader reads on by itself to show the items Ask cited. */
-const CITED_PAGES = 8;
-
-/** Every cited item shows, whole. */
-function citedShown(record: ApprovedRecord, cited: readonly CitedItem[]): boolean {
-  return cited.every(({ section, index }) => {
-    const item = record[section].items[index];
-    return item !== undefined && item.parts === undefined;
-  });
-}
-
 /**
- * An item opened by its ref, under your current access: a note, a page of a
- * document's text (the first, or the one a cursor names), or a page of a
- * meeting's record, joined to what shows. While a page loads, what the
- * reader shows of that item stays. A meeting opened on items Ask cited
- * (`cited`) lights them, and reads on by itself, a few pages at most, until
- * they show; its later pages keep them lit.
+ * An item opened by its ref, under your current access: a note, a page of an
+ * imported meeting's or a document's text (the first, or the one a cursor
+ * names), or a meeting's approved record, whole, read as the source pane
+ * reads it. While a page loads, what the reader shows of that item stays. A
+ * meeting opened on items Ask cited (`cited`, their atom ids) lights them.
  */
-async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string, lit: { readonly cited?: readonly CitedItem[]; readonly follow?: number } = {}): Promise<void> {
+async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string, cited?: readonly string[]): Promise<void> {
   const account = expect();
   if (!account) return;
   const mine = ++readSeq;
   const shown = sameRef(state.reader?.ref, ref) ? state.reader : null;
-  // An approved meeting's first page counts its follow-ups: its line.
-  if (ref.kind === 'meeting' && cursor === undefined) void loadLine('impactLine', 'record', ref.id);
-  const cited = cursor === undefined ? lit.cited : shown?.cited;
+  // An approved meeting counts its follow-ups: its line.
+  if (ref.kind === 'meeting') void loadLine('impactLine', 'record', ref.id);
   const base = { ref, from, menu: 'closed' as const, ...(cited !== undefined && cited.length > 0 ? { cited } : {}) };
   const kept = {
     ...(shown?.content ? { content: shown.content, importedNext: shown.importedNext } : {}),
     ...(shown?.document ? { document: shown.document } : {}),
-    ...(shown?.record ? { record: shown.record, recordNext: shown.recordNext } : {}),
+    ...(shown?.record ? { record: shown.record } : {}),
   };
   set({ reader: { ...base, loading: true, ...kept }, toast: null });
-  const result = await rpc('open.ref', { expect: account, ref, ...(cursor ? { cursor } : {}) });
+  // A meeting is read by its digest alone: the reader names no policy, and gets no quote (ADR-0024).
+  const result = ref.kind === 'meeting'
+    ? await rpc('ask.record', { expect: account, record: { record_sha256: ref.id } })
+      .then(read => (read.ok ? { ok: true as const, value: { kind: 'meeting' as const, record: read.value } } : read))
+    : await rpc('open.ref', { expect: account, ref, ...(cursor ? { cursor } : {}) });
   if (!sameRef(state.reader?.ref, ref) || readSeq !== mine) return;
   if (!result.ok) {
     set({ reader: { ...base, loading: false, failure: result.failure, ...kept } });
@@ -1882,59 +1857,20 @@ async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string, lit: 
     return;
   }
   const opened = result.value;
+  if (opened.kind === 'meeting') { set({ reader: { ...base, loading: false, record: opened.record } }); return; }
   if (opened.kind === 'imported_meeting') {
     const content = cursor === undefined ? opened.content : kept.content ? { ...opened.content, text: kept.content.text + opened.content.text } : null;
     if (!content) return;
     set({ reader: { ...base, loading: false, content, importedNext: opened.next_cursor } }); return;
   }
   if (opened.kind === 'note') { set({ reader: { ...base, loading: false, content: opened.content } }); return; }
-  if (opened.kind === 'document') { set({ reader: { ...base, loading: false, document: opened.document } }); return; }
-  const record = cursor === undefined ? opened.record : kept.record ? joinRecord(kept.record, opened.record) : null;
-  // A page that does not go on from what shows is never joined to it.
-  if (!record) { set({ reader: { ...base, loading: false, failure: { code: 'invalid_output', retryable: true }, ...kept } }); return; }
-  set({ reader: { ...base, loading: false, record, recordNext: opened.next_cursor } });
-  const follow = lit.follow ?? 0;
-  if (base.cited && opened.next_cursor && follow < CITED_PAGES && !citedShown(record, base.cited)) {
-    void openReader(ref, from, opened.next_cursor, { follow: follow + 1 });
-  }
-}
-
-/**
- * A meeting's next page, joined to the record shown: its three sections go
- * on. A long item left in parts goes on with the next page's first part,
- * which must be its very next part; anything else is refused (null).
- */
-export function joinRecord(shown: ApprovedRecord, next: ApprovedRecord): ApprovedRecord | null {
-  const join = (before: RecordSection, after: RecordSection): RecordSection | null => {
-    const last = before.items.at(-1);
-    const [first, ...rest] = after.items;
-    const unfinished = last?.parts !== undefined && last.parts.to < last.parts.count;
-    const continues = first?.parts !== undefined && first.parts.from > 1;
-    if (!continues) return unfinished ? null : { items: [...before.items, ...after.items], more: false };
-    const [was, goes] = [last?.parts, first!.parts!];
-    if (!last || !was || was.to !== goes.from - 1 || was.count !== goes.count) return null;
-    const text = last.text + first!.text;
-    const { parts: _parts, ...item } = last;
-    const joined: RecordItem = goes.to === goes.count && was.from === 1 ? { ...item, text: text.trim() } : { ...item, text, parts: { ...was, to: goes.to } };
-    return { items: [...before.items.slice(0, -1), joined, ...rest], more: false };
-  };
-  const decisions = join(shown.decisions, next.decisions);
-  const actions = join(shown.actions, next.actions);
-  const rationales = join(shown.rationales, next.rationales);
-  return decisions && actions && rationales ? { ...shown, decisions, actions, rationales } : null;
+  set({ reader: { ...base, loading: false, document: opened.document } });
 }
 
 export function moreImportedMeeting(): void {
   const reader = state.reader;
   if (reader?.ref.kind !== 'imported_meeting' || !reader.importedNext || reader.loading) return;
   void openReader(reader.ref, reader.from, reader.importedNext);
-}
-
-/** More, under a meeting's record: its next page. */
-export function moreRecord(): void {
-  const reader = state.reader;
-  if (reader?.ref.kind !== 'meeting' || !reader.recordNext || reader.loading) return;
-  void openReader(reader.ref, reader.from, reader.recordNext);
 }
 
 /** Next text page, from the ⋯ menu. */
@@ -4300,18 +4236,11 @@ export function litAtoms(current: State, target: PaneTarget): ReadonlySet<string
   return atoms(cited.length > 0 ? cited.map(index => all[index]!) : target.sources);
 }
 
-/** Where `atoms` are in a meeting Ask read: each one's section and place. */
-function citedItems(record: ApprovedRecord, atoms: ReadonlySet<string>): CitedItem[] {
-  return RECORD_SECTIONS.flatMap(section => record[section].items.flatMap((item, index) =>
-    item.atom_id !== undefined && atoms.has(item.atom_id) ? [{ section, index }] : []));
-}
-
 /**
  * Open: the pane's item on its own page, in place of Ask. A meeting opens on
- * the items the pane lit, found in the record the pane read; with that record
- * not read, it opens at its top. A follow-up opens its item page, with the
- * row the pane read while it reads it again. A project opens as the sidebar
- * opens it, and a tool opens Tools.
+ * the items the pane lit, by their atom ids. A follow-up opens its item page,
+ * with the row the pane read while it reads it again. A project opens as the
+ * sidebar opens it, and a tool opens Tools.
  */
 export function openFullPage(): void {
   const target = paneTarget();
@@ -4335,11 +4264,9 @@ export function openFullPage(): void {
     return;
   }
   const scope = activeTurn()?.answer.scope;
-  const read = source.kind === 'record' ? state.sources?.records[source.record.record_sha256] : undefined;
-  const cited = read !== undefined && !read.loading && 'value' in read ? citedItems(read.value, litAtoms(state, target)) : [];
+  const cited = [...litAtoms(state, target)];
   closeAsk();
-  void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'search' },
-    undefined, { cited });
+  void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'search' }, undefined, cited);
 }
 
 /**
