@@ -141,18 +141,21 @@ still call it, until a later release retires it with the other note and
 project searches. No current Authority holds a V2 note: the V16 baseline starts
 empty, and the V2 note write went on 2026-10-25.
 
-Update (2026-11-09): the update floor
-([ADR-0050](ADR-0050-update-floor-only-rises.md)) is past release 20 (the live
-feed is sequence 22), so `/v7` no longer sends `x-echo-person-ask-route`. The
+Update (2026-11-09): `/v7` no longer sends `x-echo-person-ask-route`, and the
 two opt-ins are always on: the Authority no longer reads
-`x-echo-ask-gap-details` or `x-echo-source-review`, so every Ask answer carries
-its typed `gap_details` (the research evaluation's too), and every imported
-meeting's packet from `POST /v2/person/ask/source` carries its
-`imported_meeting_review`. Clients no longer send either header. Every release
-from 22 on already sent both, so it sees the same answers; an older client,
-built before 2026-11-04, refuses a typed gap and an imported meeting's packet,
-and none is installed. `POST /v3/person/evidence/search` is retired too: it
-answers the ordinary 404 and stays reserved against provider adapters. No
+`x-echo-ask-gap-details` or `x-echo-source-review`, so every Ask answer part
+with a typed gap carries its `gap_details` (the research evaluation's too), and
+every imported meeting's packet from `POST /v2/person/ask/source` carries its
+`imported_meeting_review`. Clients no longer send either header. Releases 21
+and 22 already sent both and ignore the route header, so they see the same
+answers. A client from release 20 or older refuses a `/v7` progress stream
+without the route header, a typed gap and an imported meeting's packet. The
+update floor ([ADR-0050](ADR-0050-update-floor-only-rises.md)) is past
+release 20 (the live feed is sequence 22), but a floor never updates an
+installed seat, so this Authority ships only after a seat check shows no
+client from release 20 or older is installed.
+`POST /v3/person/evidence/search` is retired too: it answers the ordinary 404
+and stays reserved against provider adapters. No
 shipped client called it; the research-loop evaluation, its last caller, now
 binds approved meetings through the person list and the approved-record read.
 
@@ -171,7 +174,10 @@ binds approved meetings through the person list and the approved-record read.
   left from before 2026-09-23.
 - **Data:** no migration. No table, column or stored row changes.
 - **Rollback:** revert the change. Nothing stored changed, so the older routes
-  return as they were.
+  return as they were. Rolling back the 2026-11-09 update on the Authority
+  alone is quiet: clients from that release send no opt-in header, so until the
+  Authority returns they get answers without typed gap reasons and packets
+  without the review badge.
 - **Evidence:**
   - The server tests answer every retired path with 404, except V1 document
     dissociate, which no test sends:

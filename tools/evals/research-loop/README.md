@@ -112,7 +112,7 @@ grading are unchanged (the judge never reads `gap_details`), so earlier Ask
 baselines stay comparable. Approved-record runs are unchanged. The same day,
 `bindings` stopped using the retired evidence search: it reads the THERM list
 and each meeting's record (step 4). A `bindings.json` written before stays
-valid; one written after may start the M3 and M4 record cases from another of
+valid; one written after may start the M2, M3 and M4 record cases from another of
 their decisions (the record's first, where the search ranked them), so compare
 approved-record runs under one `bindings.json`.
 
