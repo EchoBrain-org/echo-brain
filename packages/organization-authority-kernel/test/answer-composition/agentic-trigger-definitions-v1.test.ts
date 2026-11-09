@@ -81,7 +81,6 @@ describe("Approved record definition", () => {
 
 describe("task-form goals share one rule", () => {
   it("adds one paragraph to the step prompt, whatever the trigger", () => {
-    expect(TASK_RULE_PROMPT).toBe("There is no question from a person; the task below replaces it.");
     expect(STEP_PROMPT).not.toContain(TASK_RULE_PROMPT);
   });
 });

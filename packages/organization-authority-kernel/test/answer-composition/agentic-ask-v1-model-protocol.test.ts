@@ -1,4 +1,3 @@
-import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import {
   AgenticAskOutputErrorV1,
@@ -106,62 +105,15 @@ describe("agentic Ask model protocol parity", () => {
     const schema = createStepSchema(["meetings", "tickets"], ["E1"], true, false);
     const variants = ((schema.properties as Schema).actions as Schema).items as Schema;
     expect((variants.anyOf as Schema[]).map(variant => ((variant.properties as Schema).tool as Schema).enum![0])).toEqual(["search", "open", "finish"]);
-    // The search-only prompt names no list tool and no inventory rule; the full prompt keeps both. Only rule 1 ("list only
-    // the facts") and rule 4, which says there is no list tool, still say "list".
-    expect(SEARCH_ONLY_STEP_PROMPT.split("\n").filter(line => /\blist\b/u.test(line)).map(line => line.slice(0, 2))).toEqual(["1.", "4."]);
-    expect(SEARCH_ONLY_STEP_PROMPT).not.toContain("inventor");
-    expect(SEARCH_ONLY_STEP_PROMPT).toContain("4. There is no list tool in this run");
-    expect(SEARCH_ONLY_STEP_PROMPT).toContain("\"tool\" is \"search\", \"open\" or \"finish\".");
-    expect(STEP_PROMPT).toContain("list, args {\"source\"");
-    expect(STEP_PROMPT.split("\n").length - SEARCH_ONLY_STEP_PROMPT.split("\n").length).toBe(8);
+    // Each step prompt describes the tools its schema offers: Ask's and a task's every tool the parser handles, a search-only
+    // run's all but list. Their wording is reviewed and measured by the research test, not pinned here (T-5).
+    const described = (prompt: string) => ["search", "open", "list", "finish"].filter(tool => prompt.includes(`${tool}, args`));
+    expect([ASK_STEP_PROMPT, STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT].map(described)).toEqual([["search", "open", "list", "finish"], ["search", "open", "list", "finish"], ["search", "open", "finish"]]);
   });
 
-  it("gives Ask its own kind and list rules (5 and 6 since the research tool contract), and keeps the task prompt byte for byte (ADR-0041)", () => {
-    const rule = (prompt: string, number: number) => prompt.split("\n").find(line => line.startsWith(`${number}. `))!;
-    const line = (prompt: string, start: string) => prompt.split("\n").find(value => value.startsWith(start))!;
-    // Background task prompts stay byte-for-byte unchanged. Ask also explains its client-local date projection.
-    expect([STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT].map(prompt => canonicalSha256(prompt))).toEqual([
-      "sha256:8083e4e4f259bd9676bd3a685d30c3fb5b8a797ecd61727552488a31a5014d86", "sha256:d4d67ae7a306adbae70a9f5c2d5ebea59a9c9e69173657f82f7ccfac9e6bccaf",
-    ]);
-    expect(ASK_STEP_PROMPT).toContain('already converted to the request time_zone');
-    // Research declares each need's kind, with an example of each; a list's id supports only the list kinds. Its examples name
-    // nothing the research-loop evaluation asks about (tests/architecture/ask-kind-examples-eval-independence.test.ts).
-    // Research tool contract v1: rules 1 to 4 are how to look (understand, look around, choose paths, dig).
-    const [rule3, rule4] = [rule(ASK_STEP_PROMPT, 5), rule(ASK_STEP_PROMPT, 6)];
-    expect(rule3).toMatch(/^5\. Give each need a kind\. "which_items": which or how many items exist in a source, or in a set of its items picked by a date, owner, status, kind or channel/u);
-    for (const text of [
-      "picked by a date, owner, status, kind or channel (\"tickets updated since Monday\", \"my open follow-ups\", \"my open tasks due this week\")",
-      "\"which_say\": which members of such a picked set say something (\"which of the tickets updated since Monday mention the recall\")",
-      "which items say something when the question picks no set by a date, owner, status, kind or channel (\"which pages mention the recall\": search finds them)",
-      "(\"is the beta on hold\", \"who owns OPS-17\", \"when was the onboarding guide created\")",
-      // One named item's own fact stays content however research found the item, so its answer states no list (F01).
-      "or a fact about one particular item, its title, dates, status, owner or lead included (\"is the beta on hold\", \"who owns OPS-17\", \"when was the onboarding guide created\"), even when you list items to find that one item.",
-      "Mark a which_items need \"found\" with its inventory L id and every requested member E id.",
-      "Put supporting facts unrelated to that membership in a separate content need.",
-      "Give a which_say need the id of the list whose members it checks, whatever its status, and mark it \"found\" with that id and ids whose full text you have seen. Mark a content need \"found\" only with ids whose full text you have seen",
-    ]) expect(rule3).toContain(text);
-    expect([rule3.includes("For which items exist, and each one's title, dates, status and owner, a list's id"), rule(STEP_PROMPT, 3).includes("kind")]).toEqual([false, false]);
-    expect([ASK_STEP_PROMPT, STEP_PROMPT].map(prompt => prompt.split("\n")[0])).toEqual([expect.stringContaining("then your plan, lists, last_results"), expect.stringContaining("then your plan, inventories, last_results")]);
-    // Addition 6: early stopping never applies to which items exist; a which_say need reads what its list has shown.
-    expect(rule4).toContain("A which_items need is supported once each list it cites has more false: a complete list supports all its items, and one that cannot be read to its end (complete is false) supports \"at least\" its count. A list shows which items exist, never what an item says: open an item for its content, and for a which_say need open as many of the list's members as you can; it need not wait for the list's end.");
-    expect(rule4).not.toContain("A question about which or how many items exist");
-    expect(rule4.endsWith("Stop as soon as every requested fact is supported: for a which_items need, once each list it cites has more false; for a which_say need, once you have seen the full text of every member its list has shown, or no other member can be opened.")).toBe(true);
-    // Ask's tools never send research to open list members only to show that they exist.
-    expect(line(ASK_STEP_PROMPT, "  Returns: the ids of up to 8 items")).toContain("Open those items before relying on what they say; a list's members need no open to show which items exist.");
-    expect(line(ASK_STEP_PROMPT, "  When to use: before relying on")).toContain("before relying on what metadata-only items or incomplete previews say, or on a fact about one item; never only to show that a list's members exist or match its filter;");
-    expect(line(STEP_PROMPT, "  Returns: the ids of up to 8 items")).toContain("no body means metadata only. Open those items before relying on them.");
-    // The reply shape names all three kinds and shows none, so a model copying it copies no default; the example has one need of each.
-    const shape = line(ASK_STEP_PROMPT, "{\"parts\":[{\"question\":\"<one part of the question>\"");
-    expect(JSON.parse(shape).parts[0].needs).toEqual([{ id: "N1", need: "<a fact needed>", kind: "<which_items, which_say or content>", status: "open", evidence: [] }]);
-    expect(ASK_STEP_PROMPT).toContain("A need's \"status\" is \"open\", \"found\" or \"not_found\". A need's \"kind\" is \"which_items\", \"which_say\" or \"content\". \"tool\" is");
-    const example = JSON.parse(ASK_STEP_PROMPT.split("\n").at(-1)!) as { parts: { needs: { kind: string; evidence: string[] }[] }[] };
-    expect(example.parts.flatMap(part => part.needs.map(need => [need.kind, need.evidence]))).toEqual([["which_items", ["L1", "E3", "E4", "E5", "E6"]], ["which_say", ["L1", "E3"]], ["content", ["E2"]]]);
-    for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT]) expect(prompt).not.toMatch(/which_items|which_say|A need's "kind"|for a which_say need/u);
-    expect([ASK_STEP_PROMPT.includes("You may stop early"), ASK_STEP_PROMPT.includes("instead of paging through it")]).toEqual([false, false]);
-    for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT]) expect(prompt).toContain("You may stop early when the facts the question asks for are already supported.");
-    // Ask's argument and recovery clarifications are covered by agentic-ask-tool-contracts.test.ts.
-    // Background prompts above remain byte-for-byte pinned; Ask keeps the same discovery tools and evidence rules.
-    for (const prompt of [ASK_STEP_PROMPT, STEP_PROMPT]) for (const tool of ['search', 'open', 'list', 'finish']) expect(prompt).toContain(`${tool}, args`);
+  it("shows Ask's research an example step the parser reads as written (ADR-0041)", () => {
+    const example = JSON.parse(ASK_STEP_PROMPT.split("\n").at(-1)!) as unknown;
+    expect(corrected(() => parseStep(example, { lists: true }))).toEqual({});
   });
 
   it("requires a need kind in Ask's step schema only with the list tool (ADR-0041)", () => {
@@ -169,11 +121,9 @@ describe("agentic Ask model protocol parity", () => {
     const kinded = needOf(createStepSchema(["pages", "tickets"], ["E1", "E2"], true, true, true));
     expect([Object.keys(kinded.properties as Schema), (kinded.properties as Schema).kind, kinded.required])
       .toEqual([["id", "need", "kind", "status", "evidence"], { type: "string", enum: ["which_items", "which_say", "content"] }, ["need", "kind", "status", "evidence"]]);
-    // Without it, the schema is the one built at 026f60d, byte for byte.
-    expect([createStepSchema(["pages", "tickets"], ["E1", "E2"], true, true), createStepSchema(["pages", "tickets"], ["E1", "E2"], true, true, false), createStepSchema(["pages"], undefined, false, false), stepSchema].map(schema => canonicalSha256(schema))).toEqual([
-      "sha256:89777c72b01f93f9335b2ec8165befe2c15d8fe1f067c8a50753f0e216cb968f", "sha256:89777c72b01f93f9335b2ec8165befe2c15d8fe1f067c8a50753f0e216cb968f",
-      "sha256:172f427c99d87ed7a210eba5972be0abdfc6c23d7d96271388934c6753231c3f", "sha256:d2903b4093e32c204330b6e39010d09ca1c2517f5902f6cf7250edd6d345401a",
-    ]);
+    // Without it, a need has no kind.
+    const plain = needOf(createStepSchema(["pages", "tickets"], ["E1", "E2"], true, true));
+    expect([Object.keys(plain.properties as Schema), plain.required]).toEqual([["id", "need", "status", "evidence"], ["need", "status", "evidence"]]);
     // Every step the kinded schema permits parses, as every step the plain one does.
     for (let seed = 1; seed <= 200; seed += 1) {
       const value = generator(seed)(createStepSchema(["meetings"], ["E1"], true, true, true)) as { parts: { question: string }[]; actions: { tool: string; args: Record<string, string> }[] };

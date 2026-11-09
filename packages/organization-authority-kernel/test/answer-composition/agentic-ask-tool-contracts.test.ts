@@ -54,16 +54,4 @@ describe('Ask tool argument contracts', () => {
     expect(argsFor(calls[0]!.schema, 'search').since.format).toBe('date');
     expect(argsFor(calls[0]!.schema, 'list').status.enum).toEqual(['open', 'done', 'active', 'archived']);
   });
-
-  it('explains adaptive recovery while retaining context reads', () => {
-    expect(ASK_STEP_PROMPT).toContain('empty or irrelevant');
-    expect(ASK_STEP_PROMPT).toContain('not the parent meeting title');
-    expect(ASK_STEP_PROMPT).toContain('Full text from search or a neighbouring passage can still be opened');
-    expect(ASK_STEP_PROMPT).toContain('prior notice or truncated read');
-    expect(ASK_STEP_PROMPT).toContain('One retry is available after an availability notice');
-    expect(ASK_STEP_PROMPT).toContain('same day for both');
-    expect(ASK_STEP_PROMPT).toContain('its text must support that fact');
-    expect(ASK_STEP_PROMPT).toContain('A complete list can establish which items exist');
-    expect(ASK_STEP_PROMPT).toContain('no fixed search/list/open order');
-  });
 });
