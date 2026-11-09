@@ -1662,7 +1662,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
     // The Ask timeline's reads (ADR-0047): the source check, by citation, and what arrived in your projects. Each is checked
     // by the contract's validator; other modes return 404 for the source check.
-    if (method === 'POST' && path === '/v1/person/ask/check' && mode === 'ask-timeline-changed') {
+    if (method === 'POST' && path === '/v1/person/ask/check' && mode === 'ask-timeline-unreadable') {
       let items: ReturnType<Contract['validatePersonAskCheckRequestV1']>['items'];
       try {
         ({ items } = api.validatePersonAskCheckRequestV1(body));
@@ -1692,7 +1692,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const question = request.question;
       const answer = { ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8' };
       // The Ask timeline's answers, by the earlier turn the Ask carries; every other mode's take one and answer as if none came.
-      if (mode === 'ask-timeline-changed') return json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
+      if (mode === 'ask-timeline-unreadable') return json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
       // A client requesting progress gets the Ask's steps, then its answer and receipt.
       const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
       if (mode === 'ask-progress' && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V3) {

@@ -3464,7 +3464,8 @@ export function widenScope(): void {
   const view = state.ask;
   if (!view) return;
   // Ask open moves to Home's thread: a turn opened that it puts behind the earlier questions' line opens that line, so the
-  // turn a follow-up continues stays in sight; and what changed of its newest turns is checked as opening Ask there would.
+  // turn a follow-up continues stays in sight; and whether you can still read its newest turns' sources is checked as opening
+  // Ask there would.
   if (!view.earlier && view.opened !== null && behindEarlierLine(askThread(), fullTurns(view)).includes(view.opened)) set({ ask: { ...view, earlier: true } });
   void checkTimeline();
 }

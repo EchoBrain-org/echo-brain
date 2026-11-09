@@ -81,7 +81,7 @@ test('the timeline stays through navigation, on this computer only, each place s
 });
 
 test('a line opens as its heading, with what you can no longer read left out', async () => {
-  run = await launch('ask-timeline-changed');
+  run = await launch('ask-timeline-unreadable');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await ask(page, 'What is open on THERM?');
