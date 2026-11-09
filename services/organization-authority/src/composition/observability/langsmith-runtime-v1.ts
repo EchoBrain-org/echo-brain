@@ -77,25 +77,36 @@ export function createLangSmithRuntimeV1(options: {
 }) {
   const config = options.path === undefined ? undefined : readLangSmithConfigV1(options.path, options.authority_url);
   if (config === undefined) return { scope: options.existing, start() {}, async close() {} };
-  const exporter = createLangSmithObserverV1({ project: config.project, release_sha: options.release_sha,
+  // Research runs and meeting extractions each have their own exporter (captures, upload queue and counts), so meeting
+  // lanes never delay or drop a research trace.
+  const exporterFor = (root: 'research_run' | 'extraction') => createLangSmithObserverV1({ project: config.project, release_sha: options.release_sha, root,
     ...(config.expires_at === null ? {} : { expires_at: Date.parse(config.expires_at) }), send: createLangSmithSenderV1(config) });
+  const research = exporterFor('research_run'), meetings = exporterFor('extraction');
   const deliver = (action: (() => void | Promise<void>) | undefined) => {
     try { if (action !== undefined) void Promise.resolve(action()).catch(() => undefined); } catch { /* observation only */ }
   };
   const scope: CoreRuntimeObservationScopeV1 = { vocabulary: options.vocabulary, ...options.existing,
     observer(event) {
-      deliver(() => exporter.scope.observer!(structuredClone(event)));
+      deliver(() => research.scope.observer!(structuredClone(event)));
+      deliver(() => meetings.scope.observer!(structuredClone(event)));
       deliver(options.existing?.observer === undefined ? undefined : () => options.existing!.observer!(event));
     },
-    diagnostic_exporter: exporter.scope.diagnostic_exporter,
+    // An operation's payloads go to each exporter capturing it: one in practice, as research and meeting extraction never
+    // share an operation.
+    diagnostic_exporter(operation) {
+      const recorders = [research, meetings].flatMap(exporter => exporter.scope.diagnostic_exporter!(operation) ?? []);
+      return recorders.length < 2 ? recorders[0] : event => { for (const record of recorders) void record(event); };
+    },
   };
   let timer: ReturnType<typeof setInterval> | undefined;
   let last = '';
   const report = () => {
-    const status = { kind: 'echo-langsmith-tracing-status-v1', enabled: config.expires_at === null || Date.now() < Date.parse(config.expires_at), ...exporter.status() };
+    // Research's counts stay top level, where the release preflight reads them; meeting extraction's are reported apart.
+    const status = { kind: 'echo-langsmith-tracing-status-v1', enabled: config.expires_at === null || Date.now() < Date.parse(config.expires_at),
+      ...research.status(), meeting_extraction: meetings.status() };
     const line = JSON.stringify(status);
     if (line !== last) { last = line; deliver(() => options.write(`${line}\n`)); }
   };
   return { scope, start() { report(); timer ??= setInterval(report, 60_000); timer.unref(); },
-    async close() { clearInterval(timer); await exporter.close(); report(); } };
+    async close() { clearInterval(timer); await Promise.all([research.close(), meetings.close()]); report(); } };
 }

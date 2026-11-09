@@ -47,8 +47,6 @@ interface Span {
   end?: CoreRuntimeObservationV1;
 }
 interface Capture {
-  /** A research run, or one meeting's extraction: its model call and the code that checks the reply. */
-  readonly kind: 'research' | 'meeting_extraction';
   start: CoreRuntimeObservationV1;
   collector: PersonDiagnosticTraceCollectorV1;
   spans: Map<string, Span>;
@@ -67,8 +65,6 @@ const order = (time: string, id: string, sequence = 0) => `${time.replace(/[-:.]
  * tool runs already show them.
  */
 const SPAN_PHASES: ReadonlySet<string> = new Set(['model_call', 'evidence_connection', 'evidence_revalidate']);
-/** The runtime spans a capture starts at, and the kind of trace each makes. */
-const ROOTS: ReadonlyMap<string, Capture['kind']> = new Map([['research_run', 'research'], ['extraction', 'meeting_extraction']]);
 /** Runtime spans one capture keeps; more are counted, not kept. */
 const MAX_SPANS = 512;
 /**
@@ -97,7 +93,7 @@ function project(capture: Capture, end: CoreRuntimeObservationV1, projectName: s
   const snapshot = capture.collector.snapshot();
   const events = snapshot.events as unknown as readonly Recorded[];
   const rootId = capture.start.span_id;
-  const extraction = capture.kind === 'meeting_extraction';
+  const extraction = capture.start.phase === 'extraction';
   // Index lag is a wait for the search index, not the outage its `unavailable` code would say.
   const lagged = events.some(event => event.kind === 'lifecycle' && event.stage === 'application' && event.event === 'failed' && event.error_kind === 'index_lag');
   const result = lagged ? 'index_lag' : end.result;
@@ -195,7 +191,7 @@ function project(capture: Capture, end: CoreRuntimeObservationV1, projectName: s
       // A meeting extraction's own stage is its root run.
       const key = `${event.span_id}:stage:${event.stage}`;
       let spanned = false;
-      if (event.stage === 'extraction' && event.span_id === rootId) {
+      if (extraction && event.stage === 'extraction' && event.span_id === rootId) {
         spanned = true;
         if (event.event === 'started') root.inputs = { ...event.data };
         else if (event.event === 'succeeded') root.outputs = { ...event.data };
@@ -224,7 +220,7 @@ function project(capture: Capture, end: CoreRuntimeObservationV1, projectName: s
       // Research asks for a call in its provider span's parent. Meeting extraction asks inside the provider span, so its
       // provider time includes any wait for a model slot.
       const asked = span.parent_span_id === null ? undefined : models.get(span.parent_span_id);
-      const run = asked ?? models.get(span.span_id);
+      const run = asked ?? (extraction ? models.get(span.span_id) : undefined);
       // What the model event itself says wins over the runtime span's copy.
       if (run !== undefined) run.extra.metadata = { ...providerLeg(span, run, asked !== undefined), ...run.extra.metadata };
       continue;
@@ -244,11 +240,16 @@ function project(capture: Capture, end: CoreRuntimeObservationV1, projectName: s
   return runs;
 }
 
-/** Full diagnostics for research runs and meeting extractions; unrelated HTTP/worker activity is not exported. */
+/**
+ * Full diagnostics for one kind of operation, research runs by default or meeting extractions; unrelated HTTP/worker
+ * activity is not exported. Each instance holds its own captures, upload queue and counts.
+ */
 export function createLangSmithObserverV1(options: {
   project: string;
   release_sha: string;
   send: (runs: LangSmithRunV1[], signal: AbortSignal) => Promise<void>;
+  /** The runtime span a capture starts at: `research_run`, or `extraction` for one trace per meeting extraction. */
+  root?: 'research_run' | 'extraction';
   now?: () => number;
   max_active?: number;
   max_pending?: number;
@@ -257,8 +258,9 @@ export function createLangSmithObserverV1(options: {
   expires_at?: number;
 }) {
   const now = options.now ?? Date.now;
+  const rootPhase = options.root ?? 'research_run';
   const active = new Map<string, Capture>();
-  const pending: { readonly kind: Capture['kind']; readonly runs: LangSmithRunV1[] }[] = [];
+  const pending: LangSmithRunV1[][] = [];
   const abort = new AbortController();
   const counts = { exported: 0, failed: 0, dropped: 0, incomplete: 0 };
   let lastFailure: ExportFailure | null = null;
@@ -267,17 +269,12 @@ export function createLangSmithObserverV1(options: {
     lastFailure = error instanceof LangSmithExportErrorV1 ? error.failure : { kind: 'unknown', http_status: null };
   };
   let sending: Promise<void> | undefined;
-  let sendingKind: Capture['kind'] | undefined;
   let delivery = 0;
   let closed = false;
-  // Each kind of trace has its own active and upload budget, so meeting lanes never crowd out a research trace.
-  const activeOf = (kind: Capture['kind']) => [...active.values()].filter(capture => capture.kind === kind).length;
-  const queuedOf = (kind: Capture['kind']) => pending.filter(entry => entry.kind === kind).length + Number(sending !== undefined && sendingKind === kind);
   const pump = () => {
     if (sending !== undefined || pending.length === 0 || abort.signal.aborted) return;
-    const { kind, runs } = pending.shift()!;
+    const runs = pending.shift()!;
     const attempt = ++delivery;
-    sendingKind = kind;
     sending = Promise.resolve().then(() => options.send(runs, abort.signal))
       .then(() => { if (attempt === delivery) counts.exported++; }, error => { if (attempt === delivery) failed(error); })
       .finally(() => { sending = undefined; pump(); });
@@ -286,10 +283,10 @@ export function createLangSmithObserverV1(options: {
     active.delete(capture.start.operation_id);
     capture.collector.seal();
     try {
-      if (queuedOf(capture.kind) >= (options.max_pending ?? 4)) { counts.dropped++; return; }
+      if (pending.length + Number(sending !== undefined) >= (options.max_pending ?? 4)) { counts.dropped++; return; }
       const runs = project(capture, end, options.project, options.release_sha, interrupted);
       if (runs[0]!.extra.metadata.complete !== true) counts.incomplete++;
-      pending.push({ kind: capture.kind, runs }); pump();
+      pending.push(runs); pump();
     } catch { failed(new LangSmithExportErrorV1('projection')); } finally { capture.collector.close(); }
   };
   const expire = () => {
@@ -316,8 +313,7 @@ export function createLangSmithObserverV1(options: {
           capture.corrections[name] = (capture.corrections[name] ?? 0) + count;
         }
       }
-      const kind = ROOTS.get(event.phase);
-      if (kind === undefined) {
+      if (event.phase !== rootPhase) {
         if (capture !== undefined && SPAN_PHASES.has(event.phase)) recordSpan(capture, event);
         return;
       }
@@ -325,8 +321,8 @@ export function createLangSmithObserverV1(options: {
         if (options.expires_at !== undefined && now() >= options.expires_at) return;
         // An operation holds one capture at a time; meetings it extracts one after another each get their own.
         if (capture !== undefined) return;
-        if (activeOf(kind) >= (options.max_active ?? 4)) { counts.dropped++; return; }
-        active.set(event.operation_id, { kind, start: event, collector: createPersonDiagnosticTraceV1(now), spans: new Map(), dropped_spans: 0, corrections: {} });
+        if (active.size >= (options.max_active ?? 4)) { counts.dropped++; return; }
+        active.set(event.operation_id, { start: event, collector: createPersonDiagnosticTraceV1(now), spans: new Map(), dropped_spans: 0, corrections: {} });
       } else if (capture?.start.span_id === event.span_id) finish(capture, event);
     },
     diagnostic_exporter(operationId) {

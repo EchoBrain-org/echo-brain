@@ -570,9 +570,9 @@ describe('llm decision processor extraction', () => {
         () => observeCoreRuntimeV1('extraction', () => instance.extract(meeting, extractionContext(instance))));
       return payload.filter((event) => event.kind === 'model_response');
     };
-    expect(await responses({ inputTokens: 1200, outputTokens: 80, totalTokens: 1280, stopReason: 'stop' })).toEqual([expect.objectContaining({
+    expect(await responses({ inputTokens: 1200, outputTokens: 80, totalTokens: 1280, cachedInputTokens: 400, reasoningTokens: 30, stopReason: 'stop' })).toEqual([expect.objectContaining({
       role: 'extraction', value: validModelOutput, finish_reason: 'stop',
-      usage: { input_tokens: 1200, output_tokens: 80, total_tokens: 1280, cached_input_tokens: null, reasoning_tokens: null },
+      usage: { input_tokens: 1200, output_tokens: 80, total_tokens: 1280, cached_input_tokens: 400, reasoning_tokens: 30 },
     })]);
     // Counts the provider did not report are null; a stop reason outside the closed set is `other`, and none is null.
     const none = { input_tokens: null, output_tokens: null, total_tokens: null, cached_input_tokens: null, reasoning_tokens: null };

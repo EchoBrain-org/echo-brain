@@ -1054,9 +1054,16 @@ It runs on the Authority server using its configured LangSmith key, independentl
 of the operator's AWS SSO session. An expired SSO session prevents operator log
 inspection; it does not stop exports.
 It sends prompts and released source content to the chosen LangSmith project.
-While tracing is enabled, meeting extraction also sends each extracted meeting's
-text (its title, participant names, transcript turns, notes and the tool's AI
-summary) and the model's extraction, as research traces send evidence text.
+While tracing is enabled, every meeting extraction also sends what the model
+read and returned: the meeting's title, date and time zone, participant names
+(or email addresses where the tool gives no name), the tool's meeting ID, its
+transcript turns, notes and the tool's AI summary as numbered units, the
+model's reply, and why code set items aside. These are each staging member's
+own meetings, private to their importer until items are approved
+([ADR-0046](../../docs/decisions/ADR-0046-private-meetings-and-item-routing.md)),
+and they are sent when extracted, before anyone reviews them, including
+meetings whose items are later not kept. Anyone with access to the LangSmith
+project can read them, and nothing revalidates or erases what was sent.
 Choose a project whose access and retention are appropriate for the rehearsal.
 No infrastructure stack or LangChain framework is required. The composition
 adapter uses LangSmith's documented [multipart tracing API](https://docs.langchain.com/langsmith/trace-with-api).
@@ -1101,14 +1108,15 @@ tickets is a valid trace; do not infer that mentioned ticket numbers were opened
 A meeting import, or a watch delivering one, makes an `ECHO meeting_extraction`
 trace once the meeting is extracted.
 
-The exporter retains at most four active research captures and four active
-meeting extraction captures (each an 8 MiB/512-event exact prefix), and four
-queued/in-flight uploads of each kind, so meeting lanes never crowd out a
-research trace; the status counts cover both kinds. Uploads run independently
-with a five-second deadline and no automatic retry. Limits or missing event pairs
-mark the trace incomplete; whole dropped or failed uploads are counted in
-`echo-langsmith-tracing-status-v1`. That content-free record reports only when
-status changes, checked once per minute and at startup/shutdown. A zero pending
+Research runs and meeting extractions have separate budgets: each kind keeps at
+most four active captures (each an 8 MiB/512-event exact prefix) and four
+queued/in-flight uploads, in its own upload lane, so meeting lanes never delay
+or drop a research trace. Uploads run independently with a five-second deadline
+and no automatic retry. Limits or missing event pairs mark the trace incomplete;
+whole dropped or failed uploads are counted in `echo-langsmith-tracing-status-v1`.
+Its top-level counts are research's; meeting extraction's are the same fields
+under `meeting_extraction`. That content-free record reports only when status
+changes, checked once per minute and at startup/shutdown. A zero pending
 count alone is not success: check `exported`, `failed`, `dropped`, `incomplete`.
 `last_failure` retains the most recent failure category and numeric `http_status`
 (or `null` when no HTTP response was received), without keys, headers, response
@@ -1129,7 +1137,8 @@ valid. To disable either mode immediately and remove the local key:
 sudo ./onboard-clean-v1.sh langsmith-tracing --disable
 ```
 
-This also restarts the runtime and stops research and meeting extraction traces
-alike. Removing a local selection does not delete already-uploaded traces;
-manage their retention in LangSmith. None of these commands approves a canary,
-promotes a release or publishes a client feed.
+This also restarts the runtime and stops new research and meeting extraction
+traces alike. Disabling or removing a local selection does not delete
+already-uploaded traces, meeting text included; manage their retention in
+LangSmith. None of these commands approves a canary, promotes a release or
+publishes a client feed.

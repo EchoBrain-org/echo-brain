@@ -187,9 +187,14 @@ Two selected diagnostic paths are explicit exceptions to that capture rule:
 - **Staging LangSmith tracing.** An operator-selected, staging-only exporter
   sends each selected research run's model prompts and outputs and its tool
   arguments and results, including live Jira and Confluence text and generated
-  JQL, to an external LangSmith project. Nothing revalidates or erases what it
-  has sent. The Authority refuses to start with a tracing selection on any
-  other origin, and the onboarding wrapper refuses non-staging Authorities (see
+  JQL, to an external LangSmith project. It also sends each meeting
+  extraction's prompt and reply: the meeting's title, date, participant names
+  or email addresses, transcript turns, notes and the tool's AI summary, from a
+  staging member's private meetings
+  ([ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md)),
+  before anyone reviews them. Nothing revalidates or erases what it has sent.
+  The Authority refuses to start with a tracing selection on any other origin,
+  and the onboarding wrapper refuses non-staging Authorities (see
   [LangSmith staging tracing](../../deploy/organization-authority/README.md#langsmith-staging-tracing)).
 
 Ask progress is not a capture path. A streamed Ask

@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
-import { observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { observeCoreRuntimeDiagnosticV1, observeCoreRuntimeRootV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { createLangSmithRuntimeV1, createLangSmithSenderV1, readLangSmithConfigV1 } from '../../src/composition/observability/langsmith-runtime-v1.js';
-import type { LangSmithRunV1 } from '../../src/composition/observability/langsmith-observer-v1.js';
+import { createLangSmithObserverV1, type LangSmithRunV1 } from '../../src/composition/observability/langsmith-observer-v1.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -17,6 +17,27 @@ const fixture = () => {
   writeFileSync(path, JSON.stringify(config), { mode: 0o600 });
   return { path, config };
 };
+/** The runs one multipart upload carried, root first, rebuilt from their parts. */
+async function uploadedRuns(form: FormData): Promise<LangSmithRunV1[]> {
+  const runs = new Map<string, Record<string, unknown>>();
+  for (const [name, value] of form.entries()) {
+    const [, id, part] = /^post\.([^.]+)(?:\.(\w+))?$/u.exec(name)!;
+    const json = JSON.parse(await (value as Blob).text()) as Record<string, unknown>;
+    runs.set(id!, { ...runs.get(id!), ...(part === undefined ? json : { [part]: json }) });
+  }
+  return [...runs.values()] as unknown as LangSmithRunV1[];
+}
+/** A trace with its random child run ids replaced by position, so two projections of the same events compare equal. */
+function positional(runs: readonly LangSmithRunV1[]): unknown {
+  let json = JSON.stringify(runs);
+  runs.forEach((run, index) => { if (run.id !== run.trace_id) json = json.split(run.id).join(`child-${index}`); });
+  return JSON.parse(json);
+}
+/** One meeting lane's extraction, as far as the exporters see it. */
+const meetingLane = (scope: CoreRuntimeObservationScopeV1 | undefined, meeting: string) => observeCoreRuntimeRootV1('worker_execution', () =>
+  observeCoreRuntimeV1('extraction', async () => {
+    observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'extraction', event: 'started', data: { meeting, title: 'private meeting title' } });
+  }), scope);
 describe('explicit staging LangSmith selection', () => {
   it('accepts an explicit persistent selection after a month, but never treats a missing expiry as persistent', () => {
     const { path, config } = fixture();
@@ -177,6 +198,90 @@ describe('explicit staging LangSmith selection', () => {
     for (const secret of [config.api_key, 'private service response', 'private question', 'private source']) {
       expect(lines.join('')).not.toContain(secret);
     }
+  });
+
+  it('uploads research exactly as a research exporter alone does, however slow meeting extraction uploads are', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { path } = fixture();
+    let holding = true;
+    const held: (() => void)[] = [], research: LangSmithRunV1[][] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, options) => {
+      const runs = await uploadedRuns(options!.body as FormData);
+      // A meeting extraction's upload hangs until the test lets it go; research uploads are accepted at once.
+      if (runs[0]!.name !== 'ECHO meeting_extraction') research.push(runs);
+      else if (holding) await new Promise<void>(resolve => { held.push(resolve); });
+      return new Response('', { status: 202 });
+    });
+    const lines: string[] = [];
+    const runtime = createLangSmithRuntimeV1({ path, authority_url: STAGING_AUTHORITY_ORIGIN_V1, release_sha: 'a'.repeat(40), write: line => { lines.push(line); } });
+    // The same events also reach a research exporter of its own: what the runtime's research uploads must equal.
+    const alone: LangSmithRunV1[][] = [];
+    const reference = createLangSmithObserverV1({ project: 'echo-staging', release_sha: 'a'.repeat(40), send: async runs => { alone.push(runs); } });
+    const scope: CoreRuntimeObservationScopeV1 = {
+      observer(event) { void reference.scope.observer!(structuredClone(event)); void runtime.scope!.observer!(event); },
+      diagnostic_exporter(operation) {
+        const recorders = [reference.scope.diagnostic_exporter!(operation), runtime.scope!.diagnostic_exporter!(operation)];
+        return event => { for (const record of recorders) void record?.(event); };
+      },
+    };
+    try {
+      runtime.start();
+      // Four meeting lanes fill meeting extraction's upload queue behind its one held upload; then six Asks, each of
+      // which uploads while that upload still hangs.
+      for (let lane = 0; lane < 4; lane++) await meetingLane(scope, `note-${lane}`);
+      for (let ask = 0; ask < 6; ask++) {
+        await observeCoreRuntimeV1('research_run', async () => {
+          observeCoreRuntimeDiagnosticV1({ kind: 'tool_request', tool_call_id: 1, round: 1, tool: 'search', args: { query: `THERM ${ask}` } });
+          observeCoreRuntimeDiagnosticV1({ kind: 'tool_response', tool_call_id: 1, round: 1, tool: 'search', result: { items: [] } });
+        }, scope);
+        await vi.waitFor(() => expect(research).toHaveLength(ask + 1));
+      }
+      await reference.flush();
+      expect(research.map(positional)).toEqual(alone.map(positional));
+      expect(held).toHaveLength(1);
+      holding = false; held.shift()!();
+      await reference.close(); await runtime.close();
+      // Research's counts are the lone exporter's; meeting extraction's are reported apart.
+      const { kind: _kind, enabled: _enabled, meeting_extraction: meetings, ...counts } = JSON.parse(lines.at(-1)!) as Record<string, unknown>;
+      expect(counts).toEqual(reference.status());
+      expect(meetings).toMatchObject({ exported: 4, failed: 0, dropped: 0, incomplete: 0, pending: 0 });
+    } finally { vi.useRealTimers(); await runtime.close(); }
+  });
+
+  it('records an extraction run inside a research operation in both traces', async () => {
+    const { path } = fixture();
+    const uploads: LangSmithRunV1[][] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, options) => { uploads.push(await uploadedRuns(options!.body as FormData)); return new Response('', { status: 202 }); });
+    const runtime = createLangSmithRuntimeV1({ path, authority_url: STAGING_AUTHORITY_ORIGIN_V1, release_sha: 'a'.repeat(40), write: () => undefined });
+    try {
+      await observeCoreRuntimeV1('research_run', () => observeCoreRuntimeV1('extraction', async () => {
+        observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'extraction', event: 'started', data: { meeting: 'note-1', title: 'nested' } });
+      }), runtime.scope);
+    } finally { await runtime.close(); }
+    // Research keeps the payloads it always recorded; the extraction's own trace has them too.
+    expect(Object.fromEntries(uploads.map(runs => [runs[0]!.name, runs.map(run => [run.name, run.inputs])]))).toEqual({
+      'ECHO meeting_extraction': [['ECHO meeting_extraction', { meeting: 'note-1', title: 'nested' }]],
+      'ECHO research': [['ECHO research', {}], ['extraction', { meeting: 'note-1', title: 'nested' }]],
+    });
+  });
+
+  it('reports meeting extraction\'s counts apart, so its failed uploads leave the counts the release preflight reads clean', async () => {
+    const { path } = fixture();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, options) => {
+      const runs = await uploadedRuns(options!.body as FormData);
+      return new Response('private service response', { status: runs[0]!.name === 'ECHO meeting_extraction' ? 500 : 202 });
+    });
+    const lines: string[] = [];
+    const runtime = createLangSmithRuntimeV1({ path, authority_url: STAGING_AUTHORITY_ORIGIN_V1, release_sha: 'a'.repeat(40), write: line => { lines.push(line); } });
+    try {
+      runtime.start();
+      await meetingLane(runtime.scope, 'note-1');
+      await observeCoreRuntimeV1('research_run', async () => 42, runtime.scope);
+    } finally { await runtime.close(); }
+    expect(JSON.parse(lines.at(-1)!)).toEqual({ kind: 'echo-langsmith-tracing-status-v1', enabled: true,
+      exported: 1, failed: 0, dropped: 0, incomplete: 0, active: 0, pending: 0, last_failure: null,
+      meeting_extraction: { exported: 0, failed: 1, dropped: 0, incomplete: 0, active: 0, pending: 0, last_failure: { kind: 'http', http_status: 500 } } });
+    expect(lines.join('')).not.toContain('private');
   });
 
   it.each(['timeout', 'cancelled', 'network'] as const)('distinguishes %s without retaining transport errors', async kind => {

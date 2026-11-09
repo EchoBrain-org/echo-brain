@@ -355,7 +355,7 @@ const decision = (text: string, units: readonly string[]) => ({ kind: 'decision'
   evidence_units: units, supports_decision_indexes: [] });
 /** The model's reply: a decision citing N1 in another spelling and a unit that does not exist, and an item citing no known unit. */
 const reply = JSON.stringify({ signals: [decision('Use vendor X for hosting', ['[N1]', 'T9']), decision('Adopt vendor Y', ['T9'])] });
-const answered: StructuredGenerationResult = { content: reply, inputTokens: 1200, outputTokens: 80, totalTokens: 1280, stopReason: 'stop' };
+const answered: StructuredGenerationResult = { content: reply, inputTokens: 1200, outputTokens: 80, totalTokens: 1280, cachedInputTokens: 400, reasoningTokens: 30, stopReason: 'stop' };
 /** The real decision processor over a provider client that returns `outcome` or throws it; `requests` holds what the client was asked. */
 function extractor(outcome: StructuredGenerationResult | Error) {
   const requests: StructuredGenerationRequest[] = [];
@@ -383,10 +383,10 @@ function extraction(meeting: MeetingDocument, extract: (meeting: MeetingDocument
     }
   });
 }
-/** Each trace one worker pass exported through a fresh observer, in upload order. */
+/** Each trace one worker pass exported through a fresh meeting extraction exporter, in upload order. */
 async function exportedPass(pass: () => Promise<unknown>): Promise<LangSmithRunV1[][]> {
   const send = vi.fn(async (_runs: LangSmithRunV1[]) => {});
-  const observer = createLangSmithObserverV1({ project: 'fixture', release_sha: 'a'.repeat(40), send });
+  const observer = createLangSmithObserverV1({ project: 'fixture', release_sha: 'a'.repeat(40), send, root: 'extraction' });
   await observeCoreRuntimeRootV1('worker_execution', pass, observer.scope).catch(() => undefined);
   await observer.flush(); await observer.close();
   return send.mock.calls.map(([runs]) => runs);
@@ -414,7 +414,7 @@ describe('LangSmith projection of meeting extraction', () => {
       max_output_tokens: request!.maxOutputTokens, timeout_ms: 120_000 });
     expect(model!.inputs.user_prompt).toContain('[T1] Ada: Should we use vendor X?');
     expect(model!.extra.metadata).toMatchObject({ finish_reason: 'stop', provider: 'other', provider_result: null, provider_latency_ms: expect.any(Number),
-      usage: { input_tokens: 1200, output_tokens: 80, total_tokens: 1280, cached_input_tokens: null, reasoning_tokens: null } });
+      usage: { input_tokens: 1200, output_tokens: 80, total_tokens: 1280, cached_input_tokens: 400, reasoning_tokens: 30 } });
     expect(model!.extra.metadata).not.toHaveProperty('queue_ms');
     // Why code set an item aside, between the extraction's own start and end, whose data are the root's inputs and outputs.
     expect(root!.events).toEqual([
@@ -459,26 +459,15 @@ describe('LangSmith projection of meeting extraction', () => {
       kwargs: { data: { failure_stage: 'evidence_id', signal_index: 0 }, error_kind: 'invalid_output' } });
   });
 
-  it('keeps its own capture and upload budget, so meeting lanes never crowd out a research trace', async () => {
-    let finishExtraction!: () => void;
-    const uploads: (() => void)[] = [];
-    const send = vi.fn((_runs: LangSmithRunV1[]) => new Promise<void>(resolve => { uploads.push(resolve); }));
-    const observer = createLangSmithObserverV1({ project: 'fixture', release_sha: 'a'.repeat(40), send, max_active: 1, max_pending: 1 });
-    const lane = (extract: () => Promise<{ readonly signals: readonly unknown[] }>) =>
-      observeCoreRuntimeRootV1('worker_execution', () => extraction(meetingDocument, extract), observer.scope);
-    const running = lane(() => new Promise(resolve => { finishExtraction = () => resolve({ signals: [] }); }));
-    // With an extraction in flight, a research run is still captured; another lane's extraction is not.
-    await observeCoreRuntimeV1('research_run', async () => 42, observer.scope);
-    await lane(async () => ({ signals: [] }));
-    expect(observer.status()).toMatchObject({ active: 1, dropped: 1, pending: 1 });
-    // While the research trace uploads, the finished extraction still queues in its own slot; one more does not.
-    finishExtraction(); await running;
-    await lane(async () => ({ signals: [] }));
-    expect(observer.status()).toMatchObject({ active: 0, dropped: 2, pending: 2 });
-    uploads.shift()!(); await pause(); await pause();
-    uploads.shift()!(); await observer.flush();
-    expect(send.mock.calls.map(([runs]) => runs[0]!.name)).toEqual(['ECHO research', 'ECHO meeting_extraction']);
-    expect(observer.status()).toMatchObject({ exported: 2, dropped: 2, pending: 0 });
-    await observer.close();
+  it('captures only the operations its root names: research by default, or meeting extractions', async () => {
+    for (const root of [undefined, 'extraction'] as const) {
+      const send = vi.fn(async (_runs: LangSmithRunV1[]) => {});
+      const observer = createLangSmithObserverV1({ project: 'fixture', release_sha: 'a'.repeat(40), send, ...(root === undefined ? {} : { root }) });
+      await observeCoreRuntimeV1('research_run', async () => 42, observer.scope);
+      await observeCoreRuntimeRootV1('worker_execution', () => extraction(meetingDocument, extractor(answered).extract), observer.scope);
+      await observer.flush(); await observer.close();
+      expect(send.mock.calls.map(([runs]) => runs[0]!.name)).toEqual([root === undefined ? 'ECHO research' : 'ECHO meeting_extraction']);
+      expect(observer.status()).toMatchObject({ exported: 1, dropped: 0 });
+    }
   });
 });

@@ -947,9 +947,10 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         throw error;
       });
       observeCoreModelMetadataV1({ provider: this.client.provider, model: this.model, ...(value.requestId === undefined ? {} : { request_id: value.requestId }), ...(value.stopReason === undefined ? {} : { finish_reason: value.stopReason }) });
-      // The reply with the token counts the span's counts carry, for a selected diagnostic sink only.
+      // The reply with the token counts the provider reported, for a selected diagnostic sink only.
       observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: 1, role: 'extraction', value: value.content,
-        usage: { input_tokens: value.inputTokens ?? null, output_tokens: value.outputTokens ?? null, total_tokens: value.totalTokens ?? null, cached_input_tokens: null, reasoning_tokens: null },
+        usage: { input_tokens: value.inputTokens ?? null, output_tokens: value.outputTokens ?? null, total_tokens: value.totalTokens ?? null,
+          cached_input_tokens: value.cachedInputTokens ?? null, reasoning_tokens: value.reasoningTokens ?? null },
         finish_reason: diagnosticFinishReason(value.stopReason) });
       annotateCoreRuntimeV1({ counts: { output_bytes: Buffer.byteLength(value.content), input_tokens: value.inputTokens ?? null, output_tokens: value.outputTokens ?? null, total_tokens: value.totalTokens ?? null, provider_latency_ms: this.providerElapsedMs(startedAt) } });
       return value;
