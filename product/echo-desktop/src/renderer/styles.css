@@ -491,7 +491,7 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
 /* While Ask works: one quiet line (a pulse, the step now, how long). */
 .ask-trail { display: flex; flex-direction: column; gap: 6px; }
 .ask-line { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; color: var(--faint); }
-.ask-line-toggle { display: inline-flex; align-items: center; gap: 7px; min-width: 0; margin-left: -6px; padding: 3px 6px; border: 0; border-radius: 6px; font-size: inherit; text-align: left; color: inherit; background: transparent; }
+.ask-line-words { display: inline-flex; align-items: center; gap: 7px; min-width: 0; margin-left: -6px; padding: 3px 6px; text-align: left; }
 .ask-line .pulse { flex-shrink: 0; width: 6px; height: 6px; border-radius: 3px; background: var(--muted); animation: pulse 1.2s infinite ease-in-out; }
 .ask-line .headline { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The step now, shimmering while Ask works: a band of brighter text that sweeps across it. */

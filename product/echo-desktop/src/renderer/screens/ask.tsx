@@ -915,7 +915,7 @@ function Asking({ progress }: { progress: AskProgress }) {
   return <>
     <div class="ask-trail" aria-live="off">
       <div class="ask-line" data-testid="asking">
-        <span class="ask-line-toggle">
+        <span class="ask-line-words">
           <i class="pulse" aria-hidden="true" />
           <span class="headline working" data-testid="ask-stage">{live ? headline(progress) : 'Thinking…'}</span>
           <span class="timer" data-testid="ask-timer" aria-hidden="true">{duration(elapsed)}</span>
