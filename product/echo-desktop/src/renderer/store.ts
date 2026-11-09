@@ -784,10 +784,9 @@ function applyStatus(status: AppStatus): void {
   if (!next) {
     // A sign-out the host lost mid-way did happen: the account goes as it would have.
     if (signOutPending) { signOutPending = null; forgetAccount(); }
-    // No one to check for: signing in again starts over, learning what is there, and reads the timeline again. No run starts
-    // for no one either, even from a list on its way.
+    // No one to check for: signing in again starts over, learning what is there, and reads the timeline again. With no
+    // change check, nothing checks in for no one either.
     freshness.stop();
-    stopRunPolling();
     forgetTimeline();
     set({ news: new Set(), visit: null });
     emptyBar();
@@ -813,13 +812,11 @@ function applyStatus(status: AppStatus): void {
   signOutPending = null;
   if (!same || !wasSignedIn) {
     void loadHome();
-    // Checks move on any page: away from Home, or covered, the driver looks at the runs itself (R4).
-    kickRuns();
     // This account's Ask timeline on this computer (ADR-0047), and when it last opened each project.
     void loadTimeline();
     rememberSeen(lastAccount);
     // The change check starts over for this account: it reads every project you belong to (filling the sidebar), and its
-    // first check learns.
+    // first check learns, then checks in, so the Authority starts a check of yours that waits, on any page (DSK-1).
     freshness.start(lastAccount);
     // New project kept through a sign-out goes on with what waited while no one was signed in.
     pumpNewProject();
@@ -880,16 +877,7 @@ function forgetAccount(): void {
   if (state.sheet?.kind === 'new-project') for (const file of state.sheet.files) if (file.kept) releaseCopy(file.requestId, account);
   if (state.sheet?.kind === 'tool-connect') cancelWaitingConnection(state.sheet, account);
   if (state.projectSettings?.tools) clearProjectMappings(state.projectSettings, account);
-  stopRunPolling();
   freshness.stop();
-  runFailures = 0;
-  openUnread = false;
-  resultOwed = false;
-  // So were the driver's runs list, Home's hold on it and a start or look on its way: the next account's go at once.
-  runsSeen = [];
-  runsHeld = false;
-  starting = null;
-  looking = null;
   lastAccount = null;
   // A Home load on its way is the last account's: the next one starts afresh.
   homeLoading = null;
@@ -5131,10 +5119,10 @@ let comingBack = false;
 /**
  * Where the window stands, as main says when it changes. Not in front: the
  * page is covered (the privacy cover), and its live reads and polls stop;
- * checks keep moving, by the runs list alone (R1). In front: it uncovers. On
- * screen and in front again: ECHO came back, and what shows is read again
- * (R4). Owed reads wait while the window cannot be seen (R6). Answers the
- * return's reads when it came back, else null.
+ * the change check goes on, and so checks keep moving (R1; DSK-1). In front:
+ * it uncovers. On screen and in front again: ECHO came back, and what shows
+ * is read again (R4). Owed reads wait while the window cannot be seen (R6).
+ * Answers the return's reads when it came back, else null.
  */
 export function windowState(next: { onScreen: boolean; front: boolean }): Promise<void> | null {
   const back = next.onScreen && next.front && !canSee();
@@ -5203,7 +5191,10 @@ const SURFACES: readonly Surface[] = [
   // The follow-ups view on screen: those under it, and the page under them all, read again when they show.
   { areas: ['follow_ups'], shows: () => topView() !== null, busy: () => Boolean(topView()?.loading || topView()?.busy), read: () => rereadViews() },
   { areas: ['follow_ups'], shows: () => projectShown() !== null, read: () => loadLine('projectLine', 'project', projectShown()!.project_id) },
-  { areas: ['follow_ups'], shows: () => impactLineShown() !== null, read: () => loadLine('impactLine', impactLineShown()!.scope, impactLineShown()!.id) },
+  // The meeting line the reader shows: its follow-ups, and its check's stage, which moves the reviews when it starts, fails or
+  // ends (DSK-1).
+  { areas: ['follow_ups', 'reviews'], shows: () => impactLineShown() !== null,
+    read: () => loadLine('impactLine', impactLineShown()!.scope, impactLineShown()!.id) },
   // The page itself, on a return: a project's feed and members, Only me, Tools, People & invites, a sidebar whose read failed,
   // and the bar's matches.
   { areas: [], shows: () => projectShown() !== null, read: () => Promise.all([loadList('quiet'),
@@ -5237,9 +5228,6 @@ function owe({ back, areas }: { readonly back: boolean; readonly areas: readonly
     if ((back || surface.areas.some(area => areas.includes(area))) && surface.shows()) owed.set(surface, back || owed.get(surface) === true);
   }
   settleOwed();
-  // Coming back, or a meeting approved or published anywhere (the reviews moved): a check may wait to start, on any page (R4).
-  // Home's own load, owed just now, drives where it shows.
-  if (back || areas.includes('reviews')) kickRuns();
 }
 
 /**
@@ -5271,8 +5259,20 @@ async function rereadViews(): Promise<void> {
   else if (!top.gone) await readItem(top.seq);
 }
 
+/**
+ * Checks in as an account (DSK-1): the Authority starts its oldest queued impact check, unless another of its checks runs.
+ * Sent after each change check that reached the Authority, as that check's account, and on Try again; the host pins it to
+ * that account. Quiet: what it started shows as the reviews move, and it never throws.
+ */
+async function checkIn(account: Expect | null = expect()): Promise<void> {
+  if (!account) return;
+  try {
+    await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'next' } });
+  } catch { /* quiet: the next check-in asks again */ }
+}
+
 freshness.configure({
-  account: expect, seen: canSee, status: refreshStatus, readProjects, refreshSidebar, readItem: readOne, owe, accountLost, readActivity,
+  account: expect, seen: canSee, status: refreshStatus, readProjects, refreshSidebar, readItem: readOne, owe, accountLost, readActivity, checkIn,
   readRows: async (account, query) => {
     const read = await readItems(account, { scope: 'involved', read: 'rows', ...query }, null, Number.POSITIVE_INFINITY);
     return read.ok ? read.pages.flatMap(page => page.items) : null;
@@ -5740,9 +5740,10 @@ let homeToken = 0;
 
 /**
  * Home: what waits on you. Read when Home opens, when the window comes
- * forward, and after a decision or a Send; read again while a check is going.
- * A load asked for while one is on its way joins it, and one more load runs
- * after it, never more.
+ * forward, and after a decision or a Send; read again when the change check
+ * says the reviews moved, as they do when one of your checks starts, fails or
+ * ends (DSK-1). A load asked for while one is on its way joins it, and one
+ * more load runs after it, never more.
  * Back on Home after a change (`fresh` false), only the rows that newly lack
  * a live part are read live.
  */
@@ -5768,41 +5769,23 @@ export function loadHome(fresh = true): Promise<void> {
 async function loadHomeOnce(fresh: boolean): Promise<void> {
   const account = expect();
   if (!account || state.concealed || (state.route.page !== 'home' && state.route.page !== 'decision')) return;
-  stopRunPolling();
   const mine = ++seq;
   const previous: Omit<HomeState, 'seq' | 'loading'> = state.home ?? { settled: false, reviews: [], runs: [], open: null, live: {}, reading: false };
   // An earlier load's live read, still on its way, is no longer Home's: it says nothing of this one's.
   set({ home: { ...previous, seq: mine, loading: true, failure: undefined, reading: false } });
-  await readHome(mine, false, fresh);
-}
-
-/** The last read of what waits on you failed: the next poll reads it again. */
-let openUnread = false;
-/** A check ended and what it found has not been read since: Home keeps looking until it has. */
-let resultOwed = false;
-
-const going = (run: PersonRunV1) => run.state === 'pending' || run.state === 'running';
-
-/** A check that was going before and is not now: what it found may wait on Home. */
-function checkEnded(before: readonly PersonRunV1[], after: readonly PersonRunV1[]): boolean {
-  return before.some(run => going(run) && !after.some(next => next.run_id === run.run_id && going(next)));
+  await readHome(mine, fresh);
 }
 
 /**
  * The reviews, your runs and what waits on you, read side by side, each
  * shown as soon as it is read, so quick rows never wait for slow ones. Each
  * part keeps its last good value when its read fails; the runs and home
- * parts fail silently, and only a failed reviews read says so (never on a
- * poll). A poll reads what waits on you only once a check has ended, or after
- * that read failed. Home stops loading, and drives its runs, once its rows
- * are read; their live read goes on.
- * Its runs drive only if no drive or look of the driver's began since it did:
- * that one goes by a newer list, which this read's must not undo (R3).
+ * parts fail silently, and only a failed reviews read says so. Home stops
+ * loading once its rows are read; their live read goes on. The open
+ * decision follows its checks. Home starts no check: the Authority starts
+ * them when this desktop checks in (DSK-1).
  */
-async function readHome(mine: number, poll: boolean, fresh = true): Promise<void> {
-  const account = expect();
-  const before = state.home?.runs ?? [];
-  const ran = runSeq;
+async function readHome(mine: number, fresh: boolean): Promise<void> {
   /** One part, shown once read while Home is still this read's; answered as settled. */
   const shown = <T>(read: Promise<T>, apply: (value: T) => Partial<HomeState>): Promise<PromiseSettledResult<T>> => read.then(
     value => {
@@ -5812,59 +5795,30 @@ async function readHome(mine: number, poll: boolean, fresh = true): Promise<void
     },
     (reason: unknown) => ({ status: 'rejected' as const, reason }));
   const reviewsRead = shown(reviewsCommand({ operation: 'reviews' }).then(value => value.reviews), reviews => ({ reviews }));
-  const runsRead = shown(runsCommand({ schema_version: 1, operation: 'list' }), value => {
-    // Shown, the list no longer shows the check going: what it found is owed from now, whichever read brings it.
-    if (checkEnded(before, value.runs)) resultOwed = true;
-    return { runs: value.runs };
-  });
-  let waiting = poll ? null : readWaiting(mine, fresh);
-  const [reviews, runs] = await Promise.all([reviewsRead, runsRead]);
-  if (waiting === null && homeShown(mine) && (openUnread || resultOwed)) waiting = readWaiting(mine, true);
-  const unread = waiting ? await waiting : undefined;
-  const reviewsFailure = reviews.status === 'rejected' ? failureOf(reviews.reason) : undefined;
-  const loadFailure = poll ? undefined : reviewsFailure;
-  // A read that is no longer Home's shows nothing, so it settles nothing Home owes either. Home was left or covered while it
-  // was on its way: unless a newer Home load, drive or look drives, the runs it read still do, for the account it read them for (R1, R3).
+  const runsRead = shown(runsCommand({ schema_version: 1, operation: 'list' }), value => ({ runs: value.runs }));
+  const waiting = readWaiting(mine, fresh);
+  const [reviews] = await Promise.all([reviewsRead, runsRead, waiting]);
+  // A read that is no longer Home's shows nothing.
   const home = homeShown(mine);
-  if (!home) {
-    // Reviews that answered lift their hold, though Home was left before they did: this load was the Try again it waits for (R4).
-    // Only while it is still Home's newest load: a newer one (after a sign-out and in, even as the same person) holds its own.
-    if (!poll && !loadFailure && state.home?.seq === mine && sameExpect(expect(), account)) runsHeld = false;
-    if (runSeq === ran && !loadFailure && !runsHeld && sameExpect(expect(), account) && runsGo()) {
-      const publishing = reviews.status === 'fulfilled' && reviews.value.some(review => review.status === 'publishing');
-      if (runs.status === 'fulfilled') endedOffHome(runs.value.runs);
-      void driveRuns(runs.status === 'fulfilled' ? runs.value.runs : runsSeen, publishing, runs.status === 'rejected' ? failureOf(runs.reason) : undefined);
-    }
-    return;
-  }
-  set({ home: { ...home, loading: false, settled: true, failure: reviews.status === 'fulfilled' ? undefined : poll ? home.failure : reviewsFailure ?? { code: 'unavailable', retryable: true } } });
-  if (waiting) openUnread = unread !== undefined;
-  // A check that ended owes a read of what it found (set as its list showed); only a read that brings its rows pays it.
-  if (waiting && unread === undefined) resultOwed = false;
+  if (!home) return;
+  set({ home: { ...home, loading: false, settled: true,
+    failure: reviews.status === 'fulfilled' ? undefined : failureOf(reviews.reason) } });
   updateDecisionRuns(home.runs);
-  // Reviews that could not be read fail the load, as Home says: it waits for Try again, and no run starts meanwhile, on any page.
-  if (!poll) runsHeld = reviewsFailure !== undefined;
-  if (loadFailure) return;
-  // The next poll waits longer after a failed runs read, or a failed read of what a check found.
-  const failed = runs.status === 'rejected' ? failureOf(runs.reason) : resultOwed ? unread : undefined;
-  if (runSeq === ran) void driveRuns(home.runs, home.reviews.some(review => review.status === 'publishing'), failed);
 }
 
 /**
  * What waits on you: its rows at once, rows only from ECHO's own fields;
  * then, only while Home itself shows, read live (`readHomeLive`), which goes
- * on by itself once the rows are read. Settles with the rows read, and its
- * failure.
+ * on by itself once the rows are read. Settles once the rows are read; a
+ * failed read keeps the rows Home had, and says nothing.
  */
-function readWaiting(mine: number, fresh: boolean): Promise<Failure | undefined> {
-  const rows = runsCommand({ schema_version: 1, operation: 'home', read: 'rows' }).then(value => {
+function readWaiting(mine: number, fresh: boolean): Promise<void> {
+  return runsCommand({ schema_version: 1, operation: 'home', read: 'rows' }).then(value => {
     const home = homeShown(mine);
     if (home) set({ home: { ...home, open: value } });
-    return undefined;
-  }, failureOf);
-  // Started as soon as the rows are in, before whoever waits on them goes on.
-  void rows.then(failure => { if (failure === undefined && homeInSight()) void readHomeLive(mine, fresh); });
-  return rows;
+    // Started as soon as the rows are in, before whoever waits on them goes on.
+    if (homeInSight()) void readHomeLive(mine, fresh);
+  }, () => undefined);
 }
 
 /**
@@ -5897,190 +5851,6 @@ async function readHomeLive(mine: number, fresh: boolean): Promise<void> {
   }
   const after = state.home;
   if (after?.seq === mine) set({ home: { ...after, reading: false, live: { ...after.live, ...live } } });
-}
-
-// ---- checks keep moving: the runs driver (one place to look v1, R1–R4) ---------------------
-
-let runPoll: ReturnType<typeof setTimeout> | null = null;
-let runSeq = 0;
-/** Polls in a row whose runs read failed, or whose start started nothing: each waits longer than the one before. */
-let runFailures = 0;
-/** How often the driver looks again while a check is going, and the longest it waits after failed reads. */
-const RUN_POLL_MS = 5_000;
-const RUN_POLL_MAX_MS = 60_000;
-/** The runs list the driver last went by, whoever read it: Home's state keeps its own (R3). */
-let runsSeen: readonly PersonRunV1[] = [];
-/** Home could not read reviews: as Home says, no run starts by itself until a Home load reads them (Try again). */
-let runsHeld = false;
-/** The driver's own look on its way, if any: a kick meanwhile has nothing to add. */
-let looking: Promise<void> | null = null;
-
-/**
- * Checks go wherever ECHO runs for you: signed in, on any page, with the
- * window in front, behind other apps or closed to the tray (R1). Nothing runs
- * once ECHO quits, and nothing for no one.
- */
-function runsGo(): boolean {
-  return Boolean(state.status?.signed_in) && expect() !== null;
-}
-
-/** Home reads its own runs, with what waits on you: while it shows and can be seen. Anywhere else the driver reads the runs list alone. */
-function homeSeen(): HomeState | null {
-  return canSee() ? homeShown() : null;
-}
-
-function stopRunPolling(): void {
-  runSeq += 1;
-  if (runPoll) clearTimeout(runPoll);
-  runPoll = null;
-}
-
-function pollRuns(mine: number, delay: number): void {
-  runPoll = setTimeout(() => {
-    runPoll = null;
-    if (mine === runSeq && runsGo()) lookAtRuns();
-  }, delay);
-}
-
-/**
- * Looks at the runs now, when nothing else is about to (R4): on sign-in, on
- * coming back, and when the reviews move (a meeting approved or published).
- * Not while Home's reviews failed, a look is armed or on its way, or a Home
- * load (which drives) is on its way while Home is seen.
- */
-function kickRuns(): void {
-  if (!runsGo() || runsHeld || runPoll !== null || looking !== null || (homeSeen() !== null && homeLoading !== null)) return;
-  lookAtRuns();
-}
-
-/** One look: Home's own read while Home is seen, as its poll; anywhere else the runs list alone. */
-function lookAtRuns(): void {
-  // Its list is newer than any read before it, whose runs drive no more (R3).
-  runSeq += 1;
-  const home = homeSeen();
-  const look = (home ? readHome(home.seq, true) : readRuns()).finally(() => { if (looking === look) looking = null; });
-  looking = look;
-}
-
-/**
- * The driver's own look, away from Home or while Home cannot be seen: the
- * runs list alone, none of it written to Home (R3). A check it sees end owes
- * Home what it found, read once Home shows, and the follow-ups that show are
- * read again (`endedOffHome`); the open decision follows its
- * checks; then the next queued run starts. A Home load, a newer look or
- * another account since drives instead: this list starts nothing.
- */
-async function readRuns(): Promise<void> {
-  const account = expect();
-  const mine = runSeq;
-  let listed: readonly PersonRunV1[] | undefined;
-  let failure: Failure | undefined;
-  try {
-    listed = (await runsCommand({ schema_version: 1, operation: 'list' })).runs;
-  } catch (error) {
-    failure = failureOf(error);
-  }
-  if (mine !== runSeq || !sameExpect(expect(), account) || !runsGo()) return;
-  if (listed) {
-    endedOffHome(listed);
-    updateDecisionRuns(listed);
-  }
-  await driveRuns(listed ?? runsSeen, false, failure);
-}
-
-/**
- * A runs list read off Home, before the driver goes by it: a check it shows
- * ended since the driver's last list owes Home what it found, and what shows
- * of the follow-ups is read again at once.
- */
-function endedOffHome(listed: readonly PersonRunV1[]): void {
-  if (!checkEnded(runsSeen, listed)) return;
-  resultOwed = true;
-  owe({ back: false, areas: ['follow_ups'] });
-}
-
-/**
- * Milliseconds until the next runs read, or null for none. `failures` counts
- * consecutive failed reads. The driver looks again only while a check is
- * pending or running, a review is publishing, or what a finished check found
- * is still unread (`owed`); after failed reads it waits twice as long each time (10 s,
- * 20 s, at most 60 s). A read that failed as unavailable with nothing in
- * flight is not tried again: an Authority with no model answers so for good,
- * and no check ever ends there.
- */
-export function runPollDelay(input: {
-  readonly runs: readonly PersonRunV1[]; readonly publishing: boolean; readonly failures: number; readonly lastFailure?: Failure; readonly owed?: boolean;
-}): number | null {
-  const inFlight = input.publishing || input.owed === true || input.runs.some(going);
-  if (input.failures === 0) return inFlight ? RUN_POLL_MS : null;
-  if (!inFlight && input.lastFailure?.code === 'unavailable') return null;
-  return Math.min(RUN_POLL_MAX_MS, RUN_POLL_MS * 2 ** input.failures);
-}
-
-/**
- * The run to start next when none is running: the oldest queued impact check,
- * never a run of another kind an older Authority may still list. Lists come
- * newest first.
- */
-export function runToStart(runs: readonly PersonRunV1[]): PersonRunV1 | undefined {
-  if (runs.some(run => run.state === 'running')) return undefined;
-  return [...runs].reverse().find(run => run.state === 'pending' && run.trigger === 'approved_record');
-}
-
-/** A start answered `busy`: another run goes first, and this one stays queued. */
-const BUSY: Failure = { code: 'busy', retryable: true };
-
-/**
- * The start on its way, if any. One goes at a time: a start asked for
- * meanwhile (Home's list and the driver's can name the same queued run at
- * once) is answered by it, never sent again (R3). The Authority runs one
- * check per person, so a second start could only be `busy`.
- */
-let starting: Promise<Failure | undefined> | null = null;
-
-/**
- * Starts a queued run. A start that starts nothing (refused, failed, or
- * `busy`) is answered with why, so the next look waits longer, as after a
- * failed runs read (ruling R50). A start the Authority holds `pending` (its
- * search index has not caught up yet) is not one: holding costs it a few reads,
- * so the driver looks again at the usual pace and the check starts soon after
- * the search index catches up.
- */
-function startRun(run_id: string): Promise<Failure | undefined> {
-  if (starting) return starting;
-  const answer = runsCommand({ schema_version: 1, operation: 'start', run_id })
-    .then(({ state: started }) => (started === 'busy' ? BUSY : undefined))
-    .catch(failureOf);
-  starting = answer;
-  void answer.finally(() => { if (starting === answer) starting = null; });
-  return answer;
-}
-
-/**
- * Runs go only from your signed-in desktop, on whatever page shows (R1):
- * start the next queued one when none is going (one whose attempt went back
- * to the queue is started again); then look again when `runPollDelay` says,
- * by Home's reads while Home is seen, else by the runs list alone. `failure`
- * is the runs read's, when it failed: the list is the last good one.
- */
-async function driveRuns(listed: readonly PersonRunV1[], publishing = false, failure?: Failure): Promise<void> {
-  stopRunPolling();
-  runsSeen = listed;
-  const mine = runSeq;
-  const current = () => mine === runSeq && runsGo();
-  // A failed read never skips the start (D6): it is tried, and its failure joins the read's.
-  let failed = failure;
-  const next = runToStart(listed);
-  if (next) {
-    const refused = await startRun(next.run_id);
-    failed ??= refused;
-    if (!current()) return;
-  }
-  runFailures = failed ? runFailures + 1 : 0;
-  // What a finished check found is Home's to read: owed, it keeps the driver looking only while Home reads (R2).
-  const owed = homeSeen() !== null && resultOwed;
-  const delay = runPollDelay({ runs: listed, publishing, failures: runFailures, lastFailure: failed, owed });
-  if (delay !== null && current()) pollRuns(mine, delay);
 }
 
 /**
@@ -6299,7 +6069,11 @@ export function lockDecisionRoutes(): void {
   const lock = !filed.every(item => decision.routes[item.signal_id]!.private);
   editChoices({ routes: { ...decision.routes, ...Object.fromEntries(filed.map(item => [item.signal_id, destinationOf(decision.routes[item.signal_id]!.projects, lock)])) } });
 }
-/** Approve or Reject: one send per opening. Home shows where it went; the check runs by itself. */
+/**
+ * Approve or Reject: one send per opening. Home shows where it went. An approval asks for a change check at once, past the
+ * page gate: it checks in, so the Authority starts the meeting's check as soon as it is queued, and it sets the pace the
+ * Authority keeps while the meeting publishes and its checks run (DSK-1).
+ */
 export async function decide(action: 'approve' | 'reject'): Promise<void> {
   const decision = state.decision;
   if (!decision?.open || decision.busy || !decisionShown(decision.seq)) return;
@@ -6319,6 +6093,8 @@ export async function decide(action: 'approve' | 'reject'): Promise<void> {
       owners: action === 'approve' ? items.flatMap(item => (item.owner_editable && (decision.routes[item.signal_id] ?? null) !== null && owner(item)
         ? [{ signal_id: item.signal_id, owner: owner(item) }] : [])) : [],
     });
+    // Before Home opens, so its page check joins this one.
+    if (action === 'approve') freshness.approved();
     if (!decisionShown(mine)) return;
     const toast = result.decided_on === 'slack' ? `Already ${result.status === 'rejected' ? 'rejected' : 'approved'} in Slack`
       : result.status === 'rejected' ? 'Rejected' : 'Approved · checking what it changes';
@@ -6330,7 +6106,10 @@ export async function decide(action: 'approve' | 'reject'): Promise<void> {
   }
 }
 
-/** Try again on one record's failed impact check. */
+/**
+ * Try again on one record's failed impact check: queued again, then a check-in, so the Authority starts it (DSK-1); the
+ * decision then reads its checks once more, as a meeting's line does.
+ */
 export async function retryImpact(run_id: string): Promise<void> {
   const decision = state.decision;
   const run = decision?.runs.find(item => item.run_id === run_id);
@@ -6341,11 +6120,8 @@ export async function retryImpact(run_id: string): Promise<void> {
     const shown = decisionShown(mine);
     if (!shown) return;
     editDecision({ runs: shown.runs.map(item => (item.run_id === run_id ? { ...item, state: 'pending', error_code: null } : item)) });
-    const runs = await runsCommand({ schema_version: 1, operation: 'list' });
-    // The driver looks again while it runs, on any page; away from Home the decision also reads its checks once more at once, as
-    // a meeting's line does.
-    if (homeUnder()) void driveRuns(runs.runs);
-    else { await driveRuns(runs.runs); await readRecordRuns(mine); }
+    await checkIn();
+    await readRecordRuns(mine);
   } catch { /* the card still offers Try again */ }
 }
 
@@ -6397,7 +6173,7 @@ export function lineRecord(line: ItemsLine): string | null {
   return line.scope === 'record' ? line.id : line.stage?.record_sha256 ?? line.summary?.by_decision[0]?.record_sha256 ?? null;
 }
 
-/** Try again, on a meeting's line: its check runs again, from your desktop. */
+/** Try again, on a meeting's line: its check is queued again, and this desktop checks in, so the Authority starts it (DSK-1). */
 export async function retryLineCheck(): Promise<void> {
   const line = state.impactLine;
   if (!line?.stage || line.stage.state !== 'failed' || !line.stage.mine || line.busy) return;
@@ -6405,7 +6181,7 @@ export async function retryLineCheck(): Promise<void> {
   set({ impactLine: { ...line, busy: true } });
   try {
     await runsCommand({ schema_version: 1, operation: 'retry', run_id: stage.run_id });
-    await driveRuns((await runsCommand({ schema_version: 1, operation: 'list' })).runs);
+    await checkIn();
   } catch { /* the line offers Try again again */ }
   if (state.impactLine?.seq === line.seq) await loadLine('impactLine', scope, id);
 }

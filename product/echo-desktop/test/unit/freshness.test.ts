@@ -217,6 +217,110 @@ describe('when a check runs (R2)', () => {
   });
 });
 
+describe('checking in after each check (DSK-1)', () => {
+  /** The check-ins sent, by the account each was for. */
+  const checkIns = () => calls('runs').filter(([, params]) => params.request.operation === 'next').map(([, params]) => params.expect.membership_id);
+
+  it('checks in after each check that reached the Authority: at sign-in, on the timer, coming back, on a wake and opening a page', async () => {
+    const store = await startStore();
+    expect(checkIns()).toEqual(['member']);
+    await nextCheck();
+    await show(store);
+    await flush();
+    await wake();
+    await flush();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await store.openOnlyMe();
+    await flush();
+    expect(checks()).toBe(5);
+    expect(checkIns()).toEqual(Array(5).fill('member'));
+  });
+
+  it('never checks in after a check that failed, and does again once one reaches the Authority', async () => {
+    await startStore();
+    authority.changes = 'fails';
+    await nextCheck(60);
+    await nextCheck(120);
+    expect([checks(), checkIns().length]).toEqual([3, 1]);
+    authority.changes = 'ok';
+    await nextCheck(240);
+    expect([checks(), checkIns().length]).toEqual([4, 2]);
+  });
+
+  it('checks in for no one after sign-out, and only as the new account once another signs in', async () => {
+    const store = await startStore();
+    rpc.mockImplementation(changesRpc({ 'app.status': () => ok({ signed_in: false, account: null }) }));
+    await store.refreshStatus();
+    await nextCheck(600);
+    expect(checkIns()).toEqual(['member']);
+    rpc.mockImplementation(changesRpc({ 'app.status': () => ok({ signed_in: true, account: { ...ACCOUNT, membership_id: 'other' } }) }));
+    await store.refreshStatus();
+    await flush();
+    expect(checkIns()).toEqual(['member', 'other']);
+  });
+
+  it('never checks in for the last account with a check that answers after another signed in', async () => {
+    let release: () => void = () => undefined;
+    let hold = false;
+    rpc.mockImplementation(changesRpc({
+      'app.status': () => ok({ signed_in: true, account }),
+      'changes.read': params => {
+        const answer = fixture['changes.read']!(params);
+        if (!hold) return answer;
+        hold = false;
+        return new Promise(resolve => { release = () => resolve(answer); });
+      },
+    }));
+    const store = await startStore();
+    // The timer's check is on its way as another account signs in here.
+    hold = true;
+    await nextCheck();
+    account = { ...ACCOUNT, membership_id: 'other' };
+    await store.refreshStatus();
+    await flush();
+    release();
+    await flush();
+    expect(checkIns()).toEqual(['member', 'other']);
+  });
+
+  it('checks at once on an approval, where a page opened within ten seconds of the last check does not', async () => {
+    const store = await startStore();
+    await store.openOnlyMe();
+    expect(checks()).toBe(1);
+    (await import('../../src/renderer/freshness.js')).approved();
+    await flush();
+    expect([checks(), checkIns().length]).toEqual([2, 2]);
+  });
+
+  it.each([false, true])('an approval during a check queues one fresh check after it, which checks in, unless stopped (%s)', async stopped => {
+    let release: () => void = () => undefined;
+    let held = false;
+    rpc.mockImplementation(changesRpc({
+      'app.status': () => ok({ signed_in: true, account }),
+      'runs': params => {
+        const request = params.request as { operation: string; scope?: string; states?: string[] };
+        const captured = fixture.runs!(params);
+        if (!held && request.operation === 'items' && request.scope === 'involved' && request.states?.join() === 'open') {
+          held = true;
+          return new Promise(resolve => { release = () => resolve(captured); });
+        }
+        return captured;
+      },
+    }));
+    await startStore();
+    const freshness = await import('../../src/renderer/freshness.js');
+    // The first check reached the Authority, and so checked in, before its follow-ups read, still on its way.
+    expect([held, checks(), checkIns().length]).toEqual([true, 1, 1]);
+    freshness.approved();
+    freshness.approved();
+    expect(checks()).toBe(1);
+    if (stopped) freshness.stop();
+    release();
+    await flush();
+    expect([checks(), checkIns().length]).toEqual(stopped ? [1, 1] : [2, 2]);
+  });
+});
+
 describe('what a moved area reads again (R3)', () => {
   it('projects: both sidebar lists, then the open project\'s header from its row, logging the area by name only', async () => {
     const store = await startStore();

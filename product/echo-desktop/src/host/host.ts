@@ -692,16 +692,18 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       return forAccount(method, expect, ['reviews', option('request', JSON.stringify(request))],
         stdout => validatePersonReviewResultV1(request.operation, unwrap(lastJson(stdout))), undefined, undefined, isWriteCall(method, params));
     }
-    // Impact checks of your own approvals, and the open items they found. Start
-    // and retry change a run, send, set_state and assign change items; the item
-    // reads rebuild what an item says now from fresh reads, so nothing outside
-    // ECHO is kept. What a check found is its meeting's follow-ups: a check's
-    // card (`view`) never crosses to the window.
+    // Impact checks of your own approvals, and the open items they found. A
+    // check-in (`next`) asks the Authority to start the oldest queued check, and
+    // retry queues a failed one again; send, set_state and assign change items;
+    // the item reads rebuild what an item says now from fresh reads, so nothing
+    // outside ECHO is kept. What a check found is its meeting's follow-ups: a
+    // check's card (`view`) never crosses to the window, and the window never
+    // starts a check by its id (`start`, DSK-1).
     case 'runs': {
       const { expect, request: raw } = params as Params<'runs'>;
       let request;
       try { request = validatePersonRunsRequestV1(raw); } catch { return code('invalid_request', true); }
-      if (request.operation === 'view') return code('invalid_request', true);
+      if (request.operation === 'view' || request.operation === 'start') return code('invalid_request', true);
       return forAccount(method, expect, ['runs', option('request', JSON.stringify(request))], stdout => {
         let result;
         try { result = validatePersonRunsResultV1(request.operation, (lastJson(stdout) as { result: unknown }).result); } catch { throw new ViewError(); }

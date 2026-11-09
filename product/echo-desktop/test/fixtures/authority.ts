@@ -982,8 +982,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const followUps = openItems.filter(item => visible(item) && (involved(item) || item.owner_set_by?.membership_id === ARI.membership_id))
       .map(item => [item.item_id, item.state, item.owner.membership_id, item.owner_set_at, item.state_set_at, item.sent_at]);
     const reviews = [granolaImported, granolaApproved, granolaRun?.state ?? null, ...extraRuns.map(extra => extra.state)];
-    // An hour unless the test says: a test's own reads never wait on, or race, a check it did not ask for.
-    const seconds = elsewhere('changes-seconds') ? Number(readFileSync(join(home, 'changes-seconds'), 'utf8')) : 3600;
+    // An hour unless the test says, so a test's own reads never wait on, or race, a check it did not ask for; but 15 s while
+    // one of Ari's checks is queued or running, as the Authority paces it (DSK-1), so the next check checks in, or sees it end.
+    const going = [granolaRun, ...extraRuns].some(entry => entry?.state === 'pending' || entry?.state === 'running');
+    const seconds = elsewhere('changes-seconds') ? Number(readFileSync(join(home, 'changes-seconds'), 'utf8')) : going ? 15 : 3600;
     return { kind: 'echo-person-changes-v1', areas: { projects: digest(projectsNow), follow_ups: digest(followUps), reviews: digest(reviews) },
       check_again_after_seconds: seconds };
   };
@@ -1116,11 +1118,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           return json({ status: 'publishing', decided_on: 'desktop' });
       }
     }
-    // Impact checks: approving queues one run; a start runs it, and the first
-    // list after that finds it done. A done check has found two open items.
-    // Every answer passes the contract's own result check, as the Authority's
-    // does. Runs and shared Home reads exist even when the meeting provider is
-    // unavailable.
+    // Impact checks: approving queues one run per destination; a check-in
+    // (`next`) starts the oldest queued one, and the first list after that finds
+    // it done. A done check has found two open items. Every answer passes the
+    // contract's own result check, as the Authority's does. Runs and shared Home
+    // reads exist even when the meeting provider is unavailable.
     if (method === 'GET' && path === '/v1/person/changes') return json(changeCheck());
     if (method === 'POST' && path === '/v1/person/runs') {
       let request: RunsRequest;
@@ -1162,15 +1164,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       switch (request.operation) {
         case 'list':
           return result('list', { runs: [...(run ? [row(run)] : []), ...extraRuns.map(extraRow)] });
-        case 'start': {
-          const extra = extraRuns.find(entry => entry.run_id === request.run_id);
-          if (extra) {
-            if (extra.state === 'pending') extra.state = 'running';
-            return result('start', { state: extra.state });
-          }
-          if (!run || request.run_id !== runId) return failure('not_found', 404);
-          if (run.state === 'pending') run.state = 'running';
-          return result('start', { state: run.state });
+        // A check-in (DSK-1), as the Authority answers it: Ari's oldest queued check starts, unless another of Ari's runs;
+        // with none queued, idle, even while one runs.
+        case 'next': {
+          const checks = [...(run ? [run] : []), ...extraRuns];
+          const oldest = checks.find(entry => entry.state === 'pending');
+          if (!oldest) return result('next', { state: 'idle' });
+          if (checks.some(entry => entry.state === 'running')) return result('next', { state: 'busy' });
+          oldest.state = 'running';
+          return result('next', { state: 'running' });
         }
         // Home: the Send row while Ari's check has items not sent, and the open items that wait on
         // Ari; then how many of the open items Ari sent wait on others. Rows only: no live read.
