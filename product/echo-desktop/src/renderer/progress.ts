@@ -62,7 +62,7 @@ export function headline(progress: AskProgress | null): string {
 }
 
 /** A place Ask read, as one name: the first of its items read stands for it, and all of its items read go with it. */
-export interface NamedPlace {
+interface NamedPlace {
   readonly source: AnswerSource;
   readonly items: readonly AnswerSource[];
 }

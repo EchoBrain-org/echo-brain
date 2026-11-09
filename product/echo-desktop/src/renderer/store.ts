@@ -3732,8 +3732,8 @@ function forgetChecks(): void {
 
 /**
  * What checks said, as the page may show it: only what is still good. The
- * first to go stale is cleared then, so the page stops showing it then, with
- * no tag, no line and nothing left out (C5).
+ * first to go stale is cleared then, so the page stops showing what it said;
+ * what it found unreadable stays hidden through the turn's `unreadable` (C5).
  */
 function keepChecks(checks: Readonly<Record<string, TurnCheck>>): void {
   if (checksExpire) { clearTimeout(checksExpire); checksExpire = null; }
