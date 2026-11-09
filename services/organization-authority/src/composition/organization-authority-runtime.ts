@@ -16,7 +16,7 @@ import type {
 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
 import {
   startOrganizationAuthorityServiceLifecycle,
-  type OrganizationAuthorityPrimaryProcessingV1,
+  type OrganizationAuthorityProcessingCycleV1,
   type RunningOrganizationAuthorityServiceLifecycle,
 } from "./organization-authority-service-lifecycle.js";
 import { createReadableSearchGenerationReconcilerV1 } from "./readable-search-generation-composition.js";
@@ -127,7 +127,7 @@ interface ReadableSearchReconcilerV1 {
  * the lifecycle runs beside this as its additional processing.
  */
 class OrganizationAuthorityProcessingCoordinator
-  implements OrganizationAuthorityPrimaryProcessingV1 {
+  implements OrganizationAuthorityProcessingCycleV1 {
   constructor(
     private readonly readableSearch: ReadableSearchReconcilerV1,
     private readonly onSearchCapacity?: (event: ReadableSearchCapacityEventV1) => void,

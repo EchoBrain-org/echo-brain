@@ -315,7 +315,7 @@ export function createPersonMeetingRuntimeV1(options: {
     }
   }
   // Meetings and their approvals; search is the Authority's own processing.
-  const processing: OrganizationAuthorityProcessingCycleV1 & Required<Pick<OrganizationAuthorityProcessingCycleV1, 'recoverV4Appends' | 'appendFinalizedApprovalsToV4'>> = {
+  const processing: OrganizationAuthorityProcessingCycleV1 & Required<Pick<OrganizationAuthorityProcessingCycleV1, 'recoverV4Appends' | 'pollAndStageAdmittedMeetings' | 'appendFinalizedApprovalsToV4'>> = {
     async recoverV4Appends(signal) { await (await approvals()).processing.recoverV4Appends(signal); },
     async appendFinalizedApprovalsToV4(signal) { await (await approvals()).processing.appendFinalizedApprovalsToV4(signal); },
     async reconcileApprovalPresentations(signal) { return (await approvals()).processing.reconcileApprovalPresentations?.(signal); },

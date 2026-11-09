@@ -57,7 +57,6 @@ describe("project-audience originals survive contributor departure", () => {
       (organization_id,principal_id,membership_id,membership_type,request_id,request_version,context_id,payload_sha256,title,text,audience_kind,audience_project_id,submitted_association_project_ids_json,audience_project_ids_json,project_id,received_at)
       VALUES (?,?,?,'owner',?,3,?,?,?,?, 'project', ?, '[]', ?, NULL, ?)`)
       .run(ORG, PRINCIPAL, MEMBER, request.request_id, context, canonicalSha256(request), request.title, request.text, PROJECT, JSON.stringify([PROJECT]), NOW);
-    database.prepare("INSERT INTO authority_person_update_work_v2(context_id,state,retry_at) VALUES (?,'pending',?)").run(context, NOW);
     database.prepare("INSERT INTO authority_person_update_audience_projects_v1 VALUES (?, ?, ?)").run(context, PROJECT, ORG);
     const pulled = new SqlitePersonTextSourceInboxV1(database).next()!;
     const store = new SqliteSourceAdmissionStoreV1(database, (source, scope) => assertPersonSourceAdmissionV1(database, source, scope));
