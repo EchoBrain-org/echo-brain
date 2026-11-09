@@ -185,8 +185,8 @@ function failure(code: string, status: number): Response {
   return json({ error: { code, message: 'request failed' } }, status);
 }
 /** As the directory finds a person: every word of the query in their name. */
-function found(query: unknown, entry: { title: string }): boolean {
-  const haystack = entry.title.normalize('NFC').toLowerCase();
+function found(query: unknown, name: string): boolean {
+  const haystack = name.normalize('NFC').toLowerCase();
   const terms = String(query).normalize('NFC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
   return terms.length > 0 && terms.every(term => haystack.includes(term));
 }
@@ -1533,7 +1533,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }
       const limit = request.limit ?? PAGE;
       const from = request.cursor === SECOND_PAGE ? limit : 0;
-      const all = desktop.people.filter(person => request.query === undefined || found(request.query, { title: person.display_name }));
+      const all = desktop.people.filter(person => request.query === undefined || found(request.query, person.display_name));
       return json(api.validateOrganizationDirectoryV1({
         schema_version: 1, kind: 'echo-organization-directory-v1', items: all.slice(from, from + limit),
         next_cursor: from + limit < all.length ? SECOND_PAGE : null,
