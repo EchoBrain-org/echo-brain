@@ -13,7 +13,7 @@ import { message } from '../messages.js';
 import { ownerAndStatus } from '../needs.js';
 import { announceAfter, announcement, duration, headline, lookedThrough, PROGRESS_AFTER_MS, type AskProgress } from '../progress.js';
 import {
-  activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
+  activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
   fullPageOffered, litAtoms, nothingLine, openCompose, openFullPage, openExternalSource, pageCovered, paneCitations, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, setBarText, sourceName, submitBar, suggestionsShown, toggleEarlier, toggleSourceList, toggleTurn, turnOf, widenScope,
   UNTITLED,
@@ -620,7 +620,7 @@ function againAt(state: State, turn: TimelineTurn): string | null {
  * (`took`) and Ask again on one asked before this Ask (`current` false).
  */
 function FullTurn({ state, turn, took, current, last }: { state: State; turn: TimelineTurn; took: AskTook | undefined; current: boolean; last: boolean }) {
-  const view = turnView(turn, shownChecks(turn, state));
+  const view = turnView(turn, checksOf(turn, state));
   const omitted = allOmitted(turn, view.checks) && answerGaps(turn.answer, view.shows).length === 0;
   const widen = !omitted && !state.ask?.failed && last && canAskEverywhere(turn, state);
   return (

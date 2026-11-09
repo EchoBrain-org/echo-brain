@@ -3531,14 +3531,6 @@ export function checksOf(turn: TimelineTurn, current: State = state): TurnChecks
 }
 
 /**
- * What the page shows of what is known of a turn's sources: on one asked in
- * this Ask, which is current, only what a check found unreadable.
- */
-export function shownChecks(turn: TimelineTurn, current: State = state): TurnChecks | undefined {
-  return current.ask?.asked.includes(turn.id) ? knownStates(undefined, turn.unreadable) : checksOf(turn, current);
-}
-
-/**
  * The account's timeline, read at sign-in and when the account changes, with
  * nothing of the last check. A read that fails is made once more, unless the
  * account is gone; one that fails again leaves it as it was. A turn kept
@@ -3845,7 +3837,7 @@ export function nothingLine(turn: TimelineTurn, current: State = state): string 
 
 /** A completed factual gap can be searched more widely even when other parts were answered. */
 export function canAskEverywhere(turn: TimelineTurn, current: State = state): boolean {
-  if (turn.scope.kind !== 'project' || !showsOf(shownChecks(turn, current))(turn.answer.sources.map((_, index) => index))) return false;
+  if (turn.scope.kind !== 'project' || !showsOf(checksOf(turn, current))(turn.answer.sources.map((_, index) => index))) return false;
   return foundNothingInProject(turn) || (turn.answer.parts.some(part => part.gap_details?.not_found !== undefined)
     && !turn.answer.parts.some(part => part.gap_details?.interrupted));
 }
@@ -4015,7 +4007,7 @@ export async function copyAnswer(id: string | null): Promise<boolean> {
   const turn = turnOf(id);
   if (turn === undefined) return false;
   const { answer } = turn;
-  const checks = shownChecks(turn);
+  const checks = checksOf(turn);
   const groups = turnGroups(answer, checks);
   const shows = showsOf(checks);
   // Ask again's "Since" (ADR-0047), named by the day the earlier answer was asked, as the page names it.
@@ -4050,7 +4042,7 @@ function answerSources(current: State = state): readonly AnswerSource[] {
  */
 export function answerGroups(current: State = state): SourceGroup[] {
   const turn = activeTurn(current);
-  return turn ? turnGroups(turn.answer, shownChecks(turn, current)) : [];
+  return turn ? turnGroups(turn.answer, checksOf(turn, current)) : [];
 }
 
 /** The turns Ask shows (ADR-0049): its place's thread, each question once. */
@@ -4278,7 +4270,7 @@ function readPane(gen: number, source: AnswerSource): void {
 export function chooseSource(group: number, focus: string | null, turn: string | null): void {
   const sources = state.sources;
   const shown = turnOf(turn);
-  const chosen = shown ? turnGroups(shown.answer, shownChecks(shown))[group] : undefined;
+  const chosen = shown ? turnGroups(shown.answer, checksOf(shown))[group] : undefined;
   const source = chosen ? shown!.answer.sources[chosen.indexes[0]!] : undefined;
   if (!sources || !shown || !source) return;
   set({ sources: { ...sources, turn: shown.id, open: group, focus, evidence: null } });
