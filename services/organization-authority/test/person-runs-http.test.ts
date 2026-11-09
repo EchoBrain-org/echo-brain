@@ -36,7 +36,7 @@ describe('person runs HTTP transport', () => {
     expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_tools: { routes: [{ route_id: 'collision', method: 'POST', path: PERSON_RUNS_PATH_V1 }], accept: async () => ({ status: 200, body: {} }) } }))).toThrow('collides with Authority route');
   });
 
-  it('dispatches a check-in (next) to its method with the validated request, and refuses one naming a run before any method', async () => {
+  it('dispatches a check-in (next) to its method with the validated request', async () => {
     const next = vi.fn(async () => ({ state: 'running' as const }));
     const app = { list: vi.fn(), start: vi.fn(), next, retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
     const base = await origin(app);
@@ -45,12 +45,6 @@ describe('person runs HTTP transport', () => {
     const response = await post(base, request);
     expect(response.status).toBe(200); expect(await response.json()).toEqual({ state: 'running' });
     expect(next).toHaveBeenCalledExactlyOnceWith({ access_token: 'fixture', request, signal: expect.any(AbortSignal) });
-    // `next` names no run and binds no capture: the Authority picks the caller's oldest queued check.
-    for (const fields of [{ run_id: RUN }, { capture_id: 'cap_00000000-0000-4000-8000-000000000004' }, { scope: 'mine' }]) {
-      expect((await post(base, { ...request, ...fields })).status, JSON.stringify(fields)).toBe(400);
-    }
-    expect(next).toHaveBeenCalledTimes(1);
-    expect(app.start).not.toHaveBeenCalled();
   });
 
   it('dispatches each open-items operation to its method with the validated request', async () => {

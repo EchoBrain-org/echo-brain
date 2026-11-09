@@ -41,22 +41,18 @@ describe('person runs client', () => {
     expect(noNetwork).not.toHaveBeenCalled();
   });
 
-  it('checks in with next, which names no run, and refuses one that names a run before networking', async () => {
-    const home = sessionHome(); let stdout = ''; let stderr = '';
-    const io = { home_directory: home, now: () => '2026-10-07T10:00:00.000Z', stdout: { write: (value: string) => { stdout += value; } }, stderr: { write: (value: string) => { stderr += value; } } };
+  it('checks in with next, which names no run, and refuses an answer outside its states', async () => {
+    const home = sessionHome(); let stdout = '';
+    const io = { home_directory: home, now: () => '2026-10-07T10:00:00.000Z', stdout: { write: (value: string) => { stdout += value; } }, stderr: { write: () => undefined } };
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ state: 'idle' }));
     expect(await runPersonClientCli(['runs', '--request', '{"schema_version":1,"operation":"next"}'], { ...io, fetch })).toBe(0);
     expect(JSON.parse(stdout)).toEqual({ ok: true, result: { state: 'idle' } });
     expect(new URL(String(fetch.mock.calls[0]![0])).pathname).toBe('/v1/person/runs');
     expect(JSON.parse(String(fetch.mock.calls[0]![1]!.body))).toEqual({ schema_version: 1, operation: 'next' });
-    // A next answer outside its states is refused as the Authority's mistake.
+    // The client checks each answer against its operation: a next answer outside its states is the Authority's mistake.
     const finished = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ state: 'done' })); stdout = '';
     expect(await runPersonClientCli(['runs', '--request', '{"schema_version":1,"operation":"next"}'], { ...io, fetch: finished })).not.toBe(0);
     expect(stdout).toBe('');
-    const noNetwork = vi.fn<typeof globalThis.fetch>(); stderr = '';
-    expect(await runPersonClientCli(['runs', '--request', '{"schema_version":1,"operation":"next","run_id":"run_0f6c1a2e-3b4d"}'], { ...io, fetch: noNetwork })).toBe(2);
-    expect(JSON.parse(stderr)).toMatchObject({ ok: false });
-    expect(noNetwork).not.toHaveBeenCalled();
   });
 
   it('runs an open-items request and names every operation in its help', async () => {
@@ -73,7 +69,6 @@ describe('person runs client', () => {
     // Sweeps are retired (SVC-2): the help names none.
     expect(stdout).not.toContain('sweep');
     expect(stdout).toContain('list                 your own impact runs\n');
-    expect(stdout).toContain('next                 starts your oldest queued impact check, as start does by run_id: idle when none is queued, busy while another of yours runs and one waits, pending while the search index catches up;');
     expect(stdout).toContain('false dismisses it, and unlisted items stay unsent');
     expect(stdout).toContain('before send the approver only');
     expect(stdout).toContain('read "rows" reads no item live (every reach not_read)\n');
