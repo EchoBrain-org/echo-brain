@@ -326,66 +326,49 @@ describe('change check: your own impact checks (DSK-1)', () => {
     VALUES (?, 'sweep', ?, ?, ?, ?, 'mine', 'pending', 0, ?, ?)`).run(`run_${randomUUID()}`, `sweep_${randomUUID()}`,
     f.person.organization_id, f.person.principal_id, f.person.membership_id, f.clock().toISOString(), f.clock().toISOString());
 
-  it('moves reviews when one of the caller\'s own checks starts, stops, ends or fails, and for nobody else', async () => {
+  it('moves reviews as one of the caller\'s own checks starts, stops, ends or fails, for nobody else, and asks again in 15 seconds while one is queued or running or one of their approvals is publishing, else in 60', async () => {
     const f = await openItemsFixture();
     const { step, read } = changesOf(f);
     const ari = f.openItemsOptions.sessions.authenticateAccess({ access_token: 'ari' });
     const reviewsWith = (...checks: readonly (readonly string[])[]) => digestOf([...f.core.proposals(ari).map(view => [view.approval_id, view.status]), ...checks]);
-    // Queued when its meeting was published.
-    expect((await read('ari')).areas.reviews).toBe(reviewsWith([f.runId, 'pending']));
-    // It starts.
-    expect(await step(() => lease(f, f.runId))).toEqual(moved({ ari: ['reviews'] }));
-    expect((await read('ari')).areas.reviews).toBe(reviewsWith([f.runId, 'running']));
-    // Its attempt stops without finishing: once the lease lapses it reads pending, as the runs list shows it.
-    expect(await step(() => f.advance(60_000))).toEqual(moved({ ari: ['reviews'] }));
-    expect((await read('ari')).areas.reviews).toBe(reviewsWith([f.runId, 'pending']));
-    // A check-in takes it over and it ends: the follow-ups it found also move Ari's, and those of Mina, whose ticket it matched.
-    expect(await step(async () => {
-      await expect(checkIn(f, 'ari')).resolves.toEqual({ state: 'running' });
-      await vi.waitFor(() => expect(f.runs.read(f.person, f.runId)!.state).toBe('done'), { interval: 1 });
-    })).toEqual(moved({ ari: ['follow_ups', 'reviews'], mina: ['follow_ups'] }));
-    expect((await read('ari')).areas.reviews).toBe(reviewsWith([f.runId, 'done']));
-    // Another meeting's check is queued as it publishes, and fails having found nothing: its state alone moves reviews.
-    const { publish } = await approveAnother(f);
-    await publish();
-    const second = f.runs.list(f.person, 1)[0]!;
-    expect(second).toMatchObject({ trigger: 'approved_record', state: 'pending' });
-    expect(await step(() => f.runs.fail(second.run_id, lease(f, second.run_id), 'no_access'))).toEqual(moved({ ari: ['reviews'] }));
-    expect((await read('ari')).areas.reviews).toBe(reviewsWith([f.runId, 'done'], [second.run_id, 'failed']));
-    // Asking again what nothing changed moves nothing, and a leftover sweep is no check of his.
-    expect(await step(() => undefined)).toEqual(moved({}));
-    expect(await step(() => leftoverSweep(f))).toEqual(moved({}));
-  });
-
-  it('asks again in 15 seconds while one of the caller\'s checks is queued or running or one of their approvals is publishing, else in 60', async () => {
-    const f = await openItemsFixture();
-    const { read } = changesOf(f);
     const waits = async () => Object.fromEntries(await Promise.all(PEOPLE.map(async who => [who, (await read(who)).check_again_after_seconds] as const)));
     const only = (ari: number) => ({ ari, mina: 60, rafael: 60, okafor: 60 });
-    // Ari's check was queued as his meeting published; nobody else has one.
+    /** Which areas `action` moved for each person, then each person's wait. */
+    const walk = async (action: () => unknown) => [await step(action), await waits()];
+    // Queued when its meeting was published; nobody else has a check.
+    expect((await read('ari')).areas.reviews).toBe(reviewsWith([f.runId, 'pending']));
     expect(await waits()).toEqual(only(15));
     // It is the check that asks sooner: without the runs store, the same reviews ask in 60.
     const withoutRuns = changesOf(f, { runs: undefined });
     expect((await withoutRuns.read('ari')).check_again_after_seconds).toBe(60);
-    lease(f, f.runId);
-    expect(await waits()).toEqual(only(15));                                // running
-    f.advance(60_000);
-    expect(await waits()).toEqual(only(15));                                // its attempt stopped: queued again
-    await expect(checkIn(f, 'ari')).resolves.toEqual({ state: 'running' });
-    await vi.waitFor(() => expect(f.runs.read(f.person, f.runId)!.state).toBe('done'), { interval: 1 });
-    expect(await waits()).toEqual(only(60));                                // done
+    // It starts.
+    expect(await walk(() => lease(f, f.runId))).toEqual([moved({ ari: ['reviews'] }), only(15)]);
+    expect((await read('ari')).areas.reviews).toBe(reviewsWith([f.runId, 'running']));
+    // Its attempt stops without finishing: once the lease lapses it reads pending (queued again), as the runs list shows it.
+    expect(await walk(() => f.advance(60_000))).toEqual([moved({ ari: ['reviews'] }), only(15)]);
+    expect((await read('ari')).areas.reviews).toBe(reviewsWith([f.runId, 'pending']));
+    // A check-in takes it over and it ends: the follow-ups it found also move Ari's, and those of Mina, whose ticket it matched.
+    expect(await walk(async () => {
+      await expect(checkIn(f, 'ari')).resolves.toEqual({ state: 'running' });
+      await vi.waitFor(() => expect(f.runs.read(f.person, f.runId)!.state).toBe('done'), { interval: 1 });
+    })).toEqual([moved({ ari: ['follow_ups', 'reviews'], mina: ['follow_ups'] }), only(60)]);
+    expect((await read('ari')).areas.reviews).toBe(reviewsWith([f.runId, 'done']));
+    // Another meeting approved and still publishing: its check is about to be queued, which asks sooner even without the runs store.
     const { publish } = await approveAnother(f);
-    expect(await waits()).toEqual(only(15));                                // approved, still publishing: its check is about to be queued
+    expect(await waits()).toEqual(only(15));
     expect((await withoutRuns.read('ari')).check_again_after_seconds).toBe(15);
     await publish();
-    expect(await waits()).toEqual(only(15));                                // queued
-    const second = f.runs.list(f.person, 1)[0]!.run_id;
-    expect(f.runs.fail(second, lease(f, second), 'unavailable')).toBe(true);
-    expect(await waits()).toEqual(only(60));                                // failed: it waits for Try again
-    // A meeting waiting for review is no reason to ask sooner, nor is a leftover sweep.
+    expect(await waits()).toEqual(only(15));
+    const second = f.runs.list(f.person, 1)[0]!;
+    expect(second).toMatchObject({ trigger: 'approved_record', state: 'pending' });
+    // It fails having found nothing: its state alone moves reviews, and it waits for Try again.
+    expect(await walk(() => f.runs.fail(second.run_id, lease(f, second.run_id), 'no_access'))).toEqual([moved({ ari: ['reviews'] }), only(60)]);
+    expect((await read('ari')).areas.reviews).toBe(reviewsWith([f.runId, 'done'], [second.run_id, 'failed']));
+    // Asking again what nothing changed moves nothing. A meeting waiting for review is no reason to ask sooner, and a leftover
+    // sweep is no check of his.
+    expect(await walk(() => undefined)).toEqual([moved({}), only(60)]);
     await f.otherProposal(true, 'note-3');
-    leftoverSweep(f);
-    expect(await waits()).toEqual(only(60));
+    expect(await walk(() => leftoverSweep(f))).toEqual([moved({}), only(60)]);
   });
 });
 
