@@ -57,27 +57,23 @@ describe("Agentic Ask HTTP capability gate", () => {
     } finally { await value.close(); }
   });
 
-  it('answers /v7 provider errors and invalid requests with their codes and the route header, and retired Ask routes with the plain 404', async () => {
+  it('answers /v7 provider errors and invalid requests with their codes, and retired Ask routes with the plain 404', async () => {
     const ask = vi.fn(async () => { throw new AuthorityOperationError('not_found', 'Provider resource unavailable'); });
     const value = await server({ ask: { ask } as never });
     try {
       const post = (path: string, body: unknown) => fetch(`${value.url}${path}`, {
         method: 'POST', headers: { authorization: 'Bearer token', 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
-      // Released clients read a /v7 404 without the route header as an Authority with no /v7, so every /v7 response keeps it.
       const failed = await post(PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'What changed?' });
       expect(failed.status).toBe(404);
-      expect(failed.headers.get('x-echo-person-ask-route')).toBe('7');
       await expect(failed.json()).resolves.toEqual({ error: { code: 'not_found', message: 'request failed' } });
       const invalid = await post(PERSON_ANSWER_PATH_V7, {});
       expect(invalid.status).toBe(400);
-      expect(invalid.headers.get('x-echo-person-ask-route')).toBe('7');
       await expect(invalid.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'request failed' } });
-      // A retired route, like one that never existed, is a plain 404 with no route header.
+      // A retired route is a plain 404, like one that never existed.
       for (const path of ['/v0/person/ask', ...RETIRED_ASK_PATHS]) {
         const absent = await post(path, { schema_version: 3, question: 'What changed?' });
         expect(absent.status).toBe(404);
-        expect(absent.headers.has('x-echo-person-ask-route')).toBe(false);
         await expect(absent.json()).resolves.toEqual({ error: { code: 'not_found', message: 'request failed' } });
       }
       expect(ask).toHaveBeenCalledTimes(1);

@@ -141,6 +141,10 @@ still call it, until a later release retires it with the other note and
 project searches. No current Authority holds a V2 note: the V16 baseline starts
 empty, and the V2 note write went on 2026-10-25.
 
+Update (2026-11-09): the update floor
+([ADR-0050](ADR-0050-update-floor-only-rises.md)) is past release 20 (the live
+feed is sequence 22), so `/v7` no longer sends `x-echo-person-ask-route`.
+
 ## Migration, rollback, and evidence
 
 - **Release order:** the Authority first, then the clients, the order the Ask
