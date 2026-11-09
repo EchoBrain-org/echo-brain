@@ -57,7 +57,6 @@ export const JOB_INPUTS = Object.freeze({
     'deploy/release/release-artifact-validation.mjs',
     'tools/clean-v1-release.mjs',
     'tools/ci-runner-info.mjs',
-    'tests/fixtures/project-context-v1/',
   ]),
   person_client_package: Object.freeze([
     ...SHARED_INPUTS,

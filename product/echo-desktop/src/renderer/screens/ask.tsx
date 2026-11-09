@@ -13,8 +13,8 @@ import { message } from '../messages.js';
 import { ownerAndStatus } from '../needs.js';
 import { announceAfter, announcement, duration, headline, lookedThrough, PROGRESS_AFTER_MS, type AskProgress } from '../progress.js';
 import {
-  activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
-  fullPageOffered, litAtoms, nothingLine, openCompose, openFullPage, openExternalSource, pageCovered, paneCitations, paneTarget, pickSuggestion,
+  activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
+  fullPageOffered, litAtoms, nothingLine, openCompose, openFullPage, openExternalSource, pageCovered, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, setBarText, sourceName, submitBar, suggestionsShown, toggleEarlier, toggleSourceList, toggleTurn, turnOf, widenScope,
   UNTITLED,
   type AskClarify, type AskTook, type PaneTarget, type Read, type State,
@@ -174,17 +174,12 @@ function lit(state: State, view: TurnView, id: string): boolean {
   return paneOn(state, view) && state.sources?.open != null && state.sources.focus === id;
 }
 
-/** A sentence's or row's classes: `base`, and lit by its number. */
-function litClass(base: string, on: boolean): string {
-  return [base, on ? 'on' : ''].filter(Boolean).join(' ');
-}
-
 /**
  * What a sentence's element carries, whichever item it reads as: its classes
  * after `base`, if any (lit by its number), and its test id.
  */
 function statementProps(state: State, view: TurnView, id: string, base = '') {
-  return { class: litClass(base, lit(state, view, id)) || undefined, 'data-testid': 'statement', 'data-reading-anchor': id };
+  return { class: [base, lit(state, view, id) ? 'on' : ''].filter(Boolean).join(' ') || undefined, 'data-testid': 'statement', 'data-reading-anchor': id };
 }
 
 /** A sentence's words as its item reads them (`text`), then the numbers of its sources. */
@@ -620,7 +615,7 @@ function againAt(state: State, turn: TimelineTurn): string | null {
  * (`took`) and Ask again on one asked before this Ask (`current` false).
  */
 function FullTurn({ state, turn, took, current, last }: { state: State; turn: TimelineTurn; took: AskTook | undefined; current: boolean; last: boolean }) {
-  const view = turnView(turn, shownChecks(turn, state));
+  const view = turnView(turn, checksOf(turn, state));
   const omitted = allOmitted(turn, view.checks) && answerGaps(turn.answer, view.shows).length === 0;
   const widen = !omitted && !state.ask?.failed && last && canAskEverywhere(turn, state);
   return (
@@ -915,7 +910,7 @@ function Asking({ progress }: { progress: AskProgress }) {
   return <>
     <div class="ask-trail" aria-live="off">
       <div class="ask-line" data-testid="asking">
-        <span class="ask-line-toggle">
+        <span class="ask-line-words">
           <i class="pulse" aria-hidden="true" />
           <span class="headline working" data-testid="ask-stage">{live ? headline(progress) : 'Thinking…'}</span>
           <span class="timer" data-testid="ask-timer" aria-hidden="true">{duration(elapsed)}</span>
@@ -952,24 +947,16 @@ const SECTIONS = [['decisions', 'Decisions'], ['actions', 'Actions'], ['rational
 
 const VISIBILITY: Record<ApprovedRecord['visibility'], string> = { project: 'Visible to project members', approver: 'Only the approver' };
 
-/** Whether an item of a record is lit. */
-export type LitItem = (item: RecordItem) => boolean;
-
-/** The items an answer cites, by atom id: as the pane and the reader light them. */
-export function byAtom(atoms: ReadonlySet<string>): LitItem {
-  return item => atoms.has(item.atom_id);
-}
-
 /**
  * MEETING · APPROVED RECORD: who approved it, who was there, who can read it,
  * and what was approved. In the source pane, and in the reader, whose own
  * head names it and who can read it (`headed` false). The items an answer
- * cites are lit (`lit`), by atom id. The first is scrolled into view once it shows.
+ * cites are lit, by their atom ids (`lit`). The first is scrolled into view once it shows.
  */
-export function RecordDetail({ record, headed = true, lit }: { record: ApprovedRecord; headed?: boolean; lit?: LitItem }) {
+export function RecordDetail({ record, headed = true, lit }: { record: ApprovedRecord; headed?: boolean; lit?: ReadonlySet<string> }) {
   const participants = [...record.participants, ...(record.participants_more ? ['Additional participants not shown'] : [])];
   const detail = useRef<HTMLDivElement>(null);
-  const on = (item: RecordItem) => lit?.(item) === true;
+  const on = (item: RecordItem) => lit?.has(item.atom_id) === true;
   // Which item is first lit, so the record read again never scrolls back to it.
   const first = SECTIONS.flatMap(([key]) => record[key].items).find(on)?.atom_id;
   useLayoutEffect(() => {
@@ -1051,7 +1038,7 @@ function SourceReviewBadge({ review, shared = false }: { review: 'not_reviewed' 
 function OriginalSource({ state, target, source }: { state: State; target: PaneTarget; source: Extract<AnswerSource, { kind: 'original' }> }) {
   const sources = state.sources!;
   const reads = sources.evidence?.group === target.number ? sources.evidence.reads : {};
-  const places = paneCitations(target);
+  const places = target.group.indexes;
   const count = places.length;
   const answer = activeTurn(state)?.answer;
   const focused = answer ? answerSentences(answer).find(([id]) => id === sources.focus)?.[1].citation_indexes ?? [] : [];
@@ -1157,9 +1144,10 @@ function WorkspaceSource({ source }: { source: Extract<AnswerSource, { kind: 'pr
 }
 
 /**
- * Beside Ask: one of the answer's sources, opened by its kind (openers.ts): a meeting's approved record with the cited items lit,
- * an original's cited passages, a follow-up, a project, a person or a tool, or
- * Open in its own app. Once the answer came, Open goes to the item's own page.
+ * Beside Ask: one of the answer's sources, opened by its kind (openers.ts): a
+ * meeting's approved record with the cited items lit, an original's cited
+ * passages, a follow-up, a project, a person or a tool, or Open in its own
+ * app. Once the answer came, Open goes to the item's own page.
  */
 export function SourcePane({ state }: { state: State }) {
   const sources = state.sources!;
@@ -1168,7 +1156,7 @@ export function SourcePane({ state }: { state: State }) {
   const source = target.sources[0]!;
   let body;
   if (source.kind === 'record') {
-    body = <ReadRecord read={sources.records[source.record.record_sha256]}>{record => <RecordDetail record={record} lit={byAtom(litAtoms(state, target))} />}</ReadRecord>;
+    body = <ReadRecord read={sources.records[source.record.record_sha256]}>{record => <RecordDetail record={record} lit={litAtoms(state, target)} />}</ReadRecord>;
   } else if ('permalink' in source) {
     body = <ExternalSource key={`${source.tool_id}:${source.permalink}`} source={source} provider={externalSourceProvider(source, state.tools?.items)} />;
   } else if (source.kind === 'original') {

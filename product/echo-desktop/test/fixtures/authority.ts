@@ -185,8 +185,8 @@ function failure(code: string, status: number): Response {
   return json({ error: { code, message: 'request failed' } }, status);
 }
 /** As the directory finds a person: every word of the query in their name. */
-function found(query: unknown, entry: { title: string }): boolean {
-  const haystack = entry.title.normalize('NFC').toLowerCase();
+function found(query: unknown, name: string): boolean {
+  const haystack = name.normalize('NFC').toLowerCase();
   const terms = String(query).normalize('NFC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
   return terms.length > 0 && terms.every(term => haystack.includes(term));
 }
@@ -1533,7 +1533,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }
       const limit = request.limit ?? PAGE;
       const from = request.cursor === SECOND_PAGE ? limit : 0;
-      const all = desktop.people.filter(person => request.query === undefined || found(request.query, { title: person.display_name }));
+      const all = desktop.people.filter(person => request.query === undefined || found(request.query, person.display_name));
       return json(api.validateOrganizationDirectoryV1({
         schema_version: 1, kind: 'echo-organization-directory-v1', items: all.slice(from, from + limit),
         next_cursor: from + limit < all.length ? SECOND_PAGE : null,
@@ -1662,7 +1662,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
     // The Ask timeline's reads (ADR-0047): the source check, by citation, and what arrived in your projects. Each is checked
     // by the contract's validator; other modes return 404 for the source check.
-    if (method === 'POST' && path === '/v1/person/ask/check' && mode === 'ask-timeline-changed') {
+    if (method === 'POST' && path === '/v1/person/ask/check' && mode === 'ask-timeline-unreadable') {
       let items: ReturnType<Contract['validatePersonAskCheckRequestV1']>['items'];
       try {
         ({ items } = api.validatePersonAskCheckRequestV1(body));
@@ -1692,7 +1692,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const question = request.question;
       const answer = { ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8' };
       // The Ask timeline's answers, by the earlier turn the Ask carries; every other mode's take one and answer as if none came.
-      if (mode === 'ask-timeline-changed') return json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
+      if (mode === 'ask-timeline-unreadable') return json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
       // A client requesting progress gets the Ask's steps, then its answer and receipt.
       const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
       if (mode === 'ask-progress' && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V3) {

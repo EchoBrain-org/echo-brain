@@ -132,7 +132,7 @@ export function listView(raw: unknown, scope: ListScope): ListPage {
  * imported meeting's or a document's text. A meeting is never opened here:
  * the reader reads its record as the source pane does (recordView).
  */
-export function openView(raw: unknown, ref: ItemRef): Opened {
+export function openView(raw: unknown, ref: ItemRef & { readonly kind: Exclude<ItemRef['kind'], 'meeting'> }): Opened {
   const opened = validated(validatePersonOpenResponseV1, unwrap(raw));
   if (opened.ref !== `${ref.kind}:${ref.id}` || !('item' in opened)) throw new ViewError();
   const item = listItem(opened.item);
@@ -159,8 +159,6 @@ export function openView(raw: unknown, ref: ItemRef): Opened {
         chunks: chunks.map(chunk => ({ anchor: chunk.anchor.kind, start: chunk.anchor.start, text: chunk.text })), next_cursor: next,
       } };
     }
-    case 'meeting':
-      throw new ViewError();
   }
 }
 
@@ -359,8 +357,8 @@ function originalSource(citation: SourceRevision, label: string, ref: string | u
  * record by its digest and policy, an original by its revision and anchor, a
  * live ticket or page by its permalink, a follow-up, a project,
  * a person or a tool by its id, and a container in a tool you connected by its
- * link, its scope and own id left behind. A name Ask shows while it works, or
- * in its receipt, is such a citation too: it opens the same way.
+ * link, its scope and own id left behind. An item the line names while Ask
+ * works is such a citation too.
  */
 function answerSource({ citation, label, ref, key }: PersonAnswerCitationV8): AnswerSource {
   switch (citation.kind) {

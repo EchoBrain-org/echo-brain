@@ -37,7 +37,6 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   const send = page.getByTestId('need-row').filter({ hasText: 'follow-ups to send' });
   await expect(send).toContainText('Launch the pilot next week — 4 follow-ups to send', { timeout: 35_000 });
   await expect(send).toContainText('owners Mina, Rafael');
-  expect(requests('next').length).toBeGreaterThan(0);
   expect(requests('start')).toEqual([]);
   await send.click();
   const list = page.getByTestId('follow-ups');

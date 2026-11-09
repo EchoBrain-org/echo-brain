@@ -121,7 +121,7 @@ describe('one status vocabulary (F7)', () => {
     expect(ownerUnmatched(item({ state: 'unsent' }))).toBe(false);
   });
 
-  it('totals not sent and open as follow-ups, never as "open", whatever the last check found', () => {
+  it('totals not sent and open as follow-ups, never as "open"', () => {
     expect(activeTotal({ unsent: 2, open: 3 })).toBe(5);
     expect([followUpCount(activeTotal({ unsent: 1, open: 3 })), followUpCount(1)]).toEqual(['4 follow-ups', '1 follow-up']);
     // A project's line says its follow-ups as a meeting's does.

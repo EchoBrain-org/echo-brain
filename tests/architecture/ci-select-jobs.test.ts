@@ -188,7 +188,6 @@ describe("pull-request job selection", () => {
     ["tools/ci-runner-info.mjs", true, false],
     ["tools/clean-v1-release.mjs", true, true],
     ["deploy/release/release-artifact-validation.mjs", true, true],
-    ["tests/fixtures/project-context-v1/operations.json", true, false],
     ["deploy/release/start-person-cli-kit-macos.sh", false, true],
     ["deploy/organization-authority/Caddyfile.clean-v1.ec2", false, true],
     ["deploy/organization-authority/compose.clean-v1.yaml", false, true],
@@ -539,7 +538,6 @@ describe("job input closures", () => {
     }
     expect(packages.size).toBeGreaterThan(0);
     for (const name of packages) expectCovered("desktop_app", workspaceByName.get(name)!);
-    expectCovered("desktop_app", "tests/fixtures/project-context-v1/operations.json");
     expectCovered("desktop_app", "product/echo-desktop/package-lock.json");
   });
 

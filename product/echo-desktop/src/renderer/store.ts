@@ -154,8 +154,8 @@ export interface SourcesState {
   records: Readonly<Record<string, Read<ApprovedRecord>>>;
   /**
    * Follow-ups an answer cites (ADR-0040), by item id: each its row as Home
-   * reads it now (rows only), for the pane's owner, status and check and a
-   * source row's "owner · status".
+   * reads it now (rows only), for the pane's owner and status and a source
+   * row's "owner · status".
    */
   followUps: Readonly<Record<string, Read<OpenItemView>>>;
   /** The cited passages of the original the pane shows (`group`, its number less one), by citation; read each time it is chosen. */
@@ -356,7 +356,7 @@ export interface OrganizationState {
 }
 
 /** Where an item was opened: a project's page (a row in it, or Ask's Open there), Only me, or Ask's Open in all context. */
-export type ReaderFrom = { kind: 'project'; project_id: string } | { kind: 'only-me' } | { kind: 'search' };
+export type ReaderFrom = { kind: 'project'; project_id: string } | { kind: 'only-me' } | { kind: 'all' };
 
 /**
  * An item open in the reader, by its ref: a note's text, a document's text a
@@ -3464,7 +3464,8 @@ export function widenScope(): void {
   const view = state.ask;
   if (!view) return;
   // Ask open moves to Home's thread: a turn opened that it puts behind the earlier questions' line opens that line, so the
-  // turn a follow-up continues stays in sight; and what changed of its newest turns is checked as opening Ask there would.
+  // turn a follow-up continues stays in sight; and whether you can still read its newest turns' sources is checked as opening
+  // Ask there would.
   if (!view.earlier && view.opened !== null && behindEarlierLine(askThread(), fullTurns(view)).includes(view.opened)) set({ ask: { ...view, earlier: true } });
   void checkTimeline();
 }
@@ -3528,14 +3529,6 @@ function setTimeline(timeline: State['timeline']): void {
 export function checksOf(turn: TimelineTurn, current: State = state): TurnChecks | undefined {
   // The turn as the timeline keeps it now: one held across a check may predate what that check found unreadable.
   return knownStates(freshChecksOf(turn, current), (turnOf(turn.id, current) ?? turn).unreadable);
-}
-
-/**
- * What the page shows of what is known of a turn's sources: on one asked in
- * this Ask, which is current, only what a check found unreadable.
- */
-export function shownChecks(turn: TimelineTurn, current: State = state): TurnChecks | undefined {
-  return current.ask?.asked.includes(turn.id) ? knownStates(undefined, turn.unreadable) : checksOf(turn, current);
 }
 
 /**
@@ -3845,7 +3838,7 @@ export function nothingLine(turn: TimelineTurn, current: State = state): string 
 
 /** A completed factual gap can be searched more widely even when other parts were answered. */
 export function canAskEverywhere(turn: TimelineTurn, current: State = state): boolean {
-  if (turn.scope.kind !== 'project' || !showsOf(shownChecks(turn, current))(turn.answer.sources.map((_, index) => index))) return false;
+  if (turn.scope.kind !== 'project' || !showsOf(checksOf(turn, current))(turn.answer.sources.map((_, index) => index))) return false;
   return foundNothingInProject(turn) || (turn.answer.parts.some(part => part.gap_details?.not_found !== undefined)
     && !turn.answer.parts.some(part => part.gap_details?.interrupted));
 }
@@ -4015,7 +4008,7 @@ export async function copyAnswer(id: string | null): Promise<boolean> {
   const turn = turnOf(id);
   if (turn === undefined) return false;
   const { answer } = turn;
-  const checks = shownChecks(turn);
+  const checks = checksOf(turn);
   const groups = turnGroups(answer, checks);
   const shows = showsOf(checks);
   // Ask again's "Since" (ADR-0047), named by the day the earlier answer was asked, as the page names it.
@@ -4050,7 +4043,7 @@ function answerSources(current: State = state): readonly AnswerSource[] {
  */
 export function answerGroups(current: State = state): SourceGroup[] {
   const turn = activeTurn(current);
-  return turn ? turnGroups(turn.answer, shownChecks(turn, current)) : [];
+  return turn ? turnGroups(turn.answer, checksOf(turn, current)) : [];
 }
 
 /** The turns Ask shows (ADR-0049): its place's thread, each question once. */
@@ -4085,11 +4078,6 @@ export interface PaneTarget {
   /** Its group, and its number less one. */
   readonly group: SourceGroup;
   readonly number: number;
-}
-
-/** Where the pane's citations are: its places in the answer. */
-export function paneCitations(target: PaneTarget): readonly number[] {
-  return target.group.indexes;
 }
 
 /** The pane's item, or null while it is closed. */
@@ -4156,7 +4144,7 @@ export function openFullPage(): void {
   const scope = activeTurn()?.answer.scope;
   const cited = [...litAtoms(state, target)];
   closeAsk();
-  void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'search' }, undefined, cited);
+  void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'all' }, undefined, cited);
 }
 
 /**
@@ -4278,7 +4266,7 @@ function readPane(gen: number, source: AnswerSource): void {
 export function chooseSource(group: number, focus: string | null, turn: string | null): void {
   const sources = state.sources;
   const shown = turnOf(turn);
-  const chosen = shown ? turnGroups(shown.answer, shownChecks(shown))[group] : undefined;
+  const chosen = shown ? turnGroups(shown.answer, checksOf(shown))[group] : undefined;
   const source = chosen ? shown!.answer.sources[chosen.indexes[0]!] : undefined;
   if (!sources || !shown || !source) return;
   set({ sources: { ...sources, turn: shown.id, open: group, focus, evidence: null } });
@@ -4321,8 +4309,7 @@ async function readEvidence(gen: number): Promise<void> {
   const scope = paneScope();
   const sources = sourcesAt(gen);
   if (!account || !target || !scope || !sources) return;
-  const places = paneCitations(target);
-  const passages = places.flatMap((place, at) => {
+  const passages = target.group.indexes.flatMap((place, at) => {
     const source = target.sources[at];
     return source?.kind === 'original' ? [[place, source.ref] as const] : [];
   });

@@ -66,7 +66,7 @@ interface Store {
 }
 interface Views {
   answerView(raw: unknown, scope: Scope): Json; recordView(raw: unknown, asked: Json): Json; evidenceView(raw: unknown): Json;
-  openItemView(item: unknown): Json;
+  openItemView(item: unknown): Json; askStepView(raw: unknown): { readonly items?: readonly Source[] };
 }
 interface ProgressView { PROGRESS_AFTER_MS: number }
 const ok = (value: unknown) => ({ ok: true, value });
@@ -259,8 +259,7 @@ describe('Ask progress from the Authority through the Person client to the deskt
       const pageReceipt = store.getState().ask!.took[shown.id]?.receipt;
       expect(store.getState().ask!.asking).toBeNull();
       expect(pageReceipt).toEqual({ looked_through: receipt.looked_through });
-      expect(pageReceipt).toEqual(views.answerView(JSON.parse(lines.at(-1)!), { kind: 'global' }).receipt);
-      expect(writing!.progress.read.map(item => item.label)).toEqual(named.map(item => item.label));
+      expect(writing!.progress.read).toEqual(views.askStepView({ ok: true, progress: { type: 'read', items: named } }).items);
 
       const cited = shown.answer.sources;
       const groups = store.answerGroups();
