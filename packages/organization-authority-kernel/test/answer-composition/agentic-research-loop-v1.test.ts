@@ -179,7 +179,7 @@ describe("research loop: open", () => {
     const open = vi.fn(async () => result([therm]));
     const reopen = reads("open", [{ tool: "open", args: { id: "E1" } }]);
     const h = harness([reopen, reopen, affects("found")], { live_sources: [JIRA], openCitation: async () => result([therm]), open });
-    const view = await h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}.`, [therm.citation], {}, "report") });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Recheck ${agenticStartingSlotV1(1)}.`, [therm.citation], {}, "report") });
     expect(open).not.toHaveBeenCalled();
     expect(h.prompt(0).opened).toEqual([expect.objectContaining({ id: "E1", text: therm.text })]);
     expect(h.prompt(1).last_results).toEqual([{ tool: "open", args: { id: "E1" }, note: "already open; its full text is in your scratchpad" }]);
@@ -340,7 +340,7 @@ describe("research loop: starting evidence", () => {
     const pending = new Map(items.map(item => [(item.citation as { readonly ticket_id: string }).ticket_id, deferred<EvidenceDeskResultV2>()]));
     const openCitation = vi.fn((input: EvidenceDeskOpenCitationInputV2) => pending.get(keyOf(input))!.promise);
     const h = harness([found("E1", "E2", "E3")], { live_sources: [JIRA], openCitation });
-    const run = h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}, ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(3)}.`, items.map(item => item.citation), {}, "report") });
+    const run = h.research.research({ trigger: "approved_record", brief: brief(`Recheck ${agenticStartingSlotV1(1)}, ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(3)}.`, items.map(item => item.citation), {}, "report") });
     await vi.waitFor(() => expect(openCitation).toHaveBeenCalledTimes(3));
     for (const item of [...items].reverse()) pending.get((item.citation as { readonly ticket_id: string }).ticket_id)!.resolve(result([item]));
     const view = await run;
@@ -353,7 +353,7 @@ describe("research loop: starting evidence", () => {
     const pending = many.map(() => deferred<EvidenceDeskResultV2>());
     const openCitation = vi.fn((input: EvidenceDeskOpenCitationInputV2) => pending[Number(keyOf(input)) - 60]!.promise);
     const h = harness([found("E1")], { live_sources: [JIRA], openCitation });
-    const run = h.research.research({ trigger: "sweep", brief: brief(many.map((_, index) => agenticStartingSlotV1(index + 1)).join(" "), many.map(item => item.citation), {}, "report") });
+    const run = h.research.research({ trigger: "approved_record", brief: brief(many.map((_, index) => agenticStartingSlotV1(index + 1)).join(" "), many.map(item => item.citation), {}, "report") });
     await vi.waitFor(() => expect(openCitation).toHaveBeenCalledTimes(4));
     pending[2]!.resolve(result([many[2]!]));
     await vi.waitFor(() => expect(openCitation).toHaveBeenCalledTimes(5));
@@ -371,7 +371,7 @@ describe("research loop: starting evidence", () => {
       return result([anchor, ...[1, 2, 3].map(index => context(anchor.label.slice(0, 8), index))]);
     });
     const h = harness([found("E1", "E4")], { live_sources: [JIRA], openCitation });
-    const view = await h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)}.`, items.slice(0, 2).map(item => item.citation), {}, "report") });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Recheck ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)}.`, items.slice(0, 2).map(item => item.citation), {}, "report") });
     // An anchor and the two 10 KB passages that fit its 24 KB, for each item; the third passage of each is left out.
     expect(h.prompt(0).task).toBe("Recheck E1 and E4.");
     expect(view.items.map(item => item.title)).toEqual([items[0]!.label, "THERM-48-CTX-1: Unrelated work", "THERM-48-CTX-2: Unrelated work", items[1]!.label, "THERM-46-CTX-1: Unrelated work", "THERM-46-CTX-2: Unrelated work"]);
@@ -392,7 +392,7 @@ describe("research loop: starting evidence", () => {
       return new Promise<EvidenceDeskResultV2>(() => undefined);
     });
     const h = harness([], { live_sources: [JIRA], openCitation });
-    await expect(h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}, ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(3)}.`, items.map(item => item.citation), {}, "report") }))
+    await expect(h.research.research({ trigger: "approved_record", brief: brief(`Recheck ${agenticStartingSlotV1(1)}, ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(3)}.`, items.map(item => item.citation), {}, "report") }))
       .rejects.toMatchObject({ code: "unavailable" });
     expect(openCitation).toHaveBeenCalledTimes(3);
     expect(whenFirstReturned).toEqual([false, true]);
@@ -407,12 +407,12 @@ describe("research loop: starting evidence", () => {
       return result([items.find(item => (item.citation as { readonly ticket_id: string }).ticket_id === keyOf(input))!]);
     });
     const h = harness([], { live_sources: [JIRA], openCitation });
-    const run = h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}, ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(3)}.`, items.map(item => item.citation), {}, "report"), signal: stop.signal });
+    const run = h.research.research({ trigger: "approved_record", brief: brief(`Recheck ${agenticStartingSlotV1(1)}, ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(3)}.`, items.map(item => item.citation), {}, "report"), signal: stop.signal });
     await vi.waitFor(() => expect(openCitation).toHaveBeenCalledTimes(3));
     stop.abort();
     await expect(run).rejects.toThrow();
     const released = items.slice(0, 2).flatMap(item => [item.receipt_sha256, canonicalSha256({ desk: [item.id] })]);
-    expect(h.audit).toEqual([expect.objectContaining({ trigger: "sweep", outcome: "cancelled", receipt_digests: released })]);
+    expect(h.audit).toEqual([expect.objectContaining({ trigger: "approved_record", outcome: "cancelled", receipt_digests: released })]);
   });
 
   it("fails with the first failure in brief order, as reading one at a time would", async () => {
