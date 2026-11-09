@@ -310,13 +310,6 @@ describe('an item opened by its ref', () => {
       chunks: [{ anchor: 'page', start: 3, text: 'Hello' }], next_cursor: 'AQ',
     } });
   });
-
-  it('never a meeting: the reader reads its approved record whole, as the source pane does (recordView)', () => {
-    const page = opened(`meeting:${RECORD}`, { item: row(`meeting:${RECORD}`), atoms: [{ kind: 'decision', text: 'One.' }], meeting: {
-      started_at: '2026-09-21T19:00:00.000Z', timezone: 'America/Los_Angeles', all_day: false, participants: ['Ari'], participants_more: false, approved_by: 'Ari',
-    } });
-    expect(() => openView(page, { kind: 'meeting', id: RECORD })).toThrow(ViewError);
-  });
 });
 
 describe('failures carry a code, never text', () => {

@@ -132,7 +132,7 @@ export function listView(raw: unknown, scope: ListScope): ListPage {
  * imported meeting's or a document's text. A meeting is never opened here:
  * the reader reads its record as the source pane does (recordView).
  */
-export function openView(raw: unknown, ref: ItemRef): Opened {
+export function openView(raw: unknown, ref: ItemRef & { readonly kind: Exclude<ItemRef['kind'], 'meeting'> }): Opened {
   const opened = validated(validatePersonOpenResponseV1, unwrap(raw));
   if (opened.ref !== `${ref.kind}:${ref.id}` || !('item' in opened)) throw new ViewError();
   const item = listItem(opened.item);
@@ -159,8 +159,6 @@ export function openView(raw: unknown, ref: ItemRef): Opened {
         chunks: chunks.map(chunk => ({ anchor: chunk.anchor.kind, start: chunk.anchor.start, text: chunk.text })), next_cursor: next,
       } };
     }
-    case 'meeting':
-      throw new ViewError();
   }
 }
 

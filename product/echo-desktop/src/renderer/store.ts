@@ -356,7 +356,7 @@ export interface OrganizationState {
 }
 
 /** Where an item was opened: a project's page (a row in it, or Ask's Open there), Only me, or Ask's Open in all context. */
-export type ReaderFrom = { kind: 'project'; project_id: string } | { kind: 'only-me' } | { kind: 'search' };
+export type ReaderFrom = { kind: 'project'; project_id: string } | { kind: 'only-me' } | { kind: 'all' };
 
 /**
  * An item open in the reader, by its ref: a note's text, a document's text a
@@ -4156,7 +4156,7 @@ export function openFullPage(): void {
   const scope = activeTurn()?.answer.scope;
   const cited = [...litAtoms(state, target)];
   closeAsk();
-  void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'search' }, undefined, cited);
+  void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'all' }, undefined, cited);
 }
 
 /**

@@ -456,7 +456,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const { expect, ref, cursor } = params as Params<'open.ref'>;
       const argument = refArgument(ref);
       if (argument === null || ref.kind === 'meeting' || !cursorOk(cursor) || (ref.kind === 'note' && cursor !== undefined)) return code('invalid_request');
-      const asked: ItemRef = { kind: ref.kind, id: ref.id };
+      const asked = { kind: ref.kind, id: ref.id };
       return forAccount(method, expect, ['open', argument, ...(cursor ? [option('cursor', cursor)] : [])], stdout => openView(lastJson(stdout), asked));
     }
     case 'documents.save': {
