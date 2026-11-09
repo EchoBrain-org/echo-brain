@@ -403,3 +403,8 @@ Update (2026-10-31): the client no longer reads `x-echo-person-ask-route`; a
 on every response for one more release, because released clients refuse a
 progress stream without it. The mine scope named above is retired
 ([ADR-0024](ADR-0024-person-list-open-and-mine-scope.md)).
+
+On 2026-11-08 sweeps were retired, and `follow_ups` no longer declares
+`checked` ([ADR-0040](ADR-0040-follow-ups-as-ask-evidence.md)). `checked`
+stays in the shared list of date fields, so the step tool every Ask is given
+is unchanged; a `checked` filter on follow-ups is refused.

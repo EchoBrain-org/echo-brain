@@ -12,15 +12,16 @@ npm run build
 ./node_modules/.bin/vitest run --config vitest.config.ts services/organization-authority/test/project-context-integration
 ```
 
-The synthetic harness drives frozen codecs, PC-01 transactions and the
-enrichment eligibility adapter. Authentication is a supplied fixture binding.
-Restart closes/reopens SQLite, not the Authority/proxy lifecycle. Enrichment
-uses a test-only completion seam, not the runtime worker.
+The synthetic harness drives frozen codecs and PC-01 transactions.
+Authentication is a supplied fixture binding. Restart closes/reopens SQLite,
+not the Authority/proxy lifecycle. Notes get no search enrichment since
+2026-11-08, so the harness has no enrichment seam.
 
-`synthetic.test.ts` keeps one table-delta case: an upload and its enrichment
-add no meeting/approval work or new queue tables, and the frozen operation
-fixtures exclude Ask. The other synthetic cases were removed after `e5f7e97`
-because the SQLite, application and HTTP tests cover them. Actual runtime
+`synthetic.test.ts` keeps one table-delta case: an upload adds only original
+custody, receipt and association rows, with no meeting, approval or work-queue
+rows, and the frozen operation fixtures exclude Ask. The other synthetic cases
+were removed after `e5f7e97` because the SQLite, application and HTTP tests
+cover them. Actual runtime
 scheduling, record/Ask dispatch, HTTP release and CLI outcome
 handling require the committed PC-02 through PC-04 integrations.
 

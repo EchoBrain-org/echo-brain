@@ -243,3 +243,12 @@ Update (2026-10-31): the client no longer reads `x-echo-person-ask-route`, and
 a 404 from Ask is the Authority's own `not_found`. `/v7` keeps sending the
 header for one more release, because released clients refuse a progress
 stream without it.
+
+On 2026-11-08 the founder retired sweeps
+([ADR-0033](ADR-0033-shared-open-items.md), amended), and Ask no longer sees a
+sweep's check. A follow-up's evidence carries no latest check: no `check`, no
+"Latest check" line, and no `checked` date. The follow-ups source no longer
+declares that date, so a `checked` date filter on follow-ups is refused like
+any date a source does not declare. The follow-ups guidance for research and
+the writer no longer mentions a check, and the desktop's side panel shows
+none. What a follow-up releases otherwise, and to whom, does not change.

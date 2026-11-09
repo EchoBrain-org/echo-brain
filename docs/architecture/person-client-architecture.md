@@ -59,10 +59,11 @@ project or not (their only-me notes and uploads, the meetings they imported,
 and approved meetings kept for them alone), newest first, one flat row each (a
 shape for its kind, its title, a tile for each project it is filed in, named
 on hover, and how long ago it was added), no row with a lock, and More for the
-next page. A project page reads `person list --project`, and the reader opens
-every list row and live match with `person open --ref`, joining a meeting's
-split parts across pages; Ask's sources still read as described under Ask
-below.
+next page. A project page reads `person list --project`. The reader opens a
+note, a document or an imported meeting with `person open --ref`, and an
+approved meeting with the read Ask's sources use (under Ask below): the whole
+record at once, each item by its atom id, with no transcript quotes and no
+More. The bar only asks: it runs no search as the person types.
 Only me's bar is Home's (all context); its ⊕, and a file dropped on it, start
 Capture in no project, and a "Saved for you" toast opens it. The desktop has no
 Mine page or Mine scope any more, and the CLI's `--mine`
@@ -243,8 +244,10 @@ the record as Ask cites it (organization-api's `person-cited-record-v1.ts`),
 while the app is shown.
 Each readable card appears as its read completes; a failed or missing read does
 not discard other readable cards. Citations also carry a `ref` for
-`person open`, but the source cards still read `person records` until a
-follow-up moves them to open by ref. The answer's numbered sources acquire
+`person open`, but the source cards read `person records`, and since
+2026-11-08 the reader opens an approved meeting through the same read (the
+brief lists every item, with no cap of 32 per section and no `more`, and says
+when the record was approved). The answer's numbered sources acquire
 meeting titles after their reads complete. Selecting a source's number or row
 opens its approved record alongside the answer.
 
@@ -398,19 +401,21 @@ explicitly selected UTF-8 file unchanged, with
 `--audience only-me|team|project|projects` (default Only me; `project` requires
 `--audience-project-id`, `projects` requires `--audience-project-ids-json`) and
 an independent `--association-project-ids-json` set that does not change the
-audience. `status-v3` returns the durable receipt and optional enrichment
-progress. `search-v3` and `search` find original uploads, and
-`person open --ref note:<context-id>` reads one, under current membership and
-stored audience, without approval or a model dependency. Content/search
+audience. `status-v3` returns the durable receipt, whose search metadata is
+always `ready`: no per-note search hints are made since 2026-11-08.
+`search-v3` finds original uploads by title and text (the V2 `search` left
+the CLI on 2026-11-08), and `person open --ref note:<context-id>` reads one,
+under current membership and stored audience, without approval or a model
+dependency. Content/search
 releases revalidate the session and audit before returning. Unknown submissions
 require the same request ID and exact file, title, audience, and project
 coordinates on retry; no local queue or automatic upload exists. The V2
 `submit`, `status` and `read` commands and `read-v3` left the CLI on
 2026-09-30.
 
-The current bounded text carrier does not decide the context taxonomy. Optional
-LLM search hints remain derived metadata. Uploads never become approved
-decision records; `person records` reads approved records only. The
+The current bounded text carrier does not decide the context taxonomy. Uploads
+never become approved decision records; `person records` reads approved
+records only. The
 Ask routes behind `person ask` also retrieve authorized uploads
 and usable document extraction as unapproved original evidence, filtered by
 stored audience and, for project scope, project association

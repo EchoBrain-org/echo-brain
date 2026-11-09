@@ -5,15 +5,17 @@ did the planner ask the right questions, did the tools find and read the
 evidence, did research reach the right verdicts, and did the writer use what
 it was given. Design: [`docs/product/2026-10-06-research-loop-eval-v1.md`](../../../docs/product/2026-10-06-research-loop-eval-v1.md).
 
-Three triggers run the same loop:
+Two triggers run the same loop:
 
 - **Ask**: a typed question, live budget (90 s), graded on the research result
   and the answer.
 - **Approved record** (replaces Check): an approved meeting record, background
   budget (5 min), graded on the research result and the impact card.
-- **Sweep**: earlier findings re-read after partial fixes (world state S1),
-  background budget, graded on the research result and the sweep result (a
-  verdict and one line per finding).
+
+Sweeps were retired on 2026-11-08
+([open items and Home v1](../../../docs/product/2026-10-08-open-items-and-home-v1.md),
+section 6). Their cases, the S1 world state, `--state`, the sweep grading and
+the export bindings only they used went with them; every case now runs at S0.
 
 **Which Ask it runs.** The Ask trigger here runs Ask as
 `POST /v7/person/ask` runs it, as desktops and `person ask` ask it: V8
@@ -27,20 +29,10 @@ the ordinary live Ask on `/v7`.
 
 The report keeps the loop and the renderers apart. **Research loop**: every
 trigger, graded on its research result (needs, found, read, handed,
-established, verdicts). A sweep has no planner (open items ruling R77): it
-re-reads its findings' items and stops, so planner needs, invented needs,
-items handed over, noise and distractors handed are not applicable to it and
-stay unknown, never zero, and a Sweep case names no expected needs or gaps
-(`validate` refuses one that does). **Renderers**: Ask's writer on its answer; the
-impact card on affected items listed, relations and owners correct (of the
-listed items), invented items or people, and gaps reported; and the sweep
-result on verdicts right out of findings, and findings not assessed.
-Approved-record keys carry a relation and an owner per affected item
-(`world/README.md`). A sweep verdict is compared with the key by its
-`finding_index`: `landed` is landed, `still_open` and `changed` are not landed,
-`unreadable` is no evidence, and a null verdict (not assessed) is wrong. Sweep
-verdicts are counted, not averaged: per case over all its runs, then over all
-Sweep cases; a failed run's findings all count as wrong.
+established). **Renderers**: Ask's writer on its answer; and the impact card
+on affected items listed, relations and owners correct (of the listed items),
+invented items or people, and gaps reported. Approved-record keys carry a
+relation and an owner per affected item (`world/README.md`).
 
 **List parts ([ADR-0041](../../../docs/decisions/ADR-0041-complete-lists-as-ask-evidence.md)).**
 A part of type `list` asks which items exist ("Which Confluence pages were
@@ -91,7 +83,7 @@ also measures the step prompt's kind rule on questions tuning never sees, and
 its examples name nothing any case asks about
 (`tests/architecture/ask-kind-examples-eval-independence.test.ts`), so the
 score never measures recall of an example. Only Ask cases have list parts: impact
-cards and sweeps record no lists. The judge sees research's lists as rows
+cards record no lists. The judge sees research's lists as rows
 (filter, completeness, members' titles, dates and details, never text), and
 for any part may take a member's own title, dates, status or owner from its
 row, never what the item says.
@@ -103,6 +95,16 @@ meaning across ADR-0041. The writer answers such a part by selecting the
 member, and code states its row facts, citing the row: Ask leaves out a
 writer's sentence that cites only rows or list ids.
 
+**Baselines across the sweeps' retirement (2026-11-08).** The Sweep cases and
+the S1 world state went, and the judge's prompt and the report no longer
+cover sweep results or verdicts. The dataset and the judge prompt changed, so
+a report taken before then is not comparable on its cross-case aggregates:
+compare case by case, and regrade an earlier Ask or approved-record baseline
+with the current `grade` first. Ask research changed only where it reads
+follow-ups, which no longer carry a latest check
+([ADR-0040](../../../docs/decisions/ADR-0040-follow-ups-as-ask-evidence.md));
+approved-record runs are unchanged.
+
 **Baselines across the plain answer's retirement (2026-11-05).** The eval
 endpoint's Ask asked for no answer layout, so until then it got the plain
 writer and its answer. It now gets the writer desktops get and its answer in
@@ -113,38 +115,28 @@ statements. Research itself is unchanged, but the writer is handed less
 evidence, to make room for the block catalog and its longer reply. Take Ask
 baselines again on an endpoint built after it before comparing writer
 numbers; grading no longer credits the "and N more" count that only answers
-from before it could end a list statement with. Approved-record and Sweep runs
-are unchanged.
+from before it could end a list statement with. Approved-record runs are
+unchanged.
 
 **Baselines across ADR-0041 (2026-10-17).** Ask's research and writer changed:
 a complete list is evidence, and code names its members. Ask baselines taken
 before it measure the old loop, and their saved runs carry no lists, so a list
 part in them is never read. Take Ask baselines again on an endpoint built
 after ADR-0041, and regrade any earlier one with the current `grade` before
-comparing it. Approved-record and Sweep runs are unchanged.
+comparing it. Approved-record runs are unchanged.
 
 **Baselines across the research trigger contract.** Ask is byte-identical
 across that change, so an Ask baseline taken before or after it measures the
 same thing. Grading changed, though: the judge's prompt now covers the impact
 card, and the summary's Ask-writer `gaps_reported` now averages Ask cases only
-(the card's gaps have their own row; Sweep's plan gaps had one until R77).
-Regrade an older Ask baseline with the current `grade` before comparing it.
-Approved-record and
-Sweep baselines must be taken after the change: their task text changed, and
-approved-record runs now return the impact card (a saved approved-record run
-without one is graded as failed). Sweep runs now also return the sweep result,
-and the judge sees it; a saved Sweep run without one is graded as failed, so
-take Sweep baselines on an endpoint that returns it. A run graded as failed
-for a missing result is still scanned for restricted leaks, so regrading an
-older approved-record run without its card can report a leak that grading
-used to hide (it counts in "runs with restricted leaks").
-
-**Baselines across R77 (2026-10-16).** Sweeps no longer run the planner, so a
-Sweep baseline taken before R77 measures different research: retake it on an
-endpoint built after R77. The Sweep cases no longer carry expected needs or a
-gap, and the cross-case planner and handed-over averages now leave Sweep cases
-out, so regrade any earlier baseline with the current `grade` before comparing
-those numbers.
+(the card's gaps have their own row). Regrade an older Ask baseline with the
+current `grade` before comparing it. Approved-record baselines must be taken
+after the change: their task text changed, and approved-record runs now return
+the impact card (a saved approved-record run without one is graded as
+failed). A run graded as failed for a missing result is still scanned for
+restricted leaks, so regrading an older approved-record run without its card
+can report a leak that grading used to hide (it counts in "runs with
+restricted leaks").
 
 A case whose start request cannot be built (a meeting not bound, or a
 citation of a kind that cannot start research) is saved as a
@@ -221,7 +213,7 @@ See
 
 | Path | What it is |
 | --- | --- |
-| `world/` | The THERM additions and S1 edits to seed by hand (see `world/README.md`). |
+| `world/` | The THERM additions to seed by hand (see `world/README.md`). |
 | `cases/development.json` | Cases used while improving the loop. |
 | `cases/holdout.json` | Held-out cases. Open them only for the final check. No other file quotes their questions, names them or gives their keys. |
 | `release-check.json` | The development cases the staging release check asks after its canary. |
@@ -242,11 +234,10 @@ See
    the restricted project for M6.
 3. **Build and sign in locally.** `npm ci && npm run build`, then sign the ECHO
    CLI in to staging as the test person. The runner reuses that session.
-4. **Bind citations** (Jira ids from your export, approved meeting records from
-   staging):
+4. **Bind citations** (the approved meeting records found on staging):
 
    ```bash
-   npm run eval:research-loop -- bindings --export ~/Desktop/ECHO-Atlassian-Export-2026-10-06 --project-id prj_… --test-person "Your Name" --out ~/.local/state/echo-research-loop-eval-20261006
+   npm run eval:research-loop -- bindings --project-id prj_… --test-person "Your Name" --out ~/.local/state/echo-research-loop-eval-20261006
    ```
 
    If a meeting is reported as not found, add its approved-record citations to
@@ -257,7 +248,7 @@ See
    background-budget run of every live Ask):
 
    ```bash
-   npm run eval:research-loop -- run --run --model <loop-model-id> --split development --state S0 --trials 3 --background-diagnostic --out ~/.local/state/echo-research-loop-eval-20261006
+   npm run eval:research-loop -- run --run --model <loop-model-id> --split development --trials 3 --background-diagnostic --out ~/.local/state/echo-research-loop-eval-20261006
    ```
 
    `--model` is the operator-declared identifier for the configured loop model;
@@ -265,10 +256,7 @@ See
    Each run also records the commit it ran from; a report needs one commit, so
    use a fresh `--out` directory after changing the code.
 
-6. **Sweeps at S1.** Apply `world/s1.json` `apply` by hand, run
-   `--state S1` with the same explicit `--model`, then apply `revert` and
-   confirm S0 is restored.
-7. **Grade.** With a judge (a Claude model through OpenRouter, never the loop's
+6. **Grade.** With a judge (a Claude model through OpenRouter, never the loop's
    model):
 
    ```bash
@@ -276,25 +264,24 @@ See
    ```
 
    `--no-judge` grades code checks only, and the report then withholds every
-   judge measure: expected and invented needs, parts established, the judge's
-   Sweep verdicts, parts correct in the answer, unsupported claims, false
-   abstentions, gaps reported (Ask's and the card's) and must-not violations.
+   judge measure: expected and invented needs, parts established, parts correct
+   in the answer, unsupported claims, false abstentions, gaps reported (Ask's
+   and the card's) and must-not violations.
    Complete and supported stays unknown unless the run failed or a code check
    fails it: a leak, a citation of something research did not read, an
    invented card item or person, or a list not named in full. The code checks
    remain: found, read, handed over, need kinds, lists named, the card's items,
-   relations and owners, the sweep result's verdicts, leaks, noise, reach and
-   cost.
-8. **Calibrate the judge for this grading pass.** `calibrate sheet` requires 15
+   relations and owners, leaks, noise, reach and cost.
+7. **Calibrate the judge for this grading pass.** `calibrate sheet` requires 15
    judged runs and writes a blind sheet; answer every check `true` or `false`
    without opening `graded.json`, then `calibrate score`. The result is bound to
    that exact `graded.json`. Judge numbers count only when every sheet answer is
    present and founder agreement is at least 90%.
-9. **Report.** `report` writes `report.md` and `report.json` beside the runs.
+8. **Report.** `report` writes `report.md` and `report.json` beside the runs.
    It withholds judge-derived metrics unless the current grading pass has a
    trusted calibration result; code-check metrics remain available. It refuses
    if any run was added, removed or rewritten since `grade`; grade again.
-10. **Holdout** runs only for the final check of a loop change: `--split holdout`.
+9. **Holdout** runs only for the final check of a loop change: `--split holdout`.
 
 Before any loop change, write down which report numbers it must raise and
 which must not get worse (spec section 5).
@@ -399,13 +386,13 @@ outside the repository as private source content; output directories are
 ### Evaluation-run privacy
 
 Runs contain released text from Jira, Confluence and approved meetings. A
-saved run keeps the research result (the trimmed bundle) and Ask's answer, the
-impact card or the sweep result, never server records such as receipts or
-model-call fingerprints. Runs are written only to `--out`, which must be an
-absolute directory outside this repository; directories are `0700` and files
-`0600`. The judge receives the answer key, the items research read and the
-run's answer, card or sweep result, and nothing else. Delete the output
-directory when the evaluation is finished.
+saved run keeps the research result (the trimmed bundle) and Ask's answer or
+the impact card, never server records such as receipts or model-call
+fingerprints. Runs are written only to `--out`, which must be an absolute
+directory outside this repository; directories are `0700` and files `0600`.
+The judge receives the answer key, the items research read and the run's
+answer or card, and nothing else. Delete the output directory when the
+evaluation is finished.
 
 Evaluation runs execute on staging, so while an operator has enabled
 [LangSmith tracing](../../../deploy/organization-authority/README.md#langsmith-staging-tracing),

@@ -7,6 +7,15 @@ record: [ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md).
 Design canvas: "Quieter Ask" (today vs quieter, a sentence under the pointer,
 Home, the Only me list, a project page, Capture, a project's thread).
 
+Updated 2026-11-08 (lean-down): an answer's footer, opened, shows only its
+sources, not what Ask looked through (call 6), and an answer with no sources
+shows its "Looked through 68 items · 41s" as plain words that open nothing.
+"Changed since …" now heads only an Ask again's list: an old answer no longer
+says that its sources changed, and no sentence of it is lit for a change
+([Ask timeline v1](2026-10-25-ask-timeline-v1.md), implementation update).
+Where calls 5 and 6, the footer and "Changed since" bullets under Behavior and
+C3's `changed-since` say otherwise, they are history.
+
 ## What the founder asked for
 
 On 2026-10-26 the founder sent a staging screenshot of Ask and said it is too

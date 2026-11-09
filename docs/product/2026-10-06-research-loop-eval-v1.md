@@ -4,6 +4,12 @@ Status: shipped in #284. The
 [evaluation README](../../tools/evals/research-loop/README.md) owns how to run
 it, seed the THERM additions and calibrate the judge.
 
+Updated 2026-11-08: sweeps were retired
+([open items and Home v1](2026-10-08-open-items-and-home-v1.md), section 6),
+and this evaluation's Sweep trigger went with them: its cases, the S1 world
+state, `--state` and the sweep grading. Every case now runs at S0. What this
+design says below about the project sweep (Verify), Sweeps and S1 is history.
+
 ## Goal
 
 Optimize the research loop: the planner should ask the right questions, have

@@ -39,6 +39,26 @@ record's decisions and actions under "What was decided", and its rows make no
 open items ([open items and Home v1](2026-10-08-open-items-and-home-v1.md),
 section 3).
 
+Implementation note, 2026-11-08 (lean-down): the Authority starts runs, and
+sweeps are retired. The desktop no longer lists and starts runs itself. After
+each change check that reaches the Authority
+([ADR-0036](../decisions/ADR-0036-person-change-check.md)), and on a failed
+run's Try again, it checks in with a new operation, `next`, and the Authority
+starts the caller's oldest queued run with that request's token, as `start`
+starts one by id. `next` answers `{state}`: `running`; `pending` while the
+search index lags (no claim, as for `start`); `busy` while another of the
+caller's runs is running or this Authority process already runs four; or
+`idle` when nothing is queued. Approve asks for a change check at once, and
+the change check asks again within 15 seconds while one of the caller's runs
+is queued or running or one of their approvals is publishing, so a queued run
+starts within about 15 seconds. Nothing starts after the app quits. `start`
+stays for the CLI, and the desktop never sends it. This replaces "Home starts
+runs" and "every 5 seconds" above, the shape's start line, the first bullet
+of section 3 and ruling 2. With sweeps retired
+([open items and Home v1](2026-10-08-open-items-and-home-v1.md), section 6),
+`list` returns impact runs only, at most 100, and a sweep row left in the
+database is never listed, started, retried or viewed.
+
 ## Goal
 
 When a person approves a meeting, on the desktop or in Slack, ECHO checks what
@@ -195,6 +215,7 @@ Nothing from a view is written back.
 | --- | --- | --- |
 | `list` | — | The caller's runs, newest first, at most 100: `{run_id, trigger, event_ref, state, error_code, created_at, updated_at}`. |
 | `start` | `run_id` | `{state}` (`running`, `pending` when search is not ready, `busy`, or the final state). |
+| `next` (2026-11-08) | — | Starts the caller's oldest queued run: `{state}` (`running`, `pending` when search is not ready, `busy`, or `idle` when none is queued). |
 | `retry` | `run_id` | `{state: 'pending'}` for a failed run. |
 | `view` | `run_id` | `{card, checked_at, hidden}`. |
 
@@ -219,7 +240,7 @@ in the meetings sheet, an **Impact** section shows:
   rejection writes none; a crash between append and receipt still yields one
   run.
 - Only the approver can list, start, retry or view a run; anyone else gets
-  `not_found`.
+  `not_found`. `next` starts only the caller's own runs.
 - Two starts never run the same work twice; a person never has two live runs.
 - An unindexed record sends the run back to `pending` without an attempt.
 - The stored result contains no text, label or name read from an outside item
@@ -236,7 +257,7 @@ in the meetings sheet, an **Impact** section shows:
 
 - Runs started without the approver's desktop (delegated background access).
 - Showing results to anyone but the approver, or in Slack.
-- Open items and Sweep (spec 3).
+- Open items and Sweep (spec 3; sweeps were retired on 2026-11-08).
 - Notifications when a card is ready.
 - Re-running a done run.
 

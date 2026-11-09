@@ -116,3 +116,20 @@ lived in the answer it never saw.
   data.
 - Evidence: the eval report for follow-up resolution, the Authority and
   desktop test suites, and the founder's validation on the desktop.
+
+## Later decisions
+
+On 2026-11-08 (lean-down) the founder retired what an old answer said about
+change; a redesign of what moved underneath is parked. The desktop no longer
+tags a changed turn, lights the sentences whose sources changed, or keeps
+ticket baselines (`markers`). `POST /v1/person/ask/check` answers readability
+only (`same`, `unreadable` or `unknown`), never `changed`: it reads no newer
+revision, no page body and no follow-up move. For released clients, `changed`
+stays a valid state and ticket markers stay on the wire for one more release:
+the Authority returns a marker on every readable ticket and accepts and
+ignores one in a request, and both go in a later release, once every desktop
+is past this one. Leaving out the sentences whose sources the asker can no
+longer read stays, on the page, in Copy and in the previous turn a follow-up
+carries, and so does Ask again with its "since" list. Where this record's
+title and its "An old answer always says what changed" say more than
+readability, they are history.

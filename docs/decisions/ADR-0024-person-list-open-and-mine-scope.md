@@ -537,3 +537,15 @@ evidence desk, the research core and the shared answer scope know only global
 and one project, and a request that names mine is refused. The list's global
 scope went with it: a list takes exactly one of a project and Only me, and no
 first page names the person, their connected tools and their projects.
+
+On 2026-11-08 (lean-down) the founder chose one approved-record read for the
+desktop's reader and Ask's source pane. The reader opens an approved meeting
+with `person records --record-sha256 <digest> --brief`, the read the pane
+already used, rather than `person open --ref meeting:…`: the whole record in
+one read, each item lit by its atom id, with no split parts or More. The reader
+still shows no transcript quotes; the pane keeps them. So the pane does not
+move to open by ref, as the Desktop section above expected, and the host now
+receives the whole signed record for reader reads too. `POST /v1/person/open`
+still opens meetings for released desktops and the CLI. The bar no longer
+searches as a person types, so it has no live matches, and the CLI's V2
+`updates search` is retired.

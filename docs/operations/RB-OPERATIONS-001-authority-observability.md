@@ -385,8 +385,8 @@ payload capture is selected separately through authenticated Person diagnostics:
 prepare an `ask` or exact `trigger_run` target, then supply its one-use
 `capture_id` on the ordinary Ask request or existing run `start`. This does not
 approve a meeting, change the research brief, or change the product response.
-A `start` that answers `pending` was held, impact run or sweep, while the
-search index catches up with the record log: it claimed neither the run nor the
+A `start` that answers `pending` was held while the search index catches up
+with the record log: it claimed neither the run nor the
 capture, which nothing will claim now, so prepare a new capture and start again
 shortly.
 The same shared observer records model-port inputs, exposed structured replies,
@@ -477,28 +477,17 @@ Prepare after any Authority restart: an existing host retry wrapper that
 restarts Authority discards an earlier in-memory selection. Capture keeps no
 persistent payload and adds no evidence for past attempts.
 
-#### Follow sweep runs and failed open-item reads
+#### Follow failed open-item reads
 
-A sweep run (a re-check of open items,
-[open items and Home v1](../product/2026-10-08-open-items-and-home-v1.md)
-section 6) goes through the same launch path and observation as an impact
-run. Each attempt is its own background `research_run` operation with trigger
-`sweep`, the hashed run ID, a hashed event ID (the sweep's own event
-reference; there is no approval) and a unique attempt ID. Its output link
-names the stored result, the counts by verdict and the ECHO ids of the items it
-could not read; a sweep has no card, so no later card read follows it. Capture
-a sweep as any queued run: an exact `trigger_run` target and its `capture_id`
-on `start`. The capture records the same lifecycle
-outcomes as an impact run's: trigger started, persistence succeeded (or
-skipped when the attempt no longer owned the run), and application succeeded
-or failed. A sweep that finds no item left to check reads nothing and binds no
-desk, so its capture checks the person's session alone.
+Sweeps, which re-checked open items, were retired on 2026-11-08
+([open items and Home v1](../product/2026-10-08-open-items-and-home-v1.md)
+section 6): no `research_run` with trigger `sweep` runs any more, and a
+`sweep` request is refused before any method.
 
 The open-item operations (`home`, `items` and `item` on the runs route) open
 each item they show live as the viewer. A failure that is not the viewer's own
 access writes one content-free JSON line to the Authority's standard error,
-which reaches the retained `authority` log stream (step 3). A sweep writes the
-same line when the stored card of a decision it names cannot be read:
+which reaches the retained `authority` log stream (step 3):
 
 ```
 fields @timestamp, reason, code
@@ -745,7 +734,7 @@ firing on the current models (model scaffolding audit, 2026-10-20).
 | --- | --- |
 | Journey logs | `diagnostic.model_corrections` on a span's `succeeded` or `failed` event: `model_grounding` for meeting extraction, `research_loop` for research steps and the loop, `research_output` for renderers, `model_parse` for the adapter's JSON reading. |
 | Journey metrics | One `ModelCorrections` value per name and terminal event, with the single dimension `correction`. Metrics outlive the 14-day log retention. |
-| LangSmith traces | The root of a captured research run (Ask, impact card, sweep) carries `model_corrections`, the sum over every span of that run. Meeting extraction is not exported to LangSmith. |
+| LangSmith traces | The root of a captured research run (Ask, impact card) carries `model_corrections`, the sum over every span of that run. Meeting extraction is not exported to LangSmith. |
 
 ```
 fields @timestamp, diagnostic.model_corrections.extraction_repeat_dropped as repeats
@@ -802,7 +791,7 @@ adapter (`openrouter-structured-generation-adapter.ts`) and the reply parsers
 | `model_entry_dropped` | Dropped a malformed entry: not an object, no text or id, an unreadable id or selection, or an argument with no text or one its tool does not take |
 | `model_repeat_dropped` | Dropped a repeated need, id, phrase, list use or card row within one reply |
 | `model_id_respelled` | Read an id in another spelling (`e4`, `[E4]`, `4`, ` n2 `, `[L3]`) as its id |
-| `model_enum_respelled` | Read a closed value (a tool, a need's status or kind, a list's kind, status or role filter, a selection field, a relation, a verdict) given in another spelling, as an alias (`browse`, `decisions`) or not at all, as a known value or its default |
+| `model_enum_respelled` | Read a closed value (a tool, a need's status or kind, a list's kind, status or role filter, a selection field, a relation) given in another spelling, as an alias (`browse`, `decisions`) or not at all, as a known value or its default |
 | `model_bare_string` | Read a bare string where an object belongs: a tool's args or the old `input` field, a need, a list use |
 | `model_inline_ids_stripped` | Removed evidence ids written into model text, such as `(E4)` |
 
@@ -811,7 +800,7 @@ the durable Ask audit and the research result's `cost`, and as `recovery` on a
 LangSmith model run. A gate counter is counted once the extra call is admitted
 past its access check, as the audit counts repairs.
 
-Ask's follow-up resolver (`agentic-follow-up-resolver-v1.ts`) and the renderers (`ask-renderer-v1.ts`, `impact-card-renderer-v1.ts`, `sweep-renderer-v1.ts`):
+Ask's follow-up resolver (`agentic-follow-up-resolver-v1.ts`) and the renderers (`ask-renderer-v1.ts`, `impact-card-renderer-v1.ts`):
 
 | Name | What code did |
 | --- | --- |
@@ -826,8 +815,6 @@ Ask's follow-up resolver (`agentic-follow-up-resolver-v1.ts`) and the renderers 
 | `card_unknown_id_dropped` | Dropped a decided or affected entry naming an item the model was not shown, or the wrong kind of item |
 | `card_date_dropped` | Dropped a date at risk that the item does not state, that is not a date, or that has no milestone |
 | `card_fallback` | Showed the record's approved lines, not assessed, in place of a card with no usable reply |
-| `sweep_line_withheld` | Withheld a sweep line that suggests an edit or claims ownership, keeping its verdict |
-| `sweep_fallback` | Left findings not assessed after a sweep with no usable reply |
 
 #### Failed OpenRouter meeting extraction
 

@@ -5,7 +5,7 @@ initialization, Person OIDC sessions, initial-owner Slack identity linking,
 admitted meeting processing, approval finalization, immutable V4 records, and
 permission-aware Person reads and answer composition. It also owns durable
 Person document and upload custody, projects with their association and
-audience, audited read/search, and optional search enrichment. Uploads need
+audience, and audited read/search. Uploads need
 no approval. Meetings go through one approval core (one proposal per meeting,
 multi-project audiences, confirmed owners). Runtime opening never migrates
 state; it requires the [current baselines](#state-and-baselines), and existing
@@ -132,8 +132,8 @@ the profile is present:
   engine. The service rejects enabling it outside
   `https://authority-staging.echobrain.org`; an absent or false switch keeps
   the existing engine. Ordinary Ask and trigger research share the native ECHO
-  evidence desk, permissions, progress and writer. Planner-disabled sweeps
-  remain unchanged. SDK requests use the existing OpenRouter service binding
+  evidence desk, permissions, progress and writer. SDK requests use the
+  existing OpenRouter service binding
   and the process-wide model queue; no developer CLI sign-in is needed by the
   host. See the [service adapter and synthetic package proof](../../tools/evals/headless-research/README.md#staging-service-adapter)
   for the implementation boundary and remaining live qualification.
@@ -393,7 +393,7 @@ meeting decided (kind `action`, at most 20, the first in the brief that have
 text; its line is the action's text and its owner the one the approver
 confirmed, matched to the one active member with the same display name,
 ignoring case and spacing, else the approver). A meeting action is ECHO's own
-data: it is never read live or swept, and is closed by hand. A failed or
+data: it is never read live, and is closed by hand. A failed or
 timed-out check writes none of these until Try again succeeds. One access
 policy answers every see and act question about open items, and each item's
 outside words are read live as the viewer
@@ -404,25 +404,28 @@ operations:
 
 | Operation | What it does |
 | --- | --- |
-| `list` | The caller's own runs, newest first, at most 100: up to the 20 newest sweeps, and impact runs for the rest. A running run whose lease has lapsed is listed as pending. |
-| `start` | Claims a pending run (or one whose lease expired) and runs it as its actor. While the search index has not caught up with the record log (an impact run's decision is not yet searchable, or a sweep would read ECHO records through it), a pending run is held instead: `start` answers `pending` with no claim, attempt or trace, and the desktop starts it again at its next look. A person has one live run, and a sweep waits while one of their impact runs is pending or running; a start that must wait answers `busy`, as does any start while four runs are already running in this Authority process. A run that hits `unauthorized` while its actor's membership is still active (for example, after a token rotation) goes back to pending without counting an attempt; once the membership is revoked it fails as `no_access`. |
-| `retry` | Puts the caller's failed impact run back to pending. A failed sweep stays failed; the next sweep replaces it. |
-| `view` | A finished impact run's card, for its approver and anyone who can read its decision, rebuilt with the viewer's access. A sweep has no card (`not_found`). |
-| `home` | What waits on the caller: Send rows, the open items to update or check, the counts under Home, and `sweep_due`. With `read: "rows"`, the same answer with no live read (every item `not_read`) and `sweep_due` always false, without starting a sweep. Its items (at most 20) come newest first by handoff time (the latest of when it was sent, its owner set, or its state set by a reopen), with changed items breaking ties. Desktop notifications come from the change check (ADR-0036) and a rows-only read of `items` `involved`, independent of this limit. |
-| `items` | The items the caller can see (unsent, open and closed) for `mine`, `involved` (`mine` plus the items the caller last handed on, `owner_set_by`), a run, a record or a project, oldest first, 50 a page (`mine` and `involved` read every row the caller is in, a page at a time, before the policy pass; a run, record or project at most 5000 rows), with a summary of the whole scope (counts by state; counts by last check among open items; and, for each decision the caller can read, up to 100 and most recent first, its unsent, open, landed and unreadable counts) and each decision's stage. A check whose lease has lapsed is a pending stage, as in `list`. `states` (a non-empty subset of `unsent`, `open`, `done` and `not_relevant`) pages over the items in those states only, its cursor included, while the summary and stages still cover the whole scope. `changed_since` (`mine` and `involved` only, never with `counts`) does the same for the items whose latest send, handoff or state change is at or after that time, so the desktop finds what was sent and closed between two checks without paging through every closed item (the Authority still reads the whole scope to count it). `read` says how much to read: `rows` answers the same page, cursor, summary and stages with no live read and no desk bound, every item `not_read`; `counts` (never beside a cursor or `states`) answers the summary and stages alone. The desktop reads a list's current work (`unsent`, `open`) before its closed items, so current work is never behind a More; it shows each page from a rows read at once and reads live only the rows it shows, and after a change to one item reads that item as rows and the counts again. |
+| `list` | The caller's own impact runs, newest first, at most 100. A running run whose lease has lapsed is listed as pending. |
+| `start` | Claims a pending run (or one whose lease expired) and runs it as its actor. While the search index has not caught up with the record log (an impact run's decision is not yet searchable), a pending run is held instead: `start` answers `pending` with no claim, attempt or trace, and the next check-in (`next`) or `start` starts it. A person has one live run; a start that must wait answers `busy`, as does any start while four runs are already running in this Authority process. A run that hits `unauthorized` while its actor's membership is still active (for example, after a token rotation) goes back to pending without counting an attempt; once the membership is revoked it fails as `no_access`. |
+| `next` | The desktop's check-in, sent after each change check and on Try again: starts the caller's oldest queued impact run (pending, or running with a lapsed lease) as `start` would, with this request's token. It answers `idle` when none is queued, `pending` while the search index lags (no claim), `busy` while another of the caller's runs is running or the process runs four, else `running`. |
+| `retry` | Puts the caller's failed impact run back to pending; the desktop then checks in, so the Authority starts it. |
+| `view` | A finished impact run's card, for its approver and anyone who can read its decision, rebuilt with the viewer's access. |
+| `home` | What waits on the caller: Send rows, the open items to update, and the counts under Home. With `read: "rows"`, the same answer with no live read (every item `not_read`). Its items (at most 20) come newest first by handoff time (the latest of when it was sent, its owner set, or its state set by a reopen). The fields that carried sweep results are sent as constants until the V17 reset: `landed` 0, `last_checked_at` null, `sweep_due` false. Desktop notifications come from the change check (ADR-0036) and a rows-only read of `items` `involved`, independent of this limit. |
+| `items` | The items the caller can see (unsent, open and closed) for `mine`, `involved` (`mine` plus the items the caller last handed on, `owner_set_by`), a run, a record or a project, oldest first, 50 a page (`mine` and `involved` read every row the caller is in, a page at a time, before the policy pass; a run, record or project at most 5000 rows), with a summary of the whole scope (counts by state, and, for each decision the caller can read, up to 100 and most recent first, its unsent and open counts; the retired verdict counts are 0, an item's `check` null and `last_checked_at` null) and each decision's stage. A check whose lease has lapsed is a pending stage, as in `list`. `states` (a non-empty subset of `unsent`, `open`, `done` and `not_relevant`) pages over the items in those states only, its cursor included, while the summary and stages still cover the whole scope. `changed_since` (`mine` and `involved` only, never with `counts`) does the same for the items whose latest send, handoff or state change is at or after that time, so the desktop finds what was sent and closed between two checks without paging through every closed item (the Authority still reads the whole scope to count it). `read` says how much to read: `rows` answers the same page, cursor, summary and stages with no live read and no desk bound, every item `not_read`; `counts` (never beside a cursor or `states`) answers the summary and stages alone. The desktop reads a list's current work (`unsent`, `open`) before its closed items, so current work is never behind a More; it shows each page from a rows read at once and reads live only the rows it shows, and after a change to one item reads that item as rows and the counts again. |
 | `item` | One open item, rebuilt for the caller; with `read: "rows"`, with no live read. |
 | `send` | The approver sends any of a run's unsent items to their owners, once per command id: a ticked item opens for its owner, an unticked one is dismissed (not relevant), and an unsent item the request does not list stays unsent. A listed item that is no longer unsent makes the whole send a conflict, as does a command id already sent that now lists other items; a retry listing the same items answers what it did. |
 | `set_state` | The approver or the owner sets a sent item to open, done or not relevant. |
 | `assign` | Changes an item's owner to another active member, stored at once with who set it and when. Before Send only the approver may, while they can send it (`picked`); once sent, the approver, the owner or a lead of one of the decision's active projects (`reassigned`). Its current owner again writes nothing, except the approver taking on an item ECHO gave them for want of a match, which is stored as chosen. A pick at `send` does the same. |
-| `sweep` | Queues a re-check of the open items the caller can see in `mine` (what they sent or own), a record or a project, or answers `nothing_to_check` when there is none a sweep covers. Asked again while that scope's sweep is pending or running, it answers the same run. |
 
 `GET /v1/person/changes` (`echo-brain person changes`) is the change check
 ([ADR-0036](../../docs/decisions/ADR-0036-person-change-check.md)): one
 fingerprint each for the caller's `projects`, `follow_ups` (what `items`
-`involved` lists) and `reviews`, built under the same policy as those reads,
-plus `check_again_after_seconds`. It reads in one Authority read transaction
-with no live tool read and no audit row. Reviews that cannot be read just now
-count as none, and the other areas still answer.
+`involved` lists) and `reviews` (the meetings waiting for their review, and
+the state of each of their own impact runs as `list` shows it), built under
+the same policy as those reads, plus `check_again_after_seconds`: 15 while
+one of the caller's runs is pending or running or one of their reviews is
+publishing, else 60. It reads in one Authority read transaction with no live
+tool read and no audit row, and it never starts a run (`next` does). Reviews
+that cannot be read just now count as none, and the other areas still answer.
 
 `GET /v1/person/project-activity` (`echo-brain person project-activity`) is
 project activity ([Ask timeline v1](../../docs/product/2026-10-25-ask-timeline-v1.md)
@@ -433,32 +436,11 @@ and readable by the caller under the project page's own policy, else null. It
 reads like the change check: one Authority read transaction, no live tool read
 and no audit row.
 
-A sweep acts as the person who asked, with their access, and stores only
-verdicts and which items it could not read. It covers items on a Jira ticket
-or a page in a tool the caller has connected (a live source a desk binds is for
-that tool and the caller's link to it is live, read locally, never from the
-provider), or on an ECHO record or document. At start it takes
-up to 20 of the items the caller still sees, never checked first, then the
-oldest last check; an item one of their sweeps that finished in the last day
-could not read goes after all the others. It names the decision to research
-only when the caller can read the decision. It runs no planner: research
-re-reads each finding's items in full and the sweep renderer's one judge call
-decides the verdicts. Its run keeps the counts by verdict and the ECHO ids of
-the items it could not read. Each item it judged keeps that verdict as its
-shared last check, replaced only by a newer one, and only when the person still
-sees the item as the sweep finishes. An `unreadable` verdict never replaces a
-judged one (`landed`, `still_open` or `changed`) from anyone: it is recorded
-only while the item has no judged check. A judged verdict replaces an
-`unreadable` one whenever that was made; since a last check only moves
-forward, one that replaces a later unreadable check is stamped 1 ms after it.
-A sweep never changes an item's state.
-`sweep_due` is true when the caller has an open item they sent or own, of a
-kind a sweep covers, that was last checked over 24 hours ago or never and that
-none of their sweeps that finished in the last day found unreadable; no sweep
-of theirs is running; and they asked for no sweep in the last hour. A
-sweep left pending for longer than that does not block it; asking again for
-its scope returns that run. The hour limits only `sweep_due`; `sweep` itself,
-as the desktop's Check now asks for it, is never limited.
+Sweeps, which re-checked open items, were retired on 2026-11-08
+([ADR-0033](../../docs/decisions/ADR-0033-shared-open-items.md), amended):
+`sweep` is refused as an invalid request before any method, and a sweep row or
+an item's last check left in the database is never listed, started, read or
+shown.
 
 A later source-folder move does not reinterpret a frozen proposal or an approved
 record.

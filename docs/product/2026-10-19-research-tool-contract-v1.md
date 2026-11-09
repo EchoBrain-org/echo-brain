@@ -99,7 +99,8 @@ The causes:
 - **ADR-0040's due date.** A follow-up's due date comes from the item it
   follows in a connected tool, and shows only after a live open, so follow-ups
   can't be filtered by due date. (This design does give follow-ups ECHO's own
-  dates: created, sent, reassigned and checked.)
+  dates: created, sent, reassigned and checked. `checked` went with sweeps on
+  2026-11-08, [ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md).)
 - **The rest of Ask.** The access check before each model call (ADR-0038), Ask
   progress (ADR-0039), the answer writer, code stating complete lists, and the
   existing answer versions.

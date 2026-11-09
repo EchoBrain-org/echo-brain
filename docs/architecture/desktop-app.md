@@ -1,7 +1,8 @@
 # Desktop app
 
 **Status:** Current. Verified against `origin/main` at
-`aa92138e4a7d8386b2ff51a95c7d2f82e86236be` (2026-10-30).
+`aa92138e4a7d8386b2ff51a95c7d2f82e86236be` (2026-10-30); updated 2026-11-08
+for the lean-down (the Authority starts impact checks on check-in).
 
 The desktop app (`product/echo-desktop`) is how team members use ECHO. It is an
 Electron app with its own package and `node_modules`; it is not a root
@@ -80,14 +81,17 @@ copy that a unit test proves equivalent.
 - **Change check and notifications**
   ([ADR-0036](../decisions/ADR-0036-person-change-check.md)). The renderer's
   `freshness.ts` runs `changes.read` at sign-in, on return to the window, when
-  a page opens (at most every 10 s), on wake, and at the pace the Authority
-  sets. It re-reads only the areas that moved, decides what deserves a
-  notification and asks main to show it. A click sends `notice.open` and brings
-  the window forward.
-- **Impact checks.** The store's runs driver starts queued impact checks,
-  polls while one runs and runs sweeps through `person runs` while a person is
-  signed in, on any page. A failed check waits on Home until the person retries
-  it. Nothing runs once the app quits; see
+  a page opens (at most every 10 s), on wake, right after an approval, and at
+  the pace the Authority sets. It re-reads only the areas that moved, decides
+  what deserves a notification and asks main to show it. A click sends
+  `notice.open` and brings the window forward.
+- **Impact checks.** The desktop does not start them itself. After each change
+  check that reached the Authority, and on Try again, it checks in with
+  `person runs` `next`, and the Authority starts the person's oldest queued
+  check. The Authority sets a 15 s pace while one of the person's checks is
+  queued or running, so checks keep moving on any page while a person is
+  signed in. A failed check waits on Home until the person retries it. Nothing
+  starts once the app quits; see
   [impact checks and open items](impact-checks-and-open-items.md).
 - **Ask** ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md),
   [ADR-0047](../decisions/ADR-0047-ask-timeline.md),

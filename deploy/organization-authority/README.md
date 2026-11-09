@@ -962,10 +962,10 @@ remains open for that full recovery path.
 ## Personal Claude staging research
 
 Staging can use one native Claude account with Sonnet 5.5 for all model work:
-Ask and final writing, meeting extraction, note and upload enrichment, impact
-analysis, sweeps and optional evaluation. Each caller keeps their own identity
-and source permissions. The selected route does not read OpenRouter credentials
-or fall back to OpenRouter when native authentication or a model call fails.
+Ask and final writing, meeting extraction, impact analysis and optional
+evaluation. Each caller keeps their own identity and source permissions. The
+selected route does not read OpenRouter credentials or fall back to OpenRouter
+when native authentication or a model call fails.
 
 Use a fresh staging rehearsal for this change. The existing
 `replace-rehearsal --confirm-no-live-users` workflow retires the entire previous
@@ -1034,8 +1034,8 @@ and these checks do not replace the canary approval or exact release decision.
 
 This optional exporter uses the unified runtime observer and its diagnostic
 events. It selects Ask and shared research runs (including approved-meeting
-impact and sweep), without adding worker polling or HTTP payload logs. Each
-trace contains exact model inputs and structured outputs, tool arguments and
+impact), without adding worker polling or HTTP payload logs. Each trace
+contains exact model inputs and structured outputs, tool arguments and
 results, generated Jira JQL attached to the responsible tool, lifecycle
 outcomes, and final output/citations. Parallel tool calls retain separate IDs.
 The ECHO operation ID and release SHA link the trace to operational telemetry.

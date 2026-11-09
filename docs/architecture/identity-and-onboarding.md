@@ -58,8 +58,9 @@ session, since its credential is certainly unused. Past the seven-day
 hard-reauthentication deadline the client signs out without sending a refresh.
 That and a refused refresh report why (`reauthentication_required`,
 `sign_in_required`). The desktop then asks the person to sign in again, rather
-than reporting a changed account, and warns a day before the deadline. Logout removes
-local authority even if the remote revocation outcome is unknown. Every Person
+than reporting a changed account; since 2026-11-08 it no longer warns a day
+before the deadline. Logout removes local authority even if the remote
+revocation outcome is unknown. Every Person
 read and integration-link request rechecks the current session, membership, and
 revocation state on the Authority.
 
