@@ -362,10 +362,9 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
       return Object.freeze({ schema_version: 1 as const, operation: kind });
     case 'home':
       return Object.freeze({ schema_version: 1 as const, operation: kind, ...readMode(request, ['rows'] as const) });
-    case 'start':
-      return Object.freeze({ schema_version: 1 as const, operation: kind, run_id: runId(request.run_id, 'Runs request run id') });
     case 'next':
       return Object.freeze({ schema_version: 1 as const, operation: kind });
+    case 'start':
     case 'retry':
     case 'view':
       return Object.freeze({ schema_version: 1 as const, operation: kind, run_id: runId(request.run_id, 'Runs request run id') });

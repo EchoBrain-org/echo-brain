@@ -725,10 +725,10 @@ export function createOrganizationAuthorityHttpServer(
       const request = input.request;
       switch (request.operation) {
         case 'list': return application.list(common);
-        case 'start': return application.start({ ...common, request: { schema_version: 1, operation: 'start', run_id: request.run_id } });
+        case 'start': return application.start({ ...common, request });
         case 'next': return application.next({ ...common, request });
-        case 'retry': return application.retry({ ...common, request: { schema_version: 1, operation: 'retry', run_id: request.run_id } });
-        case 'view': return application.view({ ...common, request: { schema_version: 1, operation: 'view', run_id: request.run_id } });
+        case 'retry': return application.retry({ ...common, request });
+        case 'view': return application.view({ ...common, request });
         case 'home': return application.home({ ...common, request });
         case 'items': return application.items({ ...common, request });
         case 'item': return application.item({ ...common, request });
