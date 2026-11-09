@@ -952,24 +952,16 @@ const SECTIONS = [['decisions', 'Decisions'], ['actions', 'Actions'], ['rational
 
 const VISIBILITY: Record<ApprovedRecord['visibility'], string> = { project: 'Visible to project members', approver: 'Only the approver' };
 
-/** Whether an item of a record is lit. */
-export type LitItem = (item: RecordItem) => boolean;
-
-/** The items an answer cites, by atom id: as the pane and the reader light them. */
-export function byAtom(atoms: ReadonlySet<string>): LitItem {
-  return item => atoms.has(item.atom_id);
-}
-
 /**
  * MEETING · APPROVED RECORD: who approved it, who was there, who can read it,
  * and what was approved. In the source pane, and in the reader, whose own
  * head names it and who can read it (`headed` false). The items an answer
- * cites are lit (`lit`), by atom id. The first is scrolled into view once it shows.
+ * cites are lit, by their atom ids (`lit`). The first is scrolled into view once it shows.
  */
-export function RecordDetail({ record, headed = true, lit }: { record: ApprovedRecord; headed?: boolean; lit?: LitItem }) {
+export function RecordDetail({ record, headed = true, lit }: { record: ApprovedRecord; headed?: boolean; lit?: ReadonlySet<string> }) {
   const participants = [...record.participants, ...(record.participants_more ? ['Additional participants not shown'] : [])];
   const detail = useRef<HTMLDivElement>(null);
-  const on = (item: RecordItem) => lit?.(item) === true;
+  const on = (item: RecordItem) => lit?.has(item.atom_id) === true;
   // Which item is first lit, so the record read again never scrolls back to it.
   const first = SECTIONS.flatMap(([key]) => record[key].items).find(on)?.atom_id;
   useLayoutEffect(() => {
@@ -1168,7 +1160,7 @@ export function SourcePane({ state }: { state: State }) {
   const source = target.sources[0]!;
   let body;
   if (source.kind === 'record') {
-    body = <ReadRecord read={sources.records[source.record.record_sha256]}>{record => <RecordDetail record={record} lit={byAtom(litAtoms(state, target))} />}</ReadRecord>;
+    body = <ReadRecord read={sources.records[source.record.record_sha256]}>{record => <RecordDetail record={record} lit={litAtoms(state, target)} />}</ReadRecord>;
   } else if ('permalink' in source) {
     body = <ExternalSource key={`${source.tool_id}:${source.permalink}`} source={source} provider={externalSourceProvider(source, state.tools?.items)} />;
   } else if (source.kind === 'original') {

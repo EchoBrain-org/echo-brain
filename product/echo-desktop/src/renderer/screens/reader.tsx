@@ -5,7 +5,7 @@ import {
   addToProject, canFile, changeBlocked, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreImportedMeeting, nextTextPage, projectChoices, refreshDocument, removableFrom, removeFromProject, retryLineCheck, saveOriginal, showProjectChoices, toggleReaderMenu, UNTITLED, type ReaderState,
   type State,
 } from '../store.js';
-import { byAtom, RecordDetail } from './ask.js';
+import { RecordDetail } from './ask.js';
 import { ChangeLine, changeShownInPlace, within } from './change.js';
 import { Chevron, Ellipsis } from './icons.js';
 import { FollowUpsLabel, meetingFollowUps } from './impact-card.js';
@@ -147,7 +147,7 @@ export function Reader({ state, reader, backTo }: { state: State; reader: Reader
           ))}
         </div>
       ))}
-      {record && <RecordDetail record={record} headed={false} lit={reader.cited && byAtom(new Set(reader.cited))} />}
+      {record && <RecordDetail record={record} headed={false} lit={reader.cited && new Set(reader.cited)} />}
       <div class="actions"><button type="button" class="link-button" onClick={closeReader}>Back to {backTo}</button></div>
     </article>
   );
