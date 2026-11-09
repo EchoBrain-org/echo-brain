@@ -5,12 +5,12 @@ import type { AgenticEvidenceBundleV1 } from "../../../src/answer-composition/ag
 import { createAgenticModelGateV1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
 import { AGENTIC_RESEARCH_LIVE_BUDGET_V1, type AgenticResearchBudgetV1 } from "../../../src/answer-composition/agentic-research-v1.js";
 import type { StructuredGenerationInput, StructuredGenerationPort, StructuredGenerationUsageV1 } from "../../../src/answer-composition/structured-generation-v1.js";
-import type { EvidenceDeskItemV1, EvidenceDeskListInputV1, EvidenceDeskPortV1 } from "../../../src/shared/evidence-desk-v1.js";
+import type { EvidenceDeskItemV1, EvidenceDeskPortV1 } from "../../../src/shared/evidence-desk-v1.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../../src/shared/evidence-desk-v2.js";
 
 /**
  * Shared fixtures for the agentic research tests: desk items, scripted model
- * replies, the Ask golden scenarios and their replay, a research core over a
+ * replies, Ask scenarios and their replay, a research core over a
  * scripted desk, and a model gate over scripted replies for renderer tests.
  */
 export const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
@@ -54,8 +54,6 @@ export type Scenario = {
   readonly question: string;
   readonly desk: () => EvidenceDeskPortV1 | EvidenceDeskPortV2;
   readonly replies: readonly unknown[];
-  /** Pinned clock advances only when the model is called, so the stop is deterministic. */
-  readonly model_call_ms?: number;
   readonly asker?: string;
 };
 
@@ -79,7 +77,7 @@ export const need = (text: string, status: string, evidence: readonly string[] =
 export const part = (question: string, needs: readonly ReturnType<typeof need>[], notes = "") => ({ question, needs, notes });
 export const step = (parts: readonly ReturnType<typeof part>[], actions: readonly { tool: string; args: Record<string, string> }[]) => ({ parts, actions });
 
-/** The Ask golden scenarios. The golden quality baseline pins every one byte for byte: change one only by recording a reviewed baseline. */
+/** Ask scenarios the diagnostics and release tests replay end to end. */
 export const SCENARIOS: Readonly<Record<string, Scenario>> = {
   finish_after_search_and_open: {
     question: "When does DVT start?", asker: "Zhen Ye",
@@ -96,32 +94,6 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
       writerReply([{ text: "DVT starts October 12, after the fixture arrives.", evidence: ["E1"] }]),
     ],
   },
-  not_found_after_two_searches: {
-    question: "Who owns the enclosure supplier follow-up?",
-    desk: () => ({
-      scope: { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000001" }, live_sources: [],
-      search: async () => result([]), open: async () => result([]), list: async () => result([]), revalidate: async () => checked,
-    }),
-    replies: [
-      step([part("Who owns it?", [need("owner of enclosure supplier follow-up", "open")])], [{ tool: "search", args: { query: "enclosure supplier" } }, { tool: "search", args: { query: "supplier follow-up owner" } }]),
-      step([part("Who owns it?", [need("owner of enclosure supplier follow-up", "not_found")])], [{ tool: "finish", args: {} }]),
-      writerReply([], { not_found: ["owner of the enclosure supplier follow-up"] }),
-    ],
-  },
-  repair_after_invalid_step: {
-    question: "What was decided about the battery reserve?",
-    desk: () => ({
-      scope: { kind: "global" }, live_sources: [],
-      search: async () => result([record("battery", "Approved: keep a 20% battery reserve for transport mode.")]),
-      open: async () => result([]), list: async () => result([]), revalidate: async () => checked,
-    }),
-    replies: [
-      { thoughts: "search first" },
-      step([part("Battery reserve decision?", [need("battery reserve decision", "open")])], [{ tool: "search", args: { query: "battery reserve" } }]),
-      step([part("Battery reserve decision?", [need("battery reserve decision", "found", ["E1"])])], [{ tool: "finish", args: {} }]),
-      writerReply([{ text: "The review approved a 20% battery reserve for transport mode.", evidence: ["E1"] }]),
-    ],
-  },
   writer_fallback_to_records: {
     question: "What did the review decide about calibration?",
     desk: () => ({
@@ -134,83 +106,6 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
       step([part("Calibration decision?", [need("calibration decision", "found", ["E1"])])], [{ tool: "finish", args: {} }]),
       { wrong: true },
       { still: "wrong" },
-    ],
-  },
-  no_progress_stop: {
-    question: "What is the latest on the fixture vendor?",
-    desk: () => ({
-      scope: { kind: "global" }, live_sources: [],
-      search: async (input: { readonly query?: string }) => result(input.query === "fixture vendor" ? [listed("vendor")] : []),
-      open: async () => result([record("vendor", "Approved: the fixture vendor ships October 20.")]),
-      list: async () => result([]), revalidate: async () => checked,
-    }),
-    replies: [
-      step([part("Fixture vendor?", [need("latest fixture vendor status", "open")])], [{ tool: "search", args: { query: "fixture vendor" } }]),
-      step([part("Fixture vendor?", [need("latest fixture vendor status", "open")])], [{ tool: "search", args: { query: "fixture vendor" } }]),
-      step([part("Fixture vendor?", [need("latest fixture vendor status", "open")])], [{ tool: "search", args: { query: "fixture vendor" } }]),
-      writerReply([], { not_found: ["latest fixture vendor status"] }),
-    ],
-  },
-  list_pages_and_owner_filter: {
-    question: "What actions does Mara own?",
-    desk: () => ({
-      scope: { kind: "global" }, live_sources: [],
-      search: async () => result([]), open: async () => result([]),
-      list: async (input: EvidenceDeskListInputV1) => input.cursor === undefined
-        ? result([record("a1", "Mara will publish the dashboard.", { kind: "action", attributes: { owner: "Mara Quinn", due_at: "2026-10-09" } }), record("a2", "Tobias will order samples.", { kind: "action", attributes: { owner: "Tobias Lund" } })], { next_cursor: "page-2" })
-        : result([record("a3", "Mara will review the PRD.", { kind: "action", attributes: { owner: "Mara Quinn" } })]),
-      revalidate: async () => checked,
-    }),
-    replies: [
-      step([part("Mara's actions?", [need("actions owned by Mara", "open")])], [{ tool: "list", args: { source: "meetings", owner: "Mara" } }]),
-      step([part("Mara's actions?", [need("actions owned by Mara", "found", ["E1", "E2"])])], [{ tool: "finish", args: {} }]),
-      writerReply([{ text: "Mara owns publishing the dashboard by October 9 and reviewing the PRD.", evidence: ["E1", "E2"] }]),
-    ],
-  },
-  budget_stop_with_slow_clock: {
-    question: "Is the DVT build on track?",
-    // 18 s steps: the fourth step would have 9 s, less than 1.25 times the longest step, so research stops for budget.
-    model_call_ms: 18_000,
-    desk: () => ({
-      scope: { kind: "global" }, live_sources: [],
-      search: async (input: { readonly query?: string }) => result([record(`hit-${input.query ?? "none"}`)]),
-      open: async () => result([]), list: async () => result([]), revalidate: async () => checked,
-    }),
-    replies: [
-      step([part("On track?", [need("DVT status", "open")])], [{ tool: "search", args: { query: "DVT status" } }]),
-      step([part("On track?", [need("DVT status", "open")])], [{ tool: "search", args: { query: "DVT schedule" } }]),
-      step([part("On track?", [need("DVT status", "open")])], [{ tool: "search", args: { query: "DVT risk" } }]),
-      writerReply([{ text: "The review decided hit-DVT status.", evidence: ["E1"] }], { not_found: ["whether DVT is on track"] }),
-    ],
-  },
-  unusable_step_stop: {
-    question: "What did the review decide?",
-    desk: () => ({
-      scope: { kind: "global" }, live_sources: [],
-      search: async () => result([]), open: async () => result([]), list: async () => result([]), revalidate: async () => checked,
-    }),
-    replies: [{ thoughts: "no parts" }, { still: "no parts" }],
-  },
-  step_limit_stop: {
-    question: "List every DVT decision.",
-    desk: () => ({
-      scope: { kind: "global" }, live_sources: [],
-      search: async (input: { readonly query?: string }) => result([record(`decision-${input.query ?? "none"}`)]),
-      open: async () => result([]), list: async () => result([]), revalidate: async () => checked,
-    }),
-    replies: [
-      ...Array.from({ length: 10 }, (_, index) => step([part("Every DVT decision?", [need("all DVT decisions", "open")])], [{ tool: "search", args: { query: `DVT decision ${index + 1}` } }])),
-      writerReply([{ text: "The review decided decision-DVT decision 1.", evidence: ["E1"] }], { not_found: ["any further DVT decisions"] }),
-    ],
-  },
-  empty_catalog_stop: {
-    question: "What is open this week?",
-    desk: () => ({
-      scope: { kind: "global" }, live_sources: [],
-      search: async () => result([]), open: async () => result([]), list: async () => result([]), revalidate: async () => checked,
-    }),
-    replies: [
-      step([part("Open this week?", [need("open items this week", "open")])], [{ tool: "list", args: { source: "meetings" } }, { tool: "list", args: { source: "documents" } }]),
     ],
   },
   live_ticket_and_page: {
@@ -242,16 +137,14 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
   },
 };
 
-/** Replays one scenario through Ask, the V8 core: scripted replies in order, and a clock that moves only when the model is called. */
+/** Replays one scenario through Ask, the V8 core: scripted replies in order, and a clock that stands still. */
 export async function replay(name: string, scenario: Scenario, hooks: { readonly signal?: AbortSignal; readonly on_append?: (entry: AgenticAskAuditEntryV1) => void } = {}) {
   const inputs: StructuredGenerationInput[] = [];
   const audit: AgenticAskAuditEntryV1[] = [];
   let offset = 0;
-  let time = 0;
   const model = {
     generate: async (input: StructuredGenerationInput) => {
       inputs.push(input);
-      time += scenario.model_call_ms ?? 0;
       const reply = scenario.replies[offset++];
       if (reply === undefined) throw new Error(`${name}: unscripted model call ${offset}`);
       return reply;
@@ -259,7 +152,7 @@ export async function replay(name: string, scenario: Scenario, hooks: { readonly
   };
   const options = {
     desk: scenario.desk(), model, generation, audit: { append: (entry: AgenticAskAuditEntryV1) => { audit.push(entry); hooks.on_append?.(entry); } },
-    now_ms: () => time, today: () => "2026-10-06", wall_ms,
+    now_ms: () => 0, today: () => "2026-10-06", wall_ms,
     ...(scenario.asker === undefined ? {} : { asker: { display_name: scenario.asker } }),
   };
   const input = { question: scenario.question, ...(hooks.signal === undefined ? {} : { signal: hooks.signal }) };

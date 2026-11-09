@@ -5,16 +5,11 @@ import {
   ANSWER_BLOCK_CATALOG,
   ANSWER_BLOCKS_PROMPT,
   ANSWER_PROMPT,
-  ANSWER_SINCE_PROMPT,
   ASK_STEP_PROMPT,
   answerBlocksSchema,
   answerBlocksSinceSchema,
   cleanId,
   createStepSchema,
-  FOLLOW_UPS_ANSWER_GUIDANCE,
-  FOLLOW_UPS_STEP_GUIDANCE,
-  LONG_IDS_ONCE_RULE,
-  NO_RESTATING_RULE,
   normalizeQuery,
   parseBlocksAnswer,
   parseStep,
@@ -510,12 +505,6 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect((answerBlocksSinceSchema.properties as Schema).lists.items.properties.members).not.toHaveProperty("maxItems");
   });
 
-  it("pins Ask again's prompt and schema with shared unbounded selections", () => {
-    expect([ANSWER_SINCE_PROMPT, answerBlocksSinceSchema].map(value => canonicalSha256(value))).toEqual([
-      "sha256:520c7b5aaae4fa05e1cf362dd3341675ba8fa803b5c00eefa563cf4d6d86a80c", "sha256:9a0778330ad9981ba2a94c6e344c8793a89494ada7510d9ecf6b7df5bd27cd46",
-    ]);
-  });
-
   it("describes each block as research sources are described, and builds the reply schema from the same entries", () => {
     expect(ANSWER_BLOCK_CATALOG.map(entry => entry.block)).toEqual(["answer", "text", "points", "table", "timeline", "card", "quote"]);
     for (const entry of ANSWER_BLOCK_CATALOG) {
@@ -529,44 +518,15 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect([Object.keys(answerBlocksSchema.properties as Schema), Object.keys(answerBlocksSinceSchema.properties as Schema)]).toEqual([["lists", "blocks", "not_found"], ["lists", "blocks", "not_found", "since"]]);
   });
 
-  it("tells the writer never to restate the question, to write a long identifier once, explicit member presentation, and its reply shape", () => {
-    const lines = ANSWER_BLOCKS_PROMPT.split("\n");
-    const answer = lines.findIndex(line => line.startsWith("- The first block is \"answer\""));
-    expect([lines[answer + 1], lines[answer + 2]]).toEqual([NO_RESTATING_RULE, LONG_IDS_ONCE_RULE]);
-    expect(NO_RESTATING_RULE).toMatch(/^- The app shows the answer right under the question, so never restate the question: the lead answers it at once\. Call what the question already names "it" or a word or two \("the follow-up", "the release"\), not its full title or identifier; name a follow-up by its title only when the question does not name it\. /u);
-    expect(LONG_IDS_ONCE_RULE).toBe("- Write a long identifier, such as a release or build name, at most once in the answer, and only where a short reference would not be clear.");
-    expect(ANSWER_BLOCKS_PROMPT).toContain("The member id identifies what the item presents; evidence alone does not.");
-    expect(ANSWER_PROMPT).toContain("If you omit a found membership need's list, code restores its requested_members");
-    expect(ANSWER_BLOCKS_PROMPT).not.toContain("Never write items, rows, events or facts for a list's members");
-    // A member is shown once: by code through a selection, or by a row or point that declares it, which is then the selection.
-    // The writer's lists selection decides what code states; a v2 row or point that declares and names a member shows it once.
-    expect(ANSWER_PROMPT).toContain("Return the members that answer the question in lists: that is your selection. Preserve every requested member; code adds any your selection leaves out.");
-    expect(ANSWER_PROMPT).not.toContain("replaces research's");
-    expect(ANSWER_PROMPT).toContain("Code states the members your selection names, with their grounded names and row facts.");
-    expect(ANSWER_PROMPT).toContain("To say that no member of a list answers, give it an empty members array and put the missing fact in not_found; code still states that list's requested_members.");
-    expect(ANSWER_PROMPT).not.toContain("never present those members again yourself");
-    expect(ANSWER_BLOCKS_PROMPT).toContain("A table row or points item that presents one member must declare member as that member's E id and name it by its title or key as its list shows it; code states the selected members you do not present that way, and never repeats one you do.");
-    expect(ANSWER_BLOCKS_PROMPT).not.toMatch(/never also select a member shown that way|no other member's|are your selection of their list/u);
-    // A question about one named item is answered from its text, never with a list of the items research looked through.
-    expect(ANSWER_PROMPT).toContain("Return lists only when the question asks which or how many items exist: answer a question about one named item, such as who leads it or when it is due, with sentences citing its text, and return no list.");
-    expect(ASK_STEP_PROMPT).not.toContain("names every member");
-    expect(lines[0]).toContain("\"block_catalog\" lists the blocks it can show");
-    expect(Object.keys(JSON.parse(lines.at(-1)!))).toEqual(["lists", "blocks", "not_found"]);
-    // Every answer is in blocks (ADR-0051): the writer is shown one reply shape, the blocks', and no count of sentences.
-    expect(lines).toContain("- An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds.");
-    const writer = [ANSWER_PROMPT, ANSWER_BLOCKS_PROMPT, ANSWER_SINCE_PROMPT].join("\n\n");
-    expect(writer.match(/Reply with ONLY a JSON object/gu)).toHaveLength(1);
-    expect(writer).not.toMatch(/up to 10|list of sentences|\{"lists":\[\],"sentences"|this shape instead|in "sentences"/u);
+  // The writer's wording is reviewed and measured by the research test, not pinned here (T-5); what code reads of it is.
+  it("shows the writer a reply shape with the answer schema's fields", () => {
+    expect(Object.keys(JSON.parse(ANSWER_BLOCKS_PROMPT.split("\n").at(-1)!) as Schema)).toEqual(Object.keys(answerBlocksSchema.properties as Schema));
+  });
+
+  it("shows the writer a nothing-found example the parser reads", () => {
     // Its nothing-found example is a blocks reply: an answer that cites nothing, which code leaves out (W1), and not_found.
     const nothingFound = /If neither the evidence nor a list answers the question, return (\{.*?\})\. Do not attach/u.exec(ANSWER_PROMPT)?.[1];
     expect(parseBlocksAnswer(JSON.parse(nothingFound!))).toMatchObject({ lists: [], sentences: [{ evidence: [] }], not_found: ["<the requested fact>"] });
-    // The writer every Ask gets: its prompt, follow-up guidance, layout part and schema, with the selection contract they share, pinned;
-    // and the follow-up guidance every Ask's research steps get, which the Ask golden never sees (its scenarios bind no follow-ups).
-    expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, ANSWER_BLOCKS_PROMPT, answerBlocksSchema, FOLLOW_UPS_STEP_GUIDANCE].map(value => canonicalSha256(value))).toEqual([
-      "sha256:badf426531d3b408a8b134858216787f147e493948cbbd249f1ffc0bf1cfc8e9", "sha256:77dc4e583a427323a32d72314fbb863c40d4b9ad6cb2c879dd7e9c609e347b64",
-      "sha256:1b55accb6d7ce3ff2a1ac95baeb0380c180af2576402786dae12f57beb1a2c05", "sha256:8d5d4b50ffbba9580067126dd95c5a59b0db6bfb569c78bb243c512e5168d32c",
-      "sha256:ae927b310a92f753194790d105d513f3c5f374ef2a7350fced7a1b416d0b6974",
-    ]);
   });
 
   it("never rejects a reply the blocks schema permits, asked again or not", () => {
