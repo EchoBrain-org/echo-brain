@@ -1144,9 +1144,10 @@ function WorkspaceSource({ source }: { source: Extract<AnswerSource, { kind: 'pr
 }
 
 /**
- * Beside Ask: one of the answer's sources, opened by its kind (openers.ts): a meeting's approved record with the cited items lit,
- * an original's cited passages, a follow-up, a project, a person or a tool, or
- * Open in its own app. Once the answer came, Open goes to the item's own page.
+ * Beside Ask: one of the answer's sources, opened by its kind (openers.ts): a
+ * meeting's approved record with the cited items lit, an original's cited
+ * passages, a follow-up, a project, a person or a tool, or Open in its own
+ * app. Once the answer came, Open goes to the item's own page.
  */
 export function SourcePane({ state }: { state: State }) {
   const sources = state.sources!;

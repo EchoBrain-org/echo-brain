@@ -154,8 +154,8 @@ export interface SourcesState {
   records: Readonly<Record<string, Read<ApprovedRecord>>>;
   /**
    * Follow-ups an answer cites (ADR-0040), by item id: each its row as Home
-   * reads it now (rows only), for the pane's owner, status and check and a
-   * source row's "owner · status".
+   * reads it now (rows only), for the pane's owner and status and a source
+   * row's "owner · status".
    */
   followUps: Readonly<Record<string, Read<OpenItemView>>>;
   /** The cited passages of the original the pane shows (`group`, its number less one), by citation; read each time it is chosen. */
