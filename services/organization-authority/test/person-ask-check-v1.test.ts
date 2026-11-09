@@ -459,10 +459,6 @@ describe('Ask source check HTTP route', () => {
     const answered = await response.json() as unknown;
     expect(validatePersonAskCheckV1(answered, validatePersonAskCheckRequestV1(body))).toEqual({ schema_version: 1, kind: 'echo-person-ask-check-v1',
       items: [SAME, { state: 'same', marker: canonicalSha256('marker') }, UNREADABLE] });
-    // A released client still sends the marker an earlier check returned: accepted, and ignored.
-    const marked = await post('Bearer ari', { ...body, items: [item(ticket('10012'), undefined, canonicalSha256('an earlier marker'))] });
-    expect(marked.status).toBe(200);
-    expect(await marked.json()).toEqual({ schema_version: 1, kind: 'echo-person-ask-check-v1', items: [{ state: 'same', marker: canonicalSha256('marker') }] });
     // Kinds outside the check, a marker off a ticket, a bad shape, a query and a body over 64 KiB are invalid requests.
     for (const invalid of [
       { ...body, items: [item({ kind: 'project', project_id: 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' })] },

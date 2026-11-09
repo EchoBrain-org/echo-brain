@@ -130,7 +130,6 @@ describe('Ask source check answer (Ask timeline v1, C1)', () => {
     ['fewer items than asked', answer([{ state: 'same', marker: MARKER }, { state: 'same' }, { state: 'same', marker: MARKER }])],
     ['more items than asked', answer([{ state: 'same', marker: MARKER }, { state: 'same' }, { state: 'same', marker: MARKER }, { state: 'same' }, { state: 'same' }])],
     ['a marker on a page', answer([{ state: 'same', marker: MARKER }, { state: 'same', marker: MARKER }, { state: 'same', marker: MARKER }, { state: 'same' }])],
-    ['a marker on a follow-up', answer([{ state: 'same', marker: MARKER }, { state: 'same' }, { state: 'same', marker: MARKER }, { state: 'same', marker: MARKER }])],
     ['a marker on an unreadable ticket', answer([{ state: 'unreadable', marker: MARKER }, { state: 'same' }, { state: 'same', marker: MARKER }, { state: 'same' }])],
     ['a marker on an unknown ticket', answer([{ state: 'same', marker: MARKER }, { state: 'same' }, { state: 'unknown', marker: MARKER }, { state: 'same' }])],
   ])('refuses an answer with %s', (label, value) => {

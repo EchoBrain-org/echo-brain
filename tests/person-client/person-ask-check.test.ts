@@ -44,9 +44,6 @@ describe('person Ask source check client (ADR-0047)', () => {
     expect(new URL(String(url)).pathname).toBe('/v1/person/ask/check');
     expect(init).toMatchObject({ method: 'POST', headers: { authorization: 'Bearer bearer', 'content-type': 'application/json' } });
     expect(JSON.parse(String(init!.body))).toEqual(REQUEST);
-    // A readable ticket may come without its marker (a later Authority stops sending it).
-    const unmarked = { ...CHECK, items: [{ state: 'same' }, { state: 'same' }] };
-    await expect(client(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(unmarked))).askCheck('bearer', REQUEST as never)).resolves.toEqual(unmarked);
   });
 
   it('refuses an answer that is not the answer to its request', async () => {

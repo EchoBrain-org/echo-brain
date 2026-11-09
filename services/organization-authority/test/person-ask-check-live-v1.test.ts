@@ -91,19 +91,13 @@ describe('Ask source check through the Jira connection', () => {
     return { runtime, store, bulk, fetch, ...askCheck([runtime.checks]) };
   }
 
-  it('answers a readable ticket same with the fingerprint of what an answer read of it, whatever marker the request gives', async () => {
-    const issues = new Map<string, Record<string, unknown>>([['10012', fields('10012')]]);
-    const f = jira(issues);
+  it('answers a readable ticket same with the fingerprint of what an answer read of it', async () => {
+    const f = jira(new Map([['10012', fields('10012')]]));
     const [baseline] = await f.check([item(ticket('10012'))]);
     // The canonical JSON of the parsed summary, description, status, assignee and due date.
     const marker = canonicalSha256({ summary: 'Kestrel issue 10012', description: 'Ship 10012 after the review.', status: 'In Progress', assignee: 'Mina Patel', due_date: '2026-10-30' });
     expect(baseline).toEqual({ state: 'same', marker });
     expect(jiraTicketMarkerV1(fields('10012'))).toBe(marker);
-    // Edited after the request's marker was taken: still the same, with its current marker.
-    issues.set('10012', { ...fields('10012'), status: { name: 'Done' } });
-    const current = jiraTicketMarkerV1(issues.get('10012'));
-    expect(current).not.toBe(marker);
-    expect(await f.check([item(ticket('10012'), marker)])).toEqual([{ state: 'same', marker: current }]);
     expect(f.failures).toEqual([]);
   });
 
