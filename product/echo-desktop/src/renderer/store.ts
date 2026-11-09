@@ -4838,8 +4838,8 @@ let comingBack = false;
 
 /**
  * Where the window stands, as main says when it changes. Not in front: the
- * page is covered (the privacy cover), and its live reads and polls stop;
- * the change check goes on, and so checks keep moving (R1; DSK-1). In front:
+ * page is covered (the privacy cover), and its live reads stop; the change
+ * check goes on, and so checks keep moving (R1; DSK-1). In front:
  * it uncovers. On screen and in front again: ECHO came back, and what shows
  * is read again (R4). Owed reads wait while the window cannot be seen (R6).
  * Answers the return's reads when it came back, else null.
@@ -5786,8 +5786,8 @@ export function lockDecisionRoutes(): void {
 }
 /**
  * Approve or Reject: one send per opening. Home shows where it went. An approval asks for a change check at once, past the
- * page gate: it checks in, so the Authority starts the meeting's check as soon as it is queued, and it sets the pace the
- * Authority keeps while the meeting publishes and its checks run (DSK-1).
+ * page gate: it checks in and learns the 15 s pace the Authority keeps while the meeting publishes, so its check starts
+ * within about 15 s of being queued (DSK-1).
  */
 export async function decide(action: 'approve' | 'reject'): Promise<void> {
   const decision = state.decision;
@@ -5823,7 +5823,8 @@ export async function decide(action: 'approve' | 'reject'): Promise<void> {
 
 /**
  * Try again on one record's failed impact check: queued again, then a check-in, so the Authority starts it (DSK-1); the
- * decision then reads its checks once more, as a meeting's line does.
+ * decision then reads its checks once more, as a meeting's line does, and Home under it reads them too, so its count and
+ * the sidebar's stop saying Retry at once.
  */
 export async function retryImpact(run_id: string): Promise<void> {
   const decision = state.decision;
@@ -5836,6 +5837,7 @@ export async function retryImpact(run_id: string): Promise<void> {
     if (!shown) return;
     editDecision({ runs: shown.runs.map(item => (item.run_id === run_id ? { ...item, state: 'pending', error_code: null } : item)) });
     await checkIn();
+    if (homeUnder()) void loadHome(false);
     await readRecordRuns(mine);
   } catch { /* the card still offers Try again */ }
 }

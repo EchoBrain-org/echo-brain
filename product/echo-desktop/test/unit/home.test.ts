@@ -706,6 +706,29 @@ describe('Home decisions and impact checks', () => {
     expect(store.getState().home?.failure).toBeUndefined();
   });
 
+  it('shows and settles nothing of a Home load from before signing out and back in as the same person', async () => {
+    fx.hold.rows = true;
+    const store = await start();
+    store.accountCommand('signout');
+    await store.signOut();
+    await flush();
+    fx.signedIn = true;
+    await store.refreshStatus();
+    await flush();
+    expect(store.getState().home).toMatchObject({ loading: true, open: null });
+    // The first load's rows land late, saying an item waits: they are not this Home's.
+    fx.home = { ...emptyHome(), items: [item('1')], waiting: 1 };
+    release('rows');
+    await flush();
+    expect(store.getState().home).toMatchObject({ loading: true, open: null });
+    // This load's own rows: nothing waits.
+    fx.home = emptyHome();
+    fx.hold.rows = false;
+    release('rows');
+    await flush();
+    expect(store.getState().home).toMatchObject({ loading: false, open: { items: [], waiting: 0 } });
+  });
+
   it('keeps an initial runs-list failure silent and recovers when Home is read again', async () => {
     fx.failNextList = true;
     const store = await checking();
@@ -781,6 +804,21 @@ describe('Home decisions and impact checks', () => {
     await flush();
     expect(checks()).toBe(before);
     expect(requests('start')).toEqual([]);
+  });
+
+  it('stops counting a check as Retry at once when Try again on the decision page over Home starts it again (DSK-1)', async () => {
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.run = impactRun('failed');
+    const store = await start();
+    expect([store.homeRows().map(row => row.kind), store.needsCount()]).toEqual([['failed'], 1]);
+    await store.openDecision(approval, store.getState().home!.runs[0]!);
+    await flush();
+    await store.retryImpact(fx.run.run_id);
+    await flush();
+    // Started at the check-in: the decision and Home under it say so now, not at the next change check a minute away.
+    expect(store.getState().decision?.runs[0]).toMatchObject({ state: 'running' });
+    expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
+    expect(store.needsCount()).toBe(0);
   });
 });
 
@@ -1407,6 +1445,11 @@ describe('Follow-up lists: current work first, results in place', () => {
     expect(runsSent().slice(before)).toEqual(['retry', 'next', 'list']);
     expect(store.getState().decision?.runs[0]).toMatchObject({ run_id: firstRun, state: 'running' });
     expect(requests('start')).toEqual([]);
+    // It fails again, finding nothing: only the reviews move, and the decision over the list says so (DSK-1).
+    fx.run = impactRun('failed');
+    fx.moved.reviews = 1;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(store.getState().decision?.runs[0]).toMatchObject({ run_id: firstRun, state: 'failed' });
   });
 
   it('keeps the check of a decision opened from its list when a runs list read since does not hold it', async () => {
