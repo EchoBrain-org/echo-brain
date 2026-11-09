@@ -325,9 +325,9 @@ test("a case whose request cannot be built is recorded as not started and the ru
   assert.match(readFileSync(join(out, "report.md"), "utf8"), /Failed runs: 1, of which not started \(the case's request could not be built\): 1; rejected at ingress: 0\./u);
 });
 
-test("a runner error that is not an unbound or unstartable citation still stops the run", async () => {
+test("bindings with no test person stop the run before any case starts", async () => {
   const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-broken-")));
-  // Broken bindings (no test person) are a bug to fix, not a case to skip.
+  // Broken bindings are a bug to fix, not a case to skip.
   writePrivateJson(out, "bindings.json", bindings);
   const client = { async startResearchEval() { throw new Error("must not start"); }, async readResearchEval() { throw new Error("must not read"); } };
   await assert.rejects(main(["run", "--run", "--model", "loop-a", "--split", "development", "--trials", "1", "--out", out], { client, poll_ms: 0 }), /test person display name is required/u);

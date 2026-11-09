@@ -38,8 +38,7 @@ import type { PersonReadableDecisionProjectsV1 } from './person-record-search-ro
  *
  * The database kinds are read in one Authority read transaction: no `BEGIN IMMEDIATE`, no audit row, nothing written, since
  * the check releases nothing. The live kinds follow, each tool on its own and all within the deadline. A source whose tool
- * is not connected or fails, or that runs past the budget (two metadata calls per tool) or the deadline, is `unknown`, and
- * the failure is reported without content.
+ * is not connected or fails, or that runs past the deadline, is `unknown`, and the failure is reported without content.
  */
 export interface CreatePersonAskCheckV1Options {
   /** The Authority database the database kinds are read from; the check's one read transaction is opened on it. */
@@ -61,8 +60,8 @@ export interface CreatePersonAskCheckV1Options {
 /** A live read the check could not finish: which read, and the error's Authority code (`error` otherwise) or `deadline`. Nothing else. */
 export interface PersonAskCheckLiveFailureV1 { readonly kind: 'person_ask_check_live_read'; readonly reason: 'tickets' | 'pages'; readonly code: string }
 
-/** The live budget (Ask timeline v1, C1): per tool two metadata calls of 50 ids, per request 15 seconds. */
-const PERSON_ASK_CHECK_LIVE_BUDGET_V1 = Object.freeze({ ids_per_tool: 100, deadline_ms: 15_000 });
+/** The live reads' deadline (Ask timeline v1, C1): 15 seconds per request. */
+const PERSON_ASK_CHECK_DEADLINE_MS_V1 = 15_000;
 
 const SAME: PersonAskCheckItemV1 = Object.freeze({ state: 'same' });
 const UNREADABLE: PersonAskCheckItemV1 = Object.freeze({ state: 'unreadable' });
@@ -76,11 +75,6 @@ function entriesOf<K extends PersonAnswerEvidenceCitationV8['kind']>(items: read
   return items.flatMap((item, index) => (item.citation.kind === kind ? [{ index, citation: item.citation as CheckedCitation<K> }] : []));
 }
 
-/** The first distinct ids, in request order, that one tool's two metadata calls read. */
-function budgeted(ids: readonly string[]): ReadonlySet<string> {
-  return new Set([...new Set(ids)].slice(0, PERSON_ASK_CHECK_LIVE_BUDGET_V1.ids_per_tool));
-}
-
 /** Resolves when the signal aborts. */
 function aborted(signal: AbortSignal): Promise<void> {
   return new Promise(resolve => {
@@ -90,7 +84,7 @@ function aborted(signal: AbortSignal): Promise<void> {
 }
 
 export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): PersonAskCheckHttpApplicationV1 {
-  const deadlineMs = options.deadline_ms ?? PERSON_ASK_CHECK_LIVE_BUDGET_V1.deadline_ms;
+  const deadlineMs = options.deadline_ms ?? PERSON_ASK_CHECK_DEADLINE_MS_V1;
   const report = (reason: PersonAskCheckLiveFailureV1['reason'], code: string): void =>
     observeEventV1(options.on_live_failure, Object.freeze({ kind: 'person_ask_check_live_read' as const, reason, code }));
   const checkOf = (kind: 'ticket' | 'page', toolId: string): PersonSourceCheckV1 | undefined =>
@@ -151,11 +145,11 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
         const failed = (reason: PersonAskCheckLiveFailureV1['reason'], error: unknown): void => {
           if (input.signal?.aborted !== true) report(reason, timedOut ? 'deadline' : errorCodeV1(error));
         };
+        // Each tool reads each distinct id once, in request order: a request's at most 100 items keep it to its two metadata
+        // calls of 50 ids.
         const readTickets = async (check: PersonTicketCheckV1, entries: readonly Entry<PersonTicketCitationV1>[]): Promise<void> => {
-          const ids = budgeted(entries.map(({ citation }) => citation.ticket_id));
-          const markers = await check.markers({ access_token, ticket_ids: [...ids], signal });
+          const markers = await check.markers({ access_token, ticket_ids: [...new Set(entries.map(({ citation }) => citation.ticket_id))], signal });
           for (const { index, citation } of entries) {
-            if (!ids.has(citation.ticket_id)) continue;
             const marker = markers.get(citation.ticket_id);
             // A readable ticket carries its current marker, which released clients require on it. A ticket read with no marker
             // is readable, but nothing is known of it.
@@ -163,11 +157,8 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
           }
         };
         const readPages = async (check: PersonPageCheckV1, entries: readonly Entry<PersonPageCitationV1>[]): Promise<void> => {
-          const ids = budgeted(entries.map(({ citation }) => citation.page_id));
-          const versions = await check.versions({ access_token, page_ids: [...ids], signal });
-          for (const { index, citation } of entries) {
-            if (ids.has(citation.page_id)) answers[index] = versions.has(citation.page_id) ? SAME : UNREADABLE;
-          }
+          const versions = await check.versions({ access_token, page_ids: [...new Set(entries.map(({ citation }) => citation.page_id))], signal });
+          for (const { index, citation } of entries) answers[index] = versions.has(citation.page_id) ? SAME : UNREADABLE;
         };
         const reads = [
           ...[...tickets].map(([check, entries]) => readTickets(check, entries).catch(error => { failed('tickets', error); })),

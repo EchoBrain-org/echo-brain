@@ -413,23 +413,7 @@ describe('check-in: the Authority starts the caller\'s next queued impact check 
     expect(indexLags).not.toHaveBeenCalled();
   });
 
-  it('never starts a failed check, and starts it again once its approver tries it again', async () => {
-    let calls = 0;
-    const f = await fixture({ render: async () => { calls++; if (calls === 1) throw new Error('the renderer refused'); return card; } });
-    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'running' });
-    await f.settled();
-    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'failed', error_code: 'research_failed' });
-    // A failed check waits for Try again.
-    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'idle' });
-    await expect(f.app.retry({ access_token: 'approver', request: { schema_version: 1, operation: 'retry', run_id: f.row.run_id } })).resolves.toEqual({ state: 'pending' });
-    await expect(checkIn(f.app, 'other')).resolves.toEqual({ state: 'idle' });
-    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'running' });
-    await f.settled();
-    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'done', attempts: 0, error_code: null });
-    expect(f.research).toHaveBeenCalledTimes(2);
-  });
-
-  it('answers idle when the check it picked has ended or gone by the time it claims it (another check-in was first)', async () => {
+  it('answers idle when the check it picked has ended or gone by the time it claims it, and starts a failed one once its approver tries it again', async () => {
     let calls = 0;
     const f = await fixture({ render: async () => { calls++; if (calls === 1) throw new Error('the renderer refused'); return card; } });
     const newer = await queueNewer(f);
@@ -449,6 +433,11 @@ describe('check-in: the Authority starts the caller\'s next queued impact check 
     vi.spyOn(f.runs, 'claim').mockImplementationOnce(() => { throw new Error('database is locked'); });
     await expect(checkIn(f.app, 'approver')).rejects.toThrow('database is locked');
     expect(f.research).toHaveBeenCalledTimes(2);
+    // The failed check waits for Try again; the next check-in then starts it.
+    await expect(f.app.retry({ access_token: 'approver', request: { schema_version: 1, operation: 'retry', run_id: failed.run_id } })).resolves.toEqual({ state: 'pending' });
+    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'running' }); await f.settled();
+    expect(f.runs.read(f.person, failed.run_id)).toMatchObject({ state: 'done', attempts: 0, error_code: null });
+    expect(f.research).toHaveBeenCalledTimes(3);
   });
 });
 

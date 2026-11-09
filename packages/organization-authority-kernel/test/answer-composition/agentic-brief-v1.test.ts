@@ -35,12 +35,12 @@ describe("brief: goals", () => {
     const brief = task(`Record ${agenticStartingSlotV1(1)} changed; recheck ${agenticStartingSlotV1(2)}.`, [
       { citation: approved.citation, if_unreadable: "fail" }, { citation: ticket.citation, if_unreadable: "fail" },
     ]);
-    const view = await h.research.research({ trigger: "sweep", brief });
+    const view = await h.research.research({ trigger: "approved_record", brief });
     expect(h.inputs[0]!.system_prompt).toBe(`${STEP_PROMPT}\n\n${TASK_RULE_PROMPT}`);
     expect(Object.keys(h.prompt(0))[0]).toBe("task");
     expect(h.prompt(0)).toMatchObject({ task: "Record E1 changed; recheck E2." });
     expect(h.prompt(0)).not.toHaveProperty("question");
-    expect(view).toMatchObject({ trigger: "sweep", goal: { kind: "task", task: "Record E1 changed; recheck E2." }, budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 });
+    expect(view).toMatchObject({ trigger: "approved_record", goal: { kind: "task", task: "Record E1 changed; recheck E2." }, budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 });
     expect(view).not.toHaveProperty("unreadable_starting");
   });
 
@@ -50,7 +50,7 @@ describe("brief: goals", () => {
     const h = harness([], { openCitation });
     const starting = [{ citation: approved.citation, if_unreadable: "fail" as const }];
     for (const text of [`Compare ${agenticStartingSlotV1(1)} with ${agenticStartingSlotV1(2)}.`, `Recheck ${agenticStartingSlotV1(0)}.`]) {
-      await expect(h.research.research({ trigger: "sweep", brief: task(text, starting) }), text).rejects.toThrow("research goal is invalid");
+      await expect(h.research.research({ trigger: "approved_record", brief: task(text, starting) }), text).rejects.toThrow("research goal is invalid");
     }
     expect(openCitation).not.toHaveBeenCalled();
     expect(h.generate).not.toHaveBeenCalled();
@@ -95,7 +95,7 @@ describe("brief: unreadable starting items", () => {
       { citation: readable.citation, if_unreadable: "report" }, { citation: deleted.citation, if_unreadable: "report" },
       { citation: hidden.citation, if_unreadable: "report" }, { citation: listedOnly.citation, if_unreadable: "report" },
     ]);
-    const view = await h.research.research({ trigger: "sweep", brief });
+    const view = await h.research.research({ trigger: "approved_record", brief });
     expect(view.unreadable_starting).toEqual([deleted.citation, hidden.citation, listedOnly.citation]);
     expect(h.prompt(0).task).toBe("Recheck E1, an item that could not be read, an item that could not be read and an item that could not be read.");
     expect(view.stop).toEqual({ reason: "finished", completed: true });
@@ -107,7 +107,7 @@ describe("brief: unreadable starting items", () => {
       expect(prompts).not.toContain((refused.citation as { readonly atom_id: string }).atom_id);
       expect(prompts).not.toContain(refused.label);
     }
-    const trimmed = await harness([finish(["E1"])], { openCitation }).research.research({ trigger: "sweep", brief: task(`Recheck ${agenticStartingSlotV1(1)}.`, [
+    const trimmed = await harness([finish(["E1"])], { openCitation }).research.research({ trigger: "approved_record", brief: task(`Recheck ${agenticStartingSlotV1(1)}.`, [
       { citation: readable.citation, if_unreadable: "report" }, { citation: deleted.citation, if_unreadable: "report" },
     ]) });
     expect(trimmed.unreadable_starting).toEqual([deleted.citation]);
@@ -116,14 +116,14 @@ describe("brief: unreadable starting items", () => {
   it("stops a 'fail' item it cannot read with not_found before any model call", async () => {
     for (const missing of [deleted, listed("metadata-only")]) {
       const h = harness([], { openCitation: async input => JSON.stringify(input.citation) === JSON.stringify(missing.citation) && missing.text === undefined ? result([missing]) : openCitation(input) });
-      await expect(h.research.research({ trigger: "sweep", brief: task(`Recheck ${agenticStartingSlotV1(1)}.`, [{ citation: missing.citation, if_unreadable: "fail" }]) })).rejects.toMatchObject({ code: "not_found" });
+      await expect(h.research.research({ trigger: "approved_record", brief: task(`Recheck ${agenticStartingSlotV1(1)}.`, [{ citation: missing.citation, if_unreadable: "fail" }]) })).rejects.toMatchObject({ code: "not_found" });
       expect(h.generate).not.toHaveBeenCalled();
     }
   });
 
   it("still stops a 'report' item on a failure that is not a refusal", async () => {
     const h = harness([], { openCitation: async () => { throw new AuthorityOperationError("unavailable", "Source is down"); } });
-    await expect(h.research.research({ trigger: "sweep", brief: task(`Recheck ${agenticStartingSlotV1(1)}.`, [{ citation: readable.citation, if_unreadable: "report" }]) })).rejects.toMatchObject({ code: "unavailable" });
+    await expect(h.research.research({ trigger: "approved_record", brief: task(`Recheck ${agenticStartingSlotV1(1)}.`, [{ citation: readable.citation, if_unreadable: "report" }]) })).rejects.toMatchObject({ code: "unavailable" });
     expect(h.generate).not.toHaveBeenCalled();
   });
 });
@@ -178,7 +178,7 @@ describe("brief: 'skip' starting items, a follow-up's (ADR-0047)", () => {
   it("is refused on a task before any read: a task's slots name every starting item", async () => {
     const openCitation = vi.fn(opens(new Error("never read")));
     const h = harness([], { openCitation });
-    await expect(h.research.research({ trigger: "sweep", brief: task(`Recheck ${agenticStartingSlotV1(1)}.`, [{ citation: readable.citation, if_unreadable: "skip" }]) }))
+    await expect(h.research.research({ trigger: "approved_record", brief: task(`Recheck ${agenticStartingSlotV1(1)}.`, [{ citation: readable.citation, if_unreadable: "skip" }]) }))
       .rejects.toThrow("research goal is invalid");
     expect(openCitation).not.toHaveBeenCalled();
   });

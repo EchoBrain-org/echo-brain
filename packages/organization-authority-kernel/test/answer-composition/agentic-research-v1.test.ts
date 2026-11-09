@@ -201,7 +201,7 @@ describe("research result beside Ask", () => {
     }, { now_ms: () => time });
 
     const view = await research.research({
-      trigger: "sweep",
+      trigger: "approved_record",
       brief: {
         goal: { kind: "task", task: "Find the current approved evidence." },
         starting: [{ citation: full.citation, if_unreadable: "fail" }],
@@ -272,13 +272,13 @@ describe("research-only triggers", () => {
     const h = harness([
       step([part("Two decimals landed?", [need("SW-22b state", "found", ["E1"]), need("TC-D-06 state", "found", ["E2"])])], [{ tool: "finish", args: {} }]),
     ], { openCitation });
-    const view = await h.research.research({ trigger: "sweep", brief: taskBrief(
+    const view = await h.research.research({ trigger: "approved_record", brief: taskBrief(
       `Recheck: firmware cited ${agenticStartingSlotV1(1)}; the test case cited ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(1)}.`,
       [ticketOne.citation, ticketTwo.citation], "report") });
     expect(openCitation).toHaveBeenCalledTimes(2);
     expect(h.prompt(0)).toMatchObject({ task: "Recheck: firmware cited E1; the test case cited E2 and E1." });
     expect(view.stop.reason).toBe("finished");
-    expect(h.audit[0]).toMatchObject({ trigger: "sweep", outcome: "answered" });
+    expect(h.audit[0]).toMatchObject({ trigger: "approved_record", outcome: "answered" });
   });
 
   it("fails closed before any model call when starting evidence is not readable", async () => {
@@ -297,9 +297,9 @@ describe("research-only triggers", () => {
   it("rejects a blank task or a malformed starting item before any read", async () => {
     const openCitation = vi.fn();
     const h = harness([], { openCitation });
-    await expect(h.research.research({ trigger: "sweep", brief: taskBrief(" ", [record("x").citation]) })).rejects.toThrow("research goal is invalid");
-    await expect(h.research.research({ trigger: "sweep", brief: taskBrief("Recheck.", ["not a citation"]) })).rejects.toThrow("research goal is invalid");
-    await expect(h.research.research({ trigger: "sweep", brief: { ...taskBrief("Recheck.", [record("x").citation]), starting: [{ citation: record("x").citation, if_unreadable: "ignore" as never }] } })).rejects.toThrow("research goal is invalid");
+    await expect(h.research.research({ trigger: "approved_record", brief: taskBrief(" ", [record("x").citation]) })).rejects.toThrow("research goal is invalid");
+    await expect(h.research.research({ trigger: "approved_record", brief: taskBrief("Recheck.", ["not a citation"]) })).rejects.toThrow("research goal is invalid");
+    await expect(h.research.research({ trigger: "approved_record", brief: { ...taskBrief("Recheck.", [record("x").citation]), starting: [{ citation: record("x").citation, if_unreadable: "ignore" as never }] } })).rejects.toThrow("research goal is invalid");
     expect(openCitation).not.toHaveBeenCalled();
   });
 

@@ -12,6 +12,7 @@ import {
   cleanId,
   createStepSchema,
   FOLLOW_UPS_ANSWER_GUIDANCE,
+  FOLLOW_UPS_STEP_GUIDANCE,
   LONG_IDS_ONCE_RULE,
   NO_RESTATING_RULE,
   normalizeQuery,
@@ -559,10 +560,12 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     // Its nothing-found example is a blocks reply: an answer that cites nothing, which code leaves out (W1), and not_found.
     const nothingFound = /If neither the evidence nor a list answers the question, return (\{.*?\})\. Do not attach/u.exec(ANSWER_PROMPT)?.[1];
     expect(parseBlocksAnswer(JSON.parse(nothingFound!))).toMatchObject({ lists: [], sentences: [{ evidence: [] }], not_found: ["<the requested fact>"] });
-    // The writer every Ask gets: its prompt, follow-up guidance, layout part and schema, with the selection contract they share, pinned.
-    expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, ANSWER_BLOCKS_PROMPT, answerBlocksSchema].map(value => canonicalSha256(value))).toEqual([
+    // The writer every Ask gets: its prompt, follow-up guidance, layout part and schema, with the selection contract they share, pinned;
+    // and the follow-up guidance every Ask's research steps get, which the Ask golden never sees (its scenarios bind no follow-ups).
+    expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, ANSWER_BLOCKS_PROMPT, answerBlocksSchema, FOLLOW_UPS_STEP_GUIDANCE].map(value => canonicalSha256(value))).toEqual([
       "sha256:badf426531d3b408a8b134858216787f147e493948cbbd249f1ffc0bf1cfc8e9", "sha256:77dc4e583a427323a32d72314fbb863c40d4b9ad6cb2c879dd7e9c609e347b64",
       "sha256:1b55accb6d7ce3ff2a1ac95baeb0380c180af2576402786dae12f57beb1a2c05", "sha256:8d5d4b50ffbba9580067126dd95c5a59b0db6bfb569c78bb243c512e5168d32c",
+      "sha256:ae927b310a92f753194790d105d513f3c5f374ef2a7350fced7a1b416d0b6974",
     ]);
   });
 

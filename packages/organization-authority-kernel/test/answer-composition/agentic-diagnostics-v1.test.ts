@@ -92,7 +92,7 @@ describe('shared research diagnostics lifecycle', () => {
       openCitation: async () => result([body]), revalidate: async () => { if (++checks === 2) time = 86_001; return checked; },
     }, { now_ms: () => time });
     await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => observeCoreRuntimeV1('research_run', () => h.research.research({
-      trigger: 'sweep', brief: { goal: { kind: 'task', task: 'Recheck current state.' }, starting: [{ citation: body.citation, if_unreadable: 'fail' }], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: {} },
+      trigger: 'approved_record', brief: { goal: { kind: 'task', task: 'Recheck current state.' }, starting: [{ citation: body.citation, if_unreadable: 'fail' }], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: {} },
     }), { observer: event => { metadata.push(event); } }));
     expect(events.filter(event => event.kind === 'model_request')).toHaveLength(1);
     expect(metadata).toContainEqual(expect.objectContaining({ phase: 'research_loop', event: 'succeeded', research_stop_reason: 'budget', research_admission: 'post_revalidation_no_time' }));

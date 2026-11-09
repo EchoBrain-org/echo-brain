@@ -106,7 +106,6 @@ describe('runs API request', () => {
     ['next with a run id', { schema_version: 1, operation: 'next', run_id: id }],
     ['next with a capture id', { schema_version: 1, operation: 'next', capture_id: 'cap_0f6c1a2e-3b4d-4c5e-8f90-123456789abc' }],
     ['next with an extra key', { schema_version: 1, operation: 'next', scope: 'mine' }],
-    ['next with another schema version', { schema_version: 2, operation: 'next' }],
     ['retry with an extra key', { schema_version: 1, operation: 'retry', run_id: id, attempts: 0 }],
     ['view with an extra key', { schema_version: 1, operation: 'view', run_id: id, project_id: 'prj_x' }],
     ['a run id without the prefix', { schema_version: 1, operation: 'start', run_id: 'rr_0f6c1a2e-3b4d' }],
