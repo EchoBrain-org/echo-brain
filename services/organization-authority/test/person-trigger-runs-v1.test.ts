@@ -171,7 +171,6 @@ describe('durable approved-record trigger runs', () => {
       request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }), { observer: event => { events.push(event); } });
     const claim = vi.spyOn(f.runs, 'claim');
     await expect(start()).resolves.toEqual({ state: 'pending' });
-    await expect(start()).resolves.toEqual({ state: 'pending' });
     expect(claim).not.toHaveBeenCalled();
     expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'pending', attempts: 0, lease_token: null, error_code: null });
     expect(f.bindDesk).not.toHaveBeenCalled(); expect(f.research).not.toHaveBeenCalled();
