@@ -955,7 +955,7 @@ const VISIBILITY: Record<ApprovedRecord['visibility'], string> = { project: 'Vis
 /** Whether an item of a record is lit. */
 export type LitItem = (item: RecordItem) => boolean;
 
-/** The items an answer or a named item cites, by atom id: as the pane and the reader light them. */
+/** The items an answer cites, by atom id: as the pane and the reader light them. */
 export function byAtom(atoms: ReadonlySet<string>): LitItem {
   return item => atoms.has(item.atom_id);
 }
@@ -963,9 +963,8 @@ export function byAtom(atoms: ReadonlySet<string>): LitItem {
 /**
  * MEETING · APPROVED RECORD: who approved it, who was there, who can read it,
  * and what was approved. In the source pane, and in the reader, whose own
- * head names it and who can read it (`headed` false). The items an answer or
- * a named item cites are lit (`lit`), by atom id. The first is scrolled into
- * view once it shows.
+ * head names it and who can read it (`headed` false). The items an answer
+ * cites are lit (`lit`), by atom id. The first is scrolled into view once it shows.
  */
 export function RecordDetail({ record, headed = true, lit }: { record: ApprovedRecord; headed?: boolean; lit?: LitItem }) {
   const participants = [...record.participants, ...(record.participants_more ? ['Additional participants not shown'] : [])];

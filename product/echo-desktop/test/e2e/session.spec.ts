@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chooseFromAccountMenu, drop, emit, launch, type Launched } from './launch.js';
@@ -52,6 +52,21 @@ test('signing in lands on Home, and signing in again as the same person keeps th
   await expect(page.getByTestId('ask-field')).toHaveValue('');
   await emit(app, 'echo-test:capture');
   await expect(page.getByTestId('compose-body')).toHaveValue('Half a thought');
+});
+
+test('signing out here deletes the account\'s Ask timeline on this computer (ADR-0047)', async () => {
+  run = await launch();
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await page.getByTestId('ask-field').fill('What did we agree?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('answer')).toBeVisible();
+  const folder = join(run.home, '.local', 'share', 'echo-brain', 'person', 'ask-timeline-v1');
+  await expect.poll(() => readdirSync(folder)).toEqual([expect.stringMatching(/^[0-9a-f]{64}\.json$/u)]);
+  await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Sign out…');
+  await page.getByTestId('confirm-signout').click();
+  await expect(page.getByTestId('signed-out')).toBeVisible();
+  expect(readdirSync(folder)).toEqual([]);
 });
 
 test('Home loads when returning from a browser sign-in that completed in the background', async () => {

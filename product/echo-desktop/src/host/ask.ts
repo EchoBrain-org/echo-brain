@@ -57,8 +57,11 @@ export function askCheckArgv(request: string): string[] {
   return ['ask-check', `--request=${request}`];
 }
 
-/** The client command that reads a cited meeting's approved record as Ask cites it, each item with its atom id, for the pane to light the cited items. */
-export function askRecordArgv(record: Pick<RecordRef, 'record_sha256'> & Partial<RecordRef>): string[] {
+/**
+ * The client command that reads one approved record as Ask cites it, each item with its atom id: one an answer cites,
+ * for the pane to light the cited items, or a meeting the reader opened by its ref. It names the record by its digest.
+ */
+export function askRecordArgv(record: { readonly record_sha256: string; readonly policy_id?: RecordRef['policy_id'] }): string[] {
   return ['records', `--record-sha256=${record.record_sha256}`, '--brief'];
 }
 

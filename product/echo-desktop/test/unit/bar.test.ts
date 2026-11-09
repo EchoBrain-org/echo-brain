@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, HomeView, ListItem, OpenItemView } from '../../src/shared/protocol.js';
 import { COUNT_FROM, decidedIn, MAX_QUESTION, MAX_SUGGESTIONS, questionCount, suggestedQuestions, weekQuestion } from '../../src/renderer/bar.js';
-import { ACCOUNT, EMPTY_SUMMARY, cover, fileOf, flush, Held, ok, project, rpcFor, startStore, storeLifecycle, timelineFiles, uncover } from './harness.js';
+import { ACCOUNT, EMPTY_SUMMARY, cover, fail, fileOf, flush, Held, ok, project, rpcFor, startStore, storeLifecycle, timelineFiles, uncover } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -212,5 +212,29 @@ describe('the bar only asks (DSK-23)', () => {
     await flush();
     expect(store.getState().reader?.content?.title).toBe('Apollo update');
     expect(JSON.stringify(rpc.mock.calls.slice(before))).not.toContain('apollo update');
+  });
+
+  it('loses its text when a read is refused for lost access, and keeps it through an outage', async () => {
+    feed = [note('Apollo update', 14)];
+    let refusal = fail('unavailable', { retryable: true });
+    const fallback = rpc.getMockImplementation()!;
+    rpc.mockImplementation(async (method, params) => method === 'open.ref' ? refusal : fallback(method, params));
+    const store = await startStore();
+    await store.openProject(apollo);
+    await flush();
+    const row = store.getState().list!.items[0]!;
+    store.setBarText('apollo');
+    await store.openListItem(row);
+    expect(store.getState().reader?.failure?.code).toBe('unavailable');
+    expect(store.getState().barText).toBe('apollo');
+    // Gone, or no longer yours: a real change of access, so what was typed under the old access goes.
+    for (const code of ['not_found', 'unauthorized']) {
+      refusal = fail(code);
+      store.setBarText('apollo');
+      await store.openListItem(row);
+      await flush();
+      expect(store.getState().reader?.failure?.code, code).toBe(code);
+      expect(store.getState().barText, code).toBe('');
+    }
   });
 });

@@ -18,6 +18,9 @@ function readersWord(audience: Visibility | undefined): string | null {
 /** A meeting's readers, as its row marks them: only its approver can read an approver-only meeting. */
 const RECORD_AUDIENCE: Record<ApprovedRecord['visibility'], Visibility> = { approver: 'only-me', project: 'project' };
 
+/** A meeting with no title, as its row names it (the Authority's list). */
+const APPROVED_MEETING = 'Approved meeting';
+
 /** What Save original… came to. */
 function saveLine(reader: ReaderState): { text: string; error: boolean } | null {
   const save = reader.save;
@@ -101,7 +104,7 @@ export function Reader({ state, reader, backTo }: { state: State; reader: Reader
   const content = reader.content;
   const document = reader.document;
   const record = reader.record;
-  const title = content?.title ?? document?.document.title ?? (record ? record.title ?? UNTITLED : undefined);
+  const title = content?.title ?? document?.document.title ?? (record ? record.title ?? APPROVED_MEETING : undefined);
   const received = content?.received_at ?? document?.document.received_at ?? record?.approved_at;
   const audience = content?.audience ?? document?.document.audience ?? (record ? RECORD_AUDIENCE[record.visibility] : undefined);
   const meta = [readersWord(audience), received ? when(received) : null,

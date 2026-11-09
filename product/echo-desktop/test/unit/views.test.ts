@@ -420,15 +420,16 @@ describe('an approved record shows only what the source pane or the reader needs
 
   it('for the reader, asked by its digest alone, under either policy: every item, each text whole, its approval time, and no quote (ADR-0024)', () => {
     const whole = 'x'.repeat(2_001);
-    const brief = {
-      decisions: [item('decision', 'd1', whole, { status: 'proposed', evidence: [{ quote: 'Annual first.', started_at: '2026-09-15T17:12:00Z' }] })],
-      actions: [item('action', 'a1', 'Update pricing.', { evidence: [{ quote: 'Maya will.' }] })],
-    };
+    // A long meeting: more decisions than the brief once kept a section (32).
+    const decisions = [item('decision', 'd0', whole, { status: 'proposed', evidence: [{ quote: 'Annual first.', started_at: '2026-09-15T17:12:00Z' }] }),
+      ...Array.from({ length: 39 }, (_, index) => item('decision', `d${index + 1}`, `Decision ${index + 1}`))];
+    const brief = { decisions, actions: [item('action', 'a1', 'Update pricing.', { evidence: [{ quote: 'Maya will.' }] })] };
     for (const policy of ['restricted-reviewer-person-v2', 'project-members-readable-person-v1']) {
       const view = recordView(reply(brief, policy), { record_sha256: sha('5') });
       expect(view.visibility).toBe(policy === 'restricted-reviewer-person-v2' ? 'approver' : 'project');
       expect(view.approved_at).toBe(APPROVED);
-      expect(view.decisions.items).toEqual([{ text: whole, status: 'proposed', excerpts: [], atom_id: atom('d1') }]);
+      expect(view.decisions.items.map(entry => entry.atom_id)).toEqual(decisions.map(entry => atom(entry.id)));
+      expect(view.decisions.items[0]).toEqual({ text: whole, status: 'proposed', excerpts: [], atom_id: atom('d0') });
       expect(view.actions.items).toEqual([{ text: 'Update pricing.', excerpts: [], atom_id: atom('a1') }]);
       expect(JSON.stringify(view)).not.toMatch(/Annual first|Maya will/);
     }

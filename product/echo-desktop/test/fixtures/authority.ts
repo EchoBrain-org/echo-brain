@@ -17,7 +17,7 @@ const WEEK_LATER = '2026-09-28T22:30:00.000Z';
 /** When the answer's meeting, Tuesday sync, was approved. */
 const TUESDAY_ADDED = '2026-09-15T18:00:00.000Z';
 
-interface Note{ context_id: string; received_at: string; audience: Record<string, unknown>; title: string; text: string }
+interface Note { context_id: string; received_at: string; audience: Record<string, unknown>; title: string; text: string }
 /** A saved document: its metadata, its original's text, and its extracted text in pages. */
 interface StoredDocument {
   document_id: string; request_id: string; filename: string; title: string; original: string; detected_media_type: string;
@@ -333,7 +333,7 @@ function projectActivityOf(projects: readonly { project_id: string }[], arrivals
 }
 
 export function installTestAuthority(home: string, fixturesDirectory: string, SessionStore: new (home: string) => unknown) {
-  const desktop =JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
+  const desktop = JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
   const importedNotes = mode === 'ask-imported-meeting' || mode === 'ask-imported-mixed';
   if (importedNotes) {
@@ -371,7 +371,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // The people a meeting's impact check names, to pick as owners.
   if (mode.startsWith('granola')) desktop.people.push(...[MINA, RAFAEL, OKAFOR].map(person => ({ membership_id: person.membership_id, display_name: person.name })));
 
-  const store =new SessionStore(realpathSync(home)) as Store;
+  const store = new SessionStore(realpathSync(home)) as Store;
   const expired = mode === 'expired-claim';
   const clock = mode.startsWith('refresh-') ? LATER : mode === 'weekly-passed' ? WEEK_LATER : NOW;
   const session = {
@@ -439,11 +439,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     });
   }
   if ((ONLY_ME_MODES.has(mode))) {
+    // Pricing review: approved the morning after it met, and long, more decisions than a section once kept (32).
     meetings.push({
-      record_sha256: PRICING_REVIEW, title: 'Pricing review', added_at: '2026-09-21T20:30:00.000Z', meeting_date: '2026-09-21', visibility: 'only_me',
+      record_sha256: PRICING_REVIEW, title: 'Pricing review', added_at: '2026-09-22T09:15:00.000Z', meeting_date: '2026-09-21', visibility: 'only_me',
       project_ids: [], approver: session.membership_id, started_at: '2026-09-21T19:00:00.000Z', timezone: 'America/Los_Angeles',
       participants: ['Ari', 'Maya Chen'], approved_by: 'Ari',
-      atoms: [{ kind: 'decision', text: 'Keep annual plans as priced.' }, { kind: 'action', text: 'Send the annual price sheet.', owner: 'Maya Chen' }],
+      atoms: [{ kind: 'decision', text: 'Keep annual plans as priced.' },
+        ...Array.from({ length: 33 }, (_, index) => ({ kind: 'decision' as const, text: `Hold price point ${index + 2}.` })),
+        { kind: 'action', text: 'Send the annual price sheet.', owner: 'Maya Chen' }],
     });
     documents.push({
       document_id: PRICING_MEMO, request_id: '00000000-0000-4000-8000-0000000000d9', filename: 'Pricing memo.pdf', title: 'Pricing memo',

@@ -41,8 +41,14 @@ test('a meeting opens in the reader as the source pane reads it: one record read
   await page.getByTestId('only-me-row').filter({ hasText: 'Pricing review' }).click();
   const reader = page.getByTestId('reader');
   await expect(reader.locator('h1')).toHaveText('Pricing review');
-  await expect(page.getByTestId('reader-meta')).toHaveText('Only me · Sep 21');
-  await expect(reader.getByTestId('record-decisions')).toContainText('Keep annual plans as priced.');
+  // When it was approved, the morning after it met: never when it started.
+  await expect(page.getByTestId('reader-meta')).toHaveText('Only me · Sep 22');
+  await expect(reader.getByTestId('record')).toContainText('Sep 21, 2026');
+  // Every item of a long meeting, past the 32 a section once kept.
+  const decisions = reader.getByTestId('record-decisions').locator('.record-item');
+  await expect(decisions).toHaveCount(34);
+  await expect(decisions.first()).toHaveText('Keep annual plans as priced.');
+  await expect(decisions.last()).toHaveText('Hold price point 34.');
   await expect(reader.getByTestId('record-actions')).toContainText('Send the annual price sheet.');
   await expect(reader.getByTestId('record-owner')).toHaveText('Owner: Maya Chen');
   // The record holds a transcript line for every item; none reaches the reader (ADR-0024).
