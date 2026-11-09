@@ -292,7 +292,9 @@ describe('checking in after each check (DSK-1)', () => {
     expect([checks(), checkIns().length]).toEqual([2, 2]);
   });
 
-  it.each([false, true])('an approval during a check queues one fresh check after it, which checks in, unless stopped (%s)', async stopped => {
+  it.each([
+    ['', false, false], [', unless stopped', true, false], [': a wake\'s when a wake came first, which reads what arrived', false, true],
+  ] as const)('an approval during a check queues one fresh check after it, which checks in%s', async (_, stopped, woke) => {
     let release: () => void = () => undefined;
     let held = false;
     rpc.mockImplementation(changesRpc({
@@ -311,6 +313,8 @@ describe('checking in after each check (DSK-1)', () => {
     const freshness = await import('../../src/renderer/freshness.js');
     // The first check reached the Authority, and so checked in, before its follow-ups read, still on its way.
     expect([held, checks(), checkIns().length]).toEqual([true, 1, 1]);
+    const arrivals = calls('projects.activity').length;
+    if (woke) await wake();
     freshness.approved();
     freshness.approved();
     expect(checks()).toBe(1);
@@ -318,6 +322,8 @@ describe('checking in after each check (DSK-1)', () => {
     release();
     await flush();
     expect([checks(), checkIns().length]).toEqual(stopped ? [1, 1] : [2, 2]);
+    // A wake's check reads what arrived in your projects at once; an approval's leaves it to the two-minute pace.
+    expect(calls('projects.activity').length - arrivals).toBe(woke ? 1 : 0);
   });
 });
 

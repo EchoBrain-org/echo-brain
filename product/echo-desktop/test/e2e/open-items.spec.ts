@@ -30,9 +30,10 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   app = await launch('granola');
   const { page } = app;
   await approveFromHome(app.page);
-  // The check runs by itself: Approve asks for a change check at once, which checks in, so the Authority starts it; while it
-  // is queued or running the Authority paces the checks at 15 s, and the one that sees it end reads what it found (DSK-1):
-  // two of those at most. Its Send row opens the meeting's follow-ups.
+  // The check runs by itself (DSK-1): Approve asks for a change check at once, which checks in, so the Authority starts it,
+  // and Home's read after that check finds it done. Should that read land before the check-in, the 15 s pace the Authority
+  // keeps while a check is queued or running brings the next check, and what it found. Its Send row opens the meeting's
+  // follow-ups.
   const send = page.getByTestId('need-row').filter({ hasText: 'follow-ups to send' });
   await expect(send).toContainText('Launch the pilot next week — 4 follow-ups to send', { timeout: 35_000 });
   await expect(send).toContainText('owners Mina, Rafael');
