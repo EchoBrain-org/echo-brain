@@ -34,7 +34,7 @@ const MEMBERS = { mina: { ...binding('0a1a'), name: 'Mina Patel' }, rafael: { ..
 const START = '2026-10-08T09:00:00.000Z';
 const signal = () => new AbortController().signal;
 
-export interface OpenItemsFixtureOptionsV1 {
+interface OpenItemsFixtureOptionsV1 {
   /** Words read from outside ECHO: in the ticket's and the page's titles and text. */
   readonly outsideText?: string;
   /** Whose Jira account the ticket's assignee is; `none` leaves it unassigned. */
@@ -43,8 +43,6 @@ export interface OpenItemsFixtureOptionsV1 {
   readonly actionOwner?: string;
   /** A not-assessed card lists what research cited, with no relation. */
   readonly assessed?: boolean;
-  /** An assessed card whose rows carry no `expected` phrase, as when storage screens one out. */
-  readonly withoutExpected?: boolean;
   /** A failed bulk assignee read. */
   readonly jiraFails?: boolean;
   /** The card also cites the ticket at a later text hash. */
@@ -65,7 +63,7 @@ export interface OpenItemsFixtureOptionsV1 {
 }
 
 /** One impact card as the renderer returns it, with a copy of the ticket at another text hash when asked. */
-function fixtureCard(input: { readonly record: unknown; readonly outsideText: string; readonly actionOwner: string; readonly assessed: boolean; readonly duplicateTicket?: boolean; readonly withoutExpected?: boolean; readonly ownRecordAffected?: boolean }) {
+function fixtureCard(input: { readonly record: unknown; readonly outsideText: string; readonly actionOwner: string; readonly assessed: boolean; readonly duplicateTicket?: boolean; readonly ownRecordAffected?: boolean }) {
   const ticket = { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: CLOUD, ticket_id: '10012', permalink: 'https://echo-fixture.atlassian.net/browse/ECHO-12', text_sha256: canonicalSha256('ECHO-12 text') };
   const rollout = { kind: 'approved_record' as const, atom_id: canonicalSha256('rollout atom'), record_sha256: canonicalSha256('rollout record'), policy_id: 'project-members-readable-person-v1' as const };
   const page = { kind: 'page' as const, tool_id: 'confluence', external_scope_id: CLOUD, page_id: '200', section_id: 'section-1', version: '3',
@@ -91,17 +89,16 @@ function fixtureCard(input: { readonly record: unknown; readonly outsideText: st
   const duplicate = input.duplicateTicket === true;
   const own = input.ownRecordAffected === true;
   const ownAt = duplicate ? 5 : 4;
-  const expected = (phrase: string) => (input.withoutExpected === true ? {} : { expected: phrase });
   return {
     status: 'assessed' as const,
     decided: [{ text: 'The pilot starts next week.', citation_index: 0 }],
     affected: [
-      { citation_index: 1, says_now: `${input.outsideText} is due Oct 30.`, relation: 'needs_updating', ...expected('launch next week'), owner: 'Mina Patel' },
-      { citation_index: 2, says_now: 'The rollout plan starts the pilot after the freeze.', relation: 'conflicts', ...expected('pilot starts next week'), owner: input.actionOwner },
+      { citation_index: 1, says_now: `${input.outsideText} is due Oct 30.`, relation: 'needs_updating', expected: 'launch next week', owner: 'Mina Patel' },
+      { citation_index: 2, says_now: 'The rollout plan starts the pilot after the freeze.', relation: 'conflicts', expected: 'pilot starts next week', owner: input.actionOwner },
       { citation_index: 3, says_now: `${input.outsideText} says the pilot starts next week.`, relation: 'confirms' },
       // The same ticket at a later text hash: one item.
-      ...(duplicate ? [{ citation_index: 4, says_now: `${input.outsideText} is due Oct 31.`, relation: 'conflicts', ...expected('launch Monday'), owner: 'Mina Patel' }] : []),
-      ...(own ? [{ citation_index: ownAt, says_now: 'Pilot planning: send the vendor the plan.', relation: 'needs_updating', ...expected('vendor gets the plan'), owner: 'Rafael Moreno' }] : []),
+      ...(duplicate ? [{ citation_index: 4, says_now: `${input.outsideText} is due Oct 31.`, relation: 'conflicts', expected: 'launch Monday', owner: 'Mina Patel' }] : []),
+      ...(own ? [{ citation_index: ownAt, says_now: 'Pilot planning: send the vendor the plan.', relation: 'needs_updating', expected: 'vendor gets the plan', owner: 'Rafael Moreno' }] : []),
     ],
     unconfirmed: [],
     people: [{ name: 'Mina Patel', items: [1, ...(duplicate ? [4] : [])] }, { name: input.actionOwner, items: [2] }, ...(own ? [{ name: 'Rafael Moreno', items: [ownAt] }] : [])],
@@ -182,7 +179,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     },
   };
   const card = fixtureCard({ record: decisionCitation, outsideText, actionOwner: options.actionOwner ?? 'Nobody Here', assessed: options.assessed !== false,
-    duplicateTicket: options.duplicateTicket === true, withoutExpected: options.withoutExpected === true, ownRecordAffected: options.ownRecordAffected === true });
+    duplicateTicket: options.duplicateTicket === true, ownRecordAffected: options.ownRecordAffected === true });
   const { pointers } = card;
   const receipt = canonicalSha256('receipt');
   const deskItems = {
@@ -269,7 +266,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
   const runItems = (access_token: FixturePerson = 'ari') => app.items({ access_token, request: { schema_version: 1, operation: 'items', scope: 'run', id: run.run_id } });
   return {
     // `db` comes with `f`, typed by the approval fixture's named interface, so this inferred type can be emitted.
-    ...f, runs, items, directory, records, readable, bindDesk, openCitation, opened, revalidated, liveFailures, openItemsOptions, owners, research, card, app, runsApp, openItemsApp,
+    ...f, runs, items, directory, records, readable, bindDesk, openCitation, opened, revalidated, liveFailures, openItemsOptions, owners, research, card, app, openItemsApp,
     runId: run.run_id, record: recordSha256, people, outsideText, finishImpactRun, runItems,
     /** The record log the approval was appended to (`record` is the approved record's digest). */
     recordLog: f.record as Database.Database,
