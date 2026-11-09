@@ -133,8 +133,8 @@ export function seedProjectMember(
 
 /**
  * A note as the retired V2 submit stored it (ADR-0048), for the reads that still find stored V2 notes: its search, the
- * person list and open, Ask and enrichment. The same rows, context ID, payload digest and receipt the submit wrote, with
- * the same project checks left to the caller: it is a seed, not a route.
+ * person list and open, and Ask. The same rows, context ID, payload digest and receipt the submit wrote (its work row
+ * included, which nothing reads any more), with the same project checks left to the caller: it is a seed, not a route.
  */
 export function insertStoredNoteV2(
   database: Database.Database,

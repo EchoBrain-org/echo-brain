@@ -412,11 +412,11 @@ Saves one UTF-8 text original (at most 8 KiB) with independent initial associati
 `,
   "updates-status-v3": `usage: echo-brain person updates status-v3 --request-id <uuid>
 
-Shows the saved V3 receipt, selected audience union, immutable initial association set, and optional search-metadata progress. Later association changes do not alter this receipt.
+Shows the saved V3 receipt, selected audience union and immutable initial association set; its metadata is always ready. Later association changes do not alter this receipt.
 `,
   "updates-search": `usage: echo-brain person updates search --query <text> [--limit <1-10>]
 
-Find original uploads you may read. Optional search hints help matching; excerpts come from the original text.
+Find original uploads you may read, matched and excerpted by their original text.
 `,
   "updates-search-v3": `usage: echo-brain person updates search-v3 --query <text> [--limit <1-10>]
 

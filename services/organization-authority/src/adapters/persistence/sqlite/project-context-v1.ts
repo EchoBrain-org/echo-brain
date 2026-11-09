@@ -56,8 +56,7 @@ type SourceRow = AuthorityPersonMembershipBinding & {
   request_version: 2 | 3;
   audience_kind: 'only_me' | 'team' | 'project' | 'projects'; audience_project_id: ProjectIdV1 | null;
   submitted_association_project_ids_json: string; audience_project_ids_json: string;
-  project_id: ProjectIdV1 | null; received_at: string; state: 'pending' | 'processing' | 'ready' | 'unavailable';
-  search_hints: string; enrichment_sha256: Sha256Digest | null; attempts: number;
+  project_id: ProjectIdV1 | null; received_at: string;
 };
 type Issued = { readonly response: ProjectReadResponseV1; readonly response_json: string; readonly operation: ProjectReadOperationV1 };
 type InternalProjectStoreV1 = {
@@ -77,9 +76,7 @@ type InternalProjectStoreV1 = {
   readonly validateSource: (row: SourceRow) => void;
 };
 let transactionActive = false;
-const SELECT_SOURCE = `SELECT submission.*, work.state, work.search_hints, work.enrichment_sha256, work.attempts
-  FROM authority_person_updates_v2 AS submission
-  JOIN authority_person_update_work_v2 AS work USING (context_id)`;
+const SELECT_SOURCE = 'SELECT submission.* FROM authority_person_updates_v2 AS submission';
 
 function denied(code: 'not_found' | 'unauthorized' | 'conflict' | 'stale_access_state' | 'rate_limited' = 'not_found'): never {
   throw new AuthorityOperationError(code, 'request failed');
@@ -96,11 +93,10 @@ function withoutCheckedAt(actor: PersonAccessAuthorization): string {
   const { checked_at: _checked, ...rest } = actor;
   return canonicalJson(rest);
 }
+/** A row matches when its title and text together hold every term. Every match scores two per term: the score its search cursor carries. */
 function score(row: SourceRow, terms: readonly string[]): number | undefined {
   const original = normalizeProjectSearchQueryV1(`${row.title}\n${row.text}`);
-  const hints = normalizeProjectSearchQueryV1(row.search_hints);
-  if (!terms.every(term => original.includes(term) || hints.includes(term))) return undefined;
-  return terms.reduce((n, term) => n + (original.includes(term) ? 2 : 1), 0);
+  return terms.every(term => original.includes(term)) ? 2 * terms.length : undefined;
 }
 /** Matching rows, best score first, then newest, then by context ID. */
 function ranked(rows: readonly SourceRow[], terms: readonly string[]): { row: SourceRow; score: number }[] {
@@ -398,7 +394,8 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
     if (!named.every((project_id) => snapshot.grants.some((grant) => grant.project_id === project_id))) {
       return this.store.issue(snapshot, 'upload_status_v3', validatePersonUpdateSavedV3({ schema_version: 3, kind: 'echo-person-update-saved-v3', request_id: row.request_id, context_id: row.context_id, received_at: row.received_at, status: 'stored' }));
     }
-    return this.store.issue(snapshot, 'upload_status_v3', validatePersonUpdateStatusV3({ schema_version: 3, kind: 'echo-person-update-status-v3', request_id: row.request_id, context_id: row.context_id, received_at: row.received_at, association_project_ids, audience, status: 'stored', metadata: row.state }));
+    // No search metadata is made any more; the exact-key status keeps `metadata` as a constant for released clients.
+    return this.store.issue(snapshot, 'upload_status_v3', validatePersonUpdateStatusV3({ schema_version: 3, kind: 'echo-person-update-status-v3', request_id: row.request_id, context_id: row.context_id, received_at: row.received_at, association_project_ids, audience, status: 'stored', metadata: 'ready' }));
   }
   searchUploadsV3(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUploadSearchV2): PersonUploadSearchResultV3 {
     this.open(); const input = this.input(() => validatePersonUploadSearchV2(request)); this.require(snapshot, 'upload_search_v3'); const terms = projectSearchTermsV1(input.query);
@@ -527,7 +524,6 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
         request.request_id, 3, context_id, canonicalSha256(request), request.title, request.text, request.audience.kind, audienceProjectId,
         canonicalJson(request.association_project_ids), canonicalJson(audienceProjectIds), null, received_at,
       );
-      this.store.database.prepare(`INSERT INTO authority_person_update_work_v2 (context_id,state,retry_at) VALUES (?,'pending',?)`).run(context_id, received_at);
       const associate = this.store.database.prepare(`INSERT INTO authority_project_context_associations_v1 (context_id,project_id,organization_id,associator_principal_id,associator_membership_id,associator_membership_type,associated_at) VALUES (?,?,?,?,?,?,?)`);
       for (const project_id of request.association_project_ids) associate.run(context_id, project_id, snapshot.person.organization_id, snapshot.person.principal_id, snapshot.person.membership_id, snapshot.person.membership_type, received_at);
       const share = this.store.database.prepare(`INSERT INTO authority_person_update_audience_projects_v1 (context_id,project_id,organization_id) VALUES (?,?,?)`);
