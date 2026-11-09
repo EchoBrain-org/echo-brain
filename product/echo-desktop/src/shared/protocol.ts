@@ -14,11 +14,6 @@ export interface Account {
   readonly membership_id: string;
   readonly display_name: string;
   readonly role: 'owner' | 'employee';
-  /**
-   * The weekly sign-in: when this session can no longer be refreshed, and how long until then by the host's clock when
-   * status was read. Past it, only signing in again helps.
-   */
-  readonly sign_in_due?: { readonly at: string; readonly in_ms: number };
 }
 
 /** Why this computer was signed out by a refresh, and the organization it was signed in to. */
@@ -178,22 +173,6 @@ export interface ContextContent {
   readonly project_ids: readonly string[];
 }
 
-/**
- * A live match for the bar's text: an item in the project in scope, or, in
- * all context, one of the saved notes you can read (of either note version).
- * Each opens by its ref, as a note.
- */
-export interface Match {
-  readonly context_id: string;
-  readonly title: string;
-  readonly excerpt: string;
-  readonly received_at: string;
-}
-
-export interface Matches {
-  readonly items: readonly Match[];
-}
-
 /** Ask is always explicitly scoped; there is no default: everything you can read, or one project. */
 export type AskScope = { readonly kind: 'global' } | ProjectScope;
 
@@ -217,6 +196,15 @@ export type RecordPolicy = 'restricted-reviewer-person-v2' | 'project-members-re
 export interface RecordRef {
   readonly record_sha256: string;
   readonly policy_id: RecordPolicy;
+}
+
+/**
+ * A record the host reads with `person records --record-sha256 --brief`: one an answer cites, under the policy it
+ * cited, for the source pane; or a meeting the reader opens by its ref, by its digest alone.
+ */
+export interface RecordRead {
+  readonly record_sha256: string;
+  readonly policy_id?: RecordPolicy;
 }
 
 /** What a connected tool keeps its items in: a Jira project or a Confluence space. */
@@ -455,7 +443,10 @@ export interface SourceEvidence {
   readonly imported_meeting_review?: 'not_reviewed' | 'reviewed' | 'nothing_to_review';
 }
 
-/** One approved decision, action or rationale, with up to three excerpts that support it. */
+/**
+ * One approved decision, action or rationale: in the source pane with up to three excerpts that support it, in the
+ * reader with none (ADR-0024).
+ */
 export interface RecordItem {
   readonly text: string;
   /** Only a decision still open says so. */
@@ -463,26 +454,20 @@ export interface RecordItem {
   /** An action's owner, only as the approver confirmed it at approval. */
   readonly owner?: string;
   readonly excerpts: readonly { readonly quote: string; readonly at?: string }[];
-  /**
-   * A long item read in parts, while some are still unread: its text holds
-   * parts `from` to `to` of `count`, and the next page's first part goes on.
-   */
-  readonly parts?: { readonly from: number; readonly to: number; readonly count: number };
-  /** The item's id as an answer cites it (a digest, never its text): only on a record read for Ask's side panel. */
-  readonly atom_id?: string;
+  /** The item's id as an answer cites it (a digest, never its text): what the pane and the reader light it by. */
+  readonly atom_id: string;
 }
 
-/** At most 32 items; `more` says some were left out. */
+/** Every item of one kind, in the record's order. */
 export interface RecordSection {
   readonly items: readonly RecordItem[];
-  readonly more: boolean;
 }
 
-/** An approved meeting record, as the source pane or the reader shows it. The pane's texts are at most 2,000 characters; the reader's at most 4,000 a part, and a long item's parts are joined. */
+/** An approved meeting record, as the source pane or the reader shows it: the pane's texts at most 2,000 characters, the reader's whole. */
 export interface ApprovedRecord {
   readonly title?: string;
-  /** When it was approved (ISO 8601), as its row shows it: only on a record opened by its ref. */
-  readonly added_at?: string;
+  /** When it was approved (ISO 8601). */
+  readonly approved_at?: string;
   /** When the meeting started (ISO 8601), in which time zone, and whether it was all day. */
   readonly started_at?: string;
   readonly timezone?: string;
@@ -497,12 +482,11 @@ export interface ApprovedRecord {
   readonly rationales: RecordSection;
 }
 
-/** One item opened by its ref: a note's text, a page of a document's text, or a page of a meeting's approved record. */
+/** One item opened by its ref: an imported meeting's or a note's text, or a page of a document's text. A meeting opens with `ask.record`. */
 export type Opened =
   | { readonly kind: 'imported_meeting'; readonly content: ContextContent; readonly next_cursor: string | null }
   | { readonly kind: 'note'; readonly content: ContextContent }
-  | { readonly kind: 'document'; readonly document: DocumentText }
-  | { readonly kind: 'meeting'; readonly record: ApprovedRecord; readonly next_cursor: string | null };
+  | { readonly kind: 'document'; readonly document: DocumentText };
 
 /** One audience per item: only you, one project's members, several projects' members, or everyone. */
 export type Audience =
@@ -689,7 +673,7 @@ export interface HostMethods {
   'changes.read': { params: { expect: Expect }; result: PersonChangesV1 };
   /** One page of what you added, or of one project's notes, documents and meetings, newest first. */
   'list.page': { params: { expect: Expect; scope: ListScope; cursor?: string }; result: ListPage };
-  /** One item by its ref, under your current access: a document's text or a meeting's record a page at a time. */
+  /** One item by its ref, under your current access: a note's text, or an imported meeting's or a document's a page at a time. Never a meeting: the reader reads one with `ask.record`. */
   'open.ref': { params: { expect: Expect; ref: ItemRef; cursor?: string }; result: Opened };
   /** Save original…: the renderer names the file only by a handle main issued; main swaps in the path. */
   'documents.save': { params: { expect: Expect; document_id: string; save_handle: string }; result: null };
@@ -734,21 +718,19 @@ export interface HostMethods {
   'projects.activity': { params: { expect: Expect }; result: { items: ProjectActivity[] } };
   /** Cancels an active Ask by its renderer-issued opaque id. */
   'ask.cancel': { params: { cancel_id: string }; result: null };
-  /** The bar's live search, within its scope: a project, or all context. */
-  'search.run': { params: { expect: Expect; query: string; scope: AskScope }; result: Matches };
-  'ask.source': { params: { expect: Expect; scope: AskScope; ref: SourceRef }; result: SourceEvidence };
-  /** Reads one approved record an answer cites. */
-  'ask.record': { params: { expect: Expect; record: RecordRef }; result: ApprovedRecord };
+  'ask.source':{ params: { expect: Expect; scope: AskScope; ref: SourceRef }; result: SourceEvidence };
+  /**
+   * Reads one approved record, whole: one an answer cites, under its policy, as the source pane shows it; or, with no
+   * policy, a meeting opened by its ref, as the reader shows it, with none of the quotes the reader never shows (ADR-0024).
+   */
+  'ask.record': { params: { expect: Expect; record: RecordRead }; result: ApprovedRecord };
   'writes.status': { params: { expect: Expect; request_id: string; kind: 'note' | 'document' }; result: WriteStatus };
   /** Resends a document's retained original under the same request. */
   'documents.retry': { params: { expect: Expect; request_id: string; audience: Audience }; result: Receipt };
   /** Start over: removes the private copy the client kept to resend a document. The Authority is not asked. */
   'documents.abandon': { params: { expect: Expect; request_id: string }; result: null };
-  /**
-   * Signs the account on screen out of this computer; the reply is the new status. Its Ask timeline goes with it, except
-   * when the same person signs straight back in (`again`, the weekly sign-in done early).
-   */
-  'account.signOut': { params: { expect: Expect; again?: true }; result: AppStatus };
+  /** Signs the account on screen out of this computer; the reply is the new status. Its Ask timeline goes with it. */
+  'account.signOut': { params: { expect: Expect }; result: AppStatus };
   /** Tools: the organization's tools and your connection to each, for the account on screen. */
   'account.tools': { params: { expect: Expect }; result: ConnectedTools };
   /** Project members read the mapping; only leads can change it. */
@@ -815,7 +797,7 @@ export const HOST_TIMEOUT_MS: Readonly<Record<HostMethodName, number>> = {
   'app.status': 5_000, 'signin.begin': 660_000, 'signin.invitation': 660_000, 'projects.list': 45_000, 'changes.read': 15_000,
   'list.page': 45_000, 'open.ref': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
   'ask.run': 145_000, 'ask.cancel': 5_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
-  'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000,
+  'account.signOut': 45_000, 'account.tools': 45_000,
   'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000,
   'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
   'employees.reissue': 45_000, 'employees.revoke': 45_000,

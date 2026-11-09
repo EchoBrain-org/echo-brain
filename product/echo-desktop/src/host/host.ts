@@ -15,15 +15,15 @@ import {
   type HostMethodName, type HostRequest, type ItemRef, type ListScope, type ProjectChange, type Result,
 } from '../shared/protocol.js';
 import { sameFolder } from '../shared/folders.js';
-import { askText, searchQuery } from '../shared/query.js';
+import { askText } from '../shared/query.js';
 import { askArgv, askCheckArgv, askCheckRequest, askPrevious, askProgressLines, askRecordArgv, askSourceArgv } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import { lost, pinRefusal, refreshStops } from './session.js';
 import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timelineTurn } from './timeline.js';
 import {
-  abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
-  membersView, noteMatchesView, noteTitle, openItemsView, openItemView, openView, projectMatchesView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectView,
-  projectActivityView, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
+  abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, listView,
+  membersView, noteTitle, openItemsView, openItemView, openView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectView,
+  projectActivityView, receiptView, recordRead, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -196,8 +196,7 @@ function code(value: string, write = false, requestId?: string): Result<never> {
 async function readStatus(): Promise<AppStatus | null> {
   const run = await cli(['status']);
   if (run.exit !== 0 || run.overflow) return null;
-  const { now } = await modules;
-  try { return statusView(lastJson(run.stdout), now()); } catch { return null; }
+  try { return statusView(lastJson(run.stdout)); } catch { return null; }
 }
 
 /**
@@ -452,13 +451,13 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       return forAccount(method, expect, ['list', ...where, ...(cursor ? [option('cursor', cursor)] : [])], stdout => listView(lastJson(stdout), asked));
     }
     case 'open.ref': {
-      // Opened under your current access, wherever it was listed: a note has one page.
+      // Opened under your current access, wherever it was listed: a note has one page. A meeting is read with ask.record, whole,
+      // as the source pane reads it.
       const { expect, ref, cursor } = params as Params<'open.ref'>;
       const argument = refArgument(ref);
-      if (argument === null || !cursorOk(cursor) || (ref.kind === 'note' && cursor !== undefined)) return code('invalid_request');
+      if (argument === null || ref.kind === 'meeting' || !cursorOk(cursor) || (ref.kind === 'note' && cursor !== undefined)) return code('invalid_request');
       const asked: ItemRef = { kind: ref.kind, id: ref.id };
-      return forAccount(method, expect, ['open', argument, ...(cursor ? [option('cursor', cursor)] : [])],
-        stdout => openView(lastJson(stdout), asked, cursor === undefined));
+      return forAccount(method, expect, ['open', argument, ...(cursor ? [option('cursor', cursor)] : [])], stdout => openView(lastJson(stdout), asked));
     }
     case 'documents.save': {
       // Main put the chosen file here in place of the page's handle.
@@ -641,24 +640,11 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       return forAccount(method, expect, askSourceArgv(ref, scope), stdout => evidenceView(lastJson(stdout)));
     }
     case 'ask.record': {
+      // An answer's record, under the policy it cited, for the source pane; or, with no policy, a meeting the reader opened by its ref.
       const { expect, record } = params as Params<'ask.record'>;
-      if (!isRecordRef(record)) return code('invalid_request');
-      const asked = { record_sha256: record.record_sha256, policy_id: record.policy_id };
+      const asked = recordRead(record);
+      if (asked === null) return code('invalid_request');
       return forAccount(method, expect, askRecordArgv(asked), stdout => recordView(lastJson(stdout), asked));
-    }
-    case 'search.run': {
-      const { expect, query, scope } = params as Params<'search.run'>;
-      const text = typeof query === 'string' ? searchQuery(query) : null;
-      if (text === null) return code('invalid_request');
-      const terms = [option('query', text), '--limit=10'];
-      if (scope?.kind === 'project' && typeof scope.project_id === 'string') {
-        return forAccount(method, expect, ['projects', 'search-v2', option('project-id', scope.project_id), ...terms],
-          stdout => projectMatchesView(lastJson(stdout), scope.project_id));
-      }
-      if (scope?.kind !== 'global') return code('invalid_request');
-      // All context: your saved notes. None can be stored as V2: ADR-0048 (494c62a) retired the V2 write before the V16
-      // baseline (4df2de2), the only state an Authority opens, so the V3 search finds every one.
-      return forAccount(method, expect, ['updates', 'search-v3', ...terms], stdout => ({ items: noteMatchesView(lastJson(stdout)) }));
     }
     case 'writes.status': {
       const { expect, request_id, kind } = params as Params<'writes.status'>;
@@ -731,7 +717,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       return forAccount(method, expect, ['tools', 'disconnect', option('tool', tool)], () => null);
     }
     case 'account.signOut': {
-      const { expect, again } = params as Params<'account.signOut'>;
+      const { expect } = params as Params<'account.signOut'>;
       const before = await status();
       if (before === null) return code('unavailable');
       // Already signed out (a failed refresh does that) is what was asked.
@@ -742,11 +728,9 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const after = await status();
       if (after === null) return code('unavailable');
       if (after.signed_in) return code('signout_failed');
-      // Our own sign-out: the account's Ask timeline goes with it, unless the same person signs straight back in (ADR-0047).
-      if (again !== true) {
-        const { paths } = await modules;
-        try { deleteTimeline(paths.directory, expect); } catch { /* best effort: the next read of another account deletes it */ }
-      }
+      // Our own sign-out: the account's Ask timeline goes with it (ADR-0047).
+      const { paths } = await modules;
+      try { deleteTimeline(paths.directory, expect); } catch { /* best effort: the next read of another account deletes it */ }
       return ok(after);
     }
   }

@@ -132,14 +132,11 @@ describe('project lists on foreground refresh', () => {
   it('a role changed elsewhere is a change of access: the refresh empties the bar', async () => {
     const store = await startStore();
     store.setBarText('apollo');
-    await vi.advanceTimersByTimeAsync(300);
-    await flush();
-    expect(store.getState().matches).not.toBeNull();
+    expect(store.getState().barText).toBe('apollo');
     active = [{ ...apollo, role: 'member' }];
     await show(store);
     expect(store.getState().projects.items[0]?.role).toBe('member');
     expect(store.getState().barText).toBe('');
-    expect(store.getState().matches).toBeNull();
   });
 
   /** Made after every numbered project. */

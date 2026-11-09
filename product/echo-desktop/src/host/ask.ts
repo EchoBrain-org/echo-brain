@@ -58,7 +58,7 @@ export function askCheckArgv(request: string): string[] {
 }
 
 /** The client command that reads a cited meeting's approved record as Ask cites it, each item with its atom id, for the pane to light the cited items. */
-export function askRecordArgv(record: RecordRef): string[] {
+export function askRecordArgv(record: Pick<RecordRef, 'record_sha256'> & Partial<RecordRef>): string[] {
   return ['records', `--record-sha256=${record.record_sha256}`, '--brief'];
 }
 

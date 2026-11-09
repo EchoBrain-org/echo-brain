@@ -1,10 +1,10 @@
 import type { ProjectSummary } from '../../shared/protocol.js';
-import { dateTime, identity, initial } from '../format.js';
+import { identity, initial } from '../format.js';
 import { message } from '../messages.js';
 import { useState } from 'preact/hooks';
 import {
   installUpdate, loadArchivedProjects, loadProjects, needsCount, openCompose, openHome, openNewProject, openOnlyMe, openOrganization, openProject, openTools,
-  openYourFollowUps, returnToAsk, settleWords, showAccountMenu, signInAgain, type State,
+  openYourFollowUps, returnToAsk, settleWords, showAccountMenu, type State,
 } from '../store.js';
 import { useDropTarget } from './drop.js';
 import { Ask, Capture, Chevron, Home as HomeIcon, Padlock, People, Person, Plug, Plus, Ticks, Up } from './icons.js';
@@ -72,28 +72,6 @@ export function UpdateRow({ state }: { state: State }) {
 }
 
 /**
- * The weekly sign-in, from a day before it is due: a quiet row above the account that signs in again now, at a moment
- * that suits, rather than when the week runs out mid-work. It takes no drop.
- */
-export function SignInDueRow({ state }: { state: State }) {
-  const due = state.signInDue;
-  if (!due || !state.status?.signed_in) return null;
-  const waiting = state.signin.phase === 'waiting';
-  const failure = due.failure;
-  return (
-    <div class="sidebar-rows update-rows" role="status" onDragOver={noDrop} onDrop={noDrop}>
-      <button type="button" class="side-row update-row" data-testid="sidebar-sign-in-again" aria-disabled={waiting ? 'true' : undefined}
-        onClick={waiting ? undefined : () => void signInAgain()}>
-        <Person />{twoPart(`Sign in again by ${dateTime(due.at)}`, 'Sign in')}
-      </button>
-      <p class={`update-note${failure ? ' error' : ''}`} data-testid="sidebar-sign-in-note" aria-live="polite">
-        {!failure ? 'ECHO asks you to sign in once a week.' : failure.code === 'signout_held' ? settleWords(state) : message(failure)}
-      </p>
-    </div>
-  );
-}
-
-/**
  * Always beside the page, every place one click away (One place to look v1):
  * Home (at its top, with an orange count of what needs you), Ask (back to
  * where you left it, and current while it is open over any page), Capture,
@@ -101,9 +79,9 @@ export function SignInDueRow({ state }: { state: State }) {
  * of what others still owe you), Only me (everything only you can read,
  * ADR-0049), your projects (one click switches) under a Projects header whose
  * "+" starts a new project, People & invites for owners, Tools, a new
- * version, the weekly sign-in once it is a day away, and who is signed in. It
- * shares the list Home loads. While another app is in front the page is
- * covered, but the project rows stay, so a dropped file lands.
+ * version, and who is signed in. It shares the list Home loads. While another
+ * app is in front the page is covered, but the project rows stay, so a
+ * dropped file lands.
  */
 export function Sidebar({ state }: { state: State }) {
   const account = state.status?.account ?? null;
@@ -207,7 +185,6 @@ export function Sidebar({ state }: { state: State }) {
         </div>
       )}
       <UpdateRow state={state} />
-      <SignInDueRow state={state} />
       <button type="button" class="account-row" data-testid="account-row" aria-haspopup="menu"
         aria-label={account ? `Account, ${account.display_name}, ${account.role}` : undefined}
         onClick={event => showAccountMenu(event.currentTarget, 'row')}>

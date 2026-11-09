@@ -5,13 +5,13 @@ import type {
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  Account, AccountCommand, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
-  ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView,
-  ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result,
+  AccountCommand, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
+  ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Member, OpenItemsView, OpenItemView,
+  ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
-import { askText, searchQuery } from '../shared/query.js';
+import { askText } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
@@ -355,26 +355,12 @@ export interface OrganizationState {
   saved: { handle: string; action: 'invite' | 'reissue'; name: string; email: string; expires_at: string } | null;
 }
 
-/** A meeting record's sections, in the order its items come. */
-export const RECORD_SECTIONS = ['decisions', 'actions', 'rationales'] as const;
-export type RecordSectionKey = (typeof RECORD_SECTIONS)[number];
-
-/**
- * A meeting's item by its section and its place there. A cited item has the
- * same place in each read of its meeting, Ask's (with atom ids) and the
- * reader's (by its ref, with none), since both walk the brief in its order.
- */
-export interface CitedItem {
-  readonly section: RecordSectionKey;
-  readonly index: number;
-}
-
-/** Where an item was opened: a project's page (a row or a match in it), Only me, or a saved note found in all context. */
+/** Where an item was opened: a project's page (a row in it, or Ask's Open there), Only me, or Ask's Open in all context. */
 export type ReaderFrom = { kind: 'project'; project_id: string } | { kind: 'only-me' } | { kind: 'search' };
 
 /**
  * An item open in the reader, by its ref: a note's text, a document's text a
- * page at a time, or a meeting's approved record, read on with More.
+ * page at a time, or a meeting's approved record, whole.
  */
 export interface ReaderState {
   ref: ItemRef;
@@ -384,10 +370,8 @@ export interface ReaderState {
   importedNext?: string | null;
   document?: DocumentText;
   record?: ApprovedRecord;
-  /** The record's next page, until all of it is read. */
-  recordNext?: string | null;
-  /** The meeting's items Ask cited, when Open came from its pane: lit, and read on to until they show. */
-  cited?: readonly CitedItem[];
+  /** The atom ids of the meeting's items Ask cited, when Open came from its pane: lit, as the pane lit them. */
+  cited?: readonly string[];
   failure?: Failure;
   /** The ⋯ menu, and its list of projects to add to. */
   menu: 'closed' | 'open' | 'projects';
@@ -511,16 +495,6 @@ export interface ProjectSettingsState {
   } | null;
 }
 
-/** The live matches for the bar's text, within the scope they were searched in. */
-export interface MatchesState {
-  seq: number;
-  query: string;
-  scope: AskScope;
-  loading: boolean;
-  items: readonly Match[];
-  failure?: Failure;
-}
-
 export interface State {
   status: AppStatus | null;
   booting: boolean;
@@ -533,13 +507,12 @@ export interface State {
   change: ChangeState | null;
   projectSettings: ProjectSettingsState | null;
   /**
-   * What the bar asks about, and searches: a project (the chip), or all
-   * context; never Mine (ADR-0049). The page never moves with it.
+   * What the bar asks about: a project (the chip), or all context; never
+   * Mine (ADR-0049). The page never moves with it.
    */
   barScope: AskScope;
   /** The bar's text. Only asking, Escape, or a real change of access empties it. */
   barText: string;
-  matches: MatchesState | null;
   /** Ask, while it is open over the page. */
   ask: AskState | null;
   /** The account's Ask timeline: it stays when Ask closes (ADR-0047). */
@@ -553,11 +526,6 @@ export interface State {
   concealed: boolean;
   /** form: the organization address is being asked for (Sign in with Google…). */
   signin: { phase: 'idle' | 'waiting' | 'failed'; form: boolean; failure?: Failure; browserOpened?: boolean };
-  /**
-   * The weekly sign-in, from a day before it is due: when, and why signing in again now did not start (a save to settle
-   * first, or a sign-out that failed). Null before that day, and signed out.
-   */
-  signInDue: { at: string; failure?: Failure } | null;
   /** A sheet over the window for the account: only one at a time. */
   sheet: Sheet | null;
   /** No status could be read (the host is down): not the same as signed out. */
@@ -657,8 +625,8 @@ function rememberedSidebar(): boolean {
 let state: State = {
   status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false },
   archivedProjects: { items: [], next: null, loading: false }, list: null, roster: null, reader: null, change: null, projectSettings: null,
-  barScope: { kind: 'global' }, barText: '', matches: null, ask: null, timeline: { turns: [], checks: {} }, sources: null, compose: null, toast: null, toastShown: 0,
-  concealed: false, signin: { phase: 'idle', form: false }, signInDue: null, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null,
+  barScope: { kind: 'global' }, barText: '', ask: null, timeline: { turns: [], checks: {} }, sources: null, compose: null, toast: null, toastShown: 0,
+  concealed: false, signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null,
   employeeWrite: null, home: null, decision: null, followUps: null, impactLine: null, projectLine: null, projectReads: null, news: new Set(), visit: null,
   update: { state: 'none' }, updateFailure: null, altitude: emptyAltitude(),
 };
@@ -706,8 +674,6 @@ function set(patch: Partial<State>): void {
   }
   // A held update click says what to settle only while it is unsettled, here or in main.
   if (state.updateFailure?.code === 'update_held' && !signOutHeld() && !unresolvedWork().unresolved) state = { ...state, updateFailure: null };
-  // So does a held sign-in-again click.
-  if (state.signInDue?.failure?.code === 'signout_held' && !signOutHeld()) state = { ...state, signInDue: { at: state.signInDue.at } };
   listeners.forEach(listener => listener());
   // A read owed to what shows may have been waiting on this change: a read of its own that landed, the window seen.
   settleOwed();
@@ -768,7 +734,6 @@ function applyStatus(status: AppStatus): void {
   const before = state.status?.account ?? null;
   const next = status.account;
   set({ status, booting: false, startFailed: false });
-  weeklySignIn(next);
   // Signed out: the sign-in page covers everything until someone signs in. Only me, and what was read in it, goes.
   if (!next) {
     // A sign-out the host lost mid-way did happen: the account goes as it would have.
@@ -813,50 +778,6 @@ function applyStatus(status: AppStatus): void {
     // New project kept through a sign-out goes on with what waited while no one was signed in.
     pumpNewProject();
   }
-}
-
-/** The weekly sign-in shows this long before it is due. */
-const SIGN_IN_NOTICE_MS = 24 * 60 * 60_000;
-/** The longest wait setTimeout keeps; a later notice waits for a status read nearer the day. */
-const LONGEST_TIMER_MS = 2 ** 31 - 1;
-let signInTimer: ReturnType<typeof setTimeout> | null = null;
-
-/**
- * The weekly sign-in a day ahead: due within a day, it shows now; otherwise once that day starts, even with the window
- * open all along. How long is left comes from the host's clock as status was read.
- */
-function weeklySignIn(account: Account | null): void {
-  if (signInTimer) { clearTimeout(signInTimer); signInTimer = null; }
-  const due = account?.sign_in_due;
-  const wait = due ? due.in_ms - SIGN_IN_NOTICE_MS : Number.POSITIVE_INFINITY;
-  if (due && wait <= 0) {
-    if (state.signInDue?.at !== due.at) set({ signInDue: { at: due.at } });
-    return;
-  }
-  if (state.signInDue !== null) set({ signInDue: null });
-  if (due && wait <= LONGEST_TIMER_MS) signInTimer = setTimeout(() => { signInTimer = null; set({ signInDue: { at: due.at } }); }, wait);
-}
-
-/**
- * Sign in again, before the weekly sign-in is due: this session ends and Google signs the same person straight back
- * in, so their drafts stay, as when the session ends on its own. A save on its way or unconfirmed is settled first.
- */
-export async function signInAgain(): Promise<void> {
-  const account = expect();
-  const due = state.signInDue;
-  if (!account || !due || state.signin.phase === 'waiting' || signingOut()) return;
-  if (signOutHeld()) { set({ signInDue: { at: due.at, failure: { code: 'signout_held', retryable: true } } }); return; }
-  set({ signin: { phase: 'waiting', form: false }, signInDue: { at: due.at } });
-  // The same person signs straight back in: their Ask timeline stays (ADR-0047).
-  const signedOut = await rpc('account.signOut', { expect: account, again: true });
-  if (!signedOut.ok) {
-    set({ signin: { phase: 'idle', form: false } });
-    if (state.signInDue) set({ signInDue: { at: state.signInDue.at, failure: signedOut.failure } });
-    accountLost(signedOut.failure);
-    return;
-  }
-  applyStatus(signedOut.value);
-  await signIn(account.authority);
 }
 
 /** Nothing of an account's stays on screen or in memory, not even a draft. */
@@ -986,13 +907,12 @@ export function closeSheet(): void {
 /** How often a waiting connection is read: the terminal client's own pace. */
 const TOOL_POLL_MS = 2_000;
 
-/** The sidebar's Tools, and the Account menu's Connected tools… (from the tray, with another app in front). The bar searches all context. */
+/** The sidebar's Tools, and the Account menu's Connected tools… (from the tray, with another app in front). The bar asks all context. */
 export function openTools(fromTray = false): void {
   if (!state.status?.account || (state.concealed && !fromTray)) return;
   readSeq += 1;
   set({ route: { page: 'tools' }, list: null, roster: null, reader: null, ask: null, sources: null, toast: null, barScope: { kind: 'global' },
     organization: null, tools: { seq: ++seq, loading: false, items: null } });
-  syncSearch();
   freshness.navigated();
   void loadToolList();
 }
@@ -1442,13 +1362,12 @@ function rolesChanged(fresh: readonly ProjectSummary[]): boolean {
 /**
  * Back to Home as it was left: the same pages, the same scroll, a kind's list
  * still open (Back from a decision or a follow-up opened from it, Approve).
- * The bar searches all context.
+ * The bar asks all context.
  */
 export function goHome(): void {
   readSeq += 1;
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' }, toast: null,
     organization: null, decision: null });
-  syncSearch();
   freshness.navigated();
   void loadHome();
   void loadAltitude();
@@ -1552,7 +1471,6 @@ export async function openProject(project: ProjectSummary): Promise<void> {
     barScope: { kind: 'project', project_id: project.project_id },
     list: { scope: { kind: 'project', project_id: project.project_id }, opened: ++seq, items: [], next: null, loading: true },
   });
-  syncSearch();
   freshness.navigated();
   void loadRoster(project.project_id);
   void loadLine('projectLine', 'project', project.project_id);
@@ -1731,7 +1649,6 @@ export async function openOnlyMe(): Promise<void> {
     route: { page: 'only-me' }, reader: null, ask: null, sources: null, toast: null, organization: null, roster: null, barScope: { kind: 'global' },
     list: { scope: { kind: 'only-me' }, opened: ++seq, items: [], next: null, loading: true },
   });
-  syncSearch();
   freshness.navigated();
   await loadList('first');
 }
@@ -1837,12 +1754,6 @@ export function openListItem(item: ListItem): Promise<void> {
   return openReader(item.ref, { kind: 'project', project_id: route.project.project_id });
 }
 
-/** A live match, read in place: the page stays, and Back returns to the matches. */
-export function openMatch(match: Match): Promise<void> {
-  const scope = state.matches?.scope;
-  return openReader({ kind: 'note', id: match.context_id }, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'search' });
-}
-
 /** The read on screen; a reply for one since closed or replaced is dropped. */
 let readSeq = 0;
 
@@ -1850,41 +1761,32 @@ function sameRef(a: ItemRef | undefined, b: ItemRef): boolean {
   return a?.kind === b.kind && a.id === b.id;
 }
 
-/** Pages the reader reads on by itself to show the items Ask cited. */
-const CITED_PAGES = 8;
-
-/** Every cited item shows, whole. */
-function citedShown(record: ApprovedRecord, cited: readonly CitedItem[]): boolean {
-  return cited.every(({ section, index }) => {
-    const item = record[section].items[index];
-    return item !== undefined && item.parts === undefined;
-  });
-}
-
 /**
- * An item opened by its ref, under your current access: a note, a page of a
- * document's text (the first, or the one a cursor names), or a page of a
- * meeting's record, joined to what shows. While a page loads, what the
- * reader shows of that item stays. A meeting opened on items Ask cited
- * (`cited`) lights them, and reads on by itself, a few pages at most, until
- * they show; its later pages keep them lit.
+ * An item opened by its ref, under your current access: a note, a page of an
+ * imported meeting's or a document's text (the first, or the one a cursor
+ * names), or a meeting's approved record, whole, read as the source pane
+ * reads it. While a page loads, what the reader shows of that item stays. A
+ * meeting opened on items Ask cited (`cited`, their atom ids) lights them.
  */
-async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string, lit: { readonly cited?: readonly CitedItem[]; readonly follow?: number } = {}): Promise<void> {
+async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string, cited?: readonly string[]): Promise<void> {
   const account = expect();
   if (!account) return;
   const mine = ++readSeq;
   const shown = sameRef(state.reader?.ref, ref) ? state.reader : null;
-  // An approved meeting's first page counts its follow-ups: its line.
-  if (ref.kind === 'meeting' && cursor === undefined) void loadLine('impactLine', 'record', ref.id);
-  const cited = cursor === undefined ? lit.cited : shown?.cited;
+  // An approved meeting counts its follow-ups: its line.
+  if (ref.kind === 'meeting') void loadLine('impactLine', 'record', ref.id);
   const base = { ref, from, menu: 'closed' as const, ...(cited !== undefined && cited.length > 0 ? { cited } : {}) };
   const kept = {
     ...(shown?.content ? { content: shown.content, importedNext: shown.importedNext } : {}),
     ...(shown?.document ? { document: shown.document } : {}),
-    ...(shown?.record ? { record: shown.record, recordNext: shown.recordNext } : {}),
+    ...(shown?.record ? { record: shown.record } : {}),
   };
   set({ reader: { ...base, loading: true, ...kept }, toast: null });
-  const result = await rpc('open.ref', { expect: account, ref, ...(cursor ? { cursor } : {}) });
+  // A meeting is read by its digest alone: the reader names no policy, and gets no quote (ADR-0024).
+  const result = ref.kind === 'meeting'
+    ? await rpc('ask.record', { expect: account, record: { record_sha256: ref.id } })
+      .then(read => (read.ok ? { ok: true as const, value: { kind: 'meeting' as const, record: read.value } } : read))
+    : await rpc('open.ref', { expect: account, ref, ...(cursor ? { cursor } : {}) });
   if (!sameRef(state.reader?.ref, ref) || readSeq !== mine) return;
   if (!result.ok) {
     set({ reader: { ...base, loading: false, failure: result.failure, ...kept } });
@@ -1892,59 +1794,20 @@ async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string, lit: 
     return;
   }
   const opened = result.value;
+  if (opened.kind === 'meeting') { set({ reader: { ...base, loading: false, record: opened.record } }); return; }
   if (opened.kind === 'imported_meeting') {
     const content = cursor === undefined ? opened.content : kept.content ? { ...opened.content, text: kept.content.text + opened.content.text } : null;
     if (!content) return;
     set({ reader: { ...base, loading: false, content, importedNext: opened.next_cursor } }); return;
   }
   if (opened.kind === 'note') { set({ reader: { ...base, loading: false, content: opened.content } }); return; }
-  if (opened.kind === 'document') { set({ reader: { ...base, loading: false, document: opened.document } }); return; }
-  const record = cursor === undefined ? opened.record : kept.record ? joinRecord(kept.record, opened.record) : null;
-  // A page that does not go on from what shows is never joined to it.
-  if (!record) { set({ reader: { ...base, loading: false, failure: { code: 'invalid_output', retryable: true }, ...kept } }); return; }
-  set({ reader: { ...base, loading: false, record, recordNext: opened.next_cursor } });
-  const follow = lit.follow ?? 0;
-  if (base.cited && opened.next_cursor && follow < CITED_PAGES && !citedShown(record, base.cited)) {
-    void openReader(ref, from, opened.next_cursor, { follow: follow + 1 });
-  }
-}
-
-/**
- * A meeting's next page, joined to the record shown: its three sections go
- * on. A long item left in parts goes on with the next page's first part,
- * which must be its very next part; anything else is refused (null).
- */
-export function joinRecord(shown: ApprovedRecord, next: ApprovedRecord): ApprovedRecord | null {
-  const join = (before: RecordSection, after: RecordSection): RecordSection | null => {
-    const last = before.items.at(-1);
-    const [first, ...rest] = after.items;
-    const unfinished = last?.parts !== undefined && last.parts.to < last.parts.count;
-    const continues = first?.parts !== undefined && first.parts.from > 1;
-    if (!continues) return unfinished ? null : { items: [...before.items, ...after.items], more: false };
-    const [was, goes] = [last?.parts, first!.parts!];
-    if (!last || !was || was.to !== goes.from - 1 || was.count !== goes.count) return null;
-    const text = last.text + first!.text;
-    const { parts: _parts, ...item } = last;
-    const joined: RecordItem = goes.to === goes.count && was.from === 1 ? { ...item, text: text.trim() } : { ...item, text, parts: { ...was, to: goes.to } };
-    return { items: [...before.items.slice(0, -1), joined, ...rest], more: false };
-  };
-  const decisions = join(shown.decisions, next.decisions);
-  const actions = join(shown.actions, next.actions);
-  const rationales = join(shown.rationales, next.rationales);
-  return decisions && actions && rationales ? { ...shown, decisions, actions, rationales } : null;
+  set({ reader: { ...base, loading: false, document: opened.document } });
 }
 
 export function moreImportedMeeting(): void {
   const reader = state.reader;
   if (reader?.ref.kind !== 'imported_meeting' || !reader.importedNext || reader.loading) return;
   void openReader(reader.ref, reader.from, reader.importedNext);
-}
-
-/** More, under a meeting's record: its next page. */
-export function moreRecord(): void {
-  const reader = state.reader;
-  if (reader?.ref.kind !== 'meeting' || !reader.recordNext || reader.loading) return;
-  void openReader(reader.ref, reader.from, reader.recordNext);
 }
 
 /** Next text page, from the ⋯ menu. */
@@ -2778,7 +2641,8 @@ function roleRead(project: ProjectSummary): void {
   listChanged();
 }
 
-/** Typing a name finds people once it pauses. */
+/** Typing a name finds people once it pauses: in People, in New project, and in an owner picker. */
+const SEARCH_PAUSE_MS = 250;
 let peopleTimer: ReturnType<typeof setTimeout> | undefined;
 
 export function setPeopleQuery(query: string): void {
@@ -3395,7 +3259,7 @@ function setOrganization(patch: Partial<OrganizationState>, mine?: number): void
 
 /**
  * The sidebar's People & invites: owners only. The page moves, the bar
- * searches all context. The tray's comes while another app may be in front.
+ * asks all context. The tray's comes while another app may be in front.
  */
 export function openOrganization(fromTray = false): void {
   if (state.status?.account?.role !== 'owner' || (state.concealed && !fromTray)) return;
@@ -3409,7 +3273,6 @@ export function openOrganization(fromTray = false): void {
       write: sending ? { action: sending.action, status: 'sending' } : null, notice: null, saved: null,
     },
   });
-  syncSearch();
   freshness.navigated();
   void loadEmployees();
 }
@@ -3608,10 +3471,9 @@ export function toggleEmployeeMenu(email: string): void {
 
 // ---- ask ---------------------------------------------------------------------
 
-/** The × on the scope chip: the bar searches and asks everything you can read. The page stays. */
+/** The × on the scope chip: the bar asks everything you can read. The page stays. */
 export function widenScope(): void {
   set({ barScope: { kind: 'global' } });
-  syncSearch();
   const view = state.ask;
   if (!view) return;
   // Ask open moves to Home's thread: a turn opened that it puts behind the earlier questions' line opens that line, so the
@@ -4089,7 +3951,6 @@ function openTurn(id: string): void {
   set({ ask: { ...view, opened: id, focus: id, earlier: behindEarlierLine(askThread(), fullTurns(view)).includes(id) } });
   startSources(id);
   void checkTimeline(turn);
-  syncSearch();
 }
 
 /**
@@ -4138,7 +3999,6 @@ async function openAskAt(turn: TimelineTurn): Promise<void> {
   set({ ask: newAsk() });
   startSources();
   void checkTimeline();
-  syncSearch();
 }
 
 /**
@@ -4183,7 +4043,6 @@ export async function copyAnswer(id: string | null): Promise<boolean> {
 /** Back or Escape: Ask closes over the page. The timeline stays, and opens again with the next question or a suggestion. */
 export function closeAsk(): void {
   set({ ask: null, sources: null });
-  syncSearch();
 }
 
 // ---- an answer's sources -----------------------------------------------------
@@ -4280,18 +4139,11 @@ export function litAtoms(current: State, target: PaneTarget): ReadonlySet<string
   return atoms(cited.length > 0 ? cited.map(index => all[index]!) : target.sources);
 }
 
-/** Where `atoms` are in a meeting Ask read: each one's section and place. */
-function citedItems(record: ApprovedRecord, atoms: ReadonlySet<string>): CitedItem[] {
-  return RECORD_SECTIONS.flatMap(section => record[section].items.flatMap((item, index) =>
-    item.atom_id !== undefined && atoms.has(item.atom_id) ? [{ section, index }] : []));
-}
-
 /**
  * Open: the pane's item on its own page, in place of Ask. A meeting opens on
- * the items the pane lit, found in the record the pane read; with that record
- * not read, it opens at its top. A follow-up opens its item page, with the
- * row the pane read while it reads it again. A project opens as the sidebar
- * opens it, and a tool opens Tools.
+ * the items the pane lit, by their atom ids. A follow-up opens its item page,
+ * with the row the pane read while it reads it again. A project opens as the
+ * sidebar opens it, and a tool opens Tools.
  */
 export function openFullPage(): void {
   const target = paneTarget();
@@ -4315,11 +4167,9 @@ export function openFullPage(): void {
     return;
   }
   const scope = activeTurn()?.answer.scope;
-  const read = source.kind === 'record' ? state.sources?.records[source.record.record_sha256] : undefined;
-  const cited = read !== undefined && !read.loading && 'value' in read ? citedItems(read.value, litAtoms(state, target)) : [];
+  const cited = [...litAtoms(state, target)];
   closeAsk();
-  void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'search' },
-    undefined, { cited });
+  void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'search' }, undefined, cited);
 }
 
 /**
@@ -4520,86 +4370,27 @@ export function retryRecord(): void {
   else if (source.kind === 'follow_up') void readFollowUpRow(sources.gen, source.item_id);
 }
 
-// ---- the bar: live search -------------------------------------------------------
+// ---- the bar: its text -----------------------------------------------------------
 
-/** Typing searches once it pauses. */
-const SEARCH_PAUSE_MS = 250;
-let searchTimer: ReturnType<typeof setTimeout> | undefined;
-
-/** What the bar should search now: never on the Ask page, never while another app is in front. */
-function wantedSearch(): { query: string; scope: AskScope } | null {
-  if (!state.status?.signed_in || state.concealed || state.ask) return null;
-  const query = searchQuery(state.barText);
-  return query === null ? null : { query, scope: state.barScope };
-}
-
-/**
- * Searches for the bar's text in its scope, unless the matches shown are
- * already for them; `fresh` reads them again anyway. With nothing to search
- * the matches go. A new search `typed` in the bar closes the reader, so its
- * matches show.
- */
-function syncSearch(fresh = false, typed = false): void {
-  clearTimeout(searchTimer);
-  searchTimer = undefined;
-  const wanted = wantedSearch();
-  if (!wanted) { if (state.matches) set({ matches: null }); return; }
-  const current = state.matches;
-  const sameList = current !== null && sameScope(current.scope, wanted.scope);
-  if (!fresh && sameList && current.query === wanted.query && !current.failure) return;
-  if (typed && state.reader) closeReader();
-  void runSearch(wanted.query, wanted.scope, sameList ? current.items : []);
-}
-
-/** The search runs; the scope's last matches stay until the new ones arrive. */
-async function runSearch(query: string, scope: AskScope, shown: readonly Match[]): Promise<void> {
-  const account = expect();
-  if (!account) return;
-  const mine = ++seq;
-  set({ matches: { seq: mine, query, scope, loading: true, items: shown } });
-  const result = await rpc('search.run', { expect: account, query, scope });
-  if (state.matches?.seq !== mine) return;
-  if (!result.ok) {
-    set({ matches: { seq: mine, query, scope, loading: false, items: [], failure: result.failure } });
-    accountLost(result.failure);
-    return;
-  }
-  set({ matches: { seq: mine, query, scope, loading: false, items: result.value.items } });
-}
-
-/** Typing in the bar. A search waits for a pause; text that cannot be searched shows no matches. */
+/** Typing in the bar: it only asks, so nothing is read while you type. */
 export function setBarText(text: string): void {
   set({ barText: text });
-  clearTimeout(searchTimer);
-  if (!wantedSearch()) { syncSearch(); return; }
-  searchTimer = setTimeout(() => syncSearch(false, true), SEARCH_PAUSE_MS);
 }
 
-/** The same search, read again: Try again after a failure, or the window or ECHO came back. */
-export function searchAgain(): void { syncSearch(true); }
-
-/** Escape in the bar: the text and its matches go; the page stays. */
+/** Escape in the bar: the text goes; the page stays. */
 export function clearBar(): void { emptyBar(); }
 
 function emptyBar(): void {
-  clearTimeout(searchTimer);
-  searchTimer = undefined;
-  if (state.barText !== '' || state.matches) set({ barText: '', matches: null });
+  if (state.barText !== '') set({ barText: '' });
 }
 
-/** Return, or the Ask row under the matches: asks the bar's scope, and the bar empties. */
+/** Return: asks the bar's scope, and the bar empties. */
 export function submitBar(): void {
   const text = state.barText;
   // While a question is on its way the next one waits in the bar.
   if (text.trim() === '' || state.ask?.asking) return;
   emptyBar();
   void ask(text, state.barScope);
-}
-
-/** The matches show over the page: not over a reader, an answer, a sheet, or a covered window. */
-export function matchesShown(current: State = state): boolean {
-  return current.matches !== null && !current.concealed && !current.ask && !current.reader && !sheetShown(current) &&
-    !(current.compose && !current.compose.hidden) && searchQuery(current.barText) !== null;
 }
 
 /**
@@ -4654,7 +4445,7 @@ export function barSuggestions(current: State = state): Suggestion[] {
   return suggestedQuestions(askedSuggestions(current.timeline.turns, current.barScope), shownMeetings(current), weekQuestion(current.barScope, chipName(current)));
 }
 
-/** The suggestions may show over the page where live matches would: the bar empty, and no answer, reader, sheet or covered window over it. */
+/** The suggestions may show over the page: signed in, the bar empty, and no answer, reader, sheet or covered window over it. */
 export function suggestionsShown(current: State = state): boolean {
   return Boolean(current.status?.signed_in) && current.barText === '' && !current.concealed && !current.ask && !current.reader && !sheetShown(current) &&
     !(current.compose && !current.compose.hidden);
@@ -5078,8 +4869,7 @@ export function windowState(next: { onScreen: boolean; front: boolean }): Promis
 
 /**
  * Another app is in front: cover the window until ECHO is back. The bar keeps
- * its text (out of sight over a covered page); its matches go, and are read
- * again for the account on return.
+ * its text, out of sight over a covered page.
  */
 function conceal(): void {
   // The source pane closes and forgets what it read; the records are read again on return.
@@ -5093,7 +4883,6 @@ function conceal(): void {
     ...(people ? { sheet: null } : {}), ...(state.reader ? { reader: { ...state.reader, menu: 'closed' as const } } : {}),
     ...(state.organization ? { organization: { ...state.organization, menu: null, confirm: null, saved: null } } : {}),
   });
-  syncSearch();
 }
 
 /**
@@ -5134,8 +4923,7 @@ const SURFACES: readonly Surface[] = [
   { areas: ['follow_ups'], shows: () => topView() !== null, busy: () => Boolean(topView()?.loading || topView()?.busy), read: () => rereadViews() },
   { areas: ['follow_ups'], shows: () => projectShown() !== null, read: () => loadLine('projectLine', 'project', projectShown()!.project_id) },
   { areas: ['follow_ups'], shows: () => impactLineShown() !== null, read: () => loadLine('impactLine', impactLineShown()!.scope, impactLineShown()!.id) },
-  // The page itself, on a return: a project's feed and members, Only me, Tools, People & invites, a sidebar whose read failed,
-  // and the bar's matches.
+  // The page itself, on a return: a project's feed and members, Only me, Tools, People & invites, a sidebar whose read failed.
   { areas: [], shows: () => projectShown() !== null, read: () => Promise.all([loadList('quiet'),
     state.roster?.projectId === projectShown()?.project_id ? loadRoster(state.roster!.projectId) : null]) },
   { areas: [], shows: () => state.route.page === 'only-me', read: () => loadList('quiet') },
@@ -5143,7 +4931,6 @@ const SURFACES: readonly Surface[] = [
   { areas: [], shows: () => state.route.page === 'organization', read: () => loadEmployees() },
   { areas: [], shows: () => Boolean(state.projects.failure || state.archivedProjects.failure), read: () => refreshSidebar() },
   { areas: [], shows: () => true, read: async () => {
-    searchAgain();
     // The answer's records are read again: another app in front forgot them.
     if (state.sources) await readRecords(state.sources.gen);
   } },
@@ -6147,7 +5934,6 @@ export async function openDecision(approval_id: string, run: PersonRunV1 | null 
     barScope: { kind: 'global' },
     decision: newDecision(approval_id, mine, run),
   });
-  syncSearch();
   freshness.navigated();
   await readDecision(mine, approval_id);
 }
@@ -6598,7 +6384,7 @@ export function openFollowUps(scope: 'record' | 'project', id: string, title: st
 
 /**
  * Follow-ups (yours), from the sidebar: everything you sent, own or last handed on (`involved`), as a page
- * of its own. The bar searches all context.
+ * of its own. The bar asks all context.
  */
 export function openYourFollowUps(): Promise<void> {
   if (!expect() || state.concealed) return Promise.resolve();
@@ -6607,7 +6393,6 @@ export function openYourFollowUps(): Promise<void> {
   const list = newList({ scope: 'involved' }, null);
   set({ route, followUps: { route, views: [list], changed: false }, list: null, roster: null, reader: null, ask: null, sources: null, toast: null,
     barScope: { kind: 'global' }, organization: null, decision: null });
-  syncSearch();
   freshness.navigated();
   return readList(list.seq, 'first');
 }

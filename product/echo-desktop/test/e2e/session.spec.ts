@@ -43,14 +43,13 @@ test('signing in lands on Home, and signing in again as the same person keeps th
   await page.getByTestId('compose-body').fill('Half a thought');
   await page.keyboard.press('Escape');
   await page.getByTestId('ask-field').fill('apollo');
-  await expect(page.getByTestId('match-row')).toHaveCount(2);
+  await expect(page.getByTestId('ask-field')).toHaveValue('apollo');
   // Signed out elsewhere, as the terminal's `person logout` does.
   rmSync(join(home, '.local', 'share', 'echo-brain', 'person', 'session.v1.json'));
   await emit(app, 'echo-test:shown');
   await signIn(page);
   // Signing out is a real change of access: the bar's text went with it.
   await expect(page.getByTestId('ask-field')).toHaveValue('');
-  await expect(page.getByTestId('matches')).toHaveCount(0);
   await emit(app, 'echo-test:capture');
   await expect(page.getByTestId('compose-body')).toHaveValue('Half a thought');
 });
@@ -98,8 +97,6 @@ test('ten minutes of sign-in serve the reads as they are, and an upload that may
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   expect(refreshes()).toHaveLength(0);
-  // The weekly sign-in is a week away: nothing says so yet.
-  await expect(page.getByTestId('sidebar-sign-in-again')).toHaveCount(0);
   writeFileSync(join(run.userData, 'Brief.md'), 'Annual pricing.');
   await drop(page, page.getByTestId('sidebar-project').nth(1), join(run.userData, 'Brief.md'));
   await page.getByTestId('compose-send').click();

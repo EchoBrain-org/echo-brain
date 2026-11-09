@@ -24,7 +24,7 @@ import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
   acceptDrop, accountCommand, askProgress, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeFollowUp,
   closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
-  hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openNotified, openOnlyMe, pageCovered, paneTarget, projectSettingsModal, readUpdate, refreshStatus,
+  hostFailed, keepNewProject, newProjectProgress, openCapture, openNotified, openOnlyMe, pageCovered, paneTarget, projectSettingsModal, readUpdate, refreshStatus,
   retryStart, sheetShown, shownItem, signinPhase, toastOpensOnlyMe, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged,
   useStore, WARNINGS, windowState, zoomOut, type State,
 } from './store.js';
@@ -53,14 +53,11 @@ function focusBar(): void {
   requestAnimationFrame(() => { if (!sheetUp() && inputs === seen) document.getElementById('ask-field')?.focus(); });
 }
 
-/**
- * Escape: the bar's text goes first, when the caret is in the bar or its
- * matches show; otherwise one level back.
- */
+/** Escape: the bar's text goes first, when the caret is in the bar; otherwise one level back. */
 function escape(): void {
   const state = getState();
   const inBar = document.activeElement?.id === 'ask-field';
-  if (state.status?.signed_in && !sheetUp() && state.barText !== '' && (inBar || matchesShown(state))) return clearBar();
+  if (state.status?.signed_in && !sheetUp() && state.barText !== '' && inBar) return clearBar();
   back();
 }
 
@@ -199,8 +196,6 @@ function App() {
   // New project, stepped aside after Create: the toast says how far it got, when nothing else has just been said.
   const progress = sheet?.kind === 'new-project' ? newProjectProgress(sheet) : null;
   const toasts = !state.concealed;
-  // The bar's matches rise from the bar: a toast moves to the top of the page while they show, so neither hides the other.
-  const toastClass = `toast${matchesShown(state) ? ' lifted' : ''}`;
   return (
     <Shell state={state} title={title} center={homeShows ? <Stops state={state} /> : null} backLabel={backLabel} pane={pane}
       trailing={inProject && !covered && !state.ask ? <><MembersButton state={state} /><ProjectToolsButton state={state} /><ProjectSettingsButton state={state} /></> : null}>
@@ -220,11 +215,11 @@ function App() {
       {/* Always there, so a screen reader announces each toast as it appears. A save in no project opens Only me. */}
       <div role="status">
         {toasts && state.toast ? (toastOpensOnlyMe(state.toast) ? (
-          <button type="button" class={toastClass} data-testid="toast" onClick={() => void openOnlyMe()}><Saved /><span>{state.toast}</span></button>
+          <button type="button" class="toast" data-testid="toast" onClick={() => void openOnlyMe()}><Saved /><span>{state.toast}</span></button>
         ) : (
-          <div class={toastClass} data-testid="toast">{WARNINGS.has(state.toast) ? <Warning /> : <Saved />}<span>{state.toast}</span></div>
+          <div class="toast" data-testid="toast">{WARNINGS.has(state.toast) ? <Warning /> : <Saved />}<span>{state.toast}</span></div>
         )) : toasts && progress && (
-          <div class={toastClass} data-testid="new-project-progress">
+          <div class="toast" data-testid="new-project-progress">
             <span class="asking" aria-hidden="true"><i /><i /><i /></span><span>{progress.words}</span>
             {progress.total > 0 && <span class="toast-count">{progress.done} of {progress.total}</span>}
           </div>

@@ -57,18 +57,16 @@ test('while another app is in front the page is covered, and the project rows st
   await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('feed-row')).toBeVisible();
   await page.getByTestId('ask-field').fill('ship');
-  await expect(page.getByTestId('match-row')).toHaveCount(1);
   await emit(app, 'echo-test:conceal');
   await expect(page.getByTestId('concealed')).toBeVisible();
   await expect(page.getByTestId('title')).toHaveText('ECHO');
   await expect(page.getByTestId('feed-row')).toHaveCount(0);
   await expect(page.getByTestId('sidebar-project')).toHaveText([/Apollo$/, /Beacon$/]);
-  // Nothing says which project was open, or what was searched in it.
+  // Nothing says which project was open, or what was typed in its bar.
   await expect(page.getByTestId('sidebar-project').nth(0)).not.toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
-  await expect(page.getByTestId('ask-field')).toHaveAttribute('placeholder', 'Search or ask ECHO');
+  await expect(page.getByTestId('ask-field')).toHaveAttribute('placeholder', 'Ask ECHO');
   await expect(page.getByTestId('ask-field')).toHaveValue('');
-  await expect(page.getByTestId('matches')).toHaveCount(0);
   await emit(app, 'echo-test:resume');
   await expect(page.getByTestId('concealed')).toHaveCount(0);
   await expect(page.getByTestId('title')).toHaveText('Apollo');
@@ -76,7 +74,50 @@ test('while another app is in front the page is covered, and the project rows st
   await expect(page.getByTestId('scope-chip')).toHaveText('Apollo');
   await expect(page.getByTestId('feed-row')).toBeVisible();
   await expect(page.getByTestId('ask-field')).toHaveValue('ship');
-  await expect(page.getByTestId('match-row')).toHaveCount(1);
+});
+
+test('the bar only asks, in its scope: ✕ widens without moving the page, Return over a reader asks, Back returns to it, and Escape clears the text first', async () => {
+  run = await launch();
+  const { page } = run;
+  const field = page.getByTestId('ask-field');
+  await page.getByTestId('sidebar-project').nth(0).click();
+  await expect(page.getByTestId('scope-chip')).toHaveText('Apollo');
+  await expect(field).toHaveAttribute('placeholder', 'Ask Apollo');
+
+  // ✕ widens to all context: the page stays, and the placeholder follows.
+  await page.getByTestId('scope-clear').click();
+  await expect(page.getByTestId('scope-chip')).toHaveCount(0);
+  await expect(field).toHaveAttribute('placeholder', 'Ask ECHO');
+  await expect(page.getByTestId('title')).toHaveText('Apollo');
+  await expect(page.getByTestId('feed-row')).toHaveCount(1);
+
+  // A row read in place stays while you type over it; Return asks the bar's scope over it, and the bar empties.
+  await page.getByTestId('feed-row').click();
+  await expect(page.getByTestId('reader-text')).toHaveText('We agreed to ship.');
+  await field.fill('ship');
+  await field.press('Enter');
+  await expect(page.getByTestId('answer')).toBeVisible();
+  await expect(field).toHaveValue('');
+  const asks = run.calls().filter(call => call.path === '/v7/person/ask');
+  expect(asks.map(call => call.body?.question)).toEqual(['ship']);
+  expect(asks[0]!.body && 'project_id' in asks[0]!.body).toBe(false);
+  // Back returns to the reader, then to the project.
+  await expect(page.getByTestId('back')).toHaveText('Back');
+  await page.getByTestId('back').click();
+  await expect(page.getByTestId('reader-text')).toHaveText('We agreed to ship.');
+  await expect(page.getByTestId('back')).toHaveText('Apollo');
+  await page.getByTestId('back').click();
+
+  // Escape clears the bar's text first, and the page stays; then it steps back.
+  await field.fill('apollo');
+  await field.press('Escape');
+  await expect(field).toHaveValue('');
+  await expect(page.getByTestId('title')).toHaveText('Apollo');
+  await field.press('Escape');
+  await expect(page.getByTestId('title').getByTestId('alt-stops')).toBeVisible();
+  // Nothing typed was searched.
+  const searches = ['/v2/person/projects/context/search', '/v3/person/updates/search', '/v2/person/updates/search'];
+  expect(run.calls().filter(call => searches.includes(call.path))).toEqual([]);
 });
 
 test('hidden tests ignore native window focus changes but honor explicit conceal and resume', async () => {

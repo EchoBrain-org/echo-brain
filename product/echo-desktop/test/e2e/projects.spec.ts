@@ -129,10 +129,9 @@ test('an original can leave the project it is in, or be added to another, and th
   expect(dissociate).toHaveLength(1);
   expect(dissociate[0]!.body).toMatchObject({ project_id: APOLLO, context_id: `ctx_${'a'.repeat(64)}`, kind: 'echo-project-context-dissociate-v1' });
 
-  // A saved note found in all context goes to another project, which opens on it.
-  await page.getByTestId('scope-clear').click();
-  await page.getByTestId('ask-field').fill('pricing');
-  await page.getByTestId('match-row').first().click();
+  // A saved note only you can read, opened from Only me, goes to another project, which opens on it.
+  await page.getByTestId('sidebar-only-me').click();
+  await page.getByTestId('only-me-row').filter({ hasText: 'Pricing decision from Tuesday sync' }).click();
   await expect(page.getByTestId('reader-text')).toContainText('usage-based pricing');
   await page.getByTestId('reader-actions').click();
   await expect(page.getByTestId('reader-remove')).toHaveCount(0);

@@ -264,23 +264,18 @@ button.account-row:hover { background: var(--raise); }
 .chip button { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: var(--faint); background: transparent; }
 .chip button:hover { color: var(--text); background: var(--hover); }
 
-/* Live matches for the bar's text, just above it. */
+/* Try asking: the empty bar's suggestions, just above it, one lit by the arrow keys. */
 .matches { position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%); width: var(--ask-width); max-width: calc(100% - 48px); max-height: min(360px, calc(100vh - 150px)); overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 6px; border-radius: 12px; background: var(--raise); box-shadow: var(--pop-shadow); }
 .matches-head { padding: 6px 12px 4px; font-size: 12px; font-weight: 500; color: var(--faint); }
 .match-row { height: 40px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 12px; border: 0; border-radius: 8px; font-size: 13.5px; text-align: left; background: transparent; }
 .match-row:hover { background: var(--selected); }
 .match-row svg { flex-shrink: 0; color: var(--muted); }
 .match-row .label { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.match-row .meta { flex-shrink: 0; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
-.match-row.ask-row { color: var(--text); }
-/* Try asking: the empty bar's suggestions, one lit by the arrow keys. */
 .match-row.suggestion.active { background: var(--selected); }
 /* The bar counts from 200 characters; at its limit the count turns and a line under the bar says why it stops. */
 .bar-count { flex-shrink: 0; padding: 0 4px; font-family: var(--mono); font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .bar-count.full { color: var(--signal-text); }
 .bar-note { position: absolute; bottom: 1px; left: 50%; transform: translateX(-50%); font-size: 12px; line-height: 18px; color: var(--signal-text); white-space: nowrap; }
-.matches-rule { height: 1px; flex-shrink: 0; margin: 4px 6px; background: var(--line); }
-.matches-note { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 13px; color: var(--faint); }
 
 /* Ask: the thread of its place, newest at the bottom (ADR-0047, ADR-0049). The latest turn and those asked since Ask opened
    are in full; every earlier one is a line that opens it. No borders between turns: space alone sets them apart. */
@@ -587,7 +582,6 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
 /* After a confirmed save: where it went. Just above the bar, clear of the page's first rows. */
 .toast { position: absolute; bottom: 88px; left: 50%; z-index: 1; transform: translateX(-50%); max-width: calc(100% - 48px); height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 16px 0 14px; border-radius: 12px; font-size: 13px; background: var(--raise); box-shadow: var(--pop-shadow); }
 .toast span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.toast.lifted { top: 52px; bottom: auto; }
 .plain-button { height: 34px; padding: 0 16px; border: 1px solid var(--line-strong); border-radius: 8px; font-size: 13.5px; font-weight: 500; background: transparent; }
 .plain-button:hover:not(:disabled) { background: var(--hover); }
 

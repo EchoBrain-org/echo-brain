@@ -295,7 +295,7 @@ Lists active people in your organization by name, or narrows the list with a nam
   records: `usage: echo-brain person records [--limit <1-100>] [--query <text>] [--record-sha256 <sha256:64hex> [--brief]]
 
 Search --limit is 1–10; list --limit is 1–100. Queries use the same text bounds as Ask. Lists recent records, searches the current index, or retrieves one exact readable cited record. --limit can refine --query; --record-sha256 cannot be combined with either.
---brief prints that one record as Ask cites it (echo-person-cited-record-v1) in place of its signed envelope: the meeting, its approver, participants and policy, and up to 32 decisions, actions and rationales, each with the atom id Ask citations carry and up to 3 quotes. A record you cannot read fails with not_found.
+--brief prints that one record as Ask cites it (echo-person-cited-record-v1) in place of its signed envelope: the meeting, when it was approved, its approver, up to 32 participants and its policy, and every decision, action and rationale, each with the atom id Ask citations carry and up to 3 quotes. A record you cannot read fails with not_found.
 `,
   documents: `usage: echo-brain person documents <upload-v2|status-v2|pending|retry|abandon|search-v2|download-v2|associate|dissociate> [options]
 
