@@ -456,11 +456,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     });
   }
   if ((ONLY_ME_MODES.has(mode))) {
+    // Pricing review: approved the morning after it met, and long, more decisions than a section once kept (32).
     meetings.push({
-      record_sha256: PRICING_REVIEW, title: 'Pricing review', added_at: '2026-09-21T20:30:00.000Z', meeting_date: '2026-09-21', visibility: 'only_me',
+      record_sha256: PRICING_REVIEW, title: 'Pricing review', added_at: '2026-09-22T09:15:00.000Z', meeting_date: '2026-09-21', visibility: 'only_me',
       project_ids: [], approver: session.membership_id, started_at: '2026-09-21T19:00:00.000Z', timezone: 'America/Los_Angeles',
       participants: ['Ari', 'Maya Chen'], approved_by: 'Ari',
-      atoms: [{ kind: 'decision', text: 'Keep annual plans as priced.' }, { kind: 'action', text: 'Send the annual price sheet.', owner: 'Maya Chen' }],
+      atoms: [{ kind: 'decision', text: 'Keep annual plans as priced.' },
+        ...Array.from({ length: 33 }, (_, index) => ({ kind: 'decision' as const, text: `Hold price point ${index + 2}.` })),
+        { kind: 'action', text: 'Send the annual price sheet.', owner: 'Maya Chen' }],
     });
     documents.push({
       document_id: PRICING_MEMO, request_id: '00000000-0000-4000-8000-0000000000d9', filename: 'Pricing memo.pdf', title: 'Pricing memo',
