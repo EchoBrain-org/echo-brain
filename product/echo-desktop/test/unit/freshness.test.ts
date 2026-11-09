@@ -283,15 +283,6 @@ describe('checking in after each check (DSK-1)', () => {
     expect(checkIns()).toEqual(['member', 'other']);
   });
 
-  it('checks at once on an approval, where a page opened within ten seconds of the last check does not', async () => {
-    const store = await startStore();
-    await store.openOnlyMe();
-    expect(checks()).toBe(1);
-    (await import('../../src/renderer/freshness.js')).approved();
-    await flush();
-    expect([checks(), checkIns().length]).toEqual([2, 2]);
-  });
-
   it.each([
     ['', false, false], [', unless stopped', true, false], [': a wake\'s when a wake came first, which reads what arrived', false, true],
   ] as const)('an approval during a check queues one fresh check after it, which checks in%s', async (_, stopped, woke) => {

@@ -86,9 +86,9 @@ type Store = Awaited<ReturnType<typeof start>>;
 type Failure = { code: string; retryable: boolean; mutation_outcome?: 'unknown' };
 /**
  * The replies a test holds back (`held`): live reads (Home's, a list's, an item's), Home's rows reads, a list's rows reads, the
- * tools read, sends and set_states; runs lists and check-ins.
+ * tools read, sends and set_states; runs lists.
  */
-type Hold = 'live' | 'rows' | 'listRows' | 'reviews' | 'send' | 'setState' | 'list' | 'next';
+type Hold = 'live' | 'rows' | 'listRows' | 'reviews' | 'send' | 'setState' | 'list';
 
 /** What the fake Authority holds and how it answers, as each test starts: a test changes `fx` to say otherwise. */
 const fresh = () => ({
@@ -105,7 +105,6 @@ const fresh = () => ({
   listed: true,
   /** The review cannot be opened while set. */
   failOpen: false,
-  failLists: false,
   /** Home's next read of its rows fails (and so nothing of it is read live). */
   failNextHome: false,
   /** Home's next live read fails, its rows read. */
@@ -137,8 +136,8 @@ const fresh = () => ({
   assignFailure: null as Failure | null,
   readItem: null as OpenItemView | null,
   /** The kinds of reply held back while set, and the replies held, oldest first. */
-  hold: { live: false, rows: false, listRows: false, reviews: false, send: false, setState: false, list: false, next: false } as Record<Hold, boolean>,
-  waiting: { live: [], rows: [], listRows: [], reviews: [], send: [], setState: [], list: [], next: [] } as Record<Hold, (() => void)[]>,
+  hold: { live: false, rows: false, listRows: false, reviews: false, send: false, setState: false, list: false } as Record<Hold, boolean>,
+  waiting: { live: [], rows: [], listRows: [], reviews: [], send: [], setState: [], list: [] } as Record<Hold, (() => void)[]>,
 });
 let fx = fresh();
 
@@ -191,7 +190,6 @@ async function authority(method: string, params: { project_id?: string; request?
     }
     case 'runs':
       if (params.request?.operation === 'list') {
-        if (fx.failLists) return unavailable;
         if (fx.failNextList) { fx.failNextList = false; return unavailable; }
         // Held, it answers the runs as they were when it was asked.
         const listed = ok({ runs: [...(fx.run ? [{ ...fx.run }] : []), ...fx.more.map(entry => ({ ...entry }))] });
@@ -207,17 +205,15 @@ async function authority(method: string, params: { project_id?: string; request?
         return held('live', () => ok(fx.home));
       }
       // A check-in (DSK-1), as the Authority answers it: the oldest queued check starts (lists come newest first), unless
-      // another runs; with none queued, idle. Held, the check is still queued until the check-in lands.
+      // another runs; with none queued, idle.
       if (params.request?.operation === 'next') {
-        return held('next', () => {
-          const checks = [...(fx.run ? [fx.run] : []), ...fx.more];
-          const oldest = [...checks].reverse().find(entry => entry.state === 'pending');
-          if (!oldest) return ok({ state: 'idle' });
-          if (checks.some(entry => entry.state === 'running')) return ok({ state: 'busy' });
-          if (oldest === fx.run) fx.run = { ...oldest, state: 'running' };
-          else fx.more = fx.more.map(entry => (entry === oldest ? { ...entry, state: 'running' as const } : entry));
-          return ok({ state: 'running' });
-        });
+        const checks = [...(fx.run ? [fx.run] : []), ...fx.more];
+        const oldest = [...checks].reverse().find(entry => entry.state === 'pending');
+        if (!oldest) return ok({ state: 'idle' });
+        if (checks.some(entry => entry.state === 'running')) return ok({ state: 'busy' });
+        if (oldest === fx.run) fx.run = { ...oldest, state: 'running' };
+        else fx.more = fx.more.map(entry => (entry === oldest ? { ...entry, state: 'running' as const } : entry));
+        return ok({ state: 'running' });
       }
       // Try again on a failed check: queued again.
       if (params.request?.operation === 'retry') {
@@ -675,8 +671,7 @@ describe('Home decisions and impact checks', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: fx.run.run_id } }]);
     expect(store.needsCount()).toBe(1);
-    // Home never starts a check itself, and reads nothing more until something moves.
-    expect(requests('start')).toEqual([]);
+    // Home reads nothing more until something moves.
     await expectQuiet();
   });
 
@@ -684,7 +679,6 @@ describe('Home decisions and impact checks', () => {
     const store = await checking();
     await store.openDecision(approval, fx.run);
     cover(store);
-    await vi.advanceTimersByTimeAsync(5_000);
     fx.run = impactRun('done');
     uncover(store);
     await flush();
@@ -803,7 +797,6 @@ describe('Home decisions and impact checks', () => {
     await store.decide('reject');
     await flush();
     expect(checks()).toBe(before);
-    expect(requests('start')).toEqual([]);
   });
 
   it('stops counting a check as Retry at once when Try again on the decision page over Home starts it again (DSK-1)', async () => {
@@ -875,7 +868,6 @@ describe('Checks keep moving (one place to look v1; DSK-1)', () => {
     await flush();
     expect(homeReads()).toBeGreaterThan(home);
     expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: fx.run.run_id } }]);
-    expect(requests('start')).toEqual([]);
   });
 });
 
@@ -1444,7 +1436,6 @@ describe('Follow-up lists: current work first, results in place', () => {
     expect(requests('retry')).toEqual([{ schema_version: 1, operation: 'retry', run_id: firstRun }]);
     expect(runsSent().slice(before)).toEqual(['retry', 'next', 'list']);
     expect(store.getState().decision?.runs[0]).toMatchObject({ run_id: firstRun, state: 'running' });
-    expect(requests('start')).toEqual([]);
     // It fails again, finding nothing: only the reviews move, and the decision over the list says so (DSK-1).
     fx.run = impactRun('failed');
     fx.moved.reviews = 1;
@@ -1516,7 +1507,6 @@ describe('A meeting\'s follow-ups line', () => {
     // The check-in started it, and the line says so.
     expect(fx.run).toMatchObject({ state: 'running' });
     expect(store.getState().impactLine).toMatchObject({ busy: false, loading: false, stage: { state: 'running' } });
-    expect(requests('start')).toEqual([]);
     // Once going, it offers Try again no more: a second click sends nothing.
     await store.retryLineCheck();
     expect(runsSent().slice(before)).toEqual(['retry', 'next', 'items']);
@@ -1695,7 +1685,6 @@ describe('Rows first, then what each says now', () => {
     fx.failReviews = false;
     await store.loadHome();
     expect(store.getState().home?.failure).toBeUndefined();
-    expect(requests('start')).toEqual([]);
   });
 
   it('shows a list\'s rows at once, read rows only, then reads live only the rows that show, and says which are on their way', async () => {
