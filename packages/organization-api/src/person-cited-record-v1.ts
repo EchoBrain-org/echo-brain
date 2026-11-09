@@ -222,7 +222,7 @@ export function validatePersonCitedRecordV1(value: unknown): PersonCitedRecordV1
     policy_id: oneOf(input.policy_id, POLICIES, 'Person cited record policy_id'),
     ...optional('title', Object.hasOwn(input, 'title') ? validText(input.title, 'Person cited record title') : undefined),
     ...optional('approved_at', Object.hasOwn(input, 'approved_at') ? validTime(input.approved_at, 'Person cited record approved_at') : undefined),
-    ...optional('started_at',Object.hasOwn(input, 'started_at') ? validTime(input.started_at, 'Person cited record started_at') : undefined),
+    ...optional('started_at', Object.hasOwn(input, 'started_at') ? validTime(input.started_at, 'Person cited record started_at') : undefined),
     ...optional('timezone', input.timezone as string | undefined),
     all_day: validFlag(input.all_day, 'Person cited record all_day'),
     ...optional('approved_by', Object.hasOwn(input, 'approved_by') ? validText(input.approved_by, 'Person cited record approved_by') : undefined),

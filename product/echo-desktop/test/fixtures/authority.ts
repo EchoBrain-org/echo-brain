@@ -17,7 +17,7 @@ const WEEK_LATER = '2026-09-28T22:30:00.000Z';
 /** When the answer's meeting, Tuesday sync, was approved. */
 const TUESDAY_ADDED = '2026-09-15T18:00:00.000Z';
 
-interface Note{ context_id: string; received_at: string; audience: Record<string, unknown>; title: string; text: string }
+interface Note { context_id: string; received_at: string; audience: Record<string, unknown>; title: string; text: string }
 /** A saved document: its metadata, its original's text, and its extracted text in pages. */
 interface StoredDocument {
   document_id: string; request_id: string; filename: string; title: string; original: string; detected_media_type: string;
@@ -350,7 +350,7 @@ function projectActivityOf(projects: readonly { project_id: string }[], arrivals
 }
 
 export function installTestAuthority(home: string, fixturesDirectory: string, SessionStore: new (home: string) => unknown) {
-  const desktop =JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
+  const desktop = JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
   const importedNotes = mode === 'ask-imported-meeting' || mode === 'ask-imported-mixed';
   if (importedNotes) {
@@ -388,7 +388,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // The people a meeting's impact check names, to pick as owners.
   if (mode.startsWith('granola')) desktop.people.push(...[MINA, RAFAEL, OKAFOR].map(person => ({ membership_id: person.membership_id, display_name: person.name })));
 
-  const store =new SessionStore(realpathSync(home)) as Store;
+  const store = new SessionStore(realpathSync(home)) as Store;
   const expired = mode === 'expired-claim';
   const clock = mode.startsWith('refresh-') ? LATER : mode === 'weekly-passed' ? WEEK_LATER : NOW;
   const session = {
