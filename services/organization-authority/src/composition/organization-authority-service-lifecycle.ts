@@ -37,9 +37,9 @@ export interface OrganizationAuthorityProcessingCycleV1 {
   /**
    * Polls admitted sources and durably stages their meetings for approval. Given `report`, it may leave passes
    * running after it returns, send their failures there and call `settled` as each one settles (neither throws);
-   * `settle` waits for them.
+   * `settle` waits for them. The Authority's own processing has no intake.
    */
-  pollAndStageAdmittedMeetings(signal: AbortSignal, report?: (failure: unknown) => void, settled?: () => void): Promise<void>;
+  pollAndStageAdmittedMeetings?(signal: AbortSignal, report?: (failure: unknown) => void, settled?: () => void): Promise<void>;
   /**
    * Resolves once no meeting pass is running: detached lanes, their top-ups and targeted passes (the staging canary).
    * With `stop` (shutdown), no new lane starts from then on.
@@ -65,13 +65,6 @@ export interface OrganizationAuthorityProcessingCycleV1 {
   setWorkerLifecycle?(lifecycle: MeetingProcessingWorkerPhaseRunnerV1): void;
 }
 
-/**
- * The primary processing, whose intake is optional: the Authority's own has none (it runs search), while the
- * authority-core eval's polls its source.
- */
-export type OrganizationAuthorityPrimaryProcessingV1 = Omit<OrganizationAuthorityProcessingCycleV1, "pollAndStageAdmittedMeetings">
-  & Partial<Pick<OrganizationAuthorityProcessingCycleV1, "pollAndStageAdmittedMeetings">>;
-
 interface OrganizationAuthorityServiceLifecycleConfig {
   readonly api: OrganizationAuthorityApiRuntimeConfig;
   readonly worker_interval_ms?: number;
@@ -80,7 +73,7 @@ interface OrganizationAuthorityServiceLifecycleConfig {
 export interface OrganizationAuthorityServiceLifecycleDependencies {
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
   readonly api: OrganizationAuthorityApiRuntimeDependencies;
-  readonly processing: OrganizationAuthorityPrimaryProcessingV1;
+  readonly processing: OrganizationAuthorityProcessingCycleV1;
   readonly additional_processing?: OrganizationAuthorityProcessingCycleV1;
   readonly start_api_runtime?: (
     config: OrganizationAuthorityApiRuntimeConfig,
@@ -143,7 +136,7 @@ const MEETING_LANE_GRACE_MS = 20_000;
  * failures there and calling `settled` as each one settles.
  */
 export async function runOrganizationAuthorityProcessingCycleV1(
-  processing: OrganizationAuthorityPrimaryProcessingV1,
+  processing: OrganizationAuthorityProcessingCycleV1,
   signal: AbortSignal,
   lifecycle?: MeetingProcessingWorkerPhaseRunnerV1,
   additional?: OrganizationAuthorityProcessingCycleV1,
@@ -164,7 +157,7 @@ export async function runOrganizationAuthorityProcessingCycleV1(
     report(failure);
   }
   signal.throwIfAborted();
-  await additional?.pollAndStageAdmittedMeetings(signal, report, settled);
+  await additional?.pollAndStageAdmittedMeetings?.(signal, report, settled);
   signal.throwIfAborted();
   await exclusive(() => runOrganizationAuthorityApprovalPublicationV1(processing, signal, lifecycle, additional));
 }
@@ -182,7 +175,7 @@ export async function runOrganizationAuthorityProcessingCycleV1(
  * logic here.
  */
 export async function runOrganizationAuthorityApprovalPublicationV1(
-  processing: OrganizationAuthorityPrimaryProcessingV1,
+  processing: OrganizationAuthorityProcessingCycleV1,
   signal: AbortSignal,
   lifecycle?: MeetingProcessingWorkerPhaseRunnerV1,
   additional?: OrganizationAuthorityProcessingCycleV1,
