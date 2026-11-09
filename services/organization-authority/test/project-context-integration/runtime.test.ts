@@ -57,7 +57,7 @@ it('uses default API composition and real Person session checks through CLI, inc
     expect(JSON.parse(read.stdout)).toMatchObject({ ok: true, result: { text: 'PC06 original meridian.\n',
       item: { visibility: 'project', projects: [{ project_id: project, name: 'Synthetic Alpha' }] } } });
     const status = await cli(['updates', 'status-v3', '--request-id', requestId]);
-    expect(status.code).toBe(0); expect(JSON.parse(status.stdout)).toMatchObject({ context_id: receipt.context_id, metadata: 'pending' });
+    expect(status.code).toBe(0); expect(JSON.parse(status.stdout)).toMatchObject({ context_id: receipt.context_id, metadata: 'ready' });
     const logout = await cli(['logout']); expect(logout.code).toBe(0);
     const denied = await fetch(`http://127.0.0.1:${runtime.address.port}/v2/person/projects/${project}`, { headers: { authorization: `Bearer ${session.access_token}` } });
     expect(denied.status).toBe(401);

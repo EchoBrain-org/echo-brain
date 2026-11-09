@@ -28,8 +28,8 @@ import { clearReadableSearchActiveGenerationV1, readableSearchExceededLimitV1 } 
  * Authority/control, then the V4 record append outbox. Keeping those writes
  * behind this seam makes the process lifecycle independent of old runtime
  * installation, enrollment, lease, and record-writer machinery. Each
- * processing implements the phases it has: the Authority's own runs notes and
- * search, the personal meeting runtime runs meetings and their approvals.
+ * processing implements the phases it has: the Authority's own runs search, the
+ * personal meeting runtime runs meetings and their approvals.
  */
 export interface OrganizationAuthorityProcessingCycleV1 {
   /** Replays finalized control-plane actions that were not appended to V4. */
@@ -65,6 +65,13 @@ export interface OrganizationAuthorityProcessingCycleV1 {
   setWorkerLifecycle?(lifecycle: MeetingProcessingWorkerPhaseRunnerV1): void;
 }
 
+/**
+ * The primary processing, whose intake is optional: the Authority's own has none (it runs search), while the
+ * authority-core eval's polls its source.
+ */
+export type OrganizationAuthorityPrimaryProcessingV1 = Omit<OrganizationAuthorityProcessingCycleV1, "pollAndStageAdmittedMeetings">
+  & Partial<Pick<OrganizationAuthorityProcessingCycleV1, "pollAndStageAdmittedMeetings">>;
+
 interface OrganizationAuthorityServiceLifecycleConfig {
   readonly api: OrganizationAuthorityApiRuntimeConfig;
   readonly worker_interval_ms?: number;
@@ -73,7 +80,7 @@ interface OrganizationAuthorityServiceLifecycleConfig {
 export interface OrganizationAuthorityServiceLifecycleDependencies {
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
   readonly api: OrganizationAuthorityApiRuntimeDependencies;
-  readonly processing: OrganizationAuthorityProcessingCycleV1;
+  readonly processing: OrganizationAuthorityPrimaryProcessingV1;
   readonly additional_processing?: OrganizationAuthorityProcessingCycleV1;
   readonly start_api_runtime?: (
     config: OrganizationAuthorityApiRuntimeConfig,
@@ -127,17 +134,16 @@ const MEETING_LANE_GRACE_MS = 20_000;
  * a restart completes every recoverable finalized action before consuming new
  * source input; a row that cannot publish waits for a later pass. Every operation
  * is awaited in order. Only recovery and publication, which append to the record
- * log, hold the writer gate (`exclusive`); notes enrichment and source intake wait
- * on providers and models outside it, kept correct by durable fences (leases,
- * cursor compare-and-swap). Direct callers run everything in place. Given
- * `report`, a failed primary intake (the Authority's notes enrichment, which
- * marks a corrupt item unavailable and defers any other failure to a later
- * cycle) is reported and the cycle goes on, and the
+ * log, hold the writer gate (`exclusive`); source intake waits on providers and
+ * models outside it, kept correct by durable fences (leases, cursor
+ * compare-and-swap). Direct callers run everything in place. Given `report`, a
+ * failed primary intake (when the primary processing has one, as the
+ * authority-core eval's does) is reported and the cycle goes on, and the
  * personal intake may leave detached meeting lanes running, reporting their
  * failures there and calling `settled` as each one settles.
  */
 export async function runOrganizationAuthorityProcessingCycleV1(
-  processing: OrganizationAuthorityProcessingCycleV1,
+  processing: OrganizationAuthorityPrimaryProcessingV1,
   signal: AbortSignal,
   lifecycle?: MeetingProcessingWorkerPhaseRunnerV1,
   additional?: OrganizationAuthorityProcessingCycleV1,
@@ -152,7 +158,7 @@ export async function runOrganizationAuthorityProcessingCycleV1(
   await exclusive(() => phase("recovery", async () => { await processing.recoverV4Appends?.(signal); await additional?.recoverV4Appends?.(signal); }));
   signal.throwIfAborted();
   try {
-    await processing.pollAndStageAdmittedMeetings(signal);
+    await processing.pollAndStageAdmittedMeetings?.(signal);
   } catch (failure) {
     if (report === undefined || signal.aborted) throw failure;
     report(failure);
@@ -176,7 +182,7 @@ export async function runOrganizationAuthorityProcessingCycleV1(
  * logic here.
  */
 export async function runOrganizationAuthorityApprovalPublicationV1(
-  processing: OrganizationAuthorityProcessingCycleV1,
+  processing: OrganizationAuthorityPrimaryProcessingV1,
   signal: AbortSignal,
   lifecycle?: MeetingProcessingWorkerPhaseRunnerV1,
   additional?: OrganizationAuthorityProcessingCycleV1,

@@ -1,9 +1,3 @@
-import type { AnswerCompositionGenerationBindingV1 } from '@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1';
-import { openOrganizationAuthorityRuntime } from '../src/composition/organization-authority-runtime.js';
-import { AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from '../src/composition/authority-record-protocols-v1.js';
-import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
-import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
-import { authorization } from './fixtures/project-context-sqlite.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   chmodSync,
@@ -151,73 +145,6 @@ afterEach(() => {
 });
 
 describe("Organization Authority API runtime", () => {
-  it("runs V2 enrichment through the existing serialized meeting worker and drains it on shutdown", async () => {
-    const { initialized, credentials } = founder("pc03-worker-composition", { organization: "Worker fixture", owner: "Owner" });
-    const database = openAuthorityDatabase(join(initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
-    const actor = authorization({ organization_id: initialized.organization_id, principal_id: initialized.owner_principal_id, membership_id: initialized.owner_membership_id, membership_type: 'owner' });
-    const application = createProjectContextApplicationV1({ authenticate: () => actor, repository: new SqliteProjectContextRepositoryV1(database) });
-    const events: string[] = [];
-    const errors: unknown[] = [];
-    // Meetings enter only through a personal meeting runtime, which shares the one serialized worker.
-    const personal_meetings = { async pollAndStageAdmittedMeetings() { events.push('meeting'); } };
-    let releaseModel!: () => void;
-    const modelPending = new Promise<void>(resolve => { releaseModel = resolve; });
-    let generationCalls = 0;
-    let active = 0;
-    let maximumActive = 0;
-    const generation: AnswerCompositionGenerationBindingV1 = {
-      generation: { generation_adapter_id: 'pc03-generation', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1000 },
-      structured_output: { async generate() {
-        active++; maximumActive = Math.max(maximumActive, active); generationCalls++;
-        events.push('upload');
-        try { if (generationCalls === 1) await modelPending; return { search_hints: 'telephone' }; }
-        finally { active--; }
-      } },
-    };
-    const project = application.createProject('fixture', { schema_version: 1, kind: 'echo-project-create-v1', request_id: '00000000-0000-4000-8000-000000000011', name: 'Worker' });
-    const request = { schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: '00000000-0000-4000-8000-000000000012', title: 'Original', text: 'Call the customer.', association_project_ids: [project.project_id], audience: { kind: 'project', project_id: project.project_id } };
-    const receipt = application.submitUploadV3('fixture', request);
-    const metadata = () => { const status = application.uploadStatusV3('fixture', request.request_id); return 'metadata' in status ? status.metadata : null; };
-    const config = {
-      state_directory: initialized.state_directory, host: '127.0.0.1' as const, port: await availablePort(),
-      authority_url: 'https://authority.example', oidc: OIDC,
-      client_authentication: { method: 'none' as const }, pkce_key_file: credentials.pkce_sealing_key_reference.slice('file:'.length),
-      answer_composition_generation_bundle: { load: () => generation }, record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1,
-      record_policy_fact_projectors: authorityRecordPolicyProjectorsV1(),
-      worker_interval_ms: 10, on_worker_error: (error: unknown) => { errors.push(error); },
-    };
-    const dependencies = { api: { oidc_provider: founderOidc(), person_http_runtime_factory: () => ({ applications: [], processing: personal_meetings, close() {} }) } };
-    let runtime: Awaited<ReturnType<typeof openOrganizationAuthorityRuntime>> | undefined;
-    try {
-      runtime = await openOrganizationAuthorityRuntime(config, dependencies);
-      expect(runtime.processing).toBe('active');
-      await vi.waitFor(() => expect(generationCalls).toBe(1), { timeout: 2000 });
-      // Personal meeting intake waits behind the in-flight enrichment in the same worker.
-      expect(events).toEqual(['upload']);
-      expect(application.searchUploadsV3('fixture', { query: 'customer' }).results).toEqual([expect.objectContaining({ context_id: receipt.context_id, excerpt: request.text })]);
-      let stopped = false;
-      const closing = runtime.close().then(() => { stopped = true; });
-      await new Promise(resolve => setTimeout(resolve, 30));
-      expect(stopped).toBe(false); expect(generationCalls).toBe(1); expect(maximumActive).toBe(1);
-      releaseModel(); await closing; runtime = undefined;
-      expect(metadata()).toBe('processing');
-      expect(events).toEqual(['upload']);
-      runtime = await openOrganizationAuthorityRuntime(config, dependencies);
-      // The interrupted claim's lease outlives the restart; the item is reclaimed once it ends.
-      await vi.waitFor(() => expect(events).toContain('meeting'));
-      expect(metadata()).toBe('processing');
-      database.prepare('UPDATE authority_person_update_work_v2 SET retry_at = ? WHERE context_id = ?').run(new Date(Date.now() - 1).toISOString(), receipt.context_id);
-      await vi.waitFor(() => expect(metadata()).toBe('ready'));
-      await runtime.close(); runtime = undefined;
-      expect([events[0], events.filter(event => event === 'upload').length]).toEqual(['upload', 2]);
-      expect(generationCalls).toBe(2); expect(maximumActive).toBe(1); expect(errors).toEqual([]);
-      expect(application.searchUploadsV3('fixture', { query: 'telephone' }).results).toEqual([expect.objectContaining({ context_id: receipt.context_id, excerpt: request.text })]);
-      expect(database.prepare('SELECT count(*) AS n FROM authority_live_source_admission_v2').get()).toEqual({ n: 0 });
-      expect(database.prepare('SELECT count(*) AS n FROM authority_live_source_candidates_v2').get()).toEqual({ n: 0 });
-      expect(database.prepare('SELECT count(*) AS n FROM authority_person_update_work_v2').get()).toEqual({ n: 1 });
-    } finally { releaseModel(); await runtime?.close(); database.close(); }
-  });
-
   it("wires an injected external-identity application without selecting a provider", async () => {
     const { initialized, pkce } = founder("person-external-identity-runtime-test");
     const opened: PersonExternalIdentityRuntimeInputV1[] = [];
@@ -941,7 +868,8 @@ describe("Organization Authority API runtime", () => {
       };
       const receipt = await post("/v3/person/updates", upload, 202);
       const context_id = receipt.context_id as string;
-      expect(await get(`/v3/person/updates/${upload.request_id}`)).toMatchObject({ status: "stored", metadata: "pending" });
+      // No search metadata is made any more: released clients still read the exact-key `metadata`, now always ready.
+      expect(await get(`/v3/person/updates/${upload.request_id}`)).toMatchObject({ status: "stored", metadata: "ready" });
       const open = { schema_version: 1, ref: `note:${context_id}` };
       expect(await post("/v1/person/open", open)).toMatchObject({ text: upload.text, item: { visibility: "project", projects: [{ project_id }] } });
       const found = await post("/v2/person/projects/context/search", { project_id, query: "original" });
@@ -997,7 +925,8 @@ describe("Organization Authority API runtime", () => {
           expect(auditCount()).toEqual(before);
         } finally { inspection.exec("DROP TRIGGER fixture_project_audit_failure"); }
         expect(inspection.prepare("SELECT count(*) AS n FROM authority_live_source_candidates_v2").get()).toEqual({ n: 0 });
-        expect(inspection.prepare("SELECT count(*) AS n FROM authority_person_update_work_v2").get()).toEqual({ n: 1 });
+        // A saved note queues no search-hint work.
+        expect(inspection.prepare("SELECT count(*) AS n FROM authority_person_update_work_v2").get()).toEqual({ n: 0 });
 
         // The composed change check (ADR-0036) reads the owner's project and the personal runtime's review; no follow-up yet.
         expect((await get("/v1/person/changes")).areas).toEqual({

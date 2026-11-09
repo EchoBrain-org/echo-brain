@@ -6,13 +6,14 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, assertTimestamp, bou
 /**
  * The Ask source check (Ask timeline v1, C1; ADR-0047). The desktop keeps old
  * answers on the device; this read takes the sources such an answer cited and
- * says, for each, whether it is the `same`, `changed`, `unreadable` or
- * `unknown`. It decides readability first: `changed` and a ticket's marker are
- * only ever returned for a source the caller can read now, and `unreadable`
- * never says why (hidden, deleted, out of scope and never existed are one
- * state). It returns no labels, text, counts or ids, makes no model call and
- * stores nothing (ADR-0012, ADR-0036). `unknown` is a source whose tool is not
- * connected, failed or ran past the check's budget or deadline.
+ * says, for each, only whether the caller can read it now: `same`,
+ * `unreadable` or `unknown`. `unreadable` never says why (hidden, deleted, out
+ * of scope and never existed are one state). It returns no labels, text,
+ * counts or ids, makes no model call and stores nothing (ADR-0012, ADR-0036).
+ * `unknown` is a source whose tool is not connected, failed or ran past the
+ * check's budget or deadline. The Authority no longer answers `changed` or
+ * compares ticket markers; for released clients, `changed` stays a valid state
+ * and ticket markers stay in both directions for one more release.
  */
 export const PERSON_ASK_CHECK_PATH_V1 = '/v1/person/ask/check';
 export const PERSON_ASK_CHECK_REQUEST_KIND_V1 = 'echo-person-ask-check-request-v1';
@@ -21,6 +22,7 @@ export const PERSON_ASK_CHECK_KIND_V1 = 'echo-person-ask-check-v1';
 /** The evidence citations a check reads; any other kind is `invalid_request`. */
 export const PERSON_ASK_CHECK_CITATION_KINDS_V1 = Object.freeze(['approved_record', 'source_revision', 'follow_up', 'ticket', 'page'] as const);
 export type PersonAskCheckCitationKindV1 = (typeof PERSON_ASK_CHECK_CITATION_KINDS_V1)[number];
+/** `changed` is no longer answered; it stays valid for one more release, so an answer from an older Authority still validates. */
 const PERSON_ASK_CHECK_STATES_V1 = Object.freeze(['same', 'changed', 'unreadable', 'unknown'] as const);
 export type PersonAskCheckStateV1 = (typeof PERSON_ASK_CHECK_STATES_V1)[number];
 
@@ -32,7 +34,7 @@ export interface PersonAskCheckRequestItemV1 {
   readonly asked_at: string;
   /** The evidence citation exactly as the answer's `citations[i].citation` carried it, of a kind in `PERSON_ASK_CHECK_CITATION_KINDS_V1`. */
   readonly citation: PersonAnswerEvidenceCitationV8;
-  /** Only for a ticket: the marker an earlier check returned for it. */
+  /** Only for a ticket: the marker an earlier check returned for it. Accepted and ignored, for released clients that send it. */
   readonly marker?: string;
 }
 
@@ -46,8 +48,9 @@ export interface PersonAskCheckRequestV1 {
 export interface PersonAskCheckItemV1 {
   readonly state: PersonAskCheckStateV1;
   /**
-   * Only for a readable ticket (`same` or `changed`): its current marker, `sha256:` and the hex SHA-256 of the canonical JSON
-   * of its summary, description, status name, assignee display name and due date.
+   * Only ever on a readable ticket (`same` or `changed`): its current marker, `sha256:` and the hex SHA-256 of the canonical
+   * JSON of its summary, description, status name, assignee display name and due date. The Authority still sends it on every
+   * readable ticket, because released clients refuse a readable ticket without one; a ticket may come without it.
    */
   readonly marker?: string;
 }
@@ -99,14 +102,14 @@ function answerItem(value: unknown, label: string, asked: PersonAskCheckRequestI
     assertDigest(input.marker, `${label} marker`);
     if (!readable) fail(`${label} marker is only for a readable ticket`);
   }
-  // Against its request: a readable ticket always carries its marker, and nothing else ever does.
-  if (asked !== undefined && marked !== (readable && asked.citation.kind === 'ticket')) fail(`${label} marker does not match its item`);
+  // Against its request: a marker only ever on a readable ticket (so a later Authority can stop sending it).
+  if (asked !== undefined && marked && asked.citation.kind !== 'ticket') fail(`${label} marker does not match its item`);
   return Object.freeze({ state, ...(marked ? { marker: input.marker as string } : {}) });
 }
 
 /**
- * The check's answer. With the request it answers, it must also answer every item in order, and carry a marker exactly on
- * each readable ticket.
+ * The check's answer. With the request it answers, it must also answer every item in order, and carry a marker only on a
+ * readable ticket.
  */
 export function validatePersonAskCheckV1(value: unknown, request?: PersonAskCheckRequestV1): PersonAskCheckV1 {
   const input = asEnumerableRecord(value, 'Ask check');

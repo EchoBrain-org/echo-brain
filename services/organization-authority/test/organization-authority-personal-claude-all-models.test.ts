@@ -15,7 +15,6 @@ import { openOrganizationAuthorityService, type OrganizationAuthorityServiceConf
 import { openOrganizationAuthorityRuntime } from '../src/composition/organization-authority-runtime.js';
 import { startOrganizationAuthorityServiceLifecycle } from '../src/composition/organization-authority-service-lifecycle.js';
 import { openPersonMeetingRuntimeV1 } from '../src/composition/person-meeting-runtime-v1.js';
-import { createPersonUpdateProcessingV1 } from '../src/composition/person-update-processing-v1.js';
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
 import { initializePersonSessionCredentials } from '../src/composition/person-onboarding-service.js';
 import type { ClaudeAccountProfileV1 } from '@echo-brain/provider-openrouter/claude-account-answer-composition-generation-bundle-v1';
@@ -37,10 +36,6 @@ vi.mock('../src/composition/organization-authority-runtime.js', async importOrig
 vi.mock('../src/composition/person-meeting-runtime-v1.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../src/composition/person-meeting-runtime-v1.js')>();
   return { ...actual, openPersonMeetingRuntimeV1: vi.fn(actual.openPersonMeetingRuntimeV1) };
-});
-vi.mock('../src/composition/person-update-processing-v1.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/composition/person-update-processing-v1.js')>();
-  return { ...actual, createPersonUpdateProcessingV1: vi.fn(actual.createPersonUpdateProcessingV1) };
 });
 // Real state/runtime composition runs; no HTTP server, worker, or provider call starts.
 vi.mock('../src/composition/organization-authority-service-lifecycle.js', async importOriginal => ({
@@ -125,16 +120,13 @@ it('selects native extraction and default generation for interactive and backgro
     const meeting = vi.mocked(openPersonMeetingRuntimeV1).mock.lastCall![0];
     expect(meeting.processor).toBe(nativeProcessor);
     const api = vi.mocked(startOrganizationAuthorityServiceLifecycle).mock.lastCall![1].api;
-    const updates = vi.mocked(createPersonUpdateProcessingV1).mock.lastCall![0];
-    for (const binding of [api.answer_composition_generation, updates]) {
-      expect(binding.generation).toBe(native.generation);
-      expect(binding).not.toHaveProperty('payer_membership_id');
-    }
+    expect(api.answer_composition_generation.generation).toBe(native.generation);
+    expect(api.answer_composition_generation).not.toHaveProperty('payer_membership_id');
     const input: StructuredGenerationInput = { model: native.generation.answer_model, system_prompt: 'Synthetic instructions', user_prompt: 'Other member evidence', schema: {}, max_output_tokens: 1, timeout_ms: 1_000 };
-    for (const port of [api.answer_composition_generation.structured_output, api.answer_composition_background!, updates.structured_output]) {
+    for (const port of [api.answer_composition_generation.structured_output, api.answer_composition_background!]) {
       await expect(port.generate_with_admission!(input, vi.fn())).resolves.toEqual({ answer: 'synthetic native result' });
     }
-    expect(nativeWriter).toHaveBeenCalledTimes(3);
+    expect(nativeWriter).toHaveBeenCalledTimes(2);
     const initial = { authenticated_membership: 'mem_another_person', question: 'Synthetic question' };
     const session: AgenticResearchDriverSessionV1 = { initial, question: true, list_available: false,
       signal: new AbortController().signal, remaining: () => 1_000, call: async () => ({}), model_request: vi.fn() };

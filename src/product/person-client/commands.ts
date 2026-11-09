@@ -129,7 +129,6 @@ const RULES: Readonly<
   "updates-submit-v3": { accepts: ["request-id", "title", "file", "audience", "audience-project-id", "association-project-ids-json", "audience-project-ids-json"], requires: ["request-id", "title", "file"] },
   "updates-status-v3": { accepts: ["request-id"], requires: ["request-id"] },
   "updates-search-v3": { accepts: ["query", "limit"], requires: ["query"] },
-  "updates-search": { accepts: ["query", "limit"], requires: ["query"] },
   login: {
     accepts: ["invitation", "authority-url", "open-browser"],
   },
@@ -190,7 +189,7 @@ Commands:
   list        List the newest notes, documents, imported meetings and approved meetings in one project, or only yours.
   open        Read one item by its ref from list or an ask citation.
   ask         Ask a question over context you may read.
-  ask-check   Check whether what earlier answers cited changed, with no content.
+  ask-check   Check whether you can still read what earlier answers cited, with no content.
   ask-source  Read one source-evidence packet an Ask citation names.
   runs        Read and act on impact runs, their open items, and sweeps.
   reviews     List, open and decide your meeting reviews.
@@ -287,7 +286,7 @@ Reads one bounded immutable source-evidence packet cited by Ask. Use the exact c
 `,
   "ask-check": `usage: echo-brain person ask-check --request <json>
 
-Checks whether the sources earlier answers cited changed, with no content. The request is {"schema_version":1,"kind":"echo-person-ask-check-request-v1","items":[...]}: 1 to 100 items, each {"asked_at":<UTC millisecond time the turn was asked>,"citation":<the citation exactly as the answer carried it>}, for an approved record, a source revision, a follow-up, a ticket or a page; a ticket may add the "marker" an earlier check returned. Each item is answered in order: same, changed, unreadable (never why) or unknown (its tool is not connected, failed or ran out of time), and a readable ticket with its current marker. Prints echo-person-ask-check-v1 as its last line.
+Checks whether you can still read the sources earlier answers cited, with no content. The request is {"schema_version":1,"kind":"echo-person-ask-check-request-v1","items":[...]}: 1 to 100 items, each {"asked_at":<UTC millisecond time the turn was asked>,"citation":<the citation exactly as the answer carried it>}, for an approved record, a source revision, a follow-up, a ticket or a page; a ticket's "marker" from an earlier check is accepted and ignored. Each item is answered in order: same (you can read it now), unreadable (never why) or unknown (its tool is not connected, failed or ran out of time); a readable ticket may also carry a marker, which you can ignore. Prints echo-person-ask-check-v1 as its last line.
 `,
   directory: `usage: echo-brain person directory [--query <text>] [--limit <1-10>] [--cursor <opaque-base64url>]
 
@@ -402,7 +401,7 @@ Remove the association without changing the original or its audience. Refresh pe
 
 Search project originals including V3 multi-project uploads. An empty query is invalid; use person list --project to browse.
 `,
-  updates: `usage: echo-brain person updates <submit-v3|status-v3|search|search-v3> [options]
+  updates: `usage: echo-brain person updates <submit-v3|status-v3|search-v3> [options]
 
 Uploads preserve the original text. Only me is the default; Team explicitly shares it with current organization members. No Slack approval or decision extraction is required. Read a note with person open --ref note:<context-id>.
 `,
@@ -412,11 +411,7 @@ Saves one UTF-8 text original (at most 8 KiB) with independent initial associati
 `,
   "updates-status-v3": `usage: echo-brain person updates status-v3 --request-id <uuid>
 
-Shows the saved V3 receipt, selected audience union, immutable initial association set, and optional search-metadata progress. Later association changes do not alter this receipt.
-`,
-  "updates-search": `usage: echo-brain person updates search --query <text> [--limit <1-10>]
-
-Find original uploads you may read. Optional search hints help matching; excerpts come from the original text.
+Shows the saved V3 receipt, selected audience union and immutable initial association set; its metadata is always ready. Later association changes do not alter this receipt.
 `,
   "updates-search-v3": `usage: echo-brain person updates search-v3 --query <text> [--limit <1-10>]
 
@@ -661,7 +656,6 @@ const CONTEXT_COMMANDS: Readonly<Record<string, (values: Record<Option, string |
     association_project_ids: canonicalProjectIdArray(values['association-project-ids-json'], '--association-project-ids-json'), audience: uploadAudienceV3(values) }],
   'updates-status-v3': values => ['updateStatusV3', requiredText(values, 'request-id')],
   'updates-search-v3': values => ['searchUploadsV3', { query: requiredText(values, 'query'), ...contextPaging(values) }],
-  'updates-search': values => ['searchUploadsV2', { query: requiredText(values, 'query'), ...contextPaging(values) }],
 };
 
 /**
@@ -958,7 +952,7 @@ export async function runPersonClientCli(
   const employeeAction =
     argv[0] === "employee" ? EMPLOYEE_ACTIONS[argv[1] as keyof typeof EMPLOYEE_ACTIONS] : undefined;
   const documentAction = argv[0] === 'documents' ? `documents-${argv[1] ?? ''}` : undefined;
-  const updateAction = argv[0] === 'updates' && ['search', 'submit-v3', 'status-v3', 'search-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
+  const updateAction = argv[0] === 'updates' && ['submit-v3', 'status-v3', 'search-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
   const projectAction = argv[0] === 'projects' ? `projects-${argv[1] ?? ''}` : undefined;
   // `tools` alone lists tools; `tools <verb>` is a tool verb, refused unless it is one of TOOL_VERBS.
   const toolAction = argv[0] === 'tools' && argv[1] !== undefined && !argv[1].startsWith('-') ? `tools-${argv[1]}` : undefined;

@@ -788,44 +788,28 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   /**
    * The Ask source check (Ask timeline v1, C1; ADR-0047): for each cited source revision, whether the caller can read it now,
-   * through the same ACL and global scope filter as every original read, and when they can, whether a newer readable revision
-   * of the same source exists: `changed` for an imported meeting edited since. Notes and documents never change.
+   * through the same ACL and global scope filter as every original read. Newer revisions of the same source are not read.
    * Read only: it releases nothing and writes no audit row, and a citation the caller cannot read is `unreadable`, never a
    * refusal, so a hidden, deleted and never-existing source read the same.
    *
    * One check reads each cited revision once, however many turns cited it: answers are kept by the revision a citation names
    * (`source_id`, `revision_id`, `source_sha256`, `representation_sha256`, and a document's `document_id`; the cited anchor
-   * never changes the answer), and each revision of an imported meeting is verified once. The caller's ACL and scope filter
-   * and the statements are prepared once a check. Answers keep the request's order and length.
+   * never changes the answer). The caller's ACL and scope filter and the statements are prepared once a check. Answers keep
+   * the request's order and length.
    */
-  checkSourceRevisions(input: { readonly access_token: string; readonly citations: readonly OriginalContextCitationV1[] }): readonly ("same" | "changed" | "unreadable")[] {
+  checkSourceRevisions(input: { readonly access_token: string; readonly citations: readonly OriginalContextCitationV1[] }): readonly ("same" | "unreadable")[] {
     const actor = this.reader(input.access_token, GLOBAL_SCOPE);
     const text = this.textSourceRead(actor, GLOBAL_SCOPE);
     const documentMeta = this.documentSourceMetaRead(actor, GLOBAL_SCOPE);
-    const revisions = this.database.prepare("SELECT revision_id FROM authority_source_revisions_v1 WHERE organization_id=? AND source_id=? ORDER BY captured_at DESC,revision_id DESC").pluck();
-    const importedRows = new Map<string, SourceRow | undefined>();
-    /** The importer's exact read of one revision of an imported meeting, verified in full once per check. */
-    const imported = (sourceId: string, revisionId: string): SourceRow | undefined => {
-      const key = JSON.stringify([sourceId, revisionId]);
-      if (!importedRows.has(key)) importedRows.set(key, this.imported.rows(actor, GLOBAL_SCOPE, { source_id: sourceId, revision_id: revisionId })[0]);
-      return importedRows.get(key);
-    };
-    const check = (citation: OriginalContextCitationV1): "same" | "changed" | "unreadable" => {
+    const check = (citation: OriginalContextCitationV1): "same" | "unreadable" => {
       if (citation.document_id !== undefined) {
         return documentMeta(citation.source_id, citation.revision_id, citation.document_id, citation.representation_sha256)?.source_sha256 === citation.source_sha256 ? "same" : "unreadable";
       }
-      const row = text(citation.source_id, citation.revision_id) ?? imported(citation.source_id, citation.revision_id);
-      if (row?.source_sha256 !== citation.source_sha256 || row.representation_sha256 !== citation.representation_sha256) return "unreadable";
-      if (row.api_version !== 0) return "same";
-      // An imported meeting's revisions newest first, by the rule the import's own list keeps (capture time, then revision
-      // id), down to the cited one, which reads: changed exactly when a newer one its importer reads exists.
-      for (const revisionId of revisions.all(actor.organization_id, row.source_id) as readonly string[]) {
-        if (revisionId === row.revision_id) break;
-        if (imported(row.source_id, revisionId) !== undefined) return "changed";
-      }
-      return "same";
+      // An imported meeting's revision is its importer's exact read, verified in full.
+      const row = text(citation.source_id, citation.revision_id) ?? this.imported.rows(actor, GLOBAL_SCOPE, { source_id: citation.source_id, revision_id: citation.revision_id })[0];
+      return row?.source_sha256 === citation.source_sha256 && row.representation_sha256 === citation.representation_sha256 ? "same" : "unreadable";
     };
-    const answers = new Map<string, "same" | "changed" | "unreadable">();
+    const answers = new Map<string, "same" | "unreadable">();
     return Object.freeze(input.citations.map((citation) => {
       const key = JSON.stringify([citation.source_id, citation.revision_id, citation.source_sha256, citation.representation_sha256, citation.document_id ?? null]);
       if (!answers.has(key)) answers.set(key, check(citation));
