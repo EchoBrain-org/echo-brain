@@ -194,6 +194,9 @@ describe('Ask source check: the database kinds', () => {
     expect(await check('mina', [item(team), item(project), item(document), item(meeting), item(mine)])).toEqual([SAME, SAME, SAME, UNREADABLE, SAME]);
     // Okafor is not in project A, and the import is Ari's alone.
     expect(await check('okafor', [item(team), item(project), item(document), item(meeting), item(mine)])).toEqual([SAME, UNREADABLE, SAME, UNREADABLE, UNREADABLE]);
+    // A citation of a readable revision with other bytes than the revision holds is unreadable: either digest decides.
+    expect(await check('ari', [item({ ...team, source_sha256: canonicalSha256('other') }), item({ ...meeting, representation_sha256: canonicalSha256('other') })]))
+      .toEqual([UNREADABLE, UNREADABLE]);
     // An edit adds a newer revision of the import: its importer reads both, so both are the same; anyone else reads neither.
     f.editMeeting();
     const edited = f.originals.deskSearch({ access_token: 'ari', scope: GLOBAL, kinds: ['imported_meeting'] }).items[0]!.citation;
