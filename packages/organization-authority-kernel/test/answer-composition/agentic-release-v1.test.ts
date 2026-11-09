@@ -101,10 +101,10 @@ describe("release step", () => {
 
   it.each(["timed_out", "cancelled"] as const)("writes a %s witness with no prompt, answer or response digest", async kind => {
     const r = release();
-    await auditAgenticTerminalV1(kind, { ...r.context, trigger: "sweep", background: true, checked_at: null });
+    await auditAgenticTerminalV1(kind, { ...r.context, trigger: "approved_record", background: true, checked_at: null });
     expect(r.trace).toEqual(["append"]);
     expect(r.entries[0]).toMatchObject({
-      kind: "echo-agentic-ask-audit-v1", trigger: "sweep", budget: "background", outcome: kind, citation_count: 0, checked_at: null,
+      kind: "echo-agentic-ask-audit-v1", trigger: "approved_record", budget: "background", outcome: kind, citation_count: 0, checked_at: null,
       prompt_sha256: null, answer_sha256: null, response_sha256: null, model_calls: 2, repairs: 1, fallbacks: 1, rounds: 3,
     });
   });
@@ -117,9 +117,9 @@ describe("release step: request terminals", () => {
     // The first step's reply lands after the five-minute background deadline.
     const h = researchHarness(() => { clock += 301_000; return step([part("Dashboard", [need("dashboard published", "open")])], [{ tool: "search", args: { query: "dashboard" } }]); }, {}, { now_ms: () => clock });
     const brief = { goal: { kind: "task" as const, task: "Recheck the dashboard." }, starting: [], budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: {} };
-    await expect(withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => h.research.research({ trigger: "sweep", brief }))).rejects.toMatchObject({ name: "AgenticAskDeadlineErrorV1" });
+    await expect(withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => h.research.research({ trigger: "approved_record", brief }))).rejects.toMatchObject({ name: "AgenticAskDeadlineErrorV1" });
     // The witness binds the access check before the late step call.
-    expect(h.audit).toEqual([expect.objectContaining({ trigger: "sweep", budget: "background", outcome: "timed_out", model_calls: 1, checked_at: deskCheck.checked_at, prompt_sha256: null, answer_sha256: null, response_sha256: null })]);
+    expect(h.audit).toEqual([expect.objectContaining({ trigger: "approved_record", budget: "background", outcome: "timed_out", model_calls: 1, checked_at: deskCheck.checked_at, prompt_sha256: null, answer_sha256: null, response_sha256: null })]);
     expect(events).toContainEqual(expect.objectContaining({ kind: 'lifecycle', stage: 'audit', event: 'started', data: { outcome: 'timed_out' } }));
     expect(events.at(-1)).toMatchObject({ kind: 'lifecycle', stage: 'run', event: 'failed', error_kind: 'deadline' });
     expect(events.filter(event => event.kind === 'lifecycle' && event.stage === 'release')).toEqual([]);

@@ -8,8 +8,8 @@ import {
 import { Altitude, MyProjects } from './altitude.js';
 import { Chevron, KindMark, Plus } from './icons.js';
 
-/** The row's verb: what a click will ask of you. "Check" is never one: it is ECHO's re-read (R63). */
-const KIND: Record<NeedRow['kind'], string> = { approve: 'Approve', send: 'Send', update: 'Update', review: 'Review', failed: 'Retry', checking: 'Checking' };
+/** The row's verb: what a click will ask of you. */
+const KIND: Record<NeedRow['kind'], string> = { approve: 'Approve', send: 'Send', update: 'Update', failed: 'Retry', checking: 'Checking' };
 /** A kind on Home's top: the row kind whose mark and verb it shares. */
 const CATEGORY: Record<HomeCategory['category'], NeedRow['kind']> = { approve: 'approve', retry: 'failed', send: 'send', update: 'update', checking: 'checking' };
 
@@ -110,8 +110,7 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
 }
 
 /**
- * Update, for a follow-up that waits on you, and Review, for one someone else
- * owns that changed since you sent it (R64): the whole row opens its page
+ * Update, for a follow-up that waits on you: the whole row opens its page
  * (F5), which says where it came from. Its two lines: its title (`label`,
  * apart from any other on Home), and its project, then what the meeting needs
  * of it, what it says now and whose it is.
@@ -225,8 +224,8 @@ function Failed({ home }: { home: State['home'] }) {
 
 /**
  * What needs you, at the top of Home, by kind (One place to look v1): meetings
- * to approve, checks to retry, follow-ups to send, follow-ups to update (and
- * to review), then checks still on their way. A kind with one row shows that
+ * to approve, checks to retry, follow-ups to send, follow-ups to update, then
+ * checks still on their way. A kind with one row shows that
  * row; with more, one line that opens its list. Its count is the sidebar's
  * badge. With nothing waiting, one quiet line.
  */

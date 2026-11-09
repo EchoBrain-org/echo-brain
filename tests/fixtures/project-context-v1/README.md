@@ -49,12 +49,14 @@ encoding implementation.
 | `projects search-v2` | `POST /v2/person/projects/context/search` | project search | `200` V2 project search page |
 | `updates submit-v3` | `POST /v3/person/updates` | V3 submit | `202` V3 receipt |
 | `updates status-v3` | `GET /v3/person/updates/{request_id}` | none | `200` V3 status |
-| `updates search` | `POST /v2/person/updates/search` | V2 search | `200` V2 search result |
+| none (`updates search`, retired 2026-11-08) | `POST /v2/person/updates/search` | V2 search | `200` V2 search result |
 
 The CLI retired the V1 project reads and the V2 note commands on 2026-09-30,
 and the Authority retired their routes on 2026-10-25
 ([ADR-0048](../../../docs/decisions/ADR-0048-retire-older-person-routes.md)).
-`updates search` stays: it is the only search of notes stored as V2.
+The CLI's `updates search`, the only search of notes stored as V2, was retired
+on 2026-11-08; its row keeps no `argv`, only the route, which the Authority
+serves for released desktops until a later release.
 `person list --project` browses a project and `person open --ref` reads one
 item; the project feed, the project context read and the V3 note read had no
 caller and were retired on 2026-10-31.

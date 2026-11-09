@@ -91,33 +91,14 @@ describe('Ask source check through the Jira connection', () => {
     return { runtime, store, bulk, fetch, ...askCheck([runtime.checks]) };
   }
 
-  it('fingerprints what an answer read of a ticket, returns it as the baseline, and moves it with each of those fields, never with a comment', async () => {
-    const issues = new Map<string, Record<string, unknown>>([['10012', fields('10012')]]);
-    const f = jira(issues);
+  it('answers a readable ticket same with the fingerprint of what an answer read of it', async () => {
+    const f = jira(new Map([['10012', fields('10012')]]));
     const [baseline] = await f.check([item(ticket('10012'))]);
     // The canonical JSON of the parsed summary, description, status, assignee and due date.
     const marker = canonicalSha256({ summary: 'Kestrel issue 10012', description: 'Ship 10012 after the review.', status: 'In Progress', assignee: 'Mina Patel', due_date: '2026-10-30' });
     expect(baseline).toEqual({ state: 'same', marker });
     expect(jiraTicketMarkerV1(fields('10012'))).toBe(marker);
-    expect(await f.check([item(ticket('10012'), marker)])).toEqual([{ state: 'same', marker }]);
-    // A comment moves Jira's `updated`, which the marker leaves out.
-    issues.set('10012', { ...fields('10012'), updated: '2026-10-21T10:00:00.000+0000', comment: { comments: [{ body: adf('A comment.') }] } });
-    expect(await f.check([item(ticket('10012'), marker)])).toEqual([{ state: 'same', marker }]);
-    for (const [change, value] of [
-      ['summary', { summary: 'Kestrel issue 10012 moved to Monday' }],
-      ['description', { description: adf('Ship 10012 after the second review.') }],
-      ['status', { status: { name: 'Done' } }],
-      ['assignee', { assignee: { displayName: 'Rafael Moreno', accountId: 'acct-rafael' } }],
-      ['no assignee', { assignee: null }],
-      ['due date', { duedate: '2026-11-02' }],
-      ['no due date', { duedate: null }],
-      ['no description', { description: null }],
-    ] as const) {
-      issues.set('10012', { ...fields('10012'), ...value });
-      const [answer] = await f.check([item(ticket('10012'), marker)]);
-      expect(answer, change).toEqual({ state: 'changed', marker: jiraTicketMarkerV1(issues.get('10012')) });
-      expect(answer!.marker, change).not.toBe(marker);
-    }
+    expect(f.failures).toEqual([]);
   });
 
   it('fingerprints a description with content the reader cannot read by the rest of its text', async () => {
@@ -128,8 +109,6 @@ describe('Ask source check through the Jira connection', () => {
     const [baseline] = await f.check([item(ticket('10012'))]);
     expect(baseline).toEqual({ state: 'same', marker: jiraTicketMarkerV1(withImage('Ship 10012 after the review.')) });
     expect(await f.check([item(ticket('10012'), baseline!.marker)])).toEqual([baseline]);
-    issues.set('10012', withImage('Ship 10012 after the second review.'));
-    expect((await f.check([item(ticket('10012'), baseline!.marker)]))[0]).toMatchObject({ state: 'changed' });
     expect(f.failures).toEqual([]);
   });
 
@@ -183,16 +162,16 @@ describe('Ask source check through the Jira connection', () => {
 
 describe('Ask source check through the Confluence connection', () => {
   const PREFIX = `/ex/confluence/${FIXTURE_CONFLUENCE_CLOUD_V1}/wiki`;
-  type Page = { id: string; status: string; version: number; paragraphs: readonly string[]; body?: string };
+  type Page = { id: string; status: string; version: number; paragraphs: readonly string[] };
 
   /** The real Confluence runtime over a fake Confluence Cloud holding these pages, all in space 42 and visible to the owner. */
-  function confluence(pages: Map<string, Page>, fail: { readonly versions?: number; readonly bodies?: number } = {}) {
+  function confluence(pages: Map<string, Page>, fail: { readonly versions?: number } = {}) {
     const database = new Database(':memory:');
     const store = new ConfluenceConnectionStoreV1(database);
     const nango = connected(store, FIXTURE_CONFLUENCE_CLOUD_V1, FIXTURE_CONFLUENCE_SITE_V1);
     const calls: { readonly path: string; readonly query: URLSearchParams }[] = [];
     const metadata = (page: Page, body: boolean) => ({ id: page.id, spaceId: '42', title: `Page ${page.id}`, status: page.status, version: { number: page.version, createdAt: '2026-10-20T09:00:00.000Z' },
-      ...(body ? { body: { atlas_doc_format: { representation: 'atlas_doc_format', value: page.body ?? JSON.stringify(adf(...page.paragraphs)) } } } : {}) });
+      ...(body ? { body: { atlas_doc_format: { representation: 'atlas_doc_format', value: JSON.stringify(adf(...page.paragraphs)) } } } : {}) });
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
       expect(init?.redirect).toBe('error');
@@ -210,7 +189,6 @@ describe('Ask source check through the Confluence connection', () => {
       const exact = /^\/api\/v2\/pages\/(\d+)$/.exec(path);
       if (exact !== null) {
         const body = url.searchParams.get('body-format') === 'atlas_doc_format';
-        if (body && fail.bodies !== undefined) return json({}, fail.bodies);
         const page = pages.get(exact[1]!);
         return page === undefined || !shown(page) ? json({}, 404) : json(metadata(page, body));
       }
@@ -238,7 +216,7 @@ describe('Ask source check through the Confluence connection', () => {
   // Two reader sections: each normalized paragraph plus its newline fills one.
   const long = (marker: string) => `${marker} ${'x'.repeat(3070 - Buffer.byteLength(marker, 'utf8'))}`;
 
-  it('answers a page the same while its version stands, and compares the cited section the reader released when it moves', async () => {
+  it('answers each citation of a page the same while the owner reads a version of it, with one metadata call and no body', async () => {
     const pages = new Map<string, Page>([['200', { id: '200', status: 'current', version: 3, paragraphs: [long('Gate one.'), long('Gate two.')] }]]);
     const f = confluence(pages);
     const [inventory, first, second] = await f.cited('200');
@@ -248,15 +226,11 @@ describe('Ask source check through the Confluence connection', () => {
     expect(await f.check([item(inventory), item(first), item(second)])).toEqual([{ state: 'same' }, { state: 'same' }, { state: 'same' }]);
     // One metadata call by id, of current and archived pages, and no body.
     expect(f.reads()).toEqual({ metadata: [['200']], bodies: [], statuses: [['current', 'archived']] });
-    // Version 4 adds a section above both: each cited section is still on the page, moved down, so it is the same.
-    pages.set('200', { ...pages.get('200')!, version: 4, paragraphs: [long('A new first gate.'), long('Gate one.'), long('Gate two.')] });
+    // Version 4 adds a section and edits the second gate: the page still reads, so each citation of it is the same.
+    pages.set('200', { ...pages.get('200')!, version: 4, paragraphs: [long('A new first gate.'), long('Gate one.'), long('Gate two, moved to Monday.')] });
     f.calls.length = 0;
-    expect(await f.check([item(first), item(second), item(inventory)])).toEqual([{ state: 'same' }, { state: 'same' }, { state: 'changed' }]);
-    // The inventory row cites no text: any new version changed it, with no body read for it.
-    expect(f.reads()).toEqual({ metadata: [['200']], bodies: ['200'], statuses: [['current', 'archived']] });
-    // Version 5 edits the second gate: its citation changed, the first stands.
-    pages.set('200', { ...pages.get('200')!, version: 5, paragraphs: [long('A new first gate.'), long('Gate one.'), long('Gate two, moved to Monday.')] });
-    expect(await f.check([item(first), item(second)])).toEqual([{ state: 'same' }, { state: 'changed' }]);
+    expect(await f.check([item(first), item(second), item(inventory)])).toEqual([{ state: 'same' }, { state: 'same' }, { state: 'same' }]);
+    expect(f.reads()).toEqual({ metadata: [['200']], bodies: [], statuses: [['current', 'archived']] });
     expect(f.failures).toEqual([]);
   });
 
@@ -275,44 +249,28 @@ describe('Ask source check through the Confluence connection', () => {
     pages.delete('203');
     const never = { ...gone!, page_id: '299', permalink: `${FIXTURE_CONFLUENCE_SITE_V1}/wiki/pages/viewpage.action?pageId=299` };
     expect(await f.check([item(archived), item(trashed), item(gone), item(never)])).toEqual([{ state: 'same' }, { state: 'unreadable' }, { state: 'unreadable' }, { state: 'unreadable' }]);
-    // A page that disappears between its version and its body reads as gone, never changed.
-    pages.set('201', { ...pages.get('201')!, version: 4 });
-    const fetched = f.fetch.getMockImplementation()!;
-    f.fetch.mockImplementation(async (input, init) => {
-      if (/\/api\/v2\/pages\/201$/.test(new URL(String(input)).pathname)) return json({}, 404);
-      return fetched(input, init);
-    });
-    expect(await f.check([item(archived)])).toEqual([{ state: 'unreadable' }]);
     expect(f.failures).toEqual([]);
   });
 
-  it('reads a hundred pages in two metadata calls of fifty and at most ten bodies, leaving the rest unknown', async () => {
+  it('reads sixty pages in two metadata calls of fifty and no body', async () => {
     const ids = Array.from({ length: 60 }, (_, index) => String(300 + index));
     const pages = new Map(ids.map(id => [id, { id, status: 'current', version: 3, paragraphs: [`Gate ${id}.`] }] as const));
     const f = confluence(pages);
     const page = (id: string) => ({ kind: 'page', tool_id: 'confluence', external_scope_id: FIXTURE_CONFLUENCE_CLOUD_V1, page_id: id, section_id: 's1', version: '2',
       permalink: `${FIXTURE_CONFLUENCE_SITE_V1}/wiki/pages/viewpage.action?pageId=${id}`, text_sha256: sha256Digest(`Gate ${id}.`) });
     const answers = await f.check(ids.map(id => item(page(id))));
-    expect(answers.map(answer => answer.state)).toEqual(ids.map((_, index) => (index < 10 ? 'same' : 'unknown')));
+    expect(answers.map(answer => answer.state)).toEqual(ids.map(() => 'same'));
     expect(f.reads().metadata).toEqual([ids.slice(0, 50), ids.slice(50)]);
-    expect(f.reads().bodies.sort()).toEqual(ids.slice(0, 10).sort());
+    expect(f.reads().bodies).toEqual([]);
   });
 
-  it('answers unknown when Confluence fails, or the owner is not connected, and keeps what the versions settled', async () => {
+  it('answers unknown when Confluence fails, or the owner is not connected', async () => {
     const pages = new Map<string, Page>([['200', { id: '200', status: 'current', version: 3, paragraphs: ['Gate one.'] }], ['201', { id: '201', status: 'current', version: 4, paragraphs: ['Gate two.'] }]]);
     const page = (id: string, version: string, text: string) => ({ kind: 'page', tool_id: 'confluence', external_scope_id: FIXTURE_CONFLUENCE_CLOUD_V1, page_id: id, section_id: 's1', version,
       permalink: `${FIXTURE_CONFLUENCE_SITE_V1}/wiki/pages/viewpage.action?pageId=${id}`, text_sha256: sha256Digest(text) });
     const versionsDown = confluence(pages, { versions: 500 });
     expect(await versionsDown.check([item(page('200', '3', 'Gate one.')), item(page('201', '3', 'Gate two.'))])).toEqual([{ state: 'unknown' }, { state: 'unknown' }]);
     expect(versionsDown.failures).toEqual([{ kind: 'person_ask_check_live_read', reason: 'pages', code: 'unavailable' }]);
-    const bodiesDown = confluence(pages, { bodies: 503 });
-    expect(await bodiesDown.check([item(page('200', '3', 'Gate one.')), item(page('201', '3', 'Gate two.'))])).toEqual([{ state: 'same' }, { state: 'unknown' }]);
-    expect(bodiesDown.failures).toEqual([{ kind: 'person_ask_check_live_read', reason: 'page_bodies', code: 'unavailable' }]);
-    // A body that is not a document is unknown on its own; the other page keeps its answer.
-    pages.set('202', { id: '202', status: 'current', version: 4, paragraphs: [], body: 'not an Atlassian document' });
-    const unreadableBody = confluence(pages);
-    expect(await unreadableBody.check([item(page('202', '3', 'Gate three.')), item(page('201', '3', 'Gate two.'))])).toEqual([{ state: 'unknown' }, { state: 'same' }]);
-    expect(unreadableBody.failures).toEqual([]);
     const signedOut = confluence(pages);
     signedOut.store.revoke(person);
     expect(await signedOut.check([item(page('200', '3', 'Gate one.'))])).toEqual([{ state: 'unknown' }]);

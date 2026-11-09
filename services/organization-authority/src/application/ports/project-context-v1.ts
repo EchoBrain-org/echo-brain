@@ -174,7 +174,7 @@ export interface ProjectContextWriteTransactionV1 extends ProjectContextReadTran
    * the write transaction. Request replay is keyed by organization + membership
    * + request_id, with the complete operation/payload commitment. A changed
    * command conflicts; identical retry returns its immutable committed receipt.
-   * Replays never restore membership, associations or enrichment work.
+   * Replays never restore membership or associations.
    */
   createProject(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectCreateV1): ProjectCreateReceiptV1;
   addMember(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectMemberAddV1): ProjectMutationReceiptV1;
@@ -185,7 +185,7 @@ export interface ProjectContextWriteTransactionV1 extends ProjectContextReadTran
   renameProject(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectRenameV1): ProjectSettingsReceiptV1;
   archiveProject(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectArchiveV1): ProjectSettingsReceiptV1;
   leaveProject(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectLeaveV1): ProjectSettingsReceiptV1;
-  /** Atomically commits exact original, initial coordinates, receipt and work. */
+  /** Atomically commits exact original, initial coordinates and receipt. */
   submitUploadV3(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUpdateSubmitV3): PersonUpdateReceiptV3;
 }
 
@@ -198,23 +198,4 @@ export interface ProjectContextRepositoryV1 {
    */
   withReadTransaction<T>(operation: (transaction: ProjectContextReadTransactionV1) => T): T;
   withWriteTransaction<T>(operation: (transaction: ProjectContextWriteTransactionV1) => T): T;
-}
-
-/** Existing serialized upload worker consumes this check; no new scheduler. */
-export interface ProjectUploadEnrichmentAuthorizationV1 {
-  /**
-   * Resolve current exact uploader tenure and (for project audience) its
-   * current audience-project grant immediately before source/model handoff.
-   * Association is not permission. Revalidate before storing derived hints;
-   * revocation cancels enrichment, leaving the immutable original accessible
-   * to its remaining permitted readers.
-   */
-  capture(contextId: string): ProjectUploadEnrichmentSnapshotV1 | undefined;
-  assertCurrent(snapshot: ProjectUploadEnrichmentSnapshotV1): void;
-}
-
-export interface ProjectUploadEnrichmentSnapshotV1 {
-  readonly context_id: string;
-  readonly uploader: AuthorityPersonMembershipBinding;
-  readonly authorization_sha256: Sha256Digest;
 }

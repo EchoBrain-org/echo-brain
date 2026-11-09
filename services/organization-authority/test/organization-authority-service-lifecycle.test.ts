@@ -688,20 +688,29 @@ describe("Organization Authority service lifecycle", () => {
     await runtime.close();
   });
 
-  it("reports a notes enrichment failure and still runs the cycle's personal intake and publication", async () => {
+  it("reports a primary intake failure and still runs the cycle's personal intake and publication", async () => {
     vi.useFakeTimers();
     const personal: string[] = [];
     const errors: string[] = [];
     const runtime = await startLifecycle(60_000, {
-      processing: { ...processing([]), pollAndStageAdmittedMeetings: async () => { throw new Error("notes item failed"); } },
+      processing: { ...processing([]), pollAndStageAdmittedMeetings: async () => { throw new Error("primary intake failed"); } },
       additional_processing: processing(personal),
       on_worker_error: (error) => errors.push(error.message),
     });
     try {
       await vi.advanceTimersByTimeAsync(1);
       expect(personal).toEqual(["recover", "recover", "stage", "append"]);
-      expect(errors).toEqual(["notes item failed"]);
+      expect(errors).toEqual(["primary intake failed"]);
     } finally { await runtime.close(); }
+  });
+
+  it("runs a cycle whose primary processing has no intake of its own, as the Authority's own has none", async () => {
+    const primary: string[] = [];
+    const personal: string[] = [];
+    const { pollAndStageAdmittedMeetings: _intake, ...searchOnly } = processing(primary);
+    await runOrganizationAuthorityProcessingCycleV1(searchOnly, new AbortController().signal, undefined, processing(personal));
+    expect(primary).toEqual(["recover", "append"]);
+    expect(personal).toEqual(["recover", "stage", "append"]);
   });
 
   it("does not reconcile after append observes cancellation", async () => {

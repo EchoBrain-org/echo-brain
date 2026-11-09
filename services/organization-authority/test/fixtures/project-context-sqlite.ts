@@ -133,8 +133,8 @@ export function seedProjectMember(
 
 /**
  * A note as the retired V2 submit stored it (ADR-0048), for the reads that still find stored V2 notes: its search, the
- * person list and open, Ask and enrichment. The same rows, context ID, payload digest and receipt the submit wrote, with
- * the same project checks left to the caller: it is a seed, not a route.
+ * person list and open, and Ask. The same rows, context ID, payload digest and receipt the submit wrote, with the same
+ * project checks left to the caller: it is a seed, not a route.
  */
 export function insertStoredNoteV2(
   database: Database.Database,
@@ -156,7 +156,6 @@ export function insertStoredNoteV2(
     canonicalJson(request.project_id === null ? [] : [request.project_id]), canonicalJson(audienceProjectId === null ? [] : [audienceProjectId]),
     request.project_id, receivedAt,
   );
-  database.prepare("INSERT INTO authority_person_update_work_v2 (context_id, state, retry_at) VALUES (?, 'pending', ?)").run(context_id, receivedAt);
   if (request.project_id !== null) {
     database.prepare(`INSERT INTO authority_project_context_associations_v1
       (context_id, project_id, organization_id, associator_principal_id, associator_membership_id, associator_membership_type, associated_at)

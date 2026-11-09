@@ -14,11 +14,6 @@ export interface Account {
   readonly membership_id: string;
   readonly display_name: string;
   readonly role: 'owner' | 'employee';
-  /**
-   * The weekly sign-in: when this session can no longer be refreshed, and how long until then by the host's clock when
-   * status was read. Past it, only signing in again helps.
-   */
-  readonly sign_in_due?: { readonly at: string; readonly in_ms: number };
 }
 
 /** Why this computer was signed out by a refresh, and the organization it was signed in to. */
@@ -178,22 +173,6 @@ export interface ContextContent {
   readonly project_ids: readonly string[];
 }
 
-/**
- * A live match for the bar's text: an item in the project in scope, or, in
- * all context, one of the saved notes you can read (of either note version).
- * Each opens by its ref, as a note.
- */
-export interface Match {
-  readonly context_id: string;
-  readonly title: string;
-  readonly excerpt: string;
-  readonly received_at: string;
-}
-
-export interface Matches {
-  readonly items: readonly Match[];
-}
-
 /** Ask is always explicitly scoped; there is no default: everything you can read, or one project. */
 export type AskScope = { readonly kind: 'global' } | ProjectScope;
 
@@ -217,6 +196,15 @@ export type RecordPolicy = 'restricted-reviewer-person-v2' | 'project-members-re
 export interface RecordRef {
   readonly record_sha256: string;
   readonly policy_id: RecordPolicy;
+}
+
+/**
+ * A record the host reads with `person records --record-sha256 --brief`: one an answer cites, under the policy it
+ * cited, for the source pane; or a meeting the reader opens by its ref, by its digest alone.
+ */
+export interface RecordRead {
+  readonly record_sha256: string;
+  readonly policy_id?: RecordPolicy;
 }
 
 /** What a connected tool keeps its items in: a Jira project or a Confluence space. */
@@ -243,7 +231,7 @@ export type AnswerSource = (
   | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef; readonly item?: ItemRef }
   /**
    * One of ECHO's shared follow-ups (ADR-0040), by its item id: it opens its
-   * item page, where its owner, status and check are read again as Home shows them.
+   * item page, where its owner and status are read again as Home shows them.
    */
   | { readonly kind: 'follow_up'; readonly label: string; readonly item_id: string }
   /** One of your projects (research tool contract v1), by its id: it opens the project, as the sidebar does. */
@@ -264,20 +252,21 @@ export type AnswerSource = (
    * The citation exactly as the answer's response carried it, only on an
    * answer's sources: opaque here. A follow-up or Ask again sends the earlier
    * answer's citations back with it (`previous`, ADR-0047), and a check asks
-   * about the evidence citation of one that can change or go (`checkOf`).
+   * whether you can still read the evidence citation of one that can go
+   * (`checkOf`).
    */
   readonly cited?: PersonAnswerCitationV8;
 };
 
-/** The kinds of evidence a check asks about (Ask source check, C1): what an old answer cited that can change or go. */
+/** The kinds of evidence a check asks about (Ask source check, C1): what an old answer cited that can go. */
 const CHECK_KINDS: readonly PersonAskCheckCitationKindV1[] = ['approved_record', 'source_revision', 'follow_up', 'ticket', 'page'];
 /** A checkable source's evidence citation, as the answer cited it. */
 export type CheckCitation = Extract<PersonAnswerEvidenceCitationV8, { readonly kind: PersonAskCheckCitationKindV1 }>;
 
 /**
  * What `ask.check` asks about a source (ADR-0047): its evidence citation,
- * exactly as the answer cited it, when it can change or go (a record's item,
- * an original's passage, a follow-up, a ticket or a page). Opaque here.
+ * exactly as the answer cited it, when it can go (a record's item, an
+ * original's passage, a follow-up, a ticket or a page). Opaque here.
  */
 export function checkOf(source: AnswerSource): CheckCitation | undefined {
   const citation = source.cited?.citation;
@@ -291,36 +280,21 @@ export function checkOf(source: AnswerSource): CheckCitation | undefined {
  */
 export type AskStage = 'searching' | 'reading' | 'checking_access' | 'writing';
 /**
- * A kind of source a step searched: meetings, documents or follow-ups; your
- * projects, the people in your organization or your tools; or a live tool's
- * tickets, pages or containers (its Jira projects or Confluence spaces), by
- * the tool's id.
+ * One step of an Ask still working: a stage (`pending`, only while reading: items about to be read whose names have not
+ * come yet); a search, after which the line's names start over (what it searched and found stays with the host); or a
+ * read, the items whose full text research was just given, each after the access check before that read: as a source opens.
  */
-export type AskSearchedSource = { readonly kind: 'meetings' | 'documents' | 'follow_ups' | 'projects' | 'people' | 'tools' }
-  | { readonly kind: 'tickets' | 'pages' | 'containers'; readonly tool_id: string };
-/** One step's searches: the source kinds, and how many items they returned that no earlier read had. */
-export interface AskSearched {
-  readonly type: 'searched';
-  readonly sources: readonly AskSearchedSource[];
-  readonly found: number;
-}
-/** Items whose full text research was just given, each after the access check before that read: as a source opens. */
-export interface AskRead {
-  readonly type: 'read';
-  readonly items: readonly AnswerSource[];
-}
-/** One step of an Ask still working. `pending`, only while reading: items about to be read whose names have not come yet. */
-export type AskStep = { readonly type: 'stage'; readonly stage: AskStage; readonly pending?: number } | AskSearched | AskRead;
+export type AskStep = { readonly type: 'stage'; readonly stage: AskStage; readonly pending?: number } | { readonly type: 'searched' }
+  | { readonly type: 'read'; readonly items: readonly AnswerSource[] };
 /**
- * What an answered Ask looked through, rebuilt by the Authority from the
- * items that passed its final check: how many items it looked through (from
- * progress V3, ADR-0043, the rows it was shown as well as what it read in
- * full; before, only what it read in full), and its searches and reads in
- * order, neighbours of a type already merged.
+ * What an answered Ask looked through, from the receipt the Authority rebuilt
+ * from the items that passed its final check: how many items it looked
+ * through (from progress V3, ADR-0043, the rows it was shown as well as what
+ * it read in full; before, only what it read in full). Its searches and reads
+ * stay with the host.
  */
 export interface AskReceipt {
   readonly looked_through: number;
-  readonly rows: readonly (AskSearched | AskRead)[];
 }
 
 /** A cited statement in the Agentic Ask response. Citation indexes address Answer.sources. */
@@ -407,15 +381,13 @@ export interface TimelineTurn {
   readonly scope: AskScope;
   /**
    * As the host built it, less what the turn keeps itself or only its Ask read (`TimelineAnswer`); each source keeps the
-   * citation it was cited by (`cited`), whose evidence citation a check asks about when it can change or go (`checkOf`).
+   * citation it was cited by (`cited`), whose evidence citation a check asks about when it can go (`checkOf`).
    */
   readonly answer: TimelineAnswer;
   /** Ask again's "Since" list: what is different now, each cited; empty when nothing material changed. */
   readonly since?: readonly AnswerStatement[];
   /** The turn this one asked again. */
   readonly again_of?: string;
-  /** Ticket baseline markers by source index: what a check compares a ticket with. */
-  readonly markers?: Readonly<Record<string, string>>;
   /**
    * The sources, by index, a check found unreadable: what cites them stays hidden, however long ago that check was, until
    * a check finds them readable again (C5). A check that cannot tell (`unknown`) changes nothing.
@@ -433,12 +405,16 @@ export const TIMELINE_DAYS = 90;
  */
 export const MAX_TIMELINE_PUT_BYTES = 256 * 1024;
 
-/** What a check says of one cited source (C1): unchanged, changed, no longer readable by you, or not known now. */
+/**
+ * What a check says of one cited source (C1): readable by you (`same`, or
+ * `changed` from an Authority before checks said only readability), no
+ * longer readable, or not known now.
+ */
 export type AskCheckState = PersonAskCheckStateV1;
-/** One source to check: when the turn that cited it was asked, its evidence citation, and a ticket's baseline marker. */
-export type AskCheckItem = PersonAskCheckRequestItemV1;
-/** What the check said of one item, in the request's order: a readable ticket's current marker too. */
-export type AskCheckResult = PersonAskCheckItemV1;
+/** One source to check: when the turn that cited it was asked, and its evidence citation. The page sends no ticket marker. */
+export type AskCheckItem = Omit<PersonAskCheckRequestItemV1, 'marker'>;
+/** What the check said of one item, in the request's order. */
+export type AskCheckResult = Pick<PersonAskCheckItemV1, 'state'>;
 /** The most items one check asks about, and its body's bound (C1). */
 export const MAX_CHECK_ITEMS = 100;
 export const MAX_CHECK_REQUEST_BYTES = 64 * 1024;
@@ -463,7 +439,10 @@ export interface SourceEvidence {
   readonly imported_meeting_review?: 'not_reviewed' | 'reviewed' | 'nothing_to_review';
 }
 
-/** One approved decision, action or rationale, with up to three excerpts that support it. */
+/**
+ * One approved decision, action or rationale: in the source pane with up to three excerpts that support it, in the
+ * reader with none (ADR-0024).
+ */
 export interface RecordItem {
   readonly text: string;
   /** Only a decision still open says so. */
@@ -471,26 +450,20 @@ export interface RecordItem {
   /** An action's owner, only as the approver confirmed it at approval. */
   readonly owner?: string;
   readonly excerpts: readonly { readonly quote: string; readonly at?: string }[];
-  /**
-   * A long item read in parts, while some are still unread: its text holds
-   * parts `from` to `to` of `count`, and the next page's first part goes on.
-   */
-  readonly parts?: { readonly from: number; readonly to: number; readonly count: number };
-  /** The item's id as an answer cites it (a digest, never its text): only on a record read for Ask's side panel. */
-  readonly atom_id?: string;
+  /** The item's id as an answer cites it (a digest, never its text): what the pane and the reader light it by. */
+  readonly atom_id: string;
 }
 
-/** At most 32 items; `more` says some were left out. */
+/** Every item of one kind, in the record's order. */
 export interface RecordSection {
   readonly items: readonly RecordItem[];
-  readonly more: boolean;
 }
 
-/** An approved meeting record, as the source pane or the reader shows it. The pane's texts are at most 2,000 characters; the reader's at most 4,000 a part, and a long item's parts are joined. */
+/** An approved meeting record, as the source pane or the reader shows it: the pane's texts at most 2,000 characters, the reader's whole. */
 export interface ApprovedRecord {
   readonly title?: string;
-  /** When it was approved (ISO 8601), as its row shows it: only on a record opened by its ref. */
-  readonly added_at?: string;
+  /** When it was approved (ISO 8601). */
+  readonly approved_at?: string;
   /** When the meeting started (ISO 8601), in which time zone, and whether it was all day. */
   readonly started_at?: string;
   readonly timezone?: string;
@@ -505,12 +478,11 @@ export interface ApprovedRecord {
   readonly rationales: RecordSection;
 }
 
-/** One item opened by its ref: a note's text, a page of a document's text, or a page of a meeting's approved record. */
+/** One item opened by its ref: an imported meeting's or a note's text, or a page of a document's text. A meeting opens with `ask.record`. */
 export type Opened =
   | { readonly kind: 'imported_meeting'; readonly content: ContextContent; readonly next_cursor: string | null }
   | { readonly kind: 'note'; readonly content: ContextContent }
-  | { readonly kind: 'document'; readonly document: DocumentText }
-  | { readonly kind: 'meeting'; readonly record: ApprovedRecord; readonly next_cursor: string | null };
+  | { readonly kind: 'document'; readonly document: DocumentText };
 
 /** One audience per item: only you, one project's members, several projects' members, or everyone. */
 export type Audience =
@@ -666,13 +638,15 @@ export interface OpenItemsView extends Omit<PersonRunsResultsV1['items'], 'items
   readonly items: readonly OpenItemView[];
 }
 /**
- * The impact checks of your own approvals, the open items they found, and the
- * sweeps that recheck them. What a check found shows as the meeting's
- * follow-ups, so the desktop never asks for its card (`view`).
+ * The impact checks of your own approvals and the open items they found.
+ * What a check found shows as the meeting's follow-ups, so the desktop never
+ * asks for its card (`view`). Nor does it start a check by its id (`start`):
+ * it checks in (`next`), and the Authority starts the oldest queued one
+ * (DSK-1).
  */
 export interface RunsResults {
   list: PersonRunsResultsV1['list'];
-  start: PersonRunsResultsV1['start'];
+  next: PersonRunsResultsV1['next'];
   retry: PersonRunsResultsV1['retry'];
   home: HomeView;
   items: OpenItemsView;
@@ -680,7 +654,6 @@ export interface RunsResults {
   send: PersonRunsResultsV1['send'];
   set_state: PersonRunsResultsV1['set_state'];
   assign: PersonRunsResultsV1['assign'];
-  sweep: PersonRunsResultsV1['sweep'];
 }
 
 export interface HostMethods {
@@ -697,7 +670,7 @@ export interface HostMethods {
   'changes.read': { params: { expect: Expect }; result: PersonChangesV1 };
   /** One page of what you added, or of one project's notes, documents and meetings, newest first. */
   'list.page': { params: { expect: Expect; scope: ListScope; cursor?: string }; result: ListPage };
-  /** One item by its ref, under your current access: a document's text or a meeting's record a page at a time. */
+  /** One item by its ref, under your current access: a note's text, or an imported meeting's or a document's a page at a time. Never a meeting: the reader reads one with `ask.record`. */
   'open.ref': { params: { expect: Expect; ref: ItemRef; cursor?: string }; result: Opened };
   /** Save original…: the renderer names the file only by a handle main issued; main swaps in the path. */
   'documents.save': { params: { expect: Expect; document_id: string; save_handle: string }; result: null };
@@ -736,27 +709,25 @@ export interface HostMethods {
   'timeline.read': { params: { expect: Expect }; result: { turns: TimelineTurn[] } };
   /** Keeps one turn: a new one at the end, or one already kept in its place; then the oldest past the bounds go. */
   'timeline.put': { params: { expect: Expect; turn: TimelineTurn }; result: Record<string, never> };
-  /** What changed of the sources old answers cited (C1): content-free, in the items' order. */
+  /** Whether you can still read the sources old answers cited (C1): content-free, in the items' order. */
   'ask.check': { params: { expect: Expect; items: AskCheckItem[] }; result: { items: AskCheckResult[] } };
   /** Per project you are in, the newest arrival from someone else you can read (C2). */
   'projects.activity': { params: { expect: Expect }; result: { items: ProjectActivity[] } };
   /** Cancels an active Ask by its renderer-issued opaque id. */
   'ask.cancel': { params: { cancel_id: string }; result: null };
-  /** The bar's live search, within its scope: a project, or all context. */
-  'search.run': { params: { expect: Expect; query: string; scope: AskScope }; result: Matches };
   'ask.source': { params: { expect: Expect; scope: AskScope; ref: SourceRef }; result: SourceEvidence };
-  /** Reads one approved record an answer cites. */
-  'ask.record': { params: { expect: Expect; record: RecordRef }; result: ApprovedRecord };
+  /**
+   * Reads one approved record, whole: one an answer cites, under its policy, as the source pane shows it; or, with no
+   * policy, a meeting opened by its ref, as the reader shows it, with none of the quotes the reader never shows (ADR-0024).
+   */
+  'ask.record': { params: { expect: Expect; record: RecordRead }; result: ApprovedRecord };
   'writes.status': { params: { expect: Expect; request_id: string; kind: 'note' | 'document' }; result: WriteStatus };
   /** Resends a document's retained original under the same request. */
   'documents.retry': { params: { expect: Expect; request_id: string; audience: Audience }; result: Receipt };
   /** Start over: removes the private copy the client kept to resend a document. The Authority is not asked. */
   'documents.abandon': { params: { expect: Expect; request_id: string }; result: null };
-  /**
-   * Signs the account on screen out of this computer; the reply is the new status. Its Ask timeline goes with it, except
-   * when the same person signs straight back in (`again`, the weekly sign-in done early).
-   */
-  'account.signOut': { params: { expect: Expect; again?: true }; result: AppStatus };
+  /** Signs the account on screen out of this computer; the reply is the new status. Its Ask timeline goes with it. */
+  'account.signOut': { params: { expect: Expect }; result: AppStatus };
   /** Tools: the organization's tools and your connection to each, for the account on screen. */
   'account.tools': { params: { expect: Expect }; result: ConnectedTools };
   /** Project members read the mapping; only leads can change it. */
@@ -822,8 +793,9 @@ export type HostMethodName = keyof HostMethods;
 export const HOST_TIMEOUT_MS: Readonly<Record<HostMethodName, number>> = {
   'app.status': 5_000, 'signin.begin': 660_000, 'signin.invitation': 660_000, 'projects.list': 45_000, 'changes.read': 15_000,
   'list.page': 45_000, 'open.ref': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
-  'ask.run': 145_000, 'ask.cancel': 5_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
-  'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000,
+  // A record read is also the reader's meeting open, which waited 45 s as `open.ref` does.
+  'ask.run': 145_000, 'ask.cancel': 5_000, 'ask.source': 15_000, 'ask.record': 45_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
+  'account.signOut': 45_000, 'account.tools': 45_000,
   'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000,
   'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
   'employees.reissue': 45_000, 'employees.revoke': 45_000,
@@ -855,9 +827,9 @@ export function isWriteCall(method: string, params: unknown): boolean {
   const operation = (params as { request?: { operation?: unknown } | null } | null | undefined)?.request?.operation;
   return !(typeof operation === 'string' && READ_OPERATIONS[method]?.has(operation) === true);
 }
-/** Every runs operation: only these reach the log by name. */
+/** Every runs operation the page sends: only these reach the log by name. */
 const RUNS_OPERATIONS: ReadonlySet<string> = new Set<PersonRunsRequestV1['operation']>(
-  ['list', 'home', 'start', 'retry', 'items', 'item', 'send', 'set_state', 'assign', 'sweep'],
+  ['list', 'home', 'next', 'retry', 'items', 'item', 'send', 'set_state', 'assign'],
 );
 /**
  * A call as desktop.log names it, content-free: the method, and for runs its operation and how much it read ("runs.home",

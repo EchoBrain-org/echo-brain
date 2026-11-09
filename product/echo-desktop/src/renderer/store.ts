@@ -5,20 +5,20 @@ import type {
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
-  ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView,
-  ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result,
+  AccountCommand, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
+  ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Member, OpenItemsView, OpenItemView,
+  ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
-import { askText, searchQuery } from '../shared/query.js';
+import { askText } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
   answeredNow, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, checksHiding, followedTurn, foundUnreadable, freshChecks, freshStates, knownStates,
   previousOf, sameScope, shownInFull, showsOf, threadOf, unreadableAfter, visibleTurns, turnGroups, type CheckPlan, type Suggestion, type TurnCheck, type TurnChecks,
 } from './timeline.js';
-import { openerOf, sourceKey } from './openers.js';
+import { openerOf } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
 import { PERSON_LIVE_MAX, PROJECT_READS_AT_ONCE, unowned } from './altitude.js';
 import { dropFile, rpc } from './api.js';
@@ -133,24 +133,16 @@ export type Read<T> =
 /**
  * The sources of what Ask shows: the pane beside it, which turn's source
  * lists are open, and the approved records and follow-ups read for them. The
- * pane shows a source of one turn at a time (`turn`), or a place the Ask on
- * its way named. Nothing here outlives Ask, or another app coming in front:
- * those start it over.
+ * pane shows a source of one turn at a time (`turn`). Nothing here outlives
+ * Ask, or another app coming in front: those start it over.
  */
 export interface SourcesState {
   /** Which start this is: a read for an earlier one is dropped. */
   gen: number;
   /** The turn whose sources the pane's numbers are: the answer that came last, or the turn a number or row was chosen in. */
   turn: string | null;
-  /** The source the pane shows, by its number in the answer less one; null while it shows a named place, or is closed. */
+  /** The source the pane shows, by its number in the answer less one; null while the pane is closed. */
   open: number | null;
-  /**
-   * The items of one place Ask named, in a live row or its receipt, that the
-   * pane shows in place of a numbered source: all of them lit, or all their
-   * passages, the first standing for the place. Named while Ask works, they
-   * go if the Ask gets no answer.
-   */
-  named: readonly AnswerSource[] | null;
   /**
    * The sentence whose number opened the pane: "direct", its part and place ("0.2", "0.r1" for a passage found), or a table
    * row ("0.t4.1"); null when a source row did.
@@ -161,16 +153,13 @@ export interface SourcesState {
   /** Approved records read for what Ask shows, by digest. */
   records: Readonly<Record<string, Read<ApprovedRecord>>>;
   /**
-   * Follow-ups an answer cites or Ask named (ADR-0040), by item id: each its
-   * row as Home reads it now (rows only), for the pane's owner, status and
-   * check and a source row's "owner · status".
+   * Follow-ups an answer cites (ADR-0040), by item id: each its row as Home
+   * reads it now (rows only), for the pane's owner and status and a source
+   * row's "owner · status".
    */
   followUps: Readonly<Record<string, Read<OpenItemView>>>;
-  /**
-   * The cited passages of the original the pane shows, by citation (a named
-   * place's by their order in it, `group` null); read each time it is chosen.
-   */
-  evidence: { seq: number; group: number | null; reads: Readonly<Record<number, Read<SourceEvidence>>> } | null;
+  /** The cited passages of the original the pane shows (`group`, its number less one), by citation; read each time it is chosen. */
+  evidence: { seq: number; group: number; reads: Readonly<Record<number, Read<SourceEvidence>>> } | null;
 }
 
 /** Where a capture goes (ADR-0049): the projects ticked, no project (only you can read it), or the whole organization. */
@@ -366,26 +355,12 @@ export interface OrganizationState {
   saved: { handle: string; action: 'invite' | 'reissue'; name: string; email: string; expires_at: string } | null;
 }
 
-/** A meeting record's sections, in the order its items come. */
-export const RECORD_SECTIONS = ['decisions', 'actions', 'rationales'] as const;
-export type RecordSectionKey = (typeof RECORD_SECTIONS)[number];
-
-/**
- * A meeting's item by its section and its place there. A cited item has the
- * same place in each read of its meeting, Ask's (with atom ids) and the
- * reader's (by its ref, with none), since both walk the brief in its order.
- */
-export interface CitedItem {
-  readonly section: RecordSectionKey;
-  readonly index: number;
-}
-
-/** Where an item was opened: a project's page (a row or a match in it), Only me, or a saved note found in all context. */
-export type ReaderFrom = { kind: 'project'; project_id: string } | { kind: 'only-me' } | { kind: 'search' };
+/** Where an item was opened: a project's page (a row in it, or Ask's Open there), Only me, or Ask's Open in all context. */
+export type ReaderFrom = { kind: 'project'; project_id: string } | { kind: 'only-me' } | { kind: 'all' };
 
 /**
  * An item open in the reader, by its ref: a note's text, a document's text a
- * page at a time, or a meeting's approved record, read on with More.
+ * page at a time, or a meeting's approved record, whole.
  */
 export interface ReaderState {
   ref: ItemRef;
@@ -395,10 +370,8 @@ export interface ReaderState {
   importedNext?: string | null;
   document?: DocumentText;
   record?: ApprovedRecord;
-  /** The record's next page, until all of it is read. */
-  recordNext?: string | null;
-  /** The meeting's items Ask cited, when Open came from its pane: lit, and read on to until they show. */
-  cited?: readonly CitedItem[];
+  /** The atom ids of the meeting's items Ask cited, when Open came from its pane: lit, as the pane lit them. */
+  cited?: readonly string[];
   failure?: Failure;
   /** The ⋯ menu, and its list of projects to add to. */
   menu: 'closed' | 'open' | 'projects';
@@ -522,16 +495,6 @@ export interface ProjectSettingsState {
   } | null;
 }
 
-/** The live matches for the bar's text, within the scope they were searched in. */
-export interface MatchesState {
-  seq: number;
-  query: string;
-  scope: AskScope;
-  loading: boolean;
-  items: readonly Match[];
-  failure?: Failure;
-}
-
 export interface State {
   status: AppStatus | null;
   booting: boolean;
@@ -544,13 +507,12 @@ export interface State {
   change: ChangeState | null;
   projectSettings: ProjectSettingsState | null;
   /**
-   * What the bar asks about, and searches: a project (the chip), or all
-   * context; never Mine (ADR-0049). The page never moves with it.
+   * What the bar asks about: a project (the chip), or all context; never
+   * Mine (ADR-0049). The page never moves with it.
    */
   barScope: AskScope;
   /** The bar's text. Only asking, Escape, or a real change of access empties it. */
   barText: string;
-  matches: MatchesState | null;
   /** Ask, while it is open over the page. */
   ask: AskState | null;
   /** The account's Ask timeline: it stays when Ask closes (ADR-0047). */
@@ -564,11 +526,6 @@ export interface State {
   concealed: boolean;
   /** form: the organization address is being asked for (Sign in with Google…). */
   signin: { phase: 'idle' | 'waiting' | 'failed'; form: boolean; failure?: Failure; browserOpened?: boolean };
-  /**
-   * The weekly sign-in, from a day before it is due: when, and why signing in again now did not start (a save to settle
-   * first, or a sign-out that failed). Null before that day, and signed out.
-   */
-  signInDue: { at: string; failure?: Failure } | null;
   /** A sheet over the window for the account: only one at a time. */
   sheet: Sheet | null;
   /** No status could be read (the host is down): not the same as signed out. */
@@ -668,8 +625,8 @@ function rememberedSidebar(): boolean {
 let state: State = {
   status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false },
   archivedProjects: { items: [], next: null, loading: false }, list: null, roster: null, reader: null, change: null, projectSettings: null,
-  barScope: { kind: 'global' }, barText: '', matches: null, ask: null, timeline: { turns: [], checks: {} }, sources: null, compose: null, toast: null, toastShown: 0,
-  concealed: false, signin: { phase: 'idle', form: false }, signInDue: null, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null,
+  barScope: { kind: 'global' }, barText: '', ask: null, timeline: { turns: [], checks: {} }, sources: null, compose: null, toast: null, toastShown: 0,
+  concealed: false, signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null,
   employeeWrite: null, home: null, decision: null, followUps: null, impactLine: null, projectLine: null, projectReads: null, news: new Set(), visit: null,
   update: { state: 'none' }, updateFailure: null, altitude: emptyAltitude(),
 };
@@ -717,8 +674,6 @@ function set(patch: Partial<State>): void {
   }
   // A held update click says what to settle only while it is unsettled, here or in main.
   if (state.updateFailure?.code === 'update_held' && !signOutHeld() && !unresolvedWork().unresolved) state = { ...state, updateFailure: null };
-  // So does a held sign-in-again click.
-  if (state.signInDue?.failure?.code === 'signout_held' && !signOutHeld()) state = { ...state, signInDue: { at: state.signInDue.at } };
   listeners.forEach(listener => listener());
   // A read owed to what shows may have been waiting on this change: a read of its own that landed, the window seen.
   settleOwed();
@@ -779,15 +734,13 @@ function applyStatus(status: AppStatus): void {
   const before = state.status?.account ?? null;
   const next = status.account;
   set({ status, booting: false, startFailed: false });
-  weeklySignIn(next);
   // Signed out: the sign-in page covers everything until someone signs in. Only me, and what was read in it, goes.
   if (!next) {
     // A sign-out the host lost mid-way did happen: the account goes as it would have.
     if (signOutPending) { signOutPending = null; forgetAccount(); }
-    // No one to check for: signing in again starts over, learning what is there, and reads the timeline again. No run starts
-    // for no one either, even from a list on its way.
+    // No one to check for: signing in again starts over, learning what is there, and reads the timeline again. With no
+    // change check, nothing checks in for no one either.
     freshness.stop();
-    stopRunPolling();
     forgetTimeline();
     set({ news: new Set(), visit: null });
     emptyBar();
@@ -813,61 +766,15 @@ function applyStatus(status: AppStatus): void {
   signOutPending = null;
   if (!same || !wasSignedIn) {
     void loadHome();
-    // Checks move on any page: away from Home, or covered, the driver looks at the runs itself (R4).
-    kickRuns();
     // This account's Ask timeline on this computer (ADR-0047), and when it last opened each project.
     void loadTimeline();
     rememberSeen(lastAccount);
     // The change check starts over for this account: it reads every project you belong to (filling the sidebar), and its
-    // first check learns.
+    // first check learns, then checks in, so the Authority starts a check of yours that waits, on any page (DSK-1).
     freshness.start(lastAccount);
     // New project kept through a sign-out goes on with what waited while no one was signed in.
     pumpNewProject();
   }
-}
-
-/** The weekly sign-in shows this long before it is due. */
-const SIGN_IN_NOTICE_MS = 24 * 60 * 60_000;
-/** The longest wait setTimeout keeps; a later notice waits for a status read nearer the day. */
-const LONGEST_TIMER_MS = 2 ** 31 - 1;
-let signInTimer: ReturnType<typeof setTimeout> | null = null;
-
-/**
- * The weekly sign-in a day ahead: due within a day, it shows now; otherwise once that day starts, even with the window
- * open all along. How long is left comes from the host's clock as status was read.
- */
-function weeklySignIn(account: Account | null): void {
-  if (signInTimer) { clearTimeout(signInTimer); signInTimer = null; }
-  const due = account?.sign_in_due;
-  const wait = due ? due.in_ms - SIGN_IN_NOTICE_MS : Number.POSITIVE_INFINITY;
-  if (due && wait <= 0) {
-    if (state.signInDue?.at !== due.at) set({ signInDue: { at: due.at } });
-    return;
-  }
-  if (state.signInDue !== null) set({ signInDue: null });
-  if (due && wait <= LONGEST_TIMER_MS) signInTimer = setTimeout(() => { signInTimer = null; set({ signInDue: { at: due.at } }); }, wait);
-}
-
-/**
- * Sign in again, before the weekly sign-in is due: this session ends and Google signs the same person straight back
- * in, so their drafts stay, as when the session ends on its own. A save on its way or unconfirmed is settled first.
- */
-export async function signInAgain(): Promise<void> {
-  const account = expect();
-  const due = state.signInDue;
-  if (!account || !due || state.signin.phase === 'waiting' || signingOut()) return;
-  if (signOutHeld()) { set({ signInDue: { at: due.at, failure: { code: 'signout_held', retryable: true } } }); return; }
-  set({ signin: { phase: 'waiting', form: false }, signInDue: { at: due.at } });
-  // The same person signs straight back in: their Ask timeline stays (ADR-0047).
-  const signedOut = await rpc('account.signOut', { expect: account, again: true });
-  if (!signedOut.ok) {
-    set({ signin: { phase: 'idle', form: false } });
-    if (state.signInDue) set({ signInDue: { at: state.signInDue.at, failure: signedOut.failure } });
-    accountLost(signedOut.failure);
-    return;
-  }
-  applyStatus(signedOut.value);
-  await signIn(account.authority);
 }
 
 /** Nothing of an account's stays on screen or in memory, not even a draft. */
@@ -880,17 +787,7 @@ function forgetAccount(): void {
   if (state.sheet?.kind === 'new-project') for (const file of state.sheet.files) if (file.kept) releaseCopy(file.requestId, account);
   if (state.sheet?.kind === 'tool-connect') cancelWaitingConnection(state.sheet, account);
   if (state.projectSettings?.tools) clearProjectMappings(state.projectSettings, account);
-  stopRunPolling();
   freshness.stop();
-  runFailures = 0;
-  openUnread = false;
-  resultOwed = false;
-  sweepOwed = null;
-  // So were the driver's runs list, Home's hold on it and a start or look on its way: the next account's go at once.
-  runsSeen = [];
-  runsHeld = false;
-  starting = null;
-  looking = null;
   lastAccount = null;
   // A Home load on its way is the last account's: the next one starts afresh.
   homeLoading = null;
@@ -997,13 +894,12 @@ export function closeSheet(): void {
 /** How often a waiting connection is read: the terminal client's own pace. */
 const TOOL_POLL_MS = 2_000;
 
-/** The sidebar's Tools, and the Account menu's Connected tools… (from the tray, with another app in front). The bar searches all context. */
+/** The sidebar's Tools, and the Account menu's Connected tools… (from the tray, with another app in front). The bar asks all context. */
 export function openTools(fromTray = false): void {
   if (!state.status?.account || (state.concealed && !fromTray)) return;
   readSeq += 1;
   set({ route: { page: 'tools' }, list: null, roster: null, reader: null, ask: null, sources: null, toast: null, barScope: { kind: 'global' },
     organization: null, tools: { seq: ++seq, loading: false, items: null } });
-  syncSearch();
   freshness.navigated();
   void loadToolList();
 }
@@ -1453,13 +1349,12 @@ function rolesChanged(fresh: readonly ProjectSummary[]): boolean {
 /**
  * Back to Home as it was left: the same pages, the same scroll, a kind's list
  * still open (Back from a decision or a follow-up opened from it, Approve).
- * The bar searches all context.
+ * The bar asks all context.
  */
 export function goHome(): void {
   readSeq += 1;
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' }, toast: null,
     organization: null, decision: null });
-  syncSearch();
   freshness.navigated();
   void loadHome();
   void loadAltitude();
@@ -1563,7 +1458,6 @@ export async function openProject(project: ProjectSummary): Promise<void> {
     barScope: { kind: 'project', project_id: project.project_id },
     list: { scope: { kind: 'project', project_id: project.project_id }, opened: ++seq, items: [], next: null, loading: true },
   });
-  syncSearch();
   freshness.navigated();
   void loadRoster(project.project_id);
   void loadLine('projectLine', 'project', project.project_id);
@@ -1742,7 +1636,6 @@ export async function openOnlyMe(): Promise<void> {
     route: { page: 'only-me' }, reader: null, ask: null, sources: null, toast: null, organization: null, roster: null, barScope: { kind: 'global' },
     list: { scope: { kind: 'only-me' }, opened: ++seq, items: [], next: null, loading: true },
   });
-  syncSearch();
   freshness.navigated();
   await loadList('first');
 }
@@ -1848,12 +1741,6 @@ export function openListItem(item: ListItem): Promise<void> {
   return openReader(item.ref, { kind: 'project', project_id: route.project.project_id });
 }
 
-/** A live match, read in place: the page stays, and Back returns to the matches. */
-export function openMatch(match: Match): Promise<void> {
-  const scope = state.matches?.scope;
-  return openReader({ kind: 'note', id: match.context_id }, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'search' });
-}
-
 /** The read on screen; a reply for one since closed or replaced is dropped. */
 let readSeq = 0;
 
@@ -1861,41 +1748,32 @@ function sameRef(a: ItemRef | undefined, b: ItemRef): boolean {
   return a?.kind === b.kind && a.id === b.id;
 }
 
-/** Pages the reader reads on by itself to show the items Ask cited. */
-const CITED_PAGES = 8;
-
-/** Every cited item shows, whole. */
-function citedShown(record: ApprovedRecord, cited: readonly CitedItem[]): boolean {
-  return cited.every(({ section, index }) => {
-    const item = record[section].items[index];
-    return item !== undefined && item.parts === undefined;
-  });
-}
-
 /**
- * An item opened by its ref, under your current access: a note, a page of a
- * document's text (the first, or the one a cursor names), or a page of a
- * meeting's record, joined to what shows. While a page loads, what the
- * reader shows of that item stays. A meeting opened on items Ask cited
- * (`cited`) lights them, and reads on by itself, a few pages at most, until
- * they show; its later pages keep them lit.
+ * An item opened by its ref, under your current access: a note, a page of an
+ * imported meeting's or a document's text (the first, or the one a cursor
+ * names), or a meeting's approved record, whole, read as the source pane
+ * reads it. While a page loads, what the reader shows of that item stays. A
+ * meeting opened on items Ask cited (`cited`, their atom ids) lights them.
  */
-async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string, lit: { readonly cited?: readonly CitedItem[]; readonly follow?: number } = {}): Promise<void> {
+async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string, cited?: readonly string[]): Promise<void> {
   const account = expect();
   if (!account) return;
   const mine = ++readSeq;
   const shown = sameRef(state.reader?.ref, ref) ? state.reader : null;
-  // An approved meeting's first page counts its follow-ups: its line.
-  if (ref.kind === 'meeting' && cursor === undefined) void loadLine('impactLine', 'record', ref.id);
-  const cited = cursor === undefined ? lit.cited : shown?.cited;
+  // An approved meeting counts its follow-ups: its line.
+  if (ref.kind === 'meeting') void loadLine('impactLine', 'record', ref.id);
   const base = { ref, from, menu: 'closed' as const, ...(cited !== undefined && cited.length > 0 ? { cited } : {}) };
   const kept = {
     ...(shown?.content ? { content: shown.content, importedNext: shown.importedNext } : {}),
     ...(shown?.document ? { document: shown.document } : {}),
-    ...(shown?.record ? { record: shown.record, recordNext: shown.recordNext } : {}),
+    ...(shown?.record ? { record: shown.record } : {}),
   };
   set({ reader: { ...base, loading: true, ...kept }, toast: null });
-  const result = await rpc('open.ref', { expect: account, ref, ...(cursor ? { cursor } : {}) });
+  // A meeting is read by its digest alone: the reader names no policy, and gets no quote (ADR-0024).
+  const result = ref.kind === 'meeting'
+    ? await rpc('ask.record', { expect: account, record: { record_sha256: ref.id } })
+      .then(read => (read.ok ? { ok: true as const, value: { kind: 'meeting' as const, record: read.value } } : read))
+    : await rpc('open.ref', { expect: account, ref, ...(cursor ? { cursor } : {}) });
   if (!sameRef(state.reader?.ref, ref) || readSeq !== mine) return;
   if (!result.ok) {
     set({ reader: { ...base, loading: false, failure: result.failure, ...kept } });
@@ -1903,59 +1781,20 @@ async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string, lit: 
     return;
   }
   const opened = result.value;
+  if (opened.kind === 'meeting') { set({ reader: { ...base, loading: false, record: opened.record } }); return; }
   if (opened.kind === 'imported_meeting') {
     const content = cursor === undefined ? opened.content : kept.content ? { ...opened.content, text: kept.content.text + opened.content.text } : null;
     if (!content) return;
     set({ reader: { ...base, loading: false, content, importedNext: opened.next_cursor } }); return;
   }
   if (opened.kind === 'note') { set({ reader: { ...base, loading: false, content: opened.content } }); return; }
-  if (opened.kind === 'document') { set({ reader: { ...base, loading: false, document: opened.document } }); return; }
-  const record = cursor === undefined ? opened.record : kept.record ? joinRecord(kept.record, opened.record) : null;
-  // A page that does not go on from what shows is never joined to it.
-  if (!record) { set({ reader: { ...base, loading: false, failure: { code: 'invalid_output', retryable: true }, ...kept } }); return; }
-  set({ reader: { ...base, loading: false, record, recordNext: opened.next_cursor } });
-  const follow = lit.follow ?? 0;
-  if (base.cited && opened.next_cursor && follow < CITED_PAGES && !citedShown(record, base.cited)) {
-    void openReader(ref, from, opened.next_cursor, { follow: follow + 1 });
-  }
-}
-
-/**
- * A meeting's next page, joined to the record shown: its three sections go
- * on. A long item left in parts goes on with the next page's first part,
- * which must be its very next part; anything else is refused (null).
- */
-export function joinRecord(shown: ApprovedRecord, next: ApprovedRecord): ApprovedRecord | null {
-  const join = (before: RecordSection, after: RecordSection): RecordSection | null => {
-    const last = before.items.at(-1);
-    const [first, ...rest] = after.items;
-    const unfinished = last?.parts !== undefined && last.parts.to < last.parts.count;
-    const continues = first?.parts !== undefined && first.parts.from > 1;
-    if (!continues) return unfinished ? null : { items: [...before.items, ...after.items], more: false };
-    const [was, goes] = [last?.parts, first!.parts!];
-    if (!last || !was || was.to !== goes.from - 1 || was.count !== goes.count) return null;
-    const text = last.text + first!.text;
-    const { parts: _parts, ...item } = last;
-    const joined: RecordItem = goes.to === goes.count && was.from === 1 ? { ...item, text: text.trim() } : { ...item, text, parts: { ...was, to: goes.to } };
-    return { items: [...before.items.slice(0, -1), joined, ...rest], more: false };
-  };
-  const decisions = join(shown.decisions, next.decisions);
-  const actions = join(shown.actions, next.actions);
-  const rationales = join(shown.rationales, next.rationales);
-  return decisions && actions && rationales ? { ...shown, decisions, actions, rationales } : null;
+  set({ reader: { ...base, loading: false, document: opened.document } });
 }
 
 export function moreImportedMeeting(): void {
   const reader = state.reader;
   if (reader?.ref.kind !== 'imported_meeting' || !reader.importedNext || reader.loading) return;
   void openReader(reader.ref, reader.from, reader.importedNext);
-}
-
-/** More, under a meeting's record: its next page. */
-export function moreRecord(): void {
-  const reader = state.reader;
-  if (reader?.ref.kind !== 'meeting' || !reader.recordNext || reader.loading) return;
-  void openReader(reader.ref, reader.from, reader.recordNext);
 }
 
 /** Next text page, from the ⋯ menu. */
@@ -2789,7 +2628,8 @@ function roleRead(project: ProjectSummary): void {
   listChanged();
 }
 
-/** Typing a name finds people once it pauses. */
+/** Typing a name finds people once it pauses: in People, in New project, and in an owner picker. */
+const SEARCH_PAUSE_MS = 250;
 let peopleTimer: ReturnType<typeof setTimeout> | undefined;
 
 export function setPeopleQuery(query: string): void {
@@ -3406,7 +3246,7 @@ function setOrganization(patch: Partial<OrganizationState>, mine?: number): void
 
 /**
  * The sidebar's People & invites: owners only. The page moves, the bar
- * searches all context. The tray's comes while another app may be in front.
+ * asks all context. The tray's comes while another app may be in front.
  */
 export function openOrganization(fromTray = false): void {
   if (state.status?.account?.role !== 'owner' || (state.concealed && !fromTray)) return;
@@ -3420,7 +3260,6 @@ export function openOrganization(fromTray = false): void {
       write: sending ? { action: sending.action, status: 'sending' } : null, notice: null, saved: null,
     },
   });
-  syncSearch();
   freshness.navigated();
   void loadEmployees();
 }
@@ -3619,14 +3458,14 @@ export function toggleEmployeeMenu(email: string): void {
 
 // ---- ask ---------------------------------------------------------------------
 
-/** The × on the scope chip: the bar searches and asks everything you can read. The page stays. */
+/** The × on the scope chip: the bar asks everything you can read. The page stays. */
 export function widenScope(): void {
   set({ barScope: { kind: 'global' } });
-  syncSearch();
   const view = state.ask;
   if (!view) return;
   // Ask open moves to Home's thread: a turn opened that it puts behind the earlier questions' line opens that line, so the
-  // turn a follow-up continues stays in sight; and what changed of its newest turns is checked as opening Ask there would.
+  // turn a follow-up continues stays in sight; and whether you can still read its newest turns' sources is checked as opening
+  // Ask there would.
   if (!view.earlier && view.opened !== null && behindEarlierLine(askThread(), fullTurns(view)).includes(view.opened)) set({ ask: { ...view, earlier: true } });
   void checkTimeline();
 }
@@ -3672,7 +3511,7 @@ function freshChecksOf(turn: TimelineTurn, current: State = state): TurnChecks |
  */
 function setTimeline(timeline: State['timeline']): void {
   const sources = state.sources;
-  const selected = paneTarget()?.group?.indexes[0];
+  const selected = paneTarget()?.group.indexes[0];
   if (!sources || sources.open === null || selected === undefined) { set({ timeline }); return; }
   const next = { ...state, timeline };
   const open = answerGroups(next).findIndex(group => group.indexes.includes(selected));
@@ -3690,15 +3529,6 @@ function setTimeline(timeline: State['timeline']): void {
 export function checksOf(turn: TimelineTurn, current: State = state): TurnChecks | undefined {
   // The turn as the timeline keeps it now: one held across a check may predate what that check found unreadable.
   return knownStates(freshChecksOf(turn, current), (turnOf(turn.id, current) ?? turn).unreadable);
-}
-
-/**
- * What the page shows of what is known of a turn's sources: on one asked in
- * this Ask, which is current, only what a check found unreadable, never a
- * Changed tag or note.
- */
-export function shownChecks(turn: TimelineTurn, current: State = state): TurnChecks | undefined {
-  return current.ask?.asked.includes(turn.id) ? knownStates(undefined, turn.unreadable) : checksOf(turn, current);
 }
 
 /**
@@ -3744,8 +3574,8 @@ function forgetChecks(): void {
 
 /**
  * What checks said, as the page may show it: only what is still good. The
- * first to go stale is cleared then, so the page stops showing it then, with
- * no tag, no line and nothing left out (C5).
+ * first to go stale is cleared then, so the page stops showing what it said;
+ * what it found unreadable stays hidden through the turn's `unreadable` (C5).
  */
 function keepChecks(checks: Readonly<Record<string, TurnCheck>>): void {
   if (checksExpire) { clearTimeout(checksExpire); checksExpire = null; }
@@ -3776,11 +3606,11 @@ function threadKey(scope: AskScope): string {
 }
 
 /**
- * Ask opened: what changed of what the newest ten turns its place's thread
- * shows cited, in one check (C5), unless that place's last one went under
- * five minutes ago (ADR-0049); and of the turn a suggestion opened it at
- * (`opened`), first in that check or in one of its own, unless what its
- * sources are now is known or on its way.
+ * Ask opened: whether you can still read what the newest ten turns its
+ * place's thread shows cited, in one check (C5), unless that place's last one
+ * went under five minutes ago (ADR-0049); and what the turn a suggestion
+ * opened it at (`opened`) cited, first in that check or in one of its own,
+ * unless what its sources are now is known or on its way.
  */
 function checkTimeline(opened?: TimelineTurn): Promise<void> {
   const key = threadKey(state.barScope);
@@ -3804,14 +3634,12 @@ function checkTurn(turn: TimelineTurn): Promise<void> {
  * of each turn it speaks for is good for five minutes from when it went, and
  * stands over what an earlier check said of that turn, never over what a
  * later one did; a turn citing nothing a check asks about is spoken for
- * without asking. It fails quietly, with no tags, when any of its requests
- * does: it speaks for no turn, and what an earlier check said that is no
- * longer good goes with it; only what a request that came back found you can
- * no longer read stays, hidden as the turn's unreadable sources and over what
- * a check still good said of them. A ticket it reads for the first time
- * keeps the marker it read as its baseline. `newest`: the place (`threadKey`)
- * whose newest turns Ask opening checked, made again there five minutes after
- * it went.
+ * without asking. It fails quietly when any of its requests does: it speaks
+ * for no turn, and what an earlier check said that is no longer good goes
+ * with it; only what a request that came back found you can no longer read
+ * stays, hidden as the turn's unreadable sources and over what a check still
+ * good said of them. `newest`: the place (`threadKey`) whose newest turns Ask
+ * opening checked, made again there five minutes after it went.
  */
 function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null): Promise<void> {
   const account = expect();
@@ -3824,7 +3652,7 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
     if (asked === null) return;
     const found = checkedOf(plan, asked.results);
     const before = state.timeline.checks;
-    const latest = Object.entries(found.turns).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at);
+    const latest = Object.entries(found).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at);
     if (asked.failure !== undefined) {
       const gone = ACCOUNT_GONE.includes(asked.failure.code);
       if (gone) accountLost(asked.failure);
@@ -3835,7 +3663,6 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
     }
     if (newest !== null) newestCheckedAt.set(newest, at);
     keepChecks({ ...before, ...Object.fromEntries(latest.map(([id, states]) => [id, { at, states }])) });
-    keepBaselines(found.markers);
     keepUnreadable(latest);
   };
   const run = check();
@@ -3873,15 +3700,6 @@ function keepUnreadable(checked: readonly (readonly [string, TurnChecks])[]): vo
   }
 }
 
-/** Tickets with no marker yet keep the one a check read: what the next check compares them with. */
-function keepBaselines(markers: Readonly<Record<string, Readonly<Record<string, string>>>>): void {
-  for (const [id, read] of Object.entries(markers)) {
-    const turn = turnOf(id);
-    const missing = turn ? Object.entries(read).filter(([at]) => turn.markers?.[at] === undefined) : [];
-    if (turn && missing.length > 0) keepTurn({ ...turn, markers: { ...turn.markers, ...Object.fromEntries(missing) } });
-  }
-}
-
 /**
  * A check's requests, one after another: the results of each that came
  * back, and the failure that ended it, if one did; null once a reply no
@@ -3896,17 +3714,6 @@ async function askChecks(account: Expect, plan: CheckPlan, wanted: () => boolean
     results.push(result.value.items);
   }
   return { results };
-}
-
-/** A new answer's tickets: one check, for their markers now, the baseline a later check compares with (C5). Quiet. */
-async function baseline(turn: TimelineTurn): Promise<void> {
-  const account = expect();
-  if (!account) return;
-  const plan = checkPlan([turn], source => source.kind === 'ticket');
-  if (plan.requests.length === 0) return;
-  const asked = await askChecks(account, plan, () => sameAccount(account));
-  if (asked === null || asked.failure !== undefined) return;
-  keepBaselines(checkedOf(plan, asked.results).markers);
 }
 
 /** Ask, opened over the page: the latest turn in full, nothing asked or opened in it yet, the older earlier questions folded. */
@@ -3930,12 +3737,10 @@ export function fullTurns(view: AskState): readonly string[] {
  * carries the turn it asks again. Either carries that turn's sentences only
  * once what they cite is known now: a check of the last five minutes, waited
  * for or made while the question shows on its way; none when no check can
- * say (C5). Asked from a page, it opens Ask, which checks what changed of the
- * newest turns. The answer is kept at the end of the timeline, in full, and
- * its tickets' markers are read as their baseline; "Which one?" waits for a
- * choice and is kept nowhere. While it works, the steps the host reports show
- * under it (ADR-0039); with no answer, they go, and so does any item they
- * opened in the pane.
+ * say (C5). Asked from a page, it opens Ask, which checks what you can still
+ * read of the newest turns. The answer is kept at the end of the timeline, in
+ * full; "Which one?" waits for a choice and is kept nowhere. While it works,
+ * one line under it names the step the host reports (ADR-0039).
  */
 export async function ask(question: string, scope: AskScope = state.barScope, how?: AskHow): Promise<void> {
   const account = expect();
@@ -3997,13 +3802,7 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const took = Date.now() - started;
   const shown = receipt !== undefined && took >= PROGRESS_AFTER_MS ? { ...current.took, [turn.id]: { receipt, took } } : current.took;
   set({ ask: { ...current, asking: null, asked: [...current.asked, turn.id], took: shown } });
-  startSources(answerNames(answer), turn.id);
-  void baseline(turn);
-}
-
-/** The items the audited answer names: its receipt's reads, and its sources. */
-function answerNames(answer: Answer): ReadonlySet<string> {
-  return new Set([...(answer.receipt?.rows ?? []).flatMap(row => row.type === 'read' ? row.items : []), ...answer.sources].map(sourceKey));
+  startSources(turn.id);
 }
 
 /**
@@ -4039,7 +3838,7 @@ export function nothingLine(turn: TimelineTurn, current: State = state): string 
 
 /** A completed factual gap can be searched more widely even when other parts were answered. */
 export function canAskEverywhere(turn: TimelineTurn, current: State = state): boolean {
-  if (turn.scope.kind !== 'project' || !showsOf(shownChecks(turn, current))(turn.answer.sources.map((_, index) => index))) return false;
+  if (turn.scope.kind !== 'project' || !showsOf(checksOf(turn, current))(turn.answer.sources.map((_, index) => index))) return false;
   return foundNothingInProject(turn) || (turn.answer.parts.some(part => part.gap_details?.not_found !== undefined)
     && !turn.answer.parts.some(part => part.gap_details?.interrupted));
 }
@@ -4120,9 +3919,9 @@ export function toggleEarlier(): void {
  * instead of asking it again (ADR-0047), and brought into view, the line of
  * the earlier questions open when it is one of them. A turn shown in full
  * (the latest) stays so. Either way it is the turn the next question
- * continues, however long ago it was asked, and what changed of its sources
- * is checked with the newest turns', first, when nothing in the last five
- * minutes said. Suggestions show only while Ask is closed.
+ * continues, however long ago it was asked, and its sources are checked with
+ * the newest turns', first, when nothing in the last five minutes said.
+ * Suggestions show only while Ask is closed.
  */
 function openTurn(id: string): void {
   const turn = turnOf(id);
@@ -4130,9 +3929,8 @@ function openTurn(id: string): void {
   emptyBar();
   const view = newAsk();
   set({ ask: { ...view, opened: id, focus: id, earlier: behindEarlierLine(askThread(), fullTurns(view)).includes(id) } });
-  startSources(null, id);
+  startSources(id);
   void checkTimeline(turn);
-  syncSearch();
 }
 
 /**
@@ -4181,13 +3979,12 @@ async function openAskAt(turn: TimelineTurn): Promise<void> {
   set({ ask: newAsk() });
   startSources();
   void checkTimeline();
-  syncSearch();
 }
 
 /**
  * Cancel, while asking: Ask goes back to what it showed, with no answer. Ask
  * opened for this question, with nothing asked or opened in it since, closes.
- * A late answer, and any step after, is dropped; what it named goes.
+ * A late answer, and any step after, is dropped.
  */
 export function cancelAsk(): void {
   const thread = state.ask;
@@ -4211,7 +4008,7 @@ export async function copyAnswer(id: string | null): Promise<boolean> {
   const turn = turnOf(id);
   if (turn === undefined) return false;
   const { answer } = turn;
-  const checks = shownChecks(turn);
+  const checks = checksOf(turn);
   const groups = turnGroups(answer, checks);
   const shows = showsOf(checks);
   // Ask again's "Since" (ADR-0047), named by the day the earlier answer was asked, as the page names it.
@@ -4226,7 +4023,6 @@ export async function copyAnswer(id: string | null): Promise<boolean> {
 /** Back or Escape: Ask closes over the page. The timeline stays, and opens again with the next question or a suggestion. */
 export function closeAsk(): void {
   set({ ask: null, sources: null });
-  syncSearch();
 }
 
 // ---- an answer's sources -----------------------------------------------------
@@ -4247,7 +4043,7 @@ function answerSources(current: State = state): readonly AnswerSource[] {
  */
 export function answerGroups(current: State = state): SourceGroup[] {
   const turn = activeTurn(current);
-  return turn ? turnGroups(turn.answer, shownChecks(turn, current)) : [];
+  return turn ? turnGroups(turn.answer, checksOf(turn, current)) : [];
 }
 
 /** The turns Ask shows (ADR-0049): its place's thread, each question once. */
@@ -4275,26 +4071,20 @@ export function sourceName(source: AnswerSource, sources: SourcesState | null): 
   return read && !read.loading && 'value' in read ? read.value.title ?? UNTITLED : source.label;
 }
 
-/** What the pane shows: one of the answer's numbered sources, or a place Ask named. */
+/** What the pane shows: one of the answer's numbered sources. */
 export interface PaneTarget {
-  /** Its citations, in the answer's order; a named place's, the items its name stands for. */
+  /** Its citations, in the answer's order. */
   readonly sources: readonly AnswerSource[];
-  /** A numbered source's group and number less one; null for a named place. */
-  readonly group: SourceGroup | null;
-  readonly number: number | null;
-}
-
-/** Where the pane's citations are: a numbered source's places in the answer, a named place's order in it. */
-export function paneCitations(target: PaneTarget): readonly number[] {
-  return target.group?.indexes ?? target.sources.map((_, at) => at);
+  /** Its group, and its number less one. */
+  readonly group: SourceGroup;
+  readonly number: number;
 }
 
 /** The pane's item, or null while it is closed. */
 export function paneTarget(current: State = state): PaneTarget | null {
   const sources = current.sources;
-  if (!sources || current.ask === null) return null;
-  if (sources.named) return { sources: sources.named, group: null, number: null };
-  const group = sources.open === null ? undefined : answerGroups(current)[sources.open];
+  if (!sources || current.ask === null || sources.open === null) return null;
+  const group = answerGroups(current)[sources.open];
   if (!group) return null;
   const all = answerSources(current);
   return { sources: group.indexes.map(index => all[index]!), group, number: sources.open };
@@ -4311,32 +4101,24 @@ export function fullPageOffered(current: State = state): boolean {
 }
 
 /**
- * The atoms a record source cites, to light: all a named place stands for; a
- * numbered source's that the chosen sentence cites, or all of them when a row
- * opened it.
+ * The atoms a record source cites, to light: those the chosen sentence cites,
+ * or all of them when a row opened it.
  */
 export function litAtoms(current: State, target: PaneTarget): ReadonlySet<string> {
   const atoms = (sources: readonly AnswerSource[]) => new Set(sources.flatMap(source => source.kind === 'record' ? [source.atom_id] : []));
   const answer = activeTurn(current)?.answer;
-  if (!target.group || !answer) return atoms(target.sources);
+  if (!answer) return atoms(target.sources);
   const focused = answerSentences(answer).find(([id]) => id === current.sources?.focus)?.[1].citation_indexes ?? [];
   const cited = target.group.indexes.filter(index => focused.includes(index));
   const all = answerSources(current);
   return atoms(cited.length > 0 ? cited.map(index => all[index]!) : target.sources);
 }
 
-/** Where `atoms` are in a meeting Ask read: each one's section and place. */
-function citedItems(record: ApprovedRecord, atoms: ReadonlySet<string>): CitedItem[] {
-  return RECORD_SECTIONS.flatMap(section => record[section].items.flatMap((item, index) =>
-    item.atom_id !== undefined && atoms.has(item.atom_id) ? [{ section, index }] : []));
-}
-
 /**
  * Open: the pane's item on its own page, in place of Ask. A meeting opens on
- * the items the pane lit, found in the record the pane read; with that record
- * not read, it opens at its top. A follow-up opens its item page, with the
- * row the pane read while it reads it again. A project opens as the sidebar
- * opens it, and a tool opens Tools.
+ * the items the pane lit, by their atom ids. A follow-up opens its item page,
+ * with the row the pane read while it reads it again. A project opens as the
+ * sidebar opens it, and a tool opens Tools.
  */
 export function openFullPage(): void {
   const target = paneTarget();
@@ -4360,11 +4142,9 @@ export function openFullPage(): void {
     return;
   }
   const scope = activeTurn()?.answer.scope;
-  const read = source.kind === 'record' ? state.sources?.records[source.record.record_sha256] : undefined;
-  const cited = read !== undefined && !read.loading && 'value' in read ? citedItems(read.value, litAtoms(state, target)) : [];
+  const cited = [...litAtoms(state, target)];
   closeAsk();
-  void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'search' },
-    undefined, { cited });
+  void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'all' }, undefined, cited);
 }
 
 /**
@@ -4392,36 +4172,24 @@ async function openCitedProject(project_id: string, label: string): Promise<void
 }
 
 /**
- * The pane's start for `turn`: closed, nothing named, nothing of its passages
- * read. Which source lists are open stays, and so do the records and
- * follow-ups already read, for the turns that show them.
+ * The pane's start for `turn`: closed, nothing of its passages read. Which
+ * source lists are open stays, and so do the records and follow-ups already
+ * read, for the turns that show them.
  */
 function freshSources(turn: string | null): SourcesState {
   const before = state.sources;
   const settled = <T>(reads: Readonly<Record<string, Read<T>>> | undefined) => Object.fromEntries(Object.entries(reads ?? {}).filter(([, read]) => !read.loading));
-  return { gen: ++seq, turn, open: null, focus: null, listed: before?.listed ?? [], named: null, records: settled(before?.records),
+  return { gen: ++seq, turn, open: null, focus: null, listed: before?.listed ?? [], records: settled(before?.records),
     followUps: settled(before?.followUps), evidence: null };
 }
 
 /**
  * What Ask shows came on screen (an answer, by default the latest turn): the
  * pane starts closed on its sources, and the approved records of what shows
- * are read one after another, so each chip can name its meeting. Answered,
- * the items a live row opened stay in the pane, with what was read for them,
- * but only those the audited answer names (`keep`): a name cleared while Ask
- * worked lasts only for that run. With no turn to show, there is no pane.
+ * are read one after another, so each chip can name its meeting. With no turn
+ * to show, there is no pane.
  */
-function startSources(keep: ReadonlySet<string> | null = null, turn: string | null = threadOf(state.timeline.turns, state.barScope).at(-1)?.id ?? null): void {
-  const sources = state.sources;
-  const named = keep === null ? [] : sources?.named?.filter(item => keep.has(sourceKey(item))) ?? [];
-  if (sources && named.length > 0) {
-    const same = named.length === sources.named!.length;
-    // With fewer passages, their places change: they are read again.
-    set({ sources: { ...sources, turn, open: null, focus: null, named, ...(same ? {} : { evidence: null }) } });
-    if (!same) readPane(sources.gen, named[0]!);
-    void readRecords(sources.gen);
-    return;
-  }
+function startSources(turn: string | null = threadOf(state.timeline.turns, state.barScope).at(-1)?.id ?? null): void {
   if (turn === null) { set({ sources: null }); return; }
   const next = freshSources(turn);
   set({ sources: next });
@@ -4443,8 +4211,8 @@ async function readRecords(gen: number): Promise<void> {
 }
 
 /**
- * A follow-up's row, as Home reads it now (rows only, ADR-0033): who owns it,
- * its status and its latest check. One the account can no longer see says
+ * A follow-up's row, as Home reads it now (rows only, ADR-0033): who owns it
+ * and its status. One the account can no longer see says
  * so; an account that is gone ends everything, as every read's does.
  */
 async function readFollowUpRow(gen: number, item_id: string): Promise<void> {
@@ -4498,10 +4266,10 @@ function readPane(gen: number, source: AnswerSource): void {
 export function chooseSource(group: number, focus: string | null, turn: string | null): void {
   const sources = state.sources;
   const shown = turnOf(turn);
-  const chosen = shown ? turnGroups(shown.answer, shownChecks(shown))[group] : undefined;
+  const chosen = shown ? turnGroups(shown.answer, checksOf(shown))[group] : undefined;
   const source = chosen ? shown!.answer.sources[chosen.indexes[0]!] : undefined;
   if (!sources || !shown || !source) return;
-  set({ sources: { ...sources, turn: shown.id, open: group, focus, named: null, evidence: null } });
+  set({ sources: { ...sources, turn: shown.id, open: group, focus, evidence: null } });
   readPane(sources.gen, source);
 }
 
@@ -4512,20 +4280,7 @@ export function toggleSourceList(turn: string | null): void {
   set({ sources: { ...sources, listed: sources.listed.includes(turn) ? sources.listed.filter(id => id !== turn) : [...sources.listed, turn] } });
 }
 
-/**
- * A name in a live row or the receipt: the pane opens on that place beside
- * Ask, which keeps running, with every item of it the name stands for, read
- * unless it already was.
- */
-export function openNamed(items: readonly AnswerSource[]): void {
-  const sources = state.sources;
-  const [source] = items;
-  if (!sources || !source || !state.ask || state.concealed) return;
-  set({ sources: { ...sources, open: null, focus: null, named: items, evidence: null } });
-  readPane(sources.gen, source);
-}
-
-/** External providers check current access when the person opens a cited or named link, or a follow-up's; main checks the link again. */
+/** External providers check current access when the person opens a cited link, or a follow-up's; main checks the link again. */
 export async function openExternalSource(source: ExternalAnswerSource): Promise<boolean> {
   return !state.concealed && (await rpc('source.openExternal', { kind: source.kind, permalink: source.permalink })).ok;
 }
@@ -4533,21 +4288,20 @@ export async function openExternalSource(source: ExternalAnswerSource): Promise<
 /** × on the pane: it closes, and forgets the passages it read. */
 export function closeSources(): void {
   const sources = state.sources;
-  if (sources) set({ sources: { ...sources, open: null, focus: null, named: null, evidence: null } });
+  if (sources) set({ sources: { ...sources, open: null, focus: null, evidence: null } });
 }
 
 /** Passages read at once: each is its own client call. */
 const EVIDENCE_READS_AT_ONCE = 3;
 
-/** Where the pane's passages are read: under the Ask on its way, or the scope of the answer its numbers are of. */
+/** Where the pane's passages are read: in the scope of the answer its numbers are of, whatever question is on its way. */
 function paneScope(): AskScope | null {
-  return state.ask?.asking?.scope ?? activeTurn()?.answer.scope ?? null;
+  return activeTurn()?.answer.scope ?? null;
 }
 
 /**
  * The cited passages of the original the pane shows, each a verified evidence
- * packet, read in order each time it is chosen: a numbered source's by their
- * place in the answer, a named place's by their order in it.
+ * packet, read in order each time it is chosen, by their place in the answer.
  */
 async function readEvidence(gen: number): Promise<void> {
   const account = expect();
@@ -4555,8 +4309,7 @@ async function readEvidence(gen: number): Promise<void> {
   const scope = paneScope();
   const sources = sourcesAt(gen);
   if (!account || !target || !scope || !sources) return;
-  const places = paneCitations(target);
-  const passages = places.flatMap((place, at) => {
+  const passages = target.group.indexes.flatMap((place, at) => {
     const source = target.sources[at];
     return source?.kind === 'original' ? [[place, source.ref] as const] : [];
   });
@@ -4591,86 +4344,27 @@ export function retryRecord(): void {
   else if (source.kind === 'follow_up') void readFollowUpRow(sources.gen, source.item_id);
 }
 
-// ---- the bar: live search -------------------------------------------------------
+// ---- the bar: its text -----------------------------------------------------------
 
-/** Typing searches once it pauses. */
-const SEARCH_PAUSE_MS = 250;
-let searchTimer: ReturnType<typeof setTimeout> | undefined;
-
-/** What the bar should search now: never on the Ask page, never while another app is in front. */
-function wantedSearch(): { query: string; scope: AskScope } | null {
-  if (!state.status?.signed_in || state.concealed || state.ask) return null;
-  const query = searchQuery(state.barText);
-  return query === null ? null : { query, scope: state.barScope };
-}
-
-/**
- * Searches for the bar's text in its scope, unless the matches shown are
- * already for them; `fresh` reads them again anyway. With nothing to search
- * the matches go. A new search `typed` in the bar closes the reader, so its
- * matches show.
- */
-function syncSearch(fresh = false, typed = false): void {
-  clearTimeout(searchTimer);
-  searchTimer = undefined;
-  const wanted = wantedSearch();
-  if (!wanted) { if (state.matches) set({ matches: null }); return; }
-  const current = state.matches;
-  const sameList = current !== null && sameScope(current.scope, wanted.scope);
-  if (!fresh && sameList && current.query === wanted.query && !current.failure) return;
-  if (typed && state.reader) closeReader();
-  void runSearch(wanted.query, wanted.scope, sameList ? current.items : []);
-}
-
-/** The search runs; the scope's last matches stay until the new ones arrive. */
-async function runSearch(query: string, scope: AskScope, shown: readonly Match[]): Promise<void> {
-  const account = expect();
-  if (!account) return;
-  const mine = ++seq;
-  set({ matches: { seq: mine, query, scope, loading: true, items: shown } });
-  const result = await rpc('search.run', { expect: account, query, scope });
-  if (state.matches?.seq !== mine) return;
-  if (!result.ok) {
-    set({ matches: { seq: mine, query, scope, loading: false, items: [], failure: result.failure } });
-    accountLost(result.failure);
-    return;
-  }
-  set({ matches: { seq: mine, query, scope, loading: false, items: result.value.items } });
-}
-
-/** Typing in the bar. A search waits for a pause; text that cannot be searched shows no matches. */
+/** Typing in the bar: it only asks, so nothing is read while you type. */
 export function setBarText(text: string): void {
   set({ barText: text });
-  clearTimeout(searchTimer);
-  if (!wantedSearch()) { syncSearch(); return; }
-  searchTimer = setTimeout(() => syncSearch(false, true), SEARCH_PAUSE_MS);
 }
 
-/** The same search, read again: Try again after a failure, or the window or ECHO came back. */
-export function searchAgain(): void { syncSearch(true); }
-
-/** Escape in the bar: the text and its matches go; the page stays. */
+/** Escape in the bar: the text goes; the page stays. */
 export function clearBar(): void { emptyBar(); }
 
 function emptyBar(): void {
-  clearTimeout(searchTimer);
-  searchTimer = undefined;
-  if (state.barText !== '' || state.matches) set({ barText: '', matches: null });
+  if (state.barText !== '') set({ barText: '' });
 }
 
-/** Return, or the Ask row under the matches: asks the bar's scope, and the bar empties. */
+/** Return: asks the bar's scope, and the bar empties. */
 export function submitBar(): void {
   const text = state.barText;
   // While a question is on its way the next one waits in the bar.
   if (text.trim() === '' || state.ask?.asking) return;
   emptyBar();
   void ask(text, state.barScope);
-}
-
-/** The matches show over the page: not over a reader, an answer, a sheet, or a covered window. */
-export function matchesShown(current: State = state): boolean {
-  return current.matches !== null && !current.concealed && !current.ask && !current.reader && !sheetShown(current) &&
-    !(current.compose && !current.compose.hidden) && searchQuery(current.barText) !== null;
 }
 
 /**
@@ -4725,7 +4419,7 @@ export function barSuggestions(current: State = state): Suggestion[] {
   return suggestedQuestions(askedSuggestions(current.timeline.turns, current.barScope), shownMeetings(current), weekQuestion(current.barScope, chipName(current)));
 }
 
-/** The suggestions may show over the page where live matches would: the bar empty, and no answer, reader, sheet or covered window over it. */
+/** The suggestions may show over the page: signed in, the bar empty, and no answer, reader, sheet or covered window over it. */
 export function suggestionsShown(current: State = state): boolean {
   return Boolean(current.status?.signed_in) && current.barText === '' && !current.concealed && !current.ask && !current.reader && !sheetShown(current) &&
     !(current.compose && !current.compose.hidden);
@@ -5131,11 +4825,11 @@ let comingBack = false;
 
 /**
  * Where the window stands, as main says when it changes. Not in front: the
- * page is covered (the privacy cover), and its live reads and polls stop;
- * checks keep moving, by the runs list alone (R1). In front: it uncovers. On
- * screen and in front again: ECHO came back, and what shows is read again
- * (R4). Owed reads wait while the window cannot be seen (R6). Answers the
- * return's reads when it came back, else null.
+ * page is covered (the privacy cover), and its live reads stop; the change
+ * check goes on, and so checks keep moving (R1; DSK-1). In front:
+ * it uncovers. On screen and in front again: ECHO came back, and what shows
+ * is read again (R4). Owed reads wait while the window cannot be seen (R6).
+ * Answers the return's reads when it came back, else null.
  */
 export function windowState(next: { onScreen: boolean; front: boolean }): Promise<void> | null {
   const back = next.onScreen && next.front && !canSee();
@@ -5149,8 +4843,7 @@ export function windowState(next: { onScreen: boolean; front: boolean }): Promis
 
 /**
  * Another app is in front: cover the window until ECHO is back. The bar keeps
- * its text (out of sight over a covered page); its matches go, and are read
- * again for the account on return.
+ * its text, out of sight over a covered page.
  */
 function conceal(): void {
   // The source pane closes and forgets what it read; the records are read again on return.
@@ -5160,11 +4853,10 @@ function conceal(): void {
   // New project stays: files are dropped on it from other apps.
   // People & invites closes what is open in it, and an invitation just saved is no longer offered back (its Undo ends).
   set({
-    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, focus: null, named: null, records: {}, followUps: {}, evidence: null } } : {}),
+    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, focus: null, records: {}, followUps: {}, evidence: null } } : {}),
     ...(people ? { sheet: null } : {}), ...(state.reader ? { reader: { ...state.reader, menu: 'closed' as const } } : {}),
     ...(state.organization ? { organization: { ...state.organization, menu: null, confirm: null, saved: null } } : {}),
   });
-  syncSearch();
 }
 
 /**
@@ -5204,9 +4896,11 @@ const SURFACES: readonly Surface[] = [
   // The follow-ups view on screen: those under it, and the page under them all, read again when they show.
   { areas: ['follow_ups'], shows: () => topView() !== null, busy: () => Boolean(topView()?.loading || topView()?.busy), read: () => rereadViews() },
   { areas: ['follow_ups'], shows: () => projectShown() !== null, read: () => loadLine('projectLine', 'project', projectShown()!.project_id) },
-  { areas: ['follow_ups'], shows: () => impactLineShown() !== null, read: () => loadLine('impactLine', impactLineShown()!.scope, impactLineShown()!.id) },
-  // The page itself, on a return: a project's feed and members, Only me, Tools, People & invites, a sidebar whose read failed,
-  // and the bar's matches.
+  // The meeting line the reader shows: its follow-ups, and its check's stage, which moves the reviews when it starts, fails or
+  // ends (DSK-1).
+  { areas: ['follow_ups', 'reviews'], shows: () => impactLineShown() !== null,
+    read: () => loadLine('impactLine', impactLineShown()!.scope, impactLineShown()!.id) },
+  // The page itself, on a return: a project's feed and members, Only me, Tools, People & invites, a sidebar whose read failed.
   { areas: [], shows: () => projectShown() !== null, read: () => Promise.all([loadList('quiet'),
     state.roster?.projectId === projectShown()?.project_id ? loadRoster(state.roster!.projectId) : null]) },
   { areas: [], shows: () => state.route.page === 'only-me', read: () => loadList('quiet') },
@@ -5214,7 +4908,6 @@ const SURFACES: readonly Surface[] = [
   { areas: [], shows: () => state.route.page === 'organization', read: () => loadEmployees() },
   { areas: [], shows: () => Boolean(state.projects.failure || state.archivedProjects.failure), read: () => refreshSidebar() },
   { areas: [], shows: () => true, read: async () => {
-    searchAgain();
     // The answer's records are read again: another app in front forgot them.
     if (state.sources) await readRecords(state.sources.gen);
   } },
@@ -5238,9 +4931,6 @@ function owe({ back, areas }: { readonly back: boolean; readonly areas: readonly
     if ((back || surface.areas.some(area => areas.includes(area))) && surface.shows()) owed.set(surface, back || owed.get(surface) === true);
   }
   settleOwed();
-  // Coming back, or a meeting approved or published anywhere (the reviews moved): a check may wait to start, on any page (R4).
-  // Home's own load, owed just now, drives where it shows.
-  if (back || areas.includes('reviews')) kickRuns();
 }
 
 /**
@@ -5272,8 +4962,20 @@ async function rereadViews(): Promise<void> {
   else if (!top.gone) await readItem(top.seq);
 }
 
+/**
+ * Checks in as an account (DSK-1): the Authority starts its oldest queued impact check, unless another of its checks runs.
+ * Sent after each change check that reached the Authority, as that check's account, and on Try again; the host pins it to
+ * that account. Quiet: what it started shows as the reviews move, and it never throws.
+ */
+async function checkIn(account: Expect | null = expect()): Promise<void> {
+  if (!account) return;
+  try {
+    await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'next' } });
+  } catch { /* quiet: the next check-in asks again */ }
+}
+
 freshness.configure({
-  account: expect, seen: canSee, status: refreshStatus, readProjects, refreshSidebar, readItem: readOne, owe, accountLost, readActivity,
+  account: expect, seen: canSee, status: refreshStatus, readProjects, refreshSidebar, readItem: readOne, owe, accountLost, readActivity, checkIn,
   readRows: async (account, query) => {
     const read = await readItems(account, { scope: 'involved', read: 'rows', ...query }, null, Number.POSITIVE_INFINITY);
     return read.ok ? read.pages.flatMap(page => page.items) : null;
@@ -5314,19 +5016,18 @@ export function awaitingLive(item: OpenItemView): boolean {
 }
 
 /**
- * One row on Home (open items and Home v1, section 8; R63–R65). `approve`: a
+ * One row on Home (open items and Home v1, section 8; R63). `approve`: a
  * meeting's decisions wait for you. `send`: a meeting you approved has
- * follow-ups not sent yet. `update`: a follow-up waits on you. `review`: one
- * someone else owns changed, and still does not match, since you sent it.
- * `failed`: the impact check did not finish. `checking`: it is on its way.
- * Every item row opens the item's page (F5).
+ * follow-ups not sent yet. `update`: a follow-up waits on you. `failed`: the
+ * impact check did not finish. `checking`: it is on its way. Every item row
+ * opens the item's page (F5).
  */
 export type NeedRow =
   | { kind: 'approve'; review: PersonMeetingReviewV2 }
   | { kind: 'checking'; review: PersonMeetingReviewV2; run?: PersonRunV1 }
   | { kind: 'failed'; review: PersonMeetingReviewV2; run: PersonRunV1 }
   | { kind: 'send'; send: HomeView['send'][number] }
-  | { kind: 'update' | 'review'; item: OpenItemView };
+  | { kind: 'update'; item: OpenItemView };
 interface HomeState {
   seq: number;
   loading: boolean;
@@ -5396,15 +5097,13 @@ export interface DecisionState {
 /**
  * Rows that wait on you first; what is on its way last. A check that did not
  * finish (Retry) comes right after the decisions to approve: it needs you, and
- * further down a long Home would hide it. Changed items (Update or Review)
- * sort before the others. An item whose last check is `changed` and whose
- * owner is not you (`me`) is a Review row; every other item is an Update row
- * (R64). Only impact checks make rows: a sweep never does, going or failed.
+ * further down a long Home would hide it. Every item that waits on you is an
+ * Update row, in the order Home read them. Only impact checks make rows.
  * An approval's checks are its records' runs, one per destination: a meeting
  * makes one row, failed when any check did not finish, else checking while
  * any is on its way.
  */
-export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readonly PersonRunV1[], open: HomeView | null, me: string | null): NeedRow[] {
+export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readonly PersonRunV1[], open: HomeView | null): NeedRow[] {
   const byRecord = new Map(runs.filter(run => run.trigger === 'approved_record').map(run => [run.event_ref, run]));
   const approve: NeedRow[] = [];
   const failed: NeedRow[] = [];
@@ -5424,13 +5123,10 @@ export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readon
     if (stopped) failed.push({ kind: 'failed', review, run: stopped });
     else if (going) checking.push({ kind: 'checking', review, run: going });
   }
-  const items = open?.items ?? [];
-  const changed = (item: OpenItemView) => item.check?.verdict === 'changed';
   return [
     ...approve, ...failed,
     ...(open?.send ?? []).map(send => ({ kind: 'send' as const, send })),
-    ...items.filter(changed).map((item): NeedRow => ({ kind: me === null || item.owner.membership_id === me ? 'update' : 'review', item })),
-    ...items.filter(item => !changed(item)).map((item): NeedRow => ({ kind: 'update', item })),
+    ...(open?.items ?? []).map((item): NeedRow => ({ kind: 'update', item })),
     ...checking,
   ];
 }
@@ -5438,14 +5134,14 @@ export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readon
 /**
  * What a row asks of you, as Home's top groups it (One place to look v1):
  * Approve, Retry (a check that did not finish), Send, and Update (a follow-up
- * that waits on you, or a Review of one you sent that changed). Checking is
- * on its way and asks nothing yet, so it never opens a list.
+ * that waits on you). Checking is on its way and asks nothing yet, so it never
+ * opens a list.
  */
 export type NeedCategory = 'approve' | 'retry' | 'send' | 'update';
 const CATEGORIES = ['approve', 'retry', 'send', 'update', 'checking'] as const;
 
 export function categoryOf(row: NeedRow): NeedCategory | 'checking' {
-  return row.kind === 'failed' ? 'retry' : row.kind === 'review' ? 'update' : row.kind;
+  return row.kind === 'failed' ? 'retry' : row.kind;
 }
 
 /**
@@ -5718,7 +5414,7 @@ export function homeRows(current: State = state): NeedRow[] {
   const home = current.home;
   if (!home) return [];
   const open = home.open && { ...home.open, items: home.open.items.map(item => shownItem(item, home.live)) };
-  return needRows(home.reviews, home.runs, open, current.status?.account?.membership_id ?? null);
+  return needRows(home.reviews, home.runs, open);
 }
 
 /** Rows that wait on you: Home's head and the sidebar's badge. What is on its way is not counted. */
@@ -5747,9 +5443,10 @@ let homeToken = 0;
 
 /**
  * Home: what waits on you. Read when Home opens, when the window comes
- * forward, and after a decision or a Send; read again while a check is going.
- * Each of these is a Home load: it may start one sweep. A load asked for while
- * one is on its way joins it, and one more load runs after it, never more.
+ * forward, and after a decision or a Send; read again when the change check
+ * says the reviews moved, as they do when one of your checks starts, fails or
+ * ends (DSK-1). A load asked for while one is on its way joins it, and one
+ * more load runs after it, never more.
  * Back on Home after a change (`fresh` false), only the rows that newly lack
  * a live part are read live.
  */
@@ -5775,59 +5472,23 @@ export function loadHome(fresh = true): Promise<void> {
 async function loadHomeOnce(fresh: boolean): Promise<void> {
   const account = expect();
   if (!account || state.concealed || (state.route.page !== 'home' && state.route.page !== 'decision')) return;
-  stopRunPolling();
-  homeLoads += 1;
   const mine = ++seq;
   const previous: Omit<HomeState, 'seq' | 'loading'> = state.home ?? { settled: false, reviews: [], runs: [], open: null, live: {}, reading: false };
   // An earlier load's live read, still on its way, is no longer Home's: it says nothing of this one's.
   set({ home: { ...previous, seq: mine, loading: true, failure: undefined, reading: false } });
-  await readHome(mine, false, fresh);
-}
-
-/** The last read of what waits on you failed: the next poll reads it again. */
-let openUnread = false;
-/** A check ended and what it found has not been read since: Home keeps looking until it has. */
-let resultOwed = false;
-/**
- * Home loads begun, counted, and the one that asked for its due sweep: each
- * Home load asks for one new sweep at most (ruling R50). A sweep that is
- * already queued is started as an impact check is.
- */
-let homeLoads = 0;
-let askedIn = 0;
-/**
- * The sweep Home asked for: what it finds is owed once a runs list shows it
- * ended, or no longer holds it, even if no list showed it going.
- */
-let sweepOwed: string | null = null;
-
-const going = (run: PersonRunV1) => run.state === 'pending' || run.state === 'running';
-
-/** A check that was going before and is not now: what it found may wait on Home. */
-function checkEnded(before: readonly PersonRunV1[], after: readonly PersonRunV1[]): boolean {
-  return before.some(run => going(run) && !after.some(next => next.run_id === run.run_id && going(next)));
-}
-
-/** The sweep Home asked for is no longer going in this list: what it found is owed. */
-function swept(runs: readonly PersonRunV1[]): boolean {
-  return sweepOwed !== null && !runs.some(run => run.run_id === sweepOwed && going(run));
+  await readHome(mine, fresh);
 }
 
 /**
  * The reviews, your runs and what waits on you, read side by side, each
  * shown as soon as it is read, so quick rows never wait for slow ones. Each
  * part keeps its last good value when its read fails; the runs and home
- * parts fail silently, and only a failed reviews read says so (never on a
- * poll). A poll reads what waits on you only once a check has ended, or after
- * that read failed. Home stops loading, and drives its runs, once its rows
- * are read; their live read goes on, and alone says whether a sweep is due.
- * Its runs drive only if no drive or look of the driver's began since it did:
- * that one goes by a newer list, which this read's must not undo (R3).
+ * parts fail silently, and only a failed reviews read says so. Home stops
+ * loading once its rows are read; their live read goes on. The open
+ * decision follows its checks. Home starts no check: the Authority starts
+ * them when this desktop checks in (DSK-1).
  */
-async function readHome(mine: number, poll: boolean, fresh = true): Promise<void> {
-  const account = expect();
-  const before = state.home?.runs ?? [];
-  const ran = runSeq;
+async function readHome(mine: number, fresh: boolean): Promise<void> {
   /** One part, shown once read while Home is still this read's; answered as settled. */
   const shown = <T>(read: Promise<T>, apply: (value: T) => Partial<HomeState>): Promise<PromiseSettledResult<T>> => read.then(
     value => {
@@ -5836,84 +5497,51 @@ async function readHome(mine: number, poll: boolean, fresh = true): Promise<void
       return { status: 'fulfilled' as const, value };
     },
     (reason: unknown) => ({ status: 'rejected' as const, reason }));
-  const ended = (runs: readonly PersonRunV1[]) => checkEnded(before, runs) || swept(runs);
   const reviewsRead = shown(reviewsCommand({ operation: 'reviews' }).then(value => value.reviews), reviews => ({ reviews }));
-  const runsRead = shown(runsCommand({ schema_version: 1, operation: 'list' }), value => {
-    // Shown, the list no longer shows the check going: what it found is owed from now, whichever read brings it.
-    if (ended(value.runs)) resultOwed = true;
-    return { runs: value.runs };
-  });
-  let waiting = poll ? null : readWaiting(mine, fresh);
-  const [reviews, runs] = await Promise.all([reviewsRead, runsRead]);
-  const checkSwept = runs.status === 'fulfilled' && swept(runs.value.runs);
-  if (waiting === null && homeShown(mine) && (openUnread || resultOwed)) waiting = readWaiting(mine, true);
-  const unread = waiting ? await waiting.rows : undefined;
-  const reviewsFailure = reviews.status === 'rejected' ? failureOf(reviews.reason) : undefined;
-  const loadFailure = poll ? undefined : reviewsFailure;
-  // A read that is no longer Home's shows nothing, so it settles nothing Home owes either. Home was left or covered while it
-  // was on its way: unless a newer Home load, drive or look drives, the runs it read still do, for the account it read them for (R1, R3).
+  const runsRead = shown(runsCommand({ schema_version: 1, operation: 'list' }), value => ({ runs: value.runs }));
+  const waiting = readWaiting(mine, fresh);
+  const [reviews] = await Promise.all([reviewsRead, runsRead, waiting]);
+  // A read that is no longer Home's shows nothing.
   const home = homeShown(mine);
-  if (!home) {
-    // Reviews that answered lift their hold, though Home was left before they did: this load was the Try again it waits for (R4).
-    // Only while it is still Home's newest load: a newer one (after a sign-out and in, even as the same person) holds its own.
-    if (!poll && !loadFailure && state.home?.seq === mine && sameExpect(expect(), account)) runsHeld = false;
-    if (runSeq === ran && !loadFailure && !runsHeld && sameExpect(expect(), account) && runsGo()) {
-      const publishing = reviews.status === 'fulfilled' && reviews.value.some(review => review.status === 'publishing');
-      if (runs.status === 'fulfilled') endedOffHome(runs.value.runs);
-      void driveRuns(runs.status === 'fulfilled' ? runs.value.runs : runsSeen, publishing, runs.status === 'rejected' ? failureOf(runs.reason) : undefined);
-    }
-    return;
-  }
-  set({ home: { ...home, loading: false, settled: true, failure: reviews.status === 'fulfilled' ? undefined : poll ? home.failure : reviewsFailure ?? { code: 'unavailable', retryable: true } } });
-  if (checkSwept) sweepOwed = null;
-  if (waiting) openUnread = unread !== undefined;
-  // A check that ended owes a read of what it found (set as its list showed); only a read that brings its rows pays it.
-  if (waiting && unread === undefined) resultOwed = false;
+  if (!home) return;
+  set({ home: { ...home, loading: false, settled: true,
+    failure: reviews.status === 'fulfilled' ? undefined : failureOf(reviews.reason) } });
   updateDecisionRuns(home.runs);
-  // Reviews that could not be read fail the load, as Home says: it waits for Try again, and no run starts meanwhile, on any page.
-  if (!poll) runsHeld = reviewsFailure !== undefined;
-  if (loadFailure) return;
-  // The next poll waits longer after a failed runs read, or a failed read of what a check found.
-  const failed = runs.status === 'rejected' ? failureOf(runs.reason) : resultOwed ? unread : undefined;
-  if (runSeq === ran) void driveRuns(home.runs, home.reviews.some(review => review.status === 'publishing'), failed, waiting?.sweepDue);
 }
 
 /**
  * What waits on you: its rows at once, rows only from ECHO's own fields;
- * then, only while Home itself shows, read live (`readHomeLive`). `rows`
- * settles with the rows read, and its failure; `sweepDue` once the live read
- * did.
+ * then, only while Home itself shows, read live (`readHomeLive`), which goes
+ * on by itself once the rows are read. Settles once the rows are read; a
+ * failed read keeps the rows Home had, and says nothing.
  */
-function readWaiting(mine: number, fresh: boolean): { rows: Promise<Failure | undefined>; sweepDue: Promise<boolean> } {
-  const rows = runsCommand({ schema_version: 1, operation: 'home', read: 'rows' }).then(value => {
+function readWaiting(mine: number, fresh: boolean): Promise<void> {
+  return runsCommand({ schema_version: 1, operation: 'home', read: 'rows' }).then(value => {
     const home = homeShown(mine);
     if (home) set({ home: { ...home, open: value } });
-    return undefined;
-  }, failureOf);
-  return { rows, sweepDue: rows.then(failure => (failure === undefined && homeInSight() ? readHomeLive(mine, fresh) : false)) };
+    // Started as soon as the rows are in, before whoever waits on them goes on.
+    if (homeInSight()) void readHomeLive(mine, fresh);
+  }, () => undefined);
 }
 
 /**
  * What waits on you, read live while Home shows: every row in one read
- * (`fresh`), which alone says whether a sweep is due; else only the rows
- * that newly lack a live part, one at a time. A read that fails leaves the
- * rows it was to read saying ECHO couldn't read them just now, and Home says
- * nothing else of it.
+ * (`fresh`); else only the rows that newly lack a live part, one at a time.
+ * A read that fails leaves the rows it was to read saying ECHO couldn't read
+ * them just now, and Home says nothing else of it.
  */
-async function readHomeLive(mine: number, fresh: boolean): Promise<boolean> {
+async function readHomeLive(mine: number, fresh: boolean): Promise<void> {
   const account = expect();
   const home = homeShown(mine);
-  if (!account || !home) return false;
+  if (!account || !home) return;
   const lacking = (home.open?.items ?? []).filter(item => awaitingLive(shownItem(item, home.live)));
-  if (!fresh && lacking.length === 0) return false;
+  if (!fresh && lacking.length === 0) return;
   set({ home: { ...home, reading: true } });
   let live: Record<string, LivePart> = {};
-  let sweepDue = false;
   if (fresh) {
     try {
       const value = await runsCommand({ schema_version: 1, operation: 'home' });
       live = liveParts(value.items);
-      sweepDue = value.sweep_due;
     } catch {
       live = Object.fromEntries(lacking.map(item => [item.item_id, UNREAD]));
     }
@@ -5926,223 +5554,6 @@ async function readHomeLive(mine: number, fresh: boolean): Promise<boolean> {
   }
   const after = state.home;
   if (after?.seq === mine) set({ home: { ...after, reading: false, live: { ...after.live, ...live } } });
-  return sweepDue;
-}
-
-// ---- checks keep moving: the runs driver (one place to look v1, R1–R4) ---------------------
-
-let runPoll: ReturnType<typeof setTimeout> | null = null;
-let runSeq = 0;
-/** Polls in a row whose runs read failed, or whose start started nothing: each waits longer than the one before. */
-let runFailures = 0;
-/** How often the driver looks again while a check is going, and the longest it waits after failed reads. */
-const RUN_POLL_MS = 5_000;
-const RUN_POLL_MAX_MS = 60_000;
-/** The runs list the driver last went by, whoever read it: Home's state keeps its own (R3). */
-let runsSeen: readonly PersonRunV1[] = [];
-/** Home could not read reviews: as Home says, no run starts by itself until a Home load reads them (Try again). */
-let runsHeld = false;
-/** The driver's own look on its way, if any: a kick meanwhile has nothing to add. */
-let looking: Promise<void> | null = null;
-
-/**
- * Checks go wherever ECHO runs for you: signed in, on any page, with the
- * window in front, behind other apps or closed to the tray (R1). Nothing runs
- * once ECHO quits, and nothing for no one.
- */
-function runsGo(): boolean {
-  return Boolean(state.status?.signed_in) && expect() !== null;
-}
-
-/** Home reads its own runs, with what waits on you: while it shows and can be seen. Anywhere else the driver reads the runs list alone. */
-function homeSeen(): HomeState | null {
-  return canSee() ? homeShown() : null;
-}
-
-function stopRunPolling(): void {
-  runSeq += 1;
-  if (runPoll) clearTimeout(runPoll);
-  runPoll = null;
-}
-
-function pollRuns(mine: number, delay: number): void {
-  runPoll = setTimeout(() => {
-    runPoll = null;
-    if (mine === runSeq && runsGo()) lookAtRuns();
-  }, delay);
-}
-
-/**
- * Looks at the runs now, when nothing else is about to (R4): on sign-in, on
- * coming back, when the reviews move (a meeting approved or published), and
- * once Check now stops following its sweep. Not while Home's reviews failed, a
- * look is armed or on its way, or a Home load (which drives) is on its way
- * while Home is seen.
- */
-function kickRuns(): void {
-  if (!runsGo() || runsHeld || runPoll !== null || looking !== null || (homeSeen() !== null && homeLoading !== null)) return;
-  lookAtRuns();
-}
-
-/** One look: Home's own read while Home is seen, as its poll; anywhere else the runs list alone. */
-function lookAtRuns(): void {
-  // Its list is newer than any read before it, whose runs drive no more (R3).
-  runSeq += 1;
-  const home = homeSeen();
-  const look = (home ? readHome(home.seq, true) : readRuns()).finally(() => { if (looking === look) looking = null; });
-  looking = look;
-}
-
-/**
- * The driver's own look, away from Home or while Home cannot be seen: the
- * runs list alone, none of it written to Home (R3). A check it sees end owes
- * Home what it found, read once Home shows, and the follow-ups that show are
- * read again (`endedOffHome`); the open decision follows its
- * checks; then the next queued run starts. A Home load, a newer look or
- * another account since drives instead: this list starts nothing.
- */
-async function readRuns(): Promise<void> {
-  const account = expect();
-  const mine = runSeq;
-  let listed: readonly PersonRunV1[] | undefined;
-  let failure: Failure | undefined;
-  try {
-    listed = (await runsCommand({ schema_version: 1, operation: 'list' })).runs;
-  } catch (error) {
-    failure = failureOf(error);
-  }
-  if (mine !== runSeq || !sameExpect(expect(), account) || !runsGo()) return;
-  if (listed) {
-    endedOffHome(listed);
-    updateDecisionRuns(listed);
-  }
-  await driveRuns(listed ?? runsSeen, false, failure);
-}
-
-/**
- * A runs list read off Home, before the driver goes by it: a check it shows
- * ended since the driver's last list owes Home what it found, and what shows
- * of the follow-ups is read again at once, with when ECHO last checked. A
- * sweep moves no follow-up's state, so the change check never sees it end.
- */
-function endedOffHome(listed: readonly PersonRunV1[]): void {
-  if (!checkEnded(runsSeen, listed) && !swept(listed)) return;
-  resultOwed = true;
-  if (swept(listed)) sweepOwed = null;
-  owe({ back: false, areas: ['follow_ups'] });
-}
-
-/**
- * Milliseconds until the next runs read, or null for none. `failures` counts
- * consecutive failed reads. The driver looks again only while a check is
- * pending or running, a review is publishing, or what a finished check found
- * is still unread (`owed`); after failed reads it waits twice as long each time (10 s,
- * 20 s, at most 60 s). A read that failed as unavailable with nothing in
- * flight is not tried again: an Authority with no model answers so for good,
- * and no check ever ends there.
- */
-export function runPollDelay(input: {
-  readonly runs: readonly PersonRunV1[]; readonly publishing: boolean; readonly failures: number; readonly lastFailure?: Failure; readonly owed?: boolean;
-}): number | null {
-  const inFlight = input.publishing || input.owed === true || input.runs.some(going);
-  if (input.failures === 0) return inFlight ? RUN_POLL_MS : null;
-  if (!inFlight && input.lastFailure?.code === 'unavailable') return null;
-  return Math.min(RUN_POLL_MAX_MS, RUN_POLL_MS * 2 ** input.failures);
-}
-
-/**
- * The run to start next when none is running: the oldest queued impact check,
- * else the oldest queued sweep (impact checks start before sweeps, spec
- * section 6). Lists come newest first.
- */
-export function runToStart(runs: readonly PersonRunV1[]): PersonRunV1 | undefined {
-  if (runs.some(run => run.state === 'running')) return undefined;
-  const queued = [...runs].reverse().filter(run => run.state === 'pending');
-  return queued.find(run => run.trigger === 'approved_record') ?? queued.find(run => run.trigger === 'sweep');
-}
-
-/** A start answered `busy`: another run goes first, and this one stays queued. */
-const BUSY: Failure = { code: 'busy', retryable: true };
-
-/**
- * The start on its way, if any. One goes at a time: a start asked for
- * meanwhile (Home's list and the driver's, or Check now's, can name the same
- * queued run at once) is answered by it, never sent again (R3). The Authority
- * runs one check per person, so a second start could only be `busy`.
- */
-let starting: Promise<Failure | undefined> | null = null;
-
-/**
- * Starts a queued run. A start that starts nothing (refused, failed, or
- * `busy`) is answered with why, so the next look waits longer, as after a
- * failed runs read (ruling R50). A start the Authority holds `pending` (its
- * search index has not caught up yet) is not one: holding costs it a few reads,
- * so the driver looks again at the usual pace and the check starts soon after
- * the search index catches up.
- */
-function startRun(run_id: string): Promise<Failure | undefined> {
-  if (starting) return starting;
-  const answer = runsCommand({ schema_version: 1, operation: 'start', run_id })
-    .then(({ state: started }) => (started === 'busy' ? BUSY : undefined))
-    .catch(failureOf);
-  starting = answer;
-  void answer.finally(() => { if (starting === answer) starting = null; });
-  return answer;
-}
-
-/**
- * Runs go only from your signed-in desktop, on whatever page shows (R1):
- * start the next queued one when none is going, impact checks first, then
- * sweeps (a sweep's attempt that went back to the queue is started again like
- * an impact check's); then look again when `runPollDelay` says, by Home's
- * reads while Home is seen, else by the runs list alone. Once no run is queued
- * or going, a sweep Home's live read says is due (`sweepDue`, once it
- * answers) is asked for and started, once per Home load. `failure` is the
- * runs read's, when it failed: the list is the last good one.
- */
-async function driveRuns(listed: readonly PersonRunV1[], publishing = false, failure?: Failure, sweepDue = Promise.resolve(false)): Promise<void> {
-  stopRunPolling();
-  runsSeen = listed;
-  const mine = runSeq;
-  const load = homeLoads;
-  const current = () => mine === runSeq && runsGo();
-  // A failed read never skips the start or the sweep request (D6): each is tried, and its failure joins the read's.
-  let failed = failure;
-  const next = runToStart(listed);
-  if (next) {
-    const refused = await startRun(next.run_id);
-    failed ??= refused;
-    if (!current()) return;
-  } else if (!listed.some(going) && await sweepDue && current() && askedIn !== load) {
-    // This load's one sweep request is spent here, as it is made.
-    askedIn = load;
-    const refused = await startDueSweep();
-    failed ??= refused;
-    if (!current()) return;
-  }
-  runFailures = failed ? runFailures + 1 : 0;
-  // What a finished check found is Home's to read: owed, it keeps the driver looking only while Home reads (R2).
-  const owed = (homeSeen() !== null && resultOwed) || sweepOwed !== null;
-  const delay = runPollDelay({ runs: listed, publishing, failures: runFailures, lastFailure: failed, owed });
-  if (delay !== null && current()) pollRuns(mine, delay);
-}
-
-/**
- * The sweep of your own items Home says is due, asked for and started. It
- * makes no row: what it finds shows once a runs list shows it ended. A failed
- * request shows nothing (the next Home load may ask again); a start that
- * starts nothing is answered as `startRun` answers it.
- */
-async function startDueSweep(): Promise<Failure | undefined> {
-  let asked: RunsResults['sweep'];
-  try {
-    asked = await runsCommand({ schema_version: 1, operation: 'sweep', scope: 'mine' });
-  } catch {
-    return undefined;
-  }
-  if (!('run_id' in asked)) return undefined;
-  sweepOwed = asked.run_id;
-  return startRun(asked.run_id);
 }
 
 /**
@@ -6218,7 +5629,6 @@ export async function openDecision(approval_id: string, run: PersonRunV1 | null 
     barScope: { kind: 'global' },
     decision: newDecision(approval_id, mine, run),
   });
-  syncSearch();
   freshness.navigated();
   await readDecision(mine, approval_id);
 }
@@ -6361,7 +5771,11 @@ export function lockDecisionRoutes(): void {
   const lock = !filed.every(item => decision.routes[item.signal_id]!.private);
   editChoices({ routes: { ...decision.routes, ...Object.fromEntries(filed.map(item => [item.signal_id, destinationOf(decision.routes[item.signal_id]!.projects, lock)])) } });
 }
-/** Approve or Reject: one send per opening. Home shows where it went; the check runs by itself. */
+/**
+ * Approve or Reject: one send per opening. Home shows where it went. An approval asks for a change check at once, past the
+ * page gate: it checks in and learns the 15 s pace the Authority keeps while the meeting publishes, so its check starts
+ * within about 15 s of being queued (DSK-1).
+ */
 export async function decide(action: 'approve' | 'reject'): Promise<void> {
   const decision = state.decision;
   if (!decision?.open || decision.busy || !decisionShown(decision.seq)) return;
@@ -6381,6 +5795,8 @@ export async function decide(action: 'approve' | 'reject'): Promise<void> {
       owners: action === 'approve' ? items.flatMap(item => (item.owner_editable && (decision.routes[item.signal_id] ?? null) !== null && owner(item)
         ? [{ signal_id: item.signal_id, owner: owner(item) }] : [])) : [],
     });
+    // Before Home opens, so its page check joins this one.
+    if (action === 'approve') freshness.approved();
     if (!decisionShown(mine)) return;
     const toast = result.decided_on === 'slack' ? `Already ${result.status === 'rejected' ? 'rejected' : 'approved'} in Slack`
       : result.status === 'rejected' ? 'Rejected' : 'Approved · checking what it changes';
@@ -6392,7 +5808,11 @@ export async function decide(action: 'approve' | 'reject'): Promise<void> {
   }
 }
 
-/** Try again on one record's failed impact check. */
+/**
+ * Try again on one record's failed impact check: queued again, then a check-in, so the Authority starts it (DSK-1); the
+ * decision then reads its checks once more, as a meeting's line does, and Home under it reads them too, so its count and
+ * the sidebar's stop saying Retry at once.
+ */
 export async function retryImpact(run_id: string): Promise<void> {
   const decision = state.decision;
   const run = decision?.runs.find(item => item.run_id === run_id);
@@ -6403,11 +5823,9 @@ export async function retryImpact(run_id: string): Promise<void> {
     const shown = decisionShown(mine);
     if (!shown) return;
     editDecision({ runs: shown.runs.map(item => (item.run_id === run_id ? { ...item, state: 'pending', error_code: null } : item)) });
-    const runs = await runsCommand({ schema_version: 1, operation: 'list' });
-    // The driver looks again while it runs, on any page; away from Home the decision also reads its checks once more at once, as
-    // a meeting's line does.
-    if (homeUnder()) void driveRuns(runs.runs);
-    else { await driveRuns(runs.runs); await readRecordRuns(mine); }
+    await checkIn();
+    if (homeUnder()) void loadHome(false);
+    await readRecordRuns(mine);
   } catch { /* the card still offers Try again */ }
 }
 
@@ -6459,7 +5877,7 @@ export function lineRecord(line: ItemsLine): string | null {
   return line.scope === 'record' ? line.id : line.stage?.record_sha256 ?? line.summary?.by_decision[0]?.record_sha256 ?? null;
 }
 
-/** Try again, on a meeting's line: its check runs again, from your desktop. */
+/** Try again, on a meeting's line: its check is queued again, and this desktop checks in, so the Authority starts it (DSK-1). */
 export async function retryLineCheck(): Promise<void> {
   const line = state.impactLine;
   if (!line?.stage || line.stage.state !== 'failed' || !line.stage.mine || line.busy) return;
@@ -6467,7 +5885,7 @@ export async function retryLineCheck(): Promise<void> {
   set({ impactLine: { ...line, busy: true } });
   try {
     await runsCommand({ schema_version: 1, operation: 'retry', run_id: stage.run_id });
-    await driveRuns((await runsCommand({ schema_version: 1, operation: 'list' })).runs);
+    await checkIn();
   } catch { /* the line offers Try again again */ }
   if (state.impactLine?.seq === line.seq) await loadLine('impactLine', scope, id);
 }
@@ -6553,8 +5971,6 @@ interface ListFields extends ChangeView {
   ticks: Readonly<Record<string, boolean>>;
   /** Sends whose outcome is unknown, by check (run). */
   sends: Readonly<Record<string, SendCommand>>;
-  /** Check now: its sweep on its way, nothing open to check, or the sweep failed. Any other read of the list clears what it said. */
-  check: 'checking' | 'nothing' | 'failed' | null;
   /** Closed groups that show their rows. */
   expanded: Readonly<Partial<Record<ClosedState, true>>>;
   /** The row whose page was opened from this list last: coming back, it takes the focus. */
@@ -6648,7 +6064,7 @@ const UNCHANGED = { busy: false, said: null, picker: null, stale: false } as con
 
 function newList(source: ListSource, title: string | null): FollowUpList {
   return { kind: 'list', seq: ++seq, ...source, title, loading: true, items: [], live: {}, reading: false, reads: [], summary: null, stage: null, ticks: {},
-    sends: {}, check: null, expanded: source.scope === 'involved' || source.scope === 'project' ? {} : { done: true, not_relevant: true }, ...UNCHANGED };
+    sends: {}, expanded: source.scope === 'involved' || source.scope === 'project' ? {} : { done: true, not_relevant: true }, ...UNCHANGED };
 }
 
 /**
@@ -6669,7 +6085,7 @@ export function openFollowUps(scope: 'record' | 'project', id: string, title: st
 
 /**
  * Follow-ups (yours), from the sidebar: everything you sent, own or last handed on (`involved`), as a page
- * of its own. The bar searches all context.
+ * of its own. The bar asks all context.
  */
 export function openYourFollowUps(): Promise<void> {
   if (!expect() || state.concealed) return Promise.resolve();
@@ -6678,7 +6094,6 @@ export function openYourFollowUps(): Promise<void> {
   const list = newList({ scope: 'involved' }, null);
   set({ route, followUps: { route, views: [list], changed: false }, list: null, roster: null, reader: null, ask: null, sources: null, toast: null,
     barScope: { kind: 'global' }, organization: null, decision: null });
-  syncSearch();
   freshness.navigated();
   return readList(list.seq, 'first');
 }
@@ -6794,8 +6209,8 @@ function mergeRows(shown: readonly OpenItemView[], read: readonly OpenItemView[]
  * fields: its first read, every part that shows together (a meeting's, all
  * of them in one read); one part's next page (More), or its first once its
  * group opens; or again, every part read so far that still shows, as far as
- * it showed (after a change over the list, or Check now), so rows move
- * between groups in place. Rows read replace what showed of them. A meeting's
+ * it showed (after a change over the list), so rows move between groups in
+ * place. Rows read replace what showed of them. A meeting's
  * first read ticks every Not sent row you may send; any other keeps the ticks
  * of rows still not sent. A read that fails keeps what shows, and Try again
  * repeats it. Then a closed group opened while it was on its way is read, and
@@ -6810,8 +6225,7 @@ async function readList(mine: number, how: ListRead): Promise<void> {
   const part = how === 'first' || how === 'again' ? null : how;
   const paged = part === null ? undefined : list.reads.find(read => read.parts.includes(part));
   if (part !== null && (list.loading || paged?.next === null)) return;
-  // Check now's word of its last sweep holds until the list is read again; a sweep on its way stays.
-  setView({ ...list, loading: true, failed: undefined, check: list.check === 'checking' ? 'checking' : null });
+  setView({ ...list, loading: true, failed: undefined });
   const rowsOf = (read: PartsRead) => read.pages.reduce((count, page) => count + page.ids.length, 0);
   const asked: { read: PartsRead; atLeast: number }[] = how === 'first' ? [{ read: { parts: shown, pages: [], next: null }, atLeast: 1 }]
     : how === 'again' ? list.reads.flatMap(read => {
@@ -6847,7 +6261,7 @@ async function readList(mine: number, how: ListRead): Promise<void> {
   const now = viewOf('list', mine);
   const owed = now && shownParts(now).find(entry => !now.reads.some(read => read.parts.includes(entry)));
   const next = owed ? readList(mine, owed) : fillLive(mine);
-  // Read again after a change, its rows say what happened at once: Send and Check now wait on no live read.
+  // Read again after a change, its rows say what happened at once: Send waits on no live read.
   if (how !== 'again') await next;
 }
 
@@ -7390,94 +6804,6 @@ export async function openListDecision(): Promise<void> {
   pushView({ kind: 'decision', seq: mine, stale: false });
   set({ decision: newDecision(record, mine, run) });
   await readDecision(mine, record);
-}
-
-/**
- * Check now, faint on a meeting's or a project's list (canvas 9.6, 9.7): a
- * sweep of that scope. With nothing open the list says so; otherwise
- * "Checking…" until the sweep ends, then the list is read again, and what
- * it found is read on Back by what is under it, as after a change. A sweep
- * that fails says so, and Try again asks for another.
- */
-export async function checkNow(): Promise<void> {
-  const list = shownView('list');
-  if (!list || list.id === undefined || list.scope === 'involved' || list.check === 'checking' || !expect() || state.concealed) return;
-  const request = { schema_version: 1 as const, operation: 'sweep' as const, scope: list.scope, id: list.id };
-  setView({ ...list, check: 'checking' });
-  // Still this list's check, while the list is open.
-  const ours = (): FollowUpList | null => {
-    const now = viewOf('list', list.seq);
-    return now?.check === 'checking' ? now : null;
-  };
-  let runId: string;
-  try {
-    const asked = await runsCommand(request);
-    const now = ours();
-    if (!now) return;
-    if (!('run_id' in asked)) { setView({ ...now, check: 'nothing' }); return; }
-    runId = asked.run_id;
-  } catch {
-    const now = ours();
-    if (now) setView({ ...now, check: 'failed' });
-    return;
-  }
-  const ended = await followSweep(runId, () => ours() !== null);
-  const now = ours();
-  if (!now || ended === null) return;
-  setView({ ...now, check: ended === 'done' ? null : 'failed' });
-  if (ended !== 'done') return;
-  changedFrom(now.seq);
-  await readList(now.seq, 'again');
-}
-
-/**
- * Check now's sweep, followed until it ends (`done` or `failed`; null once
- * nothing waits on it, `ours`). It is started at once; if another run goes
- * first (`busy`), each runs list says what starts next, impact checks before
- * sweeps. The list is read at the driver's pace (`runPollDelay`): longer after
- * a failed read or a start that started nothing; on while ECHO is behind
- * other apps, as checks are (R1). Once it stops following, the driver goes on
- * with whatever queued behind its sweep (R4).
- */
-async function followSweep(runId: string, ours: () => boolean): Promise<'done' | 'failed' | null> {
-  try {
-    let next: string | undefined = runId;
-    let failures = 0;
-    let lastFailure: Failure | undefined;
-    for (;;) {
-      if (next !== undefined) {
-        const refused = await startRun(next);
-        if (!ours()) return null;
-        failures = refused ? failures + 1 : 0;
-        lastFailure = refused;
-      }
-      // The list waits on its sweep: it is in flight until a runs list shows it ended.
-      await new Promise(resolve => setTimeout(resolve, runPollDelay({ runs: [], publishing: false, failures, lastFailure, owed: true })!));
-      next = undefined;
-      if (!ours()) return null;
-      if (!runsGo()) continue;
-      let runs: readonly PersonRunV1[];
-      try {
-        runs = (await runsCommand({ schema_version: 1, operation: 'list' })).runs;
-      } catch (error) {
-        failures += 1;
-        lastFailure = failureOf(error);
-        continue;
-      }
-      if (!ours()) return null;
-      const run = runs.find(entry => entry.run_id === runId);
-      if (run?.state === 'done') return 'done';
-      if (!run || run.state === 'failed') return 'failed';
-      next = runToStart(runs)?.run_id;
-      // Nothing to start: a run is going, ours or one before it; look again at the usual pace.
-      if (next === undefined) {
-        failures = 0;
-        lastFailure = undefined;
-      }
-    }
-  } finally {
-    kickRuns();
-  }
 }
 
 // ---- notifications (desktop refresh and notifications v1, N6) ---------------------------------

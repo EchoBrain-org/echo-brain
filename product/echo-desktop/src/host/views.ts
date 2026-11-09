@@ -4,18 +4,18 @@
 // printed through the same validator, and copies explicitly only the fields
 // the renderer needs, so nothing else the client prints can reach it.
 import type {
-  Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskRead, AskScope, AskSearched, AskStep, Audience, ConnectedTools,
-  CreatedProject, DocumentSummary, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, MemberPage, Opened,
-  ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef,
+  Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskScope, AskStep, Audience, ConnectedTools,
+  CreatedProject, DocumentSummary, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, MemberPage, Opened,
+  ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordPolicy, RecordRead,
   RecordSection, SourceEvidence, SourceRef, ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
 import {
   validateEmployeeRosterV1, validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
-  validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2,
+  validateProjectCreateReceiptV1, validateProjectListV2,
   validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1,
-  type PersonAnswerCitationV8, type PersonAskReceiptRowV3, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
-  type PersonOpenItemV1, type PersonOpenMeetingAtomV1, type PersonOpenMeetingV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
+  type PersonAnswerCitationV8, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
+  type PersonOpenItemV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
   type PersonCitedRecordSectionV1,
 } from '@echo-brain/organization-api';
 import { externalSourcePermalink } from '../shared/protocol.js';
@@ -48,8 +48,8 @@ function validated<T>(validate: (value: unknown) => T, raw: unknown): T {
   try { return validate(raw); } catch { throw new ViewError(); }
 }
 
-/** The account signed in, if any; `now` is the host's clock, for how long the weekly sign-in has left. */
-export function statusView(raw: unknown, now: number): AppStatus {
+/** The account signed in, if any; signed out by a refresh, why. */
+export function statusView(raw: unknown): AppStatus {
   const value = object(raw);
   if (value.kind !== 'echo-person-client-status-v1') throw new ViewError();
   const version = text(value.installed_version);
@@ -65,13 +65,11 @@ export function statusView(raw: unknown, now: number): AppStatus {
   }
   const role = value.membership_type;
   if (role !== 'owner' && role !== 'employee') throw new ViewError();
-  const due = typeof value.hard_reauthentication_at === 'string' ? Date.parse(value.hard_reauthentication_at) : Number.NaN;
   const account: Account = {
     authority: text(value.connected_authority),
     membership_id: text(value.membership_id),
     display_name: text(value.display_name),
     role,
-    ...(Number.isFinite(due) ? { sign_in_due: { at: new Date(due).toISOString(), in_ms: due - now } } : {}),
   };
   return { signed_in: true, account, client_version: version };
 }
@@ -130,11 +128,11 @@ export function listView(raw: unknown, scope: ListScope): ListPage {
 }
 
 /**
- * The item asked for, opened by its ref: a note's text, one page of a
- * document's text, or one page of a meeting's approved record. `first` says
- * the page was read without a cursor.
+ * The item asked for, opened by its ref: a note's text, or one page of an
+ * imported meeting's or a document's text. A meeting is never opened here:
+ * the reader reads its record as the source pane does (recordView).
  */
-export function openView(raw: unknown, ref: ItemRef, first: boolean): Opened {
+export function openView(raw: unknown, ref: ItemRef & { readonly kind: Exclude<ItemRef['kind'], 'meeting'> }): Opened {
   const opened = validated(validatePersonOpenResponseV1, unwrap(raw));
   if (opened.ref !== `${ref.kind}:${ref.id}` || !('item' in opened)) throw new ViewError();
   const item = listItem(opened.item);
@@ -161,8 +159,6 @@ export function openView(raw: unknown, ref: ItemRef, first: boolean): Opened {
         chunks: chunks.map(chunk => ({ anchor: chunk.anchor.kind, start: chunk.anchor.start, text: chunk.text })), next_cursor: next,
       } };
     }
-    case 'meeting':
-      return { kind: 'meeting', record: meetingRecord(opened as PersonOpenMeetingV1, item, first), next_cursor: next };
   }
 }
 
@@ -249,22 +245,6 @@ export function revokedView(raw: unknown): null {
   return null;
 }
 
-function match({ context_id, title, excerpt, received_at }: Match): Match {
-  return { context_id, title, excerpt, received_at };
-}
-
-/** A project's search results, only for the project that was searched. */
-export function projectMatchesView(raw: unknown, projectId: string): Matches {
-  const page = validated(validateProjectContextSearchResultV2, raw);
-  if (page.project_id !== projectId) throw new ViewError();
-  return { items: page.items.map(match) };
-}
-
-/** Saved notes found by a search, each opened by its ref. */
-export function noteMatchesView(raw: unknown): Match[] {
-  return validated(validatePersonUploadSearchResultV3, raw).results.map(match);
-}
-
 /** A cited passage of an original, as the contract has it. */
 type SourceRevision = Extract<PersonAnswerCitationV8['citation'], { readonly kind: 'source_revision' }>;
 
@@ -277,20 +257,26 @@ const SHA256 = /^sha256:[a-f0-9]{64}$/;
 const REVISION = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const POLICIES: ReadonlySet<string> = new Set<RecordPolicy>(['restricted-reviewer-person-v2', 'project-members-readable-person-v1']);
 
-/** A record the page may ask the host to read: a well-formed digest and a known policy. */
-export function isRecordRef(value: unknown): value is RecordRef {
+/**
+ * A record the page may ask the host to read: a well-formed digest, and a known policy when an answer cites it; a
+ * meeting the reader opens by its ref names none. Anything else is null.
+ */
+export function recordRead(value: unknown): RecordRead | null {
   const record = value !== null && typeof value === 'object' ? value as Json : {};
-  return typeof record.record_sha256 === 'string' && SHA256.test(record.record_sha256) &&
-    typeof record.policy_id === 'string' && POLICIES.has(record.policy_id);
+  if (typeof record.record_sha256 !== 'string' || !SHA256.test(record.record_sha256)) return null;
+  if (record.policy_id === undefined) return { record_sha256: record.record_sha256 };
+  return typeof record.policy_id === 'string' && POLICIES.has(record.policy_id)
+    ? { record_sha256: record.record_sha256, policy_id: record.policy_id as RecordPolicy } : null;
 }
 
 /**
  * An Agentic Ask answer (V8): its statements, each with the exact sources
- * that support it, in the answer's order, and a streamed answer's receipt,
- * built by the Authority from what passed its final check. It is the last
- * line `person ask --progress` printed, in every scope: the answer on `/v7`,
- * with its receipt when the Authority streamed it (ADR-0039, ADR-0040,
- * research tool contract v1). An answer to an Ask that carried `previous`
+ * that support it, in the answer's order, and how many items a streamed
+ * answer looked through, from the receipt the Authority built from what
+ * passed its final check (its searches and reads never reach the page). It
+ * is the last line `person ask --progress` printed, in every scope: the
+ * answer on `/v7`, with its receipt when the Authority streamed it (ADR-0039,
+ * ADR-0040, research tool contract v1). An answer to an Ask that carried `previous`
  * (ADR-0047) also says the full question it answers, Ask again's "since" (its
  * citations among the answer's), or, asking which one (`clarify`), the
  * choices and no part. Its diagnostic notice stays out; the desktop and Copy
@@ -301,7 +287,7 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
   const { direct, parts, outcome } = result;
   const sources = result.citations.map(citedSource);
   return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
-    ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through, rows: receipt.rows.map(askRow) } }),
+    ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through } }),
     ...(result.question === undefined ? {} : { question: result.question }),
     ...(result.since === undefined ? {} : { since: result.since.statements }),
     ...(result.choices === undefined ? {} : { choices: result.choices }) };
@@ -314,7 +300,7 @@ const PRIVATE_VISIBILITY: ReadonlySet<string> = new Set(['only_me', 'approver_on
  * An answer's cited item, and whether only you can read it: its source row
  * shows the lock when ECHO keeps it for you alone (ADR-0049). It keeps the
  * citation as the response carried it, for a later follow-up's `previous`
- * and, when it can change or go, a later check (ADR-0047).
+ * and, when it can go, a later check (ADR-0047).
  */
 function citedSource(citation: PersonAnswerCitationV8): AnswerSource {
   const source = { ...answerSource(citation), cited: citation };
@@ -323,13 +309,13 @@ function citedSource(citation: PersonAnswerCitationV8): AnswerSource {
 
 /**
  * What `person ask-check` printed (C1), as the page may see it: one state per
- * item asked, in their order, and a readable ticket's current marker. A reply
- * with another number of items, or anything else, is not its output.
+ * item asked, in their order; a ticket's marker never reaches the page. A
+ * reply with another number of items, or anything else, is not its output.
  */
 export function askCheckView(raw: unknown, asked: number): { items: AskCheckResult[] } {
   const check = validated(validatePersonAskCheckV1, raw);
   if (check.items.length !== asked) throw new ViewError();
-  return { items: check.items.map(({ state, marker }) => ({ state, ...(marker === undefined ? {} : { marker }) })) };
+  return { items: check.items.map(({ state }) => ({ state })) };
 }
 
 /**
@@ -341,22 +327,18 @@ export function projectActivityView(raw: unknown): { items: ProjectActivity[] } 
   return { items: validated(validatePersonProjectActivityV1, raw).items.map(({ project_id, latest_at }) => ({ project_id, latest_at })) };
 }
 
-function askRow(row: PersonAskReceiptRowV3): AskSearched | AskRead {
-  return row.type === 'searched'
-    ? { type: 'searched', sources: row.sources.map(source => 'tool_id' in source ? { kind: source.kind, tool_id: source.tool_id } : { kind: source.kind }), found: row.found }
-    : { type: 'read', items: row.items.map(answerSource) };
-}
-
 /**
  * One line `person ask --progress` printed before its answer: a step of the
  * Ask, as progress V3 has it (ADR-0039, ADR-0040, research tool contract v1).
- * Only the stage, a search's source kinds and count, and the items just read
- * cross, each item as an answer's citation does, a follow-up, a project, a
- * person, a tool or a tool's container included. Anything else is refused.
+ * Only the stage, that a search came (never its source kinds or count), and
+ * the items just read cross, each item as an answer's citation does, a
+ * follow-up, a project, a person, a tool or a tool's container included: the
+ * line names what it reads. Anything else is refused.
  */
 export function askStepView(raw: unknown): AskStep {
   const step = validated(validatePersonAskProgressLineV3, raw).progress;
-  if (step.type !== 'stage') return askRow(step);
+  if (step.type === 'searched') return { type: 'searched' };
+  if (step.type === 'read') return { type: 'read', items: step.items.map(answerSource) };
   return { type: 'stage', stage: step.stage, ...(step.pending === undefined ? {} : { pending: step.pending }) };
 }
 
@@ -375,8 +357,8 @@ function originalSource(citation: SourceRevision, label: string, ref: string | u
  * record by its digest and policy, an original by its revision and anchor, a
  * live ticket or page by its permalink, a follow-up, a project,
  * a person or a tool by its id, and a container in a tool you connected by its
- * link, its scope and own id left behind. A name Ask shows while it works, or
- * in its receipt, is such a citation too: it opens the same way.
+ * link, its scope and own id left behind. An item the line names while Ask
+ * works is such a citation too.
  */
 function answerSource({ citation, label, ref, key }: PersonAnswerCitationV8): AnswerSource {
   switch (citation.kind) {
@@ -421,7 +403,10 @@ export function openItemView(item: PersonOpenItemV1): OpenItemView {
   };
 }
 
-/** Home's part of the runs: Send rows, the items that wait on this viewer, the counts of the rest, and whether a sweep is due. */
+/**
+ * Home's part of the runs: Send rows, the items that wait on this viewer, and how many of the rest wait on others. `landed`,
+ * `last_checked_at` and `sweep_due` are retired (the Authority sends 0, null and false until V17) and cross unread.
+ */
 export function homeView(result: PersonRunsResultsV1['home']): HomeView {
   return {
     send: result.send, items: result.items.map(openItemView), landed: result.landed, waiting: result.waiting, last_checked_at: result.last_checked_at,
@@ -434,10 +419,8 @@ export function openItemsView(result: PersonRunsResultsV1['items']): OpenItemsVi
   return { items: result.items.map(openItemView), next_cursor: result.next_cursor, summary: result.summary, stages: result.stages };
 }
 
-/** Longest text the source pane shows, in characters; longer is cut and marked. */
+/** Longest text the source pane shows, in characters; longer is cut and marked. The reader shows each whole. */
 const MAX_SOURCE_TEXT = 2_000;
-/** Longest part of an approved item the reader shows, in characters: more than one part holds (3 KiB). */
-const MAX_READER_TEXT = 4_000;
 
 /**
  * Text as the source pane or the reader may show it: control and format
@@ -462,125 +445,34 @@ const RECORD_VISIBILITY: Readonly<Record<RecordPolicy, ApprovedRecord['visibilit
   'project-members-readable-person-v1': 'project', 'restricted-reviewer-person-v2': 'approver',
 };
 
-/** A section of a cited record, as the pane shows it: only a decision still open says so, and each item keeps the atom id its citations carry. */
-function citedSection({ items, more }: PersonCitedRecordSectionV1): RecordSection {
-  return { more, items: items.map(({ atom_id, text: itemText, status, owner, quotes }) => ({
-    text: sourceText(itemText)!, ...(status === 'proposed' || status === 'unresolved' ? { status } : {}), ...(owner === undefined ? {} : { owner }),
-    excerpts: quotes.map(({ quote, started_at }) => ({ quote: sourceText(quote)!, ...(started_at === undefined ? {} : { at: started_at }) })), atom_id,
-  })) };
-}
-
 /**
  * The one approved record asked for, as `person records --record-sha256
- * --brief` prints it (organization-api's cited record): only the record and
- * policy the answer cited, each text as the pane shows it.
+ * --brief` prints it (organization-api's cited record), only that record: one
+ * an answer cites, only under the policy it cited, as the source pane shows
+ * it, each text at most 2,000 characters; or, asked with no policy, a meeting
+ * opened by its ref, as the reader shows it, every text whole and without the
+ * quotes the reader never shows (ADR-0024). Only a decision still open says
+ * so, and each item keeps the atom id its citations carry.
  */
-export function recordView(raw: unknown, asked: RecordRef): ApprovedRecord {
+export function recordView(raw: unknown, asked: RecordRead): ApprovedRecord {
   const record = validated(validatePersonCitedRecordV1, unwrap(raw));
-  if (record.record_sha256 !== asked.record_sha256 || record.policy_id !== asked.policy_id) throw new ViewError();
+  const pane = asked.policy_id !== undefined;
+  if (record.record_sha256 !== asked.record_sha256 || (pane && record.policy_id !== asked.policy_id)) throw new ViewError();
+  const shown = (value: string) => sourceText(value, pane ? MAX_SOURCE_TEXT : Number.POSITIVE_INFINITY)!;
+  const section = ({ items }: PersonCitedRecordSectionV1): RecordSection => ({ items: items.map(({ atom_id, text: itemText, status, owner, quotes }) => ({
+    text: shown(itemText), ...(status === 'proposed' || status === 'unresolved' ? { status } : {}), ...(owner === undefined ? {} : { owner }),
+    excerpts: pane ? quotes.map(({ quote, started_at }) => ({ quote: shown(quote), ...(started_at === undefined ? {} : { at: started_at }) })) : [], atom_id,
+  })) });
   return {
-    ...(record.title === undefined ? {} : { title: sourceText(record.title)! }),
+    ...(record.title === undefined ? {} : { title: shown(record.title) }),
+    ...(record.approved_at === undefined ? {} : { approved_at: record.approved_at }),
     ...(record.started_at === undefined ? {} : { started_at: record.started_at }),
     ...(record.timezone === undefined ? {} : { timezone: record.timezone }),
     all_day: record.all_day,
-    ...(record.approved_by === undefined ? {} : { approved_by: sourceText(record.approved_by)! }),
-    participants: record.participants.map(name => sourceText(name)!), participants_more: record.participants_more,
+    ...(record.approved_by === undefined ? {} : { approved_by: shown(record.approved_by) }),
+    participants: record.participants.map(shown), participants_more: record.participants_more,
     visibility: RECORD_VISIBILITY[record.policy_id],
-    decisions: citedSection(record.decisions), actions: citedSection(record.actions), rationales: citedSection(record.rationales),
-  };
-}
-
-const SECTIONS: Readonly<Record<PersonOpenMeetingAtomV1['kind'], 'decisions' | 'actions' | 'rationales'>> = { decision: 'decisions', action: 'actions', rationale: 'rationales' };
-
-/**
- * One part of a long approved item: controls made spaces, but not trimmed,
- * since the parts join exactly as they were cut.
- */
-function partText(text: string): string {
-  return text.replace(/[\p{Cc}\p{Cf}]/gu, ' ');
-}
-
-/** Text the reader shows, controls made spaces and trimmed: a page with nothing left of it is refused. */
-function shownText(text: string): string {
-  const shown = sourceText(text, MAX_READER_TEXT);
-  if (shown === undefined) throw new ViewError();
-  return shown;
-}
-
-/** A long item whose parts are all read: its whole text, trimmed, and no parts left to join. */
-function whole(item: RecordItem): RecordItem {
-  const { parts: _parts, ...rest } = item;
-  const joined = item.text.trim();
-  if (joined === '') throw new ViewError();
-  return { ...rest, text: joined };
-}
-
-/**
- * One page of a meeting's approved record, as the reader shows it. Only the
- * first page describes the meeting (when, who was there, who approved it).
- * A long item comes in parts: each part goes on the item before it, and only
- * a page read with a cursor may begin with a part that goes on the page
- * before. Who can read it follows the row: everyone, a project's members, or
- * the approver. Every id stays behind.
- */
-function meetingRecord(page: PersonOpenMeetingV1, item: ListItem, first: boolean): ApprovedRecord {
-  if ((page.meeting !== undefined) !== first) throw new ViewError();
-  const sections: Record<'decisions' | 'actions' | 'rationales', RecordItem[]> = { decisions: [], actions: [], rationales: [] };
-  // The section of a long item whose parts are not all read yet: the next part must go on it.
-  let open: 'decisions' | 'actions' | 'rationales' | null = null;
-  page.atoms.forEach((atom, position) => {
-    const section = SECTIONS[atom.kind];
-    const items = sections[section];
-    const part = atom.part ?? null;
-    if (part && part.index > 1) {
-      const { index, count } = part;
-      const last = items.at(-1);
-      let joined: RecordItem;
-      if (open === section && last?.parts && last.parts.to === index - 1 && last.parts.count === count) {
-        joined = { ...last, text: last.text + partText(atom.text), parts: { ...last.parts, to: index } };
-        items[items.length - 1] = joined;
-      } else if (position === 0 && !first) {
-        joined = { text: partText(atom.text), excerpts: [], parts: { from: index, to: index, count } };
-        items.push(joined);
-      } else {
-        throw new ViewError();
-      }
-      open = index === count ? null : section;
-      // Every part read here: the item is whole. One begun on the page before stays in parts, to be joined.
-      if (index === count && joined.parts!.from === 1) items[items.length - 1] = whole(joined);
-      return;
-    }
-    // A long item's parts all come before the next item.
-    if (open !== null) throw new ViewError();
-    // Only a decision has a status, and only an action an owner.
-    const status = atom.status === 'proposed' || atom.status === 'unresolved' ? atom.status : undefined;
-    const owner = sourceText(atom.owner);
-    const attributes = { ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }) };
-    if (part) {
-      items.push({ text: partText(atom.text), ...attributes, excerpts: [], parts: { from: 1, to: 1, count: part.count } });
-      open = section;
-      return;
-    }
-    items.push({ text: shownText(atom.text), ...attributes, excerpts: [] });
-  });
-
-  const meeting = page.meeting;
-  const participants = meeting?.participants.map(shownText) ?? [];
-  if (new Set(participants).size !== participants.length) throw new ViewError();
-  // Its approver or a project's members read an approved meeting: no record is organization-wide since the Team policy went.
-  if (item.visibility === 'team') throw new ViewError();
-  const approver = sourceText(meeting?.approved_by);
-  return {
-    title: item.title, added_at: item.added_at,
-    ...(meeting?.started_at === undefined ? {} : { started_at: meeting.started_at }),
-    ...(meeting?.timezone === undefined ? {} : { timezone: meeting.timezone }),
-    all_day: meeting?.all_day === true,
-    ...(approver === undefined ? {} : { approved_by: approver }),
-    participants, participants_more: meeting?.participants_more === true,
-    visibility: item.visibility === 'project' ? 'project' : 'approver',
-    decisions: { items: sections.decisions, more: false },
-    actions: { items: sections.actions, more: false },
-    rationales: { items: sections.rationales, more: false },
+    decisions: section(record.decisions), actions: section(record.actions), rationales: section(record.rationales),
   };
 }
 

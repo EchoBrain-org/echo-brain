@@ -3,7 +3,7 @@
 // then the meetings ECHO shows there, then the question for any week; at most
 // three, each once) and the count toward a question's 240 characters.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Answer, AskScope, HomeView, Match, ListItem, OpenItemView } from '../../src/shared/protocol.js';
+import type { Answer, HomeView, ListItem, OpenItemView } from '../../src/shared/protocol.js';
 import { COUNT_FROM, decidedIn, MAX_QUESTION, MAX_SUGGESTIONS, questionCount, suggestedQuestions, weekQuestion } from '../../src/renderer/bar.js';
 import { ACCOUNT, EMPTY_SUMMARY, cover, fail, fileOf, flush, Held, ok, project, rpcFor, startStore, storeLifecycle, timelineFiles, uncover } from './harness.js';
 
@@ -156,7 +156,7 @@ describe('what an empty bar suggests', () => {
     expect(questions(store.barSuggestions())).toEqual(['What is left for launch?', 'When do we ship?', 'What did we decide this week?']);
   });
 
-  it('shows only over a page where live matches could: signed in, the bar empty, and no answer or sheet over it', async () => {
+  it('shows only over a page: signed in, the bar empty, and no answer or sheet over it', async () => {
     const store = await startStore();
     expect(store.getState().status?.account?.membership_id).toBe(ACCOUNT.membership_id);
     expect(store.suggestionsShown()).toBe(true);
@@ -179,72 +179,62 @@ describe('what an empty bar suggests', () => {
   });
 });
 
-describe('live matches', () => {
-  const m1: Match = { context_id: 'ctx_1', title: 'Pricing decision from Tuesday sync', excerpt: 'Apollo moves to pricing tiers.', received_at: '2026-10-19T10:00:00.000Z' };
-  const m2: Match = { ...m1, context_id: 'ctx_2', title: 'Apollo update', excerpt: 'We agreed to ship.' };
-  const searches = () => rpc.mock.calls.filter(([method]) => method === 'search.run').map(([, params]) => params);
-  const typed = async (store: Awaited<ReturnType<typeof startStore>>, value: string) => {
-    store.setBarText(value);
+describe('the bar only asks (DSK-23)', () => {
+  it('sends nothing as you type, and keeps its text over a reader, another app and a capture, and on a sidebar click, which narrows its scope', async () => {
+    feed = [note('Apollo update', 14)];
+    const fallback = rpc.getMockImplementation()!;
+    rpc.mockImplementation(async (method, params) => method === 'open.ref' ? ok({ kind: 'note', content: { context_id: 'ctx_14', title: 'Apollo update',
+      text: 'We agreed to ship.', received_at: '2026-10-14T09:00:00.000Z', audience: 'project', project_ids: [] } }) : fallback(method, params));
+    const store = await startStore();
+    const before = rpc.mock.calls.length;
+    store.setBarText('apollo');
     await vi.advanceTimersByTimeAsync(300);
     await flush();
-  };
-  beforeEach(() => {
-    const fallback = rpc.getMockImplementation()!;
-    rpc.mockImplementation(async (method, params) => method === 'search.run' ? ok({ items: params.query === 'apollo' ? [m1, m2] : [m1] })
-      : method === 'open.ref' ? ok({ kind: 'note', content: { context_id: m2.context_id, title: m2.title, text: m2.excerpt,
-        received_at: m2.received_at, audience: 'project', project_ids: [] } }) : fallback(method, params));
-  });
-
-  it('keeps Home search through a match, another app and a capture, and narrows it on a sidebar click', async () => {
-    const store = await startStore();
-    await typed(store, 'apollo');
-    expect(store.getState().matches).toMatchObject({ query: 'apollo', scope: { kind: 'global' }, loading: false });
-    expect(store.matchesShown()).toBe(true);
-    await store.openMatch(m2);
-    expect(store.getState().reader).not.toBeNull();
-    expect(store.matchesShown()).toBe(false);
-    await typed(store, 'pricing tiers');
-    expect(store.getState().reader).toBeNull();
-    expect(store.matchesShown()).toBe(true);
-    await typed(store, 'apollo');
-    const before = searches().length;
+    // What you type leaves the page only when you ask it.
+    expect(JSON.stringify(rpc.mock.calls.slice(before))).not.toContain('apollo');
     cover(store);
-    expect(store.getState().matches).toBeNull();
     expect(store.pageCovered()).toBe(true);
     expect(store.getState().barText).toBe('apollo');
     await uncover(store);
     await flush();
-    expect(searches()).toHaveLength(before + 1);
-    expect(searches().at(-1)).toMatchObject({ query: 'apollo', scope: { kind: 'global' } });
-    expect(store.matchesShown()).toBe(true);
+    expect(store.getState().barText).toBe('apollo');
     store.openCapture();
-    expect(store.matchesShown()).toBe(false);
     store.closeCompose();
     expect(store.getState().barText).toBe('apollo');
-    expect(store.matchesShown()).toBe(true);
     await store.openProject(apollo);
     await flush();
     expect(store.getState().barScope).toEqual({ kind: 'project', project_id: apollo.project_id });
     expect(store.getState().barText).toBe('apollo');
-    expect(searches().at(-1)).toMatchObject({ query: 'apollo', scope: { kind: 'project', project_id: apollo.project_id } });
+    // A row read in place stays while you type over it.
+    await store.openListItem(store.getState().list!.items[0]!);
+    store.setBarText('apollo update');
+    await vi.advanceTimersByTimeAsync(300);
+    await flush();
+    expect(store.getState().reader?.content?.title).toBe('Apollo update');
+    expect(JSON.stringify(rpc.mock.calls.slice(before))).not.toContain('apollo update');
   });
 
-  it('keeps the text through an outage and retries; a refused project search empties the bar', async () => {
+  it('loses its text when a read is refused for lost access, and keeps it through an outage', async () => {
+    feed = [note('Apollo update', 14)];
+    let refusal = fail('unavailable', { retryable: true });
     const fallback = rpc.getMockImplementation()!;
-    rpc.mockImplementation(async (method, params) => method === 'search.run'
-      ? (params.scope as AskScope).kind === 'project' ? fail('unauthorized') : fail('unavailable', { retryable: true }) : fallback(method, params));
+    rpc.mockImplementation(async (method, params) => method === 'open.ref' ? refusal : fallback(method, params));
     const store = await startStore();
-    await typed(store, 'apollo');
-    expect(store.getState().matches?.failure?.code).toBe('unavailable');
-    expect(store.getState().barText).toBe('apollo');
-    store.searchAgain();
-    await flush();
-    expect(searches()).toHaveLength(2);
-    expect(store.getState().barText).toBe('apollo');
     await store.openProject(apollo);
     await flush();
-    expect(store.getState().barText).toBe('');
-    expect(store.getState().matches).toBeNull();
-    expect(store.getState().route.page).toBe('project');
+    const row = store.getState().list!.items[0]!;
+    store.setBarText('apollo');
+    await store.openListItem(row);
+    expect(store.getState().reader?.failure?.code).toBe('unavailable');
+    expect(store.getState().barText).toBe('apollo');
+    // Gone, or no longer yours: a real change of access, so what was typed under the old access goes.
+    for (const code of ['not_found', 'unauthorized']) {
+      refusal = fail(code);
+      store.setBarText('apollo');
+      await store.openListItem(row);
+      await flush();
+      expect(store.getState().reader?.failure?.code, code).toBe(code);
+      expect(store.getState().barText, code).toBe('');
+    }
   });
 });

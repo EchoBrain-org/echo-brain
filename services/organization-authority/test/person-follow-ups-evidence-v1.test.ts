@@ -82,7 +82,7 @@ describe('follow-ups as an Ask source: what a search finds (ADR-0040)', () => {
       // ECHO's own dates, and links to its decision's items and the ticket it follows (research tool contract v1).
       dates: { created: f.ticket.created_at, sent: f.ticket.sent_at },
       links: { decision: ['desk-decision'], follows: ['desk-ticket'] },
-      text: 'On: ticket\nExpected: launch next week\nLatest check: none yet\nDecision: Pilot planning\nDecided: The pilot starts next week.',
+      text: 'On: ticket\nExpected: launch next week\nDecision: Pilot planning\nDecided: The pilot starts next week.',
       // Its title is the asker's own Jira read, so it is no wider than that read.
       visibility: 'only_me', receipt_sha256: found.receipt_digests[0],
     });
@@ -115,7 +115,7 @@ describe('follow-ups as an Ask source: what a search finds (ADR-0040)', () => {
     expect(found.items).toHaveLength(1);
     expect(found.truncated).toBe(false);
     expect(found.items[0]).toMatchObject({ attributes: { owner: 'S. Okafor', status: 'open' }, visibility: 'only_me' });
-    expect(found.items[0]!.text).toBe('On: ticket\nExpected: launch next week\nLatest check: none yet');
+    expect(found.items[0]!.text).toBe('On: ticket\nExpected: launch next week');
     // Decision words do not find his item, and nothing names the decision.
     for (const query of ['Pilot planning', 'starts', 'rollout', 'Ari']) expect((await search(okafor, query)).items).toEqual([]);
     const listed = await list(okafor);
@@ -212,7 +212,7 @@ describe('follow-ups as an Ask source: what a search finds (ADR-0040)', () => {
     const found = await search(desk, 'vendor');
     expect(found.items).toHaveLength(1);
     expect(found.items[0]).toMatchObject({ label: 'Send the vendor the pilot plan', attributes: { owner: 'Rafael Moreno', status: 'not sent yet' } });
-    expect(found.items[0]!.text!.startsWith('On: meeting action\nLatest check: none yet\nDecision: Pilot planning')).toBe(true);
+    expect(found.items[0]!.text!.startsWith('On: meeting action\nDecision: Pilot planning')).toBe(true);
     // Nothing is read live for it: only its decision is opened, through ECHO's own desk, for its link.
     expect(f.opened.slice(opens).map(open => open.kind)).toEqual(['approved_record']);
     expect(found.items[0]!.links).toEqual({ decision: ['desk-decision'] });
@@ -290,10 +290,11 @@ describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () =
   it("takes ECHO's own dates, and refuses a due date, which is its tool's, and the filters of other sources", async () => {
     const f = await sentFixture();
     const { desk } = askDesk(f, 'mina');
-    // A due date shows only once a follow-up's tool item is read, so a list cannot filter on it (ADR-0040); nor on a date no follow-up records.
-    for (const date_field of ['due', 'occurred', 'updated', 'received', 'approved']) {
+    // A due date shows only once a follow-up's tool item is read, so a list cannot filter on it (ADR-0040); nor on a date no follow-up
+    // records, a check included now that sweeps are retired (SVC-2).
+    for (const date_field of ['due', 'occurred', 'updated', 'received', 'approved', 'checked']) {
       for (const read of [() => list(desk, { since: '2026-10-01', date_field }), () => search(desk, 'launch', { since: '2026-10-01', date_field })]) {
-        await expect(read()).rejects.toMatchObject({ code: 'invalid_request', message: 'This source supports date_field: created, sent, reassigned, checked, any' });
+        await expect(read()).rejects.toMatchObject({ code: 'invalid_request', message: 'This source supports date_field: created, sent, reassigned, any' });
       }
     }
     for (const dates of [{ since: '2026-10-01' }, { until: '2026-10-30' }, { since: '2026-10-01', date_field: 'created' }, { date_field: 'sent' }]) {
@@ -492,44 +493,45 @@ describe("follow-ups as an Ask source: ECHO's own dates and links (research tool
   const day = (value: string) => ({ since: value.slice(0, 10), until: value.slice(0, 10) });
   const ids = (result: EvidenceDeskResultV2) => result.items.map(item => item.id).sort();
 
-  it('carries when each follow-up was created, sent, reassigned and checked, and lists by any of them before the page', async () => {
+  it('carries when each follow-up was created, sent and reassigned, never a check a sweep left, and lists by any of them before the page', async () => {
     const f = await sentFixture();
-    // A day on, the ticket is checked; a day after that, Ari hands the rollout to Rafael.
+    // A day on, a sweep leaves a check on the ticket (V16 state, SVC-2); a day after that, Ari hands the rollout to Rafael.
     f.advance(DAY);
     f.check(f.ticket.item_id, 'still_open');
+    const checkedAt = f.clock().toISOString();
     f.advance(DAY);
     await assign(f, 'ari', f.action.item_id, 'rafael');
     const ticket = f.items.read(f.ticket.item_id)!;
     const action = f.items.read(f.action.item_id)!;
     const [ticketId, actionId] = [`follow_up_${ticket.item_id}`, `follow_up_${action.item_id}`];
     const { desk } = askDesk(f, 'mina');
-    expect(Object.fromEntries((await list(desk)).items.map(item => [item.id, item.dates]))).toEqual({
-      [ticketId]: { created: ticket.created_at, sent: ticket.sent_at, checked: ticket.check!.at },
+    const listed = await list(desk);
+    expect(Object.fromEntries(listed.items.map(item => [item.id, item.dates]))).toEqual({
+      [ticketId]: { created: ticket.created_at, sent: ticket.sent_at },
       [actionId]: { created: action.created_at, sent: action.sent_at, reassigned: action.owner_set_at },
     });
+    // The check is no date and no line of the ticket's evidence either.
+    expect(listed.items.find(item => item.id === ticketId)!.text).toBe('On: ticket\nExpected: launch next week\nDecision: Pilot planning\nDecided: The pilot starts next week.');
     // Each field reads its own date; what a field cannot test is counted, with the dates those follow-ups record, never listed.
-    const checked = await list(desk, { ...day(ticket.check!.at), date_field: 'checked' });
-    expect([ids(checked), checked.unchecked]).toEqual([[ticketId], { count: 1, dates: ['created', 'sent', 'reassigned'] }]);
     const reassigned = await list(desk, { ...day(action.owner_set_at!), date_field: 'reassigned' });
-    expect([ids(reassigned), reassigned.unchecked]).toEqual([[actionId], { count: 1, dates: ['created', 'sent', 'checked'] }]);
+    expect([ids(reassigned), reassigned.unchecked]).toEqual([[actionId], { count: 1, dates: ['created', 'sent'] }]);
     for (const date_field of ['created', 'sent'] as const) {
       const both = await list(desk, { ...day(ticket.created_at), date_field });
       expect([date_field, ids(both), both.unchecked]).toEqual([date_field, [actionId, ticketId].sort(), undefined]);
     }
-    expect((await list(desk, { ...day(ticket.created_at), date_field: 'checked' })).items).toEqual([]);
     // No field is any of a follow-up's dates; every follow-up records its creation, so nothing is untested.
     const any = await list(desk, day(action.owner_set_at!));
     expect([ids(any), any.unchecked]).toEqual([[actionId], undefined]);
-    expect(ids(await list(desk, { since: ticket.check!.at.slice(0, 10) }))).toEqual([actionId, ticketId].sort());
-    expect(ids(await list(desk, { ...day(ticket.check!.at), date_field: 'any' }))).toEqual([ticketId]);
+    expect(ids(await list(desk, { since: checkedAt.slice(0, 10) }))).toEqual([actionId]);
+    expect(ids(await list(desk, { ...day(checkedAt), date_field: 'any' }))).toEqual([]);
     // A window applies with owner and status, and counts only what they select.
     expect(await list(desk, { owner: 'Rafael', ...day(action.owner_set_at!), date_field: 'reassigned' })).toMatchObject({ items: [{ id: actionId }] });
     expect(await list(desk, { owner: 'Rafael', ...day(action.owner_set_at!), date_field: 'reassigned' })).not.toHaveProperty('unchecked');
-    expect(await list(desk, { status: 'open', ...day(ticket.check!.at), date_field: 'checked' })).toMatchObject({ items: [{ id: ticketId }], unchecked: { count: 1 } });
+    expect(await list(desk, { status: 'open', ...day(action.owner_set_at!), date_field: 'reassigned' })).toMatchObject({ items: [{ id: actionId }], unchecked: { count: 1 } });
     // A search applies the same window before it ranks or reads anything live, and counts over every follow-up the asker sees.
     const searched = await search(desk, 'launch', { ...day(action.owner_set_at!), date_field: 'reassigned' });
-    expect([searched.items, searched.unchecked]).toEqual([[], { count: 1, dates: ['created', 'sent', 'checked'] }]);
-    expect(ids(await search(desk, 'Pilot planning', { ...day(ticket.check!.at), date_field: 'checked' }))).toEqual([ticketId]);
+    expect([searched.items, searched.unchecked]).toEqual([[], { count: 1, dates: ['created', 'sent'] }]);
+    expect(ids(await search(desk, 'launch', { ...day(ticket.sent_at!), date_field: 'sent' }))).toEqual([ticketId]);
 
     // Pages of a dated list share its window and its count; a cursor belongs to its own window.
     insertRows(f, 11);

@@ -396,7 +396,7 @@ test('a sentence held by scrolling stays held when a wider window brings the vie
   }
 });
 
-test('rows of a question on its way follow the end under a latest citation chosen there while the end keeps its sentence in view', async () => {
+test('a latest citation chosen at the end while a question is on its way opens its source beside it, and the view stays at the end', async () => {
   run = await launch('ask-progress');
   const { page, home } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
@@ -421,13 +421,6 @@ test('rows of a question on its way follow the end under a latest citation chose
   await latest.getByTestId('citation').first().click();
   await expect(page.getByTestId('source-pane')).toBeVisible();
   await expect.poll(bottom).toBeLessThan(1);
-  // Its rows, opened, come in below; the end still keeps the cited sentence wholly in view, so the view follows them.
-  const line = page.getByTestId('ask-line');
-  await expect(line).toHaveAttribute('aria-expanded', 'false', { timeout: 10_000 });
-  await line.click();
-  await expect(page.getByTestId('ask-steps').getByTestId('ask-step')).toHaveCount(2);
-  await expect.poll(bottom).toBeLessThan(1);
-  await expect(latest.getByTestId('statement-text')).toBeInViewport({ ratio: 1 });
   writeFileSync(join(home, 'release-ask'), '');
   await expect(page.getByTestId('asking')).toHaveCount(0);
 });

@@ -2,16 +2,14 @@ import { once } from 'node:events';
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { PersonUpdateReceiptV3, ProjectCreateReceiptV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { runPersonClientCli } from '../../../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../../../src/product/person-client/session-store.js';
 import { createProjectContextApplicationV1 } from '../../src/application/project-context-application-v1.js';
 import { createOrganizationAuthorityHttpServer } from '../../src/presentation/organization-authority-http-server.js';
-import { createPersonUpdateProcessingV1 } from '../../src/composition/person-update-processing-v1.js';
-import { SqlitePersonUpdateEnrichmentWorkV2 } from '../../src/adapters/persistence/sqlite/person-update-enrichment-work-v2.js';
-import { authorization, PROJECT_CONTEXT_NOW } from '../fixtures/project-context-sqlite.js';
+import { authorization, PROJECT_CONTEXT_NOW, revokeMembership } from '../fixtures/project-context-sqlite.js';
 import { authorityHttpServerOptions } from '../fixtures/authority-http-server.js';
 import { SyntheticProjectHarness, PEOPLE } from './synthetic-harness.js';
 
@@ -157,43 +155,25 @@ describe('PC-06 real CLI -> loopback HTTP -> application -> V16, fixture authent
     const conflict = await cli('alice', argv.map(value => value === 'Synthetic PC06' ? 'Changed title' : value));
     expect(JSON.parse(conflict.stderr)).toMatchObject({ code: 'conflict', mutation_outcome: 'not_submitted', request_id: requestId });
     expect(h.database.prepare('SELECT count(*) AS n FROM authority_person_updates_v2').get()).toEqual({ n: 1 });
-    expect(h.database.prepare('SELECT count(*) AS n FROM authority_person_update_work_v2').get()).toEqual({ n: 1 });
   });
 
-  it.each(['success', 'failure', 'revocation'] as const)('keeps original CLI search available across real worker %s', async outcome => {
+  it('finds an original by its own text through the CLI with no model, also after its uploader leaves its project and organization', async () => {
     const alpha = await create('Synthetic Alpha'); await member(alpha, 'bob', 'lead');
     const receipt = await ok<PersonUpdateReceiptV3>('alice', uploadArgv(alpha, 'project', alpha));
     const original = await search('bob');
     expect(original.map(row => row.context_id)).toEqual([receipt.context_id]);
-    expect((await ok('alice', ['updates', 'status-v3', '--request-id', receipt.request_id])).metadata).toBe('pending');
-    let now = PROJECT_CONTEXT_NOW;
-    let verifiedHandoffs = 0;
-    const generate = vi.fn(async () => {
-      expect(await search('bob')).toEqual(original);
-      expect((await ok('bob', ['projects', 'search-v2', '--project-id', alpha, '--query', 'meridian'])).items).toHaveLength(1);
-      verifiedHandoffs++;
-      if (outcome === 'failure') throw new Error('synthetic provider failure');
-      if (outcome === 'revocation') await ok('bob', ['projects', 'member-remove', '--request-id', h.requestId(), '--project-id', alpha, '--membership-id', PEOPLE.alice.membership_id]);
-      return { search_hints: 'zenith' };
-    });
-    const worker = createPersonUpdateProcessingV1({
-      structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 },
-    }, new SqlitePersonUpdateEnrichmentWorkV2(h.database, h.eligibility, () => now));
-    for (let attempt = 0; attempt < (outcome === 'failure' ? 5 : 1); attempt++) {
-      await worker.runOnce(new AbortController().signal);
-      now = new Date(Date.parse(now) + 60_000).toISOString();
-    }
-    const status = await ok('alice', ['updates', 'status-v3', '--request-id', receipt.request_id]);
-    if (outcome === 'revocation') {
-      // Alice has left the note's project, so her status is the saved-only proof with no metadata (ADR-0023).
-      expect(status).toMatchObject({ kind: 'echo-person-update-saved-v3', context_id: receipt.context_id });
-      expect(h.database.prepare('SELECT state FROM authority_person_update_work_v2 WHERE context_id = ?').get(receipt.context_id)).toEqual({ state: 'unavailable' });
-    } else expect(status.metadata).toBe(outcome === 'success' ? 'ready' : 'unavailable');
+    expect((await ok('bob', ['projects', 'search-v2', '--project-id', alpha, '--query', 'meridian'])).items).toHaveLength(1);
+    // No search metadata is made: the status says ready at once.
+    expect((await ok('alice', ['updates', 'status-v3', '--request-id', receipt.request_id])).metadata).toBe('ready');
+    await ok('bob', ['projects', 'member-remove', '--request-id', h.requestId(), '--project-id', alpha, '--membership-id', PEOPLE.alice.membership_id]);
+    // Alice has left the note's project, so her status is the saved-only proof with no metadata (ADR-0023); Bob still finds it.
+    expect(await ok('alice', ['updates', 'status-v3', '--request-id', receipt.request_id])).toMatchObject({ kind: 'echo-person-update-saved-v3', context_id: receipt.context_id });
     expect(await search('bob')).toEqual(original);
     expect((await ok('bob', ['projects', 'search-v2', '--project-id', alpha, '--query', 'meridian'])).items).toHaveLength(1);
-    expect((await ok('bob', ['projects', 'search-v2', '--project-id', alpha, '--query', 'zenith'])).items).toHaveLength(outcome === 'success' ? 1 : 0);
-    expect(generate).toHaveBeenCalledTimes(outcome === 'failure' ? 5 : 1);
-    expect(verifiedHandoffs).toBe(outcome === 'failure' ? 5 : 1);
+    // Alice leaves the organization as well: Bob, who may still read the note, still finds it.
+    revokeMembership(h.database, PEOPLE.alice);
+    expect(await search('bob')).toEqual(original);
+    expect((await ok('bob', ['projects', 'search-v2', '--project-id', alpha, '--query', 'meridian'])).items).toHaveLength(1);
   });
 
   it('returns explicit unsupported-route failures without falling back to V1 or team sharing', async () => {

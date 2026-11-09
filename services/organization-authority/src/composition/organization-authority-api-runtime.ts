@@ -129,7 +129,7 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly external_identity_runtime_bundle?: PersonExternalIdentityRuntimeBundleV1;
   /** Always bound by `openOrganizationAuthorityRuntime`. */
   readonly answer_composition_generation: AnswerCompositionGenerationBindingV1;
-  /** Background-priority model port for trigger and sweep research; they use the Ask port when absent. */
+  /** Background-priority model port for trigger research; it uses the Ask port when absent. */
   readonly answer_composition_background?: AnswerCompositionGenerationBindingV1["structured_output"];
 }
 
@@ -270,8 +270,7 @@ export async function startOrganizationAuthorityApiRuntime(
       liveConnectors.push({ definition, runtime: definition.open(sessions, authorizeLiveProject, projectNames) });
     }
     const liveSources: readonly PersonLiveConnectorSourceV1[] = liveConnectors.map(({ definition, runtime }) => ({
-      descriptor: definition.descriptor, scopes: definition.scopes,
-      application: runtime.application, ...(runtime.tools === undefined ? {} : { tools: runtime.tools.bind(runtime) }),
+      descriptor: definition.descriptor, scopes: definition.scopes, application: runtime.application,
     }));
     personHttp = dependencies.person_http_runtime_factory?.(sessions, { database, record: recordDatabase,
       coordinates: { authority_id: metadata.authority_id, organization_id: metadata.organization_id, state_lineage_id: lineage.root.state_lineage_id } });
@@ -342,10 +341,12 @@ export async function startOrganizationAuthorityApiRuntime(
     };
     const items = new SqliteImpactItemsV1(database);
     const people = new SqliteOpenItemPeopleV1(database);
-    // The change check (ADR-0036) needs no answer model: it reads only the database, in one read transaction.
+    const runs = new SqliteTriggerRunsV1(database);
+    // The change check (ADR-0036) needs no answer model: it reads only the database, in one read transaction, including the
+    // caller's own impact checks (their states fold into reviews and set the pace).
     const reviewStatuses = personHttp?.reviewStatuses?.bind(personHttp);
     const personChanges = createPersonChangesV1({
-      database, sessions, projects: projectRepository, items, people, records: recordSearch,
+      database, sessions, projects: projectRepository, items, people, records: recordSearch, runs,
       ...(reviewStatuses === undefined ? {} : { reviews: reviewStatuses }),
     });
     // Project activity (Ask timeline v1, C2) reads the same way: only the database, in one read transaction.
@@ -363,7 +364,6 @@ export async function startOrganizationAuthorityApiRuntime(
       authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
       repository: projectRepository,
     });
-    const runs = new SqliteTriggerRunsV1(database);
     // Ask's V8 answer reads ECHO's shared follow-ups as Home shows them (ADR-0040), and the asker's projects, people and
     // tools as the project pages and the tools page show them (research tool contract v1), each release audited without
     // content.

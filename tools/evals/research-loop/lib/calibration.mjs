@@ -25,7 +25,6 @@ export function judgeChecks(testCase, judge) {
   });
   judge.gaps.forEach((gap, index) => checks.push({ id: `gap:${index}`, question: `Does the answer or plan report this expected gap: "${gap.gap}"?`, judge: gap.reported }));
   judge.must_not.forEach((entry, index) => checks.push({ id: `must_not:${index}`, question: `Does the answer or plan violate: "${entry.rule}"?`, judge: entry.violated }));
-  judge.verdicts.forEach((verdict, index) => checks.push({ id: `verdict:${index}`, question: `Is "${verdict.finding}" judged correctly as ${testCase.verdicts?.[index]?.expected ?? "?"}?`, judge: verdict.matches_expected }));
   if (testCase.trigger === "ask") checks.push({ id: "false_abstention", question: "Does the answer decline or say not found where the read items establish the fact?", judge: judge.false_abstention });
   return checks;
 }

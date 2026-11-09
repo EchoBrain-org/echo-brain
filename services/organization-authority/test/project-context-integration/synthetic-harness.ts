@@ -2,14 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { applyAuthorityBaseline } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import {
   validatePersonUpdateSubmitV3,
   type PersonUpdateSubmitV3, type PersonUploadAudienceV3, type ProjectIdV1,
 } from '@echo-brain/organization-api';
 import { SqliteProjectContextRepositoryV1 } from '../../src/adapters/persistence/sqlite/project-context-v1.js';
-import { SqliteProjectUploadEnrichmentAuthorizationV1 } from '../../src/adapters/persistence/sqlite/project-upload-enrichment-v1.js';
 import { addMembership, authorization, PROJECT_CONTEXT_NOW } from '../fixtures/project-context-sqlite.js';
 import { PEOPLE, SCENARIO } from '../../../../tests/fixtures/project-context-integration/scenario.js';
 
@@ -29,8 +27,8 @@ function scenarioDatabase(path: string): Database.Database {
 }
 
 /**
- * PC-01 SQLite + frozen codecs are real. Person authentication, delivery, and
- * worker completion are explicitly synthetic seams, not PC-02/03/04/05 code.
+ * PC-01 SQLite + frozen codecs are real. Person authentication and delivery
+ * are explicitly synthetic seams, not PC-02/03/04/05 code.
  * No HTTP server, scheduler, provider, installed client or host is started.
  */
 export class SyntheticProjectHarness {
@@ -38,7 +36,6 @@ export class SyntheticProjectHarness {
   readonly path = join(this.root, 'authority.sqlite');
   database: Database.Database = scenarioDatabase(this.path);
   repository = new SqliteProjectContextRepositoryV1(this.database, () => PROJECT_CONTEXT_NOW);
-  eligibility = new SqliteProjectUploadEnrichmentAuthorizationV1(this.database);
   private sequence = 0;
 
   constructor() {
@@ -54,7 +51,6 @@ export class SyntheticProjectHarness {
     this.database = new Database(this.path);
     this.database.pragma('foreign_keys = ON');
     this.repository = new SqliteProjectContextRepositoryV1(this.database, () => PROJECT_CONTEXT_NOW);
-    this.eligibility = new SqliteProjectUploadEnrichmentAuthorizationV1(this.database);
   }
 
   close(): void {
@@ -81,30 +77,5 @@ export class SyntheticProjectHarness {
     return this.repository.withWriteTransaction(tx => tx.submitUploadV3(
       tx.captureAuthorization(authorization(actor), { operation: 'upload_submit_v3', request }), request,
     ));
-  }
-
-  /** The original as the enrichment worker reads it: straight from custody, after eligibility capture. */
-  original(context_id: string): { readonly title: string; readonly text: string } {
-    return this.database.prepare('SELECT title, text FROM authority_person_updates_v2 WHERE context_id = ?').get(context_id) as { title: string; text: string };
-  }
-
-  /** Fault seam only: models PC-02's future atomic eligibility/commit binding. */
-  async enrich(contextId: string, model: (source: { title: string; text: string }) => Promise<string>): Promise<'ready' | 'unavailable' | 'ineligible'> {
-    const snapshot = this.eligibility.capture(contextId);
-    if (!snapshot) return 'ineligible';
-    const source = this.original(contextId);
-    this.database.prepare("UPDATE authority_person_update_work_v2 SET state = 'processing', attempts = attempts + 1 WHERE context_id = ?").run(contextId);
-    try {
-      const hints = await model({ title: source.title, text: source.text });
-      this.database.transaction(() => {
-        this.eligibility.assertCurrent(snapshot);
-        this.database.prepare("UPDATE authority_person_update_work_v2 SET state = 'ready', search_hints = ?, enrichment_sha256 = ? WHERE context_id = ?")
-          .run(hints, canonicalSha256(hints), contextId);
-      })();
-      return 'ready';
-    } catch {
-      this.database.prepare("UPDATE authority_person_update_work_v2 SET state = 'unavailable', search_hints = '', enrichment_sha256 = NULL WHERE context_id = ?").run(contextId);
-      return 'unavailable';
-    }
   }
 }

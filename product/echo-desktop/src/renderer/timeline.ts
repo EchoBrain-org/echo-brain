@@ -1,8 +1,8 @@
 // The Ask timeline (ADR-0047), as rules the store and the page share: which
-// turns show in full, what a check of their sources says of each turn and
-// sentence, the earlier turn a follow-up or Ask again carries, and what the
-// empty bar suggests from it. Pure, for the store and its tests; the store
-// keeps the state and makes the calls.
+// turns show in full, which sentences a check of their sources leaves out,
+// the earlier turn a follow-up or Ask again carries, and what the empty bar
+// suggests from it. Pure, for the store and its tests; the store keeps the
+// state and makes the calls.
 import type {
   Answer, AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskScope, CheckCitation, TimelineTurn,
 } from '../shared/protocol.js';
@@ -59,7 +59,7 @@ export function unreadableAfter(kept: readonly number[] | undefined, states: Tur
 /**
  * What a check that did not finish keeps of what its requests that came back
  * said of a turn's sources: those they found unreadable, which stay hidden.
- * It speaks for no turn, so nothing it found the same or changed shows.
+ * It speaks for no turn, so nothing it found readable counts.
  */
 export function foundUnreadable(states: TurnChecks): TurnChecks {
   return Object.fromEntries(Object.entries(states).filter(([, said]) => said === 'unreadable'));
@@ -93,42 +93,33 @@ export interface CheckPlan {
   readonly turns: readonly string[];
 }
 
-/** What a check found: each checked turn's sources' states, and the markers tickets have now. */
-export interface Checked {
-  readonly turns: Readonly<Record<string, TurnChecks>>;
-  readonly markers: Readonly<Record<string, Readonly<Record<string, string>>>>;
-}
-
 /** The answer's sources a check can ask about, numbered as the page numbers them, each with what a check asks of it. */
-function checkable(turn: TimelineTurn): { source: AnswerSource; at: number; citation: CheckCitation }[] {
+function checkable(turn: TimelineTurn): { at: number; citation: CheckCitation }[] {
   return turn.answer.sources.flatMap((source, at) => {
     const citation = checkOf(source);
-    return citation === undefined ? [] : [{ source, at, citation }];
+    return citation === undefined ? [] : [{ at, citation }];
   });
 }
 
 /**
  * One check of `turns` (the one most wanted first: the newest, or the turn
  * opened): each turn's checkable sources, the same citation once per turn,
- * with when the turn was asked and a ticket's baseline marker, the first
- * turns' first, in as many requests as they take, each at most 100 items
- * within the route's 64 KiB. Every source is asked about, so a check never
- * speaks for part of a turn: an answer can cite more sources than one request
- * takes (ADR-0051). `only` narrows the sources, as a new answer's tickets'
- * baseline does.
+ * with when the turn was asked, the first turns' first, in as many requests
+ * as they take, each at most 100 items within the route's 64 KiB. Every
+ * source is asked about, so a check never speaks for part of a turn: an
+ * answer can cite more sources than one request takes (ADR-0051).
  */
-export function checkPlan(turns: readonly TimelineTurn[], only: (source: AnswerSource) => boolean = () => true): CheckPlan {
+export function checkPlan(turns: readonly TimelineTurn[]): CheckPlan {
   const requests: { items: AskCheckItem[]; places: { turn: string; sources: number[] }[] }[] = [];
   // What the last request holds: its envelope, and a comma between items.
   let bytes = 0;
   for (const turn of turns) {
     const seen = new Map<string, number[]>();
-    for (const { source, at, citation } of checkable(turn).filter(({ source }) => only(source))) {
+    for (const { at, citation } of checkable(turn)) {
       const key = JSON.stringify(citation);
       const same = seen.get(key);
       if (same !== undefined) { same.push(at); continue; }
-      const marker = source.kind === 'ticket' ? turn.markers?.[String(at)] : undefined;
-      const item: AskCheckItem = { asked_at: turn.asked_at, citation, ...(marker === undefined ? {} : { marker }) };
+      const item: AskCheckItem = { asked_at: turn.asked_at, citation };
       const size = new TextEncoder().encode(JSON.stringify(item)).length + 1;
       const last = requests.at(-1);
       if (last === undefined || last.items.length === MAX_CHECK_ITEMS || bytes + size > MAX_CHECK_REQUEST_BYTES - 1024) {
@@ -147,36 +138,22 @@ export function checkPlan(turns: readonly TimelineTurn[], only: (source: AnswerS
 
 /**
  * What a check's results, one list for each of its requests, say of each
- * turn it speaks for (nothing of one that cites nothing a check asks about),
- * and the markers its readable tickets have now.
+ * turn it speaks for (nothing of one that cites nothing a check asks about).
  */
-export function checkedOf(plan: CheckPlan, results: readonly (readonly AskCheckResult[])[]): Checked {
+export function checkedOf(plan: CheckPlan, results: readonly (readonly AskCheckResult[])[]): Record<string, TurnChecks> {
   const turns: Record<string, Record<number, AskCheckState>> = Object.fromEntries(plan.turns.map(id => [id, {}]));
-  const markers: Record<string, Record<string, string>> = {};
   plan.requests.forEach((request, asked) => request.places.forEach(({ turn, sources }, index) => {
     const result = results[asked]?.[index];
     if (!result) return;
     const states = turns[turn] ??= {};
-    for (const at of sources) {
-      states[at] = result.state;
-      if (result.marker !== undefined) (markers[turn] ??= {})[String(at)] = result.marker;
-    }
+    for (const at of sources) states[at] = result.state;
   }));
-  return { turns, markers };
+  return turns;
 }
 
-/** How a sentence reads after a check: left out when it cites a source you can no longer read, lit when one it cites changed. */
-export type Mark = 'omitted' | 'changed' | null;
-
-export function markOf(citations: readonly number[], checks: TurnChecks | undefined): Mark {
-  if (!checks) return null;
-  if (citations.some(at => checks[at] === 'unreadable')) return 'omitted';
-  return citations.some(at => checks[at] === 'changed') ? 'changed' : null;
-}
-
-/** Which sentences and rows of a turn the page shows after a check: all but those it leaves out. */
+/** Which sentences and rows of a turn the page shows after a check: all but those citing a source you can no longer read. */
 export function showsOf(checks: TurnChecks | undefined): Shows {
-  return citations => markOf(citations, checks) !== 'omitted';
+  return citations => !citations.some(at => checks?.[at] === 'unreadable');
 }
 
 /**
@@ -190,8 +167,8 @@ export function turnGroups(answer: Pick<Answer, 'sources'>, checks: TurnChecks |
   return checks === undefined ? groups : groups.filter(group => !group.indexes.every(at => checks[at] === 'unreadable'));
 }
 
-/** The turns a later turn asked again, by id: they show no Changed tag. */
-export function askedAgain(turns: readonly TimelineTurn[]): ReadonlySet<string> {
+/** The turns a later turn asked again, by id: a thread folds them away (visibleTurns). */
+function askedAgain(turns: readonly TimelineTurn[]): ReadonlySet<string> {
   return new Set(turns.flatMap(turn => (turn.again_of === undefined ? [] : [turn.again_of])));
 }
 
@@ -200,36 +177,12 @@ function sentences(turn: TimelineTurn): Sentence[] {
   return [...answerSentences(turn.answer).map(([, statement]) => statement), ...(turn.since ?? [])];
 }
 
-/**
- * What a check says of a turn as a whole, as the line under it says it:
- * `changed` when a sentence it shows cites a source that changed; `same` only
- * when every source the sentences it shows cite was checked and is the same;
- * and nothing otherwise. A check that could not tell (`unknown`), a source it
- * did not ask about (a project, a person or a tool, which no check asks
- * about) and a turn with every sentence left out
- * leave an old answer saying nothing: it never looks current unless the check
- * says so.
- */
-type TurnNote = 'changed' | 'same' | null;
-
-export function turnNote(turn: TimelineTurn, checks: TurnChecks | undefined): TurnNote {
-  if (checks === undefined) return null;
-  const shown = sentences(turn).filter(statement => markOf(statement.citation_indexes, checks) !== 'omitted');
-  if (shown.some(statement => markOf(statement.citation_indexes, checks) === 'changed')) return 'changed';
-  const cited = shown.flatMap(statement => statement.citation_indexes);
-  return cited.length > 0 && cited.every(at => checks[at] === 'same') ? 'same' : null;
-}
-
-/** A turn's Changed tag: a source one of the sentences it shows cites changed, and no later turn asked it again (`again`, askedAgain's). */
-export function turnChanged(turn: TimelineTurn, checks: TurnChecks | undefined, again: ReadonlySet<string>): boolean {
-  return !again.has(turn.id) && turnNote(turn, checks) === 'changed';
-}
-
 /** Whether every sentence of a turn is left out: then an opened turn shows only Ask again. */
 export function allOmitted(turn: TimelineTurn, checks: TurnChecks | undefined): boolean {
   if (checks === undefined) return false;
   const all = sentences(turn);
-  return all.length > 0 && all.every(statement => markOf(statement.citation_indexes, checks) === 'omitted');
+  const shows = showsOf(checks);
+  return all.length > 0 && all.every(statement => !shows(statement.citation_indexes));
 }
 
 /**

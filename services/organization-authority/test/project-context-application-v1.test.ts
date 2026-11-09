@@ -68,6 +68,8 @@ describe('ProjectContextApplicationV1', () => {
       .toEqual([expect.objectContaining({ context_id: alphaUpload.context_id, excerpt: 'Existing project text remains readable.' })]);
     expect(f.application.searchUploadsV3('member', { query: 'alternate' }).results)
       .toEqual([expect.objectContaining({ context_id: betaUpload.context_id, excerpt: 'Alternate project access remains readable.' })]);
+    // A note must hold every term of the query.
+    expect(f.application.searchUploadsV3('member', { query: 'alternate zebra' }).results).toEqual([]);
     expect(() => f.application.submitUploadV3('owner', {
       schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: requestId(117), title: 'Blocked', text: 'No new archive content.',
       association_project_ids: [alpha.project_id], audience: { kind: 'team' },

@@ -16,7 +16,7 @@ beforeEach(() => {
     'app.status': () => ok(status),
     // As the host does (ADR-0047): our own sign-out deletes the account's timeline, and reading one account's deletes every other's.
     'account.signOut': params => {
-      if ((params as { again?: true }).again !== true) timelineFiles.delete(fileOf(params.expect as Expect));
+      timelineFiles.delete(fileOf(params.expect as Expect));
       status = { signed_in: false, account: null, client_version: 'test' };
       return ok(status);
     },

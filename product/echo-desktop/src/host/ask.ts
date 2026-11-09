@@ -5,7 +5,7 @@
 import {
   PERSON_ASK_CHECK_REQUEST_KIND_V1, validatePersonAnswerRequestV3, validatePersonAskCheckRequestV1, validatePersonQueryText, validateProjectIdV1,
 } from '@echo-brain/organization-api';
-import type { AskPrevious, AskProgressNotice, AskScope, AskStep, Expect, RecordRef, SourceRef } from '../shared/protocol.js';
+import type { AskPrevious, AskProgressNotice, AskScope, AskStep, Expect, RecordRead, SourceRef } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { jsonLines } from './cli.js';
 import { askStepView } from './views.js';
@@ -57,8 +57,11 @@ export function askCheckArgv(request: string): string[] {
   return ['ask-check', `--request=${request}`];
 }
 
-/** The client command that reads a cited meeting's approved record as Ask cites it, each item with its atom id, for the pane to light the cited items. */
-export function askRecordArgv(record: RecordRef): string[] {
+/**
+ * The client command that reads one approved record as Ask cites it, each item with its atom id: one an answer cites,
+ * for the pane to light the cited items, or a meeting the reader opened by its ref. It names the record by its digest.
+ */
+export function askRecordArgv(record: RecordRead): string[] {
   return ['records', `--record-sha256=${record.record_sha256}`, '--brief'];
 }
 

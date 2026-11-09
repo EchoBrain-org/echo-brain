@@ -70,8 +70,8 @@ export function openItemAccessV1(facts: OpenItemFactsV1): OpenItemAccessV1 {
 
 /**
  * Who sees a decision: its title, first decided line, approval time and
- * projects on a row, its counts in a summary, its impact check's stage, and
- * its name in a sweep's findings. Those who pass the exact record check now.
+ * projects on a row, its counts in a summary, and its impact check's stage.
+ * Those who pass the exact record check now.
  */
 export function openItemDecisionAccessV1(facts: { readonly reads_decision: boolean }): { readonly see_decision: boolean } {
   return Object.freeze({ see_decision: facts.reads_decision });

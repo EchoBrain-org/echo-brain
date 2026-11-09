@@ -795,30 +795,6 @@ describe("project context adversarial query inputs", () => {
 });
 
 describe("project context adversarial storage", () => {
-  it("does not commit an upload prefix when its callback catches a durable work failure", () => {
-    const { database, repository } = open();
-    const request: PersonUpdateSubmitV3 = {
-      schema_version: 3,
-      kind: "echo-person-update-submit-v3",
-      request_id: requestId(1),
-      title: "Atomic admission",
-      text: "The work row must commit with the original and replay receipt.",
-      association_project_ids: [],
-      audience: { kind: "only_me" },
-    };
-    database.exec(`CREATE TRIGGER fixture_work_failure
-      BEFORE INSERT ON authority_person_update_work_v2
-      BEGIN SELECT RAISE(ABORT, 'fixture work failure'); END`);
-
-    repository.withWriteTransaction(transaction => {
-      expect(() => transaction.submitUploadV3(snapshot(transaction, OWNER, { operation: "upload_submit_v3", request }), request)).toThrow("fixture work failure");
-    });
-
-    expect(database.prepare("SELECT count(*) AS n FROM authority_person_updates_v2").get()).toEqual({ n: 0 });
-    expect(database.prepare("SELECT count(*) AS n FROM authority_person_update_work_v2").get()).toEqual({ n: 0 });
-    expect(database.prepare("SELECT count(*) AS n FROM authority_project_command_receipts_v1").get()).toEqual({ n: 0 });
-  });
-
   it("does not leave a ghost project when a caught create failure is retried after restart", () => {
     const path = tempPath();
     const { database, repository } = open(path);
@@ -844,7 +820,7 @@ describe("project context adversarial storage", () => {
     expect(reopened.prepare("SELECT count(*) AS n FROM authority_project_command_receipts_v1 WHERE request_id = ?").get(request.request_id)).toEqual({ n: 1 });
   });
 
-  it("rolls an initial association back when its insert fails after original and work admission", () => {
+  it("rolls an initial association back when its insert fails after original admission, the callback catching it", () => {
     const { database, repository } = open();
     const project = createProject(repository, OWNER, 3);
     const request: PersonUpdateSubmitV3 = {
@@ -863,7 +839,6 @@ describe("project context adversarial storage", () => {
     attempt(repository, transaction => transaction.submitUploadV3(snapshot(transaction, OWNER, { operation: "upload_submit_v3", request }), request));
 
     expect(database.prepare("SELECT count(*) AS n FROM authority_person_updates_v2 WHERE request_id = ?").get(request.request_id)).toEqual({ n: 0 });
-    expect(database.prepare("SELECT count(*) AS n FROM authority_person_update_work_v2").get()).toEqual({ n: 0 });
     expect(database.prepare("SELECT count(*) AS n FROM authority_project_context_associations_v1").get()).toEqual({ n: 0 });
     expect(database.prepare("SELECT count(*) AS n FROM authority_project_command_receipts_v1 WHERE request_id = ?").get(request.request_id)).toEqual({ n: 0 });
   });

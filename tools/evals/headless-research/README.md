@@ -20,8 +20,8 @@ root `npm-shrinkwrap.json` retains the production SDK dependencies.
 When no native Claude account is selected, `ECHO_STAGING_CLAUDE_RESEARCH_V1=true`
 selects it for ordinary Ask, evaluation and background research only at the fixed staging Authority origin. The EC2
 connector-rehearsal profile selects it; other Authorities retain the existing
-engine. Trigger dispatch, planner-disabled sweeps, writers and client contracts
-remain unchanged. No database baseline change is required.
+engine. Trigger dispatch, writers and client contracts remain unchanged. No
+database baseline change is required.
 
 The SDK owns the investigation through ECHO's search, list, open and finish
 tools. ECHO retains source visibility, pagination, known-id opens, completion

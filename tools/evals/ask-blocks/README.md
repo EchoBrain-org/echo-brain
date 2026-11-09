@@ -182,8 +182,9 @@ node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/cr
 
 They were their own evaluation, `tools/evals/ask-wording`, until 2026-11-08,
 when its runner was folded into this one; its cases moved here byte for byte,
-so their SHA-256 is unchanged, and its grading is unchanged; its records follow
-the block records below. A wording run's report keeps, as its own did, case
+so their SHA-256 was unchanged until a follow-up lost its check later that day
+(see "Follow-ups without a check"), and its grading is unchanged; its records
+follow the block records below. A wording run's report keeps, as its own did, case
 ids, each trial's statements, lead and grade (synthetic text), the writer
 prompt's SHA-256 and model metadata; never prompts, raw replies, credentials
 or provider payloads. It exits 0 when a complete run passes all three rules
@@ -1036,6 +1037,16 @@ through the founder's Claude account (`claude-sonnet-5-5`): 45 gate trials and
 
 The founder saw these results, `trap-disagree`'s answers before and after
 among them, and kept the change: "Keep the change".
+
+## Follow-ups without a check, 2026-11-08
+
+With sweeps retired, a follow-up carries no latest check
+([ADR-0040](../../../docs/decisions/ADR-0040-follow-ups-as-ask-evidence.md)).
+The four follow-ups in `cases.json` and the one in `wording-cases.json` lost
+their `check` objects, so both files' SHA-256 changed, and the writer is no
+longer told a follow-up's latest check. A record above is not comparable with
+a later run on a case that holds a follow-up. The rules, measures and
+thresholds are unchanged.
 
 ## Wording records
 

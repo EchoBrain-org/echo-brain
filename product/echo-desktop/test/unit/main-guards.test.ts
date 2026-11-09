@@ -43,6 +43,8 @@ describe('a call no host answered', () => {
     expect(isWriteCall('runs', { request: { operation: 'items' } })).toBe(false);
     expect(isWriteCall('reviews', { request: { operation: 'review_open' } })).toBe(false);
     expect(isWriteCall('runs', { request: { operation: 'send' } })).toBe(true);
+    // A check-in may start a check (DSK-1): a write.
+    expect(isWriteCall('runs', { request: { operation: 'next' } })).toBe(true);
     expect(isWriteCall('runs', { request: null })).toBe(true);
     expect(isWriteCall('projects.list', {})).toBe(false);
   });
@@ -56,6 +58,9 @@ describe('desktop.log and the Account menu', () => {
     expect(rpcLogName('runs', { request: { operation: 'items', scope: 'record', id, states: ['unsent', 'open'], cursor: 'c2', read: 'rows' } })).toBe('runs.items rows');
     expect(rpcLogName('runs', { request: { operation: 'items', scope: 'project', id, read: 'counts' } })).toBe('runs.items counts');
     expect(rpcLogName('runs', { request: { operation: 'item', item_id: 'itm_00000001' } })).toBe('runs.item');
+    // A check-in is named; the page never starts a run by its id (DSK-1), so a start is not.
+    expect(rpcLogName('runs', { request: { schema_version: 1, operation: 'next' } })).toBe('runs.next');
+    expect(rpcLogName('runs', { request: { schema_version: 1, operation: 'start', run_id: 'run_00000000-0000-4000-8000-000000000020' } })).toBe('runs');
     // Anything the page made up stays out of the log.
     expect(rpcLogName('runs', { request: { operation: 'ECHO-12 Pilot launch' } })).toBe('runs');
     expect(rpcLogName('runs', { request: { operation: 'item', item_id: 'itm_00000001', read: 'ECHO-12' } })).toBe('runs.item');

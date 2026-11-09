@@ -50,9 +50,11 @@ It can:
   `echo-brain update`, and the desktop app from its sidebar row
   ([ADR-0035](docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)).
 
-The desktop app also starts queued impact checks and sweeps under the
-signed-in person's own session, checks for changes and shows system
-notifications, and keeps a device-only Ask timeline
+The desktop app also checks for changes and shows system notifications,
+checks in after each change check so the Authority starts the signed-in
+person's queued impact checks under their own session
+([ADR-0032](docs/decisions/ADR-0032-stored-trigger-runs.md)), and keeps a
+device-only Ask timeline
 ([ADR-0047](docs/decisions/ADR-0047-ask-timeline.md)).
 
 It does not run meeting processing, hold provider OAuth or Slack service
@@ -75,8 +77,8 @@ Tokens are never printed by successful commands.
 - one approval core for every meeting proposal, decided from a Person client
   or on the optional Slack DM copy;
 - the append-only organization record;
-- impact checks, shared follow-ups and sweeps for approved records, and the
-  change check the desktop polls; and
+- impact checks and shared follow-ups for approved records, and the change
+  check the desktop polls; and
 - deterministic, permission-aware record reads and cited answers.
 
 The server starts only from six byte-pinned baseline schemas, one per state
@@ -93,7 +95,7 @@ and their projects, people and tools
 asker's request-local live Jira and Confluence sources when they are
 configured, then a final answer call. A question may carry the asker's
 previous turn ([ADR-0047](docs/decisions/ADR-0047-ask-timeline.md)), and impact
-checks and sweeps run the same loop in the background with a larger budget.
+checks run the same loop in the background with a larger budget.
 Citations are limited to evidence that request released and audited, and the
 loop has no direct record or store access. The evidence
 desk owns Person authorization and release audits; Person list and open read

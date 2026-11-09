@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { request as httpRequest } from 'node:http';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   PERSON_CHANGES_AREAS_V1,
@@ -13,6 +13,7 @@ import {
 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
+import { enqueueApprovedRecordRunV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { createPersonChangesV1, type CreatePersonChangesV1Options, type PersonChangesReviewsFailureV1 } from '../src/composition/person-changes-v1.js';
 import { openItemViewerV1, visiblePersonalOpenItemsV1 } from '../src/composition/person-open-items-v1.js';
@@ -23,10 +24,14 @@ import { authorityHttpServerOptions } from './fixtures/authority-http-server.js'
 const PEOPLE: readonly FixturePerson[] = ['ari', 'mina', 'rafael', 'okafor'];
 type Areas = Readonly<Record<PersonChangesAreaV1, string>>;
 
-/** The change check over the open-items fixture's Authority; Ari's reviews are the approval core's proposal statuses for him. */
+/**
+ * The change check over the open-items fixture's Authority, composed as the Authority composes it: Ari's reviews are the approval
+ * core's proposal statuses for him, and each person's own impact checks the fixture's runs, on the fixture's clock.
+ */
 function changesOf(f: OpenItemsFixtureV1, overrides: Partial<CreatePersonChangesV1Options> = {}, withReviews = true) {
   const app = createPersonChangesV1({
     database: f.db, sessions: f.openItemsOptions.sessions, projects: new SqliteProjectContextRepositoryV1(f.db), items: f.items, people: f.directory, records: f.records,
+    runs: f.runs, now: f.clock,
     ...(withReviews ? { reviews: async () => (person: Parameters<typeof f.core.proposalStatuses>[0]) => f.core.proposalStatuses(person) } : {}),
     ...overrides,
   });
@@ -66,7 +71,7 @@ describe('change check: what it answers', () => {
     expect((await read('ari')).areas.follow_ups).not.toBe(first.areas.follow_ups);
   });
 
-  it('fingerprints exactly what the matching reads list: the V2 project list, runs items involved, and reviews', async () => {
+  it('fingerprints exactly what the matching reads list: the V2 project list, runs items involved, and reviews with your own checks', async () => {
     const f = await sentFixture();
     const { read } = changesOf(f);
     const projects = projectsApp(f);
@@ -90,12 +95,18 @@ describe('change check: what it answers', () => {
         cursor = page.next_cursor ?? undefined;
       } while (cursor !== undefined);
       const person = f.openItemsOptions.sessions.authenticateAccess({ access_token: who });
-      const reviews = f.core.proposals(person).map(view => [view.approval_id, view.status]);
+      // The meetings waiting for their review, and their own impact checks in the state the runs list shows.
+      const checks = (await f.app.list({ access_token: who })).runs.filter(run => run.trigger === 'approved_record').map(run => [run.run_id, run.state]);
+      const reviews = [...f.core.proposals(person).map(view => [view.approval_id, view.status]), ...checks];
       expect((await read(who)).areas, who).toEqual({ projects: digestOf(listed), follow_ups: digestOf(involved), reviews: digestOf(reviews) });
     }
-    expect((await read('ari')).areas.reviews).not.toBe(canonicalSha256([]));
-    // With no personal meeting runtime composed, nobody has a review waiting.
-    expect((await changesOf(f, {}, false).read('ari')).areas.reviews).toBe(canonicalSha256([]));
+    expect((await read('ari')).areas.reviews).not.toBe(digestOf([[f.runId, 'done']]));
+    // With no personal meeting runtime composed, nobody has a review waiting: what is left is each person's own checks.
+    const noRuntime = changesOf(f, {}, false);
+    expect((await noRuntime.read('ari')).areas.reviews).toBe(digestOf([[f.runId, 'done']]));
+    expect((await noRuntime.read('mina')).areas.reviews).toBe(canonicalSha256([]));
+    // And with no runs store either, nothing.
+    expect((await changesOf(f, { runs: undefined }, false).read('ari')).areas.reviews).toBe(canonicalSha256([]));
   });
 
   it('refuses a person whose session or membership is gone', async () => {
@@ -112,8 +123,9 @@ describe('change check: what it answers', () => {
     const reported: PersonChangesReviewsFailureV1[] = [];
     const whole = await changesOf(f).read('ari');
     const notReady = await changesOf(f, { reviews: async () => { throw new AuthorityOperationError('unavailable', 'approval core unavailable'); }, on_reviews_failure: event => { reported.push(event); } }).read('ari');
-    expect(notReady).toEqual({ ...whole, areas: { ...whole.areas, reviews: canonicalSha256([]) } });
-    expect(whole.areas.reviews).not.toBe(canonicalSha256([]));
+    // No reviews: what is left is Ari's own check.
+    expect(notReady).toEqual({ ...whole, areas: { ...whole.areas, reviews: digestOf([[f.runId, 'done']]) } });
+    expect(whole.areas.reviews).not.toBe(notReady.areas.reviews);
     const unreadable = await changesOf(f, { reviews: async () => () => { throw new Error('proposal row unreadable'); }, on_reviews_failure: event => { reported.push(event); } }).read('ari');
     expect(unreadable).toEqual(notReady);
     expect(reported).toEqual([{ kind: 'person_changes_reviews', reason: 'ready', code: 'unavailable' }, { kind: 'person_changes_reviews', reason: 'read', code: 'error' }]);
@@ -121,17 +133,13 @@ describe('change check: what it answers', () => {
 });
 
 describe('change check: follow_ups', () => {
-  it('moves on a send, done, not relevant, reopen, a reassignment and a handoff, for those involved only; never on a check', async () => {
+  it('moves on a send, done, not relevant, reopen, a reassignment and a handoff, for those involved only', async () => {
     const f = await openItemsFixture(); await f.finishImpactRun();
     const { step } = changesOf(f);
     const unsent = (await f.runItems()).items;
     const ticket = unsent.find(item => item.kind === 'ticket')!.item_id;
-    const action = unsent.find(item => item.kind === 'record')!.item_id;
     // Ari sent both, Mina owns the ticket: Rafael reads the decision but is involved in nothing, Okafor reads nothing.
     expect(await step(() => sendAll(f, unsent))).toEqual(moved({ ari: ['follow_ups'], mina: ['follow_ups'] }));
-    f.advance(1_000);
-    // A sweep's check wakes nobody.
-    expect(await step(() => { f.check(ticket, 'landed'); f.check(action, 'changed', 'mina'); })).toEqual(moved({}));
     for (const [who, state] of [['mina', 'done'], ['ari', 'open'], ['ari', 'not_relevant'], ['mina', 'open']] as const) {
       f.advance(1_000);
       expect(await step(() => setState(f, who, ticket, state)), `${who} sets ${state}`).toEqual(moved({ ari: ['follow_ups'], mina: ['follow_ups'] }));
@@ -298,6 +306,72 @@ describe('change check: reviews', () => {
   });
 });
 
+describe('change check: your own impact checks (DSK-1)', () => {
+  /** A check-in, as the desktop sends one with each change check. */
+  const checkIn = (f: OpenItemsFixtureV1, who: FixturePerson) => f.app.next({ access_token: who, request: { schema_version: 1, operation: 'next' } });
+  /** Approves another meeting of Ari's; it publishes, and its check is queued, only once `publish` runs. */
+  const approveAnother = async (f: OpenItemsFixtureV1) => {
+    const other = await f.otherProposal();
+    f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: 'approve-other' }), () => f.session);
+    return { publish: () => f.publisher(enqueueApprovedRecordRunV1(f.runs)).appendFinalizedApprovalsToV4(new AbortController().signal) };
+  };
+  const lease = (f: OpenItemsFixtureV1, run_id: string) => {
+    const claimed = f.runs.claim(f.person, run_id, 60_000);
+    if (claimed.kind !== 'claimed') throw new Error(`expected a lease on ${run_id}`);
+    return claimed.lease_token;
+  };
+  /** A sweep of Ari's waiting to run, as an Authority that still swept left it: never one of his impact checks. */
+  const leftoverSweep = (f: OpenItemsFixtureV1) => f.db.prepare(`INSERT INTO authority_trigger_runs_v1
+    (run_id, trigger, event_ref, organization_id, principal_id, membership_id, scope_kind, state, attempts, created_at, updated_at)
+    VALUES (?, 'sweep', ?, ?, ?, ?, 'mine', 'pending', 0, ?, ?)`).run(`run_${randomUUID()}`, `sweep_${randomUUID()}`,
+    f.person.organization_id, f.person.principal_id, f.person.membership_id, f.clock().toISOString(), f.clock().toISOString());
+
+  it('moves reviews as one of the caller\'s own checks starts, stops, ends or fails, for nobody else, and asks again in 15 seconds while one is queued or running or one of their approvals is publishing, else in 60', async () => {
+    const f = await openItemsFixture();
+    const { step, read } = changesOf(f);
+    const ari = f.openItemsOptions.sessions.authenticateAccess({ access_token: 'ari' });
+    const reviewsWith = (...checks: readonly (readonly string[])[]) => digestOf([...f.core.proposals(ari).map(view => [view.approval_id, view.status]), ...checks]);
+    const waits = async () => Object.fromEntries(await Promise.all(PEOPLE.map(async who => [who, (await read(who)).check_again_after_seconds] as const)));
+    const only = (ari: number) => ({ ari, mina: 60, rafael: 60, okafor: 60 });
+    /** Which areas `action` moved for each person, then each person's wait. */
+    const walk = async (action: () => unknown) => [await step(action), await waits()];
+    // Queued when its meeting was published; nobody else has a check.
+    expect((await read('ari')).areas.reviews).toBe(reviewsWith([f.runId, 'pending']));
+    expect(await waits()).toEqual(only(15));
+    // It is the check that asks sooner: without the runs store, the same reviews ask in 60.
+    const withoutRuns = changesOf(f, { runs: undefined });
+    expect((await withoutRuns.read('ari')).check_again_after_seconds).toBe(60);
+    // It starts.
+    expect(await walk(() => lease(f, f.runId))).toEqual([moved({ ari: ['reviews'] }), only(15)]);
+    expect((await read('ari')).areas.reviews).toBe(reviewsWith([f.runId, 'running']));
+    // Its attempt stops without finishing: once the lease lapses it reads pending (queued again), as the runs list shows it.
+    expect(await walk(() => f.advance(60_000))).toEqual([moved({ ari: ['reviews'] }), only(15)]);
+    expect((await read('ari')).areas.reviews).toBe(reviewsWith([f.runId, 'pending']));
+    // A check-in takes it over and it ends: the follow-ups it found also move Ari's, and those of Mina, whose ticket it matched.
+    expect(await walk(async () => {
+      await expect(checkIn(f, 'ari')).resolves.toEqual({ state: 'running' });
+      await vi.waitFor(() => expect(f.runs.read(f.person, f.runId)!.state).toBe('done'), { interval: 1 });
+    })).toEqual([moved({ ari: ['follow_ups', 'reviews'], mina: ['follow_ups'] }), only(60)]);
+    expect((await read('ari')).areas.reviews).toBe(reviewsWith([f.runId, 'done']));
+    // Another meeting approved and still publishing: its check is about to be queued, which asks sooner even without the runs store.
+    const { publish } = await approveAnother(f);
+    expect(await waits()).toEqual(only(15));
+    expect((await withoutRuns.read('ari')).check_again_after_seconds).toBe(15);
+    await publish();
+    expect(await waits()).toEqual(only(15));
+    const second = f.runs.list(f.person, 1)[0]!;
+    expect(second).toMatchObject({ trigger: 'approved_record', state: 'pending' });
+    // It fails having found nothing: its state alone moves reviews, and it waits for Try again.
+    expect(await walk(() => f.runs.fail(second.run_id, lease(f, second.run_id), 'no_access'))).toEqual([moved({ ari: ['reviews'] }), only(60)]);
+    expect((await read('ari')).areas.reviews).toBe(reviewsWith([f.runId, 'done'], [second.run_id, 'failed']));
+    // Asking again what nothing changed moves nothing. A meeting waiting for review is no reason to ask sooner, and a leftover
+    // sweep is no check of his.
+    expect(await walk(() => undefined)).toEqual([moved({}), only(60)]);
+    await f.otherProposal(true, 'note-3');
+    expect(await walk(() => leftoverSweep(f))).toEqual([moved({}), only(60)]);
+  });
+});
+
 describe('change check: privacy (ADR-0012)', () => {
   it("leaves every fingerprint of a person unchanged by others' changes to items and projects that person cannot read", async () => {
     // Okafor is matched as the ticket's owner, but cannot read its decision and is never sent it.
@@ -311,7 +385,7 @@ describe('change check: privacy (ADR-0012)', () => {
     const startRevision = revision();
     const okafor = (await read('okafor')).areas;
     const rafael = (await read('rafael')).areas;
-    // Ari picks Mina for the ticket before Send, sends it, Mina closes it, Ari reopens it, and a sweep checks it.
+    // Ari picks Mina for the ticket before Send, sends it, Mina closes it, and Ari reopens it.
     await assign(f, 'ari', ticket.item_id, 'mina');
     f.advance(1_000);
     await sendAll(f, unsent);
@@ -319,7 +393,6 @@ describe('change check: privacy (ADR-0012)', () => {
     await setState(f, 'mina', ticket.item_id, 'done');
     f.advance(1_000);
     await setState(f, 'ari', ticket.item_id, 'open');
-    f.check(ticket.item_id, 'changed');
     // Projects Okafor is not in are renamed, archived and joined.
     const projects = projectsApp(f);
     await projects.renameProject('ari', { ...request(), kind: 'echo-project-rename-v1', project_id: f.projectA, name: 'Renamed pilot' });
@@ -390,6 +463,7 @@ describe('change check: cost', () => {
       people: { people: traced('people', f.directory.people.bind(f.directory)), leadsAny: traced('leads', f.directory.leadsAny.bind(f.directory)) },
       records: { readableDecisionProjects: traced('records', f.records.readableDecisionProjects) },
       reviews: async () => traced('reviews', reviewer),
+      runs: { list: traced('runs', f.runs.list.bind(f.runs)) },
     });
     const audits = () => Object.fromEntries((f.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%audit%' ORDER BY name").pluck().all() as string[])
       .map(table => [table, f.db.prepare(`SELECT count(*) FROM ${table}`).pluck().get()]));
@@ -397,9 +471,11 @@ describe('change check: cost', () => {
     const before = { audits: audits(), changes: changes(), binds: f.bindDesk.mock.calls.length, opens: f.openCitation.mock.calls.length };
     for (const who of PEOPLE) await app.read({ access_token: who });
     expect({ audits: audits(), changes: changes(), binds: f.bindDesk.mock.calls.length, opens: f.openCitation.mock.calls.length }).toEqual(before);
-    // Every database read after the session check runs inside the one read transaction: projects, items, people, records, reviews.
-    expect([...inTransactionBy.keys()].sort()).toEqual(['items', 'leads', 'people', 'projects', 'records', 'reviews', 'sessions']);
+    // Every database read after the session check runs inside the one read transaction: projects, items, people, records, reviews
+    // and the caller's own checks.
+    expect([...inTransactionBy.keys()].sort()).toEqual(['items', 'leads', 'people', 'projects', 'records', 'reviews', 'runs', 'sessions']);
     expect(inTransactionBy.get('reviews')).toHaveLength(PEOPLE.length);
+    expect(inTransactionBy.get('runs')).toHaveLength(PEOPLE.length);
     expect(inTransaction.length).toBeGreaterThan(PEOPLE.length * 4);
     expect(inTransaction.every(Boolean)).toBe(true);
     expect(f.db.inTransaction).toBe(false);

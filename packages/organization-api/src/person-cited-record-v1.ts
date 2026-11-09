@@ -5,15 +5,15 @@ import { asRecord, assertDigest, assertExactKeys, fail, oneOf, utf8ByteLength } 
 /**
  * One approved meeting record as an Ask citation of it reads: what
  * `person records --record-sha256 <digest> --brief` prints in place of the
- * signed envelope. Each decision, action and rationale carries the atom id Ask
- * citations carry, so a reader can light the ones an answer cites; the
- * envelope, its signal and participant ids, identities and provenance stay
+ * signed envelope. Every decision, action and rationale is kept, each with the
+ * atom id Ask citations carry, so a reader can light the ones an answer cites;
+ * the envelope, its signal and participant ids, identities and provenance stay
  * behind. Texts are display text (controls and format characters as spaces,
  * trimmed, never empty), each no longer than the record it comes from.
  */
 export const PERSON_CITED_RECORD_KIND_V1 = 'echo-person-cited-record-v1';
-/** Items kept per section, and participants named; `more` says others were left out. */
-export const PERSON_CITED_RECORD_ITEMS_MAX_V1 = 32;
+/** Participants named; `participants_more` says others were left out. */
+export const PERSON_CITED_RECORD_PARTICIPANTS_MAX_V1 = 32;
 /** Quotes kept per item: its first distinct ones. */
 export const PERSON_CITED_RECORD_QUOTES_MAX_V1 = 3;
 /** An action's owner the approver confirmed, in characters. */
@@ -36,13 +36,16 @@ export interface PersonCitedRecordItemV1 {
   readonly owner?: string;
   readonly quotes: readonly PersonCitedRecordQuoteV1[];
 }
-export interface PersonCitedRecordSectionV1 { readonly items: readonly PersonCitedRecordItemV1[]; readonly more: boolean }
+/** Every item of one kind, in the record's order. */
+export interface PersonCitedRecordSectionV1 { readonly items: readonly PersonCitedRecordItemV1[] }
 export interface PersonCitedRecordV1 {
   readonly schema_version: 1;
   readonly kind: typeof PERSON_CITED_RECORD_KIND_V1;
   readonly record_sha256: Sha256Digest;
   readonly policy_id: PersonCitedRecordPolicyV1;
   readonly title?: string;
+  /** When the record was approved (ISO 8601): the signed envelope's issue time. */
+  readonly approved_at?: string;
   /** When the meeting started (ISO 8601), in which time zone, and whether it was all day. */
   readonly started_at?: string;
   readonly timezone?: string;
@@ -82,10 +85,10 @@ function optional<K extends string, V>(key: K, value: V | undefined): { [P in K]
   return (value === undefined ? {} : { [key]: value }) as { [P in K]?: V };
 }
 
-/** Owners the approver confirmed, by action id, from the signed approval: the brief itself never has them. */
+/** Every owner the approver confirmed, by action id, from the signed approval: the brief itself never has them. */
 function confirmedOwners(entries: unknown): ReadonlyMap<string, string> {
   const owners = new Map<string, string>();
-  for (const entry of Array.isArray(entries) ? entries.slice(0, 40) : []) {
+  for (const entry of Array.isArray(entries) ? entries : []) {
     const found = object(entry);
     const owner = displayText(found?.owner);
     if (typeof found?.signal_id === 'string' && owner !== undefined && owner.length <= OWNER_MAX_CHARACTERS) owners.set(found.signal_id, owner);
@@ -93,7 +96,7 @@ function confirmedOwners(entries: unknown): ReadonlyMap<string, string> {
   return owners;
 }
 
-/** One section of the brief. Every item must be of its kind, with its own id and some text, or the whole record is refused. */
+/** One section of the brief, whole. Every item must be of its kind, with its own id and some text, or the whole record is refused. */
 function section(raw: unknown, kind: Kind, recordSha256: string, owners: ReadonlyMap<string, string>): PersonCitedRecordSectionV1 {
   if (!Array.isArray(raw)) fail(`Cited record ${kind}s are invalid`);
   const ids = new Set<string>();
@@ -105,7 +108,6 @@ function section(raw: unknown, kind: Kind, recordSha256: string, owners: Readonl
       fail(`Cited record ${kind} is invalid`);
     }
     ids.add(item.id);
-    if (items.length === PERSON_CITED_RECORD_ITEMS_MAX_V1) continue;
     const quotes: PersonCitedRecordQuoteV1[] = [];
     for (const span of Array.isArray(item.evidence) ? item.evidence.slice(0, 32) : []) {
       const found = object(span);
@@ -120,7 +122,7 @@ function section(raw: unknown, kind: Kind, recordSha256: string, owners: Readonl
       ...optional('owner', kind === 'action' ? owners.get(item.id) : undefined), quotes: Object.freeze(quotes),
     }));
   }
-  return Object.freeze({ items: Object.freeze(items), more: raw.length > PERSON_CITED_RECORD_ITEMS_MAX_V1 });
+  return Object.freeze({ items: Object.freeze(items) });
 }
 
 /**
@@ -141,13 +143,15 @@ export function personCitedRecordV1(record: PersonRecordListItemV1): PersonCited
   for (const entry of Array.isArray(meeting.participants) ? meeting.participants.slice(0, 10_000) : []) {
     const name = displayText(object(entry)?.display_name);
     if (name === undefined || participants.includes(name)) continue;
-    if (participants.length === PERSON_CITED_RECORD_ITEMS_MAX_V1) { participants_more = true; break; }
+    if (participants.length === PERSON_CITED_RECORD_PARTICIPANTS_MAX_V1) { participants_more = true; break; }
     participants.push(name);
   }
   const time = object(meeting.time) ?? {};
   return Object.freeze({
     schema_version: 1, kind: PERSON_CITED_RECORD_KIND_V1, record_sha256: record.record_sha256, policy_id,
     ...optional('title', displayText(meeting.title)),
+    // The approval's decided_at, as the Authority dates an approved meeting: the envelope's issue time.
+    ...optional('approved_at', isoTime(body.issued_at)),
     ...optional('started_at', isoTime(time.actual_start_at) ?? isoTime(time.scheduled_start_at)),
     ...optional('timezone', typeof time.timezone === 'string' && TIMEZONE.test(time.timezone) ? time.timezone : undefined),
     all_day: time.all_day === true,
@@ -171,7 +175,7 @@ function validFlag(value: unknown, label: string): boolean {
   if (typeof value !== 'boolean') fail(`${label} is invalid`);
   return value;
 }
-function validList(value: unknown, label: string, maximum: number): readonly unknown[] {
+function validList(value: unknown, label: string, maximum = Number.POSITIVE_INFINITY): readonly unknown[] {
   if (!Array.isArray(value) || value.length > maximum) fail(`${label} is invalid`);
   return value;
 }
@@ -179,8 +183,8 @@ function validList(value: unknown, label: string, maximum: number): readonly unk
 function validSection(value: unknown, kind: Kind): PersonCitedRecordSectionV1 {
   const label = `Person cited record ${kind}s`;
   const input = asRecord(value, label);
-  assertExactKeys(input, ['items', 'more'], label);
-  const items = validList(input.items, label, PERSON_CITED_RECORD_ITEMS_MAX_V1).map((entry) => {
+  assertExactKeys(input, ['items'], label);
+  const items = validList(input.items, label).map((entry) => {
     const item = asRecord(entry, `Person cited record ${kind}`);
     const extra = (kind === 'decision' ? ['status'] : kind === 'action' ? ['owner'] : []).filter((key) => Object.hasOwn(item, key));
     assertExactKeys(item, ['atom_id', 'text', 'quotes', ...extra], `Person cited record ${kind}`);
@@ -198,23 +202,26 @@ function validSection(value: unknown, kind: Kind): PersonCitedRecordSectionV1 {
       quotes: Object.freeze(quotes),
     });
   });
-  return Object.freeze({ items: Object.freeze(items), more: validFlag(input.more, `${label} more`) });
+  // Each item once: its atom id is its record's digest and its own signal's id.
+  if (new Set(items.map((item) => item.atom_id)).size !== items.length) fail(`${label} repeat`);
+  return Object.freeze({ items: Object.freeze(items) });
 }
 
 export function validatePersonCitedRecordV1(value: unknown): PersonCitedRecordV1 {
   const input = asRecord(value, 'Person cited record');
-  const optionalKeys = ['title', 'started_at', 'timezone', 'approved_by'].filter((key) => Object.hasOwn(input, key));
+  const optionalKeys = ['title', 'approved_at', 'started_at', 'timezone', 'approved_by'].filter((key) => Object.hasOwn(input, key));
   assertExactKeys(input, ['schema_version', 'kind', 'record_sha256', 'policy_id', 'all_day', 'participants', 'participants_more', 'decisions', 'actions', 'rationales', ...optionalKeys],
     'Person cited record');
   if (input.schema_version !== 1 || input.kind !== PERSON_CITED_RECORD_KIND_V1) fail('Person cited record is invalid');
   assertDigest(input.record_sha256, 'Person cited record record_sha256');
   if (Object.hasOwn(input, 'timezone') && (typeof input.timezone !== 'string' || !TIMEZONE.test(input.timezone))) fail('Person cited record timezone is invalid');
-  const participants = validList(input.participants, 'Person cited record participants', PERSON_CITED_RECORD_ITEMS_MAX_V1).map((name) => validText(name, 'Person cited record participant'));
+  const participants = validList(input.participants, 'Person cited record participants', PERSON_CITED_RECORD_PARTICIPANTS_MAX_V1).map((name) => validText(name, 'Person cited record participant'));
   if (new Set(participants).size !== participants.length) fail('Person cited record participants repeat');
   return Object.freeze({
     schema_version: 1, kind: PERSON_CITED_RECORD_KIND_V1, record_sha256: input.record_sha256 as Sha256Digest,
     policy_id: oneOf(input.policy_id, POLICIES, 'Person cited record policy_id'),
     ...optional('title', Object.hasOwn(input, 'title') ? validText(input.title, 'Person cited record title') : undefined),
+    ...optional('approved_at', Object.hasOwn(input, 'approved_at') ? validTime(input.approved_at, 'Person cited record approved_at') : undefined),
     ...optional('started_at', Object.hasOwn(input, 'started_at') ? validTime(input.started_at, 'Person cited record started_at') : undefined),
     ...optional('timezone', input.timezone as string | undefined),
     all_day: validFlag(input.all_day, 'Person cited record all_day'),

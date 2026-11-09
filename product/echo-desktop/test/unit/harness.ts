@@ -4,7 +4,7 @@
 // as plain functions, hooks that do so and the tree those calls show.
 import type { VNode } from 'preact';
 import { afterEach, beforeEach, vi } from 'vitest';
-import type { AnswerSource, AskStep, Expect, OpenItemsView, ProjectSummary, TimelineTurn } from '../../src/shared/protocol.js';
+import type { AskStep, Expect, OpenItemsView, ProjectSummary, TimelineTurn } from '../../src/shared/protocol.js';
 import type { AskTook, State } from '../../src/renderer/store.js';
 
 export const ok = (value: unknown) => ({ ok: true, value });
@@ -126,7 +126,6 @@ export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () 
       case 'projects.members': case 'people.directory': return ok({ items: [], next_cursor: null });
       case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
       case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
-      case 'search.run': return ok({ items: [] });
       case 'ask.cancel': case 'notice.show': case 'log.changes': return ok(null);
       case 'changes.read': return changesFor(lists());
       case 'runs': return fail('unavailable', { retryable: true });
@@ -172,7 +171,6 @@ export async function asking(rpc: { mock: { calls: unknown[][] } }, held: Held, 
     store.askProgress({ cancel_id: cancelId, expect: account, step: value, ...notice });
   return {
     store, release, cancelId, step,
-    read: (items: readonly AnswerSource[]) => step({ type: 'read', items }),
     pane: () => render(screens.SourcePane({ state: store.getState() })),
     thread: () => render(screens.AskView({ state: store.getState() })),
   };

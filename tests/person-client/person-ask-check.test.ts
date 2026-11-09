@@ -49,7 +49,6 @@ describe('person Ask source check client (ADR-0047)', () => {
   it('refuses an answer that is not the answer to its request', async () => {
     for (const answer of [
       { ...CHECK, items: [{ state: 'same', marker: MARKER }] },
-      { ...CHECK, items: [{ state: 'same' }, { state: 'changed' }] },
       { ...CHECK, items: [{ state: 'same', marker: MARKER }, { state: 'changed', marker: MARKER }] },
       { ...CHECK, items: [{ state: 'unreadable', marker: MARKER }, { state: 'changed' }] },
       { ...CHECK, items: [{ state: 'same', marker: MARKER }, { state: 'changed', reason: 'reassigned' }] },
@@ -136,6 +135,6 @@ describe('person Ask source check client (ADR-0047)', () => {
     expect(output.stdout).not.toContain('not_supported');
     output.stdout = '';
     expect(await run(['--help'])).toBe(0);
-    expect(output.stdout).toContain('ask-check   Check whether what earlier answers cited changed, with no content.');
+    expect(output.stdout).toContain('ask-check   Check whether you can still read what earlier answers cited, with no content.');
   });
 });

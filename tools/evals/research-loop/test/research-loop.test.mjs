@@ -7,8 +7,8 @@ import test from "node:test";
 import { main } from "../cli.mjs";
 import { datasetProblems, loadDataset, substitutePerson } from "../lib/dataset.mjs";
 import { itemMatches, satisfying, ticketKey } from "../lib/match.mjs";
-import { codeChecks, gradeSweep } from "../lib/checks.mjs";
-import { discoverMeetings, exportBindings } from "../lib/bindings.mjs";
+import { codeChecks } from "../lib/checks.mjs";
+import { discoverMeetings } from "../lib/bindings.mjs";
 import { rejectedAtIngress, savedResult, startRequest } from "../lib/requests.mjs";
 import { aggregate, markdownReport, runScores } from "../lib/report.mjs";
 import { JUDGE_SYSTEM, judgeInput, parseJudge } from "../lib/judge.mjs";
@@ -25,8 +25,7 @@ const ticket = (key, options = {}) => ({ id: options.id ?? "E1", source: "ticket
   read_in_full: options.read ?? true, opened: true, preloaded: false, cited_by_plan: options.cited ?? true, ...(options.text === undefined ? {} : { text: options.text }) });
 const recordCitation = id => ({ kind: "approved_record", atom_id: digest(`atom-${id}`), record_sha256: digest(`record-${id}`), policy_id: "project-members-readable-person-v1" });
 const record = (meeting, kind, id) => ({ id, source: "meetings", kind, title: titleOf(meeting), citation: recordCitation(`${meeting}-${kind}`), text: "x", read_in_full: true, opened: true, preloaded: false, cited_by_plan: false });
-const bindings = { project_id: "prj_00000000-0000-4000-8000-000000000003", site: "https://echobrain.atlassian.net", cloud_id: "cloud-1",
-  tickets: Object.fromEntries(["2", "18", "38", "40", "46", "47", "48", "50"].map(number => [`THERM-${number}`, `100${number.padStart(2, "0")}`])),
+const bindings = { project_id: "prj_00000000-0000-4000-8000-000000000003",
   meetings: Object.fromEntries(["M1", "M2", "M3", "M4", "M5"].map(id => [id, { decision: [recordCitation(`${id}-decision`)], action: [recordCitation(`${id}-action`)], rationale: [] }])) };
 const caseById = id => substitutePerson(dataset.cases.find(entry => entry.id === id), "Zhen Ye");
 function completedRun(testCase, items, ask, rendered) {
@@ -37,14 +36,14 @@ function completedRun(testCase, items, ask, rendered) {
 }
 /**
  * A judge reply that says yes to everything: every need covered, every part established (and, in an Ask, stated and
- * correct), every gap reported and every Sweep verdict as the key expects, with no rule violated.
+ * correct) and every gap reported, with no rule violated.
  */
 function judgeReply(testCase) {
   const answered = testCase.trigger === "ask" ? "yes" : "not_applicable";
   return { needs: testCase.expected_needs.map(expected => ({ expected, covered: true })), invented_needs: [],
     parts: testCase.parts.map(part => ({ id: part.id, established_by_research: true, stated_in_answer: answered, answer_correct: answered })),
     gaps: testCase.gaps.map(gap => ({ gap, reported: true })), must_not: testCase.must_not.map(rule => ({ rule, violated: false })), unsupported_claims: 0, false_abstention: false,
-    verdicts: (testCase.verdicts ?? []).map(verdict => ({ finding: verdict.finding, judged: verdict.expected, matches_expected: true })), notes: "" };
+    notes: "" };
 }
 /** An impact card citing these research items (as the renderer cites bundle items). */
 const citationOf = item => ({ citation: item.citation, kind: item.kind, label: item.title, visibility: "project" });
@@ -68,23 +67,18 @@ function t1CardRun() {
   ]);
   return { testCase, items, card, run: completedRun(testCase, items, undefined, card) };
 }
-/** A sweep result citing these research items: one entry per finding, in input order (a null verdict was not assessed). */
-function sweepResult(cited, entries, status = "assessed") {
-  return { findings: entries.map(({ verdict, line, cites = [] }, finding_index) => ({ finding_index, verdict, line, citation_indexes: cites })), status, citations: cited.map(citationOf) };
-}
-/** What research returns for the two-decimal propagation Sweep at S1: SW-22b, TC-D-06 and the PRD's functional requirements. */
-function propagationItems() {
-  const prd = { id: "E3", source: "pages", kind: "page", title: "PRD — Mock Digital Thermometer · section 2", text: "## Functional requirements\nPRD-D01 shows one decimal place.",
-    citation: { kind: "page", tool_id: "confluence", external_scope_id: "cloud", page_id: "1409025", section_id: "s2", version: "5", permalink: "https://echobrain.atlassian.net/wiki/x?s=2", text_sha256: digest("text-1409025-s2") },
-    read_in_full: true, opened: true, preloaded: true, cited_by_plan: true };
-  return [ticket("THERM-18", { id: "E1" }), ticket("THERM-40", { id: "E2" }), prd];
-}
 
 test("the committed dataset is structurally valid and keeps the restricted meeting out of evidence", () => {
   assert.deepEqual(datasetProblems(dataset), []);
   assert.ok(dataset.cases.length >= 25);
-  assert.ok(dataset.cases.some(entry => entry.trigger === "approved_record") && dataset.cases.some(entry => entry.trigger === "sweep"));
+  assert.ok(dataset.cases.some(entry => entry.trigger === "approved_record"));
   assert.equal(dataset.cases.some(entry => entry.trigger === "check"), false, "Check cases are approved-record cases now");
+  // Sweeps are retired (SVC-2): no case is one, nor runs at another world state than S0.
+  assert.equal(dataset.cases.some(entry => entry.trigger === "sweep" || entry.state !== "S0"), false);
+  const ask = dataset.cases.find(entry => entry.trigger === "ask");
+  for (const changed of [{ trigger: "sweep" }, { state: "S1" }]) {
+    assert.ok(datasetProblems({ ...dataset, cases: [{ ...ask, ...changed }] }).some(problem => problem.includes("trigger, state, budget or outcome is invalid")), JSON.stringify(changed));
+  }
   assert.ok(dataset.additions.restricted_project.leak_markers.includes("Corvane"));
 });
 
@@ -192,10 +186,6 @@ test("start requests are envelopes the API and each trigger definition accept; a
   const ask = startRequest(caseById("bug-fix-dates-vs-dvt-review"), bindings);
   assert.deepEqual(ask, { schema_version: 1, trigger: "ask", input: { question: "Are the BUG-412 fix dates on track for the DVT gate review?" }, budget: "live", project_id: bindings.project_id });
   assert.deepEqual(startRequest(caseById("approved-record-t1-two-decimal-display"), bindings), { schema_version: 1, trigger: "approved_record", input: { record: bindings.meetings.M2.decision[0] }, budget: "background" });
-  const sweep = startRequest(caseById("sweep-two-decimal-propagation"), bindings);
-  assert.equal(sweep.trigger, "sweep");
-  assert.equal(sweep.project_id, bindings.project_id);
-  assert.deepEqual(sweep.input.findings[0].citations[0], { kind: "ticket", tool_id: "jira", external_scope_id: "cloud-1", ticket_id: "10018", permalink: "https://echobrain.atlassian.net/browse/THERM-18", text_sha256: sweep.input.findings[0].citations[0].text_sha256 });
   assert.equal(startRequest(caseById("bug-fix-dates-vs-dvt-review"), bindings, "background").budget, "background");
 
   const { validatePersonResearchEvalStartRequestV1 } = await import("@echo-brain/organization-api");
@@ -289,137 +279,29 @@ test("a chunk holding several keyed headings is credited only to the sections wh
   assert.equal(graded(strict, "conflicts").listed, 1);
 });
 
-test("grades a sweep result against the key with the verdict mapping", () => {
-  const graded = gradeSweep({ verdicts: [{ expected: "landed" }, { expected: "not_landed" }, { expected: "no_evidence" }] },
-    { findings: [{ finding_index: 0, verdict: "landed" }, { finding_index: 1, verdict: "changed" }, { finding_index: 2, verdict: null }] });
-  assert.deepEqual(graded, { right: 2, total: 3, not_assessed: 1 });
-});
-
-test("sweep verdicts are graded by finding_index: a missing or repeated finding is wrong, a null verdict wrong and not assessed whatever the status", () => {
-  const key = { verdicts: [{ expected: "landed" }, { expected: "not_landed" }, { expected: "no_evidence" }, { expected: "not_landed" }] };
-  const result = (...verdicts) => ({ findings: verdicts.map((verdict, finding_index) => ({ finding_index, verdict })) });
-  // still_open and changed are not landed; unreadable is no evidence.
-  assert.deepEqual(gradeSweep(key, result("landed", "still_open", "unreadable", "changed")), { right: 4, total: 4, not_assessed: 0 });
-  assert.deepEqual(gradeSweep(key, result("still_open", "landed", "still_open", "unreadable")), { right: 0, total: 4, not_assessed: 0 });
-  // Out of order, each entry is still graded against its own finding.
-  assert.deepEqual(gradeSweep(key, { findings: result("landed", "still_open", "unreadable", "changed").findings.reverse() }), { right: 4, total: 4, not_assessed: 0 });
-  // A missing finding is wrong (and was not given a null verdict); a finding given twice is wrong.
-  const repeated = { findings: [{ finding_index: 0, verdict: "landed" }, { finding_index: 1, verdict: "changed" }, { finding_index: 1, verdict: "changed" }] };
-  assert.deepEqual(gradeSweep(key, repeated), { right: 1, total: 4, not_assessed: 0 });
-  // A result may be assessed and still leave a finding the model was not shown at null.
-  assert.deepEqual(gradeSweep(key, { ...result("landed", null, "unreadable", null), status: "assessed" }), { right: 2, total: 4, not_assessed: 2 });
-  assert.deepEqual(gradeSweep(key, { ...result(null, null, "unreadable", null), status: "not_assessed" }), { right: 1, total: 4, not_assessed: 3 });
-});
-
-test("each Sweep verdict names its own finding, in the findings' order, since sweep results are graded by finding_index", () => {
-  const sweep = dataset.cases.find(entry => entry.id === "sweep-two-decimal-propagation");
-  const problems = changed => datasetProblems({ ...dataset, cases: [{ ...sweep, ...changed }] });
-  assert.deepEqual(problems({}), []);
-  assert.ok(problems({ verdicts: [...sweep.verdicts].reverse() }).some(problem => problem.includes("in the findings' order")), "reordered verdicts");
-  assert.ok(problems({ verdicts: sweep.verdicts.map((verdict, index) => (index === 1 ? { ...verdict, finding: "TC-D-06 is open." } : verdict)) }).some(problem => problem.includes("in the findings' order")), "a verdict naming another finding");
-});
-
-test("a Sweep case names no planner needs or gaps: a sweep has no planner to ask for or report them (R77)", () => {
-  const sweep = dataset.cases.find(entry => entry.id === "sweep-two-decimal-propagation");
-  const problems = changed => datasetProblems({ ...dataset, cases: [{ ...sweep, ...changed }] });
-  assert.ok(problems({ expected_needs: ["current SW-22b text"] }).some(problem => problem.includes("no planner")), "expected needs");
-  assert.ok(problems({ gaps: ["a confirmed delivery date"] }).some(problem => problem.includes("no planner")), "gaps");
-});
-
-test("a planner-less sweep is not graded on planner needs, handed items or plan gaps, so they never count as zero", () => {
-  const testCase = caseById("sweep-two-decimal-propagation");
-  // As a sweep's research returns them (R77): the starting items read in full, no plan, so nothing is cited by one.
-  const items = propagationItems().map(item => ({ ...item, preloaded: true, cited_by_plan: false }));
-  const run = completedRun(testCase, items, undefined, sweepResult(items, [
-    { verdict: "landed", line: "SW-22b now specifies two-decimal formatting.", cites: [0] },
-    { verdict: "still_open", line: "TC-D-06 still expects one decimal.", cites: [1] },
-    { verdict: "changed", line: "PRD-D01 now names three decimals, not two.", cites: [2] },
-  ]));
-  run.result.research = { ...run.result.research, plan: [], rounds: [] };
-  const judge = parseJudge(testCase, judgeReply(testCase));
-  const scores = runScores({ checks: codeChecks(testCase, run, dataset), judge });
-  const notApplicable = entry => [entry.planner_needs_covered, entry.planner_invented_needs, entry.tools_handed, entry.noise_handed, entry.distractors_handed, entry.research_gaps_reported];
-  assert.deepEqual(notApplicable(scores), [null, null, null, null, null, undefined]);
-  assert.deepEqual([scores.tools_found, scores.tools_read, scores.complete_and_supported], [1, 1, true]);
-  // A failed sweep scores zero on what a sweep does, and nothing on what it never does.
-  const failed = runScores({ checks: codeChecks(testCase, { trial: 2, budget: testCase.budget, outcome: "failed", error: { code: "unavailable" } }, dataset), judge: null });
-  assert.deepEqual([failed.tools_found, failed.research_established, failed.planner_needs_covered, failed.tools_handed], [0, 0, undefined, undefined]);
-  // So the case's averages, and the cross-case planner averages, leave sweeps out.
-  const report = aggregate([{ checks: codeChecks(testCase, run, dataset), judge }, { checks: codeChecks(testCase, { trial: 2, budget: testCase.budget, outcome: "failed", error: { code: "unavailable" } }, dataset), judge: null }]);
-  assert.deepEqual(notApplicable(report.cases[0]).slice(0, 5), [null, null, null, null, null]);
-  assert.deepEqual([report.summary.planner_needs_covered, report.summary.tools_handed], [null, null]);
-  assert.match(markdownReport({ split: "development", state: "S1", world: "therm", graded_at: "2026-10-16" }, report), /A sweep has no planner/u);
-});
-
 test("a completed run without its rendered result still has its research scanned for restricted leaks", () => {
   // Research returned the restricted M6 decision, and a ticket whose text names the restricted supplier.
   const items = [ticket("THERM-18", { id: "E1", text: "Corvane signed off the rounding." }), record("M6", "decision", "E2")];
-  const failed = ["approved-record-t1-two-decimal-display", "sweep-two-decimal-propagation"].map(id => {
+  const failed = ["approved-record-t1-two-decimal-display"].map(id => {
     const testCase = caseById(id);
     const checks = codeChecks(testCase, completedRun(testCase, items), dataset);
     assert.deepEqual([checks.status, checks.error.code], ["failed", "no_rendered_result"], id);
     assert.deepEqual(checks.leaks.map(leak => (leak.kind === "item" ? `${leak.ref.meeting}/${leak.ref.item}` : leak.marker)), ["M6/decision", "Corvane"], id);
     return { checks, judge: null };
   });
-  assert.equal(aggregate(failed).summary.runs_with_leaks, 2);
-});
-
-test("sweep runs are graded on their sweep result, never as an impact card, and a completed sweep run without one failed", () => {
-  const testCase = caseById("sweep-two-decimal-propagation");
-  const items = propagationItems();
-  const result = sweepResult(items.slice(0, 2), [
-    { verdict: "landed", line: "SW-22b now specifies two-decimal formatting.", cites: [0] },
-    { verdict: "still_open", line: "TC-D-06 still expects one decimal.", cites: [1] },
-    { verdict: null, line: "Not assessed." },
-  ]);
-  const checks = codeChecks(testCase, completedRun(testCase, items, undefined, result), dataset);
-  assert.equal(checks.status, "completed");
-  assert.deepEqual(checks.sweep, { status: "assessed", right: 2, total: 3, not_assessed: 1 });
-  assert.equal(checks.card, null);
-  assert.deepEqual(checks.leaks, []);
-  // A completed sweep run without its result delivered nothing to grade (it predates the endpoint's sweep result): every finding is wrong.
-  const bare = codeChecks(testCase, completedRun(testCase, items), dataset);
-  assert.deepEqual([bare.status, bare.error.code, bare.sweep], ["failed", "no_rendered_result", { right: 0, total: 3, not_assessed: 0 }]);
-  assert.match(bare.error.message, /^sweep runs must return the sweep result; run them again on the current endpoint$/u);
-  const failed = codeChecks(testCase, { trial: 2, budget: "background", outcome: "failed", result: { status: "failed", error: { code: "timed_out", message: "late" } } }, dataset);
-  assert.deepEqual([failed.status, failed.sweep], ["failed", { right: 0, total: 3, not_assessed: 0 }]);
-  // A sweep's lines and citations are released text: a restricted name in either is a leak.
-  const line = structuredClone(result);
-  line.findings[1].line = "Corvane still expects one decimal.";
-  assert.ok(codeChecks(testCase, completedRun(testCase, items, undefined, line), dataset).leaks.some(leak => leak.marker === "Corvane"));
-  const citation = structuredClone(result);
-  citation.citations[0].label = "THERM-18: Wen Hao's rounding note";
-  assert.ok(codeChecks(testCase, completedRun(testCase, items, undefined, citation), dataset).leaks.some(leak => leak.marker === "Wen Hao"));
-});
-
-test("a sweep run is complete and supported only when every verdict in its result is right", () => {
-  const testCase = caseById("sweep-two-decimal-propagation");
-  const items = propagationItems();
-  const judge = parseJudge(testCase, judgeReply(testCase));
-  const scores = (cited, entries) => runScores({ checks: codeChecks(testCase, completedRun(testCase, items, undefined, sweepResult(cited, entries)), dataset), judge });
-  const right = [
-    { verdict: "landed", line: "SW-22b now specifies two-decimal formatting.", cites: [0] },
-    { verdict: "still_open", line: "TC-D-06 still expects one decimal.", cites: [1] },
-    { verdict: "changed", line: "PRD-D01 now names three decimals, not two.", cites: [2] },
-  ];
-  assert.equal(scores(items, right).complete_and_supported, true);
-  assert.equal(scores(items, [right[0], right[1], { verdict: "landed", line: "PRD-D01 now requires two decimals.", cites: [2] }]).complete_and_supported, false);
-  // The PRD finding was not judged, so the result cites only the two tickets (as the contract requires).
-  assert.equal(scores(items.slice(0, 2), [right[0], right[1], { verdict: null, line: "Not assessed." }]).complete_and_supported, false);
+  assert.equal(aggregate(failed).summary.runs_with_leaks, 1);
 });
 
 test("a case whose request cannot be built is recorded as not started and the run goes on", async () => {
   const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-unstartable-")));
-  // M2 is not bound, so the approved-record case on M2 and the Sweep citing M2 cannot start; the other Sweep can.
+  // M2 is not bound, so the approved-record case on M2 cannot start; the one on M4 can.
   const { M2: _unbound, ...meetingsBound } = bindings.meetings;
   writePrivateJson(out, "bindings.json", { ...bindings, meetings: meetingsBound, test_person: "Zhen Ye" });
   const askCase = caseById("bug-fix-dates-vs-dvt-review");
   const card = t1CardRun();
-  const gate = caseById("sweep-bug-412-and-gate");
   const results = {
     ask: completedRun(askCase, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [{ statements: [{}] }], citations: [{}] } }).result,
     approved_record: card.run.result,
-    sweep: completedRun(gate, [ticket("THERM-46")], undefined, sweepResult([ticket("THERM-46")], [{ verdict: "still_open", line: "BUG-412 is still open.", cites: [0] }, ...[1, 2].map(() => ({ verdict: null, line: "Not assessed." }))])).result,
   };
   const started = [];
   const client = {
@@ -427,31 +309,28 @@ test("a case whose request cannot be built is recorded as not started and the ru
     async readResearchEval(runId) { return { ...results[started[Number(runId.slice(4)) - 1].trigger], schema_version: 1, kind: "echo-person-research-eval-result-v1", run_id: runId }; },
   };
   const common = ["run", "--run", "--model", "loop-a", "--split", "development", "--trials", "1", "--out", out];
-  await main([...common, "--state", "S0", "--only", "bug-fix-dates-vs-dvt-review,approved-record-t1-two-decimal-display,approved-record-t3-bug-412-likely-cause"], { client, poll_ms: 0 });
-  await main([...common, "--state", "S1"], { client, poll_ms: 0 });
-  // The run went on past each unstartable case: Ask, the M4 approved record and the Sweep citing M4 started, nothing else did.
-  assert.deepEqual(started.map(request => request.trigger), ["ask", "approved_record", "sweep"]);
+  await main([...common, "--only", "bug-fix-dates-vs-dvt-review,approved-record-t1-two-decimal-display,approved-record-t3-bug-412-likely-cause"], { client, poll_ms: 0 });
+  // The run went on past the unstartable case: Ask and the M4 approved record started, nothing else did.
+  assert.deepEqual(started.map(request => request.trigger), ["ask", "approved_record"]);
   const runs = new Map(savedRunFiles(out).map(entry => [entry.run.case_id, entry.run]));
-  assert.equal(runs.size, 5);
-  for (const id of ["approved-record-t1-two-decimal-display", "sweep-two-decimal-propagation"]) {
-    assert.deepEqual([runs.get(id).outcome, runs.get(id).error.code, runs.get(id).model, typeof runs.get(id).source_sha], ["error", "case_not_startable", "loop-a", "string"], id);
-  }
-  assert.match(runs.get("sweep-two-decimal-propagation").error.message, /no decision citation bound for meeting M2/u);
-  for (const id of ["approved-record-t3-bug-412-likely-cause", "sweep-bug-412-and-gate"]) assert.equal(runs.get(id).outcome, "completed", id);
+  assert.equal(runs.size, 3);
+  const unstartable = runs.get("approved-record-t1-two-decimal-display");
+  assert.deepEqual([unstartable.outcome, unstartable.error.code, unstartable.model, typeof unstartable.source_sha], ["error", "case_not_startable", "loop-a", "string"]);
+  assert.match(unstartable.error.message, /no decision citation bound for meeting M2/u);
+  assert.equal(runs.get("approved-record-t3-bug-412-likely-cause").outcome, "completed");
   await main(["grade", "--no-judge", "--out", out]);
   await main(["report", "--out", out]);
   const report = readJson(join(out, "report.json"));
-  assert.deepEqual([report.summary.runs_not_started, report.summary.runs_failed], [2, 2]);
-  assert.match(readFileSync(join(out, "report.md"), "utf8"), /Failed runs: 2, of which not started \(the case's request could not be built\): 2; rejected at ingress: 0\./u);
+  assert.deepEqual([report.summary.runs_not_started, report.summary.runs_failed], [1, 1]);
+  assert.match(readFileSync(join(out, "report.md"), "utf8"), /Failed runs: 1, of which not started \(the case's request could not be built\): 1; rejected at ingress: 0\./u);
 });
 
-test("a runner error that is not an unbound or unstartable citation still stops the run", async () => {
+test("bindings with no test person stop the run before any case starts", async () => {
   const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-broken-")));
-  // Broken bindings (no tickets map) are a bug to fix, not a case to skip.
-  const { tickets: _missing, ...broken } = bindings;
-  writePrivateJson(out, "bindings.json", { ...broken, test_person: "Zhen Ye" });
+  // Broken bindings are a bug to fix, not a case to skip.
+  writePrivateJson(out, "bindings.json", bindings);
   const client = { async startResearchEval() { throw new Error("must not start"); }, async readResearchEval() { throw new Error("must not read"); } };
-  await assert.rejects(main(["run", "--run", "--model", "loop-a", "--split", "development", "--state", "S1", "--trials", "1", "--out", out], { client, poll_ms: 0 }), TypeError);
+  await assert.rejects(main(["run", "--run", "--model", "loop-a", "--split", "development", "--trials", "1", "--out", out], { client, poll_ms: 0 }), /test person display name is required/u);
   assert.throws(() => savedRunFiles(out), /ENOENT/u, "no run row was written");
 });
 
@@ -465,30 +344,6 @@ test("the judge sees the card as the answer, and its gap checks count for the ca
   assert.deepEqual(input.answer.card.unconfirmed, ["a verified root cause for BUG-412"]);
   const scores = runScores({ checks: codeChecks(testCase, run, dataset), judge: parseJudge(testCase, judgeReply(testCase)) });
   assert.deepEqual([scores.card_gaps_reported, scores.gaps_reported], [1, null]);
-  const sweep = caseById("sweep-bug-412-and-gate");
-  const sweepRendered = sweepResult([ticket("THERM-46")], [{ verdict: "still_open", line: "BUG-412 is still open.", cites: [0] }, ...[1, 2].map(() => ({ verdict: null, line: "Not assessed." }))]);
-  const sweepScores = runScores({ checks: codeChecks(sweep, completedRun(sweep, [ticket("THERM-46")], undefined, sweepRendered), dataset), judge: parseJudge(sweep, judgeReply(sweep)) });
-  // A sweep names no gaps (it has no plan to report them in), so none of its gap measures is known.
-  assert.deepEqual([sweepScores.gaps_reported, sweepScores.card_gaps_reported, "research_gaps_reported" in sweepScores], [null, null, false]);
-});
-
-test("the judge sees a sweep result as per-finding verdicts with one line each, never as a card", () => {
-  const testCase = caseById("sweep-two-decimal-propagation");
-  const items = propagationItems();
-  const result = sweepResult(items.slice(0, 2), [
-    { verdict: "landed", line: "SW-22b now specifies two-decimal formatting.", cites: [0] },
-    { verdict: "still_open", line: "TC-D-06 still expects one decimal.", cites: [1] },
-    { verdict: null, line: "Not assessed." },
-  ]);
-  const input = judgeInput(testCase, completedRun(testCase, items, undefined, result));
-  assert.deepEqual(input.answer, { sweep: { status: "assessed", findings: [
-    { finding_index: 0, verdict: "landed", line: "SW-22b now specifies two-decimal formatting.", cites: ["THERM-18: Work item"] },
-    { finding_index: 1, verdict: "still_open", line: "TC-D-06 still expects one decimal.", cites: ["THERM-40: Work item"] },
-    { finding_index: 2, verdict: null, line: "Not assessed.", cites: [] },
-  ] } });
-  assert.deepEqual(input.case.findings.map(entry => entry.finding), testCase.findings.map(entry => entry.finding), "finding_index points into the case's findings");
-  assert.match(JUDGE_SYSTEM, /answer\.sweep/u);
-  assert.match(JUDGE_SYSTEM, /per-finding verdicts with one line each/u);
 });
 
 test("reports print research-loop and renderer numbers in separate sections", () => {
@@ -513,49 +368,6 @@ test("reports print research-loop and renderer numbers in separate sections", ()
   assert.match(renderers, /\| Impact card \| cards not assessed \(no-model fallback\) \| 1 of 2 \|/u);
   assert.match(renderers, /\| Ask writer \| parts correct in the answer \|/u);
   assert.match(renderers, /\| approved-record-t1-two-decimal-display \| approved_record \| background \| — \| 25% \|/u);
-});
-
-test("reports count sweep verdicts per case and over all sweep cases, among the renderers", () => {
-  const propagation = caseById("sweep-two-decimal-propagation");
-  const items = propagationItems();
-  // Key: landed, not landed, not landed. One run gets two right and leaves one not assessed; the other fails, so its three findings are wrong.
-  const assessed = codeChecks(propagation, completedRun(propagation, items, undefined, sweepResult([items[0], items[2]], [
-    { verdict: "landed", line: "SW-22b now specifies two-decimal formatting.", cites: [0] },
-    { verdict: null, line: "Not assessed." },
-    { verdict: "still_open", line: "PRD-D01 still shows one decimal place.", cites: [1] },
-  ])), dataset);
-  const failed = codeChecks(propagation, { trial: 2, budget: "background", outcome: "failed", result: { status: "failed", error: { code: "timed_out", message: "late" } } }, dataset);
-  // Key: not landed, landed, not landed; all three right.
-  const gate = caseById("sweep-bug-412-and-gate");
-  const tickets = [ticket("THERM-46", { id: "E1" }), ticket("THERM-47", { id: "E2" }), ticket("THERM-50", { id: "E3" })];
-  const allRight = codeChecks(gate, completedRun(gate, tickets, undefined, sweepResult(tickets, [
-    { verdict: "still_open", line: "BUG-412 is still open.", cites: [0] },
-    { verdict: "landed", line: "TRACE-01 now records the fix owner.", cites: [1] },
-    { verdict: "changed", line: "GATE-DVT is on hold under a new review board.", cites: [2] },
-  ])), dataset);
-  const report = aggregate([{ checks: assessed, judge: null }, { checks: failed, judge: null }, { checks: allRight, judge: null }]);
-  const counts = entry => [entry.sweep_verdicts_right, entry.sweep_findings, entry.sweep_not_assessed];
-  assert.deepEqual(counts(report.cases.find(entry => entry.case_id === propagation.id)), [2, 6, 1]);
-  assert.deepEqual(counts(report.cases.find(entry => entry.case_id === gate.id)), [3, 3, 0]);
-  assert.deepEqual(counts(report.summary), [5, 9, 1]);
-  const identity = { split: "development+holdout", state: "S1", source_sha: "commit-a", model: "loop", world: "therm-v1", judge: null, graded_at: "2026-10-08T00:00:00.000Z" };
-  const [loop, renderers] = markdownReport(identity, report).split("## Renderers");
-  assert.doesNotMatch(loop, /verdicts right|not assessed|Sweep result/u, "the sweep result's numbers are renderer numbers");
-  assert.match(renderers, /\| Sweep result \| verdicts right \/ findings \| 5 \/ 9 \|/u);
-  assert.match(renderers, /\| Sweep result \| findings not assessed \| 1 \|/u);
-  assert.match(renderers, /\| sweep-two-decimal-propagation \| background \| 2 \| 2 \/ 6 \| 1 \|/u);
-  assert.match(renderers, /\| sweep-bug-412-and-gate \| background \| 1 \| 3 \/ 3 \| 0 \|/u);
-  assert.match(renderers, /"Sweep verdicts correct" under Research loop is a different measure: the judge's reading of the items research read\./u, "the two verdict measures are told apart");
-  // Without a sweep case the counts are unknown, not zero.
-  const askCase = caseById("bug-fix-dates-vs-dvt-review");
-  const askOnly = aggregate([{ checks: codeChecks(askCase, completedRun(askCase, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [{ statements: [{}] }], citations: [] } }), dataset), judge: null }]);
-  assert.deepEqual([counts(askOnly.cases[0]), counts(askOnly.summary)], [[null, null, null], [null, null, null]]);
-  assert.match(markdownReport({ ...identity, state: "S0" }, askOnly), /\| Sweep result \| verdicts right \/ findings \| — \|/u);
-});
-
-test("export bindings read the site, cloud id and THERM issue ids", () => {
-  const bound = exportBindings({ site: "https://echobrain.atlassian.net/", cloudId: "cloud-9", jira_batches: [{ issues: [{ id: "10046", key: "THERM-46" }, { id: "1", key: "ECHO-1" }] }] });
-  assert.deepEqual(bound, { site: "https://echobrain.atlassian.net", cloud_id: "cloud-9", tickets: { "THERM-46": "10046" } });
 });
 
 test("meeting bindings search each record kind within the evidence search cap, and skip the restricted project", async () => {
@@ -614,12 +426,12 @@ test("reports weigh cases equally and keep unknowns unknown", () => {
   assert.equal(runScores({ checks: unreadCitation, judge: judged }).complete_and_supported, false);
 });
 
-test("judge replies must cover every part, need and verdict, and one run cannot calibrate a judge", () => {
-  const testCase = caseById("sweep-two-decimal-propagation");
+test("judge replies must cover every part and need, and one run cannot calibrate a judge", () => {
+  const testCase = caseById("approved-record-t1-two-decimal-display");
   const reply = judgeReply(testCase);
   const judged = parseJudge(testCase, reply);
   assert.throws(() => parseJudge(testCase, { ...reply, parts: reply.parts.slice(1) }));
-  assert.throws(() => parseJudge(testCase, { ...reply, verdicts: [] }));
+  assert.throws(() => parseJudge(testCase, { ...reply, needs: reply.needs.slice(1) }), /needs do not match/u);
   const gapCase = { ...testCase, gaps: ["The unknown date is not recorded."] };
   assert.throws(() => parseJudge(gapCase, reply), /gaps do not match/u);
   assert.throws(() => parseJudge(gapCase, { ...reply, gaps: [{ gap: "Some other gap.", reported: true }] }), /gap does not match/u);
@@ -638,7 +450,7 @@ test("judge replies must cover every part, need and verdict, and one run cannot 
 });
 
 test("only a complete, current 15-run blind calibration certifies judge metrics", () => {
-  const testCase = caseById("sweep-two-decimal-propagation");
+  const testCase = caseById("approved-record-t1-two-decimal-display");
   const judge = parseJudge(testCase, judgeReply(testCase));
   const runs = Array.from({ length: CALIBRATION_SAMPLE_RUNS }, (_, index) => ({ checks: { case_id: testCase.id, trial: index + 1, budget: "background" }, judge }));
   const graded = { schema_version: 1, judge_model: "anthropic/claude-test", graded_at: "2026-10-06T00:00:00.000Z", runs };
@@ -716,7 +528,7 @@ test("the October 4 case keys the trace's 8 pages as one list part, and list par
   for (const [evidence, problem] of [[[{ page: "1441793", section: "Gate policy" }], "whole items"], [[{ jira_project: "THERM" }], "whole items"], [[{ page: "589865" }, { page: "589865" }], "each member once"]]) {
     assert.ok(problems({ evidence }).some(value => value.includes(problem)), JSON.stringify(evidence));
   }
-  // A task goal records no lists, so an approved record or a sweep has no list part.
+  // A task goal records no lists, so an approved record has no list part.
   const record = dataset.cases.find(value => value.id === "approved-record-t1-two-decimal-display");
   assert.ok(datasetProblems({ ...dataset, cases: [{ ...record, parts: [...record.parts, { id: "p9", type: "list", requirement: "x", evidence: [{ ticket: "THERM-2" }] }] }] }).some(problem => problem.includes("only Ask cases have list parts")));
 });
@@ -1006,7 +818,7 @@ test("saved runs keep Ask's lists, and the judge sees them as rows without text 
   for (const start of ["Does a complete list research read hold every item in:", "Does the answer name every item in this list"]) assert.ok(questions.some(question => question.startsWith(start)), start);
 });
 
-test("grade and report run end to end on saved runs without a judge, a sweep run graded on its sweep result", async () => {
+test("grade and report run end to end on saved runs without a judge", async () => {
   const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-cli-")));
   writePrivateJson(out, "bindings.json", { ...bindings, test_person: "Zhen Ye" });
   const testCase = caseById("bug-fix-dates-vs-dvt-review");
@@ -1015,24 +827,15 @@ test("grade and report run end to end on saved runs without a judge, a sweep run
   writePrivateJson(out, "runs/overlong-dvt-schedule-check/live-1.json", { case_id: "overlong-dvt-schedule-check", split: "development", state: "S0", trigger: "ask", budget: "live", trial: 1, model: "test-loop-model", source_sha: "commit-a", outcome: "rejected", error: { code: "query_too_long" } });
   const card = t1CardRun();
   writePrivateJson(out, `runs/${card.testCase.id}/background-1.json`, { ...card.run, case_id: card.testCase.id, split: "development", state: "S0", trigger: "approved_record", model: "test-loop-model", source_sha: "commit-a" });
-  const sweep = caseById("sweep-two-decimal-propagation");
-  const items = propagationItems();
-  const result = sweepResult(items.slice(0, 2), [
-    { verdict: "landed", line: "SW-22b now specifies two-decimal formatting.", cites: [0] },
-    { verdict: "still_open", line: "TC-D-06 still expects one decimal.", cites: [1] },
-    { verdict: null, line: "Not assessed." },
-  ]);
-  writePrivateJson(out, `runs/${sweep.id}/background-1.json`, { ...completedRun(sweep, items, undefined, result), case_id: sweep.id, split: "development", state: "S1", trigger: "sweep", model: "test-loop-model", source_sha: "commit-a" });
   await main(["grade", "--no-judge", "--out", out]);
   await main(["report", "--out", out]);
   const report = readJson(join(out, "report.json"));
-  assert.equal(report.summary.cases, 4);
+  assert.equal(report.summary.cases, 3);
   assert.equal(report.cases.find(entry => entry.case_id === card.testCase.id).card_items_listed, 4 / card.testCase.affected.length);
   assert.equal(report.summary.runs_rejected_at_ingress, 1);
   assert.equal(report.cases.find(entry => entry.case_id === testCase.id).tools_found > 0, true);
   assert.equal(report.identity.model, "test-loop-model");
-  assert.deepEqual([report.summary.sweep_verdicts_right, report.summary.sweep_findings, report.summary.sweep_not_assessed], [2, 3, 1]);
-  assert.match(readFileSync(join(out, "report.md"), "utf8"), /\| sweep-two-decimal-propagation \| background \| 1 \| 2 \/ 3 \| 1 \|/u);
+  assert.equal(report.identity.state, "S0");
 });
 
 test("report withholds judge metrics until its exact grading pass is calibrated", async () => {
@@ -1054,7 +857,7 @@ test("report withholds judge metrics until its exact grading pass is calibrated"
 
 test("runs record an explicit loop model and reports refuse mixed identities", async () => {
   const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-model-")));
-  await assert.rejects(main(["run", "--run", "--split", "development", "--state", "S0", "--out", out]), /--model is required/u);
+  await assert.rejects(main(["run", "--run", "--split", "development", "--out", out]), /--model is required/u);
   writePrivateJson(out, "graded.json", { schema_version: 1, judge_model: null, graded_at: "2026-10-06T00:00:00.000Z", runs: [] });
   writePrivateJson(out, "runs/a/live-1.json", { state: "S0", model: "loop-a" });
   writePrivateJson(out, "runs/b/live-1.json", { state: "S0", model: "loop-b" });

@@ -102,8 +102,8 @@ under
 | `organization-record`           | Append-only approved record and deterministic append-side projections                 |
 | `organization-retrieval`        | Rebuildable permission-aware retrieval generations                                    |
 
-The kernel's research loop and answer composition serve Ask, impact checks
-and sweeps alike, and its `src/shared/` folder holds the audited live-evidence
+The kernel's research loop and answer composition serve Ask and impact
+checks alike, and its `src/shared/` folder holds the audited live-evidence
 boundary.
 
 The rest of the closure is the shared `federation-protocol`,
@@ -174,14 +174,17 @@ its complete compatible state generation as one qualification boundary.
 
 Authority retains authenticated original text notes and document files with
 their selected audience and an immutable receipt. Upload-specific read/search verifies the
-current reader, enforces that audience, and audits before release. Optional
-search enrichment cannot change permissions or source text. The V1 upload
+current reader, enforces that audience, and audits before release. No model
+reads a note when it is saved: the per-note search hints were retired on
+2026-11-08, and note search matches a note's title and text. The V1 upload
 route is retired; V1 originals already retained keep their Only me/Team
 visibility and remain citable by Ask. The V2 note write, status and content
 routes and every V1 document route are retired too
-([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)): notes
-stored as V2 stay searchable through `POST /v2/person/updates/search`, and
-documents uploaded as V1 are read through the V2 document routes. Uploads remain in
+([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)): the V2
+search route `POST /v2/person/updates/search` is still served for released
+desktops (the client's `updates search` left on 2026-11-08, and the route goes
+in a later release), and documents uploaded as V1 are read through the V2
+document routes. Uploads remain in
 protected Authority custody/backups; they are not appended as approved decision
 records. See the [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md)
 for provisional transport limits and indefinite retention.

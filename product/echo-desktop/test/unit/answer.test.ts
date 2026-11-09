@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, ArrangedBlock } from '../../src/shared/protocol.js';
 import {
-  answerMarkdown, answerSentences, answerText, documentName, externalSourceProvider, lateForYou, passageBlocks, sourceGroups, statementGroups, tableDay,
+  answerMarkdown, answerSentences, answerText, documentName, externalSourceProvider, passageBlocks, sourceGroups, statementGroups, tableDay,
 } from '../../src/renderer/answer.js';
 import { blocksAnswer, paragraphs } from '../fixtures/authority.js';
 import { answerView } from '../../src/host/views.js';
@@ -106,26 +106,11 @@ const paragraphed = (statements: readonly [string, number[]][], extra: Partial<A
     ...(statements.length === 0 ? {} : { blocks: paragraphs(statements) }) }], ...extra,
 });
 
-describe('a table\'s dates read as dates, and only your late row is marked', () => {
-  const COLUMNS = ['Action', 'Owner', 'Due', 'Status'];
-
+describe('a table\'s dates read as dates', () => {
   it('shows an ISO date as "Oct 14", with its year when it is not this year\'s, and leaves any other text alone', () => {
     expect(tableDay('2026-10-14', NOW)).toBe('Oct 14');
     expect(tableDay('2025-12-01', NOW)).toBe('Dec 1, 2025');
     for (const text of ['To Do', '14 Oct', '2026-13-01', '2026-10-14 maybe', '']) expect(tableDay(text, NOW)).toBeNull();
-  });
-
-  it('marks a row only when it is yours, its due date has passed and it is not done', () => {
-    expect(lateForYou(COLUMNS, ['Confirm the trace', 'You', '2026-10-14', 'To Do'], null, NOW)).toBe(true);
-    // Yours by your name as well, in any case.
-    expect(lateForYou(COLUMNS, ['Confirm the trace', 'ari', '2026-10-14', 'To Do'], 'Ari', NOW)).toBe(true);
-    // Someone else's late row, a row due today or later, a done row, or a table that says no owner or due date: never.
-    expect(lateForYou(COLUMNS, ['Send the proposal', 'Rafael Moreno', '2026-10-09', 'Open'], 'Ari', NOW)).toBe(false);
-    expect(lateForYou(COLUMNS, ['Confirm the trace', 'You', '2026-10-23', 'To Do'], null, NOW)).toBe(false);
-    expect(lateForYou(COLUMNS, ['Confirm the trace', 'You', '2026-10-14', 'Done'], null, NOW)).toBe(false);
-    expect(lateForYou(['Ticket', 'Due', 'Status'], ['TRACE-01', '2026-10-14', 'To Do'], null, NOW)).toBe(false);
-    expect(lateForYou(['Item', 'Owner'], ['TRACE-01', 'You'], null, NOW)).toBe(false);
-    expect(lateForYou(COLUMNS, ['Confirm the trace', 'You', 'Friday', 'To Do'], null, NOW)).toBe(false);
   });
 });
 
@@ -203,21 +188,6 @@ describe('Copy answer writes Markdown', () => {
     ] }] };
     expect(markdown(answer, ['One', 'Two', 'Three'])).toBe(
       '\\- dash first [1]\n\nTwo paths\n\n| Name | Path |\n| --- | --- |\n| A \\| B [2] | C:\\\\temp |\n\nSources\n\n1. One\n2. Two\n3. Three');
-  });
-});
-
-describe('a done row is never late, and only an owner column says whose a row is', () => {
-  const late = (status: string, owner = 'Owner') => lateForYou(['Action', owner, 'Due', 'Status'], ['Confirm the trace', 'You', '2026-10-14', status], null, NOW);
-
-  it('reads every status of finished work as done, in any case and with either apostrophe', () => {
-    for (const status of ['Done', 'closed', 'Resolved', 'complete', 'Completed', 'Cancelled', 'canceled', "Won't do", 'Won’t do', "won't fix", 'WON’T FIX', 'Duplicate',
-      'rejected', 'Obsolete']) expect(late(status), status).toBe(false);
-    for (const status of ['To Do', 'Open', 'In Progress', 'Blocked', '']) expect(late(status), status).toBe(true);
-  });
-
-  it('takes a row as yours only under a column named Owner, Assignee or Assigned to', () => {
-    for (const owner of ['Owner', 'assignee', 'Assigned to', ' OWNER ']) expect(late('To Do', owner), owner).toBe(true);
-    for (const owner of ['Assigned by', 'Owners', 'Reviewer', 'Who']) expect(late('To Do', owner), owner).toBe(false);
   });
 });
 

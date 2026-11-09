@@ -70,11 +70,10 @@ export const CORE_RUNTIME_MODEL_CORRECTIONS_V1 = Object.freeze([
   "model_inline_ids_stripped",
   // Ask's follow-up resolver (ADR-0047).
   "resolver_fallback",
-  // Renderers: Ask's writer, the impact card and the sweep.
+  // Renderers: Ask's writer and the impact card.
   "writer_repeat_dropped", "writer_unknown_id_dropped", "writer_uncited_sentence_dropped", "writer_fallback",
   "writer_quote_unquoted", "writer_event_undated",
   "card_line_screened", "card_unknown_id_dropped", "card_date_dropped", "card_fallback",
-  "sweep_line_withheld", "sweep_fallback",
 ] as const);
 export type CoreRuntimeModelCorrectionV1 = (typeof CORE_RUNTIME_MODEL_CORRECTIONS_V1)[number];
 export type CoreRuntimeModelCorrectionsV1 = Readonly<Partial<Record<CoreRuntimeModelCorrectionV1, number>>>;

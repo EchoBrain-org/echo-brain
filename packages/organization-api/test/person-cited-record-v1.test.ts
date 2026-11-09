@@ -35,7 +35,7 @@ describe('one approved record as Ask cites it', () => {
     expect(atom('d1')).not.toBe(atom('d2'));
   });
 
-  it('keeps the meeting, who approved it, who was there, its policy and what was approved, and no identity', () => {
+  it('keeps the meeting, when it was approved, who approved it, who was there, its policy and what was approved, and no identity', () => {
     const cited = personCitedRecordV1(listed({
       meeting: {
         id: 'm1', title: 'Tuesday\u0000sync ', time: { scheduled_start_at: '2026-09-15T17:00:00Z', timezone: 'America/Los_Angeles' },
@@ -52,19 +52,22 @@ describe('one approved record as Ask cites it', () => {
       })],
       actions: [item('action', 'a1', 'Update\npricing.', { status: 'proposed' })],
       rationales: [item('rationale', 'r1', 'It funds the launch.')],
-    }));
+    }, record => { body(record).issued_at = '2026-09-15T18:30:00.000Z'; }));
     expect(cited).toEqual({
       schema_version: 1, kind: 'echo-person-cited-record-v1', record_sha256: RECORD, policy_id: 'project-members-readable-person-v1',
-      title: 'Tuesday sync', started_at: '2026-09-15T17:00:00Z', timezone: 'America/Los_Angeles', all_day: false, approved_by: 'Maya Chen',
-      participants: ['Maya Chen', 'Ari'], participants_more: false,
-      decisions: { more: false, items: [{ atom_id: atom('d1'), text: 'Ship annual plans first.', status: 'proposed', quotes: [
+      title: 'Tuesday sync', approved_at: '2026-09-15T18:30:00.000Z', started_at: '2026-09-15T17:00:00Z', timezone: 'America/Los_Angeles', all_day: false,
+      approved_by: 'Maya Chen', participants: ['Maya Chen', 'Ari'], participants_more: false,
+      decisions: { items: [{ atom_id: atom('d1'), text: 'Ship annual plans first.', status: 'proposed', quotes: [
         { quote: 'Annual first.', started_at: '2026-09-15T17:12:00Z' }, { quote: 'Two' }, { quote: 'Three' },
       ] }] },
-      actions: { more: false, items: [{ atom_id: atom('a1'), text: 'Update pricing.', quotes: [] }] },
-      rationales: { more: false, items: [{ atom_id: atom('r1'), text: 'It funds the launch.', quotes: [] }] },
+      actions: { items: [{ atom_id: atom('a1'), text: 'Update pricing.', quotes: [] }] },
+      rationales: { items: [{ atom_id: atom('r1'), text: 'It funds the launch.', quotes: [] }] },
     });
     expect(JSON.stringify(cited)).not.toMatch(/private@example\.test|"p1"|"d1"|"m1"/);
     expect(validatePersonCitedRecordV1(JSON.parse(JSON.stringify(cited)))).toEqual(cited);
+    // An envelope that names no issue time, or not a time, dates nothing.
+    expect(personCitedRecordV1(listed({})).approved_at).toBeUndefined();
+    expect(personCitedRecordV1(listed({}, record => { body(record).issued_at = 'yesterday'; })).approved_at).toBeUndefined();
   });
 
   it('names an action owner only as the approver confirmed it in the signed approval', () => {
@@ -79,13 +82,20 @@ describe('one approved record as Ask cites it', () => {
     ]);
   });
 
-  it('keeps 32 items a section and 32 participants, saying more were left out, and every text whole', () => {
-    const decisions = Array.from({ length: 33 }, (_, index) => item('decision', `d${index}`, index === 0 ? 'x'.repeat(2_001) : `Decision ${index}`));
+  it('names every owner the approver confirmed, however many', () => {
+    const actions = Array.from({ length: 41 }, (_, index) => item('action', `a${index}`, `Action ${index}`));
+    const cited = personCitedRecordV1(listed({ actions }, record => {
+      body(record).human_act_resolution_ref = { action_owners: actions.map((action, index) => ({ signal_id: action.id, owner: `Owner ${index}` })) };
+    }));
+    expect(cited.actions.items.map(entry => entry.owner)).toEqual(actions.map((_, index) => `Owner ${index}`));
+  });
+
+  it('keeps every item of a section, each text whole, and 32 participants, saying more were left out', () => {
+    const decisions = Array.from({ length: 40 }, (_, index) => item('decision', `d${index}`, index === 0 ? 'x'.repeat(2_001) : `Decision ${index}`));
     const participants = Array.from({ length: 40 }, (_, index) => ({ id: `p${index}`, display_name: `Person ${index}` }));
     const cited = personCitedRecordV1(listed({ meeting: { id: 'm1', participants }, decisions }));
     expect(cited.title).toBeUndefined();
-    expect(cited.decisions.items).toHaveLength(32);
-    expect(cited.decisions.more).toBe(true);
+    expect(cited.decisions.items.map(entry => entry.atom_id)).toEqual(decisions.map(entry => atom(entry.id)));
     expect(cited.decisions.items[0]!.text).toBe('x'.repeat(2_001));
     expect(cited.participants).toHaveLength(32);
     expect(cited.participants_more).toBe(true);
@@ -116,9 +126,13 @@ describe('one approved record as Ask cites it', () => {
     const cited = JSON.parse(JSON.stringify(personCitedRecordV1(listed({
       decisions: [item('decision', 'd1', 'Ship it.', { status: 'decided', evidence: [{ quote: 'Ship.' }] })],
       actions: [item('action', 'a1', 'Send it.')],
-    }, record => { body(record).human_act_resolution_ref = { action_owners: [{ signal_id: 'a1', owner: 'Priya Shah' }] }; })))) as Record<string, unknown>;
+    }, record => {
+      body(record).human_act_resolution_ref = { action_owners: [{ signal_id: 'a1', owner: 'Priya Shah' }] };
+      body(record).issued_at = '2026-09-15T18:30:00.000Z';
+    })))) as Record<string, unknown>;
+    expect(cited.approved_at).toBe('2026-09-15T18:30:00.000Z');
     expect(validatePersonCitedRecordV1(cited)).toEqual(cited);
-    type Copy = Record<string, unknown> & { decisions: { items: Record<string, unknown>[] }; actions: { items: Record<string, unknown>[] } };
+    type Copy = Record<string, unknown> & { decisions: Record<string, unknown> & { items: Record<string, unknown>[] }; actions: { items: Record<string, unknown>[] } };
     const variant = (change: (copy: Copy) => void): Copy => { const copy = structuredClone(cited) as Copy; change(copy); return copy; };
     for (const bad of [
       variant(copy => { copy.envelope = {}; }),
@@ -126,6 +140,7 @@ describe('one approved record as Ask cites it', () => {
       variant(copy => { copy.record_sha256 = 'sha256:nope'; }),
       variant(copy => { copy.policy_id = 'everyone'; }),
       variant(copy => { copy.title = 'Tuesday\nsync'; }),
+      variant(copy => { copy.approved_at = 'yesterday'; }),
       variant(copy => { copy.timezone = 'Not a zone!'; }),
       variant(copy => { copy.participants = ['Ari', 'Ari']; }),
       variant(copy => { copy.participants = Array.from({ length: 33 }, (_, index) => `Person ${index}`); }),
@@ -139,7 +154,9 @@ describe('one approved record as Ask cites it', () => {
       variant(copy => { copy.decisions.items[0]!.quotes = [{ quote: 'One' }, { quote: 'Two' }, { quote: 'Three' }, { quote: 'Four' }]; }),
       variant(copy => { copy.decisions.items[0]!.quotes = [{ quote: 'One' }, { quote: 'One' }]; }),
       variant(copy => { copy.decisions.items[0]!.quotes = [{ quote: 'One', started_at: 'yesterday' }]; }),
-      variant(copy => { copy.decisions.items = Array.from({ length: 33 }, () => copy.decisions.items[0]!); }),
+      // A section lists each item once, and says nothing of items left out: it leaves none out.
+      variant(copy => { copy.decisions.items = [copy.decisions.items[0]!, copy.decisions.items[0]!]; }),
+      variant(copy => { copy.decisions.more = false; }),
     ]) expect(() => validatePersonCitedRecordV1(bad), JSON.stringify(bad)).toThrow();
   });
 });

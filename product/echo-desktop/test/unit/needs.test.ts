@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
-  actionCount, activeTotal, checkWords, followUpAge, followUpCount, followUpHover, followUpMark, followUpOrder, followUpProgress, followUpsWords, itemHistory, itemKind,
-  itemLine, itemNames, itemTitle, lastChecked, liveFacts, markWords, matchesNow, meetingSuffix, monthDay, ownerAndStatus, ownerKey, ownerLine, ownerRows,
+  actionCount, activeTotal, followUpAge, followUpCount, followUpHover, followUpMark, followUpOrder, followUpProgress, followUpsWords, itemHistory, itemKind,
+  itemLine, itemNames, itemTitle, liveFacts, markWords, meetingSuffix, monthDay, ownerAndStatus, ownerKey, ownerLine, ownerRows,
   ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
 } from '../../src/renderer/needs.js';
 import { EMPTY_SUMMARY as summary } from './harness.js';
@@ -121,7 +121,7 @@ describe('one status vocabulary (F7)', () => {
     expect(ownerUnmatched(item({ state: 'unsent' }))).toBe(false);
   });
 
-  it('totals not sent and open as follow-ups, never as "open", whatever the last check found', () => {
+  it('totals not sent and open as follow-ups, never as "open"', () => {
     expect(activeTotal({ unsent: 2, open: 3 })).toBe(5);
     expect([followUpCount(activeTotal({ unsent: 1, open: 3 })), followUpCount(1)]).toEqual(['4 follow-ups', '1 follow-up']);
     // A project's line says its follow-ups as a meeting's does.
@@ -133,15 +133,12 @@ describe('one status vocabulary (F7)', () => {
     expect(of({ unsent: 3, open: 1, not_relevant: 2 })).toEqual({ total: 4, sent: 1, open: 1, done: 0 });
     expect(progressWords(of({ unsent: 3, open: 1, not_relevant: 2 }))).toBe('1 of 4 sent · 0 done');
     expect(progressWords(of({ open: 2, done: 3, not_relevant: 1 }))).toBe('5 of 5 sent · 3 done');
-    // A check's verdict never moves one: a landed item is still open.
-    expect(of({ unsent: 1, open: 2, landed: 2 })).toEqual({ total: 3, sent: 2, open: 2, done: 0 });
     expect(of({ not_relevant: 2 }).total).toBe(0);
   });
 
   it('says a meeting\'s follow-ups by status, and with none how its check stands', () => {
     const stage = { record_sha256: 'sha256:1', run_id: 'run_00000001', mine: true };
-    // Canvas 9.6: a landed or unreadable item is still open; nothing is "handled" or "couldn't read".
-    expect(followUpsWords({ ...summary, open: 3, landed: 1, unreadable: 1, unsent: 4 }, { ...stage, state: 'done', error_code: null })).toBe('3 open · 4 not sent');
+    expect(followUpsWords({ ...summary, open: 3, unsent: 4 }, { ...stage, state: 'done', error_code: null })).toBe('3 open · 4 not sent');
     expect(followUpsWords({ ...summary, done: 1, not_relevant: 1 }, { ...stage, state: 'done', error_code: null })).toBe('1 done · 1 dismissed');
     expect(followUpsWords(summary, null)).toBe('Not checked yet');
     expect(followUpsWords(summary, { ...stage, state: 'pending', error_code: null })).toBe('Not checked yet');
@@ -241,9 +238,10 @@ describe('a follow-ups row and its owner line (One place to look v1, K)', () => 
     expect(followUpAge(open(0.2, { created_at: daysAgo(0.2), state: 'not_relevant' }), now)).toEqual({ days: 0, words: 'Made today' });
   });
 
-  it('says on hover what its marks leave out: what it is, its meeting, where it stands with whom, and a match', () => {
+  it('says on hover what its marks leave out: what it is, its meeting, where it stands with whom; never what a check found', () => {
+    // An older Authority may still send a check: the hover says nothing of it.
     const landed = { verdict: 'landed' as const, checked_at: daysAgo(0.1), checked_by: 'Mina Patel' };
-    expect(followUpHover(open(4, { decision: pilot, check: landed }), ME.membership_id, now)).toBe('Jira ticket · from Pilot planning · Sent to Mina 4 days ago · matches now');
+    expect(followUpHover(open(4, { decision: pilot, check: landed }), ME.membership_id, now)).toBe('Jira ticket · from Pilot planning · Sent to Mina 4 days ago');
     expect(followUpHover(open(0.5, { owner: { ...ME, match: 'name' } }), ME.membership_id, now)).toBe('Jira ticket · Sent to you today');
     // Handed on since it was sent: whose it is now, not who it was sent to.
     expect(followUpHover(open(4, { owner: { ...RAFAEL, match: 'reassigned' }, owner_set_at: daysAgo(1), owner_set_by: person }), ME.membership_id, now))
@@ -256,48 +254,13 @@ describe('a follow-ups row and its owner line (One place to look v1, K)', () => 
   });
 });
 
-describe('ECHO\'s re-reads, kept underneath', () => {
-  const now = Date.parse('2026-10-08T15:00:00.000Z');
-  const ago = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
-  const checked = (verdict: NonNullable<OpenItemView['check']>['verdict']) => ({ verdict, checked_at: ago(120), checked_by: 'Mina Patel' });
-
-  it('says when a check ran as the canvas does', () => {
-    const checkedAgo = (iso: string, at: number) => lastChecked([iso], at)!.replace('ECHO checked ', '');
-    expect([checkedAgo(ago(0), now), checkedAgo(ago(0.5), now), checkedAgo(new Date(now + 30_000).toISOString(), now)]).toEqual(['just now', 'just now', 'just now']);
-    expect([checkedAgo(ago(1), now), checkedAgo(ago(59), now)]).toEqual(['1 min ago', '59 min ago']);
-    expect([checkedAgo(ago(60), now), checkedAgo(ago(120), now), checkedAgo(ago(359), now)]).toEqual(['1 h ago', '2 h ago', '5 h ago']);
-    // Six hours or more: the day, in this computer's time zone.
-    const local = (day: number, hour: number) => new Date(2026, 9, day, hour).getTime();
-    expect(checkedAgo(new Date(local(8, 9)).toISOString(), local(8, 18))).toBe('today');
-    expect(checkedAgo(new Date(local(7, 9)).toISOString(), local(8, 18))).toBe('yesterday');
-    expect(checkedAgo(new Date(local(6, 9)).toISOString(), local(8, 18))).toBe('Oct 6');
-  });
-
-  it('says on an item page what the last check found, in one faint line naming no one', () => {
-    expect(checkWords(checked('changed'), now)).toBe('Checked 2 h ago · changed, still doesn\'t match');
-    expect(checkWords(checked('still_open'), now)).toBe('Checked 2 h ago · not updated yet');
-    expect(checkWords(checked('landed'), now)).toBe('Checked 2 h ago · matches now');
-    expect(checkWords(checked('unreadable'), now)).toBe('Checked 2 h ago · couldn\'t read it');
-    expect(checkWords(null, now)).toBeNull();
-    // A list row says only a match.
-    expect([matchesNow(item({ check: checked('landed') })), matchesNow(item({ check: checked('changed') })), matchesNow(item())]).toEqual(['matches now', null, null]);
-  });
-
-  it('says on your Follow-ups when ECHO last checked by the latest time any read said, whichever was read last', () => {
-    expect(lastChecked([ago(5), ago(120)], now)).toBe('ECHO checked 5 min ago');
-    expect(lastChecked([ago(120), ago(5)], now)).toBe('ECHO checked 5 min ago');
-    expect(lastChecked([null, ago(120)], now)).toBe('ECHO checked 2 h ago');
-    expect(lastChecked([undefined, null], now)).toBeNull();
-  });
-});
-
 describe('Home item rows and the item page', () => {
   const ari = { membership_id: 'mem_00000000-0000-4000-8000-000000000002', name: 'Ari', active: true };
   const mina = person;
   const page = { kind: 'page' as const, tool_id: 'confluence', label: 'Thermostat PRD · Pilot scope', permalink: 'https://example.atlassian.net/wiki/pages/12345' };
   /** Ari's own page, from Ari's own meeting: the founder's example. */
   const own = item({ kind: 'page', relation: 'needs_updating', expected: 'pilot starts next week', approver: ari, owner: { ...ari, match: 'approver' }, decision: pilot,
-    current: { source: page, says_now: 'starts after freeze' }, check: { verdict: 'changed', checked_at: '2026-10-08T12:00:00.000Z', checked_by: 'Mina Patel' } });
+    current: { source: page, says_now: 'starts after freeze' } });
   /** ECHO-12, sent by Ari to Mina. */
   const theirs = item({ approver: ari, owner: { ...mina, match: 'jira_account' }, decision: pilot, current: { source: ticket, says_now: 'Planned.', assignee: 'Mina Patel', due_at: '2026-10-30' } });
 

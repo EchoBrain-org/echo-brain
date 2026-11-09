@@ -40,18 +40,18 @@ import a provider implementation.
   the receipt and runs the after-record hook in one Authority transaction.
   `authority-record-protocols-v1.ts` is the one list of record codecs and
   projectors. `person-trigger-runs-v1.ts` serves `POST /v1/person/runs`: the
-  approver-owned impact checks that the hook enqueues and the sweeps a person
-  asks for, through one launch path for both; it writes each finished check's
-  open items. `person-sweep-runs-v1.ts` does a sweep's own work: which open
-  items it re-checks, the findings it hands research, and the counts and
-  verdicts it keeps. `person-open-items-v1.ts` serves the open-items
-  operations on the same route, `sweep` (which queues a sweep) and `home`'s
-  `sweep_due` included, asking `open-items-policy-v1.ts` every access
-  question. Both services read a run's stored impact card through
-  `person-stored-impact-card-v1.ts`. `person-changes-v1.ts` serves
-  `GET /v1/person/changes` (ADR-0036): fingerprints of the caller's projects,
-  `involved` open items and reviews, read in one Authority read transaction
-  with no audit row, through the same policy as those reads.
+  approver-owned impact checks that the hook enqueues, started by id (`start`)
+  or, at the desktop's check-in, the caller's oldest queued one (`next`); it
+  writes each finished check's open items. `person-open-items-v1.ts` serves
+  the open-items operations on the same route, asking
+  `open-items-policy-v1.ts` every access question; it sends the fields that
+  carried the retired sweeps' results as constants. Both services read a
+  run's stored impact card through `person-stored-impact-card-v1.ts`.
+  `person-changes-v1.ts` serves `GET /v1/person/changes` (ADR-0036):
+  fingerprints of the caller's projects, `involved` open items, and reviews
+  with the caller's own impact checks, read in one Authority read transaction
+  with no audit row, through the same policy as those reads; it starts
+  nothing.
   `person-project-activity-v1.ts` serves `GET /v1/person/project-activity`
   (Ask timeline v1, C2) the same way: per active project, when a note,
   document, meeting or follow-up move from someone else that the caller can
@@ -94,13 +94,13 @@ known layering debt:
 - `person-meeting-runtime-v1.ts`: the personal meeting lanes, the
   `POST /v1/person/meetings` route and the provider-independent
   `POST /v1/person/reviews` route (raw SQL and SQLite adapters);
-- `person-trigger-runs-v1.ts`, `person-sweep-runs-v1.ts` and
-  `person-open-items-v1.ts`: runs, sweeps and open items (typed against
-  `Sqlite*` adapter classes, with `better-sqlite3` write callbacks);
+- `person-trigger-runs-v1.ts` and `person-open-items-v1.ts`: runs and open
+  items (typed against `Sqlite*` adapter classes, with `better-sqlite3` write
+  callbacks);
 - `person-changes-v1.ts`: the change check (ADR-0036), which opens its one
   read transaction on the `better-sqlite3` handle and reads through
-  `SqliteProjectContextRepositoryV1.personChangeView` and the open-items
-  adapters;
+  `SqliteProjectContextRepositoryV1.personChangeView`, the open-items adapters
+  and `SqliteTriggerRunsV1`;
 - `person-project-activity-v1.ts`: project activity (Ask timeline v1, C2),
   which opens its one read transaction the same way and also reads through
   `SqlitePersonProjectActivityV1`;

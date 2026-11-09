@@ -101,6 +101,8 @@ export const fixture: Record<string, Handler> = {
     }
     if (request.operation === 'list') return ok({ runs: [] });
     if (request.operation === 'items') return ok({ items: [], next_cursor: null, stages: [], summary: EMPTY_SUMMARY });
+    // The check-in each check sends (DSK-1): no check of yours waits here.
+    if (request.operation === 'next') return ok({ state: 'idle' });
     throw new Error(`Unexpected runs operation: ${request.operation}`);
   },
 };

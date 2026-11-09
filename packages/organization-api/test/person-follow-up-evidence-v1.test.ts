@@ -9,14 +9,12 @@ const ref = `follow_up:${itemId}` as const;
 const record = `sha256:${'a'.repeat(64)}` as const;
 const decided = {
   item_id: itemId, kind: 'ticket' as const, title: 'THERM-48 Fan curve v2', owner: 'Mara Lind', status: 'open' as const, due_at: '2026-10-20',
-  check: { verdict: 'still_open' as const, checked_at: '2026-10-15T09:30:00.000Z' },
   decision: { title: 'THERM DVT recovery sync', first_line: 'Ship fan curve v2 before DVT.', ref: `meeting:${record}` as const },
   expected: 'Reflect the v2 fan curve',
 };
 const evidence = {
   item_id: itemId, kind: 'ticket' as const, title: 'THERM-48 Fan curve v2', owner: 'Mara Lind', status: 'open' as const,
   created_at: '2026-10-08T09:00:00.000Z', sent_at: '2026-10-08T09:05:00.000Z', reassigned_at: '2026-10-09T14:00:00.000Z',
-  check: { verdict: 'still_open' as const, checked_at: '2026-10-15T09:30:00.000Z' },
 };
 
 describe("Follow-up evidence V1: ECHO's own dates (research tool contract v1)", () => {
@@ -59,7 +57,7 @@ describe('Follow-up citation and ref V1', () => {
 });
 
 describe('Follow-up evidence V1', () => {
-  it('carries title, owner, status, due date, latest check and decision with exact keys', () => {
+  it('carries title, owner, status, due date and decision with exact keys', () => {
     expect(validatePersonFollowUpEvidenceV1(decided)).toEqual(decided);
     const minimal = { item_id: itemId, kind: 'action' as const, title: 'Follow-up', owner: 'Unknown member', status: 'unsent' as const };
     expect(validatePersonFollowUpEvidenceV1(minimal)).toEqual(minimal);
@@ -71,9 +69,8 @@ describe('Follow-up evidence V1', () => {
     for (const value of [
       { ...decided, text: 'raw ticket body' },
       { ...decided, assignee: 'Mara' },
-      { ...decided, check: { ...decided.check, checked_by: 'Dana' } },
-      { ...decided, check: { ...decided.check, verdict: 'closed' } },
-      { ...decided, check: { ...decided.check, checked_at: '2026-10-15' } },
+      // A sweep's check is no follow-up evidence now (SVC-2).
+      { ...decided, check: { verdict: 'still_open', checked_at: '2026-10-15T09:30:00.000Z' } },
       { ...decided, decision: { ...decided.decision, approval_id: 'apr_1' } },
       { ...decided, decision: { ...decided.decision, ref: `document:doc_${'1'.repeat(64)}` } },
       { ...decided, decision: { ...decided.decision, ref: 'meeting:sha256:short' } },

@@ -23,6 +23,20 @@ The founder accepted this record on 2026-10-31, as built in #300 (`a7f8df7`)
 and #303 (`264757c`). Acceptance does not mean the change is deployed or
 qualified.
 
+**Amended 2026-11-08 (sweeps retired).** The founder retired sweeps
+(lean-down SVC-2): ECHO no longer re-checks open items. The hourly re-check
+(`sweep_due`), Check now, the `sweep` operation and trigger, and every shown
+result went: an item's last check, "matches now", the approver's Review rows
+and the changed-first order. Nothing replaces them. Follow-ups close only by a
+person: Mark done, Dismiss or Reopen (`set_state`). What this record says
+below about the last check, sweeps and their queue is history. So that
+released clients keep validating, `home`, `items` and `item` keep their shape
+and send the retired fields as constants until the V17 reset: `sweep_due`
+false, `landed` 0, `last_checked_at` null, an item's `check` null, and every
+verdict count 0. The baseline keeps the sweep columns, unread, until then.
+Ask no longer sees a sweep's check either
+([ADR-0040](ADR-0040-follow-ups-as-ask-evidence.md)).
+
 ## Context and options
 
 ADR-0032 stores an approved record's impact card as a frozen, approver-only

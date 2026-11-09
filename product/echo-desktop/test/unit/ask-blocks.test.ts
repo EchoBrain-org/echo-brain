@@ -1,13 +1,13 @@
 // An answer the writer arranged in blocks (answer layout v2, ADR-0051), on the
 // page: the answer in the lead's type, a title as its block's section heading,
-// points as bullets or numbered steps, a table in its own box with only your
-// late row in the signal colour, a timeline with each event's day down the
-// side, a card headed by its kind, and a quote with its source under it. Each
-// item is a sentence with its sources' numbers, lit on its own; a check leaves
-// out what you can no longer read and lights what changed (ADR-0047), and a
-// block left with nothing to show goes with its title. For every answer: the
-// sources start as one closed line, partial-answer explanations remain
-// visible, and Copy answer writes Markdown.
+// points as bullets or numbered steps, a table in its own box with its dates
+// in mono, a timeline with each event's day down the side, a card headed by
+// its kind, and a quote with its source under it. Each item is a sentence
+// with its sources' numbers, lit on its own; a check leaves out what you can
+// no longer read (ADR-0047), and a block left with nothing to show goes with
+// its title. For every answer: the sources start as
+// one closed line, partial-answer explanations remain visible, and Copy
+// answer writes Markdown.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, ArrangedBlock, TimelineTurn } from '../../src/shared/protocol.js';
 import { blocksAnswer } from '../fixtures/authority.js';
@@ -45,7 +45,7 @@ const NOW = new Date(2026, 10, 2, 12);
 
 let held: Held;
 let checked: Handler | null;
-// The fixture's days are this year's, and THERM-55's due date, Oct 30, has passed.
+// The fixture's days are this year's.
 storeLifecycle(NOW);
 beforeEach(() => {
   held = new Held();
@@ -223,9 +223,6 @@ describe('an arranged part reads as its blocks', () => {
     expect(byType(box, 'th').map(node => [text(node), node.props.scope])).toEqual([['Item', 'col'], ['Status', 'col'], ['Owner', 'col'], ['Due', 'col']]);
     const rows = byTestId(box, 'answer-row').map(row => byType(row, 'td'));
     expect(rows.map(row => text(byType(row[3], 'time')))).toEqual(['Nov 4', 'Oct 30']);
-    // Your late row's due date alone is in the signal colour, and says so.
-    expect(rows.map(row => classes(row[3]).includes('late'))).toEqual([false, true]);
-    expect(classes(rows[1]![2])).toContain('you');
     // Titled, with no caption: the title is the heading above it and names it.
     const titled = changed(blocks => blocks.map(block => block.kind === 'table' ? { kind: 'table', title: 'Open tickets', statements: block.statements, columns: block.columns,
       rows: block.rows } : block));
@@ -242,24 +239,20 @@ describe('an arranged part reads as its blocks', () => {
     expect(byClass(first, 'answer-lead').map(text)).toEqual(['2 Jira tickets are open']);
   });
 
-  it('puts each row\'s numbers in its first cell, shows dates as "Oct 14" in mono, and marks only your own late row', async () => {
-    // Tomas's THERM-52 is late too.
-    const { thread } = await answered(changed(blocks => blocks.map(block => block.kind !== 'table' ? block
-      : { ...block, rows: [{ ...block.rows[0]!, cells: ['THERM-52 · Thermal pad supplier', 'In Progress', 'Tomas Okafor', '2026-10-28'] }, block.rows[1]!] })));
+  it('puts each row\'s numbers in its first cell and shows dates as "Oct 14" in mono', async () => {
+    const { thread } = await answered(therm());
     const cells = byTestId(thread(), 'answer-row').map(row => byType(row, 'td'));
     expect(cells.map(row => text(byTestId(row[0], 'citation')))).toEqual(['5', '6']);
     expect(cells.map(row => text(row[0]).replace(/\d+$/u, ''))).toEqual(['THERM-52 · Thermal pad supplier', 'THERM-55 · Line fixture']);
     // No lock beside a row's number, though the tickets only you can read are cited (ADR-0049): a lock is only ever on a source's own row.
     expect(elements(byTestId(thread(), 'answer')).filter(node => /only you/iu.test(String(node.props['aria-label'] ?? '')))).toEqual([]);
     const due = cells.map(row => row[3]!);
-    expect(due.map(cell => text(byType(cell, 'time')))).toEqual(['Oct 28', 'Oct 30']);
-    expect(due.map(cell => byType(cell, 'time')[0]!.props.dateTime)).toEqual(['2026-10-28', '2026-10-30']);
-    expect(due.every(cell => classes(cell).includes('day'))).toBe(true);
-    // Yours and late: in the signal colour, and said, not by colour alone. Tomas's late row stays grey.
-    expect(due.map(cell => classes(cell).includes('late'))).toEqual([false, true]);
-    expect(text(due[1])).toBe('Oct 30, overdue');
-    expect(classes(cells[1]![2])).toContain('you');
-    expect(classes(cells[0]![2])).not.toContain('you');
+    expect(due.map(cell => text(byType(cell, 'time')))).toEqual(['Nov 4', 'Oct 30']);
+    expect(due.map(cell => byType(cell, 'time')[0]!.props.dateTime)).toEqual(['2026-11-04', '2026-10-30']);
+    // A date is only a date: no mark says whose or how late, and the owner reads as written.
+    expect(due.map(cell => classes(cell))).toEqual([['day'], ['day']]);
+    expect(text(due[1])).toBe('Oct 30');
+    expect(cells.map(row => [text(row[2]), classes(row[2])])).toEqual([['Tomas Okafor', ['short']], ['You', ['short']]]);
   });
 
   it('locks only the source row of what ECHO keeps for you alone: never a row of the answer, never a ticket read live (ADR-0049)', async () => {
@@ -282,31 +275,21 @@ describe('an arranged part reads as its blocks', () => {
     click(byTestId(thread(), 'sources-toggle')[0]);
     expect(byTestId(thread(), 'source-row').map(row => byTestId(row, 'source-lock').length)).toEqual([0, 0, 1]);
   });
-
-  it('marks a row yours by your name too, and never a row that is done', async () => {
-    const answer = changed(blocks => blocks.map(block => block.kind !== 'table' ? block : { ...block, rows: [
-      { ...block.rows[0]!, cells: ['THERM-52 · Thermal pad supplier', 'In Progress', 'Fixture', '2026-10-28'] },
-      { ...block.rows[1]!, cells: ['THERM-55 · Line fixture', 'Done', 'You', '2026-10-30'] },
-    ] }));
-    const due = byTestId(await shownAnswer(answer), 'answer-row').map(row => byType(row, 'td')[3]!);
-    expect(due.map(cell => classes(cell).includes('late'))).toEqual([true, false]);
-  });
 });
 
 describe('a check of an arranged answer (ADR-0047)', () => {
-  it('leaves out an item whose source you can no longer read, and lights one whose source changed, each on its own', async () => {
-    // The soak plan and THERM-55 are no longer yours to read; THERM-48 changed.
+  it('leaves out an item whose source you can no longer read, each on its own, and shows one whose source changed as any other', async () => {
+    // The soak plan and THERM-55 are no longer yours to read; THERM-48 changed, as an Authority before checks said only readability answers.
     const { thread } = await reopened({ 31020: 'unreadable', 20055: 'unreadable', 20048: 'changed' }, kept('1', therm()));
     const answer = byTestId(thread(), 'answer')[0]!;
     const [timeline] = byClass(answer, 'answer-timeline');
     expect(byType(timeline, 'li').map(node => [text(byType(node, 'time')), words(node)])).toEqual([['Oct 23', 'The 72-hour soak passed.']]);
-    expect(byClass(answer, 'answer-fact').map(node => [node.props['data-mark'], classes(node)])).toEqual([
-      ['changed', ['answer-fact', 'changed']], ['changed', ['answer-fact', 'changed']]]);
+    expect(byClass(answer, 'answer-fact').map(node => [words(node), classes(node)])).toEqual([
+      ['In review', ['answer-fact']], ['Tomas Okafor', ['answer-fact']]]);
     // A row is judged by what it cites itself: THERM-52's stays.
     expect(byTestId(answer, 'answer-row').map(row => text(byType(row, 'td')[0]).replace(/\d+$/u, ''))).toEqual(['THERM-52 · Thermal pad supplier']);
-    // The title of a block with something left to show stays; nothing else is marked.
+    // The title of a block with something left to show stays.
     expect(byType(answer, 'h3').map(text)).toEqual(['Soak test', 'Before PVT', 'Open risk']);
-    expect(byTestId(answer, 'statement').filter(node => node.props['data-mark'] !== undefined)).toHaveLength(2);
   });
 
   it('takes away a block left with nothing to show, and its title with it', async () => {

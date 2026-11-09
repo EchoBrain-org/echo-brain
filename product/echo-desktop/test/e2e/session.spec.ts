@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chooseFromAccountMenu, drop, emit, launch, type Launched } from './launch.js';
@@ -43,16 +43,30 @@ test('signing in lands on Home, and signing in again as the same person keeps th
   await page.getByTestId('compose-body').fill('Half a thought');
   await page.keyboard.press('Escape');
   await page.getByTestId('ask-field').fill('apollo');
-  await expect(page.getByTestId('match-row')).toHaveCount(2);
+  await expect(page.getByTestId('ask-field')).toHaveValue('apollo');
   // Signed out elsewhere, as the terminal's `person logout` does.
   rmSync(join(home, '.local', 'share', 'echo-brain', 'person', 'session.v1.json'));
   await emit(app, 'echo-test:shown');
   await signIn(page);
   // Signing out is a real change of access: the bar's text went with it.
   await expect(page.getByTestId('ask-field')).toHaveValue('');
-  await expect(page.getByTestId('matches')).toHaveCount(0);
   await emit(app, 'echo-test:capture');
   await expect(page.getByTestId('compose-body')).toHaveValue('Half a thought');
+});
+
+test('signing out here deletes the account\'s Ask timeline on this computer (ADR-0047)', async () => {
+  run = await launch();
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await page.getByTestId('ask-field').fill('What did we agree?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('answer')).toBeVisible();
+  const folder = join(run.home, '.local', 'share', 'echo-brain', 'person', 'ask-timeline-v1');
+  await expect.poll(() => readdirSync(folder)).toEqual([expect.stringMatching(/^[0-9a-f]{64}\.json$/u)]);
+  await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Sign out…');
+  await page.getByTestId('confirm-signout').click();
+  await expect(page.getByTestId('signed-out')).toBeVisible();
+  expect(readdirSync(folder)).toEqual([]);
 });
 
 test('Home loads when returning from a browser sign-in that completed in the background', async () => {
@@ -98,8 +112,6 @@ test('ten minutes of sign-in serve the reads as they are, and an upload that may
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   expect(refreshes()).toHaveLength(0);
-  // The weekly sign-in is a week away: nothing says so yet.
-  await expect(page.getByTestId('sidebar-sign-in-again')).toHaveCount(0);
   writeFileSync(join(run.userData, 'Brief.md'), 'Annual pricing.');
   await drop(page, page.getByTestId('sidebar-project').nth(1), join(run.userData, 'Brief.md'));
   await page.getByTestId('compose-send').click();

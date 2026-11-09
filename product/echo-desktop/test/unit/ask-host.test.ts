@@ -45,7 +45,8 @@ describe('the progress lines of an Ask', () => {
     expect(refused).toHaveBeenCalledTimes(1);
     expect(posted).toEqual([
       { cancel_id: CANCEL, expect: EXPECT, step: { type: 'stage', stage: 'searching' } },
-      { cancel_id: CANCEL, expect: EXPECT, step: { type: 'searched', sources: [{ kind: 'meetings' }], found: 3 } },
+      // A search crosses as one, never what it searched or found.
+      { cancel_id: CANCEL, expect: EXPECT, step: { type: 'searched' } },
       { cancel_id: CANCEL, expect: EXPECT, step: { type: 'read', items: [
         { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' }, atom_id: sha('1') },
       ] } },

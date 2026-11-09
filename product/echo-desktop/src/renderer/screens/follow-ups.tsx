@@ -4,12 +4,12 @@ import type { Member, OpenItemView, ProjectSummary } from '../../shared/protocol
 import { externalSourceProvider } from '../answer.js';
 import { message } from '../messages.js';
 import {
-  checkWords, CLOSED_STATES, followUpAge, followUpHover, followUpMark, followUpOrder, followUpProgress, itemHistory, itemKind, itemNames, itemTitle,
-  lastChecked, liveFacts, markWords, monthDay, ownerLine, ownerRows, ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, STAGES,
+  CLOSED_STATES, followUpAge, followUpHover, followUpMark, followUpOrder, followUpProgress, itemHistory, itemKind, itemNames, itemTitle,
+  liveFacts, markWords, monthDay, ownerLine, ownerRows, ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, STAGES,
   summaryTotal, type OwnerFace,
 } from '../needs.js';
 import {
-  altitudeProjects, awaitingLive, checkNow, closeFollowUp, closeOwnerPicker, filterOwner, findOwner, listDecision, moreAfter, moreFollowUps, openFollowUp, openFollowUps,
+  altitudeProjects, awaitingLive, closeFollowUp, closeOwnerPicker, filterOwner, findOwner, listDecision, moreAfter, moreFollowUps, openFollowUp, openFollowUps,
   openListDecision, ownerChoices, pickFollowUpOwner, retryFollowUp, retryFollowUps, sendable, sendFollowUp, sendTicked, setFollowUpState, shownItem, tickedRows,
   tickFollowUp, toggleClosedGroup, toggleOwnerPicker, undoFollowUp, type FollowUpList, type ItemPage, type OwnerPicker as Picker, type Said, type State,
 } from '../store.js';
@@ -129,22 +129,6 @@ function SaidLine({ said, testid, line }: { said: Said | null; testid: string; l
 }
 
 /**
- * Check now, faint after a meeting's or a project's list head, while
- * something is open to check: "Checking…" while its sweep is on its way,
- * "Nothing open to check", or "Check failed · Try again", each until the list
- * is read again.
- */
-function CheckNow({ list }: { list: FollowUpList }) {
-  if (list.check === 'checking') return <span class="items-line-check faint" role="status">Checking…</span>;
-  if (list.check === 'nothing') return <span class="items-line-check faint" role="status">Nothing open to check</span>;
-  if (list.check === 'failed') {
-    return <span class="items-line-check" role="status"><span class="faint">Check failed · </span><button type="button" class="link-button" onClick={() => void checkNow()}>Try again</button></span>;
-  }
-  if (!list.summary || list.summary.open === 0) return null;
-  return <button type="button" class="need-open" onClick={() => void checkNow()}>Check now</button>;
-}
-
-/**
  * A follow-up's state mark (K): a dashed ring not sent, a ring open, a tick
  * done, a struck ring dismissed; orange when it needs attention, a solid disc
  * once it waited over a week. Its words are its hover, and what a screen
@@ -239,10 +223,10 @@ function Owners({ faces, shown, me }: { faces: readonly OwnerFace[]; shown: stri
 }
 
 /**
- * The list's head: its name, and under it what it is, with Check now. A
- * meeting's says how far its follow-ups have come ("Approved Oct 6 · 1 of 4
- * sent · 0 done", dismissed ones left out), with a thin bar under it; a
- * project's says the project.
+ * The list's head: its name, and under it what it is. A meeting's says how
+ * far its follow-ups have come ("Approved Oct 6 · 1 of 4 sent · 0 done",
+ * dismissed ones left out), with a thin bar under it; a project's says the
+ * project.
  */
 function Head({ list }: { list: FollowUpList }) {
   const progress = list.scope === 'record' && list.summary ? followUpProgress(list.summary) : null;
@@ -260,7 +244,6 @@ function Head({ list }: { list: FollowUpList }) {
       {(list.scope === 'record' || list.scope === 'project') && (
         <div class="follow-ups-sub">
           <span>{list.scope === 'project' ? list.title : <>{approved}{approved && count ? ' · ' : ''}{count}</>}</span>
-          <CheckNow list={list} />
         </div>
       )}
       {progress && <ProgressBar progress={progress} />}
@@ -279,8 +262,7 @@ function Head({ list }: { list: FollowUpList }) {
  * on the ticked Not sent rows that show, right under the current rows (held
  * at the window's foot while the list runs past it); the list stays where it
  * was, and the same foot says what happened. Every row opens its page, and
- * Back returns to that row. Yours says faintly at its end when ECHO last
- * checked.
+ * Back returns to that row.
  */
 export function FollowUps({ state, list }: { state: State; list: FollowUpList }) {
   const { column, returned } = useKeptPlace(`follow-ups:${list.seq}`);
@@ -338,8 +320,6 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
     );
   };
   const foot = ticked > 0 || list.said !== null;
-  // Yours says when ECHO last checked: by its own read, which every read of it brings fresh, or Home's, when read since.
-  const checked = list.scope === 'involved' ? lastChecked([list.summary?.last_checked_at, state.home?.open?.last_checked_at], now) : null;
   return (
     <div class="column follow-ups" data-testid="follow-ups" ref={column} aria-busy={list.loading || list.busy}>
       <Head list={list} />
@@ -364,7 +344,6 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
           <button type="button" class="link-button" disabled={list.loading} onClick={() => void retryFollowUps()}>Try again</button>
         </div>
       )}
-      {checked !== null && <div class="follow-ups-checked" data-testid="follow-ups-checked">{checked}</div>}
     </div>
   );
 }
@@ -460,7 +439,6 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
   const me = state.status?.account?.membership_id ?? null;
   const { decision } = item;
   const day = decision ? monthDay(decision.approved_at) : null;
-  const checked = checkWords(item.check);
   // Its row shows at once; while ECHO reads it in its tool, its title says what it is and its meeting, faintly.
   const reading = page.loading && awaitingLive(item);
   return (
@@ -486,7 +464,6 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
               ))}
             </ol>
           </section>
-          {checked && <div class="faint" data-testid="follow-up-check">{checked}</div>}
           {(page.failure || item.reach === 'unavailable') && <div class="error" role="status">
             {page.failure ? message(page.failure) : 'ECHO couldn’t read the details just now.'}
             <button type="button" class="link-button" disabled={page.loading || page.busy} onClick={retryFollowUp}>Try again</button>

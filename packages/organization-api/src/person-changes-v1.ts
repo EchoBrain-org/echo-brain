@@ -6,9 +6,9 @@ import { asEnumerableRecord, assertDigest, assertExactKeys, fail } from './valid
  * area, each a digest of rows that person may read, so a fingerprint moves
  * only with activity they can see (ADR-0012). It returns no content; the
  * desktop reads an area again only when its fingerprint moved, and asks again
- * after `check_again_after_seconds`. The Authority answers 60 today; the field
- * lets a later Authority ask for longer, and clients honour any value in
- * 15..3600.
+ * after `check_again_after_seconds`. The Authority answers 15 while one of the
+ * caller's own impact checks is queued or running or one of their approvals is
+ * publishing, and 60 otherwise; clients honour any value in 15..3600.
  */
 export const PERSON_CHANGES_ROUTE_V1 = '/v1/person/changes';
 export const PERSON_CHANGES_KIND_V1 = 'echo-person-changes-v1';
@@ -17,7 +17,7 @@ export const PERSON_CHANGES_KIND_V1 = 'echo-person-changes-v1';
  * `projects`: the projects you belong to, active and archived (id, name, status, your role).
  * `follow_ups`: the follow-ups you are involved in and may read (you sent it, own it, or last handed it on), with
  * their state, owner and when the owner or state was last set; checks are left out.
- * `reviews`: the meetings waiting for your review.
+ * `reviews`: the meetings waiting for your review, and the state of each of your own impact checks as `runs` `list` shows it.
  */
 export const PERSON_CHANGES_AREAS_V1 = ['projects', 'follow_ups', 'reviews'] as const;
 export type PersonChangesAreaV1 = (typeof PERSON_CHANGES_AREAS_V1)[number];

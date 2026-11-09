@@ -134,6 +134,13 @@ has not updated keeps working. Until it updates, an installed CLI is refused
 `person ask --mine` and a `person list` with neither `--project` nor
 `--only-me`, and its `person evidence open` gets `not_found`.
 
+Update (2026-11-08): the desktop's bar no longer searches as a person types,
+and the CLI's `person updates search` is retired, so no current client calls
+`POST /v2/person/updates/search`. The route stays for released desktops, which
+still call it, until a later release retires it with the other note and
+project searches. No current Authority holds a V2 note: the V16 baseline starts
+empty, and the V2 note write went on 2026-10-25.
+
 ## Migration, rollback, and evidence
 
 - **Release order:** the Authority first, then the clients, the order the Ask

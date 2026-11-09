@@ -82,6 +82,7 @@ describe('runs API request', () => {
     for (const request of [
       { schema_version: 1, operation: 'list' },
       { schema_version: 1, operation: 'start', run_id: id },
+      { schema_version: 1, operation: 'next' },
       { schema_version: 1, operation: 'retry', run_id: id },
       { schema_version: 1, operation: 'view', run_id: id },
     ]) {
@@ -101,6 +102,10 @@ describe('runs API request', () => {
     ['list with an extra key', { schema_version: 1, operation: 'list', limit: 5 }],
     ['start without a run id', { schema_version: 1, operation: 'start' }],
     ['start with an extra key', { schema_version: 1, operation: 'start', run_id: id, force: true }],
+    // `next` names no run: the Authority picks the caller's oldest queued one.
+    ['next with a run id', { schema_version: 1, operation: 'next', run_id: id }],
+    ['next with a capture id', { schema_version: 1, operation: 'next', capture_id: 'cap_0f6c1a2e-3b4d-4c5e-8f90-123456789abc' }],
+    ['next with an extra key', { schema_version: 1, operation: 'next', scope: 'mine' }],
     ['retry with an extra key', { schema_version: 1, operation: 'retry', run_id: id, attempts: 0 }],
     ['view with an extra key', { schema_version: 1, operation: 'view', run_id: id, project_id: 'prj_x' }],
     ['a run id without the prefix', { schema_version: 1, operation: 'start', run_id: 'rr_0f6c1a2e-3b4d' }],
@@ -170,12 +175,25 @@ describe('runs API list result', () => {
   });
 });
 
-describe('runs API start and retry results', () => {
+describe('runs API start, next and retry results', () => {
   it('accepts a start state from the closed set', () => {
     for (const state of ['pending', 'running', 'busy', 'done', 'failed'] as const) expect(validatePersonRunsResultV1('start', { state })).toEqual({ state });
     for (const [label, value] of [
       ['an unknown state', { state: 'queued' }], ['an extra key', { state: 'running', run_id: 'run_abcd' }], ['no state', {}], ['a non-string state', { state: 1 }],
     ] as const) refused(() => validatePersonRunsResultV1('start', value), label);
+  });
+
+  it('accepts a next state from its own closed set, with exactly its keys', () => {
+    for (const state of ['idle', 'pending', 'running', 'busy'] as const) {
+      const result = validatePersonRunsResultV1('next', { state });
+      expect(result).toEqual({ state });
+      expect(Object.isFrozen(result)).toBe(true);
+    }
+    for (const [label, value] of [
+      // A check-in never answers a run's end: a claim that finds the run done or failed has nothing left to start (idle).
+      ['done', { state: 'done' }], ['failed', { state: 'failed' }], ['an unknown state', { state: 'queued' }],
+      ['an extra key', { state: 'running', run_id: 'run_abcd' }], ['no state', {}], ['a non-string state', { state: 1 }],
+    ] as const) refused(() => validatePersonRunsResultV1('next', value), label);
   });
 
   it('accepts only pending as a retry result', () => {
@@ -279,7 +297,6 @@ describe('runs API open items', () => {
     }
     expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'home' })).not.toHaveProperty('read');
     refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'list', read: 'rows' }), 'read on list');
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'sweep', scope: 'mine', read: 'rows' }), 'read on a sweep');
     // A list's rows at once, with no live read: the same page, paged over the same states.
     const rows = { schema_version: 1, operation: 'items', scope: 'record', id: RECORD, states: ['unsent', 'open'], read: 'rows' };
     expect(validatePersonRunsRequestV1(rows)).toEqual(rows);
@@ -578,45 +595,15 @@ describe('runs API open-item results', () => {
   });
 });
 
-describe('runs API sweep', () => {
-  const sweep = (fields: Record<string, unknown>) => ({ schema_version: 1, operation: 'sweep', ...fields });
-
-  it('accepts a sweep of the caller\'s items, a decision or a project, with exactly its keys', () => {
-    for (const request of [sweep({ scope: 'mine' }), sweep({ scope: 'record', id: RECORD }), sweep({ scope: 'project', id: PROJECT })]) {
-      const validated = validatePersonRunsRequestV1(request);
-      expect(validated).toEqual(request);
-      expect(Object.isFrozen(validated)).toBe(true);
+describe('runs API: sweeps retired (SVC-2)', () => {
+  it('refuses a sweep, of any scope, as an operation it does not know, and has no sweep result', () => {
+    for (const fields of [{ scope: 'mine' }, { scope: 'record', id: RECORD }, { scope: 'project', id: PROJECT }]) {
+      refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'sweep', ...fields }), JSON.stringify(fields));
     }
+    for (const value of [{ run_id: RUN }, { state: 'nothing_to_check' }]) refused(() => validatePersonRunsResultV1('sweep' as keyof PersonRunsResultsV1, value), JSON.stringify(value));
   });
 
-  it.each([
-    ['mine with an id', sweep({ scope: 'mine', id: RECORD })],
-    ['a decision without its record', sweep({ scope: 'record' })],
-    ['a project without its id', sweep({ scope: 'project' })],
-    ['a run scope', sweep({ scope: 'run', id: RUN })],
-    ['an unknown scope', sweep({ scope: 'team' })],
-    ['no scope', sweep({})],
-    ['a record scope with a project id', sweep({ scope: 'record', id: PROJECT })],
-    ['a project scope with a project id that is not canonical', sweep({ scope: 'project', id: 'prj_pilot' })],
-    ['a cursor', sweep({ scope: 'mine', cursor: 'next-page_2' })],
-    ['a read mode', sweep({ scope: 'record', id: RECORD, read: 'counts' })],
-    ['states', sweep({ scope: 'mine', states: ['open'] })],
-    ['an extra key', sweep({ scope: 'mine', force: true })],
-  ])('refuses a sweep with %s', (_label, request) => {
-    refused(() => validatePersonRunsRequestV1(request), _label);
-  });
-
-  it('answers the sweep\'s run, or that nothing is open to check', () => {
-    expect(validatePersonRunsResultV1('sweep', { run_id: RUN })).toEqual({ run_id: RUN });
-    expect(validatePersonRunsResultV1('sweep', { state: 'nothing_to_check' })).toEqual({ state: 'nothing_to_check' });
-    expect(Object.isFrozen(validatePersonRunsResultV1('sweep', { run_id: RUN }))).toBe(true);
-    for (const [label, value] of [
-      ['nothing', {}], ['both', { run_id: RUN, state: 'nothing_to_check' }], ['a run state', { state: 'pending' }], ['a bad run id', { run_id: 'rr_0f6c1a2e' }],
-      ['a run id that is null', { run_id: null }], ['an extra key', { run_id: RUN, scope: 'mine' }], ['a state that is not a string', { state: true }],
-    ] as const) refused(() => validatePersonRunsResultV1('sweep', value), label);
-  });
-
-  it('lists sweep runs beside impact runs, and says whether a stage\'s run is the caller\'s own and whether a sweep is due', () => {
+  it('still reads a sweep run in a list, a stage\'s owner and a home that says a sweep is due, as an Authority rolled back sends them', () => {
     expect(validatePersonRunsResultV1('list', { runs: [run(), run({ run_id: 'run_swp1', trigger: 'sweep', event_ref: 'sweep_mine' })] }).runs.map(entry => entry.trigger)).toEqual(['approved_record', 'sweep']);
     const page = { items: [], next_cursor: null, summary: summary(), stages: [stage(), stage({ mine: false, run_id: 'run_bbbb' })] };
     expect(validatePersonRunsResultV1('items', page).stages.map(entry => entry.mine)).toEqual([true, false]);

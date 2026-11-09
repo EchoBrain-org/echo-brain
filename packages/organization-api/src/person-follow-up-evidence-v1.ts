@@ -1,5 +1,5 @@
 import type { PersonMeetingRefV1 } from './person-list-v1.js';
-import type { PersonOpenItemKindV1, PersonOpenItemStateV1, PersonOpenItemVerdictV1 } from './person-runs-v1.js';
+import type { PersonOpenItemKindV1, PersonOpenItemStateV1 } from './person-runs-v1.js';
 import { asEnumerableRecord, assertDigest, assertExactKeys, assertTimestamp, boundedLine as line, fail, oneOf, openItemId as itemId } from './validation.js';
 
 /**
@@ -26,12 +26,6 @@ export type PersonFollowUpRefV1 = `follow_up:itm_${string}`;
  */
 export const PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1 = Object.freeze({ title_chars: 300, owner_chars: 200, due_chars: 128, expected_chars: 120, decision_title_chars: 200, first_line_chars: 300 });
 
-/** The latest check of a follow-up: its verdict and when it was made. Who made it is not read. */
-export interface PersonFollowUpCheckV1 {
-  readonly verdict: PersonOpenItemVerdictV1;
-  readonly checked_at: string;
-}
-
 /** The follow-up's decision, only for an asker who reads that decision now. */
 export interface PersonFollowUpDecisionV1 {
   readonly title: string;
@@ -46,7 +40,7 @@ export interface PersonFollowUpDecisionV1 {
  * open-items policy shows this asker:
  * - `title`: the item's current title in its tool when the asker opened it
  *   there in this request, else ECHO's `expected` phrase, else `Follow-up`;
- * - `owner`, `status`, `check` and `expected`: ECHO's own row facts;
+ * - `owner`, `status` and `expected`: ECHO's own row facts;
  * - `created_at`, `sent_at` and `reassigned_at`: ECHO's own dates, which the
  *   runs API shows whoever sees the row (research tool contract v1);
  * - `due_at`: from the item's tool, only with a title read from it;
@@ -69,8 +63,6 @@ export interface PersonFollowUpEvidenceV1 {
   /** When its owner was last picked or reassigned: the open item's `owner_set_at`; absent while ECHO's own match stands. */
   readonly reassigned_at?: string;
   readonly due_at?: string;
-  /** Absent when nobody has checked the item yet. */
-  readonly check?: PersonFollowUpCheckV1;
   readonly decision?: PersonFollowUpDecisionV1;
   /** What the decision requires of the item; absent when it is the title. */
   readonly expected?: string;
@@ -79,7 +71,6 @@ export interface PersonFollowUpEvidenceV1 {
 const FOLLOW_UP_REF = /^follow_up:itm_[A-Za-z0-9-]{4,60}$/;
 const KINDS = Object.keys({ action: true, ticket: true, page: true, record: true, document: true } satisfies Record<PersonOpenItemKindV1, true>) as readonly PersonOpenItemKindV1[];
 const STATES = Object.keys({ unsent: true, open: true, done: true, not_relevant: true } satisfies Record<PersonOpenItemStateV1, true>) as readonly PersonOpenItemStateV1[];
-const VERDICTS = Object.keys({ landed: true, still_open: true, changed: true, unreadable: true } satisfies Record<PersonOpenItemVerdictV1, true>) as readonly PersonOpenItemVerdictV1[];
 const LIMITS = PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1;
 
 function optional(entry: Record<string, unknown>, keys: readonly string[]): string[] {
@@ -105,16 +96,9 @@ export function personFollowUpRefV1(citation: Pick<PersonFollowUpCitationV1, 'it
 
 export function validatePersonFollowUpEvidenceV1(value: unknown): PersonFollowUpEvidenceV1 {
   const entry = asEnumerableRecord(value, 'Follow-up evidence');
-  assertExactKeys(entry, ['item_id', 'kind', 'title', 'owner', 'status', ...optional(entry, ['created_at', 'sent_at', 'reassigned_at', 'due_at', 'check', 'decision', 'expected'])], 'Follow-up evidence');
+  assertExactKeys(entry, ['item_id', 'kind', 'title', 'owner', 'status', ...optional(entry, ['created_at', 'sent_at', 'reassigned_at', 'due_at', 'decision', 'expected'])], 'Follow-up evidence');
   const title = line(entry.title, 'Follow-up title', LIMITS.title_chars);
   for (const key of ['created_at', 'sent_at', 'reassigned_at'] as const) if (Object.hasOwn(entry, key)) assertTimestamp(entry[key], `Follow-up ${key}`);
-  let check: PersonFollowUpCheckV1 | undefined;
-  if (Object.hasOwn(entry, 'check')) {
-    const raw = asEnumerableRecord(entry.check, 'Follow-up check');
-    assertExactKeys(raw, ['verdict', 'checked_at'], 'Follow-up check');
-    assertTimestamp(raw.checked_at, 'Follow-up checked_at');
-    check = Object.freeze({ verdict: oneOf(raw.verdict, VERDICTS, 'Follow-up check verdict'), checked_at: raw.checked_at });
-  }
   let decision: PersonFollowUpDecisionV1 | undefined;
   if (Object.hasOwn(entry, 'decision')) {
     const raw = asEnumerableRecord(entry.decision, 'Follow-up decision');
@@ -139,7 +123,6 @@ export function validatePersonFollowUpEvidenceV1(value: unknown): PersonFollowUp
     ...(Object.hasOwn(entry, 'sent_at') ? { sent_at: entry.sent_at as string } : {}),
     ...(Object.hasOwn(entry, 'reassigned_at') ? { reassigned_at: entry.reassigned_at as string } : {}),
     ...(Object.hasOwn(entry, 'due_at') ? { due_at: line(entry.due_at, 'Follow-up due date', LIMITS.due_chars) } : {}),
-    ...(check === undefined ? {} : { check }),
     ...(decision === undefined ? {} : { decision }),
     ...(expected === undefined ? {} : { expected }),
   });

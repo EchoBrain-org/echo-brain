@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonMeetingReviewV2, PersonRunV1 } from '@echo-brain/organization-api';
-import { validatePersonRunsRequestV1 } from '@echo-brain/organization-api';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
 import { ACCOUNT, byTestId, cover, digest, elements, EMPTY_SUMMARY, fail, flush, hide, ok, plainHooks, render, show, startStore as start, storeLifecycle, text, uncover } from './harness.js';
 import type { HomeView, OpenItemsView, OpenItemView, ToolStatus } from '../../src/shared/protocol.js';
@@ -19,6 +18,7 @@ const impactRun = (state: PersonRunV1['state'], id = '20', event = recordApprova
   run_id: `run_00000000-0000-4000-8000-0000000000${id}`, trigger: 'approved_record', event_ref: event, state,
   error_code: state === 'failed' ? 'research_failed' : null, created_at: '2026-10-08T10:00:00.000Z', updated_at: '2026-10-08T10:05:00.000Z',
 });
+/** A sweep, as an older Authority may still list one: the desktop starts none and makes no row of one. */
 const sweepRun = (state: PersonRunV1['state']): PersonRunV1 => ({
   run_id: 'run_00000000-0000-4000-8000-000000000050', trigger: 'sweep', event_ref: 'sweep_00000000-0000-4000-8000-000000000050', state,
   error_code: state === 'failed' ? 'research_failed' : null, created_at: '2026-10-08T12:00:00.000Z', updated_at: '2026-10-08T12:00:00.000Z',
@@ -36,13 +36,11 @@ const reviewItems = [
   { signal_id: 'act-1', kind: 'action' as const, text: 'Send the revised quote', subject: null, status: null, due_at: null, quotes: [], owner: 'Rafael Moreno', owner_editable: true },
 ];
 const person = (name: string) => ({ membership_id: `mem_00000000-0000-4000-8000-00000000000${name.length}`, name, active: true });
-const item = (id: string, verdict: NonNullable<OpenItemView['check']>['verdict'] | null = null): OpenItemView => ({
+const item = (id: string): OpenItemView => ({
   item_id: `itm_0000000${id}`, run_id: impactRun('done').run_id, kind: 'ticket', decision, relation: 'conflicts', expected: 'launch next week',
   approver: person('Mina Patel'), owner: { ...person('Fixture'), match: 'jira_account' }, waits_on: 'owner', state: 'open',
   created_at: '2026-10-08T10:05:00.000Z', sent_at: '2026-10-08T11:00:00.000Z', state_set_at: '2026-10-08T11:00:00.000Z', state_set_by: person('Mina Patel'),
-  owner_set_at: null, owner_set_by: null, send_included: true,
-  check: verdict === null ? null : { verdict, checked_at: '2026-10-08T12:00:00.000Z', checked_by: 'Mina Patel' }, can: { set_state: true, assign: true },
-  reach: 'no_access',
+  owner_set_at: null, owner_set_by: null, send_included: true, check: null, can: { set_state: true, assign: true }, reach: 'no_access',
 });
 /** An item of Ari's own check not sent yet: Ari ("member") approved it, so Ari may send it and pick its owner. */
 const unsent = (id: string, run_id = impactRun('done').run_id): OpenItemView => ({
@@ -56,8 +54,8 @@ const rowOnly = (entry: OpenItemView): OpenItemView => {
   const { current: _current, ...rest } = entry;
   return { ...rest, reach: 'not_read' };
 };
-/** Home as a rows-only read answers it: no row read live, and never a sweep due. */
-const rowsOf = (view: HomeView): HomeView => ({ ...view, items: view.items.map(rowOnly), sweep_due: false });
+/** Home as a rows-only read answers it: no row read live. */
+const rowsOf = (view: HomeView): HomeView => ({ ...view, items: view.items.map(rowOnly) });
 const ticket = { kind: 'ticket' as const, tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink: 'https://example.atlassian.net/browse/ECHO-12' };
 /** An item ECHO opened for you just now: what it says now comes with it. */
 const opened = (id: string, extra: Partial<OpenItemView> = {}): OpenItemView => ({ ...item(id), reach: 'opened', current: { source: ticket, says_now: `Says ${id}` }, ...extra });
@@ -67,9 +65,16 @@ const opened = (id: string, extra: Partial<OpenItemView> = {}): OpenItemView => 
  */
 const notificationScan = (request: { operation?: string; scope?: string; read?: string; states?: readonly string[]; changed_since?: string }) => request.operation === 'items'
   && (request.scope === 'mine' || request.scope === 'involved') && request.read === 'rows' && (request.states?.join() === 'open' || request.changed_since !== undefined);
-/** Every request but the change check's, which goes on at the server's pace whatever Home does (desktop refresh v1). */
-const polls = () => rpc.mock.calls.filter(([method]) => method !== 'changes.read' && method !== 'projects.activity');
-const homeCalls = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && !(params.request.operation === 'home' && params.request.read === 'rows') && !notificationScan(params.request));
+/** A check-in, which the change check sends after each check that reached the Authority (DSK-1). */
+const isCheckIn = (method: string, params: { request?: { operation?: string } | null }) => method === 'runs' && params.request?.operation === 'next';
+/** Every request but the change check's and its check-ins, which go on at the server's pace whatever Home does (desktop refresh v1). */
+const polls = () => rpc.mock.calls.filter(([method, params]) => method !== 'changes.read' && method !== 'projects.activity' && !isCheckIn(method, params));
+const homeCalls = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && !(params.request.operation === 'home' && params.request.read === 'rows') && !notificationScan(params.request)
+  && !isCheckIn(method, params));
+/** The check-ins sent, by the account each was for. */
+const checkIns = () => rpc.mock.calls.filter(([method, params]) => isCheckIn(method, params)).map(([, params]) => params.expect.membership_id as string);
+/** The runs operations sent, in order, as sent. */
+const runsSent = () => rpc.mock.calls.filter(([method]) => method === 'runs').map(([, params]) => params.request.operation as string);
 /** Reads of what waits on you: each Home read starts with its rows. */
 const rowsReads = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === 'home' && params.request.read === 'rows').length;
 const operations = () => homeCalls().map(([, params]) => params.request.operation);
@@ -78,14 +83,12 @@ const requests = (operation: string) => homeCalls().filter(([, params]) => param
 const project = { project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign', role: 'lead' as const, created_at: '2026-10-01T00:00:00.000Z', status: 'active' as const };
 
 type Store = Awaited<ReturnType<typeof start>>;
-/** Check now's state on the follow-ups shown. */
-const check = (store: Store) => (store.followUpShown() as FollowUpList | null)?.check;
 type Failure = { code: string; retryable: boolean; mutation_outcome?: 'unknown' };
 /**
  * The replies a test holds back (`held`): live reads (Home's, a list's, an item's), Home's rows reads, a list's rows reads, the
- * tools read, sends and set_states; runs lists and the starts of impact checks.
+ * tools read, sends and set_states; runs lists.
  */
-type Hold = 'live' | 'rows' | 'listRows' | 'reviews' | 'send' | 'setState' | 'list' | 'start';
+type Hold = 'live' | 'rows' | 'listRows' | 'reviews' | 'send' | 'setState' | 'list';
 
 /** What the fake Authority holds and how it answers, as each test starts: a test changes `fx` to say otherwise. */
 const fresh = () => ({
@@ -102,7 +105,6 @@ const fresh = () => ({
   listed: true,
   /** The review cannot be opened while set. */
   failOpen: false,
-  failLists: false,
   /** Home's next read of its rows fails (and so nothing of it is read live). */
   failNextHome: false,
   /** Home's next live read fails, its rows read. */
@@ -123,22 +125,19 @@ const fresh = () => ({
   /** The signed-in account; nobody once signed out. */
   member: 'member',
   signedIn: true,
-  /** Moves of the change check's areas a test makes: each moves that area's fingerprint. */
+  /**
+   * Moves of the change check's areas a test makes: each moves that area's fingerprint. The Authority folds your own checks'
+   * states into the reviews (DSK-1): a test moves them as a check starts, fails or ends.
+   */
   moved: { follow_ups: 0, reviews: 0 },
-  /** What a sweep request answers ('fails': unavailable), the sweep run it queued, and what starting that run answers ('fails': unavailable). */
-  sweepAnswer: { state: 'nothing_to_check' } as { run_id: string } | { state: 'nothing_to_check' } | 'fails',
-  sweep: null as PersonRunV1 | null,
-  sweepStarts: 'running' as 'running' | 'busy' | 'done' | 'failed' | 'fails',
-  /** What starting the impact check answers: `pending` while the Authority's search index has not caught up with its decision. */
-  impactStarts: 'running' as 'running' | 'pending',
   /** What an items read answers, when a test says. */
   page: null as OpenItemsView | null,
   /** How an assign fails, when a test says; what a read of one item answers (unavailable while null). */
   assignFailure: null as Failure | null,
   readItem: null as OpenItemView | null,
   /** The kinds of reply held back while set, and the replies held, oldest first. */
-  hold: { live: false, rows: false, listRows: false, reviews: false, send: false, setState: false, list: false, start: false } as Record<Hold, boolean>,
-  waiting: { live: [], rows: [], listRows: [], reviews: [], send: [], setState: [], list: [], start: [] } as Record<Hold, (() => void)[]>,
+  hold: { live: false, rows: false, listRows: false, reviews: false, send: false, setState: false, list: false } as Record<Hold, boolean>,
+  waiting: { live: [], rows: [], listRows: [], reviews: [], send: [], setState: [], list: [] } as Record<Hold, (() => void)[]>,
 });
 let fx = fresh();
 
@@ -162,7 +161,7 @@ async function authority(method: string, params: { project_id?: string; request?
     case 'projects.list': return ok({ items: [], next_cursor: null });
     case 'projects.members': return ok({ items: [], next_cursor: null });
     case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
-    case 'open.ref': return unavailable;
+    case 'open.ref': case 'ask.record': return unavailable;
     // A project's tools line: it reads nothing.
     case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
     case 'app.setUnresolved': case 'notice.show': case 'log.changes': return ok(null);
@@ -191,10 +190,9 @@ async function authority(method: string, params: { project_id?: string; request?
     }
     case 'runs':
       if (params.request?.operation === 'list') {
-        if (fx.failLists) return unavailable;
         if (fx.failNextList) { fx.failNextList = false; return unavailable; }
-        // Newest first: a sweep comes after the impact check. Held, it answers the runs as they were when it was asked.
-        const listed = ok({ runs: [...(fx.sweep ? [{ ...fx.sweep }] : []), ...(fx.run ? [{ ...fx.run }] : []), ...fx.more.map(entry => ({ ...entry }))] });
+        // Held, it answers the runs as they were when it was asked.
+        const listed = ok({ runs: [...(fx.run ? [{ ...fx.run }] : []), ...fx.more.map(entry => ({ ...entry }))] });
         return held('list', () => listed);
       }
       if (params.request?.operation === 'home') {
@@ -206,20 +204,16 @@ async function authority(method: string, params: { project_id?: string; request?
         if (fx.failNextLive) { fx.failNextLive = false; return unavailable; }
         return held('live', () => ok(fx.home));
       }
-      if (params.request?.operation === 'start') {
-        if (fx.sweep && params.request.run_id === fx.sweep.run_id) {
-          if (fx.sweepStarts === 'fails') return unavailable;
-          if (fx.sweepStarts !== 'busy') fx.sweep = sweepRun(fx.sweepStarts);
-          return ok({ state: fx.sweepStarts });
-        }
-        if (fx.impactStarts === 'pending') return ok({ state: 'pending' });
-        // Held, the check is still queued until the start lands.
-        const further = fx.more.find(entry => entry.run_id === params.request?.run_id);
-        return held('start', () => {
-          if (further) Object.assign(further, { state: 'running' });
-          else fx.run = impactRun('running');
-          return ok({ state: 'running' });
-        });
+      // A check-in (DSK-1), as the Authority answers it: the oldest queued check starts (lists come newest first), unless
+      // another runs; with none queued, idle.
+      if (params.request?.operation === 'next') {
+        const checks = [...(fx.run ? [fx.run] : []), ...fx.more];
+        const oldest = [...checks].reverse().find(entry => entry.state === 'pending');
+        if (!oldest) return ok({ state: 'idle' });
+        if (checks.some(entry => entry.state === 'running')) return ok({ state: 'busy' });
+        if (oldest === fx.run) fx.run = { ...oldest, state: 'running' };
+        else fx.more = fx.more.map(entry => (entry === oldest ? { ...entry, state: 'running' as const } : entry));
+        return ok({ state: 'running' });
       }
       // Try again on a failed check: queued again.
       if (params.request?.operation === 'retry') {
@@ -227,11 +221,6 @@ async function authority(method: string, params: { project_id?: string; request?
         if (!failed) return fail('not_found');
         Object.assign(failed, { state: 'pending', error_code: null });
         return ok({ state: 'pending' });
-      }
-      if (params.request?.operation === 'sweep') {
-        if (fx.sweepAnswer === 'fails') return unavailable;
-        if ('run_id' in fx.sweepAnswer) fx.sweep = sweepRun('pending');
-        return ok(fx.sweepAnswer);
       }
       if (params.request?.operation === 'set_state') {
         if (fx.setStateFailure) return { ok: false, failure: fx.setStateFailure };
@@ -364,19 +353,18 @@ describe('Home rows', () => {
     expect(operations().filter(operation => operation === 'home')).toEqual(['home', 'home']);
   });
 
-  it('orders rows approve, retry, send, review, update, checking', async () => {
+  it('orders rows approve, retry, send, update, checking', async () => {
     const { needRows } = await import('../../src/renderer/store.js');
     const reviews = [meeting('c', 'approved'), meeting('b', 'approved'), meeting('d', 'publishing'), meeting('e', 'approved'), meeting('a', 'pending')];
     const runs = [impactRun('running', '21', reviews[0]!.records[0]!.approval_id), impactRun('failed', '22', reviews[1]!.records[0]!.approval_id),
       impactRun('done', '23', reviews[3]!.records[0]!.approval_id)];
-    const open: HomeView = { ...emptyHome(), send: [sendRow()], items: [item('1'), item('2', 'changed')] };
-    const rows = needRows(reviews, runs, open, 'member');
+    const open: HomeView = { ...emptyHome(), send: [sendRow()], items: [item('1'), item('2')] };
+    const rows = needRows(reviews, runs, open);
     // A check that did not finish needs you: right after the decisions to approve, never at the bottom of a long Home.
-    expect(rows.map(row => row.kind)).toEqual(['approve', 'failed', 'send', 'review', 'update', 'checking', 'checking']);
+    expect(rows.map(row => row.kind)).toEqual(['approve', 'failed', 'send', 'update', 'update', 'checking', 'checking']);
     expect(rows[1]).toMatchObject({ kind: 'failed', review: { approval_id: reviews[1]!.approval_id } });
     const { ReviewLine } = await import('../../src/renderer/screens/home.js');
     expect(text(render(ReviewLine({ row: rows[1] as Parameters<typeof ReviewLine>[0]['row'] })))).toBe('Approved · the check did not finish');
-    expect(rows[3]).toMatchObject({ kind: 'review', item: { item_id: 'itm_00000002' } });
     expect(rows[5]).toMatchObject({ kind: 'checking', run: { state: 'running' } });
     // A finished check makes no row of its own: what it found comes from `home`.
     expect(rows.some(row => 'review' in row && row.review.approval_id === reviews[3]!.approval_id)).toBe(false);
@@ -384,8 +372,17 @@ describe('Home rows', () => {
 
   it('leaves only review and run rows when the home part was never read', async () => {
     const { needRows } = await import('../../src/renderer/store.js');
-    const rows = needRows([meeting('a', 'pending'), meeting('b', 'approved')], [impactRun('failed', '22', meeting('b', 'approved').records[0]!.approval_id)], null, 'member');
+    const rows = needRows([meeting('a', 'pending'), meeting('b', 'approved')], [impactRun('failed', '22', meeting('b', 'approved').records[0]!.approval_id)], null);
     expect(rows.map(row => row.kind)).toEqual(['approve', 'failed']);
+  });
+
+  it('makes no Home row of a sweep an older Authority may still list, going or failed', async () => {
+    const { needRows } = await import('../../src/renderer/store.js');
+    const approved = meeting('b', 'approved');
+    // Even a sweep naming an approval does not stand for its impact check.
+    for (const state of ['pending', 'running', 'failed'] as const) {
+      expect(needRows([approved], [{ ...sweepRun(state), event_ref: approved.records[0]!.approval_id }], null)).toEqual([]);
+    }
   });
 
   it('matches a meeting\'s checks through its records: one row, failed when any check did not finish, else checking while any goes', async () => {
@@ -393,46 +390,35 @@ describe('Home rows', () => {
     const records = [{ approval_id: 'apr_' + '1'.repeat(64), project_ids: ['prj_11111111-1111-4111-8111-111111111111'] }, { approval_id: 'apr_' + '2'.repeat(64), project_ids: [] }];
     const approved: PersonMeetingReviewV2 = { ...meeting('b', 'approved'), records };
     const runs = (first: PersonRunV1['state'], second: PersonRunV1['state']) => [impactRun(first, '31', records[0]!.approval_id), impactRun(second, '32', records[1]!.approval_id)];
-    expect(needRows([approved], runs('done', 'failed'), null, 'member')).toMatchObject([{ kind: 'failed', run: { run_id: impactRun('failed', '32').run_id } }]);
-    expect(needRows([approved], runs('running', 'done'), null, 'member')).toMatchObject([{ kind: 'checking', run: { run_id: impactRun('running', '31').run_id } }]);
-    expect(needRows([approved], runs('done', 'done'), null, 'member')).toEqual([]);
+    expect(needRows([approved], runs('done', 'failed'), null)).toMatchObject([{ kind: 'failed', run: { run_id: impactRun('failed', '32').run_id } }]);
+    expect(needRows([approved], runs('running', 'done'), null)).toMatchObject([{ kind: 'checking', run: { run_id: impactRun('running', '31').run_id } }]);
+    expect(needRows([approved], runs('done', 'done'), null)).toEqual([]);
     // A check keyed by the proposal's own id is no record's: it makes no row.
-    expect(needRows([approved], [impactRun('failed', '33', approved.approval_id)], null, 'member')).toEqual([]);
+    expect(needRows([approved], [impactRun('failed', '33', approved.approval_id)], null)).toEqual([]);
     // Publishing, before its records are written: checking, with no run yet.
-    expect(needRows([{ ...meeting('d', 'publishing') }], [], null, 'member')).toMatchObject([{ kind: 'checking', review: { status: 'publishing' } }]);
+    expect(needRows([{ ...meeting('d', 'publishing') }], [], null)).toMatchObject([{ kind: 'checking', review: { status: 'publishing' } }]);
   });
 
-  it('keeps the owner\'s changed item an Update row, first, and makes someone else\'s changed item a Review row (R64)', async () => {
+  it('makes every item that waits on you an Update row, in the order Home read them, whatever check an older Authority still sends', async () => {
     const { needRows } = await import('../../src/renderer/store.js');
-    const me = 'member';
-    const own = (id: string, verdict: Parameters<typeof item>[1] = null): OpenItemView => ({ ...item(id, verdict), owner: { membership_id: me, name: 'Fixture', active: true, match: 'jira_account' } });
-    const open: HomeView = { ...emptyHome(), items: [own('1'), own('2', 'changed'), item('3', 'changed'), own('4', 'still_open'), item('5')] };
-    const rows = needRows([], [], open, me);
-    // Changed items first, Update or Review; then the others, all Update.
-    expect(rows.map(row => [row.kind, 'item' in row ? row.item.item_id : null])).toEqual([
-      ['update', 'itm_00000002'], ['review', 'itm_00000003'], ['update', 'itm_00000001'], ['update', 'itm_00000004'], ['update', 'itm_00000005'],
+    const checked = (id: string, verdict: 'changed' | 'landed'): OpenItemView => ({ ...item(id), check: { verdict, checked_at: '2026-10-08T12:00:00.000Z', checked_by: 'Mina Patel' } });
+    const open: HomeView = { ...emptyHome(), items: [item('1'), checked('2', 'changed'), item('3'), checked('4', 'landed')] };
+    expect(needRows([], [], open).map(row => [row.kind, 'item' in row ? row.item.item_id : null])).toEqual([
+      ['update', 'itm_00000001'], ['update', 'itm_00000002'], ['update', 'itm_00000003'], ['update', 'itm_00000004'],
     ]);
   });
 
-  it('takes the viewer from the account Home was read for', async () => {
-    fx.home = { ...emptyHome(), items: [item('1', 'changed'), { ...item('2', 'changed'), owner: { membership_id: 'member', name: 'Fixture', active: true, match: 'jira_account' } }] };
-    fx.listed = false;
-    const store = await start();
-    expect(store.homeRows().map(row => row.kind)).toEqual(['review', 'update']);
-  });
-
-  it('groups rows by what they ask of you: Approve, Retry, Send, Update (Review too), then Checking, each newest first', async () => {
+  it('groups rows by what they ask of you: Approve, Retry, Send, Update, then Checking, each newest first', async () => {
     const { categoryOf, homeCategories, needAt } = await import('../../src/renderer/store.js');
     type Row = Parameters<typeof categoryOf>[0];
     const approve = (id: string, meeting_at: string | null): Row => ({ kind: 'approve', review: { ...meeting(id, 'pending'), meeting_at } });
     const send = (id: string, finished_at: string): Row => ({ kind: 'send', send: { ...sendRow(), run_id: `run_${id}`, finished_at } });
     const update = (id: string, moved: Partial<OpenItemView>): Row => ({ kind: 'update', item: { ...item(id), ...moved } });
-    const review: Row = { kind: 'review', item: { ...item('3', 'changed'), state_set_at: '2026-10-09T09:00:00.000Z' } };
     const rows: Row[] = [
       approve('a', '2026-10-06T12:00:00.000Z'), approve('e', null),
       { kind: 'failed', review: meeting('b', 'approved'), run: impactRun('failed', '22') },
       send('old', '2026-10-07T10:00:00.000Z'), send('new', '2026-10-08T10:00:00.000Z'),
-      review, update('1', {}), update('5', { owner_set_at: '2026-10-12T09:00:00.000Z' }),
+      update('3', { state_set_at: '2026-10-09T09:00:00.000Z' }), update('1', {}), update('5', { owner_set_at: '2026-10-12T09:00:00.000Z' }),
       { kind: 'checking', review: meeting('d', 'publishing') },
     ];
     expect(rows.map(categoryOf)).toEqual(['approve', 'approve', 'retry', 'send', 'send', 'update', 'update', 'update', 'checking']);
@@ -483,25 +469,6 @@ describe('Home rows', () => {
     // No project Home knows: it starts with the time; with neither, there is nothing to open the line.
     expect(text(render(Where({ state, at: fiveAgo, projects: ['prj_33333333-3333-4333-8333-333333333333'] })))).toBe('5m · ');
     expect(Where({ state, projects: [] })).toBeNull();
-  });
-
-  it('polls only while something is in flight, and backs off after failed reads', async () => {
-    const { runPollDelay } = await import('../../src/renderer/store.js');
-    const running = [impactRun('running')];
-    const timeout = { code: 'timeout', retryable: true };
-    expect(runPollDelay({ runs: running, publishing: false, failures: 0 })).toBe(5_000);
-    expect(runPollDelay({ runs: [impactRun('pending')], publishing: false, failures: 0 })).toBe(5_000);
-    expect(runPollDelay({ runs: [], publishing: true, failures: 0 })).toBe(5_000);
-    expect(runPollDelay({ runs: [], publishing: false, failures: 0 })).toBeNull();
-    expect(runPollDelay({ runs: [impactRun('done'), impactRun('failed', '22')], publishing: false, failures: 0 })).toBeNull();
-    // A model-less Authority answers unavailable for good: with nothing in flight it is not asked again.
-    expect(runPollDelay({ runs: [], publishing: false, failures: 1, lastFailure: { code: 'unavailable', retryable: true } })).toBeNull();
-    expect([1, 2, 4, 9].map(failures => runPollDelay({ runs: running, publishing: false, failures, lastFailure: timeout }))).toEqual([10_000, 20_000, 60_000, 60_000]);
-    // What a finished check found, still unread, keeps Home looking as a check in flight does, even through unavailable reads.
-    const unavailable = { code: 'unavailable', retryable: true };
-    expect(runPollDelay({ runs: [impactRun('done')], publishing: false, failures: 0, owed: true })).toBe(5_000);
-    expect([1, 2, 4].map(failures => runPollDelay({ runs: [impactRun('done')], publishing: false, failures, lastFailure: unavailable, owed: true })))
-      .toEqual([10_000, 20_000, 60_000]);
   });
 });
 
@@ -681,7 +648,7 @@ describe('Home decisions and impact checks', () => {
     expect(store.getState().decision?.routes).toEqual({ 'dec-1': store.ONLY_ME, 'act-1': store.ONLY_ME });
   });
 
-  it('keeps a publishing approval visible and shows what its check found once it finishes', async () => {
+  it('keeps a publishing approval visible, and shows its check start, then what it found, as the change check sees the reviews move', async () => {
     fx.review = { ...fx.review, status: 'publishing', decided_on: 'desktop' };
     const store = await start();
     expect(store.homeRows()).toMatchObject([{ kind: 'checking', review: { status: 'publishing' } }]);
@@ -689,25 +656,29 @@ describe('Home decisions and impact checks', () => {
     const { ReviewLine } = await import('../../src/renderer/screens/home.js');
     const row = store.homeRows()[0] as Parameters<typeof ReviewLine>[0]['row'];
     expect(text(render(ReviewLine({ row })))).toBe('Approved · publishing to ECHO');
+    // Published, its check queued: the reviews move. The next change check checks in, so the Authority starts the check, and
+    // Home reads it going.
     fx.review = { ...fx.review, status: 'approved' };
     fx.run = impactRun('pending');
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(operations()).toContain('start');
+    fx.moved.reviews = 1;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(checkIns()).toEqual(['member', 'member']);
+    expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
+    // It ends, and the reviews move again: the next change check reads what it found.
     fx.run = impactRun('done');
     fx.home = { ...emptyHome(), send: [sendRow()] };
-    await vi.advanceTimersByTimeAsync(5_000);
+    fx.moved.reviews = 2;
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: fx.run.run_id } }]);
     expect(store.needsCount()).toBe(1);
-    const requests = rpc.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(rpc.mock.calls).toHaveLength(requests);
+    // Home reads nothing more until something moves.
+    await expectQuiet();
   });
 
   it('refreshes an open decision when its check finishes while the app is hidden', async () => {
     const store = await checking();
     await store.openDecision(approval, fx.run);
     cover(store);
-    await vi.advanceTimersByTimeAsync(5_000);
     fx.run = impactRun('done');
     uncover(store);
     await flush();
@@ -716,47 +687,6 @@ describe('Home decisions and impact checks', () => {
     expect(operations()).not.toContain('view');
     expect(store.getState().decision?.lines[fx.run.run_id]).toMatchObject({ summary: { unsent: 1 } });
     expect(requests('items').at(-1)).toEqual({ schema_version: 1, operation: 'items', scope: 'run', id: fx.run.run_id, read: 'counts' });
-  });
-
-  it.each([
-    // The poll after the check ends reads what it found; or its runs list fails, and Home keeps the run it had; or its read of
-    // what the check found fails.
-    ['reads it', null, [{ kind: 'send' }]],
-    ['fails to read the runs list', 'failNextList', [{ kind: 'checking', run: { state: 'running' } }]],
-    ['fails to read what it found', 'failNextHome', []],
-  ] as const)('reads what waits on you only once a check ends, then stops: the poll after it %s', async (_, fails, shown) => {
-    const store = await checking();
-    // While it runs, a poll reads the runs list only: reading what waits on you opens each item live.
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect([requests('list').length, rowsReads()]).toEqual([2, 1]);
-    fx.run = impactRun('done');
-    fx.home = { ...emptyHome(), send: [sendRow()] };
-    if (fails) fx[fails] = true;
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(store.homeRows()).toMatchObject(shown);
-    // Home looks again, more slowly, until the read succeeds; then it stops.
-    await vi.advanceTimersByTimeAsync(9_000);
-    expect(store.homeRows()).toMatchObject(shown);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(store.homeRows()).toMatchObject([{ kind: 'send' }]);
-    await expectQuiet();
-  });
-
-  it('reads what waits on you again on the next poll after that read failed', async () => {
-    fx.failNextHome = true;
-    const store = await checking();
-    expect(store.getState().home?.open).toBeNull();
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(rowsReads()).toBe(2);
-    expect(store.getState().home?.open).toEqual(emptyHome());
-  });
-
-  it('never polls an Authority whose runs are unavailable when nothing is in flight', async () => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.failLists = true;
-    const store = await start();
-    expect(store.getState().home?.failure).toBeUndefined();
-    await expectQuiet();
   });
 
   it('keeps the rows a failed home read had, and shows no error for it', async () => {
@@ -770,27 +700,27 @@ describe('Home decisions and impact checks', () => {
     expect(store.getState().home?.failure).toBeUndefined();
   });
 
-  it('keeps owing what a finished check found until a read that is still Home\'s brings it', async () => {
-    const store = await checking();
-    // The check ends, and the poll's read of what it found is slow.
-    fx.run = impactRun('done');
-    fx.home = { ...emptyHome(), send: [sendRow()] };
+  it('shows and settles nothing of a Home load from before signing out and back in as the same person', async () => {
     fx.hold.rows = true;
-    await vi.advanceTimersByTimeAsync(5_000);
+    const store = await start();
+    store.accountCommand('signout');
+    await store.signOut();
     await flush();
-    expect(fx.waiting.rows).toHaveLength(1);
-    // Meanwhile Home is read again, and that read of what the check found fails.
-    fx.hold.rows = false;
-    fx.failNextHome = true;
-    await store.loadHome();
-    expect(store.homeRows()).toEqual([]);
-    // The slow read answers now. It is no longer Home's read: it shows nothing, and settles nothing Home still owes.
+    fx.signedIn = true;
+    await store.refreshStatus();
+    await flush();
+    expect(store.getState().home).toMatchObject({ loading: true, open: null });
+    // The first load's rows land late, saying an item waits: they are not this Home's.
+    fx.home = { ...emptyHome(), items: [item('1')], waiting: 1 };
     release('rows');
     await flush();
-    expect(store.homeRows()).toEqual([]);
-    // So Home keeps looking, and its next read brings the Send row.
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: fx.run.run_id } }]);
+    expect(store.getState().home).toMatchObject({ loading: true, open: null });
+    // This load's own rows: nothing waits.
+    fx.home = emptyHome();
+    fx.hold.rows = false;
+    release('rows');
+    await flush();
+    expect(store.getState().home).toMatchObject({ loading: false, open: { items: [], waiting: 0 } });
   });
 
   it('keeps an initial runs-list failure silent and recovers when Home is read again', async () => {
@@ -805,292 +735,131 @@ describe('Home decisions and impact checks', () => {
     expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
   });
 
-  it.each([false, true])('resumes a failed Home while work is outstanding, result owed: %s', async owed => {
+  it('resumes a failed Home on a return, with what its check found meanwhile', async () => {
     const store = await checking();
-    if (owed) {
-      fx.run = impactRun('done');
-      fx.home = { ...emptyHome(), send: [sendRow()] };
-      fx.failNextHome = true;
-    }
+    fx.run = impactRun('done');
+    fx.home = { ...emptyHome(), send: [sendRow()] };
+    fx.failNextHome = true;
     fx.failNextReviews = true;
     await store.loadHome();
     expect(store.getState().home?.failure).toMatchObject({ code: 'unavailable' });
-    if (owed) expect(store.homeRows()).toHaveLength(0);
+    expect(store.homeRows()).toHaveLength(0);
     cover(store);
     await vi.advanceTimersByTimeAsync(60_000);
-    fx.run = impactRun('done');
-    fx.home = { ...emptyHome(), send: [sendRow()] };
     uncover(store);
     await flush();
     expect(store.getState().home?.failure).toBeUndefined();
     expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: fx.run.run_id } }]);
   });
 
-  it.each([false, true])('preserves and retries a failed resume with an open decision: %s', async (openCard) => {
+  it('keeps Home\'s and an open decision\'s checks through returns whose runs read fails, and reads them again when the reviews move', async () => {
     const store = await checking();
-    if (openCard) await store.openDecision(approval, fx.run);
-    cover(store);
-    fx.failNextList = true;
-    uncover(store);
-    await flush();
-    expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
-    expect(store.getState().home?.failure).toBeUndefined();
-    if (openCard) expect(store.getState().decision?.runs[0]?.state).toBe('running');
-    // A second focus change must not strand the retry after stopping its timer.
-    cover(store);
-    fx.failNextList = true;
-    uncover(store);
-    await flush();
+    await store.openDecision(approval, fx.run);
+    for (let back = 0; back < 2; back += 1) {
+      cover(store);
+      fx.failNextList = true;
+      uncover(store);
+      await flush();
+      expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
+      expect(store.getState().home?.failure).toBeUndefined();
+      expect(store.getState().decision?.runs[0]?.state).toBe('running');
+    }
+    // The check ends, and the reviews move: the next change check reads Home, and so the decision's checks, again.
     fx.run = impactRun('done');
     fx.home = { ...emptyHome(), send: [sendRow()] };
-    await vi.advanceTimersByTimeAsync(20_000);
+    fx.moved.reviews = 1;
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(store.getState().home?.failure).toBeUndefined();
     expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: fx.run.run_id } }]);
-    if (openCard) {
-      expect(store.getState().decision?.runs[0]?.state).toBe('done');
-      expect(store.getState().decision?.lines[fx.run.run_id]).toBeDefined();
-    }
+    expect(store.getState().decision?.runs[0]?.state).toBe('done');
+    expect(store.getState().decision?.lines[fx.run.run_id]).toBeDefined();
+  });
+
+  it('asks for a change check at once on Approve, though the decision page checked just before: it checks in (DSK-1)', async () => {
+    const store = await start();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await store.openDecision(approval);
+    await flush();
+    const checks = () => rpc.mock.calls.filter(([method]) => method === 'changes.read').length;
+    const [checked, checkedIn] = [checks(), checkIns().length];
+    // Back on Home within ten seconds of that check, a page opened alone would not ask for another.
+    rpc.mockImplementationOnce(async () => ok({ status: 'publishing', decided_on: 'desktop' }));
+    await store.decide('approve');
+    await flush();
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect([checks(), checkIns().length]).toEqual([checked + 1, checkedIn + 1]);
+    // A rejection asks for none.
+    await vi.advanceTimersByTimeAsync(10_000);
+    await store.openDecision(approval);
+    await flush();
+    const before = checks();
+    rpc.mockImplementationOnce(async () => ok({ status: 'rejected', decided_on: 'desktop' }));
+    await store.decide('reject');
+    await flush();
+    expect(checks()).toBe(before);
+  });
+
+  it('stops counting a check as Retry at once when Try again on the decision page over Home starts it again (DSK-1)', async () => {
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.run = impactRun('failed');
+    const store = await start();
+    expect([store.homeRows().map(row => row.kind), store.needsCount()]).toEqual([['failed'], 1]);
+    await store.openDecision(approval, store.getState().home!.runs[0]!);
+    await flush();
+    await store.retryImpact(fx.run.run_id);
+    await flush();
+    // Started at the check-in: the decision and Home under it say so now, not at the next change check a minute away.
+    expect(store.getState().decision?.runs[0]).toMatchObject({ state: 'running' });
+    expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
+    expect(store.needsCount()).toBe(0);
   });
 });
 
-describe('Sweeps from Home', () => {
-  /** Signed in, with no meeting to review and a sweep of your own items due, which the Authority queues when asked. */
-  async function dueSweep(items: OpenItemView[] = []) {
-    fx.listed = false;
-    fx.home = { ...emptyHome(), sweep_due: true, items };
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    return start();
-  }
-
-  it('makes no Home row of a sweep, going or failed', async () => {
-    const { needRows } = await import('../../src/renderer/store.js');
-    const approved = meeting('b', 'approved');
-    // Even a sweep naming an approval does not stand for its impact check.
-    for (const state of ['pending', 'running', 'failed'] as const) {
-      expect(needRows([approved], [{ ...sweepRun(state), event_ref: approved.records[0]!.approval_id }], null, 'member')).toEqual([]);
-    }
-  });
-
-  it('starts queued impact checks before queued sweeps, and nothing while a run goes', async () => {
-    const { runToStart } = await import('../../src/renderer/store.js');
-    const queued = sweepRun('pending');
-    // Lists come newest first: the oldest queued impact check goes first.
-    expect(runToStart([queued, impactRun('pending', '21'), impactRun('pending', '22')])?.run_id).toBe(impactRun('pending', '22').run_id);
-    expect(runToStart([queued, impactRun('done')])?.run_id).toBe(queued.run_id);
-    expect(runToStart([queued, impactRun('running')])).toBeUndefined();
-    expect(runToStart([sweepRun('running'), impactRun('pending')])).toBeUndefined();
-    expect(runToStart([impactRun('done'), impactRun('failed', '22')])).toBeUndefined();
-  });
-
-  it('asks for the due sweep of your own items after impact checks, once per Home load', async () => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('pending');
-    fx.home = { ...emptyHome(), sweep_due: true };
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    const store = await start();
-    // The impact check starts first.
-    expect(requests('start')).toEqual([{ schema_version: 1, operation: 'start', run_id: fx.run.run_id }]);
-    expect(requests('sweep')).toEqual([]);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests('sweep')).toEqual([]);
-    // It ends: Home reads what it found, and only then asks for the sweep and starts it.
-    fx.run = impactRun('done');
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests('sweep')).toEqual([{ schema_version: 1, operation: 'sweep', scope: 'mine' }]);
-    for (const request of [...requests('sweep'), ...requests('start')]) expect(() => validatePersonRunsRequestV1(request)).not.toThrow();
-    expect(requests('start').at(-1)).toEqual({ schema_version: 1, operation: 'start', run_id: sweepRun('pending').run_id });
-    expect(store.homeRows()).toEqual([]);
-    // Home still says a sweep is due while it runs and once it is done: this Home load asks no more.
-    await vi.advanceTimersByTimeAsync(5_000);
-    fx.sweep = sweepRun('done');
-    await vi.advanceTimersByTimeAsync(5_000);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(requests('sweep')).toHaveLength(1);
-    expect(requests('start')).toHaveLength(2);
-    // The next Home load may ask again.
-    await store.loadHome();
-    expect(requests('sweep')).toHaveLength(2);
-  });
-
-  it('reads what a sweep found once it ends, even when no list showed it going', async () => {
-    const store = await dueSweep([item('1')]);
-    expect(store.homeRows().map(row => row.kind)).toEqual(['update']);
-    expect(requests('sweep')).toHaveLength(1);
-    // Done before the next look.
-    fx.sweep = sweepRun('done');
-    fx.home = { ...emptyHome(), items: [item('1', 'changed')], landed: 1, last_checked_at: '2026-10-08T12:05:00.000Z' };
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(store.homeRows().map(row => row.kind)).toEqual(['review']);
-    expect(store.getState().home?.open).toMatchObject({ landed: 1, last_checked_at: '2026-10-08T12:05:00.000Z' });
-    // Then Home stops looking.
-    await expectQuiet();
-  });
-
-  it('reads your follow-ups again when the sweep Home started ends while they show, so "ECHO checked" says when it ended', async () => {
-    fx.page = { items: [item('1', 'landed')], next_cursor: null, stages: [], summary: { ...EMPTY_SUMMARY, open: 1, decisions: 1, last_checked_at: '2026-10-07T09:00:00.000Z' } };
-    const store = await dueSweep();
-    expect(fx.sweep?.state).toBe('running');
-    // Follow-ups opens while the sweep goes: its first read says when ECHO last checked before it.
-    await store.openYourFollowUps();
-    await flush();
-    const yours = () => store.followUpShown() as FollowUpList;
-    expect(yours().summary?.last_checked_at).toBe('2026-10-07T09:00:00.000Z');
-    const reads = requests('items').length;
-    // The sweep ends on Follow-ups. It moves no follow-up's state, so the change check sees nothing: the driver reads them again.
-    fx.sweep = sweepRun('done');
-    fx.page = { ...fx.page, summary: { ...fx.page.summary, last_checked_at: '2026-10-08T12:30:00.000Z' } };
-    await vi.advanceTimersByTimeAsync(5_000);
-    await flush();
-    expect(requests('items').slice(reads).map(request => `${request.scope} ${request.read}`)).toContain('involved rows');
-    expect(yours().summary?.last_checked_at).toBe('2026-10-08T12:30:00.000Z');
-    expect(store.getState().route.page).toBe('follow-ups');
-  });
-
-  it('keeps a check queued while the Authority holds its start, looking again at the usual pace, then starts it', async () => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('pending');
-    fx.impactStarts = 'pending';
-    const store = await start();
-    const rows = store.homeRows().map(row => row.kind);
-    expect(requests('start')).toHaveLength(1);
-    // Held while its decision is not yet searchable. A held start is no failure: unlike busy, the next look and start are 5 s away.
-    await vi.advanceTimersByTimeAsync(4_000);
-    expect(requests('start')).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(requests('start')).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests('start')).toHaveLength(3);
-    expect(store.homeRows().map(row => row.kind)).toEqual(rows);
-    // The index caught up: the very next look starts the check.
-    fx.impactStarts = 'running';
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests('start')).toHaveLength(4);
-    expect(new Set(requests('start').map(request => request.run_id))).toEqual(new Set([impactRun('pending').run_id]));
-    // Started: Home looks again at the usual pace, and starts nothing more.
-    const calls = requests('list').length;
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect([requests('list').length, requests('start').length]).toEqual([calls + 1, 4]);
-  });
-
-  it('starts a sweep that went back to the queue again, waiting longer after each start that starts nothing', async () => {
-    const store = await dueSweep();
-    expect(requests('start')).toHaveLength(1);
-    // Its attempt timed out: the sweep is queued again, and for a while another run goes first.
-    fx.sweep = sweepRun('pending');
-    fx.sweepStarts = 'busy';
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests('start')).toHaveLength(2);
-    // Each start that starts nothing waits longer: 10 s, then 20 s.
-    await vi.advanceTimersByTimeAsync(9_000);
-    expect(requests('start')).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(requests('start')).toHaveLength(3);
-    fx.sweepStarts = 'running';
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(requests('start')).toHaveLength(4);
-    expect(new Set(requests('start').map(request => request.run_id))).toEqual(new Set([sweepRun('pending').run_id]));
-    // It ends: what it found shows, and no other sweep was asked for.
-    fx.sweep = sweepRun('done');
-    fx.home = { ...emptyHome(), items: [item('1', 'changed')] };
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(store.homeRows().map(row => row.kind)).toEqual(['review']);
-    expect(requests('sweep')).toHaveLength(1);
-  });
-
-  it('asks for its due sweep, and starts it, even when the runs read of that load failed (D6)', async () => {
-    fx.failNextList = true;
-    await dueSweep();
-    // The list read failed once; the load still asks for its one sweep and starts it.
-    expect(requests('sweep')).toEqual([{ schema_version: 1, operation: 'sweep', scope: 'mine' }]);
-    expect(requests('start')).toEqual([{ schema_version: 1, operation: 'start', run_id: sweepRun('pending').run_id }]);
-  });
-
-  it('starts a queued run even when the read of what a check found failed (D6)', async () => {
-    fx.listed = false;
-    fx.run = impactRun('running');
-    await start();
-    expect(requests('start')).toEqual([]);
-    // The check ends while a sweep (from Check now) waits in the queue, and the read of what the check found fails.
-    fx.run = impactRun('done');
-    fx.sweep = sweepRun('pending');
-    fx.failNextHome = true;
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests('start')).toEqual([{ schema_version: 1, operation: 'start', run_id: sweepRun('pending').run_id }]);
-  });
-
-  it('stops owing a sweep once a runs list no longer holds it', async () => {
-    await dueSweep();
-    expect(requests('sweep')).toHaveLength(1);
-    fx.sweep = null;
-    const homeReads = requests('home').length;
-    await vi.advanceTimersByTimeAsync(5_000);
-    // Read as ended: what waits on you is read again, and then Home stops looking.
-    expect(requests('home')).toHaveLength(homeReads + 1);
-    await expectQuiet();
-    expect(requests('sweep')).toHaveLength(1);
-  });
-
-  it.each(['fails', 'failed'] as const)('shows nothing for a sweep that %s, and soon stops looking', async how => {
-    fx.listed = false;
-    fx.home = { ...emptyHome(), sweep_due: true };
-    fx.sweepAnswer = how === 'fails' ? 'fails' : { run_id: sweepRun('pending').run_id };
-    fx.sweepStarts = 'failed';
-    const store = await start();
-    expect(requests('sweep')).toHaveLength(1);
-    expect(store.getState().home).toMatchObject({ loading: false, failure: undefined });
-    expect(store.homeRows()).toEqual([]);
-    // A sweep that failed at once is seen ended on the next look at most; then nothing more is read.
-    await vi.advanceTimersByTimeAsync(5_000);
-    await expectQuiet();
-    expect(store.homeRows()).toEqual([]);
-  });
-});
-
-describe('Checks keep moving (one place to look v1)', () => {
+describe('Checks keep moving (one place to look v1; DSK-1)', () => {
   /** Another meeting's check, of a record of its own, queued behind Pilot planning's. */
   const further = (state: PersonRunV1['state']) => impactRun(state, '21', 'apr_' + 'e'.repeat(64));
-  /** Home's own reads: the meeting reviews and what waits on you. The driver makes none of them. */
+  /** Home's own reads: the meeting reviews and what waits on you. */
   const homeReads = () => rpc.mock.calls.filter(([method, params]) => (method === 'reviews' && params.request?.operation === 'reviews') || (method === 'runs' && params.request.operation === 'home')).length;
-  /** The runs started, oldest first. */
-  const starts = () => requests('start').map(request => request.run_id);
 
-  it('keeps the queue moving on another page, reading the runs list alone, and goes quiet once nothing goes', async () => {
-    const store = await checking();
-    await store.openProject(project);
-    const home = homeReads();
-    const lists = requests('list').length;
-    // The check goes on: the next look reads the runs list, and nothing of Home.
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests('list')).toHaveLength(lists + 1);
-    // It ends, with another meeting's check queued behind it: the next look starts that one, still on the project.
-    fx.run = impactRun('done');
+  it('starts no check from Home: however often it loads it reads the runs list, and only each change check checks in', async () => {
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.run = impactRun('pending');
     fx.more = [further('pending')];
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(starts()).toEqual([further('pending').run_id]);
-    expect(store.getState().route.page).toBe('project');
-    // That one ends too: nothing goes, so nothing more is read.
-    fx.more = [further('done')];
-    await vi.advanceTimersByTimeAsync(5_000);
-    await expectQuiet();
-    expect(homeReads()).toBe(home);
-    expect(starts()).toHaveLength(1);
+    const store = await start();
+    // Sign-in's change check checked in once: the Authority started the oldest.
+    expect(checkIns()).toEqual(['member']);
+    expect(fx.more).toMatchObject([{ state: 'running' }]);
+    const lists = requests('list').length;
+    await store.loadHome();
+    await show(store);
+    await flush();
+    store.goHome();
+    await flush();
+    // Three more loads: each read the runs list; only the return's change check checked in.
+    expect(requests('list').length).toBeGreaterThanOrEqual(lists + 3);
+    expect(checkIns()).toEqual(['member', 'member']);
+    expect(requests('start')).toEqual([]);
+    expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { run_id: impactRun('pending').run_id, state: 'pending' } }]);
   });
 
   it.each([
-    ['another app is in front', cover, uncover],
-    ['the window is closed to the tray', hide, show],
-  ] as const)('keeps a check moving on Home while %s, reading nothing of Home until it shows again', async (_, away, back) => {
+    ['on another page', (store: Store) => store.openProject(project), (store: Store) => { store.goHome(); return flush(); }],
+    ['while another app is in front', (store: Store) => { cover(store); return flush(); }, uncover],
+    ['while the window is closed to the tray', (store: Store) => { hide(store); return flush(); }, show],
+  ] as const)('keeps checks moving %s: each change check checks in, and Home reads nothing until it shows, then what they found', async (_, away, back) => {
     const store = await checking();
-    away(store);
+    await away(store);
     const home = homeReads();
-    const lists = requests('list').length;
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests('list')).toHaveLength(lists + 1);
+    const checkedIn = checkIns().length;
+    // The check ends with another meeting's queued behind it, and the reviews move: the next change check checks in, and the
+    // Authority starts that one.
     fx.run = impactRun('done');
     fx.more = [further('pending')];
     fx.home = { ...emptyHome(), send: [sendRow()] };
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(starts()).toEqual([further('pending').run_id]);
+    fx.moved.reviews = 1;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(checkIns()).toHaveLength(checkedIn + 1);
+    expect(fx.more).toMatchObject([{ state: 'running' }]);
     // Home is neither read nor changed meanwhile: it still shows the check as it last read it.
     expect(homeReads()).toBe(home);
     expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
@@ -1099,361 +868,6 @@ describe('Checks keep moving (one place to look v1)', () => {
     await flush();
     expect(homeReads()).toBeGreaterThan(home);
     expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: fx.run.run_id } }]);
-  });
-
-  it.each(['another page opens', 'another app comes in front'] as const)('starts the check a Home read found queued even when %s while that read was on its way', async how => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('pending');
-    fx.hold.rows = true;
-    const store = await start();
-    expect(starts()).toEqual([]);
-    if (how === 'another page opens') await store.openProject(project);
-    else cover(store);
-    await landLoad();
-    expect(starts()).toEqual([impactRun('pending').run_id]);
-    // The driver follows it from there, with the runs list alone.
-    const lists = requests('list').length;
-    const rows = rowsReads();
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect([requests('list').length, rowsReads()]).toEqual([lists + 1, rows]);
-  });
-
-  /** Home's load, its rows held, left for a project; then a meeting approved in Slack, two records, both checks queued. */
-  async function leftMidLoad() {
-    fx.hold.rows = true;
-    const store = await start();
-    await store.openProject(project);
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'slack' };
-    fx.run = impactRun('pending');
-    fx.more = [further('pending')];
-    fx.moved.reviews = 1;
-    return store;
-  }
-  /** The held Home load lands, with the runs list it read. */
-  async function landLoad() {
-    fx.hold.rows = false;
-    release('rows');
-    await flush();
-  }
-
-  it('lets no Home load left on its way undo a newer drive: the driver keeps following its check, and starts the next one', async () => {
-    await leftMidLoad();
-    // The change check sees the approval: the driver starts the oldest check, and follows it.
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(starts()).toEqual([further('pending').run_id]);
-    await landLoad();
-    fx.more = [further('done')];
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(starts()).toEqual([further('pending').run_id, impactRun('pending').run_id]);
-  });
-
-  it('never starts a check twice when a Home load left on its way found it queued and the driver has started it since', async () => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('pending');
-    fx.hold.rows = true;
-    const store = await start();
-    await store.openProject(project);
-    fx.moved.reviews = 1;
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(starts()).toEqual([impactRun('pending').run_id]);
-    await landLoad();
-    expect(starts()).toEqual([impactRun('pending').run_id]);
-  });
-
-  it('lets the driver\'s look still on its way drive, not a Home load left on its way that read the runs before it', async () => {
-    await leftMidLoad();
-    fx.hold.list = true;
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(fx.waiting.list).toHaveLength(1);
-    await landLoad();
-    fx.hold.list = false;
-    release('list');
-    await flush();
-    expect(starts()).toEqual([further('pending').run_id]);
-  });
-
-  it('drives with a Home load left on its way when the only look on its way began before it, which drives nothing', async () => {
-    const store = await checking();
-    await store.openProject(project);
-    // The driver's next look is on its way as Home opens, and is left again at once.
-    fx.hold.list = true;
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(fx.waiting.list).toHaveLength(1);
-    fx.hold.list = false;
-    fx.run = impactRun('done');
-    fx.more = [further('pending')];
-    store.goHome();
-    await store.openProject(project);
-    await flush();
-    // That look lands after the load began, and so drives nothing: the load's list does.
-    release('list');
-    await flush();
-    expect(starts()).toEqual([further('pending').run_id]);
-  });
-
-  it('lets no Home load on its way undo a newer drive while the window is closed to the tray', async () => {
-    fx.hold.rows = true;
-    const store = await start();
-    hide(store);
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'slack' };
-    fx.run = impactRun('pending');
-    fx.more = [further('pending')];
-    fx.moved.reviews = 1;
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(starts()).toEqual([further('pending').run_id]);
-    await landLoad();
-    fx.more = [further('done')];
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(starts()).toEqual([further('pending').run_id, impactRun('pending').run_id]);
-  });
-
-  it('reads what a finished check found once Home shows: away from Home nothing looks for it, and the driver goes quiet', async () => {
-    const store = await checking();
-    await store.openProject(project);
-    fx.run = impactRun('done');
-    fx.home = { ...emptyHome(), send: [sendRow()] };
-    const lists = requests('list').length;
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests('list')).toHaveLength(lists + 1);
-    await expectQuiet();
-    store.goHome();
-    await flush();
-    expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: fx.run.run_id } }]);
-  });
-
-  it('reads your follow-ups again when a Home read left on its way for them sees the check end', async () => {
-    fx.page = { items: [item('1', 'landed')], next_cursor: null, stages: [], summary: { ...EMPTY_SUMMARY, open: 1, decisions: 1, last_checked_at: '2026-10-07T09:00:00.000Z' } };
-    const store = await checking();
-    // Home's next look reads the runs list as the check ends; that list is still on its way as Follow-ups opens.
-    fx.run = impactRun('done');
-    fx.hold.list = true;
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(fx.waiting.list).toHaveLength(1);
-    fx.hold.list = false;
-    await store.openYourFollowUps();
-    await flush();
-    const yours = () => store.followUpShown() as FollowUpList;
-    expect(yours().summary?.last_checked_at).toBe('2026-10-07T09:00:00.000Z');
-    fx.page = { ...fx.page, summary: { ...fx.page.summary, last_checked_at: '2026-10-08T12:30:00.000Z' } };
-    const reads = requests('items').length;
-    // The list lands, no longer Home's: it drives, and what shows of the follow-ups is read again.
-    release('list');
-    await flush();
-    expect(requests('items').slice(reads).map(request => `${request.scope} ${request.read}`)).toContain('involved rows');
-    expect(yours().summary?.last_checked_at).toBe('2026-10-08T12:30:00.000Z');
-  });
-
-  it('never sends a second start while one is on its way', async () => {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('pending');
-    fx.hold.start = true;
-    const store = await start();
-    expect(starts()).toHaveLength(1);
-    // Home is read again meanwhile (ECHO came back, say): its list still has the check queued.
-    await store.loadHome();
-    await flush();
-    expect(starts()).toHaveLength(1);
-    fx.hold.start = false;
-    release('start');
-    await flush();
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(starts()).toHaveLength(1);
-  });
-
-  it('starts the check of a meeting approved elsewhere on any page, at the change check that sees it; no other move reads the runs', async () => {
-    const store = await start();
-    await store.openProject(project);
-    const lists = requests('list').length;
-    // A follow-up moved: the change check reads no runs list for it.
-    fx.moved.follow_ups = 1;
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(requests('list')).toHaveLength(lists);
-    // Approved in Slack: the reviews move, and the check queued for it starts, on the project.
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'slack' };
-    fx.run = impactRun('pending');
-    fx.moved.reviews = 1;
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(starts()).toEqual([impactRun('pending').run_id]);
-    expect(store.getState().route.page).toBe('project');
-  });
-
-  it('starts nothing anywhere after Home could not read the reviews, until a Home load reads them', async () => {
-    fx.granola = 'linked';
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('pending');
-    fx.failReviews = true;
-    const store = await start();
-    expect(store.getState().home?.failure).toMatchObject({ code: 'transport_failed' });
-    await store.openProject(project);
-    const lists = requests('list').length;
-    // Neither coming back nor a meeting approved elsewhere starts it, away from Home.
-    await show(store);
-    fx.moved.reviews = 1;
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect([requests('list').length, starts()]).toEqual([lists, []]);
-    // Try again, on Home: the reviews answer, and the check starts.
-    fx.failReviews = false;
-    store.goHome();
-    await flush();
-    expect(starts()).toEqual([impactRun('pending').run_id]);
-  });
-
-  it.each(['another page opens', 'another app comes in front'] as const)('lifts the hold once Try again reads the reviews, even when %s before they answer', async how => {
-    fx.granola = 'linked';
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('pending');
-    fx.failReviews = true;
-    const store = await start();
-    expect(store.getState().home?.failure).toMatchObject({ code: 'transport_failed' });
-    // Try again: the reviews answer this time, but Home is left before they do.
-    fx.failReviews = false;
-    fx.hold.reviews = true;
-    const again = store.loadHome();
-    await flush();
-    if (how === 'another page opens') await store.openProject(project);
-    else cover(store);
-    fx.hold.reviews = false;
-    release('reviews');
-    await again;
-    await flush();
-    expect(starts()).toEqual([impactRun('pending').run_id]);
-  });
-
-  it('never lifts the next account\'s hold with the reviews the last account\'s Try again read', async () => {
-    fx.granola = 'linked';
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('pending');
-    fx.failReviews = true;
-    const store = await start();
-    // Try again, its reviews still on their way as another account signs in, whose own reviews cannot be read.
-    fx.failReviews = false;
-    fx.hold.reviews = true;
-    void store.loadHome();
-    await flush();
-    fx.hold.reviews = false;
-    fx.failReviews = true;
-    fx.member = 'other';
-    await store.refreshStatus();
-    await flush();
-    expect(store.getState().home?.failure).toMatchObject({ code: 'transport_failed' });
-    // The last account's reviews answer: the new account's hold stays, so a meeting approved elsewhere starts nothing.
-    release('reviews');
-    await flush();
-    await store.openProject(project);
-    fx.moved.reviews = 1;
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(starts()).toEqual([]);
-  });
-
-  it.each(['on Home', 'after another page opens'] as const)(
-    'never lifts the hold of a load after signing out and back in as the same person with the reviews that person\'s last Try again read, %s',
-    async when => {
-      fx.granola = 'linked';
-      fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-      fx.run = impactRun('pending');
-      fx.failReviews = true;
-      const store = await start();
-      // Try again, its reviews still on their way as the person signs out, then back in, and the new load's reviews cannot be read.
-      fx.failReviews = false;
-      fx.hold.reviews = true;
-      void store.loadHome();
-      await flush();
-      fx.hold.reviews = false;
-      store.accountCommand('signout');
-      await store.signOut();
-      await flush();
-      expect(store.getState().status?.signed_in).toBe(false);
-      fx.failReviews = true;
-      fx.signedIn = true;
-      await store.refreshStatus();
-      await flush();
-      expect(store.getState().home?.failure).toMatchObject({ code: 'transport_failed' });
-      if (when === 'after another page opens') await store.openProject(project);
-      // The earlier Try again's reviews answer: the new load's hold stays, so a meeting approved elsewhere starts nothing.
-      release('reviews');
-      await flush();
-      if (when === 'on Home') await store.openProject(project);
-      fx.moved.reviews = 1;
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(starts()).toEqual([]);
-    },
-  );
-
-  it('stops at sign-out, and signing in again on another page starts what is queued there', async () => {
-    const store = await checking();
-    await store.openProject(project);
-    fx.signedIn = false;
-    await store.refreshStatus();
-    const runs = () => rpc.mock.calls.filter(([method]) => method === 'runs').length;
-    const before = runs();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(runs()).toBe(before);
-    // Signed in again, still on the project: Home is not read there, yet the queued check starts.
-    fx.signedIn = true;
-    fx.run = impactRun('pending');
-    await store.refreshStatus();
-    await flush();
-    expect(store.getState().route.page).toBe('project');
-    expect(starts()).toEqual([impactRun('pending').run_id]);
-  });
-
-  it('never starts a runs list read for the last account once another signs in', async () => {
-    const store = await checking();
-    await store.openProject(project);
-    // The check went back to the queue, and the driver's next look is on its way as the account changes.
-    fx.run = impactRun('pending');
-    fx.hold.list = true;
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(fx.waiting.list).toHaveLength(1);
-    fx.hold.list = false;
-    fx.member = 'other';
-    await store.refreshStatus();
-    await flush();
-    // The new account's Home starts the check, for itself.
-    const sentFor = () => homeCalls().filter(([, params]) => params.request.operation === 'start').map(([, params]) => params.expect.membership_id);
-    expect(sentFor()).toEqual(['other']);
-    // The last account's list lands: it starts nothing.
-    release('list');
-    await flush();
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(sentFor()).toEqual(['other']);
-  });
-
-  /** A project's follow-ups, open over its page (or over Home), with nothing in flight. */
-  async function projectList(over: 'project' | 'Home' = 'project') {
-    fx.listed = false;
-    fx.page = { items: [item('1')], next_cursor: null, stages: [], summary: { ...EMPTY_SUMMARY, open: 1, decisions: 1 } };
-    const store = await start();
-    if (over === 'project') await store.openProject(project);
-    await store.openFollowUps('project', project.project_id, project.name);
-    return store;
-  }
-
-  it.each(['project', 'Home'] as const)('starts what queued behind Check now\'s sweep once that sweep ends, on a list over %s', async over => {
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    const store = await projectList(over);
-    void store.checkNow();
-    await flush();
-    expect(starts()).toEqual([sweepRun('pending').run_id]);
-    // The sweep ends as a meeting's check is queued: Check now is done, and the driver starts that check.
-    fx.sweep = sweepRun('done');
-    fx.run = impactRun('pending');
-    await vi.advanceTimersByTimeAsync(5_000);
-    await flush();
-    expect(check(store)).toBeNull();
-    expect(starts()).toEqual([sweepRun('pending').run_id, impactRun('pending').run_id]);
-  });
-
-  it('follows Check now\'s sweep while another app is in front', async () => {
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    const store = await projectList();
-    void store.checkNow();
-    await flush();
-    cover(store);
-    fx.sweep = sweepRun('done');
-    await vi.advanceTimersByTimeAsync(5_000);
-    await flush();
-    expect(check(store)).toBeNull();
   });
 });
 
@@ -1877,20 +1291,17 @@ describe('Follow-up lists: current work first, results in place', () => {
     expect(requests('items').at(-1)).toMatchObject({ scope: 'record', id: record, read: 'counts' });
   });
 
-  it('clears what Check now said when the list is read again, and keeps a project\'s line through a failed read', async () => {
+  it('keeps a project\'s line through a failed read', async () => {
     fx.page = listPage([item('1')]);
     const store = await start();
     await store.openProject(project);
     expect(store.getState().projectLine).toMatchObject({ summary: { open: 1 } });
     await store.openFollowUps('project', project.project_id, project.name);
-    await store.checkNow();
-    expect(list(store).check).toBe('nothing');
     fx.readItem = item('1');
     await store.openFollowUp('itm_00000001', item('1'));
     await store.setFollowUpState('done');
     store.closeFollowUp();
     await flush();
-    expect(list(store).check).toBeNull();
     // Back on the project, its line is read again; that read fails, and the line keeps what it said.
     store.closeFollowUp();
     fx.failItems = 1;
@@ -2018,11 +1429,18 @@ describe('Follow-up lists: current work first, results in place', () => {
     await show(store);
     await flush();
     expect(store.getState().decision?.runs[0]).toMatchObject({ run_id: firstRun, state: 'failed' });
-    // Try again: the check starts, and with no Home under it, the decision reads it once more at once.
+    // Try again: queued again, then a check-in, so the Authority starts it; the decision reads it once more at once.
+    const before = runsSent().length;
     await store.retryImpact(firstRun);
     await flush();
     expect(requests('retry')).toEqual([{ schema_version: 1, operation: 'retry', run_id: firstRun }]);
+    expect(runsSent().slice(before)).toEqual(['retry', 'next', 'list']);
     expect(store.getState().decision?.runs[0]).toMatchObject({ run_id: firstRun, state: 'running' });
+    // It fails again, finding nothing: only the reviews move, and the decision over the list says so (DSK-1).
+    fx.run = impactRun('failed');
+    fx.moved.reviews = 1;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(store.getState().decision?.runs[0]).toMatchObject({ run_id: firstRun, state: 'failed' });
   });
 
   it('keeps the check of a decision opened from its list when a runs list read since does not hold it', async () => {
@@ -2040,178 +1458,10 @@ describe('Follow-up lists: current work first, results in place', () => {
   });
 });
 
-describe('Check now', () => {
-  it('checks only the meeting whose follow-ups are open, then reads its results', async () => {
-    fx.listed = false;
-    fx.page = listPage();
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    const store = await meetingList();
-    const checking = store.checkNow();
-    await flush();
-    expect(requests('sweep')).toEqual([{ schema_version: 1, operation: 'sweep', scope: 'record', id: record }]);
-    expect(check(store)).toBe('checking');
-    fx.sweep = sweepRun('done');
-    fx.page = { ...listPage(), items: [item('1', 'landed')] };
-    await vi.advanceTimersByTimeAsync(5_000);
-    await checking;
-    expect(check(store)).toBeNull();
-    expect((store.followUpShown() as FollowUpList).items[0]?.check?.verdict).toBe('landed');
-    for (const request of [...requests('sweep'), ...requests('start')]) expect(() => validatePersonRunsRequestV1(request)).not.toThrow();
-  });
-  const listPage = (): OpenItemsView => ({ items: [item('1')], next_cursor: null, stages: [],
-    summary: { ...EMPTY_SUMMARY, open: 1, decisions: 1, by_decision: [{ record_sha256: record, unsent: 0, open: 1, landed: 0, unreadable: 0 }] } });
-  /** A project's follow-ups, open over its page. */
-  async function projectList() {
-    fx.listed = false;
-    fx.page = listPage();
-    const store = await start();
-    await store.openProject(project);
-    await store.openFollowUps('project', project.project_id, project.name);
-    return store;
-  }
-
-  it('says when nothing is open to check, and when the sweep could not be asked for', async () => {
-    const store = await projectList();
-    await store.checkNow();
-    expect(requests('sweep')).toEqual([{ schema_version: 1, operation: 'sweep', scope: 'project', id: project.project_id }]);
-    for (const request of requests('sweep')) expect(() => validatePersonRunsRequestV1(request)).not.toThrow();
-    expect(check(store)).toBe('nothing');
-    fx.sweepAnswer = 'fails';
-    await store.checkNow();
-    expect(check(store)).toBe('failed');
-  });
-
-  it('checks until its sweep ends, then reads the list again', async () => {
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    const store = await projectList();
-    const reads = requests('items').length;
-    const checking = store.checkNow();
-    await flush();
-    expect(check(store)).toBe('checking');
-    expect(requests('start')).toEqual([{ schema_version: 1, operation: 'start', run_id: sweepRun('pending').run_id }]);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(check(store)).toBe('checking');
-    fx.sweep = sweepRun('done');
-    fx.page = { ...listPage(), items: [item('1', 'landed')] };
-    await vi.advanceTimersByTimeAsync(5_000);
-    await checking;
-    expect(check(store)).toBeNull();
-    // The list read again, as far as it showed, rows only.
-    expect(requests('items')).toHaveLength(reads + 1);
-    expect((store.followUpShown() as FollowUpList).items[0]?.check?.verdict).toBe('landed');
-    expect(requests('sweep')).toHaveLength(1);
-  });
-
-  it('has what it found read on Back by the lists under it, so your Follow-ups say when ECHO last checked', async () => {
-    fx.listed = false;
-    fx.page = listPage();
-    const store = await start();
-    await store.openYourFollowUps();
-    await flush();
-    // A project's follow-ups opened over yours, and checked.
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    await store.openFollowUps('project', project.project_id, project.name);
-    await flush();
-    const checking = store.checkNow();
-    await flush();
-    fx.sweep = sweepRun('done');
-    fx.page = { ...listPage(), items: [item('1', 'landed')], summary: { ...listPage().summary, landed: 1, last_checked_at: '2026-10-08T12:00:00.000Z' } };
-    await vi.advanceTimersByTimeAsync(5_000);
-    await checking;
-    const reads = requests('items').length;
-    store.closeFollowUp();
-    await flush();
-    // Yours, read again rows only: its rows and its last check as the sweep left them.
-    expect(requests('items').slice(reads).map(request => `${request.scope} ${request.read}`)).toEqual(['involved rows']);
-    const yours = store.followUpShown() as FollowUpList;
-    expect([yours.scope, yours.items[0]?.check?.verdict, yours.summary?.last_checked_at]).toEqual(['involved', 'landed', '2026-10-08T12:00:00.000Z']);
-  });
-
-  it('starts a queued impact check before its sweep, which waits its turn', async () => {
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    const store = await projectList();
-    fx.run = impactRun('pending');
-    fx.sweepStarts = 'busy';
-    const checking = store.checkNow();
-    // Busy: the next look, 10 s on, starts the impact check first.
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(requests('start').map(request => request.run_id)).toEqual([sweepRun('pending').run_id, fx.run.run_id]);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests('start')).toHaveLength(2);
-    fx.run = impactRun('done');
-    fx.sweepStarts = 'running';
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests('start').map(request => request.run_id)).toEqual([sweepRun('pending').run_id, fx.run.run_id, sweepRun('pending').run_id]);
-    fx.sweep = sweepRun('done');
-    await vi.advanceTimersByTimeAsync(5_000);
-    await checking;
-    expect(check(store)).toBeNull();
-  });
-
-  it('waits longer after each start that starts nothing, busy or failed', async () => {
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    fx.sweepStarts = 'busy';
-    const store = await projectList();
-    const lists = () => requests('list').length;
-    const before = lists();
-    const checking = store.checkNow();
-    await flush();
-    expect(requests('start')).toHaveLength(1);
-    // Busy: the next look is 10 s away.
-    await vi.advanceTimersByTimeAsync(9_000);
-    expect(lists()).toBe(before);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect([lists(), requests('start').length]).toEqual([before + 1, 2]);
-    // Busy again, then a start that fails: 20 s, then 40 s.
-    fx.sweepStarts = 'fails';
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect([lists(), requests('start').length]).toEqual([before + 2, 3]);
-    fx.sweepStarts = 'running';
-    await vi.advanceTimersByTimeAsync(40_000);
-    expect([lists(), requests('start').length]).toEqual([before + 3, 4]);
-    // Started: back to the usual pace, and it ends.
-    fx.sweep = sweepRun('done');
-    await vi.advanceTimersByTimeAsync(5_000);
-    await checking;
-    expect(check(store)).toBeNull();
-  });
-
-  it('stops following its sweep once its list goes, leaving Home the only one to look', async () => {
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    const store = await projectList();
-    void store.checkNow();
-    await flush();
-    expect(check(store)).toBe('checking');
-    // Home: its read shows the sweep running, so Home looks again every 5 s; the list's loop reads nothing more.
-    store.goHome();
-    await flush();
-    const lists = requests('list').length;
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests('list')).toHaveLength(lists + 1);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requests('list')).toHaveLength(lists + 2);
-    expect(requests('start')).toHaveLength(1);
-  });
-
-  it('says the check failed when its sweep fails, and Try again asks for another', async () => {
-    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    const store = await projectList();
-    const checking = store.checkNow();
-    await flush();
-    expect(requests('start')).toHaveLength(1);
-    fx.sweep = sweepRun('failed');
-    await vi.advanceTimersByTimeAsync(5_000);
-    await checking;
-    expect(check(store)).toBe('failed');
-    fx.sweepAnswer = { state: 'nothing_to_check' };
-    await store.checkNow();
-    expect(requests('sweep')).toHaveLength(2);
-    expect(check(store)).toBe('nothing');
-  });
-
+describe('A meeting\'s follow-ups line', () => {
   it('learns from a meeting\'s check whether Try again is yours, reading no runs list', async () => {
     fx.listed = false;
-    fx.page = { ...listPage(), items: [], stages: [{ record_sha256: record, run_id: impactRun('done').run_id, state: 'done', error_code: null, mine: true }],
+    fx.page = { items: [], next_cursor: null, stages: [{ record_sha256: record, run_id: impactRun('done').run_id, state: 'done', error_code: null, mine: true }],
       summary: { ...EMPTY_SUMMARY, unsent: 2, decisions: 1, by_decision: [{ record_sha256: record, unsent: 2, open: 0, landed: 0, unreadable: 0 }] } };
     const store = await start();
     await store.openProject(project);
@@ -2222,6 +1472,44 @@ describe('Check now', () => {
     expect(requests('list')).toHaveLength(lists);
     // The decision page counts the same meeting by its check, and finds its record from it.
     expect(store.lineRecord({ ...store.getState().impactLine!, scope: 'run', id: impactRun('done').run_id })).toBe(record);
+  });
+
+  /** Signed in, on a project, reading the meeting whose line says your check is at `state`, as its counts read says. */
+  async function meetingLine(state: PersonRunV1['state']) {
+    fx.listed = false;
+    fx.run = impactRun(state);
+    const stage = { record_sha256: record, run_id: fx.run.run_id, state, error_code: fx.run.error_code, mine: true };
+    fx.page = { items: [], next_cursor: null, stages: [stage], summary: { ...EMPTY_SUMMARY, decisions: 1 } };
+    const store = await start();
+    await store.openProject(project);
+    await store.openListItem({ ref: { kind: 'meeting', id: record }, title: 'Pilot planning', added_at: '2026-10-08T10:00:00.000Z', visibility: 'project', projects: [] });
+    await flush();
+    expect(store.getState().impactLine).toMatchObject({ scope: 'record', id: record, stage: { state } });
+    return { store, stage };
+  }
+
+  it('reads its check\'s stage again when the reviews move, as they do when the check starts, fails or ends (DSK-1)', async () => {
+    const { store, stage } = await meetingLine('running');
+    // The check failed, and found no follow-ups: only the reviews move.
+    fx.page = { ...fx.page!, stages: [{ ...stage, state: 'failed', error_code: 'research_failed' }] };
+    fx.moved.reviews = 1;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(store.getState().impactLine).toMatchObject({ loading: false, stage: { state: 'failed', error_code: 'research_failed' } });
+  });
+
+  it('tries your failed check again from its line: queued again, then a check-in, then the line read again (DSK-1)', async () => {
+    const { store, stage } = await meetingLine('failed');
+    const before = runsSent().length;
+    fx.page = { ...fx.page!, stages: [{ ...stage, state: 'running', error_code: null }] };
+    await store.retryLineCheck();
+    expect(requests('retry')).toEqual([{ schema_version: 1, operation: 'retry', run_id: stage.run_id }]);
+    expect(runsSent().slice(before)).toEqual(['retry', 'next', 'items']);
+    // The check-in started it, and the line says so.
+    expect(fx.run).toMatchObject({ state: 'running' });
+    expect(store.getState().impactLine).toMatchObject({ busy: false, loading: false, stage: { state: 'running' } });
+    // Once going, it offers Try again no more: a second click sends nothing.
+    await store.retryLineCheck();
+    expect(runsSent().slice(before)).toEqual(['retry', 'next', 'items']);
   });
 });
 
@@ -2253,13 +1541,16 @@ describe('Rows first, then what each says now', () => {
     expect(shownItem(row, { itm_00000002: { reach: 'unavailable' } })).toEqual(row);
   });
 
-  it('shows Home\'s rows at once from their rows read, then fills what each says now from the live read, which alone says a sweep is due', async () => {
+  it('shows Home\'s rows at once from their rows read, then fills what each says now from the live read', async () => {
     fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    // An older Authority may still say a sweep is due: Home reads it as nothing.
     fx.home = { ...emptyHome(), items: [opened('1'), { ...item('2'), kind: 'action', expected: 'Send the revised quote', reach: 'not_read' }], waiting: 1, sweep_due: true };
     fx.hold.live = true;
     const store = await start();
     // The live read still on its way: the rows show, by ECHO's own fields, and Home is loaded; only the live part waits.
     expect(store.getState().home).toMatchObject({ loading: false, reading: true, open: { waiting: 1 } });
+    // It went by itself once the rows were read: nothing else has to wait on it for it to go.
+    expect(requests('home')).toEqual([{ schema_version: 1, operation: 'home' }]);
     expect(store.homeRows().map(row => ('item' in row ? [row.kind, row.item.item_id, row.item.reach] : [row.kind]))).toEqual([
       ['update', 'itm_00000001', 'not_read'], ['update', 'itm_00000002', 'not_read'],
     ]);
@@ -2267,13 +1558,11 @@ describe('Rows first, then what each says now', () => {
     expect(store.awaitingLive(homeItems(store)[0]!)).toBe(true);
     // A meeting's action is never read live: it has nothing to wait for.
     expect(store.awaitingLive(homeItems(store)[1]!)).toBe(false);
-    expect(requests('sweep')).toEqual([]);
     release('live');
     await flush();
     expect(store.getState().home).toMatchObject({ reading: false });
     expect(homeItems(store)[0]).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
-    // The live read says a sweep is due: Home asks for it once it answered.
-    expect(requests('sweep')).toHaveLength(1);
+    expect(operations()).not.toContain('sweep');
   });
 
   it('keeps Home\'s rows when its live read fails, saying ECHO couldn\'t read them just now, and shows no error', async () => {
@@ -2377,7 +1666,7 @@ describe('Rows first, then what each says now', () => {
     expect(line()).toBe('Nothing needs you');
   });
 
-  it('fails a load whose reviews cannot be read, as before, keeping what else it read and starting no run until Try again', async () => {
+  it('fails a load whose reviews cannot be read, as before, keeping what else it read; the change check still checks in', async () => {
     fx.granola = 'linked';
     fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
     fx.run = impactRun('pending');
@@ -2386,15 +1675,16 @@ describe('Rows first, then what each says now', () => {
     const store = await start();
     expect(store.getState().home).toMatchObject({ loading: false, reading: false, failure: { code: 'transport_failed' } });
     expect(store.homeRows().map(row => row.kind)).toEqual(['update']);
-    expect(requests('start')).toEqual([]);
     const calls = rpc.mock.calls.length;
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(rpc.mock.calls.slice(calls).filter(([method, params]) => method === 'runs' && params.request.read !== 'rows')).toEqual([]);
-    // Try again: the reviews answer, and the queued check starts.
+    // Home reads nothing more by itself meanwhile. Whatever it could read, each change check checks in, as the Authority
+    // starts a queued check whether or not the reviews could be read here (DSK-1).
+    expect(rpc.mock.calls.slice(calls).filter(([method, params]) => method === 'runs' && params.request.read !== 'rows')
+      .map(([, params]) => params.request.operation)).toEqual(['next', 'next']);
+    // Try again: the reviews answer.
     fx.failReviews = false;
     await store.loadHome();
     expect(store.getState().home?.failure).toBeUndefined();
-    expect(requests('start')).toHaveLength(1);
   });
 
   it('shows a list\'s rows at once, read rows only, then reads live only the rows that show, and says which are on their way', async () => {

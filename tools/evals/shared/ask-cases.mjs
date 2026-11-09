@@ -32,7 +32,7 @@ export function deskItem(fixture, caseId, index, item) {
   if (item.kind === "follow_up") {
     const evidence = validatePersonFollowUpEvidenceV1({
       item_id: `itm_${digest(key).slice(0, 24)}`, kind: item.on, title: item.title, owner: item.owner, status: item.status,
-      ...fields(item, ["created_at", "sent_at", "reassigned_at", "due_at", "check", "expected"]),
+      ...fields(item, ["created_at", "sent_at", "reassigned_at", "due_at", "expected"]),
       ...(item.decision === undefined ? {} : { decision: { ...item.decision, ref: `meeting:${canonicalSha256({ fixture: `ask-${fixture}-decision`, key })}` } }),
     });
     return Object.freeze({ id, ...followUpDeskFieldsV1(evidence), visibility: "team", receipt_sha256 });

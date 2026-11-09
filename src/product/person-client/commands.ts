@@ -129,7 +129,6 @@ const RULES: Readonly<
   "updates-submit-v3": { accepts: ["request-id", "title", "file", "audience", "audience-project-id", "association-project-ids-json", "audience-project-ids-json"], requires: ["request-id", "title", "file"] },
   "updates-status-v3": { accepts: ["request-id"], requires: ["request-id"] },
   "updates-search-v3": { accepts: ["query", "limit"], requires: ["query"] },
-  "updates-search": { accepts: ["query", "limit"], requires: ["query"] },
   login: {
     accepts: ["invitation", "authority-url", "open-browser"],
   },
@@ -190,9 +189,9 @@ Commands:
   list        List the newest notes, documents, imported meetings and approved meetings in one project, or only yours.
   open        Read one item by its ref from list or an ask citation.
   ask         Ask a question over context you may read.
-  ask-check   Check whether what earlier answers cited changed, with no content.
+  ask-check   Check whether you can still read what earlier answers cited, with no content.
   ask-source  Read one source-evidence packet an Ask citation names.
-  runs        Read and act on impact runs, their open items, and sweeps.
+  runs        Read and act on impact runs and their open items.
   reviews     List, open and decide your meeting reviews.
   records     List records or search the current generation.
   directory   Find people in your organization by name.
@@ -262,16 +261,16 @@ Prints {ok:true,result:<operation result>}. Existing retained meetings remain re
 `,
   runs: `usage: echo-brain person runs --request <json>
 
-Runs a versioned request against approved-record impact runs, the open items they found, and the sweeps that re-check them. Every request is {"schema_version":1,"operation":<operation>,...}:
-  list                 your own impact runs and sweeps
+Runs a versioned request against approved-record impact runs and the open items they found. Every request is {"schema_version":1,"operation":<operation>,...}:
+  list                 your own impact runs
   start, retry, view   with run_id; view shows a finished run's impact card to anyone who can read its decision
-  home                 what waits on you: Send rows and open items; read "rows" reads no item live (every reach not_read) and never says sweep_due
+  next                 starts your oldest queued impact check, as start does by run_id: idle when none is queued, busy while another of yours runs and one waits, pending while the search index catches up; the desktop sends it with each change check
+  home                 what waits on you: Send rows and open items; read "rows" reads no item live (every reach not_read)
   items                with scope mine, involved, run, record or project, an id for run, record and project, and an optional cursor; involved is mine plus the items you last handed on that you can still see; states (a non-empty list of unsent, open, done and not_relevant) pages over items in those states only, with the same states again beside a cursor; changed_since (a UTC millisecond time, mine and involved only) pages over the items sent, handed on or set since then, sent again beside a cursor; read "rows" answers the same page with no item read live (every reach not_read), and read "counts" the counts alone, with no cursor, states or changed_since
   item                 with item_id; read "rows" reads it with no live read
   send                 with run_id, command_id and items [{item_id, include, owner_membership_id?}] naming any of the run's unsent items: include true sends one to its owner, false dismisses it, and unlisted items stay unsent; the approver only
   set_state            with item_id and state open, done or not_relevant; the approver or the owner
   assign               with item_id and owner_membership_id; before send the approver only, then the approver, the owner or a lead of the decision's projects
-  sweep                with scope mine, record or project, and an id for record and project; re-checks the open items you can see
 `,
   "project-activity": `usage: echo-brain person project-activity
 
@@ -279,7 +278,7 @@ Reads when something new last arrived in each of your active projects from someo
 `,
   changes: `usage: echo-brain person changes
 
-Checks what moved in your own view since you last looked, with no content: one fingerprint per area (projects, the follow-ups you sent, own or last handed on, and the meetings waiting for your review), and how many seconds to wait before checking again. Compare each fingerprint with the last one you saw and read that area again only when it differs. Prints echo-person-changes-v1 as its last line.
+Checks what moved in your own view since you last looked, with no content: one fingerprint per area (projects, the follow-ups you sent, own or last handed on, and the meetings waiting for your review together with the state of your own impact checks), and how many seconds to wait before checking again (15 while one of your checks is queued or running or one of your approvals is publishing). It never starts a check: runs next does. Compare each fingerprint with the last one you saw and read that area again only when it differs. Prints echo-person-changes-v1 as its last line.
 `,
   "ask-source": `usage: echo-brain person ask-source --source-id <source-id> --revision-id <revision-id> --source-sha256 <sha256:64hex> --representation-sha256 <sha256:64hex> --anchor-sha256 <sha256:64hex> [--document-id <document-id>] [--project <project-id>]
 
@@ -287,7 +286,7 @@ Reads one bounded immutable source-evidence packet cited by Ask. Use the exact c
 `,
   "ask-check": `usage: echo-brain person ask-check --request <json>
 
-Checks whether the sources earlier answers cited changed, with no content. The request is {"schema_version":1,"kind":"echo-person-ask-check-request-v1","items":[...]}: 1 to 100 items, each {"asked_at":<UTC millisecond time the turn was asked>,"citation":<the citation exactly as the answer carried it>}, for an approved record, a source revision, a follow-up, a ticket or a page; a ticket may add the "marker" an earlier check returned. Each item is answered in order: same, changed, unreadable (never why) or unknown (its tool is not connected, failed or ran out of time), and a readable ticket with its current marker. Prints echo-person-ask-check-v1 as its last line.
+Checks whether you can still read the sources earlier answers cited, with no content. The request is {"schema_version":1,"kind":"echo-person-ask-check-request-v1","items":[...]}: 1 to 100 items, each {"asked_at":<UTC millisecond time the turn was asked>,"citation":<the citation exactly as the answer carried it>}, for an approved record, a source revision, a follow-up, a ticket or a page; a ticket's "marker" from an earlier check is accepted and ignored. Each item is answered in order: same (you can read it now), unreadable (never why) or unknown (its tool is not connected, failed or ran out of time); a readable ticket may also carry a marker, which you can ignore. Prints echo-person-ask-check-v1 as its last line.
 `,
   directory: `usage: echo-brain person directory [--query <text>] [--limit <1-10>] [--cursor <opaque-base64url>]
 
@@ -296,7 +295,7 @@ Lists active people in your organization by name, or narrows the list with a nam
   records: `usage: echo-brain person records [--limit <1-100>] [--query <text>] [--record-sha256 <sha256:64hex> [--brief]]
 
 Search --limit is 1–10; list --limit is 1–100. Queries use the same text bounds as Ask. Lists recent records, searches the current index, or retrieves one exact readable cited record. --limit can refine --query; --record-sha256 cannot be combined with either.
---brief prints that one record as Ask cites it (echo-person-cited-record-v1) in place of its signed envelope: the meeting, its approver, participants and policy, and up to 32 decisions, actions and rationales, each with the atom id Ask citations carry and up to 3 quotes. A record you cannot read fails with not_found.
+--brief prints that one record as Ask cites it (echo-person-cited-record-v1) in place of its signed envelope: the meeting, when it was approved, its approver, up to 32 participants and its policy, and every decision, action and rationale, each with the atom id Ask citations carry and up to 3 quotes. A record you cannot read fails with not_found.
 `,
   documents: `usage: echo-brain person documents <upload-v2|status-v2|pending|retry|abandon|search-v2|download-v2|associate|dissociate> [options]
 
@@ -402,7 +401,7 @@ Remove the association without changing the original or its audience. Refresh pe
 
 Search project originals including V3 multi-project uploads. An empty query is invalid; use person list --project to browse.
 `,
-  updates: `usage: echo-brain person updates <submit-v3|status-v3|search|search-v3> [options]
+  updates: `usage: echo-brain person updates <submit-v3|status-v3|search-v3> [options]
 
 Uploads preserve the original text. Only me is the default; Team explicitly shares it with current organization members. No Slack approval or decision extraction is required. Read a note with person open --ref note:<context-id>.
 `,
@@ -412,11 +411,7 @@ Saves one UTF-8 text original (at most 8 KiB) with independent initial associati
 `,
   "updates-status-v3": `usage: echo-brain person updates status-v3 --request-id <uuid>
 
-Shows the saved V3 receipt, selected audience union, immutable initial association set, and optional search-metadata progress. Later association changes do not alter this receipt.
-`,
-  "updates-search": `usage: echo-brain person updates search --query <text> [--limit <1-10>]
-
-Find original uploads you may read. Optional search hints help matching; excerpts come from the original text.
+Shows the saved V3 receipt, selected audience union and immutable initial association set; its metadata is always ready. Later association changes do not alter this receipt.
 `,
   "updates-search-v3": `usage: echo-brain person updates search-v3 --query <text> [--limit <1-10>]
 
@@ -661,7 +656,6 @@ const CONTEXT_COMMANDS: Readonly<Record<string, (values: Record<Option, string |
     association_project_ids: canonicalProjectIdArray(values['association-project-ids-json'], '--association-project-ids-json'), audience: uploadAudienceV3(values) }],
   'updates-status-v3': values => ['updateStatusV3', requiredText(values, 'request-id')],
   'updates-search-v3': values => ['searchUploadsV3', { query: requiredText(values, 'query'), ...contextPaging(values) }],
-  'updates-search': values => ['searchUploadsV2', { query: requiredText(values, 'query'), ...contextPaging(values) }],
 };
 
 /**
@@ -958,7 +952,7 @@ export async function runPersonClientCli(
   const employeeAction =
     argv[0] === "employee" ? EMPLOYEE_ACTIONS[argv[1] as keyof typeof EMPLOYEE_ACTIONS] : undefined;
   const documentAction = argv[0] === 'documents' ? `documents-${argv[1] ?? ''}` : undefined;
-  const updateAction = argv[0] === 'updates' && ['search', 'submit-v3', 'status-v3', 'search-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
+  const updateAction = argv[0] === 'updates' && ['submit-v3', 'status-v3', 'search-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
   const projectAction = argv[0] === 'projects' ? `projects-${argv[1] ?? ''}` : undefined;
   // `tools` alone lists tools; `tools <verb>` is a tool verb, refused unless it is one of TOOL_VERBS.
   const toolAction = argv[0] === 'tools' && argv[1] !== undefined && !argv[1].startsWith('-') ? `tools-${argv[1]}` : undefined;

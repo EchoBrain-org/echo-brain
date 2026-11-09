@@ -8,10 +8,8 @@ import { failedReach, reachChecks, reliedLists, traceCounts } from "./reach.mjs"
  * cited and handed over for each required part, and for a list part whether
  * the answer names its whole list (ADR-0041); for an Ask run, its plan's
  * needs by declared kind, and whether they are the kinds its case expects;
- * restricted leaks; noise; stop and cost; the impact card or sweep result
- * against its key. Meaning-level checks belong to the judge. A sweep run
- * always carries its verdict counts (`sweep`), so failed runs count toward
- * the findings.
+ * restricted leaks; noise; stop and cost; the impact card against its key.
+ * Meaning-level checks belong to the judge.
  */
 export function codeChecks(testCase, run, dataset) {
   const meetings = meetingIndex(dataset.additions);
@@ -23,8 +21,8 @@ export function codeChecks(testCase, run, dataset) {
     // The open-ended family (research tool contract v1): its cases carry reach and cost keys.
     ...(testCase.family === undefined ? {} : { family: testCase.family }),
   };
-  // A run that delivered nothing scores zero: a sweep's findings all count as wrong, and a plan it never wrote declares no kind.
-  const nothing = { parts: [], leaks: [], stop: null, cost: null, ...(testCase.trigger === "sweep" ? { sweep: gradeSweep(testCase, { findings: [] }) } : {}), ...(testCase.expected_kinds === undefined ? {} : { declared_kinds: false }),
+  // A run that delivered nothing scores zero: a plan it never wrote declares no kind.
+  const nothing = { parts: [], leaks: [], stop: null, cost: null, ...(testCase.expected_kinds === undefined ? {} : { declared_kinds: false }),
     ...(testCase.reach === undefined ? {} : { reach: failedReach(testCase) }) };
   if (run.outcome !== "completed" || run.result?.status !== "completed") {
     return { ...base, status: run.outcome === "rejected" ? "rejected_at_ingress" : "failed", error: run.error ?? run.result?.error ?? null, ...nothing };
@@ -38,13 +36,12 @@ export function codeChecks(testCase, run, dataset) {
   for (const ref of testCase.never_appears ?? []) {
     for (const item of matching(items, ref, meetings)) leaks.push({ kind: "item", ref, item_id: item.id, title: item.title });
   }
-  // The goal is the case's own text; everything else in the run came from research or a renderer (the card, or a sweep's lines and citations).
+  // The goal is the case's own text; everything else in the run came from research or a renderer (the card).
   const scanned = JSON.stringify({ research: { ...research, goal: undefined }, ask, rendered });
   for (const marker of leakMarkers(dataset.additions)) if (scanned.toLowerCase().includes(marker.toLowerCase())) leaks.push({ kind: "marker", marker });
-  // An approved record's result is its card, a sweep's its sweep result: a run without one delivered nothing to grade (it predates the rendering endpoint), but its leaks count.
-  if (rendered === null && (testCase.trigger === "approved_record" || testCase.trigger === "sweep")) {
-    const missing = testCase.trigger === "sweep" ? "sweep runs must return the sweep result" : "approved-record runs must return the impact card";
-    return { ...base, status: "failed", error: { code: "no_rendered_result", message: `${missing}; run them again on the current endpoint` }, ...nothing, leaks };
+  // An approved record's result is its card: a run without one delivered nothing to grade (it predates the rendering endpoint), but its leaks count.
+  if (rendered === null && testCase.trigger === "approved_record") {
+    return { ...base, status: "failed", error: { code: "no_rendered_result", message: "approved-record runs must return the impact card; run them again on the current endpoint" }, ...nothing, leaks };
   }
   const card = testCase.trigger === "approved_record" ? rendered : null;
   const handedIds = new Set(testCase.trigger === "ask" ? ask?.writer_evidence ?? [] : items.filter(item => item.cited_by_plan).map(item => item.id));
@@ -94,7 +91,6 @@ export function codeChecks(testCase, run, dataset) {
     answer_citations: { total: answer?.citations.length ?? 0, resolved_to_read: (answer?.citations.length ?? 0) - answer_citation_violations.length, unresolved: answer_citation_violations.length },
     answer_citation_violations,
     card: card === null ? null : cardChecks(testCase, card, items, meetings),
-    ...(testCase.trigger === "sweep" ? { sweep: { status: rendered.status, ...gradeSweep(testCase, rendered) } } : {}),
     ...(testCase.trigger === "ask" ? { kinds: kindsOf(research.plan) } : {}),
     ...(testCase.expected_kinds === undefined ? {} : { declared_kinds: declaredKinds(research.plan, testCase.expected_kinds) }),
     // What every trace counts, and an open-ended case's reach and cost checks (research tool contract v1).
@@ -277,24 +273,6 @@ function namer(text, items, cited) {
       ? !peers.some(other => holdsFact(words, other, fact, peers))
       : holdsFact(words, item, fact, peers)));
   };
-}
-
-/** The sweep result's verdicts in the key's terms; a null verdict (not assessed) has none. */
-const SWEEP_VERDICTS = new Map([["landed", "landed"], ["still_open", "not_landed"], ["changed", "not_landed"], ["unreadable", "no_evidence"]]);
-
-/**
- * A sweep result against its key (open items and Home v1, section 6): each
- * key verdict is compared with the result's entry for the same finding_index,
- * so order does not matter. A null verdict is wrong and not assessed, whatever
- * the result's status; a finding with no entry, or more than one, is wrong.
- */
-export function gradeSweep(key, result) {
-  const graded = key.verdicts.map(({ expected }, index) => {
-    const entries = result.findings.filter(entry => entry.finding_index === index);
-    const verdict = entries.length === 1 ? entries[0].verdict : undefined;
-    return { right: SWEEP_VERDICTS.get(verdict) === expected, not_assessed: verdict === null };
-  });
-  return { right: graded.filter(entry => entry.right).length, total: graded.length, not_assessed: graded.filter(entry => entry.not_assessed).length };
 }
 
 /**

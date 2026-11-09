@@ -14,8 +14,9 @@ const NOW = '2026-09-21T22:01:00.000Z';
 const LATER = '2026-09-21T22:30:00.000Z';
 /** Half an hour past the weekly sign-in of the session the fixture installs. */
 const WEEK_LATER = '2026-09-28T22:30:00.000Z';
+/** When the answer's meeting, Tuesday sync, was approved. */
+const TUESDAY_ADDED = '2026-09-15T18:00:00.000Z';
 
-interface Operation { id: string; http: { method: string; status: number; response: Record<string, unknown> } }
 interface Note { context_id: string; received_at: string; audience: Record<string, unknown>; title: string; text: string }
 /** A saved document: its metadata, its original's text, and its extracted text in pages. */
 interface StoredDocument {
@@ -25,7 +26,7 @@ interface StoredDocument {
 }
 interface DesktopFixtures {
   projects: { project_id: string; name: string; role: 'lead' | 'member' }[];
-  /** Saved V3 notes the person can read, for search. */
+  /** Saved V3 notes the person can read. */
   notes: Note[];
   answer: Record<string, unknown>;
   /** The approved record the answer cites, as its brief was approved. */
@@ -82,9 +83,6 @@ interface RunsRequest {
   items?: { item_id: string; include: boolean; owner_membership_id?: string }[];
 }
 
-/** An open item's last check: the verdict alone, who ran it and when (a check keeps no sentence). */
-interface Check { verdict: 'landed' | 'still_open' | 'changed' | 'unreadable'; checked_at: string; checked_by: string }
-
 /** Someone an item names: who set its state or its owner. */
 interface Named { membership_id: string; name: string }
 
@@ -116,16 +114,6 @@ interface OpenItem {
   owner_set_at: string | null; owner_set_by: Named | null;
   /** Whether Send included it: null before Send. */
   send_included: boolean | null;
-  check: Check | null;
-}
-
-/**
- * A sweep run (open items and Home v1, section 6): it rechecks the open items
- * in its scope (`scope`: the scope and its id) that were open when it was
- * asked for, and keeps a verdict on each.
- */
-interface SweepRun {
-  run_id: string; event_ref: string; scope: string; created_at: string; state: 'pending' | 'running' | 'done'; items: string[];
 }
 
 /** The granola modes whose projects are the meeting's: Thermostat redesign (Ari leads it) and Supplier review. */
@@ -196,14 +184,12 @@ function json(body: unknown, status = 200): Response {
 function failure(code: string, status: number): Response {
   return json({ error: { code, message: 'request failed' } }, status);
 }
-/** As the Authority searches: every word of the query in the title or text. */
-function found(query: unknown, entry: { title: string; text?: string; excerpt?: string }): boolean {
-  const haystack = `${entry.title}\n${entry.text ?? entry.excerpt ?? ''}`.normalize('NFC').toLowerCase();
+/** As the directory finds a person: every word of the query in their name. */
+function found(query: unknown, name: string): boolean {
+  const haystack = name.normalize('NFC').toLowerCase();
   const terms = String(query).normalize('NFC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
   return terms.length > 0 && terms.every(term => haystack.includes(term));
 }
-/** A search result's excerpt: the start of the original text. */
-function excerpt(text: string): string { return [...text.trim()].slice(0, 300).join(''); }
 
 /** The modes whose project list comes ten at a time. */
 const LIST_PAGES = new Set(['many-projects']);
@@ -229,12 +215,11 @@ const THERM_BLOCK_CITATIONS = [
 /**
  * `ask-blocks`'s V8 answer (answer layout v2, ADR-0051), THERM's, in every
  * block: the answer; the open tickets, a list statement that reads as a
- * table right after it, with a row of yours that is late; the soak as a
- * timeline; THERM-48 as a card; the steps before PVT; the open risk as
- * titled text; and Noor's words as a quote. Each statement reads as the
- * Authority writes it from its block: an event from its day, who and what
- * happened, a fact from its card's kind and title and its label and value, a
- * quote from its source and words.
+ * table right after it; the soak as a timeline; THERM-48 as a card; the
+ * steps before PVT; the open risk as titled text; and Noor's words as a
+ * quote. Each statement reads as the Authority writes it from its block: an
+ * event from its day, who and what happened, a fact from its card's kind and
+ * title and its label and value, a quote from its source and words.
  */
 export function blocksAnswer(question: string, scope: Record<string, unknown>): Record<string, unknown> {
   const said = (text: string, cited: number[]) => ({ text, citation_indexes: cited, private: cited.some(at => THERM_BLOCK_CITATIONS[at]!.visibility === 'only_me') });
@@ -331,17 +316,14 @@ function timelineAnswer(question: string, scope: Record<string, unknown>, previo
     cites(citations, 'Confirm the trace is still open.', [2])]);
 }
 
-/** The DVT plan changed, the follow-up is no longer readable, and the ticket reports its current marker. */
-function timelineCheck(items: readonly { citation: Record<string, unknown>; marker?: string }[]): Record<string, unknown> {
-  return { schema_version: 1, kind: 'echo-person-ask-check-v1', items: items.map(item => {
-    const citation = item.citation;
-    if (citation.kind === 'ticket') {
-      const marker = digestOf(`marker:${String(citation.ticket_id)}`);
-      return { state: item.marker === undefined || item.marker === marker ? 'same' : 'changed', marker };
-    }
-    if (citation.kind === 'page') return { state: 'changed' };
-    if (citation.kind === 'follow_up') return { state: 'unreadable' };
-    return { state: 'same' };
+/**
+ * Readability only: the follow-up is no longer readable, everything else is. A readable ticket still carries a marker, as
+ * the Authority keeps sending one for a release (SVC-13) and released clients refuse a readable ticket without it.
+ */
+function timelineCheck(items: readonly { citation: Record<string, unknown> }[]): Record<string, unknown> {
+  return { schema_version: 1, kind: 'echo-person-ask-check-v1', items: items.map(({ citation }) => {
+    if (citation.kind === 'ticket') return { state: 'same', marker: digestOf(`marker:${String(citation.ticket_id)}`) };
+    return { state: citation.kind === 'follow_up' ? 'unreadable' : 'same' };
   }) };
 }
 
@@ -351,10 +333,6 @@ function projectActivityOf(projects: readonly { project_id: string }[], arrivals
 }
 
 export function installTestAuthority(home: string, fixturesDirectory: string, SessionStore: new (home: string) => unknown) {
-  const repository = join(process.env.ECHO_PERSON_CLIENT_ENTRY!, '..', '..', '..', '..', '..');
-  const operations = (JSON.parse(readFileSync(join(repository, 'tests/fixtures/project-context-v1/operations.json'), 'utf8')) as {
-    operations: Operation[];
-  }).operations;
   const desktop = JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
   const importedNotes = mode === 'ask-imported-meeting' || mode === 'ask-imported-mixed';
@@ -392,11 +370,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     error_code: string | null }[] = [];
   // The people a meeting's impact check names, to pick as owners.
   if (mode.startsWith('granola')) desktop.people.push(...[MINA, RAFAEL, OKAFOR].map(person => ({ membership_id: person.membership_id, display_name: person.name })));
-  const fixture = (id: string) => {
-    const found = operations.find(entry => entry.id === id);
-    if (!found) throw new Error(`missing fixture ${id}`);
-    return structuredClone(found.http.response);
-  };
 
   const store = new SessionStore(realpathSync(home)) as Store;
   const expired = mode === 'expired-claim';
@@ -431,14 +404,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const projectStatus = new Map<string, 'active' | 'archived'>(projects.map(project => [project.project_id, 'active']));
   const members = structuredClone(desktop.members);
   const documents = structuredClone(desktop.documents);
-  const feedItem = fixture('projects-search-v2').items as Record<string, unknown>[];
+  // Apollo update, filed in every project.
+  const apolloUpdate = `ctx_${'a'.repeat(64)}`;
   const catalog = new Map<string, { received_at: string; title: string; text: string; audience: Record<string, unknown> }>([
-    [String(feedItem[0]!.context_id), { received_at: String(feedItem[0]!.received_at), title: String(feedItem[0]!.title),
+    [apolloUpdate, { received_at: '2026-09-21T22:01:00.000Z', title: 'Apollo update',
       // Shared with several projects; a reader sees only the one it is read in (ADR-0023).
       text: 'We agreed to ship.\n', audience: { kind: 'projects' } }],
     ...desktop.notes.map(note => [note.context_id, note] as const),
   ]);
-  const filed = new Map<string, string[]>(desktop.projects.map(project => [project.project_id, [String(feedItem[0]!.context_id)]]));
+  const filed = new Map<string, string[]>(desktop.projects.map(project => [project.project_id, [apolloUpdate]]));
   if (mode.startsWith('long-feed')) {
     // Twelve notes in Beacon, hours apart; its document falls between the eleventh and the twelfth.
     const beacon = desktop.projects[1]!.project_id;
@@ -465,11 +439,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     });
   }
   if ((ONLY_ME_MODES.has(mode))) {
+    // Pricing review: approved the morning after it met, and long, more decisions than a section once kept (32).
     meetings.push({
-      record_sha256: PRICING_REVIEW, title: 'Pricing review', added_at: '2026-09-21T20:30:00.000Z', meeting_date: '2026-09-21', visibility: 'only_me',
+      record_sha256: PRICING_REVIEW, title: 'Pricing review', added_at: '2026-09-22T09:15:00.000Z', meeting_date: '2026-09-21', visibility: 'only_me',
       project_ids: [], approver: session.membership_id, started_at: '2026-09-21T19:00:00.000Z', timezone: 'America/Los_Angeles',
       participants: ['Ari', 'Maya Chen'], approved_by: 'Ari',
-      atoms: [{ kind: 'decision', text: 'Keep annual plans as priced.' }, { kind: 'action', text: 'Send the annual price sheet.', owner: 'Maya Chen' }],
+      atoms: [{ kind: 'decision', text: 'Keep annual plans as priced.' },
+        ...Array.from({ length: 33 }, (_, index) => ({ kind: 'decision' as const, text: `Hold price point ${index + 2}.` })),
+        { kind: 'action', text: 'Send the annual price sheet.', owner: 'Maya Chen' }],
     });
     documents.push({
       document_id: PRICING_MEMO, request_id: '00000000-0000-4000-8000-0000000000d9', filename: 'Pricing memo.pdf', title: 'Pricing memo',
@@ -667,6 +644,33 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     ref: `meeting:${meeting.record_sha256}`, kind: 'meeting', title: meeting.title, added_at: meeting.added_at, visibility: meeting.visibility,
     projects: rowProjects(meeting.project_ids), meeting_date: meeting.meeting_date,
   });
+  /**
+   * An approved record as `GET /v1/person/records?record_sha256` lists it, or null for none you can read: the answer's
+   * own (Tuesday sync), its brief as approved; or a meeting's, its atoms as the brief's signals, each with the transcript
+   * line it came from, its owners as the approver confirmed them. Its envelope was issued when the meeting was added.
+   */
+  const listedRecord = (digest: string): Record<string, unknown> | null => {
+    const meeting = meetings.find(entry => entry.record_sha256 === digest);
+    const answers = digest === desktop.record.record_sha256;
+    if (!answers && !meeting) return null;
+    const signals = (meeting?.atoms ?? []).map((atom, index) => ({ ...atom, id: `s${index + 1}` }));
+    const brief = answers ? desktop.record.brief : {
+      meeting: { id: digest, title: meeting!.title, time: { actual_start_at: meeting!.started_at, timezone: meeting!.timezone },
+        participants: meeting!.participants.map((name, index) => ({ id: `p${index + 1}`, display_name: name })) },
+      ...Object.fromEntries((['decision', 'action', 'rationale'] as const).map(kind => [`${kind}s`,
+        signals.filter(signal => signal.kind === kind).map(({ owner: _owner, ...signal }) => ({
+          ...signal, evidence: [{ quote: `[10:00] ${meeting!.participants[0]}: ${signal.text}` }],
+        }))])),
+    };
+    const owners = signals.flatMap(signal => (signal.owner === undefined ? [] : [{ signal_id: signal.id, owner: signal.owner }]));
+    const event = { kind: 'approved', policy_id: meeting?.visibility === 'only_me' ? 'restricted-reviewer-person-v2' : 'project-members-readable-person-v1',
+      approved_snapshot: { approved_payload: { brief } } };
+    return {
+      position: 1, approval_id: 'apr_fixture', record_sha256: digest,
+      envelope: { record_sha256: digest, body: { issued_at: meeting?.added_at ?? TUESDAY_ADDED, event, human_act_resolution_ref: { action_owners: owners } } },
+      source_metadata: { record_approved_by: { display_name: answers ? desktop.record.approved_by : meeting!.approved_by } },
+    };
+  };
   /** Ari's access admits a note or a document: any audience but Only me, and Only me when it is Ari's own (ADR-0049). */
   const readsNote = (id: string) => catalog.get(id)?.audience.kind !== 'only_me' || ownNotes.has(id);
   const readsDocument = (document: StoredDocument) => document.audience.kind !== 'only_me' || ownDocuments.has(document.document_id);
@@ -697,29 +701,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // Ask progress (ADR-0039). The fixture answer's meeting is Tuesday sync, whose decision d1 an answer cites by its atom id.
   const TUESDAY = desktop.record.record_sha256;
   const atomOf = (signal: string) => organizationApi.personRecordAtomIdV1(TUESDAY, signal);
-  if (mode.startsWith('ask-progress')) {
-    // The meeting opens by its ref too, on its own page. The decision Ask cites is its second.
-    const brief = desktop.record.brief as unknown as { decisions: Record<string, unknown>[]; actions: { text: string }[]; rationales: { text: string }[] };
-    brief.decisions.unshift({ id: 'd0', kind: 'decision', status: 'decided', text: 'Keep monthly plans until November.', evidence: [] });
-    meetings.push({
-      record_sha256: TUESDAY, title: 'Tuesday sync', added_at: '2026-09-15T18:00:00.000Z', meeting_date: '2026-09-15', visibility: 'project', project_ids: [],
-      approver: 'mem_33333333-3333-4333-8333-333333333333', started_at: '2026-09-15T17:00:00.000Z', timezone: 'America/Los_Angeles',
-      participants: ['Maya Chen', 'Ari'], approved_by: 'Maya Chen',
-      atoms: [...brief.decisions.map(item => ({ kind: 'decision' as const, text: String(item.text) })), ...brief.actions.map(item => ({ kind: 'action' as const, text: item.text })),
-        ...brief.rationales.map(item => ({ kind: 'rationale' as const, text: item.text }))],
-    });
-  }
-  /**
-   * What the Ask reads, each as a citation: Tuesday sync's decision, a note's
-   * passage, a Jira ticket, and Tuesday sync's other decision.
-   */
+  /** What the Ask reads, each as a citation: Tuesday sync's decision, a note's passage and a Jira ticket. */
   const progressItems = () => {
     const [record, passage] = desktop.answer.citations as { citation: Record<string, unknown>; label: string; visibility: string }[];
     return [
       { citation: { ...record!.citation, atom_id: atomOf('d1') }, kind: 'decision', label: 'Tuesday sync', visibility: 'team', ref: `meeting:${TUESDAY}` },
       { ...passage!, kind: 'note', ref: `note:${desktop.notes[0]!.context_id}` },
       thermTicket('ECHO-7', 'Jira launch', '10007'),
-      { citation: { ...record!.citation, atom_id: atomOf('d0') }, kind: 'decision', label: 'Tuesday sync', visibility: 'team', ref: `meeting:${TUESDAY}` },
     ];
   };
   /**
@@ -770,11 +758,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     permalink: 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=23456', text_sha256: digestOf('Supplier brief: Lead time') } };
   const openItems: OpenItem[] = [];
   /** An item Mina sent, or has not sent yet; an owner she picked she picked as she sent it. */
-  const minaSent = (item: Omit<OpenItem, 'approver' | 'state' | 'sent_at' | 'state_set_at' | 'state_set_by' | 'owner_set_at' | 'owner_set_by' | 'send_included' | 'check'>
+  const minaSent = (item: Omit<OpenItem, 'approver' | 'state' | 'sent_at' | 'state_set_at' | 'state_set_by' | 'owner_set_at' | 'owner_set_by' | 'send_included'>
     & { sent_at: string | null }): OpenItem => {
     const picked = item.owner.match === 'picked' && item.sent_at !== null;
     return { ...item, approver: MINA, state: item.sent_at === null ? 'unsent' : 'open', state_set_at: item.sent_at, state_set_by: item.sent_at === null ? null : MINA,
-      owner_set_at: picked ? item.sent_at : null, owner_set_by: picked ? MINA : null, send_included: item.sent_at === null ? null : true, check: null };
+      owner_set_at: picked ? item.sent_at : null, owner_set_by: picked ? MINA : null, send_included: item.sent_at === null ? null : true };
   };
   // Owner modes receive someone else's items without Granola being available.
   // granola-owner-later holds one back until the test has Mina send it.
@@ -826,7 +814,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       item_id: `itm_00000000-0000-4000-8000-0000000000${n}`, run_id: `run_00000000-0000-4000-8000-0000000000${n}`, readable: true, opens: true,
       live: { citation: thermTicket(`ECHO-${n}`, rest.expected ?? 'Follow-up', `100${n}`), says_now: 'As it was.' }, relation: rest.kind === 'action' ? null : 'needs_updating',
       approver: ARI, created_at: ago(rest.made), sent_at: rest.sent === null ? null : ago(rest.sent), state_set_at: rest.sent === null ? null : ago(rest.set ?? rest.sent),
-      state_set_by: rest.sent === null ? null : ARI, owner_set_at: null, owner_set_by: null, send_included: rest.sent === null ? null : true, check: null,
+      state_set_by: rest.sent === null ? null : ARI, owner_set_at: null, owner_set_by: null, send_included: rest.sent === null ? null : true,
       kind: rest.kind, decision: rest.decision, owner: rest.owner, state: rest.state, expected: rest.expected,
     });
     openItems.push(
@@ -857,7 +845,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const decision = { approval_id: first?.approval_id ?? 'apr_' + 'a'.repeat(64), record_sha256: PILOT_RECORD, title: 'Pilot planning', first_line: 'Launch the pilot next week.',
       approved_at: '2026-10-07T10:00:00.000Z', project_ids: [...first?.project_ids ?? []] };
     const unsent = { run_id: PILOT_RUN, decision, readable: true, approver: ARI, state: 'unsent' as const, created_at: '2026-10-07T10:05:00.000Z', sent_at: null, state_set_at: null,
-      state_set_by: null, owner_set_at: null, owner_set_by: null, send_included: null, check: null };
+      state_set_by: null, owner_set_at: null, owner_set_by: null, send_included: null };
     const confirmed = Array.isArray(granolaReview?.owners) ? granolaReview.owners as { signal_id: string; owner: string }[] : [];
     const ownerOf = (signalId: string): OpenItem['owner'] => {
       const named = desktop.people.filter(person => person.display_name === confirmed.find(entry => entry.signal_id === signalId)?.owner);
@@ -900,12 +888,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     atoms: [{ kind: 'decision', text: 'Launch the pilot next week.' }, { kind: 'action', text: 'Send the revised quote', owner: 'Rafael Moreno' },
       { kind: 'action', text: 'Confirm the trace', owner: 'Mina Patel' }],
   });
-  /** What a sweep finds of Pilot planning's items: ECHO-12 landed, the PRD page changed, the supplier page unreadable. */
-  const SWEPT: Readonly<Record<string, Check['verdict']>> = {
-    'itm_00000000-0000-4000-8000-000000000031': 'landed', 'itm_00000000-0000-4000-8000-000000000032': 'changed',
-    'itm_00000000-0000-4000-8000-000000000033': 'unreadable',
-  };
-  // Ari sent Pilot planning's follow-ups; Mina's check found ECHO-12 changed. The first assignment reply will be lost.
+  // Ari sent Pilot planning's follow-ups. The first assignment reply will be lost.
   if (mode === 'granola-review-assign-lost') {
     granolaApproved = true;
     granolaReview = { action: 'approve', routes: routesTo([THERMOSTAT]), owners: MEETING_ACTIONS.map(action => ({ signal_id: action.signal_id, owner: action.owner })) };
@@ -913,19 +896,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     meetings.push(pilotMeeting([THERMOSTAT]));
     writeFound();
     const found = openItems.find(item => item.run_id === PILOT_RUN)!;
-    {
-      const sentAt = '2026-10-07T11:00:00.000Z';
-      openItems.push({ ...found, item_id: 'itm_00000000-0000-4000-8000-000000000033', kind: 'page', relation: 'conflicts', expected: 'parts ordered for next week',
-        opens: false, live: { citation: SUPPLIER_BRIEF, says_now: 'Parts are ordered with six weeks of lead time.' }, owner: { ...RAFAEL, match: 'picked' },
-        owner_set_at: sentAt, owner_set_by: ARI });
-      const checkedAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
-      const checked: Readonly<Record<string, Check['verdict']>> = { ...SWEPT, 'itm_00000000-0000-4000-8000-000000000031': 'changed' };
-      // Everything was sent; the meeting's actions are never checked.
-      for (const item of openItems.filter(entry => entry.run_id === PILOT_RUN)) {
-        Object.assign(item, { state: 'open', sent_at: sentAt, state_set_at: sentAt, state_set_by: ARI, send_included: true,
-          check: item.kind !== 'action'
-            ? { verdict: checked[item.item_id]!, checked_at: checkedAt, checked_by: 'Mina Patel' } : null });
-      }
+    const sentAt = '2026-10-07T11:00:00.000Z';
+    openItems.push({ ...found, item_id: 'itm_00000000-0000-4000-8000-000000000033', kind: 'page', relation: 'conflicts', expected: 'parts ordered for next week',
+      opens: false, live: { citation: SUPPLIER_BRIEF, says_now: 'Parts are ordered with six weeks of lead time.' }, owner: { ...RAFAEL, match: 'picked' },
+      owner_set_at: sentAt, owner_set_by: ARI });
+    // Everything was sent.
+    for (const item of openItems.filter(entry => entry.run_id === PILOT_RUN)) {
+      Object.assign(item, { state: 'open', sent_at: sentAt, state_set_at: sentAt, state_set_by: ARI, send_included: true });
     }
   }
   const mineAsOwner = (item: OpenItem) => item.owner.membership_id === ARI.membership_id;
@@ -945,8 +922,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       relation: item.relation, expected: item.expected, approver: { ...item.approver, active: true }, owner: { ...item.owner, active: true },
       waits_on: item.state === 'unsent' ? 'approver' : 'owner', state: item.state, created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at,
       state_set_by: person(item.state_set_by), owner_set_at: item.owner_set_at, owner_set_by: person(item.owner_set_by),
-      send_included: item.send_included,
-      check: item.check, can: { set_state: item.state !== 'unsent' && involved(item), assign: item.state === 'unsent' ? item.approver.membership_id === ARI.membership_id : involved(item) },
+      // `check` is retired with sweeps: null, as the Authority sends it until V17.
+      send_included: item.send_included, check: null,
+      can: { set_state: item.state !== 'unsent' && involved(item), assign: item.state === 'unsent' ? item.approver.membership_id === ARI.membership_id : involved(item) },
       reach,
     };
   };
@@ -954,8 +932,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const sends = new Map<string, { items: string; result: { sent: number; not_relevant: number } }>();
   /** Mina has marked done what Ari sent her (the `mina-done` file in the test's home). */
   let minaDone = false;
-  /** Ari's sweeps, newest first. */
-  const sweepRuns: SweepRun[] = [];
   let assigns = 0;
 
   // Your connections to the organization's tools, as Tools changes them.
@@ -1007,8 +983,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const followUps = openItems.filter(item => visible(item) && (involved(item) || item.owner_set_by?.membership_id === ARI.membership_id))
       .map(item => [item.item_id, item.state, item.owner.membership_id, item.owner_set_at, item.state_set_at, item.sent_at]);
     const reviews = [granolaImported, granolaApproved, granolaRun?.state ?? null, ...extraRuns.map(extra => extra.state)];
-    // An hour unless the test says: a test's own reads never wait on, or race, a check it did not ask for.
-    const seconds = elsewhere('changes-seconds') ? Number(readFileSync(join(home, 'changes-seconds'), 'utf8')) : 3600;
+    // An hour unless the test says, so a test's own reads never wait on, or race, a check it did not ask for; but 15 s while
+    // one of Ari's checks is queued or running, as the Authority paces it (DSK-1), so the next check checks in, or sees it end.
+    const going = [granolaRun, ...extraRuns].some(entry => entry?.state === 'pending' || entry?.state === 'running');
+    const seconds = elsewhere('changes-seconds') ? Number(readFileSync(join(home, 'changes-seconds'), 'utf8')) : going ? 15 : 3600;
     return { kind: 'echo-person-changes-v1', areas: { projects: digest(projectsNow), follow_ups: digest(followUps), reviews: digest(reviews) },
       check_again_after_seconds: seconds };
   };
@@ -1141,13 +1119,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           return json({ status: 'publishing', decided_on: 'desktop' });
       }
     }
-    // Impact checks: approving queues one run; a start runs it, and the first
-    // list after that finds it done. A done check has found two open items. A sweep of a scope with
-    // open items queues a sweep run, which starts once no impact check of
-    // Ari's is pending or running; the first list after its start finds it
-    // done, each item it checked carrying its verdict. Every answer passes the
-    // contract's own result check, as the Authority's does. Runs and shared
-    // Home reads exist even when the meeting provider is unavailable.
+    // Impact checks: approving queues one run per destination; a check-in
+    // (`next`) starts the oldest queued one, and the first list after that finds
+    // it done. A done check has found two open items. Every answer passes the
+    // contract's own result check, as the Authority's does. Runs and shared Home
+    // reads exist even when the meeting provider is unavailable.
     if (method === 'GET' && path === '/v1/person/changes') return json(changeCheck());
     if (method === 'POST' && path === '/v1/person/runs') {
       let request: RunsRequest;
@@ -1167,8 +1143,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         state: value.state, error_code: value.error_code, created_at: '2026-10-07T10:00:00.000Z', updated_at: '2026-10-07T10:05:00.000Z' });
       const extraRow = (extra: (typeof extraRuns)[number]) => ({ run_id: extra.run_id, trigger: 'approved_record', event_ref: extra.record.approval_id, state: extra.state,
         error_code: extra.error_code, created_at: '2026-10-07T10:00:00.000Z', updated_at: '2026-10-07T10:05:00.000Z' });
-      const sweepRow = (sweep: SweepRun) => ({ run_id: sweep.run_id, trigger: 'sweep', event_ref: sweep.event_ref, state: sweep.state, error_code: null,
-        created_at: sweep.created_at, updated_at: sweep.created_at });
       const result = (operation: string, value: unknown) => json(api.validatePersonRunsResultV1(operation, value));
       const now = () => new Date().toISOString();
       if (request.operation === 'list' && run?.state === 'running') {
@@ -1177,15 +1151,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       for (const extra of extraRuns) {
         if (request.operation !== 'list' || extra.state !== 'running') continue;
         Object.assign(extra, ({ state: 'done' }));
-      }
-      for (const sweep of sweepRuns) {
-        if (request.operation !== 'list' || sweep.state !== 'running') continue;
-        // Done: each item it checked that is still open keeps this check as its last.
-        const at = now();
-        for (const item of openItems) {
-          if (sweep.items.includes(item.item_id) && item.state === 'open') item.check = { verdict: SWEPT[item.item_id] ?? 'still_open', checked_at: at, checked_by: 'Ari' };
-        }
-        sweep.state = 'done';
       }
       writeFound();
       followUpsElsewhere();
@@ -1199,51 +1164,35 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         : scope === 'record' ? item.readable && item.decision.record_sha256 === id : item.readable && item.decision.project_ids.includes(id!);
       switch (request.operation) {
         case 'list':
-          // Newest first: Ari's sweeps came after the check of Pilot planning.
-          return result('list', { runs: [...sweepRuns.map(sweepRow), ...(run ? [row(run)] : []), ...extraRuns.map(extraRow)] });
-        case 'start': {
-          // One run goes at a time, and impact checks start before sweeps: a sweep waits while one is pending or running.
-          const sweep = sweepRuns.find(entry => entry.run_id === request.run_id);
-          if (sweep) {
-            if (run?.state === 'pending' || run?.state === 'running' || sweepRuns.some(entry => entry !== sweep && entry.state === 'running')) {
-              return result('start', { state: 'busy' });
-            }
-            if (sweep.state === 'pending') sweep.state = 'running';
-            return result('start', { state: sweep.state });
-          }
-          const extra = extraRuns.find(entry => entry.run_id === request.run_id);
-          if (extra) {
-            if (extra.state === 'pending') extra.state = 'running';
-            return result('start', { state: extra.state });
-          }
-          if (!run || request.run_id !== runId) return failure('not_found', 404);
-          if (sweepRuns.some(entry => entry.state === 'running')) return result('start', { state: 'busy' });
-          if (run.state === 'pending') run.state = 'running';
-          return result('start', { state: run.state });
+          return result('list', { runs: [...(run ? [row(run)] : []), ...extraRuns.map(extraRow)] });
+        // A check-in (DSK-1), as the Authority answers it: Ari's oldest queued check starts, unless another of Ari's runs;
+        // with none queued, idle, even while one runs.
+        case 'next': {
+          const checks = [...(run ? [run] : []), ...extraRuns];
+          const oldest = checks.find(entry => entry.state === 'pending');
+          if (!oldest) return result('next', { state: 'idle' });
+          if (checks.some(entry => entry.state === 'running')) return result('next', { state: 'busy' });
+          oldest.state = 'running';
+          return result('next', { state: 'running' });
         }
-        // Home: the Send row while Ari's check has items not sent, the open items that wait on
-        // Ari, and the open items Ari sent that ECHO saw change; then, of the open items Ari sent
-        // or owns, how many landed, how many Ari sent wait on others, and when ECHO last checked
-        // one. Rows only: no live read, and never a sweep due.
+        // Home: the Send row while Ari's check has items not sent, and the open items that wait on
+        // Ari; then how many of the open items Ari sent wait on others. Rows only: no live read.
+        // `landed`, `last_checked_at` and `sweep_due` are retired with sweeps: 0, null and false, as
+        // the Authority sends them until V17.
         case 'home': {
           const unsent = shown.filter(item => item.run_id === runId && item.state === 'unsent');
           const send = run?.state === 'done' && unsent.length > 0 ? [{
             run_id: runId, decision: unsent[0]!.decision, items: unsent.length, kinds: [...new Set(unsent.map(item => item.kind))],
             owners: [...new Set(unsent.filter(item => !mineAsOwner(item)).map(item => item.owner.name))], finished_at: '2026-10-07T10:05:00.000Z',
           }] : [];
-          // Changed first, then the newest first by when each started waiting (sent, owner set, or reopened), as the Authority
-          // orders them, rows only or not.
+          // The newest first by when each started waiting (sent, owner set, or reopened), as the Authority orders them, rows
+          // only or not.
           const since = (item: OpenItem) => [item.sent_at, item.owner_set_at, item.state_set_at].reduce<string>((latest, at) => (at !== null && at > latest ? at : latest), item.created_at);
-          const changed = (item: OpenItem) => Number(item.check?.verdict === 'changed');
-          const order = (a: OpenItem, b: OpenItem) => changed(b) - changed(a) || since(b).localeCompare(since(a));
           const theirs = shown.filter(item => item.state === 'open' && involved(item));
-          const waitsOnAri = (item: OpenItem) => mineAsOwner(item) || item.check?.verdict === 'changed';
           return result('home', {
-            send, items: theirs.filter(waitsOnAri).sort(order).slice(0, 20).map(item => itemView(item, live)),
-            landed: theirs.filter(item => item.check?.verdict === 'landed').length,
-            waiting: theirs.filter(item => item.approver.membership_id === ARI.membership_id && !mineAsOwner(item)).length,
-            last_checked_at: theirs.flatMap(item => (item.check ? [item.check.checked_at] : [])).sort().at(-1) ?? null,
-            sweep_due: false,
+            send, items: theirs.filter(mineAsOwner).sort((a, b) => since(b).localeCompare(since(a))).slice(0, 20).map(item => itemView(item, live)),
+            landed: 0, waiting: theirs.filter(item => item.approver.membership_id === ARI.membership_id && !mineAsOwner(item)).length,
+            last_checked_at: null, sweep_due: false,
           });
         }
         case 'items': {
@@ -1251,8 +1200,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           const items = shown.filter(item => inScope(item, scope, id));
           const records = [...new Set(items.filter(item => item.readable).map(item => item.decision.record_sha256))];
           const count = (state: OpenItem['state'], of = items) => of.filter(item => item.state === state).length;
-          // Last checks count on open items only: a check reads open items.
-          const verdicts = (verdict: Check['verdict'], of = items) => of.filter(item => item.state === 'open' && item.check?.verdict === verdict).length;
           // Each decision's check: Ari's own (whatever its stage), and Mina's, done. Only Ari's is Ari's own.
           const pilotProjects = recordsOf(granolaReview)[0]?.project_ids ?? [];
           const pilot = run !== null && granolaApproved && (scope === 'mine' || (scope === 'run' && id === runId) || (scope === 'record' && id === PILOT_RECORD) ||
@@ -1281,13 +1228,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           const counts = request.read === 'counts';
           const paged = counts ? [] : listed.slice(from, from + size);
           const next = !counts && from + size < listed.length ? pageCursor(pageKey, from + size) : null;
+          // The verdict counts and `last_checked_at` are retired with sweeps: 0 and null, as the Authority sends them until V17.
           return result('items', { items: paged.map(item => itemView(item, live)), next_cursor: next, stages, summary: {
             unsent: count('unsent'), open: count('open'), done: count('done'), not_relevant: count('not_relevant'),
-            landed: verdicts('landed'), changed: verdicts('changed'), unreadable: verdicts('unreadable'), decisions: records.length,
-            last_checked_at: items.flatMap(item => (item.check ? [item.check.checked_at] : [])).sort().at(-1) ?? null, by_decision: records.map(record => {
+            landed: 0, changed: 0, unreadable: 0, decisions: records.length, last_checked_at: null, by_decision: records.map(record => {
               const of = items.filter(item => item.decision.record_sha256 === record);
-              // Of its open items, those whose last check landed, and those ECHO could not read.
-              return { record_sha256: record, unsent: count('unsent', of), open: count('open', of), landed: verdicts('landed', of), unreadable: verdicts('unreadable', of) };
+              return { record_sha256: record, unsent: count('unsent', of), open: count('open', of), landed: 0, unreadable: 0 };
             }),
           } });
         }
@@ -1346,20 +1292,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         case 'item': {
           const item = shown.find(entry => entry.item_id === request.item_id);
           return item ? result('item', { item: itemView(item, live) }) : failure('not_found', 404);
-        }
-        // A sweep of the open items Ari can see in a scope (mine: those Ari sent or owns), queued; with
-        // none open, nothing to check. Asked for again while that scope's sweep waits, it is that one.
-        case 'sweep': {
-          const { scope, id } = request;
-          // A meeting's action is never rechecked.
-          const open = shown.filter(item => item.state === 'open' && item.kind !== 'action' && inScope(item, scope, id));
-          if (open.length === 0) return result('sweep', { state: 'nothing_to_check' });
-          const key = `${scope}:${id ?? ''}`;
-          const queued = sweepRuns.find(entry => entry.scope === key && entry.state === 'pending');
-          if (queued) return result('sweep', { run_id: queued.run_id });
-          sweepRuns.unshift({ run_id: `run_${randomUUID()}`, event_ref: `sweep_${randomUUID()}`, scope: key, created_at: now(), state: 'pending',
-            items: open.map(item => item.item_id) });
-          return result('sweep', { run_id: sweepRuns[0]!.run_id });
         }
       }
     }
@@ -1467,32 +1399,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           next_cursor: from + 1 < document.pages.length ? pageCursor(request.ref, from + 1) : null,
         });
       }
-      const meeting = kind === 'meeting' ? meetings.find(entry => entry.record_sha256 === id) : undefined;
-      // Every meeting here is one page: a record's next page and its More are the reader's unit tests (ask-progress.test).
-      if (meeting) {
-        if (request.cursor !== undefined) return failure('not_found', 404);
-        return open({
-          item: meetingRow(meeting), atoms: meeting.atoms, next_cursor: null, meeting: {
-            started_at: meeting.started_at, timezone: meeting.timezone, all_day: false, participants: meeting.participants, participants_more: false,
-            approved_by: meeting.approved_by,
-          },
-        });
-      }
+      // A meeting is read as a record (GET /v1/person/records), whole: the desktop never opens one here.
       return failure('not_found', 404);
-    }
-    if (method === 'POST' && path === '/v2/person/projects/context/search') {
-      const response = fixture('projects-search-v2');
-      response.project_id = body?.project_id;
-      response.items = (response.items as { title: string; excerpt: string }[])
-        .filter(item => found(body?.query, item))
-        .map(item => ({ ...item, audience: { kind: 'project', project_id: body?.project_id } }));
-      return json(response);
-    }
-    // All context: saved notes, Apollo's update (the shared fixture's) among them.
-    if (method === 'POST' && path === '/v3/person/updates/search') {
-      const notes = [...desktop.notes.map(({ text, ...note }) => ({ ...note, excerpt: excerpt(text) })),
-        ...(fixture('updates-search-v2').results as { title: string; excerpt: string }[])];
-      return json({ schema_version: 3, kind: 'echo-person-upload-search-v3', results: notes.filter(note => found(body?.query, note)) });
     }
 
     // New project: made once per request id, with you as its lead.
@@ -1625,7 +1533,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }
       const limit = request.limit ?? PAGE;
       const from = request.cursor === SECOND_PAGE ? limit : 0;
-      const all = desktop.people.filter(person => request.query === undefined || found(request.query, { title: person.display_name }));
+      const all = desktop.people.filter(person => request.query === undefined || found(request.query, person.display_name));
       return json(api.validateOrganizationDirectoryV1({
         schema_version: 1, kind: 'echo-organization-directory-v1', items: all.slice(from, from + limit),
         next_cursor: from + limit < all.length ? SECOND_PAGE : null,
@@ -1754,7 +1662,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
     // The Ask timeline's reads (ADR-0047): the source check, by citation, and what arrived in your projects. Each is checked
     // by the contract's validator; other modes return 404 for the source check.
-    if (method === 'POST' && path === '/v1/person/ask/check' && mode === 'ask-timeline-changed') {
+    if (method === 'POST' && path === '/v1/person/ask/check' && mode === 'ask-timeline-unreadable') {
       let items: ReturnType<Contract['validatePersonAskCheckRequestV1']>['items'];
       try {
         ({ items } = api.validatePersonAskCheckRequestV1(body));
@@ -1784,7 +1692,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const question = request.question;
       const answer = { ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8' };
       // The Ask timeline's answers, by the earlier turn the Ask carries; every other mode's take one and answer as if none came.
-      if (mode === 'ask-timeline-changed') return json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
+      if (mode === 'ask-timeline-unreadable') return json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
       // A client requesting progress gets the Ask's steps, then its answer and receipt.
       const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
       if (mode === 'ask-progress' && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V3) {
@@ -1832,22 +1740,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         ...(importedNotes && review ? { imported_meeting_review: newer ? 'not_reviewed' : mode === 'ask-imported-mixed' || existsSync(join(home, 'imported-reviewed')) ? 'reviewed' : 'not_reviewed' } : {}),
       });
     }
-    // One approved record, by the digest an answer cited. A record the person
+    // One approved record, by the digest an answer cited or a meeting's row names. A record the person
     // cannot read comes back as an empty list, as the Authority's does.
     if (method === 'GET' && path === '/v1/person/records' && url.searchParams.has('record_sha256')) {
-      const { record_sha256: digest, approved_by: approver, brief } = desktop.record;
       if ([...url.searchParams.keys()].length !== 1) return failure('invalid_request', 400);
-      if (url.searchParams.get('record_sha256') !== digest) {
-        return json({ schema_version: 1, kind: 'echo-clean-person-record-list-v1', records: [] });
-      }
-      const event = { kind: 'approved', policy_id: 'project-members-readable-person-v1', approved_snapshot: { approved_payload: { brief } } };
-      return json({
-        schema_version: 1, kind: 'echo-clean-person-record-list-v1',
-        records: [{
-          position: 1, approval_id: 'apr_fixture', record_sha256: digest, envelope: { record_sha256: digest, body: { event } },
-          source_metadata: { record_approved_by: { display_name: approver } },
-        }],
-      });
+      const listed = listedRecord(url.searchParams.get('record_sha256')!);
+      return json({ schema_version: 1, kind: 'echo-clean-person-record-list-v1', records: listed === null ? [] : [listed] });
     }
     return failure('not_found', 404);
   };

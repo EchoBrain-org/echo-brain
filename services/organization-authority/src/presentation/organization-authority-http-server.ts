@@ -768,6 +768,7 @@ export function createOrganizationAuthorityHttpServer(
       switch (request.operation) {
         case 'list': return application.list(common);
         case 'start': return application.start({ ...common, request: { schema_version: 1, operation: 'start', run_id: request.run_id, ...(request.capture_id === undefined ? {} : { capture_id: request.capture_id }) } });
+        case 'next': return application.next({ ...common, request });
         case 'retry': return application.retry({ ...common, request: { schema_version: 1, operation: 'retry', run_id: request.run_id } });
         case 'view': return application.view({ ...common, request: { schema_version: 1, operation: 'view', run_id: request.run_id } });
         case 'home': return application.home({ ...common, request });
@@ -776,7 +777,6 @@ export function createOrganizationAuthorityHttpServer(
         case 'send': return application.send({ ...common, request });
         case 'set_state': return application.set_state({ ...common, request });
         case 'assign': return application.assign({ ...common, request });
-        case 'sweep': return application.sweep({ ...common, request });
         default: {
           // Every operation the API knows is served: one added to the API does not compile here until it is.
           const unserved: never = request;

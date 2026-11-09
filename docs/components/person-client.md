@@ -102,13 +102,14 @@ the local session: it makes no Authority request, prints no token or private
 path, and reports a session written by an older release as signed out
 ([`person-client.test.ts`](../../tests/person-client/person-client.test.ts)).
 Signed in, it also prints `hard_reauthentication_at`, the weekly sign-in, so an
-app can say ahead of time when the person must sign in again. A refresh that
-ends the session prints why as its `code`: `reauthentication_required` when the
-weekly sign-in has passed (no refresh is sent), or `sign_in_required` when the
-Authority refused it. The client also keeps that reason and the organization,
-token-free, in `session.v1.ended.json` beside the session until the next
-sign-in or sign-out, and signed-out `status` prints it as `session_ended`, so
-an app restarted meanwhile still knows why.
+app can say ahead of time when the person must sign in again (the desktop
+stopped saying so on 2026-11-08: it shows only that the sign-in ended). A
+refresh that ends the session prints why as its `code`:
+`reauthentication_required` when the weekly sign-in has passed (no refresh is
+sent), or `sign_in_required` when the Authority refused it. The client also
+keeps that reason and the organization, token-free, in `session.v1.ended.json`
+beside the session until the next sign-in or sign-out, and signed-out `status`
+prints it as `session_ended`, so an app restarted meanwhile still knows why.
 `INV-PERMISSIONS-013` does not govern this output. The Person client holds no
 pending approval work, and that invariant's diagnostic clause has no current
 enforcement point.
@@ -120,8 +121,9 @@ uploads, and `person open --ref note:<context-id>` reads one.
 `--audience-project-ids-json`); `status-v3` reports the saved receipt. Only me
 is the default. No Slack approval, provider code, background upload, or local
 queue is required. Search and exact reads return only authorized originals;
-submit-v3/status-v3 remain content-free. The carrier and
-optional metadata do not settle the final context shape. See the
+submit-v3/status-v3 remain content-free. Search matches a note's title and
+text; the V2 `updates search` and the per-note search hints were retired on
+2026-11-08. The carrier does not settle the final context shape. See the
 [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md).
 
 The ADRs that specify Ask, and how the Authority composes it, are in

@@ -15,7 +15,7 @@ are configuration limits, not a tested maximum customer count.
 | Questions wait before research starts | ECHO | Raise SDK session and model-call concurrency together, with enough memory. |
 | Memory fills or processes are killed | AWS capacity and SDK resource use | Increase host RAM; measure the whole process tree, not just the ECHO process. |
 | Requests expire while waiting | ECHO, plus proxy timeouts | Improve admission and queue handling. Use durable asynchronous jobs if work needs to outlive a request. |
-| Meetings or sweeps fall behind while Ask stays busy | ECHO | Reserve background capacity and improve scheduling; then increase worker concurrency. |
+| Meetings or impact checks fall behind while Ask stays busy | ECHO | Reserve background capacity and improve scheduling; then increase worker concurrency. |
 | Documents wait to be processed | ECHO | Increase the bounded parser worker pool; it currently parses one document at a time. |
 | The app slows as stored history grows | ECHO | Profile synchronous database work and full search rebuilds; improve queries and consider incremental indexing or separate workers. |
 | Older items disappear from search or summaries | ECHO | Fix coverage limits with pagination or indexed queries. More RAM does not fix a truncated search. |

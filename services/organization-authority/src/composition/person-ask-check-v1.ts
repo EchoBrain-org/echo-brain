@@ -1,5 +1,4 @@
 import type Database from 'better-sqlite3';
-import { sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
 import {
   PERSON_ASK_CHECK_KIND_V1,
   validatePersonAskCheckV1,
@@ -12,7 +11,7 @@ import {
 } from '@echo-brain/organization-api';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import type { ImpactItemRowV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
+import type { SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open-item-people-v1.js';
 import type { SqlitePersonOriginalContextRetrievalV1 } from '../adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
 import type { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/sqlite/project-context-v1.js';
@@ -24,26 +23,22 @@ import type { PersonReadableDecisionProjectsV1 } from './person-record-search-ro
 
 /**
  * The Ask source check (Ask timeline v1, C1; ADR-0047): `POST /v1/person/ask/check` takes the sources old answers cited and
- * answers, for each, whether it is the `same`, `changed`, `unreadable` or `unknown`. Readability comes first, through the
- * policy of the read each source stands for, so `changed` and a ticket's marker only ever come for a source the caller can
- * read now, and `unreadable` never says whether a source is hidden, deleted or never existed (ADR-0012). The answer carries
- * no label, text, count or id.
+ * answers, for each, only whether the caller can read it now: `same` when they can, `unreadable` when they cannot, `unknown`
+ * when its tool cannot tell; never `changed`. Readability goes through the policy of the read each source stands for, and
+ * `unreadable` never says whether a source is hidden, deleted or never existed (ADR-0012). The answer carries no label,
+ * text, count or id.
  *
  * - `approved_record`: the Layer 1 exact read with the caller's current grants (`readableDecisionProjects`), with no search
- *   generation. Records are immutable, so a readable one is always the same.
- * - `source_revision`: the originals ACL under global access (`checkSourceRevisions`); changed when a newer readable revision
- *   of the same source exists, as for an imported meeting edited since. Notes and documents never change.
- * - `follow_up`: the open item through the open-items policy (`see_row`), as `runs` `item` reads it; changed when its owner,
- *   state or send moved after the turn was asked.
- * - `ticket`: read in bulk through the caller's own connection to its tool; changed when its marker differs from the
- *   request's. Without one it is the same, and its marker is the asker's baseline.
- * - `page`: its version read by id through the caller's own connection; changed when the version moved and the cited
- *   section's text is no longer on the page (any move for an inventory item, which cites no text).
+ *   generation.
+ * - `source_revision`: the cited revision through the originals ACL under global access (`checkSourceRevisions`).
+ * - `follow_up`: the open item through the open-items policy (`see_row`), as `runs` `item` reads it.
+ * - `ticket`: read in bulk through the caller's own connection to its tool. A readable ticket still carries its current
+ *   marker, since every released client refuses one without it; a request's marker is accepted and ignored.
+ * - `page`: its version read by id through the caller's own connection; no page body is read.
  *
  * The database kinds are read in one Authority read transaction: no `BEGIN IMMEDIATE`, no audit row, nothing written, since
  * the check releases nothing. The live kinds follow, each tool on its own and all within the deadline. A source whose tool
- * is not connected or fails, or that runs past the budget (two metadata calls per tool, ten page bodies per request) or the
- * deadline, is `unknown`, and the failure is reported without content.
+ * is not connected or fails, or that runs past the deadline, is `unknown`, and the failure is reported without content.
  */
 export interface CreatePersonAskCheckV1Options {
   /** The Authority database the database kinds are read from; the check's one read transaction is opened on it. */
@@ -63,35 +58,21 @@ export interface CreatePersonAskCheckV1Options {
   readonly deadline_ms?: number;
 }
 /** A live read the check could not finish: which read, and the error's Authority code (`error` otherwise) or `deadline`. Nothing else. */
-export interface PersonAskCheckLiveFailureV1 { readonly kind: 'person_ask_check_live_read'; readonly reason: 'tickets' | 'pages' | 'page_bodies'; readonly code: string }
+export interface PersonAskCheckLiveFailureV1 { readonly kind: 'person_ask_check_live_read'; readonly reason: 'tickets' | 'pages'; readonly code: string }
 
-/** The live budget (Ask timeline v1, C1): per tool two metadata calls of 50 ids, per request ten page bodies and 15 seconds. */
-const PERSON_ASK_CHECK_LIVE_BUDGET_V1 = Object.freeze({ ids_per_tool: 100, page_bodies: 10, deadline_ms: 15_000 });
+/** The live reads' deadline (Ask timeline v1, C1): 15 seconds per request. */
+const PERSON_ASK_CHECK_DEADLINE_MS_V1 = 15_000;
 
 const SAME: PersonAskCheckItemV1 = Object.freeze({ state: 'same' });
-const CHANGED: PersonAskCheckItemV1 = Object.freeze({ state: 'changed' });
 const UNREADABLE: PersonAskCheckItemV1 = Object.freeze({ state: 'unreadable' });
 const UNKNOWN: PersonAskCheckItemV1 = Object.freeze({ state: 'unknown' });
-/** What a page inventory or continuation item cites as its text: none. */
-const EMPTY_TEXT_SHA256 = sha256Digest('');
 
 type CheckedCitation<K extends PersonAnswerEvidenceCitationV8['kind']> = Extract<PersonAnswerEvidenceCitationV8, { readonly kind: K }>;
-interface Entry<C> { readonly index: number; readonly item: PersonAskCheckRequestItemV1; readonly citation: C }
+interface Entry<C> { readonly index: number; readonly citation: C }
 
 /** The request's items of one kind, with their places. */
 function entriesOf<K extends PersonAnswerEvidenceCitationV8['kind']>(items: readonly PersonAskCheckRequestItemV1[], kind: K): Entry<CheckedCitation<K>>[] {
-  return items.flatMap((item, index) => (item.citation.kind === kind ? [{ index, item, citation: item.citation as CheckedCitation<K> }] : []));
-}
-
-/** The first distinct ids, in request order, that one tool's two metadata calls read. */
-function budgeted(ids: readonly string[]): ReadonlySet<string> {
-  return new Set([...new Set(ids)].slice(0, PERSON_ASK_CHECK_LIVE_BUDGET_V1.ids_per_tool));
-}
-
-/** When a follow-up's row last moved: the latest of its owner, state and send times; undefined while none was set. */
-function lastMoved(row: Pick<ImpactItemRowV1, 'owner_set_at' | 'state_set_at' | 'sent_at'>): number | undefined {
-  const times = [row.owner_set_at, row.state_set_at, row.sent_at].flatMap(at => (at === null ? [] : [Date.parse(at)]));
-  return times.length === 0 ? undefined : Math.max(...times);
+  return items.flatMap((item, index) => (item.citation.kind === kind ? [{ index, citation: item.citation as CheckedCitation<K> }] : []));
 }
 
 /** Resolves when the signal aborts. */
@@ -103,7 +84,7 @@ function aborted(signal: AbortSignal): Promise<void> {
 }
 
 export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): PersonAskCheckHttpApplicationV1 {
-  const deadlineMs = options.deadline_ms ?? PERSON_ASK_CHECK_LIVE_BUDGET_V1.deadline_ms;
+  const deadlineMs = options.deadline_ms ?? PERSON_ASK_CHECK_DEADLINE_MS_V1;
   const report = (reason: PersonAskCheckLiveFailureV1['reason'], code: string): void =>
     observeEventV1(options.on_live_failure, Object.freeze({ kind: 'person_ask_check_live_read' as const, reason, code }));
   const checkOf = (kind: 'ticket' | 'page', toolId: string): PersonSourceCheckV1 | undefined =>
@@ -124,18 +105,14 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
     const originals = entriesOf(items, 'source_revision');
     if (originals.length > 0) {
       const states = options.originals.checkSourceRevisions({ access_token, citations: originals.map(({ citation }) => citation) });
-      originals.forEach(({ index }, at) => { answers[index] = states[at] === 'same' ? SAME : states[at] === 'changed' ? CHANGED : UNREADABLE; });
+      originals.forEach(({ index }, at) => { answers[index] = states[at] === 'same' ? SAME : UNREADABLE; });
     }
     const followUps = entriesOf(items, 'follow_up');
     if (followUps.length > 0) {
       const found = options.items.readMany(followUps.map(({ citation }) => citation.item_id));
-      const seen = new Map(assessOpenItemsV1({ records, people: options.people }, openItemViewerV1(access_token, authorization), [...found.values()]).assessed
-        .filter(entry => entry.access.see_row).map(entry => [entry.row.item_id, entry.row] as const));
-      for (const { index, item, citation } of followUps) {
-        const row = seen.get(citation.item_id);
-        const moved = row === undefined ? undefined : lastMoved(row);
-        answers[index] = row === undefined ? UNREADABLE : moved !== undefined && moved > Date.parse(item.asked_at) ? CHANGED : SAME;
-      }
+      const seen = new Set(assessOpenItemsV1({ records, people: options.people }, openItemViewerV1(access_token, authorization), [...found.values()]).assessed
+        .filter(entry => entry.access.see_row).map(entry => entry.row.item_id));
+      for (const { index, citation } of followUps) answers[index] = seen.has(citation.item_id) ? SAME : UNREADABLE;
     }
   }
 
@@ -168,47 +145,20 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
         const failed = (reason: PersonAskCheckLiveFailureV1['reason'], error: unknown): void => {
           if (input.signal?.aborted !== true) report(reason, timedOut ? 'deadline' : errorCodeV1(error));
         };
-        const bodies = { remaining: PERSON_ASK_CHECK_LIVE_BUDGET_V1.page_bodies };
+        // Each tool reads each distinct id once, in request order: a request's at most 100 items keep it to its two metadata
+        // calls of 50 ids.
         const readTickets = async (check: PersonTicketCheckV1, entries: readonly Entry<PersonTicketCitationV1>[]): Promise<void> => {
-          const ids = budgeted(entries.map(({ citation }) => citation.ticket_id));
-          const markers = await check.markers({ access_token, ticket_ids: [...ids], signal });
-          for (const { index, item, citation } of entries) {
-            if (!ids.has(citation.ticket_id)) continue;
+          const markers = await check.markers({ access_token, ticket_ids: [...new Set(entries.map(({ citation }) => citation.ticket_id))], signal });
+          for (const { index, citation } of entries) {
             const marker = markers.get(citation.ticket_id);
-            // Without a marker of its own, the asker takes the ticket's current one as its baseline. A ticket read with no marker
-            // to compare is readable, but nothing is known of it.
-            answers[index] = marker === undefined ? UNREADABLE : marker === null ? UNKNOWN
-              : Object.freeze({ state: item.marker === undefined || item.marker === marker ? 'same' : 'changed', marker });
+            // A readable ticket carries its current marker, which released clients require on it. A ticket read with no marker
+            // is readable, but nothing is known of it.
+            answers[index] = marker === undefined ? UNREADABLE : marker === null ? UNKNOWN : Object.freeze({ state: 'same', marker });
           }
         };
         const readPages = async (check: PersonPageCheckV1, entries: readonly Entry<PersonPageCitationV1>[]): Promise<void> => {
-          const ids = budgeted(entries.map(({ citation }) => citation.page_id));
-          const versions = await check.versions({ access_token, page_ids: [...ids], signal });
-          const compared: Entry<PersonPageCitationV1>[] = [];
-          for (const entry of entries) {
-            const { index, citation } = entry;
-            if (!ids.has(citation.page_id)) continue;
-            const version = versions.get(citation.page_id);
-            if (version === undefined) answers[index] = UNREADABLE;
-            else if (version === citation.version) answers[index] = SAME;
-            else if (citation.text_sha256 === EMPTY_TEXT_SHA256) answers[index] = CHANGED;
-            else compared.push(entry);
-          }
-          // The request's page bodies go to the first pages that need one; the others stay unknown.
-          const read = new Set<string>();
-          for (const { citation } of compared) {
-            if (!read.has(citation.page_id) && bodies.remaining > 0) { read.add(citation.page_id); bodies.remaining -= 1; }
-          }
-          if (read.size === 0) return;
-          let sections: ReadonlyMap<string, readonly Sha256Digest[] | null>;
-          try { sections = await check.sections({ access_token, page_ids: [...read], signal }); }
-          catch (error) { failed('page_bodies', error); return; }
-          for (const { index, citation } of compared) {
-            if (!read.has(citation.page_id)) continue;
-            const digests = sections.get(citation.page_id);
-            // Section numbers move when an edit above adds or removes one: the cited text anywhere on the page is unchanged.
-            answers[index] = digests === undefined ? UNREADABLE : digests === null ? UNKNOWN : digests.includes(citation.text_sha256) ? SAME : CHANGED;
-          }
+          const versions = await check.versions({ access_token, page_ids: [...new Set(entries.map(({ citation }) => citation.page_id))], signal });
+          for (const { index, citation } of entries) answers[index] = versions.has(citation.page_id) ? SAME : UNREADABLE;
         };
         const reads = [
           ...[...tickets].map(([check, entries]) => readTickets(check, entries).catch(error => { failed('tickets', error); })),

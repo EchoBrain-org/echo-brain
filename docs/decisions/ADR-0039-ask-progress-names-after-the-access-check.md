@@ -349,3 +349,16 @@ from the host's `forAccount`, which passes the page's account to every
 account-scoped command, Ask included, and maps the client's refusal; the host
 no longer runs its own account check around the call. `session-host.test.ts`,
 `person-account-pin.test.ts` and `account.spec.ts` cover it.
+
+On 2026-11-08 (lean-down) the desktop stopped listing rows. Its live line
+keeps the pulse, the timer, Cancel and the changing words, which still name
+what Ask reads once the access check has passed ("Reading Tuesday sync and 2
+more"), but no rows open under it, and none open under a finished answer: the
+page keeps only the receipt's `looked_through` for its foot label. Progress V3
+and its receipt, the rules above and the Authority's tests are unchanged; the
+desktop host forwards a searched step without its sources and a receipt as its
+count alone. In the round trip
+(`tests/architecture/ask-progress-roundtrip.test.ts`), the decision, the
+document and the follow-up now open through the answer's cited sources rather
+than by the names the line showed, and the test checks that the line named
+the follow-up while the writer ran.

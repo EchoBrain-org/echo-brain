@@ -7,15 +7,15 @@ import { REACH_COLLECTIONS, REACH_WINDOWS } from "./reach.mjs";
 /** The committed THERM world and cases (research loop evaluation v1). */
 export const DATASET_ROOT = fileURLToPath(new URL("..", import.meta.url));
 export const TEST_PERSON = "{{TEST_PERSON}}";
-const TRIGGERS = new Set(["ask", "approved_record", "sweep"]);
-const STATES = new Set(["S0", "S1"]);
+const TRIGGERS = new Set(["ask", "approved_record"]);
+/** The world state every case runs at: S0, the founder's export plus the additions. */
+const STATES = new Set(["S0"]);
 const BUDGETS = new Set(["live", "background"]);
 const OUTCOMES = new Set(["answerable", "partial", "not_found"]);
 /** `list` (ADR-0041): which items exist; its evidence names every member, and it scores only on naming them all. */
 const PART_TYPES = new Set(["fact", "date", "owner", "status", "conflict", "change", "list"]);
 /** What a project member reads of a meeting: its approved records. No transcript is ever shared (ADR-0046). */
 const MEETING_ITEMS = new Set(["decision", "action", "rationale"]);
-const VERDICTS = new Set(["landed", "not_landed", "no_evidence"]);
 /** The kinds an Ask need declares (ADR-0041): a case may name those its plan should declare. */
 export const NEED_KINDS = Object.freeze(["which_items", "which_say", "content"]);
 /** A key drafted from the export that the founder has not confirmed yet. */
@@ -204,16 +204,6 @@ export function datasetProblems(dataset) {
     if ((entry.trigger === "approved_record") !== (entry.scope?.kind === "record")) problems.push(`${where}: approved records, and only they, take the record's scope`);
     if (entry.trigger === "approved_record") problems.push(...affectedProblems(entry, meetings, restricted));
     else if (entry.affected !== undefined) problems.push(`${where}: only approved records list affected items`);
-    if (entry.trigger === "sweep") {
-      if (!Array.isArray(entry.findings) || entry.findings.length === 0) problems.push(`${where}: Sweep needs findings`);
-      for (const finding of entry.findings ?? []) for (const ref of finding.citations ?? []) problems.push(...refProblems(ref, meetings, `${where} finding`));
-      if (!Array.isArray(entry.verdicts) || entry.verdicts.length !== (entry.findings ?? []).length || entry.verdicts.some(verdict => !VERDICTS.has(verdict.expected))) problems.push(`${where}: Sweep needs one valid verdict per finding`);
-      // A sweep result is graded by finding_index, so verdict i must be finding i's.
-      else if (entry.verdicts.some((verdict, index) => verdict.finding !== entry.findings[index]?.finding)) problems.push(`${where}: each Sweep verdict must name its own finding, in the findings' order`);
-      // R77: a sweep re-reads its findings' items with no planner, so nothing asks for a need or reports a gap; its verdicts say what was not found.
-      if (entry.expected_needs?.length > 0 || entry.gaps?.length > 0) problems.push(`${where}: a Sweep has no planner, so it names no expected needs or gaps`);
-    }
-    if (entry.trigger !== "sweep" && entry.state !== "S0") problems.push(`${where}: only Sweeps run at S1`);
     // An open-ended case whose answer the world cannot fix in advance ("what happened yesterday") is graded on reach and cost alone.
     if (!Array.isArray(entry.parts) || (entry.parts.length === 0 && entry.expected_outcome !== "not_found" && entry.reach === undefined)) problems.push(`${where}: parts are required unless nothing should be found or the case is graded on reach and cost alone`);
     for (const part of entry.parts ?? []) {

@@ -1,16 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dateTime, marked, meetingTime, snippet } from '../../src/renderer/format.js';
-
-describe('a match shows why it matched', () => {
-  it('marks the query\'s words in a title, and finds them in the text when the title has none', () => {
-    expect(marked('Pricing decision', ['pricing'])).toEqual([{ text: 'Pricing', hit: true }, { text: ' decision', hit: false }]);
-    expect(marked('No words', [])).toEqual([{ text: 'No words', hit: false }]);
-    expect(snippet('Apollo moves to usage-based pricing tiers from October and then on to the rest of the plan', ['pricing']))
-      .toBe('…moves to usage-based pricing tiers from October…');
-    expect(snippet('Short pricing note', ['pricing'])).toBe('Short pricing note');
-    expect(snippet('Nothing here', ['pricing'])).toBeNull();
-  });
-});
+import { dateTime, meetingTime } from '../../src/renderer/format.js';
 
 describe('a whole day is the day its UTC time names', () => {
   it('in the source pane and on a card, whatever the meeting\'s or this computer\'s time zone', () => {

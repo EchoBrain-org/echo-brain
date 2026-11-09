@@ -157,7 +157,6 @@ const MOST = 1_000;
 const indexes = (value: unknown, maximum = MOST): value is number[] => Array.isArray(value) && value.length <= maximum && value.every(index);
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const projectId = (value: unknown): boolean => { try { validateProjectIdV1(value); return true; } catch { return false; } };
-const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const time = (value: unknown): value is string => string(value, 64) && !Number.isNaN(Date.parse(value));
 const STATUSES: ReadonlySet<unknown> = new Set(['answered', 'partial', 'not_found', 'records_only']);
 const OUTCOMES: ReadonlySet<unknown> = new Set(['answered', 'partial', 'not_found']);
@@ -266,20 +265,22 @@ function retired(turn: unknown): boolean {
     || parts.some(part => record(part) && (Object.hasOwn(part, 'layout') || (part.blocks === undefined && Array.isArray(part.statements) && part.statements.length > 0)));
 }
 
-/** A turn as a put writes it, or null for anything else. */
+/**
+ * A turn as a put writes it, or null for anything else. The tickets'
+ * baseline markers an older desktop kept on a turn are retired: never read
+ * back, so never written again.
+ */
 export function timelineTurn(value: unknown): TimelineTurn | null {
   if (!record(value) || !string(value.id) || !ID.test(value.id) || !time(value.asked_at) || !string(value.text, 2_000) || !string(value.question, 2_000)
       || !scope(value.scope) || !answer(value.answer)) return null;
   if (value.since !== undefined && !statements(value.since)) return null;
   if (value.again_of !== undefined && !(string(value.again_of) && ID.test(value.again_of))) return null;
-  if (value.markers !== undefined && !(record(value.markers) && Object.entries(value.markers).every(([at, marker]) => /^\d{1,3}$/.test(at) && string(marker) && SHA256.test(marker)))) {
-    return null;
-  }
   // The sources a check found unreadable: distinct places among the answer's own sources.
   const sources = (value.answer as TimelineAnswer).sources.length;
   if (value.unreadable !== undefined && !(indexes(value.unreadable, 256) && new Set(value.unreadable).size === value.unreadable.length
       && value.unreadable.every(at => at < sources))) {
     return null;
   }
-  return value as unknown as TimelineTurn;
+  const { markers: _retired, ...turn } = value;
+  return turn as unknown as TimelineTurn;
 }

@@ -12,7 +12,7 @@ interface Opener {
   /**
    * What the panel shows: the meeting's approved record with the cited items
    * lit (`record`), the cited passages (`passages`), a follow-up's title,
-   * owner, status and latest check (`follow_up`), a project's name
+   * owner and status (`follow_up`), a project's name
    * (`project`), a person's name (`person`), a tool and how you are connected
    * to it (`tool`), or Open in its own app (`external`).
    */

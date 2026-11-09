@@ -10,7 +10,7 @@ import {
   PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_ACTIVITY_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_PROJECT_RENAME_PATH_V1, PERSON_RECORDS_PATH_V1,
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, PERSON_RESEARCH_EVAL_READ_PATH_V1, PERSON_RESEARCH_EVAL_START_PATH_V1, PERSON_RUNS_MAX_RESPONSE_BYTES_V1, PERSON_RUNS_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1, PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1, PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_VALUE_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1,
-  PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PersonQueryInputError, createPersonAskProgressDecoderV3,
+  PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PersonQueryInputError, createPersonAskProgressDecoderV3,
   isOrganizationApiValidationError, personRefKindV1, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, validateOrganizationPersonToolsV4,
@@ -22,7 +22,7 @@ import {
   validatePersonProjectActivityV1, validatePersonRecordListV1, validatePersonRecordSearchRequestV2, validatePersonRecordSearchV2, validatePersonResearchEvalReadRequestV1,
   validatePersonResearchEvalReadResponseV1, validatePersonResearchEvalStartReceiptV1, validatePersonResearchEvalStartRequestV1, validatePersonRunsRequestV1,
   validatePersonRunsResultV1, validatePersonSourceEvidenceReadRequestV1, validatePersonSourceEvidenceV1, validatePersonUpdateReceiptV3, validatePersonUpdateRequestId,
-  validatePersonUpdateStatusResultV3, validatePersonUpdateSubmitV3, validatePersonUploadSearchResultV2, validatePersonUploadSearchResultV3, validatePersonUploadSearchV2,
+  validatePersonUpdateStatusResultV3, validatePersonUpdateSubmitV3, validatePersonUploadSearchResultV3,
   validatePersonUploadSearchV3, validateProjectArchiveV1, validateProjectContextAssociateV1, validateProjectContextBrowseV1, validateProjectContextDissociateV1,
   validateProjectContextSearchResultV2, validateProjectContextSearchV1, validateProjectCreateReceiptV1, validateProjectCreateV1, validateProjectDirectorySearchV1,
   validateProjectDirectoryV1, validateProjectIdV1, validateProjectLeaveV1, validateProjectListV2, validateProjectMemberAddV1, validateProjectMemberRemoveV1,
@@ -416,8 +416,6 @@ export const CONTEXT_ROUTES = Object.freeze({
     response: validateProjectMutationReceiptV1, matches: (result, request) => result.operation === 'dissociate' && result.context_id === request.context_id && applied(result, request) }),
   searchProjectContextV2: route({ request: validateProjectContextSearchV1, path: () => `${PERSON_PROJECTS_PATH_V2}/context/search`, response: validateProjectContextSearchResultV2,
     matches: (result, request) => result.project_id === request.project_id && fits(result.items, request) }),
-  searchUploadsV2: route({ request: validatePersonUploadSearchV2, path: () => `${PERSON_UPDATES_PATH_V2}/search`, response: validatePersonUploadSearchResultV2,
-    matches: (result, request) => fits(result.results, request) }),
   submitUpdateV3: route({ request: validatePersonUpdateSubmitV3, path: () => PERSON_UPDATES_PATH_V3, status: 202, mutation: 'upload', response: validatePersonUpdateReceiptV3,
     matches: (result, request) => result.request_id === request.request_id &&
       canonicalJson(result.association_project_ids) === canonicalJson(request.association_project_ids) && canonicalJson(result.audience) === canonicalJson(request.audience) }),
@@ -797,8 +795,8 @@ export class PersonAuthorityClient {
   }
 
   /**
-   * The Ask source check (Ask timeline v1, C1; ADR-0047): whether each source old answers cited is the same, changed, unreadable
-   * or unknown now, and no content.
+   * The Ask source check (Ask timeline v1, C1; ADR-0047): whether the caller can still read each source old answers cited, and
+   * no content.
    */
   async askCheck(accessToken: string, value: PersonAskCheckRequestV1, signal?: AbortSignal): Promise<PersonAskCheckV1> {
     const request = validatePersonAskCheckRequestV1(value);

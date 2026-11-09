@@ -93,8 +93,10 @@ The CLI exposes `person updates submit-v3|status-v3|search-v3` and
 `person open --ref` reads a note's text or a document's extracted text.
 `person list --project <project-id>` browses a project's content,
 `person projects search-v2` searches it and `person open --ref` opens one row
-([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)); the
-desktop app's project page does the same. New
+([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)). The
+desktop app's project page lists and opens its content the same way, but no
+longer searches it: since 2026-11-08 its bar only asks. Note search matches a
+note's title and text. New
 admission commands accept `--association-project-ids-json`; a projects
 audience also uses `--audience-project-ids-json`. Document retry selects the
 retained snapshot's version automatically. In the desktop app, only **Save**

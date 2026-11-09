@@ -1,7 +1,8 @@
 # Ask and research
 
 **Status:** Current. Verified against `origin/main` at
-`aa92138e4a7d8386b2ff51a95c7d2f82e86236be` (2026-10-30).
+`aa92138e4a7d8386b2ff51a95c7d2f82e86236be` (2026-10-30); updated 2026-11-08
+for the lean-down (sweeps and per-note search hints retired).
 
 Ask answers a person's question from everything that person can read in ECHO
 and in their own connected tools. The same research engine runs impact checks
@@ -83,7 +84,7 @@ Budgets (`agentic-research-v1.ts`):
 | Profile | Rounds | Model calls | Deadline |
 | --- | --- | --- | --- |
 | Live Ask | 10 | 24 | 90 s |
-| Background (impact checks, sweeps) | 20 | 48 | 300 s |
+| Background (impact checks) | 20 | 48 | 300 s |
 
 ## Safeguards
 
@@ -105,8 +106,9 @@ Budgets (`agentic-research-v1.ts`):
 
 ## Models
 
-Ask, research and search hints call `anthropic/claude-sonnet-5.5` through
-OpenRouter (`providers/openrouter`). Meeting extraction uses
+Ask and research call `anthropic/claude-sonnet-5.5` through OpenRouter
+(`providers/openrouter`). Saving a note makes no model call: the per-note
+search hints were retired on 2026-11-08. Meeting extraction uses
 `anthropic/claude-sonnet-4.6`, whose configuration digest is committed when a
 source is admitted, so changing it needs fresh state. On staging, the connector
 profile can select the Claude Agent SDK research engine, and one member can use

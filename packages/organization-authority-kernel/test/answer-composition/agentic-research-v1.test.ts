@@ -201,7 +201,7 @@ describe("research result beside Ask", () => {
     }, { now_ms: () => time });
 
     const view = await research.research({
-      trigger: "sweep",
+      trigger: "approved_record",
       brief: {
         goal: { kind: "task", task: "Find the current approved evidence." },
         starting: [{ citation: full.citation, if_unreadable: "fail" }],
@@ -272,13 +272,13 @@ describe("research-only triggers", () => {
     const h = harness([
       step([part("Two decimals landed?", [need("SW-22b state", "found", ["E1"]), need("TC-D-06 state", "found", ["E2"])])], [{ tool: "finish", args: {} }]),
     ], { openCitation });
-    const view = await h.research.research({ trigger: "sweep", brief: taskBrief(
+    const view = await h.research.research({ trigger: "approved_record", brief: taskBrief(
       `Recheck: firmware cited ${agenticStartingSlotV1(1)}; the test case cited ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(1)}.`,
       [ticketOne.citation, ticketTwo.citation], "report") });
     expect(openCitation).toHaveBeenCalledTimes(2);
     expect(h.prompt(0)).toMatchObject({ task: "Recheck: firmware cited E1; the test case cited E2 and E1." });
     expect(view.stop.reason).toBe("finished");
-    expect(h.audit[0]).toMatchObject({ trigger: "sweep", outcome: "answered" });
+    expect(h.audit[0]).toMatchObject({ trigger: "approved_record", outcome: "answered" });
   });
 
   it("fails closed before any model call when starting evidence is not readable", async () => {
@@ -297,10 +297,9 @@ describe("research-only triggers", () => {
   it("rejects a blank task or a malformed starting item before any read", async () => {
     const openCitation = vi.fn();
     const h = harness([], { openCitation });
-    await expect(h.research.research({ trigger: "sweep", brief: taskBrief(" ", [record("x").citation]) })).rejects.toThrow("research goal is invalid");
-    await expect(h.research.research({ trigger: "sweep", brief: taskBrief("Recheck.", ["not a citation"]) })).rejects.toThrow("research goal is invalid");
-    await expect(h.research.research({ trigger: "sweep", brief: { ...taskBrief("Recheck.", [record("x").citation]), starting: [{ citation: record("x").citation, if_unreadable: "ignore" as never }] } })).rejects.toThrow("research goal is invalid");
-    await expect(h.research.research({ trigger: "sweep", brief: { ...taskBrief("Recheck.", [record("x").citation]), goal: { kind: "task", task: "Recheck.", data: [1 as never] } } })).rejects.toThrow("research goal is invalid");
+    await expect(h.research.research({ trigger: "approved_record", brief: taskBrief(" ", [record("x").citation]) })).rejects.toThrow("research goal is invalid");
+    await expect(h.research.research({ trigger: "approved_record", brief: taskBrief("Recheck.", ["not a citation"]) })).rejects.toThrow("research goal is invalid");
+    await expect(h.research.research({ trigger: "approved_record", brief: { ...taskBrief("Recheck.", [record("x").citation]), starting: [{ citation: record("x").citation, if_unreadable: "ignore" as never }] } })).rejects.toThrow("research goal is invalid");
     expect(openCitation).not.toHaveBeenCalled();
   });
 
@@ -357,9 +356,9 @@ describe("task briefs with a renderer", () => {
     expect(audit[0]!.generations.map(entry => entry.role)).toEqual(["step", "step", "answer"]);
   });
 
-  // The impact card's call, and the sweep's: a cancel or the deadline still throws, never a not-assessed result.
+  // The impact card's call: a cancel or the deadline still throws, never a not-assessed result.
   it.each([
-    ["approved_record", "timed_out"], ["approved_record", "cancelled"], ["sweep", "timed_out"], ["sweep", "cancelled"],
+    ["approved_record", "timed_out"], ["approved_record", "cancelled"],
   ] as const)("writes one %s %s witness and releases nothing when the renderer's model call is cut off", async (trigger, outcome) => {
     vi.useFakeTimers();
     try {
@@ -368,15 +367,14 @@ describe("task briefs with a renderer", () => {
       let checks = 0;
       let entered!: () => void;
       const started = new Promise<void>(resolve => { entered = resolve; });
-      // Research finishes at once (a sweep runs no planner); the renderer's call never replies.
-      const plannerCalls = trigger === "sweep" ? 0 : 1;
+      // Research finishes after one step; the renderer's call never replies.
+      const plannerCalls = 1;
       const h = harness((_input, index) => {
         if (index < plannerCalls) return step([part("Part", [need("affected tickets", "not_found")])], [{ tool: "finish", args: {} }]);
         entered(); return new Promise<never>(() => undefined);
       }, { openCitation: async () => result([decision]), revalidate: async () => ({ checked_at: `2026-10-06T00:00:0${checks += 1}.000Z` }) });
       const defined = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === trigger)!;
-      const event = defined.parseEvent(trigger === "approved_record" ? { record: decision.citation }
-        : { findings: [{ finding: "The display shows one decimal.", expected: "two decimals", citations: [decision.citation] }] });
+      const event = defined.parseEvent({ record: decision.citation });
       const pending = h.research.renderWithResearch({ trigger: defined.name, brief: defined.brief(event, h.port.scope), renderer: defined.renderer!, trigger_input: event, signal: controller.signal });
       await started;
       const rejected = expect(pending).rejects.toMatchObject({ name: outcome === "timed_out" ? "AgenticAskDeadlineErrorV1" : "AbortError" });

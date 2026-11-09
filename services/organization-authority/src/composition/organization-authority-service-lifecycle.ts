@@ -28,8 +28,8 @@ import { clearReadableSearchActiveGenerationV1, readableSearchExceededLimitV1 } 
  * Authority/control, then the V4 record append outbox. Keeping those writes
  * behind this seam makes the process lifecycle independent of old runtime
  * installation, enrollment, lease, and record-writer machinery. Each
- * processing implements the phases it has: the Authority's own runs notes and
- * search, the personal meeting runtime runs meetings and their approvals.
+ * processing implements the phases it has: the Authority's own runs search, the
+ * personal meeting runtime runs meetings and their approvals.
  */
 export interface OrganizationAuthorityProcessingCycleV1 {
   /** Replays finalized control-plane actions that were not appended to V4. */
@@ -37,9 +37,9 @@ export interface OrganizationAuthorityProcessingCycleV1 {
   /**
    * Polls admitted sources and durably stages their meetings for approval. Given `report`, it may leave passes
    * running after it returns, send their failures there and call `settled` as each one settles (neither throws);
-   * `settle` waits for them.
+   * `settle` waits for them. The Authority's own processing has no intake.
    */
-  pollAndStageAdmittedMeetings(signal: AbortSignal, report?: (failure: unknown) => void, settled?: () => void): Promise<void>;
+  pollAndStageAdmittedMeetings?(signal: AbortSignal, report?: (failure: unknown) => void, settled?: () => void): Promise<void>;
   /**
    * Resolves once no meeting pass is running: detached lanes, their top-ups and targeted passes (the staging canary).
    * With `stop` (shutdown), no new lane starts from then on.
@@ -127,12 +127,11 @@ const MEETING_LANE_GRACE_MS = 20_000;
  * a restart completes every recoverable finalized action before consuming new
  * source input; a row that cannot publish waits for a later pass. Every operation
  * is awaited in order. Only recovery and publication, which append to the record
- * log, hold the writer gate (`exclusive`); notes enrichment and source intake wait
- * on providers and models outside it, kept correct by durable fences (leases,
- * cursor compare-and-swap). Direct callers run everything in place. Given
- * `report`, a failed primary intake (the Authority's notes enrichment, which
- * marks a corrupt item unavailable and defers any other failure to a later
- * cycle) is reported and the cycle goes on, and the
+ * log, hold the writer gate (`exclusive`); source intake waits on providers and
+ * models outside it, kept correct by durable fences (leases, cursor
+ * compare-and-swap). Direct callers run everything in place. Given `report`, a
+ * failed primary intake (when the primary processing has one, as the
+ * authority-core eval's does) is reported and the cycle goes on, and the
  * personal intake may leave detached meeting lanes running, reporting their
  * failures there and calling `settled` as each one settles.
  */
@@ -152,13 +151,13 @@ export async function runOrganizationAuthorityProcessingCycleV1(
   await exclusive(() => phase("recovery", async () => { await processing.recoverV4Appends?.(signal); await additional?.recoverV4Appends?.(signal); }));
   signal.throwIfAborted();
   try {
-    await processing.pollAndStageAdmittedMeetings(signal);
+    await processing.pollAndStageAdmittedMeetings?.(signal);
   } catch (failure) {
     if (report === undefined || signal.aborted) throw failure;
     report(failure);
   }
   signal.throwIfAborted();
-  await additional?.pollAndStageAdmittedMeetings(signal, report, settled);
+  await additional?.pollAndStageAdmittedMeetings?.(signal, report, settled);
   signal.throwIfAborted();
   await exclusive(() => runOrganizationAuthorityApprovalPublicationV1(processing, signal, lifecycle, additional));
 }

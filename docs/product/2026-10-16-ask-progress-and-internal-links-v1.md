@@ -6,6 +6,18 @@ Date: 2026-10-16. Status: shipped in #330 (d2d03c6: progress and links) and
 (#338) later replaced what the person sees while Ask works and when the answer
 arrives.
 
+Implementation update, 2026-11-08 (lean-down): the desktop lists nothing under
+the line. The live line keeps its pulse, timer, Cancel and changing words,
+which name what Ask reads once the access check has passed ("Reading Tuesday
+sync and 2 more"), but no rows open under it. Nor do any open under a finished
+answer: its foot label stays ("3 sources · 20s", or "Looked through 68 items ·
+41s" for an answer with no sources), and opening it shows only the answer's
+sources. The rows, the receipt rows and "every name is a link" below no longer
+apply; an answer's sources open beside Ask as before. Progress V3 and its
+receipt are unchanged on the wire, and the page keeps only the receipt's
+count. A follow-up in the panel shows no latest check, since sweeps were
+retired.
+
 The founder decided on 2026-10-16:
 - Direction B, "a line plus what it opened", chosen from a two-option mockup.
 - Answers cite internal items in general, including follow-ups.

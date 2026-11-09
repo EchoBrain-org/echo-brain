@@ -5,7 +5,6 @@ import {
   type PersonFollowUpRefV1,
   type PersonOpenItemKindV1,
   type PersonOpenItemStateV1,
-  type PersonOpenItemVerdictV1,
 } from '@echo-brain/organization-api';
 import type { EvidenceDeskAttributesV1 } from './evidence-desk-v1.js';
 import type { PersonLiveSourceDescriptorV2 } from './evidence-desk-v2.js';
@@ -51,7 +50,7 @@ export const FOLLOW_UPS_SOURCE_DESCRIPTOR_V1: FollowUpsSourceDescriptorV1 = Obje
   selector: FOLLOW_UPS_SELECTOR_V1,
   // Content only: what it filters on, and which dates it has, are its capabilities (research tool contract v1). A due date
   // belongs to the item it follows and shows only once that item is read, so it is not a date a list can filter on.
-  description: "Shared follow-ups of approved decisions: what a decision asked of a ticket, page, record or meeting action, with its owner, status, latest check and decision, and the due date its tool shows. Search matches the decision's title and first line, the expected change, a ticket key and the owner's name, never words inside a ticket or page.",
+  description: "Shared follow-ups of approved decisions: what a decision asked of a ticket, page, record or meeting action, with its owner, status and decision, and the due date its tool shows. Search matches the decision's title and first line, the expected change, a ticket key and the owner's name, never words inside a ticket or page.",
   metadata_only_list: false,
   capabilities: Object.freeze({
     filters: Object.freeze({ status: Object.freeze(['open', 'done']), owner: 'name' as const }),
@@ -59,7 +58,6 @@ export const FOLLOW_UPS_SOURCE_DESCRIPTOR_V1: FollowUpsSourceDescriptorV1 = Obje
       created: 'when ECHO created the follow-up; every follow-up has it',
       sent: 'when it was sent to its owner; only sent follow-ups have it',
       reassigned: 'when its owner was last picked or reassigned; only follow-ups whose owner was changed have it',
-      checked: 'when it was last checked; only checked follow-ups have it',
     }),
     any_date: true,
     links: Object.freeze(['decision', 'follows']),
@@ -67,7 +65,6 @@ export const FOLLOW_UPS_SOURCE_DESCRIPTOR_V1: FollowUpsSourceDescriptorV1 = Obje
 });
 
 const STATUS_TEXT: Readonly<Record<PersonOpenItemStateV1, string>> = Object.freeze({ unsent: 'not sent yet', open: 'open', done: 'done', not_relevant: 'not relevant' });
-const VERDICT_TEXT: Readonly<Record<PersonOpenItemVerdictV1, string>> = Object.freeze({ landed: 'landed', still_open: 'still open', changed: 'changed', unreadable: 'could not be read' });
 const KIND_TEXT: Readonly<Record<PersonOpenItemKindV1, string>> = Object.freeze({ action: 'meeting action', ticket: 'ticket', page: 'page', record: 'ECHO meeting record', document: 'ECHO document' });
 
 /** The desk fields of one follow-up. The source adds its desk id, visibility, release receipt and links. */
@@ -77,31 +74,29 @@ export interface FollowUpDeskFieldsV1 {
   readonly ref: PersonFollowUpRefV1;
   readonly label: string;
   readonly attributes: EvidenceDeskAttributesV1;
-  /** ECHO's own dates (research tool contract v1): created, and sent, reassigned and checked once they happened. Absent when it has none. */
+  /** ECHO's own dates (research tool contract v1): created, and sent and reassigned once they happened. Absent when it has none. */
   readonly dates?: EvidenceDatesV1;
   readonly text: string;
 }
 
 /**
  * One follow-up as the desk carries it: its title as the label; owner, status
- * and due date as attributes; when ECHO created, sent, reassigned and last
- * checked it as dates; and as text, what it is on, what the decision expects
- * of it, its latest check and its decision. Every value comes from the
- * already-shaped evidence, so nothing the asker may not see can enter here.
+ * and due date as attributes; when ECHO created, sent and reassigned it as
+ * dates; and as text, what it is on, what the decision expects of it and its
+ * decision. Every value comes from the already-shaped evidence, so nothing the
+ * asker may not see can enter here.
  */
 export function followUpDeskFieldsV1(evidence: PersonFollowUpEvidenceV1): FollowUpDeskFieldsV1 {
   const citation: PersonFollowUpCitationV1 = Object.freeze({ kind: FOLLOW_UP_EVIDENCE_KIND_V1, item_id: evidence.item_id });
   const lines = [
     `On: ${KIND_TEXT[evidence.kind]}`,
     ...(evidence.expected === undefined ? [] : [`Expected: ${evidence.expected}`]),
-    evidence.check === undefined ? 'Latest check: none yet' : `Latest check: ${VERDICT_TEXT[evidence.check.verdict]} on ${evidence.check.checked_at.slice(0, 10)}`,
     ...(evidence.decision === undefined ? [] : [`Decision: ${evidence.decision.title}`, ...(evidence.decision.first_line === undefined ? [] : [`Decided: ${evidence.decision.first_line}`])]),
   ];
   const dates: EvidenceDatesV1 = {
     ...(evidence.created_at === undefined ? {} : { created: evidence.created_at }),
     ...(evidence.sent_at === undefined ? {} : { sent: evidence.sent_at }),
     ...(evidence.reassigned_at === undefined ? {} : { reassigned: evidence.reassigned_at }),
-    ...(evidence.check === undefined ? {} : { checked: evidence.check.checked_at }),
   };
   return Object.freeze({
     kind: FOLLOW_UP_EVIDENCE_KIND_V1, citation, ref: personFollowUpRefV1(citation), label: evidence.title,

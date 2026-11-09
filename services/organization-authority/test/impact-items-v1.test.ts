@@ -46,13 +46,13 @@ async function doneRunFixture(keys: readonly string[] = []) {
   return { ...f, run: f.finished[0]! };
 }
 const doneRunWithItems = (keys: readonly string[]) => doneRunFixture(keys);
-/** One item sent to Mina, and a pending sweep of the approver's. */
+/** One item sent to Mina. */
 async function sentItemFixture() {
   const f = await doneRunWithItems(['46']);
   const [item] = f.items.forRun(f.run.run_id);
   const sent = f.items.send({ run_id: f.run.run_id, by: f.owner.membership_id, command_id: 'cmd-send', choices: [{ item_id: item!.item_id, include: true, owner_membership_id: f.mina }] });
   if (sent.kind !== 'sent') throw new Error('expected a send');
-  return { ...f, itemId: item!.item_id, sweepRunId: f.runs.enqueueSweep(f.owner, { kind: 'mine' }).run_id };
+  return { ...f, itemId: item!.item_id };
 }
 
 describe('SQLite open items v1', () => {
@@ -75,7 +75,7 @@ describe('SQLite open items v1', () => {
     expect(rows.find(row => row.pointer.ticket_id === '46')).toMatchObject({
       run_id: f.run.run_id, item_key: draft('46').item_key, pointer: draft('46').pointer, record_sha256: f.recordSha256, organization_id: f.owner.organization_id,
       approver: { principal_id: f.owner.principal_id, membership_id: ARI }, relation: 'needs_updating', expected: 'launch next week',
-      owner_membership_id: f.mina, owner_match: 'jira_account', owner_set_by: null, owner_set_at: null, state: 'unsent', state_set_by: null, state_set_at: null, sent_at: null, send_command_id: null, check: null,
+      owner_membership_id: f.mina, owner_match: 'jira_account', owner_set_by: null, owner_set_at: null, state: 'unsent', state_set_by: null, state_set_at: null, sent_at: null, send_command_id: null,
       created_at: f.clock().toISOString(), updated_at: f.clock().toISOString(),
     });
     expect(rows.find(row => row.pointer.ticket_id === '47')).toMatchObject({ relation: 'conflicts', expected: null });
@@ -255,55 +255,26 @@ describe('SQLite open items v1', () => {
     expect(f.items.sentBy(f.run.run_id, 'cmd-1', [item.item_id])).toEqual({ kind: 'replayed', sent: 1, not_relevant: 0 });
   });
 
-  it('never moves an item back to unsent, keeps identity frozen, and keeps only a newer check', async () => {
+  it('never moves an item back to unsent and keeps identity frozen', async () => {
     const f = await sentItemFixture();
     expect(() => f.db.prepare("UPDATE authority_impact_items_v1 SET state='unsent', sent_at=NULL, send_command_id=NULL WHERE item_id=?").run(f.itemId)).toThrow();
     expect(() => f.db.prepare("UPDATE authority_impact_items_v1 SET expected='something else' WHERE item_id=?").run(f.itemId)).toThrow('immutable');
     expect(() => f.db.prepare('DELETE FROM authority_impact_items_v1 WHERE item_id=?').run(f.itemId)).toThrow('denied');
-    expect(f.db.transaction(() => f.items.recordCheck(f.db, { item_id: f.itemId, verdict: 'landed', by: f.owner.membership_id, at: '2026-10-08T10:00:00.000Z', run_id: f.sweepRunId }))()).toBe(true);
-    expect(f.db.transaction(() => f.items.recordCheck(f.db, { item_id: f.itemId, verdict: 'changed', by: f.owner.membership_id, at: '2026-10-08T09:00:00.000Z', run_id: f.sweepRunId }))()).toBe(false);
-    expect(f.db.transaction(() => f.items.recordCheck(f.db, { item_id: f.itemId, verdict: 'changed', by: f.mina, at: '2026-10-08T10:00:00.000Z', run_id: f.sweepRunId }))()).toBe(false);
-    expect(f.items.read(f.itemId)!.check).toMatchObject({ verdict: 'landed' });
-    expect(f.items.read(f.itemId)).toMatchObject({ state: 'open', check: { verdict: 'landed', by: f.owner.membership_id, at: '2026-10-08T10:00:00.000Z', run_id: f.sweepRunId } });
-    expect(f.db.transaction(() => f.items.recordCheck(f.db, { item_id: f.itemId, verdict: 'changed', by: f.mina, at: '2026-10-08T11:00:00.000Z', run_id: f.sweepRunId }))()).toBe(true);
-    expect(f.items.read(f.itemId)!.check).toEqual({ verdict: 'changed', by: f.mina, at: '2026-10-08T11:00:00.000Z', run_id: f.sweepRunId });
-    expect(() => f.db.prepare('UPDATE authority_impact_items_v1 SET checked_at=? WHERE item_id=?').run('2026-10-08T10:30:00.000Z', f.itemId)).toThrow('newer');
-    // Rewriting the last check without a newer time is refused, whichever check column it names.
-    expect(() => f.db.prepare("UPDATE authority_impact_items_v1 SET checked_verdict='landed' WHERE item_id=?").run(f.itemId)).toThrow('newer');
-    expect(() => f.db.prepare("UPDATE authority_impact_items_v1 SET checked_verdict='landed', checked_by=? WHERE item_id=?").run(ARI, f.itemId)).toThrow('newer');
-    expect(() => f.db.prepare('UPDATE authority_impact_items_v1 SET checked_run_id=? WHERE item_id=?').run(f.run.run_id, f.itemId)).toThrow('newer');
-    expect(() => f.db.prepare('UPDATE authority_impact_items_v1 SET checked_verdict=NULL, checked_by=NULL, checked_at=NULL, checked_run_id=NULL WHERE item_id=?').run(f.itemId)).toThrow('newer');
-    expect(f.items.read(f.itemId)!.check).toEqual({ verdict: 'changed', by: f.mina, at: '2026-10-08T11:00:00.000Z', run_id: f.sweepRunId });
-    expect(() => f.items.recordCheck(f.db, { item_id: f.itemId, verdict: 'landed', by: f.mina, at: '2026-10-08T12:00:00.000Z', run_id: f.sweepRunId })).toThrow('transaction');
-    expect(() => f.db.transaction(() => f.items.recordCheck(f.db, { item_id: f.itemId, verdict: 'landed', by: f.mina, at: '2026-10-08T12:00Z', run_id: f.sweepRunId }))()).toThrow();
+    expect(f.items.read(f.itemId)).toMatchObject({ state: 'open' });
   });
 
-  it('never lets an unreadable check replace a judged one, whichever finishes first, and keeps checks moving forward', async () => {
-    const record = (f: Awaited<ReturnType<typeof sentItemFixture>>, verdict: 'still_open' | 'unreadable', by: string, at: string) =>
-      f.db.transaction(() => f.items.recordCheck(f.db, { item_id: f.itemId, verdict, by, at, run_id: f.sweepRunId }))();
-    // Mina's sweep, which reads the ticket, started first; Ari's, whose desk cannot read it, started later and finishes first.
-    const unreadableFirst = await sentItemFixture();
-    expect(record(unreadableFirst, 'unreadable', ARI, '2026-10-08T10:30:00.000Z')).toBe(true);
-    expect(record(unreadableFirst, 'still_open', unreadableFirst.mina, '2026-10-08T10:00:00.000Z')).toBe(true);
-    // The judged check replaces the unreadable one, stamped just after it: a last check never moves back.
-    expect(unreadableFirst.items.read(unreadableFirst.itemId)!.check).toEqual({ verdict: 'still_open', by: unreadableFirst.mina, at: '2026-10-08T10:30:00.001Z', run_id: unreadableFirst.sweepRunId });
-    expect(record(unreadableFirst, 'unreadable', ARI, '2026-10-08T11:00:00.000Z')).toBe(false);
-    expect(unreadableFirst.items.read(unreadableFirst.itemId)!.check).toMatchObject({ verdict: 'still_open', by: unreadableFirst.mina });
-    // The judged check finishes first: no later unreadable check replaces it, Ari's own or anyone's.
-    const judgedFirst = await sentItemFixture();
-    expect(record(judgedFirst, 'still_open', judgedFirst.mina, '2026-10-08T10:00:00.000Z')).toBe(true);
-    expect(record(judgedFirst, 'unreadable', ARI, '2026-10-08T10:30:00.000Z')).toBe(false);
-    expect(record(judgedFirst, 'unreadable', judgedFirst.mina, '2026-10-09T10:00:00.000Z')).toBe(false);
-    expect(judgedFirst.items.read(judgedFirst.itemId)!.check).toEqual({ verdict: 'still_open', by: judgedFirst.mina, at: '2026-10-08T10:00:00.000Z', run_id: judgedFirst.sweepRunId });
-    // With no judged check, a newer unreadable check replaces an older one, and never an equal or newer one.
-    const unreadable = await sentItemFixture();
-    expect(record(unreadable, 'unreadable', ARI, '2026-10-08T09:00:00.000Z')).toBe(true);
-    expect(record(unreadable, 'unreadable', unreadable.mina, '2026-10-08T09:00:00.000Z')).toBe(false);
-    expect(record(unreadable, 'unreadable', unreadable.mina, '2026-10-08T09:30:00.000Z')).toBe(true);
-    expect(unreadable.items.read(unreadable.itemId)!.check).toMatchObject({ verdict: 'unreadable', by: unreadable.mina, at: '2026-10-08T09:30:00.000Z' });
-    // A judged check is ordered against the stamp a judged check carries, not its read time: Ari's still_open, read at 10:15,
-    // after Mina's 10:00 read, is refused, because her check carries 10:30:00.001 (the row keeps no other time).
-    expect(record(unreadableFirst, 'still_open', ARI, '2026-10-08T10:15:00.000Z')).toBe(false);
+  it('reads no check a sweep left before sweeps were retired (SVC-2)', async () => {
+    const f = await sentItemFixture();
+    const before = f.items.read(f.itemId)!;
+    const at = f.clock().toISOString();
+    // A finished sweep of the approver's and its verdict on the item, as a V16 Authority left them.
+    f.db.prepare(`INSERT INTO authority_trigger_runs_v1 (run_id, trigger, event_ref, organization_id, principal_id, membership_id, scope_kind, state, attempts,
+      result_json, result_sha256, created_at, updated_at) VALUES ('run_leftover-sweep', 'sweep', 'sweep_leftover', ?, ?, ?, 'mine', 'done', 1, '{}', ?, ?, ?)`)
+      .run(f.owner.organization_id, f.owner.principal_id, f.owner.membership_id, canonicalSha256({}), at, at);
+    f.db.prepare("UPDATE authority_impact_items_v1 SET checked_verdict='changed', checked_by=?, checked_at=?, checked_run_id='run_leftover-sweep' WHERE item_id=?").run(f.mina, at, f.itemId);
+    expect(f.items.read(f.itemId)).toEqual(before);
+    expect(f.items.forRun(f.run.run_id)).toEqual([before]);
+    expect(before).not.toHaveProperty('check');
   });
 
   it('finds items by person and by record', async () => {

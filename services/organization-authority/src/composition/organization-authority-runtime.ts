@@ -1,7 +1,4 @@
 import { preparePersonHttpRuntimeV1 } from './organization-authority-api-runtime.js';
-import { createPersonUpdateProcessingV1, type PersonUpdateProcessingBindingV1 } from './person-update-processing-v1.js';
-import { SqlitePersonUpdateEnrichmentWorkV2 } from '../adapters/persistence/sqlite/person-update-enrichment-work-v2.js';
-import { SqliteProjectUploadEnrichmentAuthorizationV1 } from '../adapters/persistence/sqlite/project-upload-enrichment-v1.js';
 import type { RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { join } from "node:path";
@@ -125,7 +122,7 @@ interface ReadableSearchReconcilerV1 {
 }
 
 /**
- * The Authority's own worker phases: personal updates and search maintenance.
+ * The Authority's own worker phase: search maintenance; it has no intake.
  * Meeting intake and approvals belong to the personal meeting runtime, which
  * the lifecycle runs beside this as its additional processing.
  */
@@ -133,13 +130,8 @@ class OrganizationAuthorityProcessingCoordinator
   implements OrganizationAuthorityProcessingCycleV1 {
   constructor(
     private readonly readableSearch: ReadableSearchReconcilerV1,
-    private readonly updates: PersonUpdateProcessingBindingV1,
     private readonly onSearchCapacity?: (event: ReadableSearchCapacityEventV1) => void,
   ) {}
-
-  pollAndStageAdmittedMeetings(signal: AbortSignal): Promise<void> {
-    return this.updates.runOnce(signal);
-  }
 
   async reconcileReadableSearchGeneration(signal: AbortSignal): Promise<{ readonly status: ReadableSearchGenerationReconciliationV1["status"] }> {
     let status: ReadableSearchGenerationReconciliationV1["status"];
@@ -227,7 +219,7 @@ export async function openOrganizationAuthorityRuntime(
       ...(answerGeneration.research_driver === undefined ? {} : { research_driver: limitResearchDriverV1(answerGeneration.research_driver,
         (signal, op) => limiter.run(priority, signal, op), (signal, op) => researchSessions.run(priority, signal, op)) }),
     });
-    // Ask is interactive; notes and trigger research wait behind it.
+    // Ask is interactive; trigger research waits behind it.
     const backgroundGeneration = limited("background");
     const readableSearch = createReadableSearchGenerationReconcilerV1({
       state_directory: config.state_directory,
@@ -245,13 +237,6 @@ export async function openOrganizationAuthorityRuntime(
         additional_processing: preparedPerson?.processing,
         processing: new OrganizationAuthorityProcessingCoordinator(
           readableSearch,
-          createPersonUpdateProcessingV1(
-            backgroundGeneration,
-            new SqlitePersonUpdateEnrichmentWorkV2(
-              authority,
-              new SqliteProjectUploadEnrichmentAuthorizationV1(authority),
-            ),
-          ),
           config.on_search_capacity,
         ),
         api: {

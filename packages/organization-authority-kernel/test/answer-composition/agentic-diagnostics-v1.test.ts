@@ -11,23 +11,20 @@ const lifecycle = (events: readonly CoreRuntimeDiagnosticObservationV1[]) => eve
 const finish = (status = 'found', ids: readonly string[] = ['E1']) => step([part('Current state', [need('current state', status, ids)])], [{ tool: 'finish', args: {} }]);
 
 describe('shared research diagnostics lifecycle', () => {
-  it.each(['ask', 'approved_record', 'sweep'])('observes %s through the same correlated lifecycle and terminal release', async trigger => {
+  it.each(['ask', 'approved_record'])('observes %s through the same correlated lifecycle and terminal release', async trigger => {
     const events: CoreRuntimeDiagnosticObservationV1[] = [];
     const metadata: CoreRuntimeObservationV1[] = [];
     const body = record('display', 'Approved: show two decimals.');
-    // A sweep runs no planner: its judge makes the only model call. Ask's first step searches, and the hit carries its text.
+    // Ask's first step searches, and the hit carries its text.
     const h = researchHarness([
       ...(trigger === 'ask' ? [step([part('Current state', [need('current state', 'open')])], [{ tool: 'search', args: { query: 'display decision' } }])] : []),
-      ...(trigger === 'sweep' ? [] : [finish()]),
-      trigger === 'approved_record' ? { decided: [{ id: 'E1', text: 'Show two decimals.' }], affected: [] }
-        : trigger === 'sweep' ? { findings: [{ index: 0, verdict: 'landed', line: 'The decision shows two decimals.', cites: ['E1'] }] }
-          : writerReply([{ text: 'Show two decimals.', evidence: ['E1'] }]),
+      finish(),
+      trigger === 'approved_record' ? { decided: [{ id: 'E1', text: 'Show two decimals.' }], affected: [] } : writerReply([{ text: 'Show two decimals.', evidence: ['E1'] }]),
     ], {
       search: async () => result([body]), openCitation: async () => result([body]),
     });
     const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === trigger)!;
-    const input = definition.parseEvent(trigger === 'ask' ? { question: 'What is the display decision?' } : trigger === 'approved_record'
-      ? { record: body.citation } : { findings: [{ finding: 'Display precision', expected: 'Show two decimals', citations: [body.citation] }] });
+    const input = definition.parseEvent(trigger === 'ask' ? { question: 'What is the display decision?' } : { record: body.citation });
     const output = await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => observeCoreRuntimeV1('research_run', async () => {
       if (trigger === 'ask') return (await h.research.answerWithResearch({ question: 'What is the display decision?' })).response;
       if (definition.renderer !== undefined) return (await h.research.renderWithResearch({ trigger, brief: definition.brief(input, h.port.scope), renderer: definition.renderer, trigger_input: input })).rendered;
@@ -39,8 +36,8 @@ describe('shared research diagnostics lifecycle', () => {
     for (const stage of ['brief', 'research', 'audit', 'release', 'run']) {
       expect(stages.filter(event => event.stage === stage).map(event => event.event)).toEqual(['started', 'succeeded']);
     }
-    // One access check before each model call: Ask's two steps and writer, a task's step and renderer, a sweep's judge.
-    const modelCalls = trigger === 'ask' ? 3 : trigger === 'sweep' ? 1 : 2;
+    // One access check before each model call: Ask's two steps and writer, a task's step and renderer.
+    const modelCalls = trigger === 'ask' ? 3 : 2;
     expect(stages.filter(event => event.stage === 'revalidation' && event.event === 'started').map(event => event.data?.purpose))
       .toEqual([...Array<string>(modelCalls).fill('model'), 'before_audit', 'after_audit']);
     expect(stages.at(-1)).toMatchObject({ stage: 'run', event: 'succeeded', data: { result: output } });
@@ -86,21 +83,6 @@ describe('shared research diagnostics lifecycle', () => {
     expect(lifecycle(events).at(-1)).toMatchObject({ stage: 'run', event: 'succeeded', data: { result: output.response } });
   });
 
-  it('reports an unreadable sweep anchor without calling it resolved', async () => {
-    const events: CoreRuntimeDiagnosticObservationV1[] = [];
-    const body = record('hidden');
-    // A sweep runs no planner, and its only item is unreadable: no model is called.
-    const h = researchHarness([], { openCitation: async () => { throw new AuthorityOperationError('not_found', 'private source exception'); } });
-    const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'sweep')!;
-    const input = definition.parseEvent({ findings: [{ finding: 'Display precision', expected: 'Show two decimals', citations: [body.citation] }] });
-    const output = await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => h.research.research({ trigger: 'sweep', brief: definition.brief(input, h.port.scope) }));
-    expect(output.unreadable_starting).toEqual([body.citation]);
-    expect(events.filter(event => event.kind === 'model_request')).toEqual([]);
-    expect(lifecycle(events)).toContainEqual(expect.objectContaining({ stage: 'starting_read', event: 'failed', error_kind: 'not_found' }));
-    expect(lifecycle(events).at(-1)).toMatchObject({ stage: 'run', event: 'succeeded', data: { result: output } });
-    expect(JSON.stringify(events)).not.toContain('private source exception');
-  });
-
   it('keeps budget admission metadata after revalidation prevents the next planner call', async () => {
     const events: CoreRuntimeDiagnosticObservationV1[] = [];
     const metadata: CoreRuntimeObservationV1[] = [];
@@ -110,7 +92,7 @@ describe('shared research diagnostics lifecycle', () => {
       openCitation: async () => result([body]), revalidate: async () => { if (++checks === 2) time = 86_001; return checked; },
     }, { now_ms: () => time });
     await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => observeCoreRuntimeV1('research_run', () => h.research.research({
-      trigger: 'sweep', brief: { goal: { kind: 'task', task: 'Recheck current state.' }, starting: [{ citation: body.citation, if_unreadable: 'fail' }], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: {} },
+      trigger: 'approved_record', brief: { goal: { kind: 'task', task: 'Recheck current state.' }, starting: [{ citation: body.citation, if_unreadable: 'fail' }], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: {} },
     }), { observer: event => { metadata.push(event); } }));
     expect(events.filter(event => event.kind === 'model_request')).toHaveLength(1);
     expect(metadata).toContainEqual(expect.objectContaining({ phase: 'research_loop', event: 'succeeded', research_stop_reason: 'budget', research_admission: 'post_revalidation_no_time' }));

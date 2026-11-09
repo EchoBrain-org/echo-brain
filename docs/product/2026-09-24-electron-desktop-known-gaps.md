@@ -14,14 +14,14 @@ Authority: signing in (including the weekly re-sign-in), Home, a project's
 list of notes, documents and approved meetings (and its place when you come
 back to it), Only me (everything only you can read, filed in a project or
 not, newest first, with More), the reader (a note's text, who can read it, a
-document's text pages, a meeting's approved record read on with More, Save
+document's text pages, a meeting's whole approved record in one read, Save
 original…, and moving an original between projects), a project's People,
 Ask as a timeline with sources and Copy answer, capturing a note or a file
 with a place button (one or several projects up to the API's twenty, No
 project, or Organization) and an Only me lock on a project choice, dropping a
 file on a project row, the Capture sheet or the window, resolving an
-unconfirmed save or project change, the sidebar, the bar's scope chip and
-live matches, New project on one page (its name, people and files), People & invites for owners
+unconfirmed save or project change, the sidebar, the bar's scope chip, New
+project on one page (its name, people and files), People & invites for owners
 (from the sidebar or the tray), the Account menu (in the window and the tray),
 reopening ECHO while it runs, and signing out or switching account.
 
@@ -50,17 +50,14 @@ toast has no Undo, and the Organization choice warns inline instead.
 
 | Gap | What happens today | Fix when needed |
 | --- | --- | --- |
-| Live matches leave documents out | A project's documents show in its feed and open in the reader, but the bar's live matches find notes only, in all context and in a project. The Swift app's results also listed documents (`documents search-v2 --query`, with `--project-id` in a project). | Search documents beside the notes in `search.run`, and open a document match in the reader. |
 | Finding a project you were added to reads every page | Being added to a project notifies however far past the sidebar's pages it sorts: at sign-in and when your projects moved, every page of your active and archived projects is read (which also fills the sidebar) and compared with the last full read. Each page read is audited, so someone in many projects adds an audit row per page at each sign-in and each such move. The sidebar itself still waits behind More for an old project. | Have the Authority say which memberships are new, so one call finds them. |
-| Home's sweep re-checks what you sent or own only | Follow-ups (yours) lists what you sent, own or last handed on, but has no Check now, and Home's own sweep of your items asks for the `mine` scope (sweeps take no `involved` scope): a follow-up you only handed on is re-checked by its owner's or its sender's sweep, or its meeting's or project's Check now, never by yours. | Give sweeps an `involved` scope when someone misses it. |
 | Changes made while ECHO was closed do not notify | Notifications come from the change check, which compares what moved since the last check this run of ECHO made. Its first check after a start or a sign-in only learns, so a handoff made while ECHO was closed shows on Home and Follow-ups, with no notification. Changes made while the machine slept do notify. | A server-side inbox of notifications (desktop refresh and notifications v1, "Not in v1"). |
 | Link changes have no Undo | Remove from this project and Add to project are instant, and each reverses the other, but the toast after them offers no Undo, as the proposed design had. The Swift branch had none either. | Put Undo on the toast: the opposite link change, under a new request id. |
 | An unknown add has no Check status | In New project, a person's add that may not have arrived says "This may not have been sent." and offers Try again, which resends the same request, and Skip… (asked first); the people and files after it wait. Files also offer Check status, but the API has no status read for a project change, so a person's row does not. People's own unknown change offers the same Try again, with Dismiss. | A status read for project changes by request id, then Check status. |
 | Ask leaves out some Swift details | A question sent while another is on its way waits in the bar with send disabled, and nothing says why. The Swift app said "ECHO is still answering your earlier question." Cancel shows no "Cancelled" line. Source rows name the meeting without the Swift app's date ("1  Tuesday sync", not "· Sep 15, 2026"). A failed question offers Try again only when trying again can help; the Swift app offered Retry after every failure. An original's evidence is read again each time its source is chosen; the Swift app kept it for the answer while the window had focus. The source pane always sits beside the answer and narrows with the window, so Escape or Back closes the timeline, which stays; below 1,000 px the Swift app covered the answer with the pane, and Back closed the pane first. | Add the status lines, the date or the evidence cache if people miss them. |
-| Live matches stop at 10 | The bar shows the first 10 matches, with no More. In all context those are your newest saved notes (V3) first, then older ones (V2); each version is searched on its own. The Swift app paged a project's search with "More results". | Add More with the search cursor when someone misses a match. |
-| No clear button in the bar | Escape empties the bar's text and its matches. The Swift app also showed a small × (Clear search) while the bar had text. | Add the × if people look for one. |
+| No clear button in the bar | Escape empties the bar's text. The Swift app also showed a small × (Clear search) while the bar had text. | Add the × if people look for one. |
 | Back is Escape only | Escape steps back one level, and the reader has its own Back button. ⌘[ and a mouse's Back button do nothing. The Swift app went back with both. | Send ⌘[ and the mouse Back button to the same one-level Back, if people reach for them. |
-| Ask source cards still read full records | A meeting cited in an answer is read through `person records`, not `person open --ref`, so the host receives the whole signed record (log positions, ids and every audience project) and keeps only what the card shows, evidence quotes included, which open never releases. | Open the citation's `meeting:` ref instead, drop `ask.record`, and prove no `/v1/person/records` call remains (ADR-0024 follow-up). |
+| Approved meetings are read as full records | A meeting cited in an answer, and since 2026-11-08 an approved meeting opened in the reader, is read through `person records`, not `person open --ref`, so the host receives the whole signed record (log positions, ids and every audience project) and keeps only what it shows. The source card also shows evidence quotes, which open never releases; the reader shows none. | None planned: on 2026-11-08 the founder chose this one read for the reader too and kept `GET /v1/person/records`. |
 | No "Not live yet" | An Authority without the projects API refuses the list, and Home shows a failure with Try again. The Swift app read that 404 as "Projects · Not live yet" and turned New project off. The founder's Authority has projects. | Give a not-found project list its own state, if an older Authority is ever used again. |
 
 Two ideas from the proposed direction are still not built, nor were they on
@@ -76,7 +73,7 @@ narrows it).
 | --- | --- | --- |
 | A meeting just approved can be missing | Until the Authority's search index takes in a meeting you approved, Only me and a project page list the notes and files without it and say nothing. More then reads on, and may say "ECHO is unavailable right now. Try again." until the meeting is indexed. A quiet read never drops meetings already shown. | Show a line that meetings are still being added while the list says so. |
 | Items lost with a project you left | Your own note or file whose only access was a project you left is gone from every page, with nothing in its place, and opening it says "This is no longer available to you." | A placeholder, which needs its own decision (ADR-0024). |
-| Only me is not searched | On Only me the bar is Home's, in all context: its live matches and Ask are not narrowed to Only me, and nothing narrows the list by date or kind. Nothing is counted. | Live matches under Only me, a since filter or counts, each after its own decision. |
+| Only me is not searched | On Only me the bar is Home's, in all context: its Ask is not narrowed to Only me, and nothing narrows the list by date or kind. Nothing is counted. | An Ask narrowed to Only me, a since filter or counts, each after its own decision. |
 | No Remove from Only me | In the reader opened from Only me, ⋯ offers Add to project but not Remove from this project, which only a project page offers. A meeting has no ⋯. | Offer Remove for each project a row names, if people look for it there. |
 | Only me keeps to one membership | If your account is provisioned again, the notes and files only you could read before no longer show, in Only me or anywhere else: an only-me audience names the membership that added it. | None planned. |
 

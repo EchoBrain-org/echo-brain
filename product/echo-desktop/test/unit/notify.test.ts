@@ -327,7 +327,7 @@ describe('what never notifies (N3)', () => {
     expect(notices()).toEqual([]);
   });
 
-  it('a check, and other activity: items that do not involve you, and one you only own taken back by its sender', async () => {
+  it('a check an older Authority still sends, and other activity: items that do not involve you, and one you only own taken back by its sender', async () => {
     const item = followUp(1);
     await signedIn([item]);
     authority.items = [{ ...item, check: { verdict: 'landed', checked_at: '2026-10-14T12:00:00.000Z', checked_by: 'Mina Patel' } },

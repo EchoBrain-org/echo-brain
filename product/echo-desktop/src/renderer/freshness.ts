@@ -5,12 +5,13 @@ import type { PersonChangesAreaV1, PersonChangesV1 } from '@echo-brain/organizat
 // each area that moved: projects read every project you belong to again
 // (which also feeds the sidebar), follow-ups read the follow-ups you are
 // involved in again (rows only), and what shows that an area feeds is owed a
-// quiet read. Coming back to ECHO, a page opened and the machine waking each
-// run a check; between them the server sets the pace. A change someone
-// else made to a follow-up you are involved in, and being added to a project,
-// come as one system notification per check. Each check also reads what
-// arrived in your projects, for the sidebar's dots (ADR-0047). The store keeps
-// its loaders; this module only says when they run.
+// quiet read. Coming back to ECHO, a page opened, the machine waking and an
+// approval each run a check; between them the server sets the pace. A change
+// someone else made to a follow-up you are involved in, and being added to a
+// project, come as one system notification per check. Each check also reads
+// what arrived in your projects, for the sidebar's dots (ADR-0047), and checks
+// in, so the Authority starts your oldest queued impact check (DSK-1). The
+// store keeps its loaders; this module only says when they run.
 import type { Expect, Failure, Notice, NoticeTarget, OpenItemView, ProjectSummary } from '../shared/protocol.js';
 import { ACCOUNT_GONE, CHANGE_AREAS, NOTICE_ITEMS_MAX, NOTICE_TEXT_MAX, sameExpect } from '../shared/protocol.js';
 import { rpc } from './api.js';
@@ -68,10 +69,15 @@ interface Surfaces {
    * it: what moved is acted on as soon as the change check says so. Quiet, and never thrown.
    */
   readActivity(due: boolean): Promise<void>;
+  /**
+   * Checks in as the account, after a check that reached the Authority, never waiting on it: the Authority starts that
+   * account's oldest queued impact check, if one waits and none of its others runs (DSK-1). Quiet, and never thrown.
+   */
+  checkIn(account: Expect): Promise<void>;
 }
 
 /** Why a check ran. */
-type Trigger = 'start' | 'timer' | 'came-back' | 'navigation' | 'wake';
+type Trigger = 'start' | 'timer' | 'came-back' | 'navigation' | 'wake' | 'approved';
 /** How a check went: read and acted on, or failed; and, read, the screen areas that moved. */
 interface Checked { outcome: 'ok' | 'failed'; moved: readonly ScreenArea[] }
 
@@ -104,8 +110,11 @@ interface Loop {
   failures: number;
   timer: ReturnType<typeof setTimeout> | null;
   running: Promise<Checked> | null;
-  /** A wake during a check needs one fresh read after that pre-wake check finishes. */
-  wakePending: boolean;
+  /**
+   * A wake or an approval during a check needs one fresh check after that earlier one finishes, which began before it: a
+   * wake's, when both came.
+   */
+  again: 'wake' | 'approved' | null;
   /** When the last check began. */
   began: number;
 }
@@ -142,7 +151,7 @@ export function start(account: Expect): void {
   stop();
   loop = { account, areas: {}, projects: surfaces.readProjects(true), memberships: null, followed: null, pending: new Map(),
     seenUpTo: null, boundary: new Set(), told: { keys: [], rows: new Map(), projects: new Map() }, created: new Set(), pace: 60_000, failures: 0,
-    timer: null, running: null, wakePending: false, began: Number.NEGATIVE_INFINITY };
+    timer: null, running: null, again: null, began: Number.NEGATIVE_INFINITY };
   void check('start');
 }
 
@@ -154,14 +163,14 @@ export function stop(): void {
 
 /**
  * A check: the change check's fingerprints, and a reaction to each area that moved or is not learned yet. One runs at a
- * time; another trigger meanwhile joins it, except a wake also queues one fresh check. Its moved screen areas are read
- * again (but a return reads them with the page).
+ * time; another trigger meanwhile joins it, except a wake or an approval also queues one fresh check. Its moved screen
+ * areas are read again (but a return reads them with the page).
  */
 function check(trigger: Trigger): Promise<Checked | null> {
   const run = loop;
   if (!run) return Promise.resolve(null);
   if (run.running) {
-    if (trigger === 'wake') run.wakePending = true;
+    if (trigger === 'wake' || trigger === 'approved') run.again = run.again === 'wake' ? 'wake' : trigger;
     return run.running;
   }
   const running = once(run, trigger).then(checked => {
@@ -170,7 +179,9 @@ function check(trigger: Trigger): Promise<Checked | null> {
   }).finally(() => {
     run.running = null;
     if (loop === run) {
-      if (run.wakePending) { run.wakePending = false; void check('wake'); }
+      const again = run.again;
+      run.again = null;
+      if (again) void check(again);
       else schedule(run);
     }
   });
@@ -199,9 +210,11 @@ async function once(run: Loop, trigger: Trigger): Promise<Checked> {
     return { outcome: 'failed', moved: [] };
   }
   run.failures = 0;
-  // A check that reached the Authority also reads what arrived in your projects (ADR-0047), never waiting on it; one
-  // that could not reach it does not try, so nothing else goes out (or asks to refresh the session) while it cannot.
+  // A check that reached the Authority also reads what arrived in your projects (ADR-0047), and checks in as its account,
+  // so the Authority starts your oldest queued impact check (DSK-1), never waiting on either; one that could not reach it
+  // does neither, so nothing else goes out (or asks to refresh the session) while it cannot.
   void surfaces.readActivity(trigger === 'start' || trigger === 'came-back' || trigger === 'wake').catch(() => undefined);
+  void surfaces.checkIn(run.account).catch(() => undefined);
   run.pace = result.value.check_again_after_seconds * 1000;
   const fresh = result.value.areas;
   const known = run.areas;
@@ -249,6 +262,13 @@ export function navigated(): void {
   if (!run || run.running || Date.now() - run.began < NAVIGATION_MS) return;
   void check('navigation');
 }
+
+/**
+ * A meeting was approved here: a check at once, past the ten seconds a page waits, that checks in and learns the pace
+ * the Authority keeps while the meeting publishes and its checks run (DSK-1). One on its way began before the approval:
+ * a fresh one follows it.
+ */
+export function approved(): void { void check('approved'); }
 
 /** A project made on this desktop: never news (N2). */
 export function createdHere(projectId: string): void { loop?.created.add(projectId); }

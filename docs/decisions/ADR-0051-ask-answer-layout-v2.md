@@ -464,3 +464,10 @@ above leaves as it is ("Left as they are") no longer holds:
 - **Not measured:** no case of either evaluation has nothing that answers it,
   and neither asks again, so the nothing-found example and the Ask again line
   are covered by unit tests only.
+
+## Amended 2026-11-08: tables mark no late date
+
+The founder took out the desktop's guess at a table's Owner and Due columns
+(lean-down DSK-18). "Tables as v1's" above no longer includes the late due
+date in the signal colour or the asker's bold owner cell. Dates still show as
+"Oct 14" in mono, and nothing on the wire changes.

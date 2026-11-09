@@ -840,7 +840,7 @@ const ASK_REUSE_RULE = "- Reuse completed search results. One retry is available
 const NEED_FIELDS = "A need's \"id\" is its id from plan; leave it out in step 1 and for a new need. A need's \"status\" is \"open\", \"found\" or \"not_found\".";
 
 /**
- * A task goal's research step prompt (impact cards, sweeps): the text before ADR-0041. Without list (a search-only brief)
+ * A task goal's research step prompt (impact cards): the text before ADR-0041. Without list (a search-only brief)
  * it names no list tool, no inventory rule and no way to browse a source. Ask has its own (askStepPrompt).
  */
 function stepPrompt(list: boolean): string { return [
@@ -918,7 +918,7 @@ const ASK_KIND_RULE = "5. Give each need a kind. \"which_items\": which or how m
 /** Ask's stop rule (addition 6, ADR-0041): early stopping never applies to which items exist, and a which_say need reads what its list has shown. */
 const STOP_RULE = "Stop as soon as every requested fact is supported: for a which_items need, once each list it cites has more false; for a which_say need, once you have seen the full text of every member its list has shown, or no other member can be opened.";
 
-/** A task goal's step prompt (impact cards, sweeps): the text before ADR-0041, byte for byte. */
+/** A task goal's step prompt (impact cards): the text before ADR-0041, byte for byte. */
 export const STEP_PROMPT = stepPrompt(true);
 /** A task goal's step prompt with a search-only brief (`options.list` false): no list tool. */
 export const SEARCH_ONLY_STEP_PROMPT = stepPrompt(false);
@@ -1127,13 +1127,13 @@ export const TASK_RULE_PROMPT = "There is no question from a person; the task be
  * its source catalog lists them, so a prompt without them is unchanged.
  */
 export const FOLLOW_UPS_STEP_GUIDANCE = [
-  "Follow-ups (source \"follow_ups\") are ECHO's shared follow-ups of approved decisions: each is what one decision asked of one ticket, page, record or meeting action. A follow-up's attributes give its owner, its status (open, done, not sent yet, or not relevant) and any due date; its text says what it is on, what the decision expects, ECHO's latest check and the decision.",
+  "Follow-ups (source \"follow_ups\") are ECHO's shared follow-ups of approved decisions: each is what one decision asked of one ticket, page, record or meeting action. A follow-up's attributes give its owner, its status (open, done, not sent yet, or not relevant) and any due date; its text says what it is on, what the decision expects and the decision.",
   "- For what a person has to do, owns or is waiting on (\"my open tasks\", \"what is Mara working on\"), list follow_ups with \"owner\" set to their name (asked_by for \"I\" and \"my\"), and \"status\": \"open\" when the question is about open work.",
   "- For who owns a piece of work, search follow_ups for its ticket key (such as THERM-48) unchanged, or for the decision's words.",
   "- Follow-up search matches only the decision's title and first line, the expected change, a ticket key and the owner's name, never words inside a ticket or page: search the ticket or page source for those.",
   "- A follow-up's status is ECHO's state of the follow-up, not the status of the ticket or page it is on; when the question asks for that, read the ticket or page itself.",
-  "- A follow-up's dates are ECHO's own: created, sent (to its owner), reassigned and checked; list follow_ups by them with since, until and date_field. Its due date belongs to the item it follows and is never a filter. Its \"decision\" link names the decision's records: open them for its meeting, participants and approval.",
+  "- A follow-up's dates are ECHO's own: created, sent (to its owner) and reassigned; list follow_ups by them with since, until and date_field. Its due date belongs to the item it follows and is never a filter. Its \"decision\" link names the decision's records: open them for its meeting, participants and approval.",
 ].join("\n");
 
 /** What the answer writer is told about follow-ups, only when the source catalog lists them (ADR-0040). */
-export const FOLLOW_UPS_ANSWER_GUIDANCE = "Follow-ups (provenance.kind \"follow_up\") are ECHO's shared follow-ups of approved decisions. A follow-up's \"owner\" is the person it is assigned to: the asker's tasks include the follow-ups they own. Its \"status\" is ECHO's state of the follow-up: open, done, not sent yet (not yet sent to its owner) or not relevant; it is not the linked ticket's or page's own status. \"Latest check\" is ECHO's latest check of whether the expected change landed, on that date. Name a follow-up by its title, and keep its owner, status and due date with it.";
+export const FOLLOW_UPS_ANSWER_GUIDANCE = "Follow-ups (provenance.kind \"follow_up\") are ECHO's shared follow-ups of approved decisions. A follow-up's \"owner\" is the person it is assigned to: the asker's tasks include the follow-ups they own. Its \"status\" is ECHO's state of the follow-up: open, done, not sent yet (not yet sent to its owner) or not relevant; it is not the linked ticket's or page's own status. Name a follow-up by its title, and keep its owner, status and due date with it.";
