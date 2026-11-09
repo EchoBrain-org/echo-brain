@@ -28,7 +28,7 @@ export interface AgenticEvidenceBundleItemV1 {
   readonly source: string;
   /** The released desk item: desk id, receipt, ref, visibility. Server only. */
   readonly item: EvidenceDeskItemV2;
-  /** Research read its complete released text: a planner step was shown it, or, with no planner, it was starting evidence read in full. */
+  /** Research read its complete released text: a planner step was shown it. */
   readonly full: boolean;
   readonly opened: boolean;
   /** Loaded before round 1: starting evidence. */

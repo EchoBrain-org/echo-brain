@@ -19,14 +19,10 @@ export interface AgenticBriefStartingItemV1 {
   readonly if_unreadable: "fail" | "report" | "skip";
 }
 
-/**
- * A person's question (Ask), passed through as asked, or a task ECHO wrote
- * from its trigger's fixed template. The event's own text never joins the
- * template: it travels in `data` and goes in by data slot.
- */
+/** A person's question (Ask), passed through as asked, or a task ECHO wrote from its trigger's fixed template. */
 export type AgenticBriefGoalV1 =
   | Extract<AgenticResearchGoalV1, { readonly kind: "question" }>
-  | { readonly kind: "task"; readonly task: string; readonly data?: readonly string[] };
+  | { readonly kind: "task"; readonly task: string };
 
 export interface AgenticBriefV1 {
   readonly goal: AgenticBriefGoalV1;
@@ -34,11 +30,6 @@ export interface AgenticBriefV1 {
   /** The budget profile, including the time held back for the renderer. */
   readonly budget: AgenticResearchBudgetV1;
   readonly options: {
-    /**
-     * False: research reads the starting evidence and stops, finished, with no planner step; what it read in full counts as
-     * read. Only a task with starting items can run without one.
-     */
-    readonly planner?: boolean;
     /**
      * False: research has no list tool, only search and open, and is never told of list-only source options. Only a task can
      * run without it: an approved record in no project reads everything its approver can read, so it searches the record's
@@ -53,29 +44,23 @@ export function agenticStartingSlotV1(position: number): string {
   return `{{starting:${position}}}`;
 }
 
-/** How a task places its event's text `position` (1-based, in `goal.data`). */
-export function agenticDataSlotV1(position: number): string {
-  return `{{data:${position}}}`;
-}
+const TASK_SLOT = /\{\{starting:(\d+)\}\}/gu;
 
-const TASK_SLOT = /\{\{(starting|data):(\d+)\}\}/gu;
-
-/** Every slot in the task has something to fill it: positions 1 to the brief's starting items or data entries. */
-export function agenticTaskSlotsFitV1(task: string, starting: number, data: number): boolean {
-  return [...task.matchAll(TASK_SLOT)].every(([, kind, position]) => Number(position) >= 1 && Number(position) <= (kind === "starting" ? starting : data));
+/** Every slot in the task has something to fill it: positions 1 to the brief's starting items. */
+export function agenticTaskSlotsFitV1(task: string, starting: number): boolean {
+  return [...task.matchAll(TASK_SLOT)].every(([, position]) => Number(position) >= 1 && Number(position) <= starting);
 }
 
 /**
  * The task as the model sees it. One pass over the fixed template: each
- * starting slot gets its item's id (or says the item could not be read), each
- * data slot its event text. What a slot receives is never read again, so event
- * text cannot act as template. A slot with nothing to fill it is a definition
- * bug: the runner refuses such a brief before any read (`agenticTaskSlotsFitV1`),
- * and this stops the run if one gets through.
+ * starting slot gets its item's id, or says the item could not be read. A slot
+ * with nothing to fill it is a definition bug: the runner refuses such a brief
+ * before any read (`agenticTaskSlotsFitV1`), and this stops the run if one gets
+ * through.
  */
-export function fillAgenticTaskV1(task: string, ids: readonly (string | null)[], data: readonly string[] = []): string {
-  return task.replace(TASK_SLOT, (slot, kind: string, position: string) => {
-    const value = (kind === "starting" ? ids : data)[Number(position) - 1];
+export function fillAgenticTaskV1(task: string, ids: readonly (string | null)[]): string {
+  return task.replace(TASK_SLOT, (slot, position: string) => {
+    const value = ids[Number(position) - 1];
     if (value === undefined) throw new Error(`Task slot ${slot} has nothing to fill it`);
     return value ?? "an item that could not be read";
   });

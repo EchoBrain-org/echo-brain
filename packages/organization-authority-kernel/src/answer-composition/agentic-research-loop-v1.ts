@@ -79,8 +79,7 @@ import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
  * evidence bundle out. Starting evidence is read fresh through the
  * access-checked desk, then planner
  * rounds over three read tools (search, open, list) plus `finish` until a stop
- * rule fires; a brief with no planner stops after its starting reads. It
- * never answers, renders or releases, never learns which
+ * rule fires. It never answers, renders or releases, never learns which
  * trigger wrote its brief, and reaches the model only through the request's
  * gate. The model plans parts and the needs of each part; code owns ids,
  * paging, de-duplication and the stop rules.
@@ -204,7 +203,7 @@ export interface AgenticResearchLoopV1 {
 type Entry = {
   readonly short: string;
   item: EvidenceDeskItemV2;
-  /** Research read this item's complete released text: a planner step was shown it, or, with no planner, it was starting evidence read in full. */
+  /** Research read this item's complete released text: a planner step was shown it. */
   full: boolean;
   /** Opened explicitly (or preloaded); full text stays in the prompt while budget allows. */
   opened: boolean;
@@ -1391,16 +1390,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       if (anchor.citation.kind !== "source_revision") anchorsRead.add(anchor.id);
       for (const item of opened.items.filter(value => value.text === undefined)) register(item);
     }
-    if (brief.goal.kind === "task") goal = Object.freeze({ kind: "task", task: fillAgenticTaskV1(brief.goal.task, startingIds, brief.goal.data) });
-
-    // ---- no planner: the reads above are the research --------------------
-    // The starting items were read in full, so they count as read; the renderer judges from them. No plan is written.
-    if (brief.options.planner === false) {
-      for (const entry of entries.values()) if (entry.preloaded === true && entry.opened && entry.item.text !== undefined) entry.full = true;
-      researchIncomplete = false;
-      researchStop = 'finished';
-      return;
-    }
+    if (brief.goal.kind === "task") goal = Object.freeze({ kind: "task", task: fillAgenticTaskV1(brief.goal.task, startingIds) });
 
     if (options.driver !== undefined) {
       await drivenResearch(gate, options.driver);

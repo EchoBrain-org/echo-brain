@@ -25,8 +25,7 @@ export interface AgenticTriggerDefinitionV1<Event> {
   /**
    * The event's brief, for the scope the run reads (its desk's). A task names
    * its starting items by slot (`agenticStartingSlotV1`) because their ids
-   * exist only once the loop has read them, and places the event's own text
-   * by data slot (`agenticDataSlotV1`); the loop fills both in one pass.
+   * exist only once the loop has read them; the loop fills them in one pass.
    */
   brief(event: Event, scope: AgenticTriggerScopeV1): AgenticBriefV1;
   /** The budget profile its brief runs on; `brief` always carries this profile's limits. */
