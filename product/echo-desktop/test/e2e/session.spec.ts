@@ -97,8 +97,6 @@ test('ten minutes of sign-in serve the reads as they are, and an upload that may
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   expect(refreshes()).toHaveLength(0);
-  // The weekly sign-in is a week away: nothing says so yet.
-  await expect(page.getByTestId('sidebar-sign-in-again')).toHaveCount(0);
   writeFileSync(join(run.userData, 'Brief.md'), 'Annual pricing.');
   await drop(page, page.getByTestId('sidebar-project').nth(1), join(run.userData, 'Brief.md'));
   await page.getByTestId('compose-send').click();

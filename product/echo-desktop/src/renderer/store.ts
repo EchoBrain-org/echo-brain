@@ -5,7 +5,7 @@ import type {
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
+  AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
   ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Member, OpenItemsView, OpenItemView,
   ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
@@ -537,11 +537,6 @@ export interface State {
   concealed: boolean;
   /** form: the organization address is being asked for (Sign in with Google…). */
   signin: { phase: 'idle' | 'waiting' | 'failed'; form: boolean; failure?: Failure; browserOpened?: boolean };
-  /**
-   * The weekly sign-in, from a day before it is due: when, and why signing in again now did not start (a save to settle
-   * first, or a sign-out that failed). Null before that day, and signed out.
-   */
-  signInDue: { at: string; failure?: Failure } | null;
   /** A sheet over the window for the account: only one at a time. */
   sheet: Sheet | null;
   /** No status could be read (the host is down): not the same as signed out. */
@@ -642,7 +637,7 @@ let state: State = {
   status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false },
   archivedProjects: { items: [], next: null, loading: false }, list: null, roster: null, reader: null, change: null, projectSettings: null,
   barScope: { kind: 'global' }, barText: '', ask: null, timeline: { turns: [], checks: {} }, sources: null, compose: null, toast: null, toastShown: 0,
-  concealed: false, signin: { phase: 'idle', form: false }, signInDue: null, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null,
+  concealed: false, signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null,
   employeeWrite: null, home: null, decision: null, followUps: null, impactLine: null, projectLine: null, projectReads: null, news: new Set(), visit: null,
   update: { state: 'none' }, updateFailure: null, altitude: emptyAltitude(),
 };
@@ -690,8 +685,6 @@ function set(patch: Partial<State>): void {
   }
   // A held update click says what to settle only while it is unsettled, here or in main.
   if (state.updateFailure?.code === 'update_held' && !signOutHeld() && !unresolvedWork().unresolved) state = { ...state, updateFailure: null };
-  // So does a held sign-in-again click.
-  if (state.signInDue?.failure?.code === 'signout_held' && !signOutHeld()) state = { ...state, signInDue: { at: state.signInDue.at } };
   listeners.forEach(listener => listener());
   // A read owed to what shows may have been waiting on this change: a read of its own that landed, the window seen.
   settleOwed();
@@ -752,7 +745,6 @@ function applyStatus(status: AppStatus): void {
   const before = state.status?.account ?? null;
   const next = status.account;
   set({ status, booting: false, startFailed: false });
-  weeklySignIn(next);
   // Signed out: the sign-in page covers everything until someone signs in. Only me, and what was read in it, goes.
   if (!next) {
     // A sign-out the host lost mid-way did happen: the account goes as it would have.
@@ -797,50 +789,6 @@ function applyStatus(status: AppStatus): void {
     // New project kept through a sign-out goes on with what waited while no one was signed in.
     pumpNewProject();
   }
-}
-
-/** The weekly sign-in shows this long before it is due. */
-const SIGN_IN_NOTICE_MS = 24 * 60 * 60_000;
-/** The longest wait setTimeout keeps; a later notice waits for a status read nearer the day. */
-const LONGEST_TIMER_MS = 2 ** 31 - 1;
-let signInTimer: ReturnType<typeof setTimeout> | null = null;
-
-/**
- * The weekly sign-in a day ahead: due within a day, it shows now; otherwise once that day starts, even with the window
- * open all along. How long is left comes from the host's clock as status was read.
- */
-function weeklySignIn(account: Account | null): void {
-  if (signInTimer) { clearTimeout(signInTimer); signInTimer = null; }
-  const due = account?.sign_in_due;
-  const wait = due ? due.in_ms - SIGN_IN_NOTICE_MS : Number.POSITIVE_INFINITY;
-  if (due && wait <= 0) {
-    if (state.signInDue?.at !== due.at) set({ signInDue: { at: due.at } });
-    return;
-  }
-  if (state.signInDue !== null) set({ signInDue: null });
-  if (due && wait <= LONGEST_TIMER_MS) signInTimer = setTimeout(() => { signInTimer = null; set({ signInDue: { at: due.at } }); }, wait);
-}
-
-/**
- * Sign in again, before the weekly sign-in is due: this session ends and Google signs the same person straight back
- * in, so their drafts stay, as when the session ends on its own. A save on its way or unconfirmed is settled first.
- */
-export async function signInAgain(): Promise<void> {
-  const account = expect();
-  const due = state.signInDue;
-  if (!account || !due || state.signin.phase === 'waiting' || signingOut()) return;
-  if (signOutHeld()) { set({ signInDue: { at: due.at, failure: { code: 'signout_held', retryable: true } } }); return; }
-  set({ signin: { phase: 'waiting', form: false }, signInDue: { at: due.at } });
-  // The same person signs straight back in: their Ask timeline stays (ADR-0047).
-  const signedOut = await rpc('account.signOut', { expect: account, again: true });
-  if (!signedOut.ok) {
-    set({ signin: { phase: 'idle', form: false } });
-    if (state.signInDue) set({ signInDue: { at: state.signInDue.at, failure: signedOut.failure } });
-    accountLost(signedOut.failure);
-    return;
-  }
-  applyStatus(signedOut.value);
-  await signIn(account.authority);
 }
 
 /** Nothing of an account's stays on screen or in memory, not even a draft. */

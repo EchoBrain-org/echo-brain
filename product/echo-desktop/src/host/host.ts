@@ -196,8 +196,7 @@ function code(value: string, write = false, requestId?: string): Result<never> {
 async function readStatus(): Promise<AppStatus | null> {
   const run = await cli(['status']);
   if (run.exit !== 0 || run.overflow) return null;
-  const { now } = await modules;
-  try { return statusView(lastJson(run.stdout), now()); } catch { return null; }
+  try { return statusView(lastJson(run.stdout)); } catch { return null; }
 }
 
 /**
@@ -718,7 +717,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       return forAccount(method, expect, ['tools', 'disconnect', option('tool', tool)], () => null);
     }
     case 'account.signOut': {
-      const { expect, again } = params as Params<'account.signOut'>;
+      const { expect } = params as Params<'account.signOut'>;
       const before = await status();
       if (before === null) return code('unavailable');
       // Already signed out (a failed refresh does that) is what was asked.
@@ -729,11 +728,9 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const after = await status();
       if (after === null) return code('unavailable');
       if (after.signed_in) return code('signout_failed');
-      // Our own sign-out: the account's Ask timeline goes with it, unless the same person signs straight back in (ADR-0047).
-      if (again !== true) {
-        const { paths } = await modules;
-        try { deleteTimeline(paths.directory, expect); } catch { /* best effort: the next read of another account deletes it */ }
-      }
+      // Our own sign-out: the account's Ask timeline goes with it (ADR-0047).
+      const { paths } = await modules;
+      try { deleteTimeline(paths.directory, expect); } catch { /* best effort: the next read of another account deletes it */ }
       return ok(after);
     }
   }

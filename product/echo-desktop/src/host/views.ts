@@ -48,8 +48,8 @@ function validated<T>(validate: (value: unknown) => T, raw: unknown): T {
   try { return validate(raw); } catch { throw new ViewError(); }
 }
 
-/** The account signed in, if any; `now` is the host's clock, for how long the weekly sign-in has left. */
-export function statusView(raw: unknown, now: number): AppStatus {
+/** The account signed in, if any; signed out by a refresh, why. */
+export function statusView(raw: unknown): AppStatus {
   const value = object(raw);
   if (value.kind !== 'echo-person-client-status-v1') throw new ViewError();
   const version = text(value.installed_version);
@@ -65,13 +65,11 @@ export function statusView(raw: unknown, now: number): AppStatus {
   }
   const role = value.membership_type;
   if (role !== 'owner' && role !== 'employee') throw new ViewError();
-  const due = typeof value.hard_reauthentication_at === 'string' ? Date.parse(value.hard_reauthentication_at) : Number.NaN;
   const account: Account = {
     authority: text(value.connected_authority),
     membership_id: text(value.membership_id),
     display_name: text(value.display_name),
     role,
-    ...(Number.isFinite(due) ? { sign_in_due: { at: new Date(due).toISOString(), in_ms: due - now } } : {}),
   };
   return { signed_in: true, account, client_version: version };
 }

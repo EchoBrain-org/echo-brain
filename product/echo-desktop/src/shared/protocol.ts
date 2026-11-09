@@ -14,11 +14,6 @@ export interface Account {
   readonly membership_id: string;
   readonly display_name: string;
   readonly role: 'owner' | 'employee';
-  /**
-   * The weekly sign-in: when this session can no longer be refreshed, and how long until then by the host's clock when
-   * status was read. Past it, only signing in again helps.
-   */
-  readonly sign_in_due?: { readonly at: string; readonly in_ms: number };
 }
 
 /** Why this computer was signed out by a refresh, and the organization it was signed in to. */
@@ -742,11 +737,8 @@ export interface HostMethods {
   'documents.retry': { params: { expect: Expect; request_id: string; audience: Audience }; result: Receipt };
   /** Start over: removes the private copy the client kept to resend a document. The Authority is not asked. */
   'documents.abandon': { params: { expect: Expect; request_id: string }; result: null };
-  /**
-   * Signs the account on screen out of this computer; the reply is the new status. Its Ask timeline goes with it, except
-   * when the same person signs straight back in (`again`, the weekly sign-in done early).
-   */
-  'account.signOut': { params: { expect: Expect; again?: true }; result: AppStatus };
+  /** Signs the account on screen out of this computer; the reply is the new status. Its Ask timeline goes with it. */
+  'account.signOut': { params: { expect: Expect }; result: AppStatus };
   /** Tools: the organization's tools and your connection to each, for the account on screen. */
   'account.tools': { params: { expect: Expect }; result: ConnectedTools };
   /** Project members read the mapping; only leads can change it. */
