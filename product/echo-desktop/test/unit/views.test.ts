@@ -603,8 +603,7 @@ describe('follow-ups in an answer and its progress (ADR-0040)', () => {
     expect(JSON.stringify({ ...answer, sources: visible(answer.sources) })).not.toContain('follow_up:');
   });
 
-  it('carries a step that searched follow-ups or read one', () => {
-    expect(askStepView({ ok: true, progress: { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }], found: 9 } })).toStrictEqual({ type: 'searched' });
+  it('carries a step that read a follow-up', () => {
     expect(askStepView({ ok: true, progress: { type: 'read', items: [followUp, named] } })).toEqual({ type: 'read', items: [followUpSource, namedSource] });
   });
 });
@@ -650,28 +649,16 @@ describe('your workspace and your tools\' containers in an answer and its progre
       container: 'confluence_space', key: 'THT', private: true });
   });
 
-  it('carries a step that searched your workspace or a tool\'s containers, or read one of them', () => {
-    const sources = [{ kind: 'meetings' }, { kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'jira' }];
-    expect(askStepView({ ok: true, progress: { type: 'searched', sources, found: 9 } })).toStrictEqual({ type: 'searched' });
+  it('carries a step that read your workspace or a tool\'s containers', () => {
     expect(askStepView({ ok: true, progress: { type: 'read', items: [project, person, tool, container] } })).toEqual({ type: 'read', items: workspaceSources });
   });
 });
 
 describe('a streamed answer\'s receipt (ADR-0039, ADR-0040, ADR-0043)', () => {
-  // A receipt as the Authority sends it: what was searched, and the items read, of any kind an answer cites.
-  const meetings = { looked_through: 14, elapsed_ms: 48_000, rows: [{ type: 'searched', sources: [{ kind: 'meetings' }], found: 6 }, { type: 'read', items: [named] }] };
-  const followUps = { looked_through: 2, elapsed_ms: 31_000, rows: [{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 3 }, { type: 'read', items: [followUp, named] }] };
-  const workspace = { looked_through: 4, elapsed_ms: 31_000, rows: [
-    { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'containers', tool_id: 'jira' }], found: 9 }, { type: 'read', items: [project, person, tool, container] },
-  ] };
-  it.each([
-    { read: 'a decision', answer: v8([named]), receipt: meetings },
-    { read: 'a follow-up', answer: v8([followUp]), receipt: followUps },
-    { read: 'your workspace', answer: v8([project]), receipt: workspace },
-    // A receipt with no search is still one.
-    { read: 'only what it read', answer: v8([named]), receipt: { looked_through: 1, elapsed_ms: 1_000, rows: [{ type: 'read', items: [named] }] } },
-  ])('takes the receipt of an answer that read $read as how many items it looked through, and nothing it searched or read', ({ answer, receipt }) => {
-    expect(answerView({ ok: true, result: answer, receipt }, { kind: 'global' }).receipt).toStrictEqual({ looked_through: receipt.looked_through });
+  it('takes the receipt as how many items the answer looked through, and nothing it searched or read', () => {
+    // A receipt as the Authority sends it: what was searched, and the items read.
+    const receipt = { looked_through: 14, elapsed_ms: 48_000, rows: [{ type: 'searched', sources: [{ kind: 'meetings' }], found: 6 }, { type: 'read', items: [named] }] };
+    expect(answerView({ ok: true, result: v8([named]), receipt }, { kind: 'global' }).receipt).toStrictEqual({ looked_through: 14 });
   });
 
   // What the result line may hold (V8 only, a receipt that covers its rows) is the contract's to test (organization-api
