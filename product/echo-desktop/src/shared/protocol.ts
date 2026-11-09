@@ -264,20 +264,21 @@ export type AnswerSource = (
    * The citation exactly as the answer's response carried it, only on an
    * answer's sources: opaque here. A follow-up or Ask again sends the earlier
    * answer's citations back with it (`previous`, ADR-0047), and a check asks
-   * about the evidence citation of one that can change or go (`checkOf`).
+   * whether you can still read the evidence citation of one that can go
+   * (`checkOf`).
    */
   readonly cited?: PersonAnswerCitationV8;
 };
 
-/** The kinds of evidence a check asks about (Ask source check, C1): what an old answer cited that can change or go. */
+/** The kinds of evidence a check asks about (Ask source check, C1): what an old answer cited that can go. */
 const CHECK_KINDS: readonly PersonAskCheckCitationKindV1[] = ['approved_record', 'source_revision', 'follow_up', 'ticket', 'page'];
 /** A checkable source's evidence citation, as the answer cited it. */
 export type CheckCitation = Extract<PersonAnswerEvidenceCitationV8, { readonly kind: PersonAskCheckCitationKindV1 }>;
 
 /**
  * What `ask.check` asks about a source (ADR-0047): its evidence citation,
- * exactly as the answer cited it, when it can change or go (a record's item,
- * an original's passage, a follow-up, a ticket or a page). Opaque here.
+ * exactly as the answer cited it, when it can go (a record's item, an
+ * original's passage, a follow-up, a ticket or a page). Opaque here.
  */
 export function checkOf(source: AnswerSource): CheckCitation | undefined {
   const citation = source.cited?.citation;
@@ -290,19 +291,9 @@ export function checkOf(source: AnswerSource): CheckCitation | undefined {
  * answer being written.
  */
 export type AskStage = 'searching' | 'reading' | 'checking_access' | 'writing';
-/**
- * A kind of source a step searched: meetings, documents or follow-ups; your
- * projects, the people in your organization or your tools; or a live tool's
- * tickets, pages or containers (its Jira projects or Confluence spaces), by
- * the tool's id.
- */
-export type AskSearchedSource = { readonly kind: 'meetings' | 'documents' | 'follow_ups' | 'projects' | 'people' | 'tools' }
-  | { readonly kind: 'tickets' | 'pages' | 'containers'; readonly tool_id: string };
-/** One step's searches: the source kinds, and how many items they returned that no earlier read had. */
+/** A step searched: the line's names start over with the next read. What it searched and found stays with the host. */
 export interface AskSearched {
   readonly type: 'searched';
-  readonly sources: readonly AskSearchedSource[];
-  readonly found: number;
 }
 /** Items whose full text research was just given, each after the access check before that read: as a source opens. */
 export interface AskRead {
@@ -312,15 +303,14 @@ export interface AskRead {
 /** One step of an Ask still working. `pending`, only while reading: items about to be read whose names have not come yet. */
 export type AskStep = { readonly type: 'stage'; readonly stage: AskStage; readonly pending?: number } | AskSearched | AskRead;
 /**
- * What an answered Ask looked through, rebuilt by the Authority from the
- * items that passed its final check: how many items it looked through (from
- * progress V3, ADR-0043, the rows it was shown as well as what it read in
- * full; before, only what it read in full), and its searches and reads in
- * order, neighbours of a type already merged.
+ * What an answered Ask looked through, from the receipt the Authority rebuilt
+ * from the items that passed its final check: how many items it looked
+ * through (from progress V3, ADR-0043, the rows it was shown as well as what
+ * it read in full; before, only what it read in full). Its searches and reads
+ * stay with the host.
  */
 export interface AskReceipt {
   readonly looked_through: number;
-  readonly rows: readonly (AskSearched | AskRead)[];
 }
 
 /** A cited statement in the Agentic Ask response. Citation indexes address Answer.sources. */
@@ -407,15 +397,13 @@ export interface TimelineTurn {
   readonly scope: AskScope;
   /**
    * As the host built it, less what the turn keeps itself or only its Ask read (`TimelineAnswer`); each source keeps the
-   * citation it was cited by (`cited`), whose evidence citation a check asks about when it can change or go (`checkOf`).
+   * citation it was cited by (`cited`), whose evidence citation a check asks about when it can go (`checkOf`).
    */
   readonly answer: TimelineAnswer;
   /** Ask again's "Since" list: what is different now, each cited; empty when nothing material changed. */
   readonly since?: readonly AnswerStatement[];
   /** The turn this one asked again. */
   readonly again_of?: string;
-  /** Ticket baseline markers by source index: what a check compares a ticket with. */
-  readonly markers?: Readonly<Record<string, string>>;
   /**
    * The sources, by index, a check found unreadable: what cites them stays hidden, however long ago that check was, until
    * a check finds them readable again (C5). A check that cannot tell (`unknown`) changes nothing.
@@ -433,12 +421,16 @@ export const TIMELINE_DAYS = 90;
  */
 export const MAX_TIMELINE_PUT_BYTES = 256 * 1024;
 
-/** What a check says of one cited source (C1): unchanged, changed, no longer readable by you, or not known now. */
+/**
+ * What a check says of one cited source (C1): readable by you (`same`, or
+ * `changed` from an Authority before checks said only readability), no
+ * longer readable, or not known now.
+ */
 export type AskCheckState = PersonAskCheckStateV1;
-/** One source to check: when the turn that cited it was asked, its evidence citation, and a ticket's baseline marker. */
-export type AskCheckItem = PersonAskCheckRequestItemV1;
-/** What the check said of one item, in the request's order: a readable ticket's current marker too. */
-export type AskCheckResult = PersonAskCheckItemV1;
+/** One source to check: when the turn that cited it was asked, and its evidence citation. The page sends no ticket marker. */
+export type AskCheckItem = Omit<PersonAskCheckRequestItemV1, 'marker'>;
+/** What the check said of one item, in the request's order. */
+export type AskCheckResult = Pick<PersonAskCheckItemV1, 'state'>;
 /** The most items one check asks about, and its body's bound (C1). */
 export const MAX_CHECK_ITEMS = 100;
 export const MAX_CHECK_REQUEST_BYTES = 64 * 1024;
@@ -736,7 +728,7 @@ export interface HostMethods {
   'timeline.read': { params: { expect: Expect }; result: { turns: TimelineTurn[] } };
   /** Keeps one turn: a new one at the end, or one already kept in its place; then the oldest past the bounds go. */
   'timeline.put': { params: { expect: Expect; turn: TimelineTurn }; result: Record<string, never> };
-  /** What changed of the sources old answers cited (C1): content-free, in the items' order. */
+  /** Whether you can still read the sources old answers cited (C1): content-free, in the items' order. */
   'ask.check': { params: { expect: Expect; items: AskCheckItem[] }; result: { items: AskCheckResult[] } };
   /** Per project you are in, the newest arrival from someone else you can read (C2). */
   'projects.activity': { params: { expect: Expect }; result: { items: ProjectActivity[] } };

@@ -1,7 +1,7 @@
-// Your project, a person, a tool and a tool's container, as Ask cites or
-// names them (research tool contract v1), in the store and on the page: each
-// opens in Ask's side panel by its name while Ask keeps running, and nothing
-// is read for it. Once the answer came, Open goes to the project, or to
+// Your project, a person, a tool and a tool's container, as an answer cites
+// them (research tool contract v1), in the store and on the page: each opens
+// in Ask's side panel by its name while Ask keeps running, and nothing is
+// read for it. Once the answer came, Open goes to the project, or to
 // Tools; a person has nowhere to go; a Jira project or Confluence space says
 // its tool and key on its source row, and opens in its tool.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -61,10 +61,17 @@ const asking = (question = 'Who leads Thermal recovery?') => askingWith(rpc, hel
 
 describe('your workspace and your tools\' containers open beside Ask (research tool contract v1)', () => {
   it('shows a project by its name while Ask runs, with nothing read and no Open; once answered, Open goes to the project, from its sidebar row', async () => {
-    const { store, release, read, pane } = await asking();
-    read([cited]);
+    const first = await asking();
+    first.release(ok(answering([cited])));
+    await flush();
+    const { store, pane } = first;
+    const earlier = paneTurn(store)!;
+    // Another question on its way: the project the first answer cites, chosen meanwhile, opens beside Ask.
+    const release = held.hold('ask.run');
+    void store.ask('And who else?');
+    await flush();
     const before = rpc.mock.calls.length;
-    store.openNamed([cited]);
+    store.chooseSource(0, null, earlier);
     await flush();
     // Nothing is read for it: the pane shows what Ask cited.
     expect(rpc.mock.calls).toHaveLength(before);
@@ -76,11 +83,11 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     store.openFullPage();
     expect(store.getState().ask?.asking).not.toBeNull();
 
-    // The answer cites it, and its receipt names it: the pane stays on it, and Open shows.
+    // The answer comes: chosen again, the project offers Open.
     vi.advanceTimersByTime(3_000);
-    release(ok(answering([cited], { looked_through: 1, rows: [{ type: 'searched', sources: [{ kind: 'projects' }], found: 1 },
-      { type: 'read', items: [cited] }] })));
+    release(ok(answering([cited], { looked_through: 1 })));
     await flush();
+    store.chooseSource(0, null, earlier);
     expect(store.paneTarget()?.sources).toEqual([cited]);
     expect(byTestId(pane(), 'source-open')).toHaveLength(1);
     store.openFullPage();

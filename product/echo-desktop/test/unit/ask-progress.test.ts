@@ -1,9 +1,12 @@
 // Ask progress and internal links v1 (ADR-0039), in the store: the steps of
-// the Ask on its way, the items they name opening beside a running Ask, and
-// the receipt an answer keeps.
+// the Ask on its way and the one line they make, an answer's sources opening
+// beside a running Ask, and what an answer looked through.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, AskReceipt, Expect } from '../../src/shared/protocol.js';
-import { ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, latestTurn, ok, paneTurn, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text } from './harness.js';
+import {
+  ACCOUNT, asking as askingWith, byClass, byTestId, byType, elements, fail, flush, Held, latestTurn, ok, paneTurn, plainHooks, project, render, rpcFor, startStore,
+  storeLifecycle, text,
+} from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -15,9 +18,7 @@ const coordinates = { source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', 
 const decision: AnswerSource = { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' }, atom_id: sha('1') };
 const note: AnswerSource = { kind: 'original', label: 'Launch notes', ref: coordinates, item: { kind: 'note', id: `ctx_${'8'.repeat(64)}` } };
 const ticket: AnswerSource = { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7' };
-const receipt: AskReceipt = { looked_through: 3, rows: [
-  { type: 'searched', sources: [{ kind: 'meetings' }], found: 3 }, { type: 'read', items: [decision, note, ticket] },
-] };
+const receipt: AskReceipt = { looked_through: 3 };
 const answer = (withReceipt = true): Answer => ({
   scope: { kind: 'global' }, sources: [decision], outcome: 'answered',
   parts: [{ question: 'What did we agree?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0], private: false }],
@@ -45,21 +46,21 @@ const calls = (method: string) => rpc.mock.calls.filter(([name]) => name === met
 const asking = (question?: string) => askingWith(rpc, held, question);
 
 describe('the steps of the Ask on its way', () => {
-  it('build its stage and rows; a step of another Ask, a cancelled one or another account is dropped', async () => {
+  it('build its stage and what it reads; a step of another Ask, a cancelled one or another account is dropped', async () => {
     const { store, step, release } = await asking();
     const progress = () => store.getState().ask?.asking?.progress;
-    expect(progress()).toMatchObject({ stage: null, pending: 0, rows: [] });
+    expect(progress()).toEqual({ started: expect.any(Number), stage: null, pending: 0, read: [] });
     step({ type: 'stage', stage: 'searching' });
-    step({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'tickets', tool_id: 'jira' }], found: 22 });
+    step({ type: 'searched' });
     step({ type: 'stage', stage: 'reading', pending: 2 });
-    expect(progress()).toMatchObject({ stage: 'reading', pending: 2, rows: [{ type: 'searched', found: 22 }] });
+    expect(progress()).toMatchObject({ stage: 'reading', pending: 2, read: [] });
     // Another Ask's id, another account, another Authority: nothing changes.
     step({ type: 'read', items: [decision] }, { cancel_id: '00000000-0000-4000-8000-000000000000' });
     step({ type: 'read', items: [decision] }, { expect: { ...EXPECT, membership_id: 'someone-else' } });
     step({ type: 'read', items: [decision] }, { expect: { ...EXPECT, authority: 'https://other.invalid' } });
-    expect(progress()?.rows).toHaveLength(1);
+    expect(progress()).toMatchObject({ pending: 2, read: [] });
     step({ type: 'read', items: [decision, note] });
-    expect(progress()).toMatchObject({ pending: 0, rows: [{ type: 'searched' }, { type: 'read', items: [decision, note] }] });
+    expect(progress()).toMatchObject({ pending: 0, read: [decision, note] });
     // Answered: a late step goes nowhere.
     release(ok(answer()));
     await flush();
@@ -68,10 +69,26 @@ describe('the steps of the Ask on its way', () => {
     expect(latestTurn(store)?.text).toBe('What did we agree?');
   });
 
-  it('cancelled, takes no step more, and Ask closes with what it named', async () => {
+  it('show one line while it works: a pulse, the step now and what it reads, how long, and Cancel, with nothing to open under it', async () => {
+    const { step, thread } = await asking();
+    step({ type: 'stage', stage: 'searching' });
+    step({ type: 'searched' });
+    step({ type: 'stage', stage: 'reading', pending: 3 });
+    step({ type: 'read', items: [decision, note, ticket] });
+    vi.advanceTimersByTime(4_000);
+    const shown = thread();
+    const line = byTestId(shown, 'asking')[0]!;
+    expect(byClass(line, 'pulse')).toHaveLength(1);
+    expect(text(byTestId(line, 'ask-stage'))).toBe('Reading Tuesday sync and 2 more');
+    expect(text(byTestId(line, 'ask-timer'))).toBe('4s');
+    // Cancel is its one button: the line opens onto nothing, and no list shows under it.
+    expect(byType(line, 'button').map(node => node.props['data-testid'])).toEqual(['ask-cancel']);
+    expect(elements(byClass(shown, 'ask-trail')[0]).filter(node => node.type === 'ul' || node.type === 'li')).toEqual([]);
+  });
+
+  it('cancelled, takes no step more, and Ask closes', async () => {
     const { store, step } = await asking();
     step({ type: 'read', items: [decision] });
-    store.openNamed([decision]);
     store.cancelAsk();
     step({ type: 'read', items: [note] });
     expect(store.getState().ask).toBeNull();
@@ -80,14 +97,21 @@ describe('the steps of the Ask on its way', () => {
   });
 });
 
-describe('a name opens beside Ask, and Ask keeps running', () => {
-  it('a decision opens its meeting, lit; Open waits for the answer and then goes to the meeting\'s page', async () => {
-    const { store, step, release } = await asking();
-    step({ type: 'read', items: [decision] });
-    store.openNamed([decision]);
+describe('an answer\'s source opens beside Ask, and Ask keeps running', () => {
+  it('a decision an answer cites opens its meeting, lit, while a new question is on its way; Open waits for that answer', async () => {
+    const first = await asking();
+    first.release(ok(answer(false)));
     await flush();
-    expect(store.paneTarget()).toEqual({ sources: [decision], group: null, number: null });
-    expect(calls('ask.record')).toEqual([{ expect: EXPECT, record: decision.kind === 'record' ? decision.record : null }]);
+    const { store } = first;
+    const earlier = paneTurn(store)!;
+    // A follow-up on its way: the decision the first answer cites, its number chosen meanwhile, opens its meeting beside Ask.
+    const second = held.hold('ask.run');
+    void store.ask('And then?');
+    await flush();
+    store.chooseSource(0, '0.0', earlier);
+    await flush();
+    expect(store.paneTarget()).toMatchObject({ sources: [decision], number: 0 });
+    expect([...store.litAtoms(store.getState(), store.paneTarget()!)]).toEqual([sha('1')]);
     expect(store.getState().sources?.records[sha('2')]).toMatchObject({ loading: false, value: { title: 'Tuesday sync' } });
     // Still asking: nothing was cancelled, and there is no Open, since leaving Ask would cancel it.
     expect(store.getState().ask?.asking).not.toBeNull();
@@ -96,12 +120,14 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     store.openFullPage();
     expect(store.getState().ask?.asking).not.toBeNull();
 
-    // The answer comes: the pane stays on the item, with what it read, and Open shows.
-    vi.advanceTimersByTime(3_000);
-    release(ok(answer()));
+    // The answer comes, and the pane starts over, closed on its sources. Chosen again, the decision offers Open.
+    second(ok(answer(false)));
     await flush();
-    expect(store.paneTarget()?.sources).toEqual([decision]);
-    expect(calls('ask.record')).toHaveLength(1);
+    expect(store.paneTarget()).toBeNull();
+    store.chooseSource(0, null, earlier);
+    await flush();
+    // One read of the meeting served every answer that cites it.
+    expect(calls('ask.record')).toEqual([{ expect: EXPECT, record: decision.kind === 'record' ? decision.record : null }]);
     expect(store.fullPageOffered()).toBe(true);
     store.openFullPage();
     await flush();
@@ -156,102 +182,109 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     expect(byTestId(shown(), 'reader-more')).toHaveLength(0);
   });
 
-  it('a name of a place lights every item of it Ask read, and shows every passage', async () => {
+  it('a meeting an answer cites at two of its items lights both when its row opens it, and only the one a sentence cites by its number', async () => {
     const other: AnswerSource = { ...decision, atom_id: sha('9') } as AnswerSource;
-    const passage: AnswerSource = { ...note, ref: { ...coordinates, anchor_sha256: sha('a') } } as AnswerSource;
-    const { store } = await asking();
-    store.openNamed([decision, other]);
+    const { store, release } = await asking();
+    release(ok({ ...answer(false), sources: [decision, other], parts: [{ question: 'What did we agree?', status: 'answered', statements: [
+      { text: 'Ship it.', citation_indexes: [0], private: false }, { text: 'Hold monthly plans.', citation_indexes: [1], private: false },
+    ], blocks: [{ kind: 'text', statements: [0] }, { kind: 'text', statements: [1] }] }] }));
+    await flush();
+    // One meeting is one source: its row lights every item the answer cites in it.
+    expect(store.answerGroups()).toHaveLength(1);
+    store.chooseSource(0, null, paneTurn(store));
     await flush();
     const target = store.paneTarget()!;
     expect(target.sources).toEqual([decision, other]);
     expect([...store.litAtoms(store.getState(), target)]).toEqual([sha('1'), sha('9')]);
+    store.chooseSource(0, '0.1', paneTurn(store));
+    expect([...store.litAtoms(store.getState(), store.paneTarget()!)]).toEqual([sha('9')]);
     // One read of their meeting serves both.
     expect(calls('ask.record')).toHaveLength(1);
-
-    store.openNamed([note, passage]);
-    await flush();
-    expect(calls('ask.source').map(params => (params.ref as { anchor_sha256: string }).anchor_sha256)).toEqual([sha('6'), sha('a')]);
-    expect(store.getState().sources?.evidence).toMatchObject({ group: null, reads: { 0: { loading: false }, 1: { loading: false } } });
   });
 
-  it('a passage is read under the Ask\'s own scope, and a ticket opens only in its app', async () => {
+  it('reads a passage in the scope of the answer that cites it, whatever question is on its way; a ticket opens only in its app', async () => {
+    const inApollo = { kind: 'project', project_id: project(1, 30).project_id } as const;
     const store = await startStore();
-    const release = held.hold('ask.run');
-    void store.ask('What did we agree?', { kind: 'project', project_id: project(1, 30).project_id });
+    const first = held.hold('ask.run');
+    void store.ask('What did we agree?', inApollo);
     await flush();
-    store.openNamed([note]);
+    first(ok({ ...answer(false), scope: inApollo, sources: [note, ticket], parts: [{ question: 'What did we agree?', status: 'answered',
+      statements: [{ text: 'Ship it, as ECHO-7 says.', citation_indexes: [0, 1], private: false }], blocks: [{ kind: 'text', statements: [0] }] }] }));
     await flush();
-    expect(calls('ask.source')).toEqual([{ expect: EXPECT, scope: { kind: 'project', project_id: project(1, 30).project_id }, ref: coordinates }]);
-    expect(store.getState().sources?.evidence).toMatchObject({ group: null, reads: { 0: { loading: false, value: { text: 'We agreed to ship.' } } } });
+    const earlier = paneTurn(store)!;
+    // A question across everything on its way: the earlier answer's passage is read where that answer was asked.
+    const second = held.hold('ask.run');
+    void store.ask('And everywhere?', { kind: 'global' });
+    await flush();
+    store.chooseSource(0, null, earlier);
+    await flush();
+    expect(calls('ask.source')).toEqual([{ expect: EXPECT, scope: inApollo, ref: coordinates }]);
+    expect(store.getState().sources?.evidence).toMatchObject({ group: 0, reads: { 0: { loading: false, value: { text: 'We agreed to ship.' } } } });
 
-    store.openNamed([ticket]);
+    store.chooseSource(1, null, earlier);
+    expect(store.paneTarget()?.sources).toEqual([ticket]);
     expect(await store.openExternalSource(ticket as Extract<AnswerSource, { kind: 'ticket' }>)).toBe(true);
     expect(calls('source.openExternal')).toEqual([{ kind: 'ticket', permalink: ticket.kind === 'ticket' ? ticket.permalink : '' }]);
-    release(ok(answer()));
+    second(ok(answer(false)));
     await flush();
+    store.chooseSource(1, null, earlier);
     // A ticket has no page in the app: Open in Jira is all it has.
     expect(store.fullPageOffered()).toBe(false);
   });
 
   it('heads a live item beside Ask by its tool and kind: a Jira ticket, a Confluence page', async () => {
-    const { store, read, pane } = await asking();
     const page: AnswerSource = { kind: 'page', tool_id: 'confluence', label: 'DVT plan', permalink: 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=31010' };
-    read([ticket, page]);
-    for (const [item, heading] of [[ticket, 'Jira · Ticket'], [page, 'Confluence · Page']] as const) {
-      store.openNamed([item]);
+    const { store, release, pane } = await asking();
+    release(ok({ ...answer(false), sources: [ticket, page], parts: [{ question: 'What did we agree?', status: 'answered',
+      statements: [{ text: 'ECHO-7 and the DVT plan agree.', citation_indexes: [0, 1], private: false }], blocks: [{ kind: 'text', statements: [0] }] }] }));
+    await flush();
+    for (const [group, heading] of [[0, 'Jira · Ticket'], [1, 'Confluence · Page']] as const) {
+      store.chooseSource(group, null, paneTurn(store));
       await flush();
       expect(text(byTestId(pane(), 'source-pane'))).toContain(heading);
     }
   });
 
-  it('closes with no answer: a refusal, a timeout or a cancel removes what the Ask named', async () => {
-    const { store, step, release } = await asking();
-    step({ type: 'read', items: [decision] });
-    store.openNamed([decision]);
+  it('starts the pane over when a question gets no answer: a refusal or a cancel closes what was chosen while it ran', async () => {
+    // Asked from a page with nothing before it, refused: no answer, and no pane.
+    const { store, release } = await asking();
     release(fail('unavailable', { retryable: true }));
     await flush();
     expect(store.getState().ask?.failed?.failure.code).toBe('unavailable');
     expect(store.getState().sources).toBeNull();
+    // Answered, then a follow-up refused: the pane closes on the source chosen while it ran.
+    const answered = held.hold('ask.run');
+    void store.ask('Answered?');
+    await flush();
+    answered(ok(answer(false)));
+    await flush();
+    const earlier = paneTurn(store)!;
+    const refused = held.hold('ask.run');
+    void store.ask('Refused?');
+    await flush();
+    store.chooseSource(0, null, earlier);
+    expect(store.paneTarget()?.sources).toEqual([decision]);
+    refused(fail('unavailable', { retryable: true }));
+    await flush();
     expect(store.paneTarget()).toBeNull();
-
     // A follow-up that is cancelled: the answer before comes back, its pane closed.
-    const first = held.hold('ask.run');
-    void store.ask('First?');
+    const cancelled = held.hold('ask.run');
+    void store.ask('Cancelled?');
     await flush();
-    first(ok(answer(false)));
-    await flush();
-    const second = held.hold('ask.run');
-    void store.ask('Second?');
-    await flush();
-    store.openNamed([note]);
+    store.chooseSource(0, null, earlier);
     store.cancelAsk();
-    expect(latestTurn(store)?.text).toBe('First?');
-    expect(store.getState().sources?.named).toBeNull();
+    expect(latestTurn(store)?.text).toBe('Answered?');
     expect(store.paneTarget()).toBeNull();
-    second(ok(answer()));
-  });
-
-  it('keeps a named item in the pane after the answer only when the audited answer names it', async () => {
-    const { store, step, release } = await asking();
-    step({ type: 'read', items: [decision, note] });
-    store.openNamed([note]);
-    await flush();
-    expect(store.paneTarget()?.sources).toEqual([note]);
-    // The answer releases without the note, in its receipt or its sources: the pane closes on it.
-    vi.advanceTimersByTime(3_000);
-    release(ok({ ...answer(), receipt: { ...receipt, rows: [{ type: 'read', items: [decision] }] } }));
-    await flush();
-    expect(latestTurn(store)?.text).toBe('What did we agree?');
-    expect(store.getState().sources?.named).toBeNull();
-    expect(store.getState().sources?.evidence).toBeNull();
-    expect(store.paneTarget()).toBeNull();
+    cancelled(ok(answer()));
   });
 
   it('closes when another app comes in front', async () => {
-    const { store } = await asking();
-    store.openNamed([decision]);
+    const { store, release } = await asking();
+    release(ok(answer(false)));
+    await flush();
+    store.chooseSource(0, null, paneTurn(store));
+    expect(store.paneTarget()?.sources).toEqual([decision]);
     store.windowState({ onScreen: true, front: false });
-    expect(store.getState().sources?.named).toBeNull();
     expect(store.paneTarget()).toBeNull();
   });
 });
@@ -280,6 +313,17 @@ describe('the receipt above an answer', () => {
     release(ok(answer()));
     await flush();
     expect(latestTurn(store)).toMatchObject({ receipt, took: 3_400 });
+  });
+
+  it('says what an answer with no sources looked through as plain words under it: there is nothing to open', async () => {
+    const { store, release, thread } = await asking();
+    vi.advanceTimersByTime(3_000);
+    release(ok({ ...answer(), sources: [], outcome: 'not_found', parts: [{ question: 'What did we agree?', status: 'not_found', statements: [] }] }));
+    await flush();
+    expect(latestTurn(store)?.receipt).toEqual(receipt);
+    const foot = byTestId(thread(), 'turn-foot').at(-1)!;
+    expect(byTestId(foot, 'sources-toggle')).toEqual([]);
+    expect(text(byTestId(foot, 'foot-label'))).toBe('Looked through 3 items · 3s');
   });
 
   it('an Authority that answers without streaming sends none, and the answer shows without a receipt', async () => {

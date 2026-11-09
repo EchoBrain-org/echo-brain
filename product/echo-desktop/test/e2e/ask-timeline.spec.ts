@@ -1,7 +1,7 @@
 // The Ask timeline (ADR-0047), in the real app with the fixture Authority:
 // kept on this computer through navigation, earlier turns folded to lines
-// that open as they were, what changed lit, follow-ups carrying readable
-// evidence, and a project's dot with its New rows.
+// that open as they were, what you can no longer read left out, follow-ups
+// carrying readable evidence, and a project's dot with its New rows.
 import { expect, test, type Page } from '@playwright/test';
 import { readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -80,7 +80,7 @@ test('the timeline stays through navigation, on this computer only, each place s
   expect(asks()).toHaveLength(3);
 });
 
-test('a line tagged Changed opens as its heading, with what changed lit and what you can no longer read left out', async () => {
+test('a line opens as its heading, with what you can no longer read left out', async () => {
   run = await launch('ask-timeline-changed');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
@@ -89,23 +89,20 @@ test('a line tagged Changed opens as its heading, with what changed lit and what
   await ask(page, 'What else?');
   await back(page);
   await ask(page, 'Anything new?');
-  // Opening Ask checked the newest turns' sources in one read: the DVT plan changed, the follow-up is no longer yours.
+  // Opening Ask checked the newest turns' sources in one read: the follow-up is no longer yours.
   const row = page.getByTestId('timeline-row').filter({ hasText: 'What is open on THERM?' });
-  await expect(row.getByTestId('changed-tag')).toHaveText('Changed');
   await row.click();
   const opened = page.getByTestId('opened-turn');
   await expect(opened.getByTestId('statement-text')).toHaveText(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
-  await expect(opened.locator('[data-mark="changed"]')).toHaveText(/The DVT plan moved the retest to Oct 30\./u);
   // What you can no longer read is gone from its sources too, and the rest keep the numbers its sentences show.
   await expect(opened).not.toContainText('Confirm the trace');
   await expect(opened.getByTestId('sources-toggle')).toHaveText(/^2 sources$/u);
   await expect(opened.getByTestId('citation')).toHaveText(['1', '2']);
-  // Opened, the line is the heading: the tag gives way to what changed since, said once (ADR-0049).
-  await expect(row.getByTestId('changed-tag')).toHaveCount(0);
-  await expect(opened.getByTestId('changed-since')).toHaveText(/^Changed since \d{1,2}:\d{2}\s?(AM|PM)$/u);
+  // The checks say what you can read, and nothing of a ticket: no label, and no marker, though the Authority answers with one.
   const checks = run.calls().filter(call => call.path === '/v1/person/ask/check');
   expect(checks.length).toBeGreaterThan(0);
   expect(JSON.stringify(checks.map(call => call.body))).not.toContain('Sensor drift');
+  expect(JSON.stringify(checks.map(call => call.body))).not.toContain('"marker"');
   await ask(page, 'who owns it?');
   await expect(page.getByTestId('turn').last().getByTestId('statement-text')).toHaveText(['Dev owns THERM-482, since Oct 21.']);
   const followUp = asks().at(-1)!;

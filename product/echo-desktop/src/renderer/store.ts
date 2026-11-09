@@ -5,7 +5,7 @@ import type {
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
+  Account, AccountCommand, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
   ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView,
   ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
@@ -18,7 +18,7 @@ import {
   answeredNow, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, checksHiding, followedTurn, foundUnreadable, freshChecks, freshStates, knownStates,
   previousOf, sameScope, shownInFull, showsOf, threadOf, unreadableAfter, visibleTurns, turnGroups, type CheckPlan, type Suggestion, type TurnCheck, type TurnChecks,
 } from './timeline.js';
-import { openerOf, sourceKey } from './openers.js';
+import { openerOf } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
 import { PERSON_LIVE_MAX, PROJECT_READS_AT_ONCE, unowned } from './altitude.js';
 import { dropFile, rpc } from './api.js';
@@ -133,24 +133,16 @@ export type Read<T> =
 /**
  * The sources of what Ask shows: the pane beside it, which turn's source
  * lists are open, and the approved records and follow-ups read for them. The
- * pane shows a source of one turn at a time (`turn`), or a place the Ask on
- * its way named. Nothing here outlives Ask, or another app coming in front:
- * those start it over.
+ * pane shows a source of one turn at a time (`turn`). Nothing here outlives
+ * Ask, or another app coming in front: those start it over.
  */
 export interface SourcesState {
   /** Which start this is: a read for an earlier one is dropped. */
   gen: number;
   /** The turn whose sources the pane's numbers are: the answer that came last, or the turn a number or row was chosen in. */
   turn: string | null;
-  /** The source the pane shows, by its number in the answer less one; null while it shows a named place, or is closed. */
+  /** The source the pane shows, by its number in the answer less one; null while the pane is closed. */
   open: number | null;
-  /**
-   * The items of one place Ask named, in a live row or its receipt, that the
-   * pane shows in place of a numbered source: all of them lit, or all their
-   * passages, the first standing for the place. Named while Ask works, they
-   * go if the Ask gets no answer.
-   */
-  named: readonly AnswerSource[] | null;
   /**
    * The sentence whose number opened the pane: "direct", its part and place ("0.2", "0.r1" for a passage found), or a table
    * row ("0.t4.1"); null when a source row did.
@@ -161,16 +153,13 @@ export interface SourcesState {
   /** Approved records read for what Ask shows, by digest. */
   records: Readonly<Record<string, Read<ApprovedRecord>>>;
   /**
-   * Follow-ups an answer cites or Ask named (ADR-0040), by item id: each its
-   * row as Home reads it now (rows only), for the pane's owner, status and
-   * check and a source row's "owner · status".
+   * Follow-ups an answer cites (ADR-0040), by item id: each its row as Home
+   * reads it now (rows only), for the pane's owner, status and check and a
+   * source row's "owner · status".
    */
   followUps: Readonly<Record<string, Read<OpenItemView>>>;
-  /**
-   * The cited passages of the original the pane shows, by citation (a named
-   * place's by their order in it, `group` null); read each time it is chosen.
-   */
-  evidence: { seq: number; group: number | null; reads: Readonly<Record<number, Read<SourceEvidence>>> } | null;
+  /** The cited passages of the original the pane shows (`group`, its number less one), by citation; read each time it is chosen. */
+  evidence: { seq: number; group: number; reads: Readonly<Record<number, Read<SourceEvidence>>> } | null;
 }
 
 /** Where a capture goes (ADR-0049): the projects ticked, no project (only you can read it), or the whole organization. */
@@ -3672,7 +3661,7 @@ function freshChecksOf(turn: TimelineTurn, current: State = state): TurnChecks |
  */
 function setTimeline(timeline: State['timeline']): void {
   const sources = state.sources;
-  const selected = paneTarget()?.group?.indexes[0];
+  const selected = paneTarget()?.group.indexes[0];
   if (!sources || sources.open === null || selected === undefined) { set({ timeline }); return; }
   const next = { ...state, timeline };
   const open = answerGroups(next).findIndex(group => group.indexes.includes(selected));
@@ -3694,8 +3683,7 @@ export function checksOf(turn: TimelineTurn, current: State = state): TurnChecks
 
 /**
  * What the page shows of what is known of a turn's sources: on one asked in
- * this Ask, which is current, only what a check found unreadable, never a
- * Changed tag or note.
+ * this Ask, which is current, only what a check found unreadable.
  */
 export function shownChecks(turn: TimelineTurn, current: State = state): TurnChecks | undefined {
   return current.ask?.asked.includes(turn.id) ? knownStates(undefined, turn.unreadable) : checksOf(turn, current);
@@ -3776,11 +3764,11 @@ function threadKey(scope: AskScope): string {
 }
 
 /**
- * Ask opened: what changed of what the newest ten turns its place's thread
- * shows cited, in one check (C5), unless that place's last one went under
- * five minutes ago (ADR-0049); and of the turn a suggestion opened it at
- * (`opened`), first in that check or in one of its own, unless what its
- * sources are now is known or on its way.
+ * Ask opened: whether you can still read what the newest ten turns its
+ * place's thread shows cited, in one check (C5), unless that place's last one
+ * went under five minutes ago (ADR-0049); and what the turn a suggestion
+ * opened it at (`opened`) cited, first in that check or in one of its own,
+ * unless what its sources are now is known or on its way.
  */
 function checkTimeline(opened?: TimelineTurn): Promise<void> {
   const key = threadKey(state.barScope);
@@ -3804,14 +3792,12 @@ function checkTurn(turn: TimelineTurn): Promise<void> {
  * of each turn it speaks for is good for five minutes from when it went, and
  * stands over what an earlier check said of that turn, never over what a
  * later one did; a turn citing nothing a check asks about is spoken for
- * without asking. It fails quietly, with no tags, when any of its requests
- * does: it speaks for no turn, and what an earlier check said that is no
- * longer good goes with it; only what a request that came back found you can
- * no longer read stays, hidden as the turn's unreadable sources and over what
- * a check still good said of them. A ticket it reads for the first time
- * keeps the marker it read as its baseline. `newest`: the place (`threadKey`)
- * whose newest turns Ask opening checked, made again there five minutes after
- * it went.
+ * without asking. It fails quietly when any of its requests does: it speaks
+ * for no turn, and what an earlier check said that is no longer good goes
+ * with it; only what a request that came back found you can no longer read
+ * stays, hidden as the turn's unreadable sources and over what a check still
+ * good said of them. `newest`: the place (`threadKey`) whose newest turns Ask
+ * opening checked, made again there five minutes after it went.
  */
 function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null): Promise<void> {
   const account = expect();
@@ -3824,7 +3810,7 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
     if (asked === null) return;
     const found = checkedOf(plan, asked.results);
     const before = state.timeline.checks;
-    const latest = Object.entries(found.turns).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at);
+    const latest = Object.entries(found).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at);
     if (asked.failure !== undefined) {
       const gone = ACCOUNT_GONE.includes(asked.failure.code);
       if (gone) accountLost(asked.failure);
@@ -3835,7 +3821,6 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
     }
     if (newest !== null) newestCheckedAt.set(newest, at);
     keepChecks({ ...before, ...Object.fromEntries(latest.map(([id, states]) => [id, { at, states }])) });
-    keepBaselines(found.markers);
     keepUnreadable(latest);
   };
   const run = check();
@@ -3873,15 +3858,6 @@ function keepUnreadable(checked: readonly (readonly [string, TurnChecks])[]): vo
   }
 }
 
-/** Tickets with no marker yet keep the one a check read: what the next check compares them with. */
-function keepBaselines(markers: Readonly<Record<string, Readonly<Record<string, string>>>>): void {
-  for (const [id, read] of Object.entries(markers)) {
-    const turn = turnOf(id);
-    const missing = turn ? Object.entries(read).filter(([at]) => turn.markers?.[at] === undefined) : [];
-    if (turn && missing.length > 0) keepTurn({ ...turn, markers: { ...turn.markers, ...Object.fromEntries(missing) } });
-  }
-}
-
 /**
  * A check's requests, one after another: the results of each that came
  * back, and the failure that ended it, if one did; null once a reply no
@@ -3896,17 +3872,6 @@ async function askChecks(account: Expect, plan: CheckPlan, wanted: () => boolean
     results.push(result.value.items);
   }
   return { results };
-}
-
-/** A new answer's tickets: one check, for their markers now, the baseline a later check compares with (C5). Quiet. */
-async function baseline(turn: TimelineTurn): Promise<void> {
-  const account = expect();
-  if (!account) return;
-  const plan = checkPlan([turn], source => source.kind === 'ticket');
-  if (plan.requests.length === 0) return;
-  const asked = await askChecks(account, plan, () => sameAccount(account));
-  if (asked === null || asked.failure !== undefined) return;
-  keepBaselines(checkedOf(plan, asked.results).markers);
 }
 
 /** Ask, opened over the page: the latest turn in full, nothing asked or opened in it yet, the older earlier questions folded. */
@@ -3930,12 +3895,10 @@ export function fullTurns(view: AskState): readonly string[] {
  * carries the turn it asks again. Either carries that turn's sentences only
  * once what they cite is known now: a check of the last five minutes, waited
  * for or made while the question shows on its way; none when no check can
- * say (C5). Asked from a page, it opens Ask, which checks what changed of the
- * newest turns. The answer is kept at the end of the timeline, in full, and
- * its tickets' markers are read as their baseline; "Which one?" waits for a
- * choice and is kept nowhere. While it works, the steps the host reports show
- * under it (ADR-0039); with no answer, they go, and so does any item they
- * opened in the pane.
+ * say (C5). Asked from a page, it opens Ask, which checks what you can still
+ * read of the newest turns. The answer is kept at the end of the timeline, in
+ * full; "Which one?" waits for a choice and is kept nowhere. While it works,
+ * one line under it names the step the host reports (ADR-0039).
  */
 export async function ask(question: string, scope: AskScope = state.barScope, how?: AskHow): Promise<void> {
   const account = expect();
@@ -3997,13 +3960,7 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const took = Date.now() - started;
   const shown = receipt !== undefined && took >= PROGRESS_AFTER_MS ? { ...current.took, [turn.id]: { receipt, took } } : current.took;
   set({ ask: { ...current, asking: null, asked: [...current.asked, turn.id], took: shown } });
-  startSources(answerNames(answer), turn.id);
-  void baseline(turn);
-}
-
-/** The items the audited answer names: its receipt's reads, and its sources. */
-function answerNames(answer: Answer): ReadonlySet<string> {
-  return new Set([...(answer.receipt?.rows ?? []).flatMap(row => row.type === 'read' ? row.items : []), ...answer.sources].map(sourceKey));
+  startSources(turn.id);
 }
 
 /**
@@ -4120,9 +4077,9 @@ export function toggleEarlier(): void {
  * instead of asking it again (ADR-0047), and brought into view, the line of
  * the earlier questions open when it is one of them. A turn shown in full
  * (the latest) stays so. Either way it is the turn the next question
- * continues, however long ago it was asked, and what changed of its sources
- * is checked with the newest turns', first, when nothing in the last five
- * minutes said. Suggestions show only while Ask is closed.
+ * continues, however long ago it was asked, and its sources are checked with
+ * the newest turns', first, when nothing in the last five minutes said.
+ * Suggestions show only while Ask is closed.
  */
 function openTurn(id: string): void {
   const turn = turnOf(id);
@@ -4130,7 +4087,7 @@ function openTurn(id: string): void {
   emptyBar();
   const view = newAsk();
   set({ ask: { ...view, opened: id, focus: id, earlier: behindEarlierLine(askThread(), fullTurns(view)).includes(id) } });
-  startSources(null, id);
+  startSources(id);
   void checkTimeline(turn);
   syncSearch();
 }
@@ -4187,7 +4144,7 @@ async function openAskAt(turn: TimelineTurn): Promise<void> {
 /**
  * Cancel, while asking: Ask goes back to what it showed, with no answer. Ask
  * opened for this question, with nothing asked or opened in it since, closes.
- * A late answer, and any step after, is dropped; what it named goes.
+ * A late answer, and any step after, is dropped.
  */
 export function cancelAsk(): void {
   const thread = state.ask;
@@ -4275,26 +4232,25 @@ export function sourceName(source: AnswerSource, sources: SourcesState | null): 
   return read && !read.loading && 'value' in read ? read.value.title ?? UNTITLED : source.label;
 }
 
-/** What the pane shows: one of the answer's numbered sources, or a place Ask named. */
+/** What the pane shows: one of the answer's numbered sources. */
 export interface PaneTarget {
-  /** Its citations, in the answer's order; a named place's, the items its name stands for. */
+  /** Its citations, in the answer's order. */
   readonly sources: readonly AnswerSource[];
-  /** A numbered source's group and number less one; null for a named place. */
-  readonly group: SourceGroup | null;
-  readonly number: number | null;
+  /** Its group, and its number less one. */
+  readonly group: SourceGroup;
+  readonly number: number;
 }
 
-/** Where the pane's citations are: a numbered source's places in the answer, a named place's order in it. */
+/** Where the pane's citations are: its places in the answer. */
 export function paneCitations(target: PaneTarget): readonly number[] {
-  return target.group?.indexes ?? target.sources.map((_, at) => at);
+  return target.group.indexes;
 }
 
 /** The pane's item, or null while it is closed. */
 export function paneTarget(current: State = state): PaneTarget | null {
   const sources = current.sources;
-  if (!sources || current.ask === null) return null;
-  if (sources.named) return { sources: sources.named, group: null, number: null };
-  const group = sources.open === null ? undefined : answerGroups(current)[sources.open];
+  if (!sources || current.ask === null || sources.open === null) return null;
+  const group = answerGroups(current)[sources.open];
   if (!group) return null;
   const all = answerSources(current);
   return { sources: group.indexes.map(index => all[index]!), group, number: sources.open };
@@ -4311,14 +4267,13 @@ export function fullPageOffered(current: State = state): boolean {
 }
 
 /**
- * The atoms a record source cites, to light: all a named place stands for; a
- * numbered source's that the chosen sentence cites, or all of them when a row
- * opened it.
+ * The atoms a record source cites, to light: those the chosen sentence cites,
+ * or all of them when a row opened it.
  */
 export function litAtoms(current: State, target: PaneTarget): ReadonlySet<string> {
   const atoms = (sources: readonly AnswerSource[]) => new Set(sources.flatMap(source => source.kind === 'record' ? [source.atom_id] : []));
   const answer = activeTurn(current)?.answer;
-  if (!target.group || !answer) return atoms(target.sources);
+  if (!answer) return atoms(target.sources);
   const focused = answerSentences(answer).find(([id]) => id === current.sources?.focus)?.[1].citation_indexes ?? [];
   const cited = target.group.indexes.filter(index => focused.includes(index));
   const all = answerSources(current);
@@ -4392,36 +4347,24 @@ async function openCitedProject(project_id: string, label: string): Promise<void
 }
 
 /**
- * The pane's start for `turn`: closed, nothing named, nothing of its passages
- * read. Which source lists are open stays, and so do the records and
- * follow-ups already read, for the turns that show them.
+ * The pane's start for `turn`: closed, nothing of its passages read. Which
+ * source lists are open stays, and so do the records and follow-ups already
+ * read, for the turns that show them.
  */
 function freshSources(turn: string | null): SourcesState {
   const before = state.sources;
   const settled = <T>(reads: Readonly<Record<string, Read<T>>> | undefined) => Object.fromEntries(Object.entries(reads ?? {}).filter(([, read]) => !read.loading));
-  return { gen: ++seq, turn, open: null, focus: null, listed: before?.listed ?? [], named: null, records: settled(before?.records),
+  return { gen: ++seq, turn, open: null, focus: null, listed: before?.listed ?? [], records: settled(before?.records),
     followUps: settled(before?.followUps), evidence: null };
 }
 
 /**
  * What Ask shows came on screen (an answer, by default the latest turn): the
  * pane starts closed on its sources, and the approved records of what shows
- * are read one after another, so each chip can name its meeting. Answered,
- * the items a live row opened stay in the pane, with what was read for them,
- * but only those the audited answer names (`keep`): a name cleared while Ask
- * worked lasts only for that run. With no turn to show, there is no pane.
+ * are read one after another, so each chip can name its meeting. With no turn
+ * to show, there is no pane.
  */
-function startSources(keep: ReadonlySet<string> | null = null, turn: string | null = threadOf(state.timeline.turns, state.barScope).at(-1)?.id ?? null): void {
-  const sources = state.sources;
-  const named = keep === null ? [] : sources?.named?.filter(item => keep.has(sourceKey(item))) ?? [];
-  if (sources && named.length > 0) {
-    const same = named.length === sources.named!.length;
-    // With fewer passages, their places change: they are read again.
-    set({ sources: { ...sources, turn, open: null, focus: null, named, ...(same ? {} : { evidence: null }) } });
-    if (!same) readPane(sources.gen, named[0]!);
-    void readRecords(sources.gen);
-    return;
-  }
+function startSources(turn: string | null = threadOf(state.timeline.turns, state.barScope).at(-1)?.id ?? null): void {
   if (turn === null) { set({ sources: null }); return; }
   const next = freshSources(turn);
   set({ sources: next });
@@ -4501,7 +4444,7 @@ export function chooseSource(group: number, focus: string | null, turn: string |
   const chosen = shown ? turnGroups(shown.answer, shownChecks(shown))[group] : undefined;
   const source = chosen ? shown!.answer.sources[chosen.indexes[0]!] : undefined;
   if (!sources || !shown || !source) return;
-  set({ sources: { ...sources, turn: shown.id, open: group, focus, named: null, evidence: null } });
+  set({ sources: { ...sources, turn: shown.id, open: group, focus, evidence: null } });
   readPane(sources.gen, source);
 }
 
@@ -4512,20 +4455,7 @@ export function toggleSourceList(turn: string | null): void {
   set({ sources: { ...sources, listed: sources.listed.includes(turn) ? sources.listed.filter(id => id !== turn) : [...sources.listed, turn] } });
 }
 
-/**
- * A name in a live row or the receipt: the pane opens on that place beside
- * Ask, which keeps running, with every item of it the name stands for, read
- * unless it already was.
- */
-export function openNamed(items: readonly AnswerSource[]): void {
-  const sources = state.sources;
-  const [source] = items;
-  if (!sources || !source || !state.ask || state.concealed) return;
-  set({ sources: { ...sources, open: null, focus: null, named: items, evidence: null } });
-  readPane(sources.gen, source);
-}
-
-/** External providers check current access when the person opens a cited or named link, or a follow-up's; main checks the link again. */
+/** External providers check current access when the person opens a cited link, or a follow-up's; main checks the link again. */
 export async function openExternalSource(source: ExternalAnswerSource): Promise<boolean> {
   return !state.concealed && (await rpc('source.openExternal', { kind: source.kind, permalink: source.permalink })).ok;
 }
@@ -4533,21 +4463,20 @@ export async function openExternalSource(source: ExternalAnswerSource): Promise<
 /** × on the pane: it closes, and forgets the passages it read. */
 export function closeSources(): void {
   const sources = state.sources;
-  if (sources) set({ sources: { ...sources, open: null, focus: null, named: null, evidence: null } });
+  if (sources) set({ sources: { ...sources, open: null, focus: null, evidence: null } });
 }
 
 /** Passages read at once: each is its own client call. */
 const EVIDENCE_READS_AT_ONCE = 3;
 
-/** Where the pane's passages are read: under the Ask on its way, or the scope of the answer its numbers are of. */
+/** Where the pane's passages are read: in the scope of the answer its numbers are of, whatever question is on its way. */
 function paneScope(): AskScope | null {
-  return state.ask?.asking?.scope ?? activeTurn()?.answer.scope ?? null;
+  return activeTurn()?.answer.scope ?? null;
 }
 
 /**
  * The cited passages of the original the pane shows, each a verified evidence
- * packet, read in order each time it is chosen: a numbered source's by their
- * place in the answer, a named place's by their order in it.
+ * packet, read in order each time it is chosen, by their place in the answer.
  */
 async function readEvidence(gen: number): Promise<void> {
   const account = expect();
@@ -5160,7 +5089,7 @@ function conceal(): void {
   // New project stays: files are dropped on it from other apps.
   // People & invites closes what is open in it, and an invitation just saved is no longer offered back (its Undo ends).
   set({
-    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, focus: null, named: null, records: {}, followUps: {}, evidence: null } } : {}),
+    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, focus: null, records: {}, followUps: {}, evidence: null } } : {}),
     ...(people ? { sheet: null } : {}), ...(state.reader ? { reader: { ...state.reader, menu: 'closed' as const } } : {}),
     ...(state.organization ? { organization: { ...state.organization, menu: null, confirm: null, saved: null } } : {}),
   });

@@ -242,8 +242,8 @@ button.account-row:hover { background: var(--raise); }
 .mark { flex-shrink: 0; display: flex; align-items: center; color: var(--faint); }
 .more { align-self: center; margin: 10px 0; flex-shrink: 0; }
 .tag { flex-shrink: 0; font-size: 11.5px; font-weight: 500; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 6px; padding: 1px 7px; }
-/* Changed, on an old answer's line, and New, on a project's row since your previous visit (ADR-0047): a quiet word in the signal. */
-.changed-tag, .new-tag { flex-shrink: 0; padding: 1px 8px; border-radius: 6px; font-size: 12px; font-weight: 500; line-height: 1.5; color: var(--signal-text); background: var(--signal-soft); }
+/* New, on a project's row since your previous visit (ADR-0047): a quiet word in the signal. */
+.new-tag { flex-shrink: 0; padding: 1px 8px; border-radius: 6px; font-size: 12px; font-weight: 500; line-height: 1.5; color: var(--signal-text); background: var(--signal-soft); }
 
 .link-button { border: 0; background: transparent; color: var(--muted); padding: 4px 8px; border-radius: 7px; font-weight: 500; }
 .link-button:hover { color: var(--text); background: var(--hover); }
@@ -310,16 +310,10 @@ button.account-row:hover { background: var(--raise); }
 /* An opened line is its turn's heading: the question once, in full. */
 .folded-turn.open .folded .q { overflow: visible; white-space: normal; font-size: 15px; font-weight: 600; line-height: 1.45; color: var(--text); }
 .folded .when { flex-shrink: 0; font-size: 12px; color: var(--faint); }
-/* An old answer opened: as it was, dimmed, under its question; what changed since is lit in the signal. */
+/* An old answer opened: as it was, dimmed, under its question. */
 .opened { display: flex; flex-direction: column; gap: 10px; padding: 6px 0 4px 36px; }
 .agentic-answer.dimmed { color: var(--muted); }
-.agentic-answer .changed > span:first-child, .claim.changed > span:first-child, .answer-bullets li.changed > span > span:first-child,
-.answer-timeline li.changed .event-text > span:first-child, .answer-quote.changed blockquote > span:first-child {
-  border-radius: 4px; color: var(--text); background: var(--signal-soft); -webkit-box-decoration-break: clone; box-decoration-break: clone;
-}
-.answer-table tr.changed td, .answer-fact.changed { color: var(--text); background: var(--signal-soft); }
-.passage.changed { color: var(--text); border-color: var(--signal-soft); background: var(--signal-soft); }
-/* "Changed since Oct 14": over Ask again's list of what is different now, each cited, and over an old answer that changed. No box. */
+/* "Changed since Oct 14": over Ask again's list of what is different now, each cited. No box. */
 .since { display: flex; flex-direction: column; gap: 6px; }
 .since-label { font-size: 12.5px; font-weight: 500; color: var(--signal-text); }
 .since-items { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 14.5px; line-height: 1.55; color: var(--text); }
@@ -353,10 +347,10 @@ button.marker:hover { color: var(--text); background: var(--line-strong); }
 :is(.answer-statement, .claim, .answer-bullets li, .since-items li, .answer-table tr, .passage, .answer-timeline li, .answer-fact, .answer-quote):hover .marker:not(.on),
 button.marker:not(.on):hover { color: var(--text); background: transparent; }
 /* The sentence under the pointer is lit quietly, as its numbers show. */
-.claim:not(.on, .changed):hover > span:first-child, .answer-statement:not(.on, .changed):hover > span:first-child,
-.answer-bullets li:not(.on, .changed):hover > span > span:first-child, .since-items li:not(.on):hover > span > span:first-child,
-.answer-timeline li:not(.on, .changed):hover .event-text > span:first-child, .answer-fact:not(.on, .changed):hover dd > span:first-child,
-.answer-quote:not(.on, .changed):hover blockquote > span:first-child {
+.claim:not(.on):hover > span:first-child, .answer-statement:not(.on):hover > span:first-child,
+.answer-bullets li:not(.on):hover > span > span:first-child, .since-items li:not(.on):hover > span > span:first-child,
+.answer-timeline li:not(.on):hover .event-text > span:first-child, .answer-fact:not(.on):hover dd > span:first-child,
+.answer-quote:not(.on):hover blockquote > span:first-child {
   border-radius: 4px; background: var(--hover); -webkit-box-decoration-break: clone; box-decoration-break: clone;
 }
 /* The one line under an answer (ADR-0049): how many sources and how long, then Ask again and Copy on the right. */
@@ -373,8 +367,6 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
 /* Copy shows while the pointer is on the turn or focus is in it. */
 .foot-action.copy { opacity: 0; transition: opacity 0.12s ease; }
 :is(.turn, .folded-turn):is(:hover, :focus-within) .foot-action.copy, .foot-action.copy:focus-visible { opacity: 1; }
-.foot-trail { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 4px; }
-.foot-trail-head { font-size: 12px; color: var(--faint); }
 .source-rows { display: flex; flex-direction: column; gap: 1px; padding-bottom: 6px; }
 .source-row { display: flex; align-items: center; gap: 10px; height: 34px; margin: 0 -8px; padding: 0 8px; border: 0; border-radius: 8px; font-size: 13.5px; text-align: left; background: transparent; }
 .source-row:hover { background: var(--hover); }
@@ -440,9 +432,9 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
 .answer-bullets li { display: flex; gap: 12px; }
 .answer-bullets li::before { content: ""; flex-shrink: 0; width: 5px; height: 5px; margin-top: 10px; border-radius: 3px; background: var(--faint); }
 .answer-bullets li.on { margin: -2px -8px; padding: 2px 8px; border-radius: 8px; background: var(--selected); }
-/* A table scrolls in its own box when the window is narrow; the page never scrolls sideways. Only your late due date is in the signal colour.
-   A shadow at an edge says more of the table is past it: covers in the workspace's colour scroll with the table (local) over shadows that
-   stay with the box (scroll). The first column wraps at about 40% of the box, so the next one shows beside it. */
+/* A table scrolls in its own box when the window is narrow; the page never scrolls sideways. A shadow at an edge says more of the table
+   is past it: covers in the workspace's colour scroll with the table (local) over shadows that stay with the box (scroll). The first
+   column wraps at about 40% of the box, so the next one shows beside it. */
 .answer-table {
   position: relative; max-width: 100%; overflow-x: auto; overflow-wrap: normal; container-type: inline-size; border: 1px solid var(--line); border-radius: 10px;
   background:
@@ -461,14 +453,11 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
 .answer-table td { padding: 11px 14px; border-top: 1px solid var(--line); vertical-align: top; }
 .answer-table td.short, .answer-table td.day { white-space: nowrap; }
 .answer-table td.day { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
-.answer-table td.you { font-weight: 500; }
-.answer-table td.late { font-weight: 500; color: var(--signal-text); }
-.answer-table td.late time::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 3px; background: var(--signal); vertical-align: 1px; }
 .answer-table tr.on td { background: var(--selected); }
 .answer-table .marker { vertical-align: 1px; }
 /* Numbered steps, a timeline, a card and a quote, in the same type. A timeline keeps each event's day down the side, beside a dot on
    one rail; a card is a box headed by its kind's icon, its kind and its title, then its facts as label and value rows; a quote is set
-   apart by a rule, its source under it. Each item is lit on its own, and lit in the signal when a source it cites changed. */
+   apart by a rule, its source under it. Each item is lit on its own. */
 .answer-bullets.answer-steps { counter-reset: answer-step; }
 .answer-bullets.answer-steps li { counter-increment: answer-step; }
 .answer-bullets.answer-steps li::before {
@@ -504,13 +493,10 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
 .asking i { width: 6px; height: 6px; border-radius: 3px; background: var(--muted); animation: pulse 1.2s infinite ease-in-out; }
 .asking i:nth-child(2) { animation-delay: 0.15s; } .asking i:nth-child(3) { animation-delay: 0.3s; }
 @keyframes pulse { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
-/* While Ask works: one quiet line (a pulse, the step now, how long) that opens onto every row of what it searched and read. */
+/* While Ask works: one quiet line (a pulse, the step now, how long). */
 .ask-trail { display: flex; flex-direction: column; gap: 6px; }
 .ask-line { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; color: var(--faint); }
 .ask-line-toggle { display: inline-flex; align-items: center; gap: 7px; min-width: 0; margin-left: -6px; padding: 3px 6px; border: 0; border-radius: 6px; font-size: inherit; text-align: left; color: inherit; background: transparent; }
-button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
-.ask-line-toggle svg { flex-shrink: 0; transition: transform 0.15s ease; }
-.ask-line-toggle.open svg { transform: rotate(90deg); }
 .ask-line .pulse { flex-shrink: 0; width: 6px; height: 6px; border-radius: 3px; background: var(--muted); animation: pulse 1.2s infinite ease-in-out; }
 .ask-line .headline { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The step now, shimmering while Ask works: a band of brighter text that sweeps across it. */
@@ -526,20 +512,9 @@ button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
   .ask-line .headline.working { animation: none; background: none; color: var(--muted); }
   .ask-line .pulse { animation: none; opacity: 0.85; }
 }
-.ask-steps { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0 0 0 2px; list-style: none; font-size: 13px; color: var(--faint); }
-.ask-step { display: flex; align-items: flex-start; gap: 8px; min-width: 0; line-height: 1.45; }
-.ask-step .mark { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 19px; color: var(--muted); }
-.ask-step .mark i { width: 6px; height: 6px; border-radius: 3px; background: var(--muted); animation: pulse 1.2s infinite ease-in-out; }
-.ask-step .words { min-width: 0; overflow-wrap: anywhere; }
-.ask-step:not(.done) .words { color: var(--muted); }
-/* A name opens its item beside Ask; the one the pane shows is lit. */
-.step-name { padding: 0; border: 0; font-size: inherit; text-align: left; color: var(--text); background: transparent; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 2px; }
-.step-name:hover, .step-name.on { color: var(--text); text-decoration-color: currentColor; }
-/* How many of a place's items Ask read, after its name: dim, never underlined. */
-.step-name .count { display: inline-block; margin-left: 1px; color: var(--faint); }
 /* The source pane's own buttons, at the right of its head. */
 .pane-actions { display: flex; flex-shrink: 0; align-items: center; gap: 2px; }
-/* The decision, action or rationale an answer or a name cites, lit in its meeting. */
+/* The decision, action or rationale an answer cites, lit in its meeting. */
 .record-item.on { border-color: var(--cite-line); background: var(--cite); }
 .reader { position: relative; width: var(--ask-width); max-width: calc(100% - 48px); height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
 .reader h1 { margin: 0; font-size: 26px; font-weight: 600; line-height: 1.2; letter-spacing: -0.02em; }

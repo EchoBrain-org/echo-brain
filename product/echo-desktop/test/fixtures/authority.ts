@@ -229,12 +229,11 @@ const THERM_BLOCK_CITATIONS = [
 /**
  * `ask-blocks`'s V8 answer (answer layout v2, ADR-0051), THERM's, in every
  * block: the answer; the open tickets, a list statement that reads as a
- * table right after it, with a row of yours that is late; the soak as a
- * timeline; THERM-48 as a card; the steps before PVT; the open risk as
- * titled text; and Noor's words as a quote. Each statement reads as the
- * Authority writes it from its block: an event from its day, who and what
- * happened, a fact from its card's kind and title and its label and value, a
- * quote from its source and words.
+ * table right after it; the soak as a timeline; THERM-48 as a card; the
+ * steps before PVT; the open risk as titled text; and Noor's words as a
+ * quote. Each statement reads as the Authority writes it from its block: an
+ * event from its day, who and what happened, a fact from its card's kind and
+ * title and its label and value, a quote from its source and words.
  */
 export function blocksAnswer(question: string, scope: Record<string, unknown>): Record<string, unknown> {
   const said = (text: string, cited: number[]) => ({ text, citation_indexes: cited, private: cited.some(at => THERM_BLOCK_CITATIONS[at]!.visibility === 'only_me') });
@@ -331,17 +330,14 @@ function timelineAnswer(question: string, scope: Record<string, unknown>, previo
     cites(citations, 'Confirm the trace is still open.', [2])]);
 }
 
-/** The DVT plan changed, the follow-up is no longer readable, and the ticket reports its current marker. */
-function timelineCheck(items: readonly { citation: Record<string, unknown>; marker?: string }[]): Record<string, unknown> {
-  return { schema_version: 1, kind: 'echo-person-ask-check-v1', items: items.map(item => {
-    const citation = item.citation;
-    if (citation.kind === 'ticket') {
-      const marker = digestOf(`marker:${String(citation.ticket_id)}`);
-      return { state: item.marker === undefined || item.marker === marker ? 'same' : 'changed', marker };
-    }
-    if (citation.kind === 'page') return { state: 'changed' };
-    if (citation.kind === 'follow_up') return { state: 'unreadable' };
-    return { state: 'same' };
+/**
+ * Readability only: the follow-up is no longer readable, everything else is. A readable ticket still carries a marker, as
+ * the Authority keeps sending one for a release (SVC-13) and released clients refuse a readable ticket without it.
+ */
+function timelineCheck(items: readonly { citation: Record<string, unknown> }[]): Record<string, unknown> {
+  return { schema_version: 1, kind: 'echo-person-ask-check-v1', items: items.map(({ citation }) => {
+    if (citation.kind === 'ticket') return { state: 'same', marker: digestOf(`marker:${String(citation.ticket_id)}`) };
+    return { state: citation.kind === 'follow_up' ? 'unreadable' : 'same' };
   }) };
 }
 

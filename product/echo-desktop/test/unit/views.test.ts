@@ -662,11 +662,11 @@ describe('an Ask citation opens the exact item it cites', () => {
 });
 
 describe('Ask progress lines and the receipt (ADR-0039)', () => {
-  it('carries each step of a working Ask, and nothing else a line holds', () => {
+  it('carries each step of a working Ask, and nothing else a line holds: a search crosses as one, never what it searched or found', () => {
     expect(askStepView({ ok: true, progress: { type: 'stage', stage: 'reading', pending: 3 } })).toEqual({ type: 'stage', stage: 'reading', pending: 3 });
     expect(askStepView({ ok: true, progress: { type: 'stage', stage: 'checking_access' } })).toEqual({ type: 'stage', stage: 'checking_access' });
     expect(askStepView({ ok: true, progress: { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'tickets', tool_id: 'jira' }], found: 22 } }))
-      .toEqual({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'tickets', tool_id: 'jira' }], found: 22 });
+      .toStrictEqual({ type: 'searched' });
     const read = askStepView({ ok: true, progress: { type: 'read', items: [named, ticket] } });
     expect(read).toEqual({ type: 'read', items: [
       namedSource,
@@ -689,8 +689,7 @@ describe('follow-ups in an answer and its progress (ADR-0040)', () => {
   });
 
   it('carries a step that searched follow-ups or read one', () => {
-    expect(askStepView({ ok: true, progress: { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }], found: 9 } }))
-      .toEqual({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }], found: 9 });
+    expect(askStepView({ ok: true, progress: { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }], found: 9 } })).toStrictEqual({ type: 'searched' });
     expect(askStepView({ ok: true, progress: { type: 'read', items: [followUp, named] } })).toEqual({ type: 'read', items: [followUpSource, namedSource] });
   });
 });
@@ -738,30 +737,26 @@ describe('your workspace and your tools\' containers in an answer and its progre
 
   it('carries a step that searched your workspace or a tool\'s containers, or read one of them', () => {
     const sources = [{ kind: 'meetings' }, { kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'jira' }];
-    expect(askStepView({ ok: true, progress: { type: 'searched', sources, found: 9 } })).toEqual({ type: 'searched', sources, found: 9 });
+    expect(askStepView({ ok: true, progress: { type: 'searched', sources, found: 9 } })).toStrictEqual({ type: 'searched' });
     expect(askStepView({ ok: true, progress: { type: 'read', items: [project, person, tool, container] } })).toEqual({ type: 'read', items: workspaceSources });
   });
 });
 
 describe('a streamed answer\'s receipt (ADR-0039, ADR-0040, ADR-0043)', () => {
-  // A receipt, and the rows it names as they cross: what was searched, and the items read, of any kind an answer cites.
+  // A receipt as the Authority sends it: what was searched, and the items read, of any kind an answer cites.
   const meetings = { looked_through: 14, elapsed_ms: 48_000, rows: [{ type: 'searched', sources: [{ kind: 'meetings' }], found: 6 }, { type: 'read', items: [named] }] };
   const followUps = { looked_through: 2, elapsed_ms: 31_000, rows: [{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 3 }, { type: 'read', items: [followUp, named] }] };
   const workspace = { looked_through: 4, elapsed_ms: 31_000, rows: [
     { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'containers', tool_id: 'jira' }], found: 9 }, { type: 'read', items: [project, person, tool, container] },
   ] };
-  const namedMeeting = [{ type: 'searched', sources: [{ kind: 'meetings' }], found: 6 }, { type: 'read', items: [namedSource] }];
   it.each([
-    { read: 'a decision', answer: v8([named]), receipt: meetings, rows: namedMeeting },
-    { read: 'a follow-up', answer: v8([followUp]), receipt: followUps, rows: [{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 3 }, { type: 'read', items: [followUpSource, namedSource] }] },
-    { read: 'your workspace', answer: v8([project]), receipt: workspace, rows: [
-      { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'containers', tool_id: 'jira' }], found: 9 }, { type: 'read', items: workspaceSources },
-    ] },
+    { read: 'a decision', answer: v8([named]), receipt: meetings },
+    { read: 'a follow-up', answer: v8([followUp]), receipt: followUps },
+    { read: 'your workspace', answer: v8([project]), receipt: workspace },
     // A receipt with no search is still one.
-    { read: 'only what it read', answer: v8([named]), receipt: { looked_through: 1, elapsed_ms: 1_000, rows: [{ type: 'read', items: [named] }] }, rows: [{ type: 'read', items: [namedSource] }] },
-  ])('keeps the receipt of an answer that read $read as it came', ({ answer, receipt, rows }) => {
-    expect(answerView({ ok: true, result: answer, receipt }, { kind: 'global' }).receipt)
-      .toEqual({ looked_through: receipt.looked_through, rows });
+    { read: 'only what it read', answer: v8([named]), receipt: { looked_through: 1, elapsed_ms: 1_000, rows: [{ type: 'read', items: [named] }] } },
+  ])('takes the receipt of an answer that read $read as how many items it looked through, and nothing it searched or read', ({ answer, receipt }) => {
+    expect(answerView({ ok: true, result: answer, receipt }, { kind: 'global' }).receipt).toStrictEqual({ looked_through: receipt.looked_through });
   });
 
   // What the result line may hold (V8 only, a receipt that covers its rows) is the contract's to test (organization-api
@@ -837,11 +832,11 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
     expect(answerView(clarify, scope)).toEqual({ scope, sources: [], parts: [], outcome: 'clarify', question: 'Who owns it?', choices });
   });
 
-  it('reads a source check (C1): a state per item asked, in order, and a readable ticket\'s marker; anything else is not its output', () => {
+  it('reads a source check (C1): a state per item asked, in order, never a ticket\'s marker; anything else is not its output', () => {
     const check = (items: unknown[]) => ({ schema_version: 1, kind: 'echo-person-ask-check-v1', items });
-    const marker = sha('c');
-    expect(askCheckView(check([{ state: 'same', marker }, { state: 'changed' }, { state: 'unreadable' }, { state: 'unknown' }]), 4))
-      .toEqual({ items: [{ state: 'same', marker }, { state: 'changed' }, { state: 'unreadable' }, { state: 'unknown' }] });
+    // A readable ticket's marker, which the Authority still sends for a release, never reaches the page.
+    expect(askCheckView(check([{ state: 'same', marker: sha('c') }, { state: 'changed' }, { state: 'unreadable' }, { state: 'unknown' }]), 4))
+      .toStrictEqual({ items: [{ state: 'same' }, { state: 'changed' }, { state: 'unreadable' }, { state: 'unknown' }] });
     expect(() => askCheckView(check([{ state: 'same' }]), 2)).toThrow(ViewError);
     // Its states, markers and keys are the contract's to test (organization-api person-ask-check-v1).
     expect(() => askCheckView(check([{ state: 'gone' }]), 1)).toThrow(ViewError);

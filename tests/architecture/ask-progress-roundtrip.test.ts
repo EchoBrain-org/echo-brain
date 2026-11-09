@@ -19,7 +19,7 @@ import { CONFLUENCE_TEXT, JIRA_TEXT } from '../../services/organization-authorit
 // real Person client runs `ask --progress` against it exactly as the desktop
 // host runs it; the host's own line reader turns the printed lines into page
 // notices; and the desktop's store takes them, then the answer, and opens what
-// Ask named. A change on any of the three sides meets the others. The client
+// the answer cites. A change on any of the three sides meets the others. The client
 // asks /v7, Ask's one route: the V8 answer (research tool contract v1),
 // streamed as progress V3, whose Ask may cite a follow-up (ADR-0040).
 //
@@ -40,16 +40,18 @@ type Scope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly 
 type Expect = { readonly authority: string; readonly membership_id: string };
 interface CliRun { readonly exit: number; readonly stdout: string; readonly stderr: string; readonly overflow: boolean }
 type Source = Json & { readonly kind: 'record' | 'original' | 'follow_up' | 'ticket' | 'page' | 'project' | 'person' | 'tool' | 'container'; readonly label: string };
-interface Row { readonly type: 'searched' | 'read'; readonly sources?: readonly Json[]; readonly found?: number; readonly items?: readonly Source[] }
-interface Progress { readonly started: number; readonly stage: string | null; readonly pending: number; readonly rows: readonly Row[] }
-interface Receipt { readonly looked_through: number; readonly elapsed_ms: number; readonly rows: readonly Row[] }
+/** The line's model: the stage, how many items it is about to read, and the items read since the last search, which it names. */
+interface Progress { readonly started: number; readonly stage: string | null; readonly pending: number; readonly read: readonly Source[] }
+/** What the page keeps of an answer's receipt: how many items it looked through. */
+interface Receipt { readonly looked_through: number }
 interface Notice { readonly cancel_id: string; readonly expect: Expect; readonly step: Json }
 interface Store {
   refreshStatus(): Promise<void>;
   ask(question: string, scope?: Scope): Promise<void>;
   askProgress(notice: Notice): void;
   cancelAsk(): void;
-  openNamed(items: readonly Source[]): void;
+  chooseSource(group: number, focus: string | null, turn: string | null): void;
+  answerGroups(): readonly { readonly indexes: readonly number[] }[];
   fullPageOffered(): boolean;
   openFullPage(): void;
   followUpShown(): { kind: string; item_id?: string; item?: Json | null } | null;
@@ -66,7 +68,7 @@ interface Views {
   answerView(raw: unknown, scope: Scope): Json; recordView(raw: unknown, asked: Json): Json; evidenceView(raw: unknown): Json;
   openItemView(item: unknown): Json;
 }
-interface ProgressView { PROGRESS_AFTER_MS: number; searchedWords(row: Row): string }
+interface ProgressView { PROGRESS_AFTER_MS: number }
 const ok = (value: unknown) => ({ ok: true, value });
 const flush = async (turns = 30) => { for (let i = 0; i < turns; i += 1) await Promise.resolve(); };
 const QUESTION = 'Combine the Launchscope approved meeting, document, Jira ticket, and Confluence page.';
@@ -186,7 +188,7 @@ const SEARCHED = [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets'
   { kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }];
 
 describe('Ask progress from the Authority through the Person client to the desktop page', () => {
-  it('streams each step to the page while the Authority works on /v7, then folds into the audited receipt, and opens what it named', async () => {
+  it('streams each step to the page while the Authority works on /v7, then folds into the audited receipt, and opens what the answer cites', async () => {
     const { f, store, views, lines, refused, runs, audits, asked } = await app();
     try {
       // The atom ids the Person client gives a cited record's items (organization-api's) are the Authority's own.
@@ -251,46 +253,48 @@ describe('Ask progress from the Authority through the Person client to the deskt
       // --- The host: it took every step line as a step. ---
       expect(refused).not.toHaveBeenCalled();
 
-      // --- The page with the answer: the rows it showed while the Authority wrote, folded into the receipt, its names opening the exact item. ---
+      // --- The page with the answer: its line named every item the client printed while the Authority wrote; of the receipt it keeps
+      // only how many items it looked through; and the answer's sources open the exact item. ---
       const shown = store.getState().timeline.turns.at(-1)!;
       const pageReceipt = store.getState().ask!.took[shown.id]?.receipt;
       expect(store.getState().ask!.asking).toBeNull();
+      expect(pageReceipt).toEqual({ looked_through: receipt.looked_through });
       expect(pageReceipt).toEqual(views.answerView(JSON.parse(lines.at(-1)!), { kind: 'global' }).receipt);
-      const pageNamed = pageReceipt!.rows.flatMap(row => row.type === 'read' ? row.items! : []);
-      expect(pageNamed).toEqual(writing!.progress.rows[1]!.items);
+      expect(writing!.progress.read.map(item => item.label)).toEqual(named.map(item => item.label));
 
-      const decision = pageNamed.find(item => item.kind === 'record')!;
-      const document = pageNamed.find(item => item.kind === 'original')!;
+      const cited = shown.answer.sources;
+      const groups = store.answerGroups();
+      const groupOf = (kind: string) => groups.findIndex(group => cited[group.indexes[0]!]!.kind === kind);
+      const decision = cited.find(item => item.kind === 'record')!;
+      expect(writing!.progress.read).toContainEqual(expect.objectContaining({ kind: 'record', atom_id: decision.atom_id }));
 
-      // A named decision opens its meeting with that very item lit: its atom id is one of the record's items as the desktop reads them.
-      store.openNamed([decision]);
+      // The decision the answer cites opens its meeting with that very item lit: its atom id is one of the record's items as the
+      // desktop reads them.
+      store.chooseSource(groupOf('record'), null, shown.id);
       await vi.waitFor(() => expect(store.getState().sources?.records[f.seeded.approved_record_sha256]?.value).toBeDefined(), { timeout: 10_000, interval: 10 });
       const record = store.getState().sources!.records[f.seeded.approved_record_sha256]!.value!;
       expect(record.decisions.items.map(item => item.atom_id)).toContain(decision.atom_id);
       expect(store.fullPageOffered()).toBe(true);
-      // A named document opens its cited passage, read where the Ask was asked.
-      store.openNamed([document]);
-      await vi.waitFor(() => expect(store.getState().sources?.evidence?.reads[0]?.value).toBeDefined(), { timeout: 10_000, interval: 10 });
-      expect(store.getState().sources!.evidence!.reads[0]!.value!.text).toContain(DOCUMENT_TEXT);
+      // The document it cites opens its cited passage, read where the Ask was asked.
+      const passages = groups[groupOf('original')]!.indexes;
+      store.chooseSource(groupOf('original'), null, shown.id);
+      await vi.waitFor(() => expect(passages.every(at => store.getState().sources?.evidence?.reads[at]?.value)).toBe(true), { timeout: 10_000, interval: 10 });
+      expect(passages.map(at => store.getState().sources!.evidence!.reads[at]!.value!.text).join('\n')).toContain(DOCUMENT_TEXT);
     } finally { await f.close(); }
   });
 
-  it('cites and names a follow-up on /v7, opens it beside the running Ask with its owner and status, and after the answer opens its item page (ADR-0040)', async () => {
-    const { f, store, views, progress, openerOf, account, lines, refused, runs, audits } = await app();
+  it('cites and names a follow-up on /v7, names it on the line while the writer runs, and opens it beside the answer with its owner and status, then its item page (ADR-0040)', async () => {
+    const { f, store, views, openerOf, account, lines, refused, runs, audits } = await app();
     const EXPECTED = 'Send the Launchscope checklist to the pilot group';
     const DECIDED = 'Launchscope rolls out to the pilot group first.';
     const item_id = f.followUp(EXPECTED);
     try {
-      // While the Authority is inside the writer's model call, the follow-up Ask named opens beside it, read as Home reads it.
-      let whileAsking: { row?: Json; offered?: boolean; error?: unknown } = {};
+      // While the Authority is inside the writer's model call, the line has named the follow-up it read.
+      let whileAsking: { named?: Json; error?: unknown } = {};
       f.beforeAnswerReturn(async () => {
         try {
           await vi.waitFor(() => expect(store.getState().ask?.asking?.progress.stage).toBe('writing'), { timeout: 10_000, interval: 10 });
-          const named = store.getState().ask!.asking!.progress.rows.flatMap(row => row.items ?? []).find(item => item.kind === 'follow_up')!;
-          expect(named).toEqual({ kind: 'follow_up', label: EXPECTED, item_id });
-          store.openNamed([named]);
-          await vi.waitFor(() => expect(store.getState().sources?.followUps[item_id]?.value).toBeDefined(), { timeout: 10_000, interval: 10 });
-          whileAsking = { row: store.getState().sources!.followUps[item_id]!.value as unknown as Json, offered: store.fullPageOffered() };
+          whileAsking = { named: store.getState().ask!.asking!.progress.read.find(item => item.kind === 'follow_up') };
         } catch (error) { whileAsking = { error }; }
       });
       await store.ask(QUESTION, { kind: 'global' });
@@ -323,17 +327,18 @@ describe('Ask progress from the Authority through the Person client to the deskt
         for (const key of [...NEVER_KEYS, 'owner', 'status', 'check', 'decision', 'expected']) expect(keys.has(key), `${key} in ${line}`).toBe(false);
       }
 
-      // --- The page: the follow-up opened beside Ask while it ran, without Open; the answer's source opens its item page. ---
-      expect(whileAsking.row).toMatchObject({ item_id, state: 'open', expected: EXPECTED, owner: { membership_id: account.membership_id } });
-      expect(whileAsking.offered).toBe(false);
+      // --- The page: the line named the follow-up while the writer ran; the answer's source opens beside it, then its item page. ---
+      expect(whileAsking.named).toEqual({ kind: 'follow_up', label: EXPECTED, item_id });
       const shown = store.getState().timeline.turns.at(-1)!;
       const source = { kind: 'follow_up', label: EXPECTED, item_id };
       // Each source also keeps the citation the answer carried (`cited`), for the timeline's checks.
       expect(shown.answer.sources).toContainEqual(expect.objectContaining(source));
       expect(views.answerView(JSON.parse(lines.at(-1)!), { kind: 'global' }).sources).toContainEqual(expect.objectContaining(source));
       expect(openerOf(source as Source)).toEqual({ pane: 'follow_up', page: { kind: 'follow_up', item_id } });
-      expect(progress.searchedWords(store.getState().ask!.took[shown.id]!.receipt.rows[0]!)).toBe(`Searched meetings, documents, Jira, Confluence, follow-ups, projects, people and tools · ${named.length} found`);
-      // The audited answer names it, so the pane stays on it, and now offers Open: its item page, read again.
+      // Chosen beside the answer, it is read as Home reads it, and offers Open: its item page, read again.
+      store.chooseSource(store.answerGroups().findIndex(group => shown.answer.sources[group.indexes[0]!]!.kind === 'follow_up'), null, shown.id);
+      await vi.waitFor(() => expect(store.getState().sources?.followUps[item_id]?.value).toBeDefined(), { timeout: 10_000, interval: 10 });
+      expect(store.getState().sources!.followUps[item_id]!.value).toMatchObject({ item_id, state: 'open', expected: EXPECTED, owner: { membership_id: account.membership_id } });
       expect(store.fullPageOffered()).toBe(true);
       store.openFullPage();
       expect(store.getState().ask).toBeNull();
