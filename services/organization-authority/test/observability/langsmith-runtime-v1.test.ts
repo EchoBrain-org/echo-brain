@@ -7,6 +7,7 @@ import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-
 import { annotateCoreRuntimeV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeRootV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { createLangSmithRuntimeV1, createLangSmithSenderV1, readLangSmithConfigV1 } from '../../src/composition/observability/langsmith-runtime-v1.js';
 import { createLangSmithObserverV1, type LangSmithRunV1 } from '../../src/composition/observability/langsmith-observer-v1.js';
+import { uploadedRuns } from '../fixtures/langsmith-uploads.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -17,16 +18,6 @@ const fixture = () => {
   writeFileSync(path, JSON.stringify(config), { mode: 0o600 });
   return { path, config };
 };
-/** The runs one multipart upload carried, root first, rebuilt from their parts. */
-async function uploadedRuns(form: FormData): Promise<LangSmithRunV1[]> {
-  const runs = new Map<string, Record<string, unknown>>();
-  for (const [name, value] of form.entries()) {
-    const [, id, part] = /^post\.([^.]+)(?:\.(\w+))?$/u.exec(name)!;
-    const json = JSON.parse(await (value as Blob).text()) as Record<string, unknown>;
-    runs.set(id!, { ...runs.get(id!), ...(part === undefined ? json : { [part]: json }) });
-  }
-  return [...runs.values()] as unknown as LangSmithRunV1[];
-}
 /** A trace with its random child run ids replaced by position, so two projections of the same events compare equal. */
 function positional(runs: readonly LangSmithRunV1[]): unknown {
   let json = JSON.stringify(runs);

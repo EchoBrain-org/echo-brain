@@ -29,8 +29,8 @@ import { AdapterError } from '@echo-brain/organization-processing/core/contracts
 import { providerStatusError } from '@echo-brain/organization-processing/llm/llm-provider';
 import { LlmDecisionProcessor } from '@echo-brain/organization-processing/llm/llm-decision-processor';
 import type { DecisionProcessorBundleV1 } from '@echo-brain/organization-processing/ports/decision-processor-bundle-v1';
-import type { LangSmithRunV1 } from '../src/composition/observability/langsmith-observer-v1.js';
 import { createLangSmithRuntimeV1 } from '../src/composition/observability/langsmith-runtime-v1.js';
+import { uploadedRuns } from './fixtures/langsmith-uploads.js';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
 import { writeFileSync } from 'node:fs';
 import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
@@ -1502,13 +1502,5 @@ function stagingTracing(existing: CoreRuntimeObservationScopeV1) {
   runtime.start();
   return { scope: runtime.scope!, lines,
     async close() { try { await runtime.close(); } finally { fetcher.mockRestore(); rmSync(directory, { recursive: true, force: true }); } },
-    uploads: () => Promise.all(forms.map(async form => {
-      const runs = new Map<string, Record<string, unknown>>();
-      for (const [name, value] of form.entries()) {
-        const [, runId, part] = /^post\.([^.]+)(?:\.(\w+))?$/u.exec(name)!;
-        const json = JSON.parse(await (value as Blob).text()) as Record<string, unknown>;
-        runs.set(runId!, { ...runs.get(runId!), ...(part === undefined ? json : { [part]: json }) });
-      }
-      return [...runs.values()] as unknown as LangSmithRunV1[];
-    })) };
+    uploads: () => Promise.all(forms.map(uploadedRuns)) };
 }
