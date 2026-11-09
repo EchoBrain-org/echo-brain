@@ -4,15 +4,6 @@ export const PERSON_DIAGNOSTIC_TRACE_MAX_EVENTS_V1 = 512;
 /** Includes the envelope itself; nested model JSON schemas need a larger allowance than request inputs. */
 const MAX_DEPTH = 48;
 
-/** The exact prefix one collector kept: complete only when it dropped no event. */
-export interface PersonDiagnosticTraceV1 {
-  readonly schema_version: 1;
-  readonly kind: 'echo-agentic-research-trace-v1';
-  readonly complete: boolean;
-  readonly events: readonly Readonly<Record<string, unknown>>[];
-  readonly dropped_events: number;
-}
-
 /**
  * One private, bounded prefix of a run's diagnostic events: the collector the staging LangSmith exporter keeps for each
  * research run and meeting extraction it admits.
@@ -54,7 +45,8 @@ export function createPersonDiagnosticTraceV1(now: () => number) {
         eventBytes += size;
       } catch { drop(); }
     },
-    snapshot(): PersonDiagnosticTraceV1 {
+    /** The exact prefix this collector kept: complete only when it dropped no event. */
+    snapshot() {
       return Object.freeze({
         schema_version: 1 as const, kind: 'echo-agentic-research-trace-v1' as const,
         complete: dropped === 0, events: Object.freeze(events.map(event => JSON.parse(event) as Readonly<Record<string, unknown>>)), dropped_events: dropped,
