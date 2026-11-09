@@ -36,7 +36,7 @@ export interface AgenticBriefV1 {
   readonly options: {
     /**
      * False: research reads the starting evidence and stops, finished, with no planner step; what it read in full counts as
-     * read. A sweep checks its items and searches for nothing more. Only a task with starting items can run without one.
+     * read. Only a task with starting items can run without one.
      */
     readonly planner?: boolean;
     /**

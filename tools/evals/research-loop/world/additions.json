@@ -165,7 +165,7 @@
           "role": "Clinical operations lead, Kestrel Valley Care (pilot customer)"
         }
       ],
-      "purpose": "T1. Customer meeting that APPROVES a two-decimal display (0.01 °C) for MRD-02; approver Mara Lindqvist, 2026-09-30. Source of the approved-record T1 case and the two-decimal Sweep.",
+      "purpose": "T1. Customer meeting that APPROVES a two-decimal display (0.01 °C) for MRD-02; approver Mara Lindqvist, 2026-09-30. Source of the approved-record T1 case.",
       "notes_markdown": "# Kestrel Valley Care pilot review — MRD-02 display (2026-09-30)\n\n## Decision\n- APPROVED by Mara Lindqvist (Product lead): MRD-02 display changes from one decimal to two decimals (0.01 °C), at Kestrel Valley Care's request. The ±0.1 °C accuracy requirement is unchanged.\n\n## Why\n- Kestrel Valley Care's nurses compare readings with a reference that shows two decimals; one decimal causes repeated re-checks.\n- The second decimal is display resolution only.\n\n## Actions\n- {{TEST_PERSON}}: update MRD-02 and the PRD display requirement (PRD-D01), due 2026-10-07.\n- Jonas Becker: update SW-22b number formatting, due 2026-10-09.\n- Rafael Moreno: update TC-D-06 expected results and plan the rerun, due 2026-10-09.",
       "transcript": [
         "{{TEST_PERSON}}: Thanks for joining. The main item today is how the reading shows on the device screen.",

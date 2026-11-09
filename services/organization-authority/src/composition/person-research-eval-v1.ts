@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { validatePersonImpactCardV1, validatePersonSweepResultV1, type PersonResearchEvalReadResponseV1 } from '@echo-brain/organization-api';
+import { validatePersonImpactCardV1, type PersonResearchEvalReadResponseV1 } from '@echo-brain/organization-api';
 import {
   AGENTIC_RESEARCH_BUDGETS_V1,
   createAgenticAskV5,
@@ -8,7 +8,6 @@ import {
   type AgenticResearchDriverV1,
 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
-import { SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/sweep-renderer-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonAskScopeV2 } from '../application/ports/person-original-context-retrieval-v1.js';
 import { askerOf, personAskRequestContextV1, scopeOf } from './person-answer-v3-route.js';
@@ -146,13 +145,10 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
             run.research = output.research;
             run.ask = Object.freeze({ writer_evidence: output.writer_evidence, response: output.response });
           } else if (definition.renderer !== undefined) {
-            // A task with a renderer: its result and the trimmed bundle it was written from. The renderer, never the
-            // definition's name, says which contract the result keeps: a sweep's verdicts, one per finding, or an impact card.
+            // A task with a renderer: its result, an impact card, and the trimmed bundle it was written from.
             const output = await loop.renderWithResearch({ trigger: definition.name, brief: scoped, renderer: definition.renderer, trigger_input: event, signal });
             run.research = output.research;
-            run.rendered = definition.renderer === SWEEP_RENDERER_V1
-              ? validatePersonSweepResultV1(output.rendered, (event as SweepTriggerInputV1).findings.length)
-              : validatePersonImpactCardV1(output.rendered);
+            run.rendered = validatePersonImpactCardV1(output.rendered);
           } else {
             run.research = await loop.research({ trigger: definition.name, brief: scoped, signal });
           }

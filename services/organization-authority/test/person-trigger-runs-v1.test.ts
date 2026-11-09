@@ -73,30 +73,24 @@ describe('durable approved-record trigger runs', () => {
     await expect(f.app.list({ access_token: 'other' })).resolves.toEqual({ runs: [] });
   });
 
-  it('lists at most the 20 newest sweeps, so they never push an impact run off the list', async () => {
+  it('lists the caller\'s impact runs only, and never starts a sweep an Authority left before sweeps were retired (SVC-2)', async () => {
     const f = await fixture();
-    // An older impact check that failed: its Try again row must stay listed.
-    const impact = f.runs.claim(f.person, f.row.run_id, 60_000);
-    if (impact.kind !== 'claimed') throw new Error('expected lease');
-    expect(f.runs.fail(f.row.run_id, impact.lease_token, 'research_failed')).toBe(true);
-    const sweeps: string[] = [];
-    for (let index = 0; index < 30; index++) {
-      f.advance(1_000);
-      const sweep = f.runs.enqueueSweep(f.person, { kind: 'mine' });
-      const lease = f.runs.claim(f.person, sweep.run_id, 60_000);
-      if (lease.kind !== 'claimed' || !f.runs.fail(sweep.run_id, lease.lease_token, 'unavailable')) throw new Error('expected a failed sweep');
-      sweeps.push(sweep.run_id);
-    }
-    // A newer approval's impact check, queued after them all.
+    // The approver's sweeps as a V16 Authority left them: one waiting to start, one failed, both newer than the impact check.
     f.advance(1_000);
-    const other = await f.otherProposal();
-    f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: 'approve-other' }), () => f.session);
-    await f.publisher(enqueueApprovedRecordRunV1(f.runs)).appendFinalizedApprovalsToV4(new AbortController().signal);
-    const newer = f.runs.list(f.person, 1, 'approved_record')[0]!.run_id;
-    const { runs } = await f.app.list({ access_token: 'approver' });
-    // Newest first overall, as before: the 20 newest sweeps among the impact runs.
-    expect(runs.map(run => run.run_id)).toEqual([newer, ...sweeps.slice(-20).reverse(), f.row.run_id]);
-    expect(runs.at(-1)).toMatchObject({ trigger: 'approved_record', state: 'failed', error_code: 'research_failed' });
+    const leftover = (run_id: string, state: 'pending' | 'failed') => f.db.prepare(`INSERT INTO authority_trigger_runs_v1
+      (run_id, trigger, event_ref, organization_id, principal_id, membership_id, scope_kind, state, attempts, error_code, created_at, updated_at)
+      VALUES (?, 'sweep', ?, ?, ?, ?, 'mine', ?, 0, ?, '2026-10-07T10:00:01.000Z', '2026-10-07T10:00:01.000Z')`).run(run_id, `sweep_${run_id}`,
+      f.person.organization_id, f.person.principal_id, f.person.membership_id, state, state === 'failed' ? 'unavailable' : null);
+    leftover('run_sweep-pending', 'pending');
+    leftover('run_sweep-failed', 'failed');
+    expect((await f.app.list({ access_token: 'approver' })).runs).toEqual([expect.objectContaining({ run_id: f.row.run_id, trigger: 'approved_record', state: 'pending' })]);
+    for (const run_id of ['run_sweep-pending', 'run_sweep-failed']) {
+      await expect(f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id } }), run_id).rejects.toMatchObject({ code: 'not_found' });
+    }
+    await expect(f.app.retry({ access_token: 'approver', request: { schema_version: 1, operation: 'retry', run_id: 'run_sweep-failed' } })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.app.view({ access_token: 'approver', request: { schema_version: 1, operation: 'view', run_id: 'run_sweep-pending' } })).rejects.toMatchObject({ code: 'not_found' });
+    expect(f.research).not.toHaveBeenCalled();
+    expect(f.db.prepare("SELECT state FROM authority_trigger_runs_v1 WHERE trigger='sweep' ORDER BY run_id").pluck().all()).toEqual(['failed', 'pending']);
   });
 
   it('captures one approved run with a linked background root and preserves its research outcome after committing output', async () => {
@@ -153,12 +147,15 @@ describe('durable approved-record trigger runs', () => {
 
   it('answers busy past the process cap, and running to a duplicate start of a running run', async () => {
     const f = await fixture({ render: ({ signal }) => new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('closed')), { once: true })) });
+    const newer = await queueNewer(f);
     const app = f.create(f.runs, 1);
-    const sweep = f.runs.enqueueSweep({ ...f.person, principal_id: 'prn_00000000-0000-4000-8000-0000000000f1', membership_id: 'mem_00000000-0000-4000-8000-0000000000f2' }, { kind: 'mine' });
-    const start = (access_token: string, run_id: string) => app.start({ access_token, request: { schema_version: 1, operation: 'start', run_id } });
-    await expect(start('approver', f.row.run_id)).resolves.toEqual({ state: 'running' });
-    await expect(start('other', sweep.run_id)).resolves.toEqual({ state: 'busy' });
-    await expect(start('approver', f.row.run_id)).resolves.toEqual({ state: 'running' });
+    const start = (run_id: string) => app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id } });
+    await expect(start(f.row.run_id)).resolves.toEqual({ state: 'running' });
+    await expect(start(f.row.run_id)).resolves.toEqual({ state: 'running' });
+    // The first attempt outlives its lease and still holds the process's one place: a start of the newer check waits, unclaimed.
+    f.advance(1_001);
+    await expect(start(newer)).resolves.toEqual({ state: 'busy' });
+    expect(f.runs.read(f.person, newer)).toMatchObject({ state: 'pending', lease_token: null });
     app.close();
   });
 
@@ -463,19 +460,15 @@ describe('open items written when an impact check finishes', () => {
 
   it('reports a run whose attempt stopped without finishing as pending, without changing it, and starts it again (R60)', async () => {
     const f = await openItemsFixture();
-    const mina = { organization_id: f.person.organization_id, principal_id: f.people.mina.principal_id, membership_id: f.membership('mina') };
-    // The Authority stops while Ari's impact check and Mina's sweep run.
+    // The Authority stops while Ari's impact check runs.
     if (f.runs.claim(f.person, f.runId, 60_000).kind !== 'claimed') throw new Error('expected lease');
-    const sweep = f.runs.enqueueSweep(mina, { kind: 'mine' });
-    if (f.runs.claim(mina, sweep.run_id, 60_000).kind !== 'claimed') throw new Error('expected lease');
     const stage = async () => (await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record, read: 'counts' } })).stages;
     expect((await f.app.list({ access_token: 'ari' })).runs.map(run => run.state)).toEqual(['running']);
     expect(await stage()).toMatchObject([{ run_id: f.runId, state: 'running' }]);
     f.advance(60_001);
     expect((await f.app.list({ access_token: 'ari' })).runs).toMatchObject([{ run_id: f.runId, trigger: 'approved_record', state: 'pending', error_code: null }]);
-    expect((await f.app.list({ access_token: 'mina' })).runs).toMatchObject([{ run_id: sweep.run_id, trigger: 'sweep', state: 'pending', error_code: null }]);
     expect(await stage()).toMatchObject([{ run_id: f.runId, state: 'pending', error_code: null }]);
-    expect([f.runs.readUnfenced(f.runId)!.state, f.runs.readUnfenced(sweep.run_id)!.state]).toEqual(['running', 'running']);
+    expect(f.runs.readUnfenced(f.runId)!.state).toBe('running');
     // Started again (here by id; a check-in picks it the same way): claim takes over the lapsed attempt.
     await expect(f.app.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id: f.runId } })).resolves.toEqual({ state: 'running' });
     await vi.waitFor(() => expect(f.runs.read(f.person, f.runId)!.state).toBe('done'), { interval: 1 });

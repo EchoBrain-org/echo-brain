@@ -133,17 +133,13 @@ describe('change check: what it answers', () => {
 });
 
 describe('change check: follow_ups', () => {
-  it('moves on a send, done, not relevant, reopen, a reassignment and a handoff, for those involved only; never on a check', async () => {
+  it('moves on a send, done, not relevant, reopen, a reassignment and a handoff, for those involved only', async () => {
     const f = await openItemsFixture(); await f.finishImpactRun();
     const { step } = changesOf(f);
     const unsent = (await f.runItems()).items;
     const ticket = unsent.find(item => item.kind === 'ticket')!.item_id;
-    const action = unsent.find(item => item.kind === 'record')!.item_id;
     // Ari sent both, Mina owns the ticket: Rafael reads the decision but is involved in nothing, Okafor reads nothing.
     expect(await step(() => sendAll(f, unsent))).toEqual(moved({ ari: ['follow_ups'], mina: ['follow_ups'] }));
-    f.advance(1_000);
-    // A sweep's check wakes nobody.
-    expect(await step(() => { f.check(ticket, 'landed'); f.check(action, 'changed', 'mina'); })).toEqual(moved({}));
     for (const [who, state] of [['mina', 'done'], ['ari', 'open'], ['ari', 'not_relevant'], ['mina', 'open']] as const) {
       f.advance(1_000);
       expect(await step(() => setState(f, who, ticket, state)), `${who} sets ${state}`).toEqual(moved({ ari: ['follow_ups'], mina: ['follow_ups'] }));
@@ -406,7 +402,7 @@ describe('change check: privacy (ADR-0012)', () => {
     const startRevision = revision();
     const okafor = (await read('okafor')).areas;
     const rafael = (await read('rafael')).areas;
-    // Ari picks Mina for the ticket before Send, sends it, Mina closes it, Ari reopens it, and a sweep checks it.
+    // Ari picks Mina for the ticket before Send, sends it, Mina closes it, and Ari reopens it.
     await assign(f, 'ari', ticket.item_id, 'mina');
     f.advance(1_000);
     await sendAll(f, unsent);
@@ -414,7 +410,6 @@ describe('change check: privacy (ADR-0012)', () => {
     await setState(f, 'mina', ticket.item_id, 'done');
     f.advance(1_000);
     await setState(f, 'ari', ticket.item_id, 'open');
-    f.check(ticket.item_id, 'changed');
     // Projects Okafor is not in are renamed, archived and joined.
     const projects = projectsApp(f);
     await projects.renameProject('ari', { ...request(), kind: 'echo-project-rename-v1', project_id: f.projectA, name: 'Renamed pilot' });

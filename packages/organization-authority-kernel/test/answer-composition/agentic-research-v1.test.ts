@@ -357,9 +357,9 @@ describe("task briefs with a renderer", () => {
     expect(audit[0]!.generations.map(entry => entry.role)).toEqual(["step", "step", "answer"]);
   });
 
-  // The impact card's call, and the sweep's: a cancel or the deadline still throws, never a not-assessed result.
+  // The impact card's call: a cancel or the deadline still throws, never a not-assessed result.
   it.each([
-    ["approved_record", "timed_out"], ["approved_record", "cancelled"], ["sweep", "timed_out"], ["sweep", "cancelled"],
+    ["approved_record", "timed_out"], ["approved_record", "cancelled"],
   ] as const)("writes one %s %s witness and releases nothing when the renderer's model call is cut off", async (trigger, outcome) => {
     vi.useFakeTimers();
     try {
@@ -368,15 +368,14 @@ describe("task briefs with a renderer", () => {
       let checks = 0;
       let entered!: () => void;
       const started = new Promise<void>(resolve => { entered = resolve; });
-      // Research finishes at once (a sweep runs no planner); the renderer's call never replies.
-      const plannerCalls = trigger === "sweep" ? 0 : 1;
+      // Research finishes after one step; the renderer's call never replies.
+      const plannerCalls = 1;
       const h = harness((_input, index) => {
         if (index < plannerCalls) return step([part("Part", [need("affected tickets", "not_found")])], [{ tool: "finish", args: {} }]);
         entered(); return new Promise<never>(() => undefined);
       }, { openCitation: async () => result([decision]), revalidate: async () => ({ checked_at: `2026-10-06T00:00:0${checks += 1}.000Z` }) });
       const defined = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === trigger)!;
-      const event = defined.parseEvent(trigger === "approved_record" ? { record: decision.citation }
-        : { findings: [{ finding: "The display shows one decimal.", expected: "two decimals", citations: [decision.citation] }] });
+      const event = defined.parseEvent({ record: decision.citation });
       const pending = h.research.renderWithResearch({ trigger: defined.name, brief: defined.brief(event, h.port.scope), renderer: defined.renderer!, trigger_input: event, signal: controller.signal });
       await started;
       const rejected = expect(pending).rejects.toMatchObject({ name: outcome === "timed_out" ? "AgenticAskDeadlineErrorV1" : "AbortError" });

@@ -69,15 +69,25 @@ describe('person runs client', () => {
     expect(JSON.parse(String(fetch.mock.calls[0]![1]!.body))).toEqual({ schema_version: 1, operation: 'home' });
     stdout = '';
     expect(await runPersonClientCli(['runs', '--help'], { ...io, fetch: vi.fn() })).toBe(0);
-    for (const operation of ['list', 'start', 'next', 'retry', 'view', 'home', 'items', 'item', 'send', 'set_state', 'assign', 'sweep']) expect(stdout).toContain(operation);
-    expect(stdout).toContain('your own impact runs and sweeps');
+    for (const operation of ['list', 'start', 'next', 'retry', 'view', 'home', 'items', 'item', 'send', 'set_state', 'assign']) expect(stdout).toContain(operation);
+    // Sweeps are retired (SVC-2): the help names none.
+    expect(stdout).not.toContain('sweep');
+    expect(stdout).toContain('list                 your own impact runs\n');
     expect(stdout).toContain('next                 starts your oldest queued impact check, as start does by run_id: idle when none is queued, busy while another of yours runs');
-    expect(stdout).toContain('re-checks the open items you can see');
     expect(stdout).toContain('false dismisses it, and unlisted items stay unsent');
     expect(stdout).toContain('before send the approver only');
-    expect(stdout).toContain('read "rows" reads no item live (every reach not_read) and never says sweep_due');
+    expect(stdout).toContain('read "rows" reads no item live (every reach not_read)\n');
     expect(stdout).toContain('read "rows" answers the same page with no item read live (every reach not_read), and read "counts" the counts alone');
     expect(stdout).toContain('states (a non-empty list of unsent, open, done and not_relevant) pages over items in those states only');
     expect(stderr).toBe('');
+  });
+
+  it('refuses a sweep, as an operation the runs API no longer has, before networking (SVC-2)', async () => {
+    const home = sessionHome(); let stderr = '';
+    const io = { home_directory: home, now: () => '2026-10-07T10:00:00.000Z', stdout: { write: () => undefined }, stderr: { write: (value: string) => { stderr += value; } } };
+    const noNetwork = vi.fn<typeof globalThis.fetch>();
+    expect(await runPersonClientCli(['runs', '--request', '{"schema_version":1,"operation":"sweep","scope":"mine"}'], { ...io, fetch: noNetwork })).toBe(2);
+    expect(JSON.parse(stderr)).toMatchObject({ ok: false });
+    expect(noNetwork).not.toHaveBeenCalled();
   });
 });

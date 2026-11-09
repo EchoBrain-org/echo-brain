@@ -18,7 +18,6 @@ const OPEN_ITEMS = {
   send: [{ schema_version: 1, operation: 'send', run_id: RUN, command_id: 'cmd-1', items: [{ item_id: ITEM, include: true, owner_membership_id: MEMBER }] }, { sent: 1, not_relevant: 0 }],
   set_state: [{ schema_version: 1, operation: 'set_state', item_id: ITEM, state: 'done' }, { state: 'done' }],
   assign: [{ schema_version: 1, operation: 'assign', item_id: ITEM, owner_membership_id: MEMBER }, { owner: { membership_id: MEMBER, name: 'Mina Patel', active: true } }],
-  sweep: [{ schema_version: 1, operation: 'sweep', scope: 'mine' }, { run_id: RUN }],
 } as const;
 
 const servers: ReturnType<typeof createOrganizationAuthorityHttpServer>[] = [];
@@ -28,7 +27,7 @@ const post = (base: string, body: unknown, authorization: string | null = 'Beare
 
 describe('person runs HTTP transport', () => {
   it('reserves the route, requires a bearer, and dispatches a validated list', async () => {
-    const app = { list: vi.fn(async () => ({ runs: [] })), start: vi.fn(), next: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), sweep: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
+    const app = { list: vi.fn(async () => ({ runs: [] })), start: vi.fn(), next: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
     const base = await origin(app);
     expect((await post(base, { schema_version: 1, operation: 'list' }, null)).status).toBe(401);
     const response = await post(base, { schema_version: 1, operation: 'list' });
@@ -39,7 +38,7 @@ describe('person runs HTTP transport', () => {
 
   it('dispatches a check-in (next) to its method with the validated request, and refuses one naming a run before any method', async () => {
     const next = vi.fn(async () => ({ state: 'running' as const }));
-    const app = { list: vi.fn(), start: vi.fn(), next, retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), sweep: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
+    const app = { list: vi.fn(), start: vi.fn(), next, retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
     const base = await origin(app);
     const request = { schema_version: 1, operation: 'next' };
     expect((await post(base, request, null)).status).toBe(401);
@@ -74,20 +73,15 @@ describe('person runs HTTP transport', () => {
     expect(methods.set_state).toHaveBeenCalledTimes(1);
   });
 
-  it('dispatches a valid sweep of each scope to its method, answers a run or nothing to check, and refuses an invalid one before any method', async () => {
-    const sweep = vi.fn(async ({ request }: Parameters<PersonTriggerRunsHttpApplicationV1['sweep']>[0]) => (request.scope === 'mine' ? { run_id: RUN } : { state: 'nothing_to_check' as const }));
-    const app = { list: vi.fn(), start: vi.fn(), next: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), sweep, close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
-    const base = await origin(app);
-    const valid = [{ scope: 'mine' }, { scope: 'record', id: RECORD }, { scope: 'project', id: PROJECT }].map(fields => ({ schema_version: 1, operation: 'sweep', ...fields }));
-    for (const request of valid) {
-      const response = await post(base, request);
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual(request.scope === 'mine' ? { run_id: RUN } : { state: 'nothing_to_check' });
-      expect(sweep).toHaveBeenLastCalledWith({ access_token: 'fixture', request, signal: expect.any(AbortSignal) });
+  it('refuses a sweep of any scope with 400 before any method: sweeps are retired (SVC-2)', async () => {
+    const methods = { list: vi.fn(), start: vi.fn(), next: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn() };
+    const base = await origin({ ...methods, close() {} } satisfies PersonTriggerRunsHttpApplicationV1);
+    // The requests a released desktop's Check now and auto-sweep sent.
+    for (const fields of [{ scope: 'mine' }, { scope: 'record', id: RECORD }, { scope: 'project', id: PROJECT }]) {
+      const response = await post(base, { schema_version: 1, operation: 'sweep', ...fields });
+      expect(response.status, JSON.stringify(fields)).toBe(400);
+      expect(await response.json(), JSON.stringify(fields)).toMatchObject({ error: { code: 'invalid_request' } });
     }
-    for (const fields of [{ scope: 'mine', id: RECORD }, { scope: 'record' }, { scope: 'mine', cursor: 'next-page_2' }]) {
-      expect((await post(base, { schema_version: 1, operation: 'sweep', ...fields })).status, JSON.stringify(fields)).toBe(400);
-    }
-    expect(sweep).toHaveBeenCalledTimes(valid.length);
+    for (const method of Object.values(methods)) expect(method).not.toHaveBeenCalled();
   });
 });

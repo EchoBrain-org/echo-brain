@@ -79,10 +79,6 @@ describe('runs items scope involved (ADR-0036)', () => {
   ])('refuses involved with %s', (label, request) => {
     refused(() => validatePersonRunsRequestV1(request), label);
   });
-
-  it('is not a sweep scope', () => {
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'sweep', scope: 'involved' }), 'a sweep of involved');
-  });
 });
 
 describe('runs items changed_since (ADR-0036)', () => {
@@ -118,9 +114,8 @@ describe('runs items changed_since (ADR-0036)', () => {
     refused(() => validatePersonRunsRequestV1(request), label);
   });
 
-  it('is not a home, item or sweep field', () => {
+  it('is not a home or item field', () => {
     refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'home', changed_since: since }), 'home');
     refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'item', item_id: 'itm_abcd', changed_since: since }), 'item');
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'sweep', scope: 'mine', changed_since: since }), 'sweep');
   });
 });

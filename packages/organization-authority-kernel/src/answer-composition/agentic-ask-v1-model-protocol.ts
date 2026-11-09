@@ -840,7 +840,7 @@ const ASK_REUSE_RULE = "- Reuse completed search results. One retry is available
 const NEED_FIELDS = "A need's \"id\" is its id from plan; leave it out in step 1 and for a new need. A need's \"status\" is \"open\", \"found\" or \"not_found\".";
 
 /**
- * A task goal's research step prompt (impact cards, sweeps): the text before ADR-0041. Without list (a search-only brief)
+ * A task goal's research step prompt (impact cards): the text before ADR-0041. Without list (a search-only brief)
  * it names no list tool, no inventory rule and no way to browse a source. Ask has its own (askStepPrompt).
  */
 function stepPrompt(list: boolean): string { return [
@@ -918,7 +918,7 @@ const ASK_KIND_RULE = "5. Give each need a kind. \"which_items\": which or how m
 /** Ask's stop rule (addition 6, ADR-0041): early stopping never applies to which items exist, and a which_say need reads what its list has shown. */
 const STOP_RULE = "Stop as soon as every requested fact is supported: for a which_items need, once each list it cites has more false; for a which_say need, once you have seen the full text of every member its list has shown, or no other member can be opened.";
 
-/** A task goal's step prompt (impact cards, sweeps): the text before ADR-0041, byte for byte. */
+/** A task goal's step prompt (impact cards): the text before ADR-0041, byte for byte. */
 export const STEP_PROMPT = stepPrompt(true);
 /** A task goal's step prompt with a search-only brief (`options.list` false): no list tool. */
 export const SEARCH_ONLY_STEP_PROMPT = stepPrompt(false);

@@ -29,8 +29,7 @@ import type { PersonReadableDecisionProjectsV1 } from './person-record-search-ro
  * - `follow_ups`: `[item_id, state, owner_membership_id, owner_set_at,
  *   state_set_at, sent_at]` for every item `runs` `items` `involved` shows:
  *   the items the caller sent, owns or last handed on, after the same
- *   rows-only policy pass, with no bound before that pass. A check
- *   (`checked_*`) is left out, so a sweep wakes no desktop.
+ *   rows-only policy pass, with no bound before that pass.
  * - `reviews`: `[approval_id, status]` for each meeting `tools` `meetings`
  *   `reviews` lists for the caller, and `[run_id, state]` for each of the
  *   caller's own impact checks `runs` `list` shows, in the state it shows, so
@@ -100,9 +99,9 @@ export function createPersonChangesV1(options: CreatePersonChangesV1Options): Pe
         const viewer = openItemViewerV1(input.access_token, authorization);
         const involved = visiblePersonalOpenItemsV1({ items: options.items, records, people: options.people }, viewer, 'involved').assessed;
         const reviews = reviewTuples(reviewsOf, authorization);
-        // The caller's own impact checks, as `runs` `list` shows them: a lapsed attempt reads pending.
+        // The caller's own impact checks, as `runs` `list` shows them (the store lists no leftover sweep): a lapsed attempt reads pending.
         const at = now().toISOString();
-        const checks = (options.runs?.list(authorization, PERSON_RUNS_LIST_LIMIT_V1, 'approved_record') ?? []).map(run => [run.run_id, triggerRunStateAtV1(run, at)] as const);
+        const checks = (options.runs?.list(authorization, PERSON_RUNS_LIST_LIMIT_V1) ?? []).map(run => [run.run_id, triggerRunStateAtV1(run, at)] as const);
         return {
           areas: {
             projects: fingerprint(view.projects.map(project => [project.project_id, project.name, project.status, project.role])),

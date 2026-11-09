@@ -1,7 +1,6 @@
 import { validatePersonAnswerResponseV8 } from './person-answer-v4.js';
 import type { PersonAnswerResponseV8 } from './person-answer-v8.js';
 import { validatePersonImpactCardV1, type PersonImpactCardV1 } from './person-impact-card-v1.js';
-import { validatePersonSweepResultV1, type PersonSweepResultV1 } from './person-sweep-result-v1.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import { asEnumerableRecord, fail, MAX_ORGANIZATION_API_BODY_BYTES, utf8ByteLength } from './validation.js';
 
@@ -53,11 +52,8 @@ export interface PersonResearchEvalReadResponseV1 {
   readonly research?: Readonly<Record<string, unknown>>;
   /** A question's output: the writer's input ids and the V8 answer, as `/v7` answers (research tool contract v1). */
   readonly ask?: { readonly writer_evidence: readonly string[]; readonly response: PersonAnswerResponseV8 };
-  /**
-   * A task's output when its trigger has a renderer: a sweep's result for a
-   * sweep, the impact card for an approved record. A research-only trigger has none.
-   */
-  readonly rendered?: PersonImpactCardV1 | PersonSweepResultV1;
+  /** A task's output when its trigger has a renderer: the impact card of an approved record. A research-only trigger has none. */
+  readonly rendered?: PersonImpactCardV1;
   readonly error?: { readonly code: string; readonly message: string };
 }
 
@@ -166,8 +162,7 @@ export function validatePersonResearchEvalReadResponseV1(value: unknown): Person
   let rendered: PersonResearchEvalReadResponseV1['rendered'];
   if (input.rendered !== undefined) {
     if (goalKind !== 'task') fail('Research evaluation rendered result needs a task result');
-    // This package cannot see the Authority's definitions, so the research's trigger names the result's contract.
-    rendered = research?.trigger === 'sweep' ? validatePersonSweepResultV1(input.rendered) : validatePersonImpactCardV1(input.rendered);
+    rendered = validatePersonImpactCardV1(input.rendered);
   }
   let error: PersonResearchEvalReadResponseV1['error'];
   if (input.error !== undefined) {

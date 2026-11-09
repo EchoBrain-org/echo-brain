@@ -6,7 +6,7 @@ import { join } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { DATASET_ROOT, datasetProblems, loadDataset, substitutePerson } from "./lib/dataset.mjs";
-import { CaseNotStartableError, discoverMeetings, exportBindings } from "./lib/bindings.mjs";
+import { CaseNotStartableError, discoverMeetings } from "./lib/bindings.mjs";
 import { pollDeadlineMs, rejectedAtIngress, savedResult, startRequest } from "./lib/requests.mjs";
 import { codeChecks } from "./lib/checks.mjs";
 import { createOpenRouterJudge, judgeInput, parseJudge } from "./lib/judge.mjs";
@@ -19,10 +19,10 @@ import { releaseCheck, releaseCheckLines } from "./lib/release-check.mjs";
 const USAGE = `Research loop evaluation (docs/product/2026-10-06-research-loop-eval-v1.md)
 
   validate                                   Check the committed dataset's structure.
-  bindings --export <dir> --project-id <prj_…> --test-person <name> --out <dir>
-                                             Bind Jira/Confluence ids from the export and the approved
-                                             THERM meetings found on staging (needs a signed-in CLI session).
-  run --run --model <loop-model-id> --split development|holdout --state S0|S1 --out <dir> [--trials 3] [--only id,…] [--family open_ended] [--background-diagnostic]
+  bindings --project-id <prj_…> --test-person <name> --out <dir>
+                                             Bind the approved THERM meetings found on staging
+                                             (needs a signed-in CLI session).
+  run --run --model <loop-model-id> --split development|holdout --out <dir> [--trials 3] [--only id,…] [--family open_ended] [--background-diagnostic]
                                              Run cases against the staging research endpoint, one at a time.
   release-check --out <dir> [--runs langsmith-runs.json] [--release-sha <sha>]
                                              Check the staging release's open-ended Asks from their saved LangSmith runs.
@@ -65,11 +65,11 @@ function sourceIdentity() {
   try { return execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim(); } catch { return null; }
 }
 
-function selectCases(dataset, split, state, only, family) {
+function selectCases(dataset, split, only, family) {
   const ids = only === undefined ? undefined : new Set(only.split(","));
-  const cases = dataset.cases.filter(entry => entry.split === split && entry.state === state && (ids === undefined || ids.has(entry.id)) && (family === undefined || entry.family === family));
-  if (ids !== undefined && cases.length !== ids.size) throw new Error("--only names a case that is not in this split and state");
-  if (family !== undefined && cases.length === 0) throw new Error("--family names no case in this split and state");
+  const cases = dataset.cases.filter(entry => entry.split === split && (ids === undefined || ids.has(entry.id)) && (family === undefined || entry.family === family));
+  if (ids !== undefined && cases.length !== ids.size) throw new Error("--only names a case that is not in this split");
+  if (family !== undefined && cases.length === 0) throw new Error("--family names no case in this split");
   return cases;
 }
 
@@ -97,13 +97,11 @@ function runReleaseCheck(args) {
 
 async function bindings(args) {
   const out = privateDirectory(args.out);
-  if (typeof args.export !== "string") throw new Error("--export is required");
   if (!/^prj_[0-9a-f-]{36}$/u.test(args["project-id"] ?? "")) throw new Error("--project-id must be the THERM ECHO project id");
   const dataset = loadDataset();
-  const fromExport = exportBindings(readJson(join(args.export, "source-data.json")));
   const client = await personClient();
   const { meetings, missing } = await discoverMeetings(client, dataset.additions, args["project-id"]);
-  const bound = { schema_version: 1, world: dataset.additions.world, test_person: args["test-person"], project_id: args["project-id"], ...fromExport, meetings };
+  const bound = { schema_version: 1, world: dataset.additions.world, test_person: args["test-person"], project_id: args["project-id"], meetings };
   substitutePerson({}, bound.test_person);
   writePrivateJson(out, "bindings.json", bound);
   process.stdout.write(`bindings.json written; meetings bound: ${Object.keys(meetings).join(", ") || "none"}${missing.length === 0 ? "" : `; not found: ${missing.join(", ")} (fill them in by hand)`}\n`);
@@ -143,7 +141,7 @@ async function run(args, { client: given, poll_ms: pollMs = 2_000 } = {}) {
   const out = privateDirectory(args.out);
   const bound = readJson(join(out, "bindings.json"));
   const dataset = loadDataset();
-  const cases = selectCases(dataset, args.split, args.state, args.only, args.family).map(entry => substitutePerson(entry, bound.test_person));
+  const cases = selectCases(dataset, args.split, args.only, args.family).map(entry => substitutePerson(entry, bound.test_person));
   const trials = Number(args.trials ?? 3);
   if (!Number.isSafeInteger(trials) || trials < 1 || trials > 5) throw new Error("--trials must be 1 to 5");
   const client = given ?? await personClient();
@@ -157,7 +155,7 @@ async function run(args, { client: given, poll_ms: pollMs = 2_000 } = {}) {
         const saved = unstartable === undefined ? await runOne(client, testCase, request, budget, trial, model, pollMs)
           : { ...runBase(testCase, budget, trial, model, Date.now()), outcome: "error", error: { code: "case_not_startable", message: errorText(unstartable) }, elapsed_ms: 0 };
         writePrivateJson(out, `runs/${testCase.id}/${budget}-${trial}.json`, { ...saved, source_sha: sourceIdentity() });
-        process.stdout.write(`${testCase.id} ${budget} #${trial}: ${saved.outcome}${saved.result?.research?.stop ? ` (${saved.result.research.stop.reason})` : ""}${saved.result?.rendered ? `, ${testCase.trigger === "sweep" ? "sweep result" : "card"} ${saved.result.rendered.status}` : ""}\n`);
+        process.stdout.write(`${testCase.id} ${budget} #${trial}: ${saved.outcome}${saved.result?.research?.stop ? ` (${saved.result.research.stop.reason})` : ""}${saved.result?.rendered ? `, card ${saved.result.rendered.status}` : ""}\n`);
       }
     }
   }

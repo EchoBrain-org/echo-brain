@@ -1,4 +1,4 @@
-import { CaseNotStartableError, citationFor, meetingCitation } from "./bindings.mjs";
+import { CaseNotStartableError, meetingCitation } from "./bindings.mjs";
 
 /**
  * The staging start request for one case (organization API
@@ -13,10 +13,7 @@ export function startRequest(testCase, bindings, budget = testCase.budget) {
 
 function triggerInput(testCase, bindings) {
   if (testCase.trigger === "ask") return { question: testCase.question };
-  if (testCase.trigger === "approved_record") return { record: meetingCitation(bindings, testCase.record.meeting, "decision") };
-  return { findings: testCase.findings.map(finding => ({
-    finding: finding.finding, expected: finding.expected, citations: finding.citations.map(ref => citationFor(bindings, ref)),
-  })) };
+  return { record: meetingCitation(bindings, testCase.record.meeting, "decision") };
 }
 
 /**
