@@ -10,7 +10,7 @@ import { PersonAuthorityClient } from '../../src/product/person-client/authority
 import { signedInHome } from './signed-in-home.js';
 import { validatePersonUpdateSubmitV3, type PersonUpdateSubmitV3, type ProjectIdV1 } from '@echo-brain/organization-api';
 
-/** A fixture row; one with no CLI command (the V2 feed and context read, the V3 note read) has no argv. */
+/** A fixture row; one with no CLI command (the V2 feed and context read, the V2 notes search, the V3 note read) has no argv. */
 interface FixtureRow {
   id: string;
   argv?: string[];
@@ -190,7 +190,7 @@ describe('frozen project context CLI contract', () => {
     ['projects', 'read-v2', '--project-id', projectId, '--project-id', otherProject],
     ['projects', 'read-v2', '--project-id', '../../updates'],
     ['projects', 'ask', '--question', 'ship'], ['ask', '--question', 'ship', '--project-id', projectId],
-    ['updates', 'search', '--query', 'ship', '--project-id', projectId],
+    ['updates', 'search-v3', '--query', 'ship', '--project-id', projectId],
     ['updates', 'status-v3', '--request-id', 'not-a-request-id'],
     [...upload.argv.filter((_, i) => i < upload.argv.indexOf('--audience')), '--audience-project-id', projectId],
     [...upload.argv.slice(0, upload.argv.indexOf('--audience-project-id'))],
@@ -318,6 +318,18 @@ describe('frozen project context CLI contract', () => {
       stdout: { write: value => { output += value; } }, stderr: { write: () => {} } })).toBe(0);
     expect(output).toContain(`echo-brain person ${command.join(' ')}`);
     expect(network).not.toHaveBeenCalled();
+  });
+
+  it('has retired the V2 notes search command: refused before network use, with no help of its own', async () => {
+    const network = vi.fn();
+    for (const argv of [['updates', 'search', '--query', 'ship'], ['updates', 'search', '--help']]) {
+      const result = await run({ argv }, network);
+      expect(result.code, argv.join(' ')).toBe(2); expect(result.stdout).toBe('');
+    }
+    expect(network).not.toHaveBeenCalled();
+    const help = await run({ argv: ['updates', '--help'] }, network);
+    expect(help.code).toBe(0);
+    expect(help.stdout).toContain('usage: echo-brain person updates <submit-v3|status-v3|search-v3> [options]');
   });
 
   it.each(cliOperations)('$id maps exact argv to the frozen HTTP and success JSON', async operation => {
