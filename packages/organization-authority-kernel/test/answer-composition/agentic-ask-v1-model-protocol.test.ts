@@ -561,7 +561,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(parseBlocksAnswer(JSON.parse(nothingFound!))).toMatchObject({ lists: [], sentences: [{ evidence: [] }], not_found: ["<the requested fact>"] });
     // The writer every Ask gets: its prompt, follow-up guidance, layout part and schema, with the selection contract they share, pinned.
     expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, ANSWER_BLOCKS_PROMPT, answerBlocksSchema].map(value => canonicalSha256(value))).toEqual([
-      "sha256:badf426531d3b408a8b134858216787f147e493948cbbd249f1ffc0bf1cfc8e9", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
+      "sha256:badf426531d3b408a8b134858216787f147e493948cbbd249f1ffc0bf1cfc8e9", "sha256:77dc4e583a427323a32d72314fbb863c40d4b9ad6cb2c879dd7e9c609e347b64",
       "sha256:1b55accb6d7ce3ff2a1ac95baeb0380c180af2576402786dae12f57beb1a2c05", "sha256:8d5d4b50ffbba9580067126dd95c5a59b0db6bfb569c78bb243c512e5168d32c",
     ]);
   });

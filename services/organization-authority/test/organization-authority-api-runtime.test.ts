@@ -26,6 +26,7 @@ import {
   issuePersonOnboardingInvitation,
 } from "../src/composition/person-onboarding-service.js";
 import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
+import { SqliteTriggerRunsV1 } from "../src/adapters/persistence/sqlite/trigger-runs-v1.js";
 import type {
   PersonExternalIdentityRuntimeInputV1,
   OpenedPersonExternalIdentityRuntimeV1,
@@ -928,10 +929,16 @@ describe("Organization Authority API runtime", () => {
         // A saved note queues no search-hint work.
         expect(inspection.prepare("SELECT count(*) AS n FROM authority_person_update_work_v2").get()).toEqual({ n: 0 });
 
-        // The composed change check (ADR-0036) reads the owner's project and the personal runtime's review; no follow-up yet.
-        expect((await get("/v1/person/changes")).areas).toEqual({
-          projects: canonicalSha256([[project_id, create.name, "active", "lead"]]), follow_ups: canonicalSha256([]), reviews: canonicalSha256([[REVIEW, "pending"]]),
-        });
+        // The composed change check (ADR-0036) reads the owner's project, the personal runtime's review and, from the runs store,
+        // the owner's own impact checks (none yet); no follow-up yet.
+        const checksRead = vi.spyOn(SqliteTriggerRunsV1.prototype, "list");
+        try {
+          expect((await get("/v1/person/changes")).areas).toEqual({
+            projects: canonicalSha256([[project_id, create.name, "active", "lead"]]), follow_ups: canonicalSha256([]), reviews: canonicalSha256([[REVIEW, "pending"]]),
+          });
+          expect(checksRead.mock.calls).toEqual([[expect.objectContaining({ organization_id: initialized.organization_id, principal_id: initialized.owner_principal_id,
+            membership_id: initialized.owner_membership_id }), 100]]);
+        } finally { checksRead.mockRestore(); }
         // Project activity (Ask timeline v1, C2) is composed beside it: the owner's own note is no news to the owner.
         expect(await get("/v1/person/project-activity")).toEqual({ schema_version: 1, kind: "echo-person-project-activity-v1", items: [{ project_id, latest_at: null }] });
       } finally { inspection.close(); }

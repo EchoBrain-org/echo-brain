@@ -1,5 +1,4 @@
 import {
-  PERSON_SWEEP_RESULT_LIMITS_V1,
   validatePersonEvidenceOpenRequestV1,
   validatePersonPageCitationV1,
   validatePersonQueryText,
@@ -7,11 +6,10 @@ import {
 } from "@echo-brain/organization-api";
 import { AuthorityOperationError } from "../domain/errors.js";
 import type { EvidenceDeskPortV2 } from "../shared/evidence-desk-v2.js";
-import { agenticDataSlotV1, agenticStartingSlotV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
+import { agenticStartingSlotV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
 import type { AgenticRendererV1 } from "./agentic-renderer-v1.js";
 import { AGENTIC_RESEARCH_BUDGETS_V1 } from "./agentic-research-v1.js";
 import { IMPACT_CARD_RENDERER_V1 } from "./renderers/impact-card-renderer-v1.js";
-import { SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from "./renderers/sweep-renderer-v1.js";
 
 /**
  * Trigger definitions (research trigger contract v1, section 1). Adding a
@@ -27,8 +25,7 @@ export interface AgenticTriggerDefinitionV1<Event> {
   /**
    * The event's brief, for the scope the run reads (its desk's). A task names
    * its starting items by slot (`agenticStartingSlotV1`) because their ids
-   * exist only once the loop has read them, and places the event's own text
-   * by data slot (`agenticDataSlotV1`); the loop fills both in one pass.
+   * exist only once the loop has read them; the loop fills them in one pass.
    */
   brief(event: Event, scope: AgenticTriggerScopeV1): AgenticBriefV1;
   /** The budget profile its brief runs on; `brief` always carries this profile's limits. */
@@ -51,10 +48,6 @@ export interface AgenticTriggerDefinitionV1<Event> {
 /** Where a run reads, as far as its brief may depend on it: the kind of scope the run's desk binds. */
 export interface AgenticTriggerScopeV1 { readonly kind: EvidenceDeskPortV2["scope"]["kind"] }
 
-/** As many findings as a sweep result holds. */
-const MAX_FINDINGS = PERSON_SWEEP_RESULT_LIMITS_V1.findings;
-const MAX_FINDING_CITATIONS = 12;
-
 /** Freezes a definition and gives its brief the budget its label names, so the two can never disagree. */
 function define<Event>(definition: Omit<AgenticTriggerDefinitionV1<Event>, "brief"> & { brief(event: Event, scope: AgenticTriggerScopeV1): Omit<AgenticBriefV1, "budget"> }): AgenticTriggerDefinitionV1<Event> {
   return Object.freeze({ ...definition, brief: (event: Event, scope: AgenticTriggerScopeV1): AgenticBriefV1 => ({ ...definition.brief(event, scope), budget: AGENTIC_RESEARCH_BUDGETS_V1[definition.budget] }) });
@@ -70,12 +63,6 @@ function fields(input: unknown, keys: readonly string[], label: string): Readonl
   if (present.length !== keys.length || !keys.every(key => present.includes(key))) invalid(`${label} input must have exactly ${keys.join(", ")}`);
   return input as Readonly<Record<string, unknown>>;
 }
-/** One trimmed line of text, as the request gave it. */
-function line(value: unknown, label: string): string {
-  if (typeof value !== "string" || value.trim().length === 0 || value !== value.trim() || value !== value.normalize("NFC") ||
-      Buffer.byteLength(value, "utf8") > 1_000 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)) invalid(`${label} must be one line of text`);
-  return value;
-}
 /** A citation released by an earlier request: a ticket, a page, or an ECHO record or document. */
 function citation(value: unknown, label: string): unknown {
   try {
@@ -88,7 +75,6 @@ function citation(value: unknown, label: string): unknown {
 
 interface AskEventV1 { readonly question: string }
 interface ApprovedRecordEventV1 { readonly record: unknown }
-type SweepEventV1 = SweepTriggerInputV1;
 
 const ask = define<AskEventV1>({
   name: "ask", budget: "live", scope: "requested",
@@ -133,52 +119,7 @@ const approvedRecord = define<ApprovedRecordEventV1>({
   },
 });
 
-/**
- * Sweep: earlier findings rechecked against their items as they read now. No planner runs: research re-reads each cited
- * item in full and looks for nothing newer, and the renderer's one judge call decides each verdict from those items.
- */
-const SWEEP_TASK = [
-  "Recheck the earlier findings below. Each says what was expected to change and lists the items it cited then, each re-read in full now. Judge each finding from its own current items.",
-  "Never treat a finding as resolved without reading the current item. An item that could not be read is not evidence that anything changed.",
-  "Findings:",
-].join("\n");
-
-const sweep = define<SweepEventV1>({
-  name: "sweep", budget: "background", scope: "requested", renderer: SWEEP_RENDERER_V1,
-  parseEvent(input: unknown): SweepEventV1 {
-    const findings = fields(input, ["findings"], "Sweep").findings;
-    if (!Array.isArray(findings) || findings.length === 0 || findings.length > MAX_FINDINGS) invalid(`Sweep needs 1 to ${MAX_FINDINGS} findings`);
-    return Object.freeze({ findings: Object.freeze(findings.map((raw: unknown, index: number) => {
-      const finding = fields(raw, ["finding", "expected", "citations"], `Sweep finding ${index + 1}`);
-      if (!Array.isArray(finding.citations) || finding.citations.length === 0 || finding.citations.length > MAX_FINDING_CITATIONS) invalid(`Sweep finding ${index + 1} needs 1 to ${MAX_FINDING_CITATIONS} citations`);
-      return Object.freeze({
-        finding: line(finding.finding, `Sweep finding ${index + 1}`), expected: line(finding.expected, `Sweep finding ${index + 1} expectation`),
-        citations: Object.freeze(finding.citations.map((value: unknown) => citation(value, `Sweep finding ${index + 1} citation`))),
-      });
-    })) });
-  },
-  // A deleted or now-hidden item is news, so an unreadable one is reported, not fatal. Each cited item is read once.
-  brief: (event: SweepEventV1) => {
-    const starting: unknown[] = [];
-    const positions = new Map<string, number>();
-    const slot = (value: unknown): string => {
-      const key = JSON.stringify(value);
-      if (!positions.has(key)) { starting.push(value); positions.set(key, starting.length); }
-      return agenticStartingSlotV1(positions.get(key)!);
-    };
-    // The caller's own words go in by data slot, never into the template.
-    const data: string[] = [];
-    const text = (value: string): string => { data.push(JSON.stringify(value)); return agenticDataSlotV1(data.length); };
-    const lines = event.findings.map((finding, index) =>
-      `${index + 1}. ${text(finding.finding)} Expected: ${text(finding.expected)}. Cited then: ${finding.citations.map(slot).join(", ")}.`);
-    return {
-      goal: { kind: "task", task: [SWEEP_TASK, ...lines].join("\n"), data }, starting: starting.map(value => ({ citation: value, if_unreadable: "report" })),
-      options: { planner: false },
-    };
-  },
-});
-
-export const AGENTIC_TRIGGER_DEFINITIONS_V1: readonly AgenticTriggerDefinitionV1<unknown>[] = Object.freeze([ask, approvedRecord, sweep]);
+export const AGENTIC_TRIGGER_DEFINITIONS_V1: readonly AgenticTriggerDefinitionV1<unknown>[] = Object.freeze([ask, approvedRecord]);
 
 /** The triggers an audit record may name: every definition but Ask, whose audit records carry no trigger. */
 export const AGENTIC_TRIGGER_NAMES_V1: readonly string[] = Object.freeze(AGENTIC_TRIGGER_DEFINITIONS_V1.filter(definition => definition !== ask).map(definition => definition.name));

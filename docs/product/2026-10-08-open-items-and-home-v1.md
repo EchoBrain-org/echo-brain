@@ -428,7 +428,7 @@ dozen or more reads as one person.
 Every operation is on `POST /v1/person/runs` (ruling 5). The contract as built
 is [`person-runs-v1.ts`](../../packages/organization-api/src/person-runs-v1.ts),
 with the sweep result in
-[`person-sweep-result-v1.ts`](../../packages/organization-api/src/person-sweep-result-v1.ts),
+[`person-sweep-result-v1.ts`](https://github.com/EchoBrain-org/echo-brain/blob/257adcd3ae8059cfbe143e1cd79ce48b4997b2a7/packages/organization-api/src/person-sweep-result-v1.ts),
 and the
 [Authority runbook](../../services/organization-authority/README.md#person-reads-and-permissions)
 describes each operation. Two later designs changed it:

@@ -129,7 +129,7 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly external_identity_runtime_bundle?: PersonExternalIdentityRuntimeBundleV1;
   /** Always bound by `openOrganizationAuthorityRuntime`. */
   readonly answer_composition_generation: AnswerCompositionGenerationBindingV1;
-  /** Background-priority model port for trigger and sweep research; they use the Ask port when absent. */
+  /** Background-priority model port for trigger research; it uses the Ask port when absent. */
   readonly answer_composition_background?: AnswerCompositionGenerationBindingV1["structured_output"];
 }
 

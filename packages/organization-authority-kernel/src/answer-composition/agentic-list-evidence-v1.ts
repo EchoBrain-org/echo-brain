@@ -10,7 +10,7 @@ import type { AgenticResearchNeedV1 } from "./agentic-research-v1.js";
  * evidence of which items exist: its filter, its members, whether it was read
  * to its end and when. A list supports list facts only (which items exist,
  * and each member's title, dates, status and owner), never what an item says.
- * A task goal (impact cards, sweeps) records no lists and keeps the rules
+ * A task goal (an impact check's) records no lists and keeps the rules
  * before ADR-0041.
  *
  * Everything here holds model-facing ids (`L1`, `E4`), selectors and row

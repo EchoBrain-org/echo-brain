@@ -5,7 +5,6 @@ import { canonicalJson, type Sha256Digest } from '@echo-brain/federation-protoco
 import type { TriggerRunRowV1 } from './trigger-runs-v1.js';
 
 export type ImpactItemStateV1 = 'unsent' | 'open' | 'done' | 'not_relevant';
-export type ImpactItemVerdictV1 = 'landed' | 'still_open' | 'changed' | 'unreadable';
 type ImpactOwnerMatchV1 = 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned';
 /** One item an impact run found (an affected item or one of the meeting's own actions), as its finishing transaction stores it. */
 export interface ImpactItemDraftV1 {
@@ -29,7 +28,6 @@ export interface ImpactItemRowV1 {
   readonly sent_at: string | null; readonly send_command_id: string | null;
   /** Whether Send included the item: null before Send, then frozen. Only an included item went to its owner. */
   readonly send_included: boolean | null;
-  readonly check: { readonly verdict: ImpactItemVerdictV1; readonly by: string; readonly at: string; readonly run_id: string } | null;
   readonly created_at: string; readonly updated_at: string;
 }
 export interface ImpactSendChoiceV1 { readonly item_id: string; readonly include: boolean; readonly owner_membership_id?: string }
@@ -43,13 +41,12 @@ interface StoredItemV1 {
   readonly owner_set_by: string | null; readonly owner_set_at: string | null;
   readonly state: ImpactItemStateV1; readonly state_set_by: string | null; readonly state_set_at: string | null;
   readonly sent_at: string | null; readonly send_command_id: string | null; readonly send_included: 0 | 1 | null;
-  readonly checked_verdict: ImpactItemVerdictV1 | null; readonly checked_by: string | null; readonly checked_at: string | null; readonly checked_run_id: string | null;
   readonly created_at: string; readonly updated_at: string;
 }
 const ITEM_COLUMNS = `item.item_id, item.run_id, item.item_key, item.pointer_json, item.record_sha256, item.organization_id,
   item.approver_principal_id, item.approver_membership_id, item.relation, item.expected, item.owner_membership_id, item.owner_match,
   item.owner_set_by, item.owner_set_at, item.state, item.state_set_by, item.state_set_at, item.sent_at, item.send_command_id, item.send_included,
-  item.checked_verdict, item.checked_by, item.checked_at, item.checked_run_id, item.created_at, item.updated_at`;
+  item.created_at, item.updated_at`;
 const selectItems = `SELECT ${ITEM_COLUMNS}
   FROM authority_impact_items_v1 AS item`;
 const ORDER = 'ORDER BY item.created_at, item.item_id';
@@ -75,8 +72,6 @@ function publicItem(value: StoredItemV1): ImpactItemRowV1 {
     relation: value.relation, expected: value.expected, owner_membership_id: value.owner_membership_id, owner_match: value.owner_match,
     owner_set_by: value.owner_set_by, owner_set_at: value.owner_set_at, state: value.state, state_set_by: value.state_set_by, state_set_at: value.state_set_at, sent_at: value.sent_at, send_command_id: value.send_command_id,
     send_included: value.send_included === null ? null : value.send_included === 1,
-    check: value.checked_verdict === null ? null
-      : Object.freeze({ verdict: value.checked_verdict, by: value.checked_by!, at: value.checked_at!, run_id: value.checked_run_id! }),
     created_at: value.created_at, updated_at: value.updated_at,
   });
 }
@@ -311,36 +306,6 @@ export class SqliteImpactItemsV1 {
         WHERE item_id=?`).run(ownerMembershipId, by, timestamp, timestamp, itemId).changes;
       return changes === 1 ? this.read(itemId) : undefined;
     });
-  }
-
-  /**
-   * In the sweep's finishing transaction. A judged check (landed, still open, changed) replaces an older check, and an unreadable
-   * one whenever it was made: someone who could read the item outranks someone who could not, whichever sweep started first. An
-   * unreadable check is recorded only while no one's judged check exists, over nothing or an older unreadable one. A last check
-   * only moves forward, so a judged check that started before the unreadable one it replaces carries the time just after it.
-   * The row keeps no other time, so that stamp also orders it against later judged checks: one that read the item after it did but
-   * before the stamp is refused, and the item keeps a verdict read minutes earlier (three sweeps racing on one item). Comparing
-   * judged checks by their own read times needs a column of its own. False when the item keeps its check.
-   */
-  recordCheck(transaction: Database.Database, input: { readonly item_id: string; readonly verdict: ImpactItemVerdictV1; readonly by: string; readonly at: string; readonly run_id: string }): boolean {
-    if (!transaction.inTransaction) throw new Error('An open item check is recorded inside the sweep finishing transaction');
-    // Checks are ordered as strings, so only the canonical ISO form keeps string order equal to time order.
-    if (typeof input.at !== 'string' || Number.isNaN(Date.parse(input.at)) || new Date(input.at).toISOString() !== input.at) throw new TypeError('Open item check time is invalid');
-    const current = transaction.prepare('SELECT checked_verdict, checked_at FROM authority_impact_items_v1 WHERE item_id=?').get(input.item_id) as
-      Pick<StoredItemV1, 'checked_verdict' | 'checked_at'> | undefined;
-    if (current === undefined) return false;
-    let at = input.at;
-    if (current.checked_verdict !== null && current.checked_at !== null) {
-      const judged = input.verdict !== 'unreadable';
-      if (!judged && current.checked_verdict !== 'unreadable') return false;
-      if (current.checked_at >= input.at) {
-        if (!judged || current.checked_verdict !== 'unreadable') return false;
-        at = new Date(Date.parse(current.checked_at) + 1).toISOString();
-      }
-    }
-    return transaction.prepare(`UPDATE authority_impact_items_v1 SET checked_verdict=?, checked_by=?, checked_at=?, checked_run_id=?, updated_at=?
-      WHERE item_id=? AND (checked_at IS NULL OR checked_at < ?)`).run(
-      input.verdict, input.by, at, input.run_id, this.timestamp(), input.item_id, at).changes === 1;
   }
 
   private timestamp(): string {

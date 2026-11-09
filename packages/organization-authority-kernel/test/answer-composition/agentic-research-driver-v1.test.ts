@@ -413,17 +413,6 @@ describe('native research harness shares the real ECHO tool state', () => {
     expect(list).toHaveBeenCalledTimes(2);
   });
 
-  it('does not invoke the SDK when the trigger disables planning and preserves starting slots', async () => {
-    const h = harness(async () => { throw new Error('must not run'); }, { openCitation: async () => result([evidence]) });
-    const output = await createAgenticResearchV1(h.options).research({ trigger: 'sweep', brief: {
-      goal: { kind: 'task', task: 'Recheck {{starting:1}}.' }, starting: [{ citation: evidence.citation, if_unreadable: 'report' }],
-      options: { planner: false, list: false }, budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
-    } });
-    expect(h.driver.run).not.toHaveBeenCalled();
-    expect(output.stop.completed).toBe(true);
-    expect(output.items[0]).toMatchObject({ read_in_full: true, preloaded: true });
-  });
-
   it('preserves search-only trigger restrictions and terminal desk failures', async () => {
     const h = harness(async session => {
       expect(session.list_available).toBe(false);

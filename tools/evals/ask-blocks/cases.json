@@ -32,7 +32,6 @@
         {
           "kind": "follow_up", "on": "page", "title": "Publish the DVT release notes to the team space", "owner": "Tomas Okafor", "status": "open",
           "created_at": "2026-10-28T17:00:00.000Z", "sent_at": "2026-10-28T17:02:00.000Z", "due_at": "2026-11-04",
-          "check": { "verdict": "still_open", "checked_at": "2026-10-29T16:00:00.000Z" },
           "decision": { "title": "DVT review", "first_line": "Publish the DVT release notes before the lab handoff." }
         }
       ],
@@ -302,19 +301,16 @@
         {
           "kind": "follow_up", "on": "ticket", "title": "Ship firmware 2.3 with the THERM-482 fix", "owner": "Tomas Okafor", "status": "open",
           "created_at": "2026-10-27T18:00:00.000Z", "sent_at": "2026-10-27T18:05:00.000Z", "due_at": "2026-11-02",
-          "check": { "verdict": "still_open", "checked_at": "2026-10-29T16:00:00.000Z" },
           "decision": { "title": "DVT readiness review", "first_line": "Firmware 2.3 must fix THERM-482." }
         },
         {
           "kind": "follow_up", "on": "page", "title": "Freeze the enclosure at revision C", "owner": "Lena Brandt", "status": "done",
           "created_at": "2026-10-27T18:00:00.000Z", "sent_at": "2026-10-27T18:05:00.000Z",
-          "check": { "verdict": "landed", "checked_at": "2026-10-29T16:00:00.000Z" },
           "decision": { "title": "DVT review", "first_line": "Freeze the enclosure at revision C." }
         },
         {
           "kind": "follow_up", "on": "ticket", "title": "Get the thermal pad RoHS certificate", "owner": "Dev Mehta", "status": "open",
           "created_at": "2026-10-27T18:00:00.000Z", "sent_at": "2026-10-27T18:05:00.000Z", "due_at": "2026-11-03",
-          "check": { "verdict": "still_open", "checked_at": "2026-10-29T16:00:00.000Z" },
           "decision": { "title": "DVT readiness review", "first_line": "The supplier must send its RoHS certificate." }
         },
         {

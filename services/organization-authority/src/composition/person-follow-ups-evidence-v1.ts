@@ -167,8 +167,8 @@ const DATE_FIELDS = evidenceDateFieldsOfV1(FOLLOW_UPS_SOURCE_DESCRIPTOR_V1.capab
 const REFUSED: readonly string[] = ['unauthorized', 'not_found', 'stale_access_state'];
 
 /** A follow-up's own dates, as its desk item carries them: created always, the rest once they happened. */
-function rowDates(row: Pick<ImpactItemRowV1, 'created_at' | 'sent_at' | 'owner_set_at' | 'check'>): EvidenceDatesV1 {
-  return { created: row.created_at, ...(row.sent_at === null ? {} : { sent: row.sent_at }), ...(row.owner_set_at === null ? {} : { reassigned: row.owner_set_at }), ...(row.check === null ? {} : { checked: row.check.at }) };
+function rowDates(row: Pick<ImpactItemRowV1, 'created_at' | 'sent_at' | 'owner_set_at'>): EvidenceDatesV1 {
+  return { created: row.created_at, ...(row.sent_at === null ? {} : { sent: row.sent_at }), ...(row.owner_set_at === null ? {} : { reassigned: row.owner_set_at }) };
 }
 /**
  * A read's window, or none. A date field follow-ups do not record is refused, never ignored (ADR-0041); a window with no
@@ -181,11 +181,11 @@ function windowOf(input: EvidenceDateFilterV1): EvidenceDateFilterV1 | undefined
   return Object.freeze({ ...(input.since === undefined ? {} : { since: input.since }), ...(input.until === undefined ? {} : { until: input.until }),
     date_field: input.date_field ?? EVIDENCE_ANY_DATE_V1, ...(input.time_zone === undefined ? {} : { time_zone: input.time_zone }) });
 }
-function inWindow(row: Pick<ImpactItemRowV1, 'created_at' | 'sent_at' | 'owner_set_at' | 'check'>, window: EvidenceDateFilterV1 | undefined): boolean {
+function inWindow(row: Pick<ImpactItemRowV1, 'created_at' | 'sent_at' | 'owner_set_at'>, window: EvidenceDateFilterV1 | undefined): boolean {
   return window === undefined || matchesEvidenceDateV1(rowDates(row), window, 'created');
 }
 /** The rows a window could not test because they do not record its date, and the dates they do record (research tool contract v1). */
-function uncheckedOf(rows: readonly Pick<ImpactItemRowV1, 'created_at' | 'sent_at' | 'owner_set_at' | 'check'>[], window: EvidenceDateFilterV1 | undefined): EvidenceDeskUncheckedV1 | undefined {
+function uncheckedOf(rows: readonly Pick<ImpactItemRowV1, 'created_at' | 'sent_at' | 'owner_set_at'>[], window: EvidenceDateFilterV1 | undefined): EvidenceDeskUncheckedV1 | undefined {
   if (window === undefined) return undefined;
   // `windowOf` always names the window's field.
   const tally = createUncheckedTallyV1();
@@ -377,7 +377,6 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
         // ECHO's own dates, which the runs API shows whoever sees the row.
         created_at: row.created_at, ...(row.sent_at === null ? {} : { sent_at: row.sent_at }), ...(row.owner_set_at === null ? {} : { reassigned_at: row.owner_set_at }),
         ...(withLive && liveTitle !== '' && due !== '' ? { due_at: due } : {}),
-        ...(row.check === null ? {} : { check: { verdict: row.check.verdict, checked_at: row.check.at } }),
         ...(withDecision && decision !== undefined ? { decision: {
           title: impactCardLineV1(decision.title, LIMITS.decision_title_chars) || 'Approved meeting',
           ...(decided === '' ? {} : { first_line: decided }), ref: `meeting:${row.record_sha256}`,

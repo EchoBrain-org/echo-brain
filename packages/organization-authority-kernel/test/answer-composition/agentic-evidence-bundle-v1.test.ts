@@ -1,8 +1,9 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
+import { agenticStartingSlotV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
 import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import { callRendererModelV1, type AgenticRendererV1 } from "../../src/answer-composition/agentic-renderer-v1.js";
-import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
+import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
 import type { StructuredGenerationJsonSchema } from "../../src/answer-composition/structured-generation-v1.js";
 import { listed, need, part, record, researchHarness, result, step } from "./fixtures/agentic-scenarios.js";
 
@@ -11,18 +12,18 @@ const followUp = record("owner", "Approved: Jules owns the dashboard.");
 const owned = record("action-owned", "Jules will publish the dashboard.", { kind: "action", attributes: { owner: "Jules", due_at: "2026-09-11" } });
 const unowned = record("action-unowned", "Someone checks the numbers.", { kind: "action", attributes: { due_at: "2026-09-12" } });
 const listedOnly = listed("listed");
-const sweepTrigger = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === "sweep")!;
-const sweepBrief = sweepTrigger.brief(sweepTrigger.parseEvent({ findings: [
-  { finding: "Dashboard published", expected: "Published by September 11", citations: [anchor.citation, followUp.citation] },
-] }), { kind: "project" });
-// A sweep's brief with the planner on, so research rounds fill the bundle.
-const sweep = { trigger: "sweep", brief: { ...sweepBrief, options: { ...sweepBrief.options, planner: true } } };
+/** A background task that starts from two records, so its starting reads and its research rounds both fill the bundle. */
+const brief: AgenticBriefV1 = {
+  goal: { kind: "task", task: `Find what ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)} decided about the dashboard.` },
+  starting: [{ citation: anchor.citation, if_unreadable: "fail" }, { citation: followUp.citation, if_unreadable: "fail" }],
+  budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: {},
+};
 
 /**
- * A Sweep run with a rejected first reply on a pinned clock (model calls 1 s, desk reads 7 ms) and a model that
+ * A task run with a rejected first reply on a pinned clock (model calls 1 s, desk reads 7 ms) and a model that
  * reports usage. Its renderer keeps the full bundle it is given and makes one answer call of its own.
  */
-async function sweepRun() {
+async function taskRun() {
   let clock = 0;
   const replies = [
     { not: "a step" },
@@ -43,13 +44,13 @@ async function sweepRun() {
       return { result: null, cited: [], outcome: "answered", fallbacks: 0, answer_sha256: canonicalSha256({}) };
     },
   };
-  await run.research.renderWithResearch({ ...sweep, renderer, trigger_input: null });
+  await run.research.renderWithResearch({ trigger: "approved_record", brief, renderer, trigger_input: null });
   return { bundle: bundle!, audit: run.audit };
 }
 
 describe("evidence bundle", () => {
   it("keeps server records, desk items and who it was gathered for in the full bundle, and trims them all away", async () => {
-    const { bundle } = await sweepRun();
+    const { bundle } = await taskRun();
     expect(bundle.items.map(item => item.short)).toEqual(["E1", "E2", "E3", "E4", "E5"]);
     expect(bundle.items[0]).toMatchObject({ short: "E1", item: anchor, source: "meeting", full: true, opened: true, preloaded: true, cited_by_plan: true });
     expect(bundle.items[4]).toMatchObject({ short: "E5", item: listedOnly, full: false, opened: false, preloaded: false, query: "dashboard numbers", cited_by_plan: false });
@@ -66,7 +67,7 @@ describe("evidence bundle", () => {
   });
 
   it("gives the evaluation each item's details, the inventories read and research's own cost", async () => {
-    const { bundle, audit } = await sweepRun();
+    const { bundle, audit } = await taskRun();
     const view = trimAgenticEvidenceBundleV1(bundle);
     expect(view.items.map(item => [item.id, item.date, item.date_kind, item.attributes])).toEqual([
       ["E1", "2026-10-01", "unspecified", undefined],

@@ -283,10 +283,6 @@ describe('project activity: what moves it', () => {
     await sendAll(f, unsent);
     // Ari sent them: news to Mina, who owns the ticket, and to Rafael, who reads the decision; Ari's own send is not.
     expect(await all()).toEqual({ ari: { [f.projectA]: null, [f.projectB]: null }, mina: { [f.projectA]: sentAt }, rafael: { [f.projectA]: sentAt }, okafor: {} });
-    // A sweep's check moves nothing.
-    tick(f);
-    f.check(ticket, 'landed', 'mina');
-    expect((await all()).rafael).toEqual({ [f.projectA]: sentAt });
     const doneAt = tick(f);
     await setState(f, 'mina', ticket, 'done');
     expect(await all()).toEqual({ ari: { [f.projectA]: doneAt, [f.projectB]: null }, mina: { [f.projectA]: sentAt }, rafael: { [f.projectA]: doneAt }, okafor: {} });

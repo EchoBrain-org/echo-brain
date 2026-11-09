@@ -3,8 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { agenticStartingSlotV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
-import { SWEEP_APPROVED_DECISION_V1 } from "../../src/answer-composition/renderers/sweep-renderer-v1.js";
-import type { PersonSweepResultV1 } from "@echo-brain/organization-api";
 import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskOpenCitationInputV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
 import { SEARCH_ONLY_STEP_PROMPT, STEP_PROMPT, TASK_RULE_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
@@ -409,7 +407,7 @@ describe("research loop: starting evidence", () => {
       return result([items.find(item => (item.citation as { readonly ticket_id: string }).ticket_id === keyOf(input))!]);
     });
     const h = harness([], { live_sources: [JIRA], openCitation });
-    const run = h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}, ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(3)}.`, items.map(item => item.citation), { planner: false }, "report"), signal: stop.signal });
+    const run = h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}, ${agenticStartingSlotV1(2)} and ${agenticStartingSlotV1(3)}.`, items.map(item => item.citation), {}, "report"), signal: stop.signal });
     await vi.waitFor(() => expect(openCitation).toHaveBeenCalledTimes(3));
     stop.abort();
     await expect(run).rejects.toThrow();
@@ -426,80 +424,6 @@ describe("research loop: starting evidence", () => {
     // The first item fails after the second, and its brief asked to fail on it.
     await expect(h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)} affect.`, items.slice(0, 2).map(item => item.citation)) }))
       .rejects.toMatchObject({ code: "not_found" });
-    expect(h.generate).not.toHaveBeenCalled();
-  });
-});
-
-describe("research loop: no planner (sweeps)", () => {
-  const therm = ticket("THERM-48", "THERM-48: firmware now formats two decimals.");
-  const gone = ticket("THERM-49");
-  const openCitation = async (input: EvidenceDeskOpenCitationInputV2) => {
-    if ((input.citation as { readonly ticket_id: string }).ticket_id === "49") throw new AuthorityOperationError("not_found", "Evidence item is not available");
-    return result([therm]);
-  };
-
-  it("reads the starting evidence and stops as finished, with no planner call; what it read in full counts as read", async () => {
-    const h = harness([], { live_sources: [JIRA], openCitation });
-    const view = await h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)}.`, [therm.citation, gone.citation], { planner: false }, "report") });
-    expect(h.generate).not.toHaveBeenCalled();
-    expect(view.stop).toEqual({ reason: "finished", completed: true });
-    expect(view).toMatchObject({ goal: { kind: "task", task: "Recheck E1 and an item that could not be read." }, plan: [], rounds: [], unreadable_starting: [gone.citation] });
-    expect(view.items).toEqual([expect.objectContaining({ id: "E1", text: therm.text, read_in_full: true, opened: true, preloaded: true, cited_by_plan: false })]);
-    expect(view.cost).toMatchObject({ rounds: 0, model_calls: 0, repairs: 0, fallbacks: 0 });
-    expect(h.audit).toEqual([expect.objectContaining({ trigger: "sweep", rounds: 0, model_calls: 0 })]);
-  });
-
-  it("lets the sweep's one judge call cite the starting items it read", async () => {
-    const sweep = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === "sweep")!;
-    const event = sweep.parseEvent({ findings: [
-      { finding: "Firmware shows one decimal", expected: "two decimals", citations: [therm.citation] },
-      { finding: "Test case expects one decimal", expected: "two decimals", citations: [gone.citation] },
-    ] });
-    const h = harness([{ findings: [{ index: 0, verdict: "landed", line: "THERM-48 now formats two decimals.", cites: ["E1"] }] }], { live_sources: [JIRA], openCitation });
-    const output = await h.research.renderWithResearch({ trigger: sweep.name, brief: sweep.brief(event, { kind: "global" }), renderer: sweep.renderer!, trigger_input: event });
-    // One model call, and it is the judge's.
-    expect(h.inputs.map(input => input.system_prompt.slice(0, 22))).toEqual(["You recheck open items"]);
-    expect(JSON.parse(h.inputs[0]!.user_prompt)).toMatchObject({ findings: [{ index: 0, about: ["E1"] }], items: [expect.objectContaining({ id: "E1", text: therm.text })] });
-    expect(output.rendered as PersonSweepResultV1).toMatchObject({
-      findings: [
-        { finding_index: 0, verdict: "landed", line: "THERM-48 now formats two decimals.", citation_indexes: [0] },
-        { finding_index: 1, verdict: "unreadable", citation_indexes: [] },
-      ],
-      citations: [expect.objectContaining({ citation: therm.citation })],
-    });
-    expect(output.research).toMatchObject({ trigger: "sweep", stop: { reason: "finished", completed: true }, rounds: [] });
-    expect(h.audit).toEqual([expect.objectContaining({ trigger: "sweep", outcome: "partial", rounds: 0, model_calls: 1, citation_count: 1 })]);
-  });
-
-  // Across workstreams: the planner-less read must open the finding's decision for the judge's placeholder expectation, and the
-  // judge's own-item rule still holds when nothing but the starting items was read.
-  it("shows the judge the decision it re-read for a placeholder expectation, and sends back a landed verdict grounded only in it", async () => {
-    const sweep = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === "sweep")!;
-    const decision = record("display", "Approved: show two decimals (0.01 °C) on the display from DVT.");
-    const event = sweep.parseEvent({ findings: [
-      { finding: "Outdated Jira ticket from Display review", expected: SWEEP_APPROVED_DECISION_V1, citations: [therm.citation, decision.citation] },
-    ] });
-    const h = harness([
-      { findings: [{ index: 0, verdict: "landed", line: "The decision asks for two decimals.", cites: ["E2"] }] },
-      { findings: [{ index: 0, verdict: "landed", line: "THERM-48 now formats two decimals.", cites: ["E1", "E2"] }] },
-    ], { live_sources: [JIRA],
-      openCitation: async input => result([(input.citation as { readonly kind: string }).kind === "approved_record" ? decision : therm]) });
-    const output = await h.research.renderWithResearch({ trigger: sweep.name, brief: sweep.brief(event, { kind: "global" }), renderer: sweep.renderer!, trigger_input: event });
-    // No planner call: both calls are the judge's, the second its one repair.
-    expect(h.inputs.map(input => input.system_prompt.slice(0, 22))).toEqual(["You recheck open items", "You recheck open items"]);
-    expect(JSON.parse(h.inputs[0]!.user_prompt)).toMatchObject({ findings: [{ index: 0, expected: decision.text, about: ["E1"] }] });
-    expect(JSON.parse(h.inputs[1]!.user_prompt).validation_error).toContain('finding 0 is "landed" but cites none of the items it is about (E1)');
-    expect(output.rendered as PersonSweepResultV1).toMatchObject({ status: "assessed", findings: [{ finding_index: 0, verdict: "landed", line: "THERM-48 now formats two decimals." }] });
-    expect(output.research).toMatchObject({ plan: [], rounds: [], stop: { reason: "finished", completed: true } });
-  });
-
-  it("refuses a brief with no planner and nothing to read before any read", async () => {
-    const h = harness([], { openCitation: vi.fn(async () => result([therm])) });
-    await expect(h.research.research({ trigger: "sweep", brief: brief("Recheck.", [], { planner: false }) })).rejects.toThrow("research goal is invalid");
-    await expect(h.research.research({ trigger: "ask", brief: { goal: { kind: "question", question: "What changed?" }, starting: [], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: { planner: false } } }))
-      .rejects.toThrow("question is invalid");
-    await expect(h.research.research({ trigger: "sweep", brief: brief(`Recheck ${agenticStartingSlotV1(1)}.`, [therm.citation], { planner: "no" as never }) })).rejects.toThrow("research goal is invalid");
-    expect(h.port.openCitation).not.toHaveBeenCalled();
     expect(h.generate).not.toHaveBeenCalled();
   });
 });
@@ -777,19 +701,19 @@ describe("research core: what a task trigger's renderer was shown and cited", ()
   const decision = record("two-decimals", "Approved on Oct 8: show 0.01 °C on the display for MRD-02.");
   const therm = ticket("THERM-46", "THERM-46: the firmware formats one decimal.");
 
-  it.each(["approved_record", "sweep"] as const)("counts the tickets the %s renderer was shown and cited", async trigger => {
+  it("counts the tickets the approved_record renderer was shown and cited", async () => {
+    const trigger = "approved_record";
     const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === trigger)!;
-    const replies = trigger === "approved_record" ? [
+    const replies = [
       reads("open", [{ tool: "search", args: { query: "display decimals" } }]),
       step([part("What does E1 affect?", [need("tickets the record affects", "found", ["E2"])])], [{ tool: "finish", args: {} }]),
       { decided: [{ id: "E1", text: "Show two decimals on the display." }], affected: [{ id: "E2", says_now: "The firmware formats one decimal.", relation: "conflicts", date_at_risk: "", milestone: "" }] },
-    ] : [{ findings: [{ index: 0, verdict: "still_open", line: "THERM-46 still formats one decimal.", cites: ["E1"] }] }];
+    ];
     const h = harness(replies, {
       live_sources: [JIRA], search: async () => result([therm]),
       openCitation: async input => result([(input.citation as { readonly kind: string }).kind === "ticket" ? therm : decision]),
     });
-    const event = trigger === "approved_record" ? definition.parseEvent({ record: decision.citation })
-      : definition.parseEvent({ findings: [{ finding: "Firmware shows one decimal", expected: "two decimals", citations: [therm.citation, decision.citation] }] });
+    const event = definition.parseEvent({ record: decision.citation });
     const metadata: CoreRuntimeObservationV1[] = [];
     const output = await observeCoreRuntimeV1("research_run", () => h.research.renderWithResearch({ trigger, brief: definition.brief(event, h.port.scope), renderer: definition.renderer!, trigger_input: event }),
       { observer: value => { metadata.push(value); } });

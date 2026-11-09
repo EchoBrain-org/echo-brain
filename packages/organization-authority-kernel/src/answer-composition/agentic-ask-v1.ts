@@ -142,16 +142,13 @@ function runnableBrief(brief: AgenticBriefV1): AgenticBriefV1 | null {
   // Only a question skips a starting item unmentioned: a task's slots name every one of its starting items.
   if (!Array.isArray(starting) || !starting.every(start => object(start.citation) !== null &&
     (start.if_unreadable === "fail" || start.if_unreadable === "report" || (start.if_unreadable === "skip" && goal.kind === "question")))) return null;
-  // With no planner research only reads its starting items: a question, or a task with none, would read nothing. A
-  // question always has the list tool.
-  const { planner, list } = object(brief.options) ?? {};
-  if (planner !== undefined && (typeof planner !== "boolean" || (!planner && (goal.kind === "question" || starting.length === 0)))) return null;
+  // A question always has the list tool.
+  const { list } = object(brief.options) ?? {};
   if (list !== undefined && (typeof list !== "boolean" || (!list && goal.kind === "question"))) return null;
   if (goal.kind === "question") return questionText(goal.question) === null ? null : brief;
-  const data = goal.data === undefined ? [] : goal.data;
-  if (goal.kind !== "task" || typeof goal.task !== "string" || goal.task.trim().length === 0 || !Array.isArray(data) || !data.every(value => typeof value === "string")) return null;
+  if (goal.kind !== "task" || typeof goal.task !== "string" || goal.task.trim().length === 0) return null;
   // A task slot with nothing to fill it is a definition bug, refused before any audited read.
-  return agenticTaskSlotsFitV1(goal.task, starting.length, data.length) ? brief : null;
+  return agenticTaskSlotsFitV1(goal.task, starting.length) ? brief : null;
 }
 /** A research-only run releases its trimmed bundle; the outcome counts the checklist's found needs. */
 function researchOnlyOutput(bundle: AgenticEvidenceBundleV1, researched: AgenticResearchResultV1): AgenticRenderOutputV1<AgenticResearchResultV1> {

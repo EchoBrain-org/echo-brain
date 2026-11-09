@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonRunsResultV1, type PersonOpenItemV1, type PersonRunsRequestV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
+import { validatePersonRunsResultV1, type PersonOpenItemV1, type PersonOpenItemVerdictV1, type PersonRunsRequestV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { expect, vi } from 'vitest';
-import { SqliteImpactItemsV1, type ImpactItemVerdictV1 } from '../../src/adapters/persistence/sqlite/impact-items-v1.js';
+import { SqliteImpactItemsV1 } from '../../src/adapters/persistence/sqlite/impact-items-v1.js';
 import { SqliteOpenItemPeopleV1 } from '../../src/adapters/persistence/sqlite/open-item-people-v1.js';
 import { SqliteTriggerRunsV1, enqueueApprovedRecordRunV1 } from '../../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import type { PersonLiveConnectorSourceV1 } from '../../src/application/ports/person-context-live-runtime-v1.js';
@@ -62,8 +62,6 @@ export interface OpenItemsFixtureOptionsV1 {
   readonly ownRecordAffected?: boolean;
   /** A temp-file database, so a peer handle (`peer()`) can hold a lock on the same Authority. */
   readonly file?: boolean;
-  /** The tools each person has connected, as their live sources' link says; everyone has connected Jira and Confluence by default. */
-  readonly connected?: Partial<Record<FixturePerson, readonly ('jira' | 'confluence')[]>>;
 }
 
 /** One impact card as the renderer returns it, with a copy of the ticket at another text hash when asked. */
@@ -214,16 +212,10 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     openCitation: ({ citation }: { readonly citation: Citation }) => openCitation(token(input.access_token), citation),
     async revalidate() { revalidated.push(input.access_token); return { checked_at: now.toISOString() }; },
   }));
-  /** What a sweep's renderer returns; a sweep test sets it with `renderSweepsWith`. */
-  let renderSweep: (input: { readonly trigger_input: unknown; readonly signal?: AbortSignal }) => Promise<unknown> = async () => {
-    throw new Error('This fixture renders no sweep');
-  };
-  const research = vi.fn(() => ({ renderWithResearch: async (input: { readonly trigger: string; readonly trigger_input: unknown; readonly signal?: AbortSignal }) => (input.trigger === 'sweep'
-    ? { rendered: await renderSweep(input), research: { items: [] } }
-    : {
-      rendered: (({ pointers: _pointers, ...rendered }) => rendered)(card),
-      research: { items: card.citations.map(entry => ({ citation: entry.citation, title: entry.label })) },
-    }) }));
+  const research = vi.fn(() => ({ renderWithResearch: async () => ({
+    rendered: (({ pointers: _pointers, ...rendered }) => rendered)(card),
+    research: { items: card.citations.map(entry => ({ citation: entry.citation, title: entry.label })) },
+  }) }));
   const accounts = { mina: 'acct-mina', okafor: 'acct-okafor', none: undefined };
   const assignee = accounts[options.ticketOwner ?? 'mina'];
   const owners: TicketOwnerAccountsV1 = {
@@ -239,15 +231,9 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
   };
   const bind_options = { authority_id: 'authority', state_lineage_id: 'lineage' } as never;
   const clock = () => now;
-  /** Jira and Confluence as the live sources a desk binds: the fake desk never asks them for a source, only for each person's link. */
+  /** Jira and Confluence as the live sources a desk binds: the fake desk never asks them for a source. */
   const live_sources: readonly PersonLiveConnectorSourceV1[] = [JIRA_LIVE_CONNECTOR_V1, CONFLUENCE_LIVE_CONNECTOR_V1].map(connector => ({
     ...connector, application: { source: async () => undefined },
-    tools: async (access_token: string) => {
-      const toolId = connector.descriptor.tool_id;
-      const linked = (options.connected?.[token(access_token)] ?? ['jira', 'confluence']).includes(toolId);
-      return [{ tool_id: toolId, display_name: toolId, availability: 'enabled' as const, personal_status: linked ? 'linked' as const : 'unlinked' as const,
-        external_scope_id: linked ? CLOUD : null, external_subject_id: linked ? `acct-${access_token}` : null, organization_setup: null }];
-    },
   }));
   const runsApp = createPersonTriggerRunsV1({ runs, sessions, records, bindDesk: bindDesk as never, bind_options, research: research as never,
     items, people: directory, owners, lease_ms: 60_000, now: clock, live_sources });
@@ -274,7 +260,6 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     send: checked('send', openItemsApp.send) as (input: Request<'send'>) => Promise<PersonRunsResultsV1['send']>,
     set_state: checked('set_state', openItemsApp.set_state) as (input: Request<'set_state'>) => Promise<PersonRunsResultsV1['set_state']>,
     assign: checked('assign', openItemsApp.assign) as (input: Request<'assign'>) => Promise<PersonRunsResultsV1['assign']>,
-    sweep: checked('sweep', openItemsApp.sweep) as (input: Request<'sweep'>) => Promise<PersonRunsResultsV1['sweep']>,
   } satisfies Partial<Record<keyof PersonTriggerRunsHttpApplicationV1, unknown>>;
   const finishImpactRun = async () => {
     await app.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id: run.run_id } });
@@ -292,16 +277,23 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     okaforMembership: people.okafor.membership_id,
     decisionCitation,
     clock,
-    renderSweepsWith(render: typeof renderSweep) { renderSweep = render; },
     advance(ms: number) { now = new Date(now.getTime() + ms); },
     revoke(name: FixturePerson) { revokeMembership(db, { organization_id: organization, ...people[name] }); },
     makeLead(name: FixturePerson) {
       db.prepare("UPDATE authority_project_memberships_v1 SET role='lead' WHERE project_id=? AND membership_id=? AND status='active'").run(f.projectA, people[name].membership_id);
     },
-    /** Records a last check on an item, as a sweep of `by` finishing now would. */
-    check(itemId: string, verdict: ImpactItemVerdictV1, by: FixturePerson = 'ari') {
-      const sweep = runs.enqueueSweep({ organization_id: organization, principal_id: people[by].principal_id, membership_id: people[by].membership_id }, { kind: 'mine' });
-      db.transaction(() => items.recordCheck(db, { item_id: itemId, verdict, by: people[by].membership_id, at: now.toISOString(), run_id: sweep.run_id }))();
+    /**
+     * Leaves a last check on an item by raw SQL, stamped now, as a sweep of `by` that finished before sweeps were retired
+     * (SVC-2) left one: V16 state no code writes any more.
+     */
+    check(itemId: string, verdict: PersonOpenItemVerdictV1, by: FixturePerson = 'ari') {
+      const sweep = `run_${randomUUID()}`;
+      const at = now.toISOString();
+      db.prepare(`INSERT INTO authority_trigger_runs_v1 (run_id, trigger, event_ref, organization_id, principal_id, membership_id, scope_kind, state, attempts,
+        result_json, result_sha256, created_at, updated_at) VALUES (?, 'sweep', ?, ?, ?, ?, 'mine', 'done', 1, '{}', ?, ?, ?)`)
+        .run(sweep, `sweep_${randomUUID()}`, organization, people[by].principal_id, people[by].membership_id, canonicalSha256({}), at, at);
+      db.prepare('UPDATE authority_impact_items_v1 SET checked_verdict=?, checked_by=?, checked_at=?, checked_run_id=? WHERE item_id=?')
+        .run(verdict, people[by].membership_id, at, sweep, itemId);
     },
   };
 }

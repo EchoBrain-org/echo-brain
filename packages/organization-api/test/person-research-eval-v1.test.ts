@@ -9,7 +9,6 @@ import {
 
 const record = { kind: 'approved_record', atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'project-members-readable-person-v1' };
 const ticket = { kind: 'ticket', tool_id: 'jira', external_scope_id: 'cloud-1', ticket_id: '10046', permalink: 'https://therm.example.test/browse/THERM-46', text_sha256: canonicalSha256('ticket') };
-const page = { kind: 'page', tool_id: 'confluence', external_scope_id: 'cloud-1', page_id: '1441793', section_id: 's1', version: '3', permalink: 'https://therm.example.test/wiki/pages/viewpage.action?pageId=1441793', text_sha256: canonicalSha256('page') };
 const runId = 'rr_00000000-0000-4000-8000-000000000001';
 const project = 'prj_00000000-0000-4000-8000-000000000002';
 
@@ -17,8 +16,7 @@ describe('research evaluation start request', () => {
   it('accepts any well-formed envelope: a trigger name, its input, and an optional budget and scope', () => {
     expect(validatePersonResearchEvalStartRequestV1({ schema_version: 1, trigger: 'check', budget: 'background', project_id: project, input: { record } }))
       .toEqual({ schema_version: 1, trigger: 'check', budget: 'background', project_id: project, input: { record } });
-    const findings = [{ finding: 'Firmware shows two decimals', expected: 'SW-22b updated', citations: [ticket, page, record] }];
-    expect(validatePersonResearchEvalStartRequestV1({ schema_version: 1, trigger: 'sweep', input: { findings } })).toEqual({ schema_version: 1, trigger: 'sweep', input: { findings } });
+    expect(validatePersonResearchEvalStartRequestV1({ schema_version: 1, trigger: 'approved_record', input: { record } })).toEqual({ schema_version: 1, trigger: 'approved_record', input: { record } });
     // The Authority's trigger definitions judge the name and the input; the API checks only their form.
     expect(validatePersonResearchEvalStartRequestV1({ schema_version: 1, trigger: 'a_future_trigger', input: { anything: [1, 'two', null, true, { nested: 3.5 }] } }))
       .toEqual({ schema_version: 1, trigger: 'a_future_trigger', input: { anything: [1, 'two', null, true, { nested: 3.5 }] } });
@@ -97,26 +95,18 @@ describe('research evaluation receipts and results', () => {
     ]) expect(() => validatePersonResearchEvalReadResponseV1(value), JSON.stringify(value).slice(0, 120)).toThrow();
   });
 
-  it("carries a sweep's result beside the research of a sweep, and an impact card beside any other task's", () => {
+  it("carries an impact card beside a task's research, and never a retired sweep's verdicts", () => {
     const base = { schema_version: 1, kind: 'echo-person-research-eval-result-v1', run_id: runId, status: 'completed' };
-    const sweep = { schema_version: 1, kind: 'echo-agentic-research-result-v1', trigger: 'sweep', goal: { kind: 'task', task: 'Recheck the earlier findings below.' }, items: [], rounds: [], plan: [] };
-    const approvedRecord = { ...sweep, trigger: 'approved_record', goal: { kind: 'task', task: 'A PM just approved record E1.' } };
+    const approvedRecord = { schema_version: 1, kind: 'echo-agentic-research-result-v1', trigger: 'approved_record', goal: { kind: 'task', task: 'A PM just approved record E1.' }, items: [], rounds: [], plan: [] };
     const ticketCitation = { citation: ticket, kind: 'ticket', label: 'THERM-46: Display precision', visibility: 'only_me' };
-    const result = {
-      findings: [
-        { finding_index: 0, verdict: 'landed', line: 'THERM-46 now formats two decimals.', citation_indexes: [0] },
-        { finding_index: 1, verdict: 'unreadable', line: 'ECHO could not read this item.', citation_indexes: [] },
-      ],
-      status: 'assessed', citations: [ticketCitation],
-    };
     const card = { decided: [], affected: [{ citation_index: 0, says_now: 'THERM-46 formats one decimal.' }], unconfirmed: [], people: [], status: 'not_assessed', citations: [ticketCitation] };
-    expect(validatePersonResearchEvalReadResponseV1({ ...base, research: sweep, rendered: result })).toEqual({ ...base, research: sweep, rendered: result });
-    // The API cannot see the Authority's definitions: the research's trigger names which contract the rendered result keeps.
+    expect(validatePersonResearchEvalReadResponseV1({ ...base, research: approvedRecord, rendered: card })).toEqual({ ...base, research: approvedRecord, rendered: card });
+    // Verdicts are no impact card, whatever trigger the research names; and a question's research has no rendered result.
+    const verdicts = { findings: [{ finding_index: 0, verdict: 'landed', line: 'THERM-46 now formats two decimals.', citation_indexes: [0] }], status: 'assessed', citations: [ticketCitation] };
     for (const value of [
-      { ...base, research: sweep, rendered: card },
-      { ...base, research: approvedRecord, rendered: result },
-      { ...base, research: sweep, rendered: { ...result, status: 'not_assessed' } },
-      { ...base, research: { ...sweep, goal: { kind: 'question', question: 'Did it land?' } }, rendered: result },
+      { ...base, research: approvedRecord, rendered: verdicts },
+      { ...base, research: { ...approvedRecord, trigger: 'sweep', goal: { kind: 'task', task: 'Recheck the earlier findings below.' } }, rendered: verdicts },
+      { ...base, research: { ...approvedRecord, goal: { kind: 'question', question: 'Did it land?' } }, rendered: card },
     ]) expect(() => validatePersonResearchEvalReadResponseV1(value), JSON.stringify(value).slice(0, 160)).toThrow();
   });
 });

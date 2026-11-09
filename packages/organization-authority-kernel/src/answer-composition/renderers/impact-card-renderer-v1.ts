@@ -164,7 +164,7 @@ function quoted(text: string, start: number, end: number, sources: readonly stri
 /**
  * The screen a line a model wrote fails, or null. A match the line quotes from `sources` (the record's own words, or the title
  * and text of the item the line describes) is excused: the record may say "owner approval" and a ticket "fix-owner links".
- * A new ownership claim or suggested edit still fails. The sweep's lines pass the same screen.
+ * A new ownership claim or suggested edit still fails.
  */
 export function screenImpactLineV1(text: string, sources: readonly string[]): ImpactLineScreenFailureV1 | null {
   const unquoted = (rule: RegExp) => [...text.matchAll(rule)].find(match => match[0].length > 0 && !quoted(text, match.index, match.index + match[0].length, sources));

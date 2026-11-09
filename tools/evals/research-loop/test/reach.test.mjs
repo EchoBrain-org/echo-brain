@@ -163,7 +163,7 @@ test("workspace references match projects and people by exact name, tools and co
   const container = { kind: "tool_container", title: "THERM", citation: { kind: "tool_container", tool_id: "jira", container: "jira_project", container_id: "10003", permalink: "https://echobrain.atlassian.net/browse/THERM" } };
   assert.equal(itemMatches(container, { container: "jira_project", id: "10003" }, meetings), true);
   assert.equal(itemMatches(container, { container: "confluence_space", id: "10003" }, meetings), false);
-  const followUp = title => ({ kind: "follow_up", title, text: "On: ticket\nLatest check: none yet", citation: { kind: "follow_up", item_id: "itm_0001" } });
+  const followUp = title => ({ kind: "follow_up", title, text: "On: ticket", citation: { kind: "follow_up", item_id: "itm_0001" } });
   assert.equal(itemMatches(followUp("THERM-47: TRACE-01 — Confirm BUG-412 requirement and fix-owner links"), { follow_up: "F4" }, meetings), true);
   assert.equal(itemMatches(followUp("THERM-470: Another ticket"), { follow_up: "F4" }, meetings), false);
   assert.equal(itemMatches(followUp("Record the confirmed fix owner"), { follow_up: "F4" }, meetings), false, "a follow-up whose ticket the asker cannot open is not this one");

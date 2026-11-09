@@ -191,7 +191,7 @@ Commands:
   ask         Ask a question over context you may read.
   ask-check   Check whether you can still read what earlier answers cited, with no content.
   ask-source  Read one source-evidence packet an Ask citation names.
-  runs        Read and act on impact runs, their open items, and sweeps.
+  runs        Read and act on impact runs and their open items.
   reviews     List, open and decide your meeting reviews.
   records     List records or search the current generation.
   directory   Find people in your organization by name.
@@ -261,17 +261,16 @@ Prints {ok:true,result:<operation result>}. Existing retained meetings remain re
 `,
   runs: `usage: echo-brain person runs --request <json>
 
-Runs a versioned request against approved-record impact runs, the open items they found, and the sweeps that re-check them. Every request is {"schema_version":1,"operation":<operation>,...}:
-  list                 your own impact runs and sweeps
+Runs a versioned request against approved-record impact runs and the open items they found. Every request is {"schema_version":1,"operation":<operation>,...}:
+  list                 your own impact runs
   start, retry, view   with run_id; view shows a finished run's impact card to anyone who can read its decision
-  next                 starts your oldest queued impact check, as start does by run_id: idle when none is queued, busy while another of yours runs; the desktop sends it with each change check
-  home                 what waits on you: Send rows and open items; read "rows" reads no item live (every reach not_read) and never says sweep_due
+  next                 starts your oldest queued impact check, as start does by run_id: idle when none is queued, busy while another of yours runs and one waits, pending while the search index catches up; the desktop sends it with each change check
+  home                 what waits on you: Send rows and open items; read "rows" reads no item live (every reach not_read)
   items                with scope mine, involved, run, record or project, an id for run, record and project, and an optional cursor; involved is mine plus the items you last handed on that you can still see; states (a non-empty list of unsent, open, done and not_relevant) pages over items in those states only, with the same states again beside a cursor; changed_since (a UTC millisecond time, mine and involved only) pages over the items sent, handed on or set since then, sent again beside a cursor; read "rows" answers the same page with no item read live (every reach not_read), and read "counts" the counts alone, with no cursor, states or changed_since
   item                 with item_id; read "rows" reads it with no live read
   send                 with run_id, command_id and items [{item_id, include, owner_membership_id?}] naming any of the run's unsent items: include true sends one to its owner, false dismisses it, and unlisted items stay unsent; the approver only
   set_state            with item_id and state open, done or not_relevant; the approver or the owner
   assign               with item_id and owner_membership_id; before send the approver only, then the approver, the owner or a lead of the decision's projects
-  sweep                with scope mine, record or project, and an id for record and project; re-checks the open items you can see
 `,
   "project-activity": `usage: echo-brain person project-activity
 

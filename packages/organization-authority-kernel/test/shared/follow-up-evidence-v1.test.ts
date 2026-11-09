@@ -11,30 +11,28 @@ const itemId = 'itm_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10';
 const record = `sha256:${'a'.repeat(64)}` as const;
 const evidence: PersonFollowUpEvidenceV1 = validatePersonFollowUpEvidenceV1({
   item_id: itemId, kind: 'ticket', title: 'THERM-48 Fan curve v2', owner: 'Mara Lind', status: 'open', due_at: '2026-10-20',
-  check: { verdict: 'still_open', checked_at: '2026-10-15T09:30:00.000Z' },
   decision: { title: 'THERM DVT recovery sync', first_line: 'Ship fan curve v2 before DVT.', ref: `meeting:${record}` },
   expected: 'Reflect the v2 fan curve',
 });
 const fields = followUpDeskFieldsV1(evidence);
 
 describe('Follow-ups as Ask evidence (ADR-0040)', () => {
-  it('projects one follow-up to desk fields: its title, owner, status, due date, check and decision', () => {
+  it('projects one follow-up to desk fields: its title, owner, status, due date and decision, and no check (SVC-2)', () => {
     expect(fields).toEqual({
       kind: 'follow_up', citation: { kind: 'follow_up', item_id: itemId }, ref: `follow_up:${itemId}`, label: 'THERM-48 Fan curve v2',
       attributes: { owner: 'Mara Lind', status: 'open', due_at: '2026-10-20' },
-      dates: { checked: '2026-10-15T09:30:00.000Z' },
-      text: 'On: ticket\nExpected: Reflect the v2 fan curve\nLatest check: still open on 2026-10-15\nDecision: THERM DVT recovery sync\nDecided: Ship fan curve v2 before DVT.',
+      text: 'On: ticket\nExpected: Reflect the v2 fan curve\nDecision: THERM DVT recovery sync\nDecided: Ship fan curve v2 before DVT.',
     });
     // An owner who cannot read the decision gets no decision line; nothing absent is invented.
     const owned = followUpDeskFieldsV1(validatePersonFollowUpEvidenceV1({ item_id: itemId, kind: 'action', title: 'Send the DVT schedule', owner: 'Dana', status: 'unsent' }));
-    expect(owned).toMatchObject({ label: 'Send the DVT schedule', attributes: { owner: 'Dana', status: 'not sent yet' }, text: 'On: meeting action\nLatest check: none yet' });
+    expect(owned).toMatchObject({ label: 'Send the DVT schedule', attributes: { owner: 'Dana', status: 'not sent yet' }, text: 'On: meeting action' });
     expect(owned.attributes).not.toHaveProperty('due_at');
     expect(owned).not.toHaveProperty('dates');
   });
 
-  it("carries ECHO's own dates as the desk's: created, sent, reassigned and checked, each once it happened (research tool contract v1)", () => {
+  it("carries ECHO's own dates as the desk's: created, sent and reassigned, each once it happened (research tool contract v1)", () => {
     const dated = followUpDeskFieldsV1(validatePersonFollowUpEvidenceV1({ ...evidence, created_at: '2026-10-08T09:00:00.000Z', sent_at: '2026-10-08T09:05:00.000Z', reassigned_at: '2026-10-09T14:00:00.000Z' }));
-    expect(dated.dates).toEqual({ created: '2026-10-08T09:00:00.000Z', sent: '2026-10-08T09:05:00.000Z', reassigned: '2026-10-09T14:00:00.000Z', checked: '2026-10-15T09:30:00.000Z' });
+    expect(dated.dates).toEqual({ created: '2026-10-08T09:00:00.000Z', sent: '2026-10-08T09:05:00.000Z', reassigned: '2026-10-09T14:00:00.000Z' });
     // Its due date is its tool's, an attribute shown with a live read: never one of ECHO's dates a list filters on.
     expect(dated.dates).not.toHaveProperty('due');
     const unsent = followUpDeskFieldsV1(validatePersonFollowUpEvidenceV1({ item_id: itemId, kind: 'action', title: 'Send the DVT schedule', owner: 'Dana', status: 'unsent', created_at: '2026-10-08T09:00:00.000Z' }));

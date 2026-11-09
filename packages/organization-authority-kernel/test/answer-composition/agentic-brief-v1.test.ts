@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ASK_STEP_PROMPT, STEP_PROMPT, TASK_RULE_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
-import { agenticDataSlotV1, agenticStartingSlotV1, fillAgenticTaskV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
+import { agenticStartingSlotV1, fillAgenticTaskV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
 import type { EvidenceDeskResultV2 } from "../../src/shared/evidence-desk-v2.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
@@ -9,8 +9,8 @@ import { researchHarness as harness, listed, need, part, record, result, step, w
 const finish = (evidence: readonly string[]) => step([part("Part", [need("state", "found", evidence)])], [{ tool: "finish", args: {} }]);
 const search = (query: string) => step([part("Part", [need("state", "open")])], [{ tool: "search", args: { query } }]);
 
-const task = (text: string, starting: AgenticBriefV1["starting"], options: AgenticBriefV1["options"] = {}, data?: readonly string[]): AgenticBriefV1 =>
-  ({ goal: { kind: "task", task: text, ...(data === undefined ? {} : { data }) }, starting, budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options });
+const task = (text: string, starting: AgenticBriefV1["starting"], options: AgenticBriefV1["options"] = {}): AgenticBriefV1 =>
+  ({ goal: { kind: "task", task: text }, starting, budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options });
 
 describe("brief: task slots", () => {
   it("fills each starting slot with its item's id, or says the item could not be read", () => {
@@ -18,18 +18,10 @@ describe("brief: task slots", () => {
     expect(fillAgenticTaskV1(text, ["E1", null, "E4"])).toBe("Compare E1 with an item that could not be read and E4.");
   });
 
-  it("places event data in its slots without reading it as template", () => {
-    const text = `Finding ${agenticDataSlotV1(1)} cites ${agenticStartingSlotV1(1)}; expected ${agenticDataSlotV1(2)}.`;
-    expect(fillAgenticTaskV1(text, ["E1"], [`"Ship ${agenticStartingSlotV1(1)} first"`, `"${agenticDataSlotV1(1)}"`]))
-      .toBe('Finding "Ship {{starting:1}} first" cites E1; expected "{{data:1}}".');
-  });
-
   it("fails closed on a slot with nothing to fill it: a definition bug never reaches the model", () => {
-    for (const [text, data] of [
-      [`Compare ${agenticStartingSlotV1(1)} with ${agenticStartingSlotV1(2)}.`, []],
-      [`Recheck ${agenticStartingSlotV1(0)}.`, []],
-      [`Recheck ${agenticStartingSlotV1(1)}: ${agenticDataSlotV1(2)}.`, ["one"]],
-    ] as const) expect(() => fillAgenticTaskV1(text, ["E1"], data), text).toThrow("has nothing to fill it");
+    for (const text of [`Compare ${agenticStartingSlotV1(1)} with ${agenticStartingSlotV1(2)}.`, `Recheck ${agenticStartingSlotV1(0)}.`]) {
+      expect(() => fillAgenticTaskV1(text, ["E1"]), text).toThrow("has nothing to fill it");
+    }
   });
 });
 
@@ -52,26 +44,14 @@ describe("brief: goals", () => {
     expect(view).not.toHaveProperty("unreadable_starting");
   });
 
-  it("places the brief's data after its template is fixed, and records the goal without it", async () => {
-    const approved = record("approved", "Approved: show two decimals.");
-    const h = harness([finish(["E1"])], { openCitation: async () => result([approved]) });
-    const brief = task(`Recheck ${agenticStartingSlotV1(1)}: ${agenticDataSlotV1(1)}.`, [{ citation: approved.citation, if_unreadable: "fail" }], undefined, [`"${agenticStartingSlotV1(1)} stays literal"`]);
-    const view = await h.research.research({ trigger: "sweep", brief });
-    expect(h.prompt(0)).toMatchObject({ task: 'Recheck E1: "{{starting:1}} stays literal".' });
-    expect(view.goal).toEqual({ kind: "task", task: 'Recheck E1: "{{starting:1}} stays literal".' });
-  });
-
   it("refuses a task whose slot has nothing to fill it before any read: a definition bug never reaches the desk or the model", async () => {
     const approved = record("approved");
     const openCitation = vi.fn(async () => result([approved]));
     const h = harness([], { openCitation });
     const starting = [{ citation: approved.citation, if_unreadable: "fail" as const }];
-    for (const [text, data] of [
-      [`Compare ${agenticStartingSlotV1(1)} with ${agenticStartingSlotV1(2)}.`, undefined],
-      [`Recheck ${agenticStartingSlotV1(0)}.`, undefined],
-      [`Recheck ${agenticStartingSlotV1(1)}: ${agenticDataSlotV1(1)}.`, undefined],
-      [`Recheck ${agenticStartingSlotV1(1)}: ${agenticDataSlotV1(2)}.`, ['"one"']],
-    ] as const) await expect(h.research.research({ trigger: "sweep", brief: task(text, starting, undefined, data) }), text).rejects.toThrow("research goal is invalid");
+    for (const text of [`Compare ${agenticStartingSlotV1(1)} with ${agenticStartingSlotV1(2)}.`, `Recheck ${agenticStartingSlotV1(0)}.`]) {
+      await expect(h.research.research({ trigger: "sweep", brief: task(text, starting) }), text).rejects.toThrow("research goal is invalid");
+    }
     expect(openCitation).not.toHaveBeenCalled();
     expect(h.generate).not.toHaveBeenCalled();
   });

@@ -298,7 +298,6 @@ describe('runs API open items', () => {
     }
     expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'home' })).not.toHaveProperty('read');
     refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'list', read: 'rows' }), 'read on list');
-    refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'sweep', scope: 'mine', read: 'rows' }), 'read on a sweep');
     // A list's rows at once, with no live read: the same page, paged over the same states.
     const rows = { schema_version: 1, operation: 'items', scope: 'record', id: RECORD, states: ['unsent', 'open'], read: 'rows' };
     expect(validatePersonRunsRequestV1(rows)).toEqual(rows);
@@ -597,45 +596,15 @@ describe('runs API open-item results', () => {
   });
 });
 
-describe('runs API sweep', () => {
-  const sweep = (fields: Record<string, unknown>) => ({ schema_version: 1, operation: 'sweep', ...fields });
-
-  it('accepts a sweep of the caller\'s items, a decision or a project, with exactly its keys', () => {
-    for (const request of [sweep({ scope: 'mine' }), sweep({ scope: 'record', id: RECORD }), sweep({ scope: 'project', id: PROJECT })]) {
-      const validated = validatePersonRunsRequestV1(request);
-      expect(validated).toEqual(request);
-      expect(Object.isFrozen(validated)).toBe(true);
+describe('runs API: sweeps retired (SVC-2)', () => {
+  it('refuses a sweep, of any scope, as an operation it does not know, and has no sweep result', () => {
+    for (const fields of [{ scope: 'mine' }, { scope: 'record', id: RECORD }, { scope: 'project', id: PROJECT }]) {
+      refused(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'sweep', ...fields }), JSON.stringify(fields));
     }
+    for (const value of [{ run_id: RUN }, { state: 'nothing_to_check' }]) refused(() => validatePersonRunsResultV1('sweep' as keyof PersonRunsResultsV1, value), JSON.stringify(value));
   });
 
-  it.each([
-    ['mine with an id', sweep({ scope: 'mine', id: RECORD })],
-    ['a decision without its record', sweep({ scope: 'record' })],
-    ['a project without its id', sweep({ scope: 'project' })],
-    ['a run scope', sweep({ scope: 'run', id: RUN })],
-    ['an unknown scope', sweep({ scope: 'team' })],
-    ['no scope', sweep({})],
-    ['a record scope with a project id', sweep({ scope: 'record', id: PROJECT })],
-    ['a project scope with a project id that is not canonical', sweep({ scope: 'project', id: 'prj_pilot' })],
-    ['a cursor', sweep({ scope: 'mine', cursor: 'next-page_2' })],
-    ['a read mode', sweep({ scope: 'record', id: RECORD, read: 'counts' })],
-    ['states', sweep({ scope: 'mine', states: ['open'] })],
-    ['an extra key', sweep({ scope: 'mine', force: true })],
-  ])('refuses a sweep with %s', (_label, request) => {
-    refused(() => validatePersonRunsRequestV1(request), _label);
-  });
-
-  it('answers the sweep\'s run, or that nothing is open to check', () => {
-    expect(validatePersonRunsResultV1('sweep', { run_id: RUN })).toEqual({ run_id: RUN });
-    expect(validatePersonRunsResultV1('sweep', { state: 'nothing_to_check' })).toEqual({ state: 'nothing_to_check' });
-    expect(Object.isFrozen(validatePersonRunsResultV1('sweep', { run_id: RUN }))).toBe(true);
-    for (const [label, value] of [
-      ['nothing', {}], ['both', { run_id: RUN, state: 'nothing_to_check' }], ['a run state', { state: 'pending' }], ['a bad run id', { run_id: 'rr_0f6c1a2e' }],
-      ['a run id that is null', { run_id: null }], ['an extra key', { run_id: RUN, scope: 'mine' }], ['a state that is not a string', { state: true }],
-    ] as const) refused(() => validatePersonRunsResultV1('sweep', value), label);
-  });
-
-  it('lists sweep runs beside impact runs, and says whether a stage\'s run is the caller\'s own and whether a sweep is due', () => {
+  it('still reads a sweep run in a list, a stage\'s owner and a home that says a sweep is due, as an Authority rolled back sends them', () => {
     expect(validatePersonRunsResultV1('list', { runs: [run(), run({ run_id: 'run_swp1', trigger: 'sweep', event_ref: 'sweep_mine' })] }).runs.map(entry => entry.trigger)).toEqual(['approved_record', 'sweep']);
     const page = { items: [], next_cursor: null, summary: summary(), stages: [stage(), stage({ mine: false, run_id: 'run_bbbb' })] };
     expect(validatePersonRunsResultV1('items', page).stages.map(entry => entry.mine)).toEqual([true, false]);

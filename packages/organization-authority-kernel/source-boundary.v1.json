@@ -27,7 +27,6 @@
     "packages/organization-authority-kernel/src/answer-composition/agentic-ask-v1.ts",
     "packages/organization-authority-kernel/src/answer-composition/agentic-trigger-definitions-v1.ts",
     "packages/organization-authority-kernel/src/answer-composition/renderers/impact-card-storage-v1.ts",
-    "packages/organization-authority-kernel/src/answer-composition/renderers/sweep-renderer-v1.ts",
     "packages/organization-authority-kernel/src/application/ports/authority-clock.ts",
     "packages/organization-authority-kernel/src/application/ports/organization-authority-signer.ts",
     "packages/organization-authority-kernel/src/adapters/persistence/sqlite/open-authority-database.ts",
