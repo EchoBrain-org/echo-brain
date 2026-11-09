@@ -67,7 +67,7 @@ export class PersonDocumentProcessingV1 {
   private observe(event:PersonDocumentProcessingFailureObservationV1):void { try { this.options.on_failure?.(event); } catch {} }
 }
 
-/** Start with the API, including when no answer/enrichment model is configured. */
+/** Start with the API, including when no answer model is configured. */
 export function startPersonDocumentProcessingV1(repository: ExtractionRepository, texts?:PersonTextSourceInboxV1, options:PersonDocumentProcessingOptionsV1={}): { wake(): void; close(): Promise<void> } {
   // The worker already isolates observer failures.
   const worker = new PersonDocumentProcessingV1(repository,extractDocument,texts,options);
