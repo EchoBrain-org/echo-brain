@@ -10,7 +10,8 @@ import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, AskScope, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
 import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS } from '../../src/shared/protocol.js';
 import {
-  allOmitted, answeredNow, askedSuggestions, checkedOf, checkPlan, followedTurn, previousOf, shownInFull, showsOf, threadOf, turnGroups, visibleTurns,
+  allOmitted, answeredNow, askedSuggestions, checkedOf, checkPlan, followedTurn, knownStates, previousOf, shownInFull, showsOf, threadOf, turnGroups,
+  unreadableAfter, visibleTurns,
 } from '../../src/renderer/timeline.js';
 import { suggestedQuestions } from '../../src/renderer/bar.js';
 import { askedWhen } from '../../src/renderer/format.js';
@@ -158,6 +159,13 @@ describe('the timeline\'s rules', () => {
     expect(visibleTurns(threadOf(turns, { kind: 'global' }))).toEqual([again, typed, elsewhere]);
     expect(visibleTurns(threadOf(turns, inApollo))).toEqual([typed]);
   });
+
+  it('reads `changed`, as an Authority from before checks said only readability answers, as readable', () => {
+    // It lets go of a source a check found unreadable, as `same` does; one that cannot tell keeps it.
+    expect(unreadableAfter([1, 2], { 1: 'changed', 2: 'unknown' })).toEqual([2]);
+    // A fresh `changed` stands over the turn's kept unreadable flag.
+    expect(knownStates({ 1: 'changed' }, [1])).toEqual({ 1: 'changed' });
+  });
 });
 
 describe('what a check asks, and what it says of a turn', () => {
@@ -187,6 +195,9 @@ describe('what a check asks, and what it says of a turn', () => {
     const plan = checkPlan([one]);
     const found = checkedOf(plan, [[{ state: 'same' }, { state: 'changed' }, { state: 'unreadable' }]]);
     expect(found).toEqual({ [one.id]: { 0: 'same', 1: 'changed', 2: 'unreadable' } });
+    // One result stands for every place of a citation the turn cites twice.
+    expect(checkedOf({ requests: [{ items: [], places: [{ turn: 't', sources: [0, 1] }] }], turns: ['t'] }, [[{ state: 'unreadable' }]]))
+      .toEqual({ t: { 0: 'unreadable', 1: 'unreadable' } });
   });
 
   it('leaves out a sentence whose source you can no longer read, and nothing else: a changed source reads as the same', () => {
@@ -506,6 +517,21 @@ describe('Ask on the timeline', () => {
     expect(byTestId(opened, 'ask-again')).toHaveLength(1);
   });
 
+  it('with every sentence of the latest turn left out, shows it in full with only Ask again, and none of its sources', async () => {
+    // Its one sentence cites the follow-up, no longer yours to read; the DVT plan it also cites is still readable.
+    const sources = [followUp('itm_timeline-1'), page('31010')];
+    const latest = turn('Is the trace still open?', DAY, answerOf('Is the trace still open?', sources, [['Confirm the trace is still open.', [0]]]));
+    seed(turn('One?', 2 * DAY, status()), latest);
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
+    const store = await startStore();
+    store.pickSuggestion({ question: latest.question, turn: latest.id });
+    await flush();
+    const full = byTestId((await view())(store), 'turn').find(node => node.props['data-turn'] === latest.id)!;
+    expect(byTestId(full, 'answer')).toEqual([]);
+    expect(byTestId(full, 'sources-toggle')).toEqual([]);
+    expect(byTestId(full, 'ask-again')).toHaveLength(1);
+  });
+
   it.each([false, true])('keeps fixed actionable messages visible and copyable after every source becomes unreadable (earlier: %s)', async earlier => {
     const base = status();
     const answer: Answer = { ...base, outcome: 'partial', parts: [{ ...base.parts[0]!, status: 'partial',
@@ -604,6 +630,33 @@ describe('Ask on the timeline', () => {
     expect(store.checksOf(one)).toEqual({ 2: 'unreadable' });
   });
 
+  it('leaves out a direct answer and a passage research found when they cite a source you can no longer read, on the page and in Copy', async () => {
+    const sources = [ticket('THERM-482', '20482'), followUp('itm_timeline-1')];
+    const base = answerOf('What is open on THERM?', sources, [['THERM-482, Sensor drift, is open.', [0]]]);
+    const answer: Answer = { ...base, direct: said('Yes, the trace is still open.', [1], sources),
+      parts: [{ ...base.parts[0]!, records: [said('Confirm the trace is still open.', [1], sources)] }] };
+    const one = turn('What is open on THERM?', 2 * DAY, answer);
+    // The follow-up is no longer yours to read.
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
+    const copied: string[] = [];
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.check': params => checks!(params.items as never),
+      'clipboard.writeText': params => { copied.push(String(params.text)); return ok(null); },
+      'ask.record': () => fail('not_found'),
+    }, () => ({ active: [apollo], archived: [] })));
+    seed(one, turn('Two?', DAY, status()));
+    const store = await startStore();
+    store.pickSuggestion({ question: one.question, turn: one.id });
+    await flush();
+    const opened = byTestId((await view())(store), 'opened-turn')[0]!;
+    expect(byTestId(opened, 'statement-text').map(text)).toEqual(['THERM-482, Sensor drift, is open.']);
+    expect(byTestId(opened, 'found')).toEqual([]);
+    expect(await store.copyAnswer(one.id)).toBe(true);
+    expect(copied[0]).toContain('THERM-482, Sensor drift, is open.');
+    expect(copied[0]).not.toContain('Yes, the trace is still open.');
+    expect(copied[0]).not.toContain('Confirm the trace is still open.');
+  });
+
   it('clears what a check said when it goes stale, so the page stops showing it then', async () => {
     seed(turn('One?', 2 * DAY, status()), turn('Two?', DAY, status()));
     checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'changed' : 'same' })) });
@@ -669,8 +722,10 @@ describe('Ask on the timeline', () => {
     const long = 'x'.repeat(11_990);
     const answer = answerOf('What is open on THERM?', sources, [['Confirm the trace is still open.', [0]]]);
     const earlier = turn('What is open on THERM?', 3 * DAY, answer);
-    const again = turn('What is open on THERM?', 2 * DAY, answer, { again_of: earlier.id, since: [said(long, [1], sources)] });
-    // The follow-up is no longer yours to read: the answer's one sentence is left out, and the "Since" beside it stays.
+    const again = turn('What is open on THERM?', 2 * DAY, answer, { again_of: earlier.id,
+      since: [said(long, [1], sources), said('The trace was confirmed.', [0], sources)] });
+    // The follow-up is no longer yours to read: the answer's one sentence is left out, and so is the "Since" item citing it; the
+    // one beside them stays.
     checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
     const copied: string[] = [];
     rpc.mockImplementation(rpcFor(held, {
