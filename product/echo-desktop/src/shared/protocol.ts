@@ -279,17 +279,13 @@ export function checkOf(source: AnswerSource): CheckCitation | undefined {
  * answer being written.
  */
 export type AskStage = 'searching' | 'reading' | 'checking_access' | 'writing';
-/** A step searched: the line's names start over with the next read. What it searched and found stays with the host. */
-export interface AskSearched {
-  readonly type: 'searched';
-}
-/** Items whose full text research was just given, each after the access check before that read: as a source opens. */
-export interface AskRead {
-  readonly type: 'read';
-  readonly items: readonly AnswerSource[];
-}
-/** One step of an Ask still working. `pending`, only while reading: items about to be read whose names have not come yet. */
-export type AskStep = { readonly type: 'stage'; readonly stage: AskStage; readonly pending?: number } | AskSearched | AskRead;
+/**
+ * One step of an Ask still working: a stage (`pending`, only while reading: items about to be read whose names have not
+ * come yet); a search, after which the line's names start over (what it searched and found stays with the host); or a
+ * read, the items whose full text research was just given, each after the access check before that read: as a source opens.
+ */
+export type AskStep = { readonly type: 'stage'; readonly stage: AskStage; readonly pending?: number } | { readonly type: 'searched' }
+  | { readonly type: 'read'; readonly items: readonly AnswerSource[] };
 /**
  * What an answered Ask looked through, from the receipt the Authority rebuilt
  * from the items that passed its final check: how many items it looked

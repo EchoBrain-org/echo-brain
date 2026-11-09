@@ -4080,11 +4080,6 @@ export interface PaneTarget {
   readonly number: number;
 }
 
-/** Where the pane's citations are: its places in the answer. */
-export function paneCitations(target: PaneTarget): readonly number[] {
-  return target.group.indexes;
-}
-
 /** The pane's item, or null while it is closed. */
 export function paneTarget(current: State = state): PaneTarget | null {
   const sources = current.sources;
@@ -4314,8 +4309,7 @@ async function readEvidence(gen: number): Promise<void> {
   const scope = paneScope();
   const sources = sourcesAt(gen);
   if (!account || !target || !scope || !sources) return;
-  const places = paneCitations(target);
-  const passages = places.flatMap((place, at) => {
+  const passages = target.group.indexes.flatMap((place, at) => {
     const source = target.sources[at];
     return source?.kind === 'original' ? [[place, source.ref] as const] : [];
   });

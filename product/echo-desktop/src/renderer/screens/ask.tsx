@@ -14,7 +14,7 @@ import { ownerAndStatus } from '../needs.js';
 import { announceAfter, announcement, duration, headline, lookedThrough, PROGRESS_AFTER_MS, type AskProgress } from '../progress.js';
 import {
   activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
-  fullPageOffered, litAtoms, nothingLine, openCompose, openFullPage, openExternalSource, pageCovered, paneCitations, paneTarget, pickSuggestion,
+  fullPageOffered, litAtoms, nothingLine, openCompose, openFullPage, openExternalSource, pageCovered, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, setBarText, sourceName, submitBar, suggestionsShown, toggleEarlier, toggleSourceList, toggleTurn, turnOf, widenScope,
   UNTITLED,
   type AskClarify, type AskTook, type PaneTarget, type Read, type State,
@@ -174,17 +174,12 @@ function lit(state: State, view: TurnView, id: string): boolean {
   return paneOn(state, view) && state.sources?.open != null && state.sources.focus === id;
 }
 
-/** A sentence's or row's classes: `base`, and lit by its number. */
-function litClass(base: string, on: boolean): string {
-  return [base, on ? 'on' : ''].filter(Boolean).join(' ');
-}
-
 /**
  * What a sentence's element carries, whichever item it reads as: its classes
  * after `base`, if any (lit by its number), and its test id.
  */
 function statementProps(state: State, view: TurnView, id: string, base = '') {
-  return { class: litClass(base, lit(state, view, id)) || undefined, 'data-testid': 'statement', 'data-reading-anchor': id };
+  return { class: [base, lit(state, view, id) ? 'on' : ''].filter(Boolean).join(' ') || undefined, 'data-testid': 'statement', 'data-reading-anchor': id };
 }
 
 /** A sentence's words as its item reads them (`text`), then the numbers of its sources. */
@@ -1043,7 +1038,7 @@ function SourceReviewBadge({ review, shared = false }: { review: 'not_reviewed' 
 function OriginalSource({ state, target, source }: { state: State; target: PaneTarget; source: Extract<AnswerSource, { kind: 'original' }> }) {
   const sources = state.sources!;
   const reads = sources.evidence?.group === target.number ? sources.evidence.reads : {};
-  const places = paneCitations(target);
+  const places = target.group.indexes;
   const count = places.length;
   const answer = activeTurn(state)?.answer;
   const focused = answer ? answerSentences(answer).find(([id]) => id === sources.focus)?.[1].citation_indexes ?? [] : [];
