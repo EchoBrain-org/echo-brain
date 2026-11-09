@@ -65,8 +65,9 @@ import a provider implementation.
   `synthetic-demo-*` is the no-write demo extraction evaluator.
 - `observability/` holds the journey metrics and telemetry transport and the
   optional staging LangSmith trace exporter (`langsmith-observer-v1.ts`,
-  `langsmith-runtime-v1.ts`), which `organization-authority-service-cli.ts`
-  opens. When selected, it sends trace content off-host.
+  `langsmith-runtime-v1.ts`) of research runs and meeting extractions, which
+  `organization-authority-service-cli.ts` opens. When selected, it sends trace
+  content off-host, including the text of each meeting it extracts.
 
 Provider-neutral bundle seams live in `packages/organization-processing/src/ports/`.
 Concrete bundles live in `providers/synthetic-demo` (the staging synthetic

@@ -724,6 +724,12 @@ function configuredMaxOutputTokens(config: AdapterConfig): number {
   return typeof value === 'number' ? value : DEFAULT_MAX_OUTPUT_TOKENS;
 }
 
+/** A provider's stop reason in the diagnostic events' closed set, as the OpenRouter adapter reads one; null when it gave none. */
+function diagnosticFinishReason(value: string | undefined): 'stop' | 'length' | 'content_filter' | 'error' | 'other' | null {
+  if (value === undefined) return null;
+  return value === 'stop' || value === 'length' || value === 'content_filter' || value === 'error' ? value : 'other';
+}
+
 /**
  * Runtime processing identity. Provider/model changes must not reuse cached
  * decision sets or approvals even though all providers share adapter_id=llm.
@@ -941,7 +947,10 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         throw error;
       });
       observeCoreModelMetadataV1({ provider: this.client.provider, model: this.model, ...(value.requestId === undefined ? {} : { request_id: value.requestId }), ...(value.stopReason === undefined ? {} : { finish_reason: value.stopReason }) });
-      observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: 1, role: 'extraction', value: value.content });
+      // The reply with the token counts the span's counts carry, for a selected diagnostic sink only.
+      observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: 1, role: 'extraction', value: value.content,
+        usage: { input_tokens: value.inputTokens ?? null, output_tokens: value.outputTokens ?? null, total_tokens: value.totalTokens ?? null, cached_input_tokens: null, reasoning_tokens: null },
+        finish_reason: diagnosticFinishReason(value.stopReason) });
       annotateCoreRuntimeV1({ counts: { output_bytes: Buffer.byteLength(value.content), input_tokens: value.inputTokens ?? null, output_tokens: value.outputTokens ?? null, total_tokens: value.totalTokens ?? null, provider_latency_ms: this.providerElapsedMs(startedAt) } });
       return value;
     });

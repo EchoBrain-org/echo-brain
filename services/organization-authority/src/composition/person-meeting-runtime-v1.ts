@@ -232,11 +232,13 @@ export function createPersonMeetingRuntimeV1(options: {
             fence: async signal => { signal?.throwIfAborted(); current(); },
           });
           return withCoreRuntimeDiagnosticsV1(capture?.record, () => observeCoreRuntimeV1('extraction', async () => {
-            observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'extraction', event: 'started' });
+            // Which meeting, and what came out of it: diagnostic sinks only (a LangSmith trace's root inputs and outputs).
+            observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'extraction', event: 'started', data: { meeting: meeting.provenance.external_id, title: meeting.title ?? null } });
             try {
               const result = await base.extract(meeting, context, operation);
               annotateCoreRuntimeV1({ result: result.signals.length === 0 ? 'empty' : 'completed' });
-              observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'extraction', event: 'succeeded' });
+              const count = (kind: string) => result.signals.filter(signal => signal.kind === kind).length;
+              observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'extraction', event: 'succeeded', data: { decisions: count('decision'), actions: count('action'), rationales: count('rationale') } });
               capture?.complete();
               return result;
             } catch (error) {

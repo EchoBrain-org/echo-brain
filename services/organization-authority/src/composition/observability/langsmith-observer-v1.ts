@@ -47,6 +47,8 @@ interface Span {
   end?: CoreRuntimeObservationV1;
 }
 interface Capture {
+  /** A research run, or one meeting's extraction: its model call and the code that checks the reply. */
+  readonly kind: 'research' | 'meeting_extraction';
   start: CoreRuntimeObservationV1;
   collector: PersonDiagnosticTraceCollectorV1;
   spans: Map<string, Span>;
@@ -65,6 +67,8 @@ const order = (time: string, id: string, sequence = 0) => `${time.replace(/[-:.]
  * tool runs already show them.
  */
 const SPAN_PHASES: ReadonlySet<string> = new Set(['model_call', 'evidence_connection', 'evidence_revalidate']);
+/** The runtime spans a capture starts at, and the kind of trace each makes. */
+const ROOTS: ReadonlyMap<string, Capture['kind']> = new Map([['research_run', 'research'], ['extraction', 'meeting_extraction']]);
 /** Runtime spans one capture keeps; more are counted, not kept. */
 const MAX_SPANS = 512;
 /**
@@ -76,33 +80,39 @@ function modelRouting(event: ModelRouting): ModelRouting {
   return { ...(event.upstream_provider === undefined ? {} : { upstream_provider: event.upstream_provider }),
     ...(event.generation_id === undefined ? {} : { generation_id: event.generation_id }) };
 }
-/** What a model call's provider span adds to its model run: provider time and status, and how long it queued before the provider. */
-function providerLeg(span: Span, run: LangSmithRunV1): Record<string, unknown> {
+/**
+ * What a model call's provider span adds to its model run: provider time and status, and, for a call asked before its
+ * provider span started, how long it queued before the provider.
+ */
+function providerLeg(span: Span, run: LangSmithRunV1, askedBefore: boolean): Record<string, unknown> {
   const done = span.end!;
   const queued = Date.parse(span.started_at) - Date.parse(run.start_time);
   return { provider_latency_ms: done.counts.provider_latency_ms ?? null, http_status: done.counts.http_status ?? null,
     active_models: done.counts.active_models ?? null, provider: done.provider, provider_result: done.result,
     // The runtime's opaque identity of the provider's request id, as operational telemetry records it.
-    provider_request: done.provider_request, ...(Number.isFinite(queued) ? { queue_ms: Math.max(0, queued) } : {}) };
+    provider_request: done.provider_request, ...(askedBefore && Number.isFinite(queued) ? { queue_ms: Math.max(0, queued) } : {}) };
 }
 
 function project(capture: Capture, end: CoreRuntimeObservationV1, projectName: string, release: string, interrupted: boolean): LangSmithRunV1[] {
   const snapshot = capture.collector.snapshot();
   const events = snapshot.events as unknown as readonly Recorded[];
   const rootId = capture.start.span_id;
+  const extraction = capture.kind === 'meeting_extraction';
   // Index lag is a wait for the search index, not the outage its `unavailable` code would say.
   const lagged = events.some(event => event.kind === 'lifecycle' && event.stage === 'application' && event.event === 'failed' && event.error_kind === 'index_lag');
   const result = lagged ? 'index_lag' : end.result;
   const corrected = CORE_RUNTIME_MODEL_CORRECTIONS_V1.filter(name => capture.corrections[name] !== undefined);
   const root: LangSmithRunV1 = {
-    id: rootId, name: `ECHO ${capture.start.trigger ?? 'research'}`, run_type: 'chain', trace_id: rootId,
+    id: rootId, name: extraction ? 'ECHO meeting_extraction' : `ECHO ${capture.start.trigger ?? 'research'}`, run_type: 'chain', trace_id: rootId,
     dotted_order: order(capture.start.observed_at, rootId), session_name: projectName,
     start_time: capture.start.observed_at, end_time: end.observed_at, inputs: {},
     extra: { metadata: { echo_operation_id: end.operation_id, echo_span_id: rootId, release_sha: release,
-      echo_run_id: end.run_id ?? null, echo_event_id: end.event_id ?? null, echo_attempt_id: end.attempt_id ?? null,
-      trigger: capture.start.trigger ?? 'research', complete: snapshot.complete && !interrupted, dropped_events: snapshot.dropped_events,
+      // A meeting extraction is not research: it has the opaque meeting id journey logs record and its attempt instead.
+      ...(extraction ? { echo_meeting_id: end.meeting_id ?? null, attempt: end.attempt ?? null } : {
+        echo_run_id: end.run_id ?? null, echo_event_id: end.event_id ?? null, echo_attempt_id: end.attempt_id ?? null,
+        trigger: capture.start.trigger ?? 'research' }), complete: snapshot.complete && !interrupted, dropped_events: snapshot.dropped_events,
       // `counts` CPU, memory and file-system figures are process-wide deltas: concurrent work shares them.
-      result, research_stop_reason: end.research_stop_reason ?? null, counts: end.counts, resource_scope: 'process',
+      result, ...(extraction ? {} : { research_stop_reason: end.research_stop_reason ?? null }), counts: end.counts, resource_scope: 'process',
       ...(capture.dropped_spans === 0 ? {} : { dropped_spans: capture.dropped_spans }),
       // Code's corrections of model output across every span of the run, by name (RB-OPERATIONS-001).
       ...(corrected.length === 0 ? {} : { model_corrections: Object.fromEntries(corrected.map(name => [name, capture.corrections[name]])) }),
@@ -182,9 +192,14 @@ function project(capture: Capture, end: CoreRuntimeObservationV1, projectName: s
       if (event.stage === 'run' && event.event === 'succeeded') root.outputs = { ...event.data };
       // A stage that runs in its own runtime span is its own run, so the time it takes (an access check above all) is not a
       // gap. Its started and succeeded data are that run's inputs and outputs, and are not repeated on the root's event.
+      // A meeting extraction's own stage is its root run.
       const key = `${event.span_id}:stage:${event.stage}`;
       let spanned = false;
-      if (event.event === 'started' && !bySpan.has(event.span_id)) {
+      if (event.stage === 'extraction' && event.span_id === rootId) {
+        spanned = true;
+        if (event.event === 'started') root.inputs = { ...event.data };
+        else if (event.event === 'succeeded') root.outputs = { ...event.data };
+      } else if (event.event === 'started' && !bySpan.has(event.span_id)) {
         const run = child(under(event.parent_span_id), { name: event.stage === 'revalidation' ? 'access_check' : event.stage, run_type: 'chain',
           start_time: event.observed_at, inputs: { ...event.data },
           extra: { metadata: { echo_operation_id: event.operation_id, echo_span_id: event.span_id, echo_sequence: event.sequence, stage: event.stage } } }, event.sequence);
@@ -206,9 +221,12 @@ function project(capture: Capture, end: CoreRuntimeObservationV1, projectName: s
     const done = span.end;
     if (done === undefined) continue;
     if (span.phase === 'model_call') {
-      const run = span.parent_span_id === null ? undefined : models.get(span.parent_span_id);
+      // Research asks for a call in its provider span's parent. Meeting extraction asks inside the provider span, so its
+      // provider time includes any wait for a model slot.
+      const asked = span.parent_span_id === null ? undefined : models.get(span.parent_span_id);
+      const run = asked ?? models.get(span.span_id);
       // What the model event itself says wins over the runtime span's copy.
-      if (run !== undefined) run.extra.metadata = { ...providerLeg(span, run), ...run.extra.metadata };
+      if (run !== undefined) run.extra.metadata = { ...providerLeg(span, run, asked !== undefined), ...run.extra.metadata };
       continue;
     }
     const source = done.evidence_source ?? null;
@@ -226,7 +244,7 @@ function project(capture: Capture, end: CoreRuntimeObservationV1, projectName: s
   return runs;
 }
 
-/** Full diagnostics for selected research operations; unrelated HTTP/worker activity is not exported. */
+/** Full diagnostics for research runs and meeting extractions; unrelated HTTP/worker activity is not exported. */
 export function createLangSmithObserverV1(options: {
   project: string;
   release_sha: string;
@@ -240,7 +258,7 @@ export function createLangSmithObserverV1(options: {
 }) {
   const now = options.now ?? Date.now;
   const active = new Map<string, Capture>();
-  const pending: LangSmithRunV1[][] = [];
+  const pending: { readonly kind: Capture['kind']; readonly runs: LangSmithRunV1[] }[] = [];
   const abort = new AbortController();
   const counts = { exported: 0, failed: 0, dropped: 0, incomplete: 0 };
   let lastFailure: ExportFailure | null = null;
@@ -249,12 +267,17 @@ export function createLangSmithObserverV1(options: {
     lastFailure = error instanceof LangSmithExportErrorV1 ? error.failure : { kind: 'unknown', http_status: null };
   };
   let sending: Promise<void> | undefined;
+  let sendingKind: Capture['kind'] | undefined;
   let delivery = 0;
   let closed = false;
+  // Each kind of trace has its own active and upload budget, so meeting lanes never crowd out a research trace.
+  const activeOf = (kind: Capture['kind']) => [...active.values()].filter(capture => capture.kind === kind).length;
+  const queuedOf = (kind: Capture['kind']) => pending.filter(entry => entry.kind === kind).length + Number(sending !== undefined && sendingKind === kind);
   const pump = () => {
     if (sending !== undefined || pending.length === 0 || abort.signal.aborted) return;
-    const runs = pending.shift()!;
+    const { kind, runs } = pending.shift()!;
     const attempt = ++delivery;
+    sendingKind = kind;
     sending = Promise.resolve().then(() => options.send(runs, abort.signal))
       .then(() => { if (attempt === delivery) counts.exported++; }, error => { if (attempt === delivery) failed(error); })
       .finally(() => { sending = undefined; pump(); });
@@ -263,10 +286,10 @@ export function createLangSmithObserverV1(options: {
     active.delete(capture.start.operation_id);
     capture.collector.seal();
     try {
-      if (pending.length + Number(sending !== undefined) >= (options.max_pending ?? 4)) { counts.dropped++; return; }
+      if (queuedOf(capture.kind) >= (options.max_pending ?? 4)) { counts.dropped++; return; }
       const runs = project(capture, end, options.project, options.release_sha, interrupted);
       if (runs[0]!.extra.metadata.complete !== true) counts.incomplete++;
-      pending.push(runs); pump();
+      pending.push({ kind: capture.kind, runs }); pump();
     } catch { failed(new LangSmithExportErrorV1('projection')); } finally { capture.collector.close(); }
   };
   const expire = () => {
@@ -293,15 +316,17 @@ export function createLangSmithObserverV1(options: {
           capture.corrections[name] = (capture.corrections[name] ?? 0) + count;
         }
       }
-      if (event.phase !== 'research_run') {
+      const kind = ROOTS.get(event.phase);
+      if (kind === undefined) {
         if (capture !== undefined && SPAN_PHASES.has(event.phase)) recordSpan(capture, event);
         return;
       }
       if (event.event === 'started') {
         if (options.expires_at !== undefined && now() >= options.expires_at) return;
+        // An operation holds one capture at a time; meetings it extracts one after another each get their own.
         if (capture !== undefined) return;
-        if (active.size >= (options.max_active ?? 4)) { counts.dropped++; return; }
-        active.set(event.operation_id, { start: event, collector: createPersonDiagnosticTraceV1(now), spans: new Map(), dropped_spans: 0, corrections: {} });
+        if (activeOf(kind) >= (options.max_active ?? 4)) { counts.dropped++; return; }
+        active.set(event.operation_id, { kind, start: event, collector: createPersonDiagnosticTraceV1(now), spans: new Map(), dropped_spans: 0, corrections: {} });
       } else if (capture?.start.span_id === event.span_id) finish(capture, event);
     },
     diagnostic_exporter(operationId) {

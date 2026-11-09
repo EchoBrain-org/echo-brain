@@ -11,6 +11,9 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { createAgenticAskV5 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { EvidenceDeskItemV1, EvidenceDeskPortV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
 import { createOpenRouterStructuredGenerationAdapter } from '../../../../providers/openrouter/src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js';
+import type { MeetingDocument } from '@echo-brain/organization-processing/core';
+import { LlmDecisionProcessor } from '@echo-brain/organization-processing/llm/llm-decision-processor';
+import { providerStatusError, type StructuredGenerationRequest, type StructuredGenerationResult } from '@echo-brain/organization-processing/llm/llm-provider';
 
 const modelInput = { model: 'fixture-model', system_prompt: 'Use the supplied sources.', user_prompt: 'What blocks THERM?', schema: { type: 'object' }, max_output_tokens: 100, timeout_ms: 1000 };
 const pause = () => new Promise<void>(resolve => setImmediate(resolve));
@@ -336,5 +339,146 @@ describe('LangSmith projection of the shared observer', () => {
       finish(); await work;
       expect(send).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }
+  });
+});
+
+/** A meeting as a person's tool hands it over: a note (unit N1) and one of Ada's turns (T1). */
+const meetingDocument: MeetingDocument = {
+  schema_version: 1, id: 'meeting-1', title: 'Vendor selection sync', artifacts: [],
+  provenance: { source: { kind: 'meeting-source', adapter_id: 'fixture-source', instance_id: 'local', version: '1.0.0' }, external_id: 'note-1',
+    canonical_revision: 'sha256:note-1', observed_at: '2026-07-17T17:01:00.000Z', normalizer_version: '1.0.0' },
+  capture: { state: 'complete', components: [] }, participants: [{ id: 'ada', display_name: 'Ada' }],
+  content: [{ id: 'notes-1', kind: 'note', text: 'The team agreed to use vendor X for hosting' },
+    { id: 'turn-1', kind: 'transcript', text: 'Should we use vendor X?', speaker_participant_id: 'ada' }],
+};
+const decision = (text: string, units: readonly string[]) => ({ kind: 'decision', text, status: 'decided', owner: null, due_at: null, confidence: null,
+  evidence_units: units, supports_decision_indexes: [] });
+/** The model's reply: a decision citing N1 in another spelling and a unit that does not exist, and an item citing no known unit. */
+const reply = JSON.stringify({ signals: [decision('Use vendor X for hosting', ['[N1]', 'T9']), decision('Adopt vendor Y', ['T9'])] });
+const answered: StructuredGenerationResult = { content: reply, inputTokens: 1200, outputTokens: 80, totalTokens: 1280, stopReason: 'stop' };
+/** The real decision processor over a provider client that returns `outcome` or throws it; `requests` holds what the client was asked. */
+function extractor(outcome: StructuredGenerationResult | Error) {
+  const requests: StructuredGenerationRequest[] = [];
+  const processor = new LlmDecisionProcessor({ adapter_id: 'llm', instance_id: 'local', settings: { model: 'fixture-model' } }, {
+    identityEndpoint: null, validateProviderConfig: () => [],
+    client: { provider: 'fixture', verifyModel: async () => {}, async generateStructured(request) {
+      requests.push(request);
+      if (outcome instanceof Error) throw outcome;
+      return outcome;
+    } },
+  });
+  return { requests, extract: (meeting: MeetingDocument) => processor.extract(meeting, { processor_version: processor.identity.version, input_fingerprint: meeting.provenance.canonical_revision }) };
+}
+/** One meeting's extraction as the meeting runtime runs it: its own span, with which meeting it is and what came out of it. */
+function extraction(meeting: MeetingDocument, extract: (meeting: MeetingDocument) => Promise<{ readonly signals: readonly unknown[] }>) {
+  return observeCoreRuntimeV1('extraction', async () => {
+    observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'extraction', event: 'started', data: { meeting: meeting.provenance.external_id, title: meeting.title ?? null } });
+    try {
+      const result = await extract(meeting);
+      observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'extraction', event: 'succeeded', data: { decisions: result.signals.length } });
+      return result;
+    } catch (error) {
+      observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'extraction', event: 'failed', error_kind: coreRuntimeDiagnosticErrorKindV1(error) });
+      throw error;
+    }
+  });
+}
+/** Each trace one worker pass exported through a fresh observer, in upload order. */
+async function exportedPass(pass: () => Promise<unknown>): Promise<LangSmithRunV1[][]> {
+  const send = vi.fn(async (_runs: LangSmithRunV1[]) => {});
+  const observer = createLangSmithObserverV1({ project: 'fixture', release_sha: 'a'.repeat(40), send });
+  await observeCoreRuntimeRootV1('worker_execution', pass, observer.scope).catch(() => undefined);
+  await observer.flush(); await observer.close();
+  return send.mock.calls.map(([runs]) => runs);
+}
+
+describe('LangSmith projection of meeting extraction', () => {
+  it('exports an extraction as its own trace: the exact prompt, the reply with its token counts, and code\'s corrections on the root', async () => {
+    const { requests, extract } = extractor(answered);
+    const traces = await exportedPass(() => extraction(meetingDocument, extract));
+    expect(traces).toHaveLength(1);
+    const [root, model, ...rest] = traces[0]!;
+    expect(rest).toEqual([]);
+    // Named for what it is, with which meeting and what came out of it; never research's trigger, run or stop reason.
+    expect(root).toMatchObject({ name: 'ECHO meeting_extraction', run_type: 'chain', inputs: { meeting: 'note-1', title: 'Vendor selection sync' },
+      outputs: { decisions: 1 }, extra: { metadata: { complete: true, release_sha: 'a'.repeat(40), echo_operation_id: expect.any(String),
+        model_corrections: { extraction_item_set_aside: 1, extraction_unit_id_respelled: 1, extraction_unknown_unit_dropped: 1 } } } });
+    for (const key of ['trigger', 'research_stop_reason', 'echo_run_id']) expect(root!.extra.metadata).not.toHaveProperty(key);
+    expect(root).not.toHaveProperty('error');
+    // The model run holds exactly what the provider was asked, its reply and token counts, and the provider leg it was asked
+    // inside (so no queue time of its own).
+    const [request] = requests;
+    expect(model).toMatchObject({ name: 'model.extraction', run_type: 'llm', parent_run_id: root!.id, outputs: { value: reply },
+      prompt_tokens: 1200, completion_tokens: 80, total_tokens: 1280 });
+    expect(model!.inputs).toEqual({ model: request!.model, system_prompt: request!.systemPrompt, user_prompt: request!.userPrompt, schema: request!.schema,
+      max_output_tokens: request!.maxOutputTokens, timeout_ms: 120_000 });
+    expect(model!.inputs.user_prompt).toContain('[T1] Ada: Should we use vendor X?');
+    expect(model!.extra.metadata).toMatchObject({ finish_reason: 'stop', provider: 'other', provider_result: null, provider_latency_ms: expect.any(Number),
+      usage: { input_tokens: 1200, output_tokens: 80, total_tokens: 1280, cached_input_tokens: null, reasoning_tokens: null } });
+    expect(model!.extra.metadata).not.toHaveProperty('queue_ms');
+    // Why code set an item aside, between the extraction's own start and end, whose data are the root's inputs and outputs.
+    expect(root!.events).toEqual([
+      { name: 'extraction.started', time: expect.any(String) },
+      { name: 'grounding.skipped', time: expect.any(String), kwargs: { data: { signal_index: 1, reason: 'evidence_id', cited_units: ['T9'] } } },
+      { name: 'extraction.succeeded', time: expect.any(String) },
+    ]);
+  });
+
+  it('gives each meeting that one operation extracts in turn its own trace', async () => {
+    const second: MeetingDocument = { ...meetingDocument, id: 'meeting-2', provenance: { ...meetingDocument.provenance, external_id: 'note-2', canonical_revision: 'sha256:note-2' } };
+    const traces = await exportedPass(async () => {
+      await extraction(meetingDocument, extractor(answered).extract);
+      await extraction(second, extractor(answered).extract);
+    });
+    expect(traces.map(runs => [runs[0]!.inputs.meeting, runs.map(run => run.name)])).toEqual([
+      ['note-1', ['ECHO meeting_extraction', 'model.extraction']],
+      ['note-2', ['ECHO meeting_extraction', 'model.extraction']],
+    ]);
+    const [first, next] = traces.map(runs => runs[0]!);
+    expect(first!.extra.metadata.echo_operation_id).toBe(next!.extra.metadata.echo_operation_id);
+    for (const runs of traces) expect(runs.every(run => run.trace_id === runs[0]!.id && run.extra.metadata.incomplete === undefined)).toBe(true);
+    expect(first!.id).not.toBe(next!.id);
+  });
+
+  it('exports a failed extraction with its error: a provider refusal, and a reply whose every item code set aside', async () => {
+    const [refused] = await exportedPass(() => extraction(meetingDocument, extractor(providerStatusError('OpenRouter', 429)).extract));
+    expect(refused!.map(run => [run.name, run.error])).toEqual([['ECHO meeting_extraction', 'rate_limited'], ['model.extraction', 'rate_limited']]);
+    expect(refused![1]!.extra.metadata).toMatchObject({ error_kind: 'rate_limited', provider_result: 'rate_limited' });
+    expect(refused![0]!.events).toContainEqual({ name: 'extraction.failed', time: expect.any(String), kwargs: { error_kind: 'rate_limited' } });
+    expect(JSON.stringify(refused)).not.toContain('rejected the request');
+
+    const unusable = JSON.stringify({ signals: [decision('Adopt vendor Y', ['T9'])] });
+    const [[root, model] = []] = await exportedPass(() => extraction(meetingDocument, extractor({ ...answered, content: unusable }).extract));
+    // The reply and its token counts stay on the model run; the root fails, with what code set aside and why.
+    expect(model).toMatchObject({ name: 'model.extraction', outputs: { value: unusable }, prompt_tokens: 1200 });
+    expect(model).not.toHaveProperty('error');
+    expect(root).toMatchObject({ error: 'failed', extra: { metadata: { complete: true, model_corrections: { extraction_item_set_aside: 1 } } } });
+    expect(root).not.toHaveProperty('outputs');
+    expect(root!.events!.map(event => event.name)).toEqual(['extraction.started', 'grounding.skipped', 'grounding.failed', 'extraction.failed']);
+    expect(root!.events).toContainEqual({ name: 'grounding.failed', time: expect.any(String),
+      kwargs: { data: { failure_stage: 'evidence_id', signal_index: 0 }, error_kind: 'invalid_output' } });
+  });
+
+  it('keeps its own capture and upload budget, so meeting lanes never crowd out a research trace', async () => {
+    let finishExtraction!: () => void;
+    const uploads: (() => void)[] = [];
+    const send = vi.fn((_runs: LangSmithRunV1[]) => new Promise<void>(resolve => { uploads.push(resolve); }));
+    const observer = createLangSmithObserverV1({ project: 'fixture', release_sha: 'a'.repeat(40), send, max_active: 1, max_pending: 1 });
+    const lane = (extract: () => Promise<{ readonly signals: readonly unknown[] }>) =>
+      observeCoreRuntimeRootV1('worker_execution', () => extraction(meetingDocument, extract), observer.scope);
+    const running = lane(() => new Promise(resolve => { finishExtraction = () => resolve({ signals: [] }); }));
+    // With an extraction in flight, a research run is still captured; another lane's extraction is not.
+    await observeCoreRuntimeV1('research_run', async () => 42, observer.scope);
+    await lane(async () => ({ signals: [] }));
+    expect(observer.status()).toMatchObject({ active: 1, dropped: 1, pending: 1 });
+    // While the research trace uploads, the finished extraction still queues in its own slot; one more does not.
+    finishExtraction(); await running;
+    await lane(async () => ({ signals: [] }));
+    expect(observer.status()).toMatchObject({ active: 0, dropped: 2, pending: 2 });
+    uploads.shift()!(); await pause(); await pause();
+    uploads.shift()!(); await observer.flush();
+    expect(send.mock.calls.map(([runs]) => runs[0]!.name)).toEqual(['ECHO research', 'ECHO meeting_extraction']);
+    expect(observer.status()).toMatchObject({ exported: 2, dropped: 2, pending: 0 });
+    await observer.close();
   });
 });

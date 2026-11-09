@@ -1041,12 +1041,23 @@ outcomes, and final output/citations. Parallel tool calls retain separate IDs.
 The ECHO operation ID and release SHA link the trace to operational telemetry.
 Existing one-use Person diagnostic exports remain independent.
 
+It also selects each meeting extraction, one trace per meeting, named
+`ECHO meeting_extraction`. Its root names the meeting (the tool's meeting ID and
+title) and how many decisions, actions and rationales came out, and carries the
+opaque meeting ID and attempt that journey logs record and code's corrections of
+the model's reply (`model_corrections`). Its `model.extraction` run holds the
+exact prompt, the model's reply, its token counts and the provider's time and
+status. Items code set aside appear as events with their reason and cited units.
+
 Hosted tracing is disabled when its private selection file is absent or expired.
 It runs on the Authority server using its configured LangSmith key, independently
 of the operator's AWS SSO session. An expired SSO session prevents operator log
 inspection; it does not stop exports.
-It sends prompts and released source content to the chosen LangSmith project;
-choose a project whose access and retention are appropriate for the rehearsal.
+It sends prompts and released source content to the chosen LangSmith project.
+While tracing is enabled, meeting extraction also sends each extracted meeting's
+text (its title, participant names, transcript turns, notes and the tool's AI
+summary) and the model's extraction, as research traces send evidence text.
+Choose a project whose access and retention are appropriate for the rehearsal.
 No infrastructure stack or LangChain framework is required. The composition
 adapter uses LangSmith's documented [multipart tracing API](https://docs.langchain.com/langsmith/trace-with-api).
 
@@ -1087,10 +1098,14 @@ with exact arguments and results, Jira search events containing the generated
 JQL, subsequent model context, and final citations. A Jira search returning no
 tickets is a valid trace; do not infer that mentioned ticket numbers were opened.
 `complete=true` describes capture completeness, not answer correctness.
+A meeting import, or a watch delivering one, makes an `ECHO meeting_extraction`
+trace once the meeting is extracted.
 
-The exporter retains at most four active captures (each an 8 MiB/512-event exact
-prefix) and four queued/in-flight uploads. Uploads run independently with a
-five-second deadline and no automatic retry. Limits or missing event pairs
+The exporter retains at most four active research captures and four active
+meeting extraction captures (each an 8 MiB/512-event exact prefix), and four
+queued/in-flight uploads of each kind, so meeting lanes never crowd out a
+research trace; the status counts cover both kinds. Uploads run independently
+with a five-second deadline and no automatic retry. Limits or missing event pairs
 mark the trace incomplete; whole dropped or failed uploads are counted in
 `echo-langsmith-tracing-status-v1`. That content-free record reports only when
 status changes, checked once per minute and at startup/shutdown. A zero pending
@@ -1114,6 +1129,7 @@ valid. To disable either mode immediately and remove the local key:
 sudo ./onboard-clean-v1.sh langsmith-tracing --disable
 ```
 
-This also restarts the runtime. Removing a local selection does not delete
-already-uploaded traces; manage their retention in LangSmith. None of these
-commands approves a canary, promotes a release or publishes a client feed.
+This also restarts the runtime and stops research and meeting extraction traces
+alike. Removing a local selection does not delete already-uploaded traces;
+manage their retention in LangSmith. None of these commands approves a canary,
+promotes a release or publishes a client feed.

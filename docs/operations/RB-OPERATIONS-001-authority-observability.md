@@ -521,7 +521,7 @@ just now" for those items.
 Inspect the stack, alarm state, and current journey before relying on the
 overview. It remains staging-only. The Journey Explorer, a separate staging
 Lambda behind the overview's custom widget, and the opt-in staging content
-telemetry were retired on 2026-10-19. Research traces go to
+telemetry were retired on 2026-10-19. Research and meeting extraction traces go to
 [LangSmith](../../deploy/organization-authority/README.md#langsmith-staging-tracing),
 and [selected diagnostics](#follow-a-research-execution-and-select-private-payload-capture)
 capture exact payloads. Read journeys with the Logs Insights queries in this
@@ -734,7 +734,7 @@ firing on the current models (model scaffolding audit, 2026-10-20).
 | --- | --- |
 | Journey logs | `diagnostic.model_corrections` on a span's `succeeded` or `failed` event: `model_grounding` for meeting extraction, `research_loop` for research steps and the loop, `research_output` for renderers, `model_parse` for the adapter's JSON reading. |
 | Journey metrics | One `ModelCorrections` value per name and terminal event, with the single dimension `correction`. Metrics outlive the 14-day log retention. |
-| LangSmith traces | The root of a captured research run (Ask, impact card) carries `model_corrections`, the sum over every span of that run. Meeting extraction is not exported to LangSmith. |
+| LangSmith traces | The root of a captured research run (Ask, impact card) or meeting extraction (`ECHO meeting_extraction`, one trace per meeting) carries `model_corrections`, the sum over every span of that run. |
 
 ```
 fields @timestamp, diagnostic.model_corrections.extraction_repeat_dropped as repeats
@@ -746,7 +746,7 @@ Meeting extraction (`llm-decision-processor.ts`):
 
 | Name | What code did |
 | --- | --- |
-| `extraction_item_set_aside` | Set aside a malformed or ungrounded item; its reason and cited units reach only a selected private capture |
+| `extraction_item_set_aside` | Set aside a malformed or ungrounded item; its reason and cited units reach only a selected private capture and, while staging tracing is on, the extraction's LangSmith trace |
 | `extraction_repeat_dropped` | Dropped a repeated item: the same kind, text and units, or the same id after evidence trimming |
 | `extraction_owner_cleared` | Cleared a proposed action owner that no cited unit names |
 | `extraction_due_cleared` | Cleared a due date that is not a date or falls before the meeting |
