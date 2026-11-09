@@ -46,7 +46,7 @@ async function fixture(options: { readonly anchor?: () => typeof record; readonl
     items: new SqliteImpactItemsV1(f.db, () => now), people: new SqliteOpenItemPeopleV1(f.db) });
   const app = create();
   const settled = async () => await vi.waitFor(() => expect(runs.read(f.person, row.run_id)!.state).not.toBe('running'), { interval: 1 });
-  return { ...f, runs, row, app, create, research, desk, renderInputs, bindDesk, openCitation, settled, advance: (ms: number) => { now = new Date(now.getTime() + ms); } };
+  return { ...f, runs, row, app, create, research, renderInputs, bindDesk, openCitation, settled, advance: (ms: number) => { now = new Date(now.getTime() + ms); } };
 }
 
 describe('durable approved-record trigger runs', () => {
