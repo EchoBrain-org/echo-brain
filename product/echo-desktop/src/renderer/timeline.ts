@@ -168,7 +168,7 @@ export function turnGroups(answer: Pick<Answer, 'sources'>, checks: TurnChecks |
 }
 
 /** The turns a later turn asked again, by id: a thread folds them away (visibleTurns). */
-export function askedAgain(turns: readonly TimelineTurn[]): ReadonlySet<string> {
+function askedAgain(turns: readonly TimelineTurn[]): ReadonlySet<string> {
   return new Set(turns.flatMap(turn => (turn.again_of === undefined ? [] : [turn.again_of])));
 }
 

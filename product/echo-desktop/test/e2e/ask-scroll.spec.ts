@@ -1,4 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { launch, type Launched } from './launch.js';
 
 let run: Launched;
@@ -394,3 +396,31 @@ test('a sentence held by scrolling stays held when a wider window brings the vie
   }
 });
 
+test('a latest citation chosen at the end while a question is on its way opens its source beside it, and the view stays at the end', async () => {
+  run = await launch('ask-progress');
+  const { page, home } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  const view = page.getByTestId('ask-view');
+  const bottom = () => view.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight);
+  // Answers first, more than the view holds: the fixture holds each answer until the test releases it.
+  for (const question of ['What did we agree?', 'Who owns pricing?', 'When is the review?', 'What is still open?', 'Who signed off?', 'What changed?']) {
+    await page.getByTestId('ask-field').fill(question);
+    await page.getByTestId('ask-field').press('Enter');
+    writeFileSync(join(home, 'release-ask'), '');
+    await expect(page.getByTestId('turn').last().getByTestId('question')).toHaveText(question);
+    await expect(page.getByTestId('asking')).toHaveCount(0);
+    rmSync(join(home, 'release-ask'));
+  }
+  await expect.poll(() => view.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(100);
+  // With another question on its way, the latest answer's citation, chosen at the end, opens its source beside it.
+  await page.getByTestId('ask-field').fill('And the pricing?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('asking')).toBeVisible();
+  await expect.poll(bottom).toBeLessThan(1);
+  const latest = page.getByTestId('turn').last();
+  await latest.getByTestId('citation').first().click();
+  await expect(page.getByTestId('source-pane')).toBeVisible();
+  await expect.poll(bottom).toBeLessThan(1);
+  writeFileSync(join(home, 'release-ask'), '');
+  await expect(page.getByTestId('asking')).toHaveCount(0);
+});
