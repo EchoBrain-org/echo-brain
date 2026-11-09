@@ -424,7 +424,6 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
   const report = (reason: OpenItemsLiveFailureV1['reason'], code: string): void => reportLiveFailure(options, reason, code);
   /** The run was made for the viewer: they approved its decision. */
   const runFor = (run: TriggerRunRowV1, viewer: Viewer) => run.actor.membership_id === viewer.membership && run.actor.principal_id === viewer.principal;
-  const actorOf = (viewer: Viewer) => ({ organization_id: viewer.organization, principal_id: viewer.principal, membership_id: viewer.membership });
   const requestContext = (viewer: Viewer): AgenticAskAuditRequestContextV1 => ({
     authority_id: options.bind_options.authority_id, organization_id: viewer.organization, state_lineage_id: options.bind_options.state_lineage_id,
     principal_id: viewer.principal, membership_id: viewer.membership, session_family_id: viewer.authorization.session_family_id, request_id: `open_items_${randomUUID()}`,
@@ -531,8 +530,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
   return Object.freeze({
     async home(input: Parameters<PersonOpenItemsApplicationV1['home']>[0]) {
       const viewer = viewerOf(input.access_token, input.signal);
-      const actor = actorOf(viewer);
-      const unsent = options.items.involving(viewer.organization, viewer.membership, { states: ['unsent'], limit: INVOLVING_MAX }).filter(row => approvedBy(row, viewer));
+      const actor = { organization_id: viewer.organization, principal_id: viewer.principal, membership_id: viewer.membership };
+      const unsent =options.items.involving(viewer.organization, viewer.membership, { states: ['unsent'], limit: INVOLVING_MAX }).filter(row => approvedBy(row, viewer));
       const open = new Map<string, ImpactItemRowV1>();
       // Leads take an item when its approver and owner have both left.
       for (const row of [...options.items.involving(viewer.organization, viewer.membership, { states: ['open'], limit: INVOLVING_MAX }), ...options.items.orphaned(viewer.organization, { limit: INVOLVING_MAX })]) {

@@ -29,11 +29,8 @@ type Desk = Awaited<ReturnType<typeof bindPersonLiveEvidenceDeskV1>>;
 type RunResearch = Pick<ReturnType<typeof import('@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1').createAgenticResearchV1>, 'renderWithResearch'>;
 type BoundOptions = CreatePersonLiveAnswerRouteOptionsV1;
 type DeskScope = Parameters<typeof bindPersonLiveEvidenceDeskV1>[2]['scope'];
-/**
- * What a finished run stores, and what its finishing transaction writes with it: `writes` is asked right before the run
- * finishes, with no await in between, and answers the callback the transaction runs.
- */
-type RunOutput = { readonly result: object; readonly writes?: () => (transaction: Database.Database) => void };
+/** What a finished run stores, and what its finishing transaction writes with it. */
+type RunOutput = { readonly result: object; readonly writes?: (transaction: Database.Database) => void };
 
 interface CreatePersonTriggerRunsV1Options {
   readonly runs: SqliteTriggerRunsV1;
@@ -171,7 +168,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     signal.throwIfAborted();
     const drafts: ImpactItemDraftV1[] = candidates.map(({ owner_name: _name, ...candidate }, index) => ({ ...candidate, ...owners[index]! }));
     // The items are written in the transaction that stores the card, so a run is never done without them.
-    return { result: value, ...(drafts.length === 0 ? {} : { writes: () => (transaction: Database.Database) => options.items.insertForRun(transaction, row, drafts) }) };
+    return { result: value, ...(drafts.length === 0 ? {} : { writes: (transaction: Database.Database) => options.items.insertForRun(transaction, row, drafts) }) };
   };
   const authenticates = (token: string) => { try { options.sessions.authenticateAccess({ access_token: token }); return true; } catch { return false; } };
   const launch = (row: TriggerRunRowV1, token: string, authorization: PersonAccessAuthorization, lease_token: string, capture?: PersonDiagnosticCaptureHandleV1) => {
@@ -191,8 +188,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
         const output = await checkImpact(row, token, research, controller.signal);
         // What the run stores, and what is written with it, in the one transaction that finishes it.
         const digest = canonicalSha256(output.result);
-        const write = output.writes?.();
-        const persisted = options.runs.finish(row.run_id, lease_token, { json: canonicalJson(output.result), sha256: digest }, write);
+        const persisted = options.runs.finish(row.run_id, lease_token, { json: canonicalJson(output.result), sha256: digest }, output.writes);
         observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'persistence', event: persisted ? 'succeeded' : 'skipped', data: { run_id: row.run_id, output_sha256: digest } });
         annotateCoreRuntimeV1({ result: persisted ? currentCoreRuntimeDetailV1()?.result ?? 'completed' : 'competing_action', output_id: coreRuntimeIdentityV1('research-output', digest) });
         if (!persisted) throw new AuthorityOperationError('conflict', 'The research attempt no longer owns its run');
