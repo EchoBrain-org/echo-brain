@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
-import { observeCoreRuntimeDiagnosticV1, observeCoreRuntimeRootV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { annotateCoreRuntimeV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeRootV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { createLangSmithRuntimeV1, createLangSmithSenderV1, readLangSmithConfigV1 } from '../../src/composition/observability/langsmith-runtime-v1.js';
 import { createLangSmithObserverV1, type LangSmithRunV1 } from '../../src/composition/observability/langsmith-observer-v1.js';
 
@@ -248,20 +248,28 @@ describe('explicit staging LangSmith selection', () => {
     } finally { vi.useRealTimers(); await runtime.close(); }
   });
 
-  it('records an extraction run inside a research operation in both traces', async () => {
+  it('records an extraction run inside a research operation in both traces, with the provider leg of its model call in its own alone', async () => {
     const { path } = fixture();
     const uploads: LangSmithRunV1[][] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, options) => { uploads.push(await uploadedRuns(options!.body as FormData)); return new Response('', { status: 202 }); });
     const runtime = createLangSmithRuntimeV1({ path, authority_url: STAGING_AUTHORITY_ORIGIN_V1, release_sha: 'a'.repeat(40), write: () => undefined });
+    const input = { model: 'fixture-model', system_prompt: 'Extract.', user_prompt: 'nested', schema: { type: 'object' }, max_output_tokens: 100, timeout_ms: 1000 };
     try {
       await observeCoreRuntimeV1('research_run', () => observeCoreRuntimeV1('extraction', async () => {
         observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'extraction', event: 'started', data: { meeting: 'note-1', title: 'nested' } });
+        // Meeting extraction asks for its model call inside the call's own runtime span, as the decision processor does.
+        await observeCoreRuntimeV1('model_call', async () => {
+          observeCoreRuntimeDiagnosticV1({ kind: 'model_request', call_id: 1, role: 'extraction', recovery: false, input });
+          observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: 1, role: 'extraction', value: 'reply' });
+          annotateCoreRuntimeV1({ counts: { provider_latency_ms: 5 } });
+        });
       }), runtime.scope);
     } finally { await runtime.close(); }
-    // Research keeps the payloads it always recorded; the extraction's own trace has them too.
-    expect(Object.fromEntries(uploads.map(runs => [runs[0]!.name, runs.map(run => [run.name, run.inputs])]))).toEqual({
-      'ECHO meeting_extraction': [['ECHO meeting_extraction', { meeting: 'note-1', title: 'nested' }]],
-      'ECHO research': [['ECHO research', {}], ['extraction', { meeting: 'note-1', title: 'nested' }]],
+    // Research keeps the payloads it always recorded; the extraction's own trace has them too. Research asks for a call in
+    // its provider span's parent, so only the extraction's model run takes the provider leg of a call asked inside it.
+    expect(Object.fromEntries(uploads.map(runs => [runs[0]!.name, runs.map(run => [run.name, run.inputs, run.extra.metadata.provider_latency_ms])]))).toEqual({
+      'ECHO meeting_extraction': [['ECHO meeting_extraction', { meeting: 'note-1', title: 'nested' }, undefined], ['model.extraction', input, 5]],
+      'ECHO research': [['ECHO research', {}, undefined], ['extraction', { meeting: 'note-1', title: 'nested' }, undefined], ['model.extraction', input, undefined]],
     });
   });
 
