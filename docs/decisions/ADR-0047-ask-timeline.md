@@ -133,3 +133,8 @@ longer read stays, on the page, in Copy and in the previous turn a follow-up
 carries, and so does Ask again with its "since" list. Where this record's
 title and its "An old answer always says what changed" say more than
 readability, they are history.
+
+On 2026-11-09 typed `gap_details` stopped being an opt-in: every Ask answer
+part with a typed gap carries them, the Authority no longer reads
+`x-echo-ask-gap-details`, and clients no longer send it
+([ADR-0048](ADR-0048-retire-older-person-routes.md)).

@@ -362,3 +362,7 @@ count alone. In the round trip
 document and the follow-up now open through the answer's cited sources rather
 than by the names the line showed, and the test checks that the line named
 the follow-up while the writer ran.
+
+Update (2026-11-09): `/v7` no longer sends `x-echo-person-ask-route`, and the
+person's capture sink named above is retired with the one-use diagnostic
+captures ([ADR-0048](ADR-0048-retire-older-person-routes.md)).

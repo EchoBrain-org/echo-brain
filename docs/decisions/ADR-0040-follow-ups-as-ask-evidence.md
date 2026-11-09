@@ -252,3 +252,7 @@ declares that date, so a `checked` date filter on follow-ups is refused like
 any date a source does not declare. The follow-ups guidance for research and
 the writer no longer mentions a check, and the desktop's side panel shows
 none. What a follow-up releases otherwise, and to whom, does not change.
+
+Update (2026-11-09): `/v7` no longer sends `x-echo-person-ask-route`, and the
+research-loop `trace` command named above is retired with the one-use
+diagnostic captures ([ADR-0048](ADR-0048-retire-older-person-routes.md)).
