@@ -151,7 +151,10 @@ meeting's packet from `POST /v2/person/ask/source` carries its
 `imported_meeting_review`. Clients no longer send either header. Every release
 from 22 on already sent both, so it sees the same answers; an older client,
 built before 2026-11-04, refuses a typed gap and an imported meeting's packet,
-and none is installed.
+and none is installed. `POST /v3/person/evidence/search` is retired too: it
+answers the ordinary 404 and stays reserved against provider adapters. No
+shipped client called it; the research-loop evaluation, its last caller, now
+binds approved meetings through the person list and the approved-record read.
 
 ## Migration, rollback, and evidence
 

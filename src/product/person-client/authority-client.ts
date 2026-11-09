@@ -6,7 +6,7 @@ import {
   PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_HEADER_V1,
   PERSON_ASK_PROGRESS_HEADER_VALUE_V3, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, PERSON_CHANGES_ROUTE_V1, PERSON_DIAGNOSTICS_MAX_RESPONSE_BYTES_V1,
   PERSON_DIAGNOSTICS_PATH_V1, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, PERSON_EMPLOYEES_PATH_V1,
-  PERSON_EVIDENCE_SEARCH_PATH_V1, PERSON_LIST_PATH_V1, PERSON_LIST_RESPONSE_MAX_BYTES_V1, PERSON_OPEN_PATH_V1, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, PERSON_PROJECTS_PATH_V1,
+  PERSON_LIST_PATH_V1, PERSON_LIST_RESPONSE_MAX_BYTES_V1, PERSON_OPEN_PATH_V1, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, PERSON_PROJECTS_PATH_V1,
   PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_ACTIVITY_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_PROJECT_RENAME_PATH_V1, PERSON_RECORDS_PATH_V1,
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, PERSON_RESEARCH_EVAL_READ_PATH_V1, PERSON_RESEARCH_EVAL_START_PATH_V1, PERSON_RUNS_MAX_RESPONSE_BYTES_V1, PERSON_RUNS_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1,
@@ -17,8 +17,8 @@ import {
   validatePersonAnswerRequestV3, validatePersonAnswerResponseV8, validatePersonAskCheckRequestV1, validatePersonAskCheckV1, validatePersonChangesV1,
   validatePersonDiagnosticsRequestV1, validatePersonDiagnosticsResultV1, validatePersonDocumentAssociateV1, validatePersonDocumentAssociationReceiptV1,
   validatePersonDocumentDissociateV1, validatePersonDocumentIdV1, validatePersonDocumentMetadataV2, validatePersonDocumentSearchResultV2, validatePersonDocumentSearchV2,
-  validatePersonDocumentStatusV2, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV2, validatePersonEvidenceDeskResponseV1,
-  validatePersonEvidenceSearchRequestV1, validatePersonListRequestV1, validatePersonListResponseV1, validatePersonOpenRequestV1, validatePersonOpenResponseV1,
+  validatePersonDocumentStatusV2, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV2,
+  validatePersonListRequestV1, validatePersonListResponseV1, validatePersonOpenRequestV1, validatePersonOpenResponseV1,
   validatePersonProjectActivityV1, validatePersonRecordListV1, validatePersonRecordSearchRequestV2, validatePersonRecordSearchV2, validatePersonResearchEvalReadRequestV1,
   validatePersonResearchEvalReadResponseV1, validatePersonResearchEvalStartReceiptV1, validatePersonResearchEvalStartRequestV1, validatePersonRunsRequestV1,
   validatePersonRunsResultV1, validatePersonSourceEvidenceReadRequestV1, validatePersonSourceEvidenceV1, validatePersonUpdateReceiptV3, validatePersonUpdateRequestId,
@@ -32,7 +32,7 @@ import {
   type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2, type PersonAnswerPreviousV1, type PersonAnswerResponseV8 as OrganizationPersonAnswerV8,
   type PersonAskCheckRequestV1, type PersonAskCheckV1, type PersonAskProgressStepEventV3, type PersonAskProgressTerminalEventV3, type PersonAskReceiptV3,
   type PersonChangesV1, type PersonDiagnosticCaptureIdV1, type PersonDiagnosticsRequestV1, type PersonDiagnosticsResultsV1, type PersonDocumentAssociateV1,
-  type PersonDocumentDissociateV1, type PersonDocumentSearchV2, type PersonEvidenceDeskResponseV1, type PersonEvidenceSearchRequestV1, type PersonListRequestV1,
+  type PersonDocumentDissociateV1, type PersonDocumentSearchV2, type PersonListRequestV1,
   type PersonListResponseV1, type PersonOpenRequestV1, type PersonOpenResponseV1, type PersonProjectActivityV1, type PersonRecordListV1, type PersonRecordSearchV2,
   type PersonResearchEvalReadResponseV1, type PersonResearchEvalStartReceiptV1, type PersonResearchEvalStartRequestV1, type PersonRunsRequestV1, type PersonRunsResultsV1,
   type PersonSourceEvidenceReadRequestV1, type PersonSourceEvidenceV1, type PersonToolGetRequestV1, type PersonToolJsonRequestV1, type PersonToolTransportV1,
@@ -53,8 +53,6 @@ export type { EmployeeRosterV1, PersonRecordListItemV1, PersonRecordListV1, Pers
  * tool containers (research tool contract v1).
  */
 export type PersonAnswerV8 = OrganizationPersonAnswerV8;
-export type PersonEvidenceSearchV1 = PersonEvidenceSearchRequestV1;
-export type PersonEvidenceDeskV1 = PersonEvidenceDeskResponseV1;
 export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
 export type PersonListV1 = PersonListResponseV1;
 export type PersonOpenV1 = PersonOpenResponseV1;
@@ -804,16 +802,6 @@ export class PersonAuthorityClient {
       validate_response: response => validatePersonAskCheckV1(response, request), access_token: accessToken,
       maximum_request_bytes: PERSON_ASK_CHECK_LIMITS_V1.body_bytes, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_CHECK_TIMEOUT_MS, signal,
     });
-  }
-
-  async evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    const request = validatePersonEvidenceSearchRequestV1(value);
-    const response = await this.json({ path: PERSON_EVIDENCE_SEARCH_PATH_V1, body: request,
-      validate_request: validatePersonEvidenceSearchRequestV1, validate_response: validatePersonEvidenceDeskResponseV1,
-      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, signal });
-    const expectedScope = request.project_id === undefined ? { kind: 'global' } : { kind: 'project', project_id: request.project_id };
-    if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different evidence scope');
-    return response;
   }
 
   /** Model-free list (ADR-0024). Only the caller knows which page is first, so the header is checked here. */

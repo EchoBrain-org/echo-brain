@@ -6,7 +6,7 @@ import {
   validatePersonAnswerCitationV6,
   validatePersonAnswerCitationV8,
   validatePersonAnswerResponseV8,
-  validatePersonEvidenceDeskResponseV1,
+  validatePersonEvidenceOpenRequestV1,
 } from '../src/index.js';
 
 const record = `sha256:${'a'.repeat(64)}` as const;
@@ -105,7 +105,7 @@ const response = (citations: readonly Cited[], private_ = citations.some(isPriva
 });
 
 describe.each(ROWS)('a $name citation', (row) => {
-  it('is cited from its version: in an answer (8), on an impact card (6), at the evidence desk (4)', () => {
+  it('is cited from its version: in an answer (8), on an impact card (6), in an evidence open (4)', () => {
     const accepted = validatePersonAnswerResponseV8(response([row.cited]));
     expect(accepted.citations).toEqual([row.cited]);
     expect(Object.isFrozen(accepted.citations[0])).toBe(true);
@@ -113,11 +113,10 @@ describe.each(ROWS)('a $name citation', (row) => {
     // Stored impact cards and open items' live parts validate V6 citations.
     if (row.since <= 6) expect(validatePersonAnswerCitationV6(row.cited)).toEqual(row.cited);
     else expect(() => validatePersonAnswerCitationV6(row.cited)).toThrow('Ask response citation kind is invalid');
-    // The model-free evidence doors stay V4.
-    const desk = { schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: { kind: 'global' }, truncated: false,
-      items: [{ id: 'desk_1', citation: row.cited.citation, kind: row.cited.kind, label: row.cited.label, visibility: row.cited.visibility, receipt_sha256: record }] };
-    if (row.since === 4) expect(validatePersonEvidenceDeskResponseV1(desk).items[0]!.citation).toEqual(row.cited.citation);
-    else expect(() => validatePersonEvidenceDeskResponseV1(desk)).toThrow('Evidence desk item kind is invalid');
+    // Evidence opens (a task's starting record, the live desk's open) stay V4.
+    const open = { schema_version: 1, citation: row.cited.citation };
+    if (row.since === 4) expect(validatePersonEvidenceOpenRequestV1(open).citation).toEqual(row.cited.citation);
+    else expect(() => validatePersonEvidenceOpenRequestV1(open)).toThrow('Ask citation kind is invalid');
   });
 
   it('is named by its own kind, and a record or a passage by any record kind', () => {

@@ -63,18 +63,15 @@ import {
   PERSON_DIAGNOSTICS_PATH_V1,
   PERSON_RESEARCH_EVAL_READ_PATH_V1,
   PERSON_RESEARCH_EVAL_START_PATH_V1,
-  PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
   validatePersonAnswerRequestV3,
   validatePersonRunsRequestV1,
   validatePersonDiagnosticsRequestV1,
   validatePersonResearchEvalReadRequestV1,
   validatePersonResearchEvalStartRequestV1,
-  validatePersonEvidenceSearchRequestV1,
   validatePersonSourceEvidenceReadRequestV1,
 } from "@echo-brain/organization-api";
 import type { PersonSourceEvidenceHttpApplicationV1 } from "./person-source-evidence-http-application.js";
-import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-application.js";
 import type { PersonAnswerV7HttpApplication } from "./person-live-answer-http-application.js";
 import type { PersonResearchEvalHttpApplicationV1 } from "./person-research-eval-http-application.js";
 import type { PersonTriggerRunsHttpApplicationV1 } from './person-trigger-runs-http-application.js';
@@ -119,7 +116,6 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_RECORDS_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V7}`,
   `POST ${PERSON_ASK_CHECK_PATH_V1}`,
-  `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
   `GET ${PERSON_CHANGES_ROUTE_V1}`,
   `GET ${PERSON_PROJECT_ACTIVITY_PATH_V1}`,
   `POST ${PERSON_SOURCE_EVIDENCE_PATH_V1}`,
@@ -154,11 +150,6 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_record_search: PersonRecordSearchHttpApplicationV1;
   /** Owner-only employee invite, reissue, and revoke. */
   readonly person_employees: PersonEmployeeHttpApplication;
-  /**
-   * The evidence desk's search (`/v3/person/evidence/search`, ADR-0022), which only the research-loop evaluation reads. Its
-   * open and its Ask route, `/v3/person/ask`, were retired: Ask is `person_answer_v7`.
-   */
-  readonly person_answer_v3: PersonAnswerV3HttpApplication;
   /**
    * Ask (`/v7`, the V8 answer, research tool contract v1): it may read and cite live tickets and pages, ECHO's shared
    * follow-ups (ADR-0040), and the asker's projects, people, tools and their connected tools' containers.
@@ -203,10 +194,10 @@ function providerIngressRoutes(
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
       // These Person families stay reserved, their retired paths too (V1 notes; V1 documents and the V2 and V3 tools lists,
-      // ADR-0048; the capability read and the evidence desk's open), so no adapter can mount one.
+      // ADR-0048; the capability read and the evidence desk's open and search), so no adapter can mount one.
       if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) ||
         [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2,
-          '/v2/person/tools', '/v3/person/tools', '/v3/person/capabilities', '/v3/person/evidence/open']
+          '/v2/person/tools', '/v3/person/tools', '/v3/person/capabilities', '/v3/person/evidence/open', '/v3/person/evidence/search']
           .some(path => route.path === path || route.path.startsWith(`${path}/`))) {
         throw new Error(`provider ingress route collides with Authority route: ${key}`);
       }
@@ -485,7 +476,7 @@ function askOptions(request: IncomingMessage): { readonly time_context?: PersonA
   return time_context === undefined ? {} : { time_context };
 }
 
-/** Ask, desk and list reads check the bearer and install cancellation before reading any body bytes. */
+/** Ask and list reads check the bearer and install cancellation before reading any body bytes. */
 function personCancellablePost<Application, Request>(
   application: Application,
   validate: (value: unknown) => Request,
@@ -728,7 +719,6 @@ export function createOrganizationAuthorityHttpServer(
   );
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
     [PERSON_ANSWER_PATH_V7, personAskV7Post(options.person_answer_v7)],
-    [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
     [PERSON_ASK_CHECK_PATH_V1, personCancellablePost(options.person_ask_check, validatePersonAskCheckRequestV1, (application, input) => application.check(input))],
     ...(options.person_research_eval === undefined ? [] : [
       [PERSON_RESEARCH_EVAL_START_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalStartRequestV1, (application, input) => application.start(input))],

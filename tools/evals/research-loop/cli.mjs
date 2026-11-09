@@ -95,11 +95,12 @@ function runReleaseCheck(args) {
   if (!result.passed) throw new Error(`release check failed; see ${join(out, "release-check.json")}`);
 }
 
-async function bindings(args) {
+/** Binds the approved meetings the THERM project lists, read as Ask cites them (lib/bindings.mjs). */
+async function bindings(args, { client: given } = {}) {
   const out = privateDirectory(args.out);
   if (!/^prj_[0-9a-f-]{36}$/u.test(args["project-id"] ?? "")) throw new Error("--project-id must be the THERM ECHO project id");
   const dataset = loadDataset();
-  const client = await personClient();
+  const client = given ?? await personClient();
   const { meetings, missing } = await discoverMeetings(client, dataset.additions, args["project-id"]);
   const bound = { schema_version: 1, world: dataset.additions.world, test_person: args["test-person"], project_id: args["project-id"], meetings };
   substitutePerson({}, bound.test_person);
@@ -238,7 +239,7 @@ export async function main(argv, dependencies = {}) {
     const problems = datasetProblems(loadDataset());
     if (problems.length > 0) throw new Error(`dataset problems:\n${problems.join("\n")}`);
     process.stdout.write("dataset is structurally valid\n");
-  } else if (command === "bindings") await bindings(args);
+  } else if (command === "bindings") await bindings(args, dependencies);
   else if (command === "run") await run(args, dependencies);
   else if (command === "trace") {
     const result = await runTrace(args, { ...dependencies, get_client: personClient, source_sha: sourceIdentity() });

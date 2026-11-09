@@ -2,12 +2,7 @@ import { once } from "node:events";
 import { request as httpRequest } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import {
-  PERSON_ANSWER_PATH_V7,
-  PERSON_EVIDENCE_SEARCH_PATH_V1,
-  validatePersonAnswerResponseV8,
-  validatePersonEvidenceDeskResponseV1,
-} from "@echo-brain/organization-api";
+import { PERSON_ANSWER_PATH_V7, validatePersonAnswerResponseV8 } from "@echo-brain/organization-api";
 import type { StructuredGenerationInput } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 import type { AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -15,20 +10,17 @@ import { AuthorityOperationError } from "@echo-brain/organization-authority-kern
 /** Retired Ask paths: the one-shot Asks (ADR-0022) and every route before `/v7`. No route, so the canonical not-found reply. */
 const RETIRED_ASK_PATHS = ["/v1/person/ask", "/v2/person/ask", "/v3/person/ask", "/v4/person/ask", "/v5/person/ask", "/v6/person/ask"] as const;
 import type { OriginalContextDeskItemV1, PersonOriginalContextEvidenceDeskPortV1 } from "../src/application/ports/person-original-context-retrieval-v1.js";
-import { createPersonAnswerV3Route } from "../src/composition/person-answer-v3-route.js";
 import { createPersonLiveAnswerRouteV1 } from "../src/composition/person-live-answer-route-v1.js";
 import { PersonRecordSearchIndexLagV1, type PersonEvidenceDeskRecordsV1 } from "../src/composition/person-record-search-route.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
-import type { PersonAnswerV3HttpApplication } from "../src/presentation/person-answer-v3-http-application.js";
 import type { PersonAnswerV7HttpApplication } from "../src/presentation/person-live-answer-http-application.js";
 import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
 
-/** The evidence desk (`application`) and Ask on `/v7` (`ask`) behind the real HTTP server. */
-async function server(input: { readonly application?: PersonAnswerV3HttpApplication; readonly ask?: PersonAnswerV7HttpApplication }) {
+/** Ask on `/v7` (`ask`) behind the real HTTP server. */
+async function server(input: { readonly ask?: PersonAnswerV7HttpApplication }) {
   const sessions = { authenticateAccess: vi.fn(() => ({})) };
   const instance = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({
     sessions: sessions as never,
-    ...(input.application === undefined ? {} : { person_answer_v3: input.application }),
     ...(input.ask === undefined ? {} : { person_answer_v7: input.ask }),
   }));
   instance.listen(0, "127.0.0.1");
@@ -102,6 +94,23 @@ describe("Agentic Ask HTTP capability gate", () => {
     expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_tool_connections: [adapter] }))).toThrow("collides with Authority route");
   });
 
+  it("answers the evidence desk's retired search and open as routes that never existed, and keeps both from provider adapters", async () => {
+    const citation = { kind: "source_revision", source_id: `source:${"d".repeat(64)}`, revision_id: "revision-1", source_sha256: canonicalSha256({ source: 1 }),
+      representation_sha256: canonicalSha256({ representation: 1 }), anchor_sha256: canonicalSha256({ anchor: 1 }) };
+    const retired = [["/v3/person/evidence/search", { schema_version: 1, query: "launch" }], ["/v3/person/evidence/open", { schema_version: 1, citation }]] as const;
+    const value = await server({});
+    try {
+      for (const [path, body] of retired) {
+        expect(await post(value.url, path, body)).toEqual({ status: 404, body: { error: { code: "not_found", message: "request failed" } } });
+      }
+      expect(value.sessions.authenticateAccess).not.toHaveBeenCalled();
+    } finally { await value.close(); }
+    for (const [path] of retired) {
+      const adapter = { routes: [{ route_id: "collision", method: "POST" as const, path }], accept: async () => ({ status: 200 as const, body: {} }) };
+      expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_tool_connections: [adapter] }))).toThrow("collides with Authority route");
+    }
+  });
+
   it("forwards a client disconnect as the Ask's abort signal", async () => {
     let started!: () => void;
     let observedAbort!: () => void;
@@ -133,8 +142,8 @@ describe("Agentic Ask HTTP capability gate", () => {
 });
 
 /**
- * The real Ask route (`/v7`) and evidence desk behind the real HTTP server,
- * over fake stores: one only-me note of the asker's, and records still indexing.
+ * The real Ask route (`/v7`) behind the real HTTP server, over fake stores:
+ * one only-me note of the asker's, and records still indexing.
  */
 function askFixture(nativeDriver = false) {
   const checked_at = "2026-09-27T00:00:00.000Z";
@@ -178,7 +187,6 @@ function askFixture(nativeDriver = false) {
     audit: { forRequest: () => ({ append: vi.fn() }), forLiveRequest: () => ({}) } as never,
   };
   const route = createPersonLiveAnswerRouteV1(options);
-  const desk = createPersonAnswerV3Route(options);
   async function nativeRun(session: AgenticResearchDriverSessionV1) {
       expect(JSON.stringify(session.initial)).toContain('everything the asker can read');
       const read = await session.call('search', { query: 'launch' });
@@ -186,7 +194,7 @@ function askFixture(nativeDriver = false) {
       expect(await session.call('finish', { completed: true, parts: [{ question: 'Launch day', notes: 'Launch on Tuesday.', needs: [{ need: 'launch day', kind: 'content', status: 'found', evidence: ['E1'] }] }] })).toMatchObject({ accepted: true });
   }
   // The desk cites an original with its display label.
-  return { note, cited: { ...note.citation, label: note.label }, scopes, originals, records, generate, route, desk };
+  return { note, cited: { ...note.citation, label: note.label }, scopes, originals, records, generate, route };
 }
 
 async function post(url: string, path: string, body: unknown): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
@@ -197,7 +205,7 @@ async function post(url: string, path: string, body: unknown): Promise<{ readonl
 describe("Ask scope, and citation refs (ADR-0024)", () => {
   it('serves the native research driver through the existing authenticated HTTP route and writer', async () => {
     const f = askFixture(true);
-    const value = await server({ application: f.desk, ask: f.route });
+    const value = await server({ ask: f.route });
     try {
       const answer = await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'What did I decide?' });
       expect(answer.status).toBe(200);
@@ -219,7 +227,7 @@ describe("Ask scope, and citation refs (ADR-0024)", () => {
 
   it("builds one desk scope for every store, echoes it, and cites with a ref", async () => {
     const f = askFixture();
-    const value = await server({ application: f.desk, ask: f.route });
+    const value = await server({ ask: f.route });
     try {
       const answer = await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What did I decide?" });
       expect(answer.status).toBe(200);
@@ -248,7 +256,7 @@ describe("Ask scope, and citation refs (ADR-0024)", () => {
 
   it("refuses mine, a retired scope, alone or with a project, before the route runs", async () => {
     const f = askFixture();
-    const value = await server({ application: f.desk, ask: f.route });
+    const value = await server({ ask: f.route });
     try {
       for (const body of [
         { schema_version: 3, question: "What did I decide?", mine: true },
@@ -259,23 +267,6 @@ describe("Ask scope, and citation refs (ADR-0024)", () => {
       }
       expect(f.originals.deskAuthorize).not.toHaveBeenCalled();
       expect(f.generate).not.toHaveBeenCalled();
-    } finally { await value.close(); }
-  });
-
-  it("strips ref and the other internal research metadata from the evidence search, whose contract carries none; its open is retired", async () => {
-    const f = askFixture();
-    const value = await server({ application: f.desk, ask: f.route });
-    try {
-      const searched = await post(value.url, PERSON_EVIDENCE_SEARCH_PATH_V1, { schema_version: 1, query: "launch" });
-      expect(searched.status).toBe(200);
-      const desk = validatePersonEvidenceDeskResponseV1(searched.body);
-      expect(desk.items.map((item) => item.citation)).toEqual([f.cited]);
-      // A meeting record's list label, like named dates, is internal too (ADR-0041); the all-source door test releases one.
-      for (const key of ["ref", "dates", "date_kind", "list_label"]) expect(desk.items[0]).not.toHaveProperty(key);
-      expect(JSON.stringify(searched.body)).not.toContain(f.note.ref!);
-      // The desk's open had no caller: it answers as a route that never existed.
-      expect(await post(value.url, "/v3/person/evidence/open", { schema_version: 1, citation: f.note.citation }))
-        .toEqual({ status: 404, body: { error: { code: "not_found", message: "request failed" } } });
     } finally { await value.close(); }
   });
 });

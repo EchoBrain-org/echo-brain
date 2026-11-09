@@ -54,7 +54,6 @@ import { readableSearchGenerationContractV1 } from "./readable-search-generation
 import { AUTHORITY_RECORD_INPUT_CODECS_V1 } from "./authority-record-protocols-v1.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { createPersonSourceEvidenceRouteV1 } from "./person-source-evidence-route.js";
-import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
 import { bindPersonLiveEvidenceDeskV1, createPersonLiveAnswerRouteV1 } from './person-live-answer-route-v1.js';
 import { personWorkspaceGrantsV1 } from './person-workspace-evidence-v1.js';
 import type {
@@ -416,9 +415,8 @@ export async function startOrganizationAuthorityApiRuntime(
         originals: originalItems,
         meetings: recordSearch,
       }),
-      // Agentic Ask is the only Ask (ADR-0022), on `/v7`, beside the evidence desk. The request catalog contains local
-      // context even when no external source is configured.
-      person_answer_v3: createPersonAnswerV3Route(answerOptions),
+      // Agentic Ask is the only Ask (ADR-0022), on `/v7`. The request catalog contains local context even when no external
+      // source is configured.
       person_answer_v7: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps, workspace }),
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
       person_diagnostics: diagnostics,

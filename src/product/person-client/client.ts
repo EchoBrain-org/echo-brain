@@ -20,8 +20,6 @@ import {
   unknownDocumentMutation,
   type EmployeeRosterV1,
   type PersonAnswerV8,
-  type PersonEvidenceDeskV1,
-  type PersonEvidenceSearchV1,
   type PersonAskSourceEvidenceV1,
   type PersonAskProgressSinkV3,
   type PersonLiveAnswerV3,
@@ -550,14 +548,6 @@ export class PersonClient {
   /** Whether each source old answers cited is the same, changed, unreadable or unknown now (ADR-0047). */
   async askCheck(value: PersonAskCheckRequestV1, signal?: AbortSignal): Promise<PersonAskCheckV1> {
     return this.withReadSession((authority, token) => authority.askCheck(token, value, signal), signal, ASK_CHECK_TIMEOUT_MS);
-  }
-
-  /**
-   * One evidence desk search under a new authenticated, scope-bound request. No command runs it: the research-loop
-   * evaluation finds approved meetings' record citations with it (tools/evals/research-loop/lib/bindings.mjs).
-   */
-  async evidenceSearch(value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    return this.withReadSession((authority, token) => authority.evidenceSearch(token, value, signal), signal);
   }
 
   /** One model-free list page under a fresh authenticated read (ADR-0024). */

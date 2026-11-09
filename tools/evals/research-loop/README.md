@@ -101,7 +101,12 @@ desktop's Ask already did
 ([ADR-0048](../../../docs/decisions/ADR-0048-retire-older-person-routes.md),
 update of 2026-11-09). Research, the writer, the answer's other fields and
 grading are unchanged (the judge never reads `gap_details`), so earlier Ask
-baselines stay comparable. Approved-record runs are unchanged.
+baselines stay comparable. Approved-record runs are unchanged. The same day,
+`bindings` stopped using the retired evidence search: it reads the THERM list
+and each meeting's record (step 4). A `bindings.json` written before stays
+valid; one written after may start the M3 and M4 record cases from another of
+their decisions (the record's first, where the search ranked them), so compare
+approved-record runs under one `bindings.json`.
 
 **Baselines across the sweeps' retirement (2026-11-08).** The Sweep cases and
 the S1 world state went, and the judge's prompt and the report no longer
@@ -248,10 +253,15 @@ See
    npm run eval:research-loop -- bindings --project-id prj_… --test-person "Your Name" --out ~/.local/state/echo-research-loop-eval-20261006
    ```
 
-   If a meeting is reported as not found, add its approved-record citations to
-   `bindings.json` by hand. The search runs inside the THERM project, so a
-   meeting it cannot find may belong to no project (see "Approved-record
-   scope").
+   It lists the THERM project as `person list --project` does, and reads each
+   approved meeting whose title carries a dataset meeting's as
+   `person records --record-sha256 <digest> --brief` does: every decision,
+   action and rationale, in the record's order (newest record first), each
+   with the atom id and policy its citation needs. An approved-record case
+   starts from its meeting's first decision. If a meeting is reported as not
+   found, add its approved-record citations to `bindings.json` by hand. Only
+   meetings listed in THERM are found, so a meeting it cannot find may belong
+   to no project (see "Approved-record scope").
 5. **Baseline at S0** (Ask and approved record, three runs each, plus one
    background-budget run of every live Ask):
 

@@ -141,7 +141,6 @@ selection facts; empty subsets of incomplete or unchecked lists do not qualify.
 | --- | --- | --- |
 | `POST /v1/person/ask/check` | Content-free check that an old turn's sources are still readable | Desktop, when an old turn opens |
 | `POST /v2/person/ask/source` | Open one cited source | Desktop |
-| `POST /v3/person/evidence/search` | The evidence desk's search, directly | The research-loop eval |
 | `POST /v1/person/diagnostics` | One-use diagnostic capture | Research-loop traces |
 | `POST /v1/person/research-eval/start`, `/read` | Staging evaluation runs | `npm run eval:research-loop` |
 
