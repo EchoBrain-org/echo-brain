@@ -4,7 +4,7 @@
 // as plain functions, hooks that do so and the tree those calls show.
 import type { VNode } from 'preact';
 import { afterEach, beforeEach, vi } from 'vitest';
-import type { AnswerSource, AskStep, Expect, OpenItemsView, ProjectSummary, TimelineTurn } from '../../src/shared/protocol.js';
+import type { AskStep, Expect, OpenItemsView, ProjectSummary, TimelineTurn } from '../../src/shared/protocol.js';
 import type { AskTook, State } from '../../src/renderer/store.js';
 
 export const ok = (value: unknown) => ({ ok: true, value });
@@ -171,7 +171,6 @@ export async function asking(rpc: { mock: { calls: unknown[][] } }, held: Held, 
     store.askProgress({ cancel_id: cancelId, expect: account, step: value, ...notice });
   return {
     store, release, cancelId, step,
-    read: (items: readonly AnswerSource[]) => step({ type: 'read', items }),
     pane: () => render(screens.SourcePane({ state: store.getState() })),
     thread: () => render(screens.AskView({ state: store.getState() })),
   };
