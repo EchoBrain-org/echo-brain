@@ -54,14 +54,6 @@ export const PERSON_EVIDENCE_SEARCH_PATH_V1 = '/v3/person/evidence/search';
 /** Optional Ask headers; older Authorities ignore them, preserving client-first upgrades. */
 export const PERSON_ASK_CLIENT_NOW_HEADER_V1 = 'x-echo-client-now';
 export const PERSON_ASK_TIME_ZONE_HEADER_V1 = 'x-echo-time-zone';
-/** Only opted-in clients receive typed Ask explanations; older exact-key V8 readers keep their response shape. */
-export const PERSON_ASK_GAP_DETAILS_HEADER_V1 = 'x-echo-ask-gap-details';
-export const PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1 = '1';
-export function validatePersonAskGapDetailsHeaderV1(value: unknown): true | undefined {
-  if (value === undefined) return undefined;
-  if (value === PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1) return true;
-  fail('Ask gap details header is invalid');
-}
 
 export interface PersonAskTimeContextV1 {
   readonly now: string;

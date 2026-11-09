@@ -136,7 +136,7 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
       const askOptions = { model: options.model, generation: options.generation,
         ...(options.research_driver === undefined ? {} : { research_driver: options.research_driver }),
         ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, audit: options.audit.forRequest(context),
-        ...(input.include_gap_details === undefined ? {} : { include_gap_details: input.include_gap_details }), ...(asker === undefined ? {} : { asker }),
+        ...(asker === undefined ? {} : { asker }),
       };
       // Each attempt audits what it named; only the released attempt's receipt is returned. It streams progress V3, whose
       // names may be follow-ups, workspace items and tool containers.

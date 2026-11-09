@@ -16,14 +16,14 @@ import { EMPTY_BUNDLE, LIST_READ_AT, listed, record, scriptedGate, writerReply }
 
 /** Ask's renderer on its own: a hand-built bundle, a gate over scripted writer replies, and no desk. */
 function alone(input: {
-  readonly bundle: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly remaining?: number; readonly typed_gaps?: boolean;
+  readonly bundle: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly remaining?: number;
   /** An Ask again (ADR-0047): the earlier answer, and the question the answer names, as Ask passes them together. */
   readonly earlier?: Parameters<typeof createAskRendererV1>[0]["earlier"]; readonly answers?: string;
 }) {
   const trace: string[] = [];
   const { gate, inputs } = scriptedGate(input.replies, input.bundle.budget, trace);
   const renderer = createAskRendererV1({
-    answer_prompt: ANSWER_PROMPT, source_catalog: [], ...(input.typed_gaps === false ? {} : { include_gap_details: true }), scope: "everything the asker can read",
+    answer_prompt: ANSWER_PROMPT, source_catalog: [], scope: "everything the asker can read",
     context: { today: "2026-10-06" }, desk_scope: input.bundle.gathered_for.scope,
     ...(input.earlier === undefined ? {} : { earlier: input.earlier }), ...(input.answers === undefined ? {} : { answers: input.answers }),
   });
@@ -65,17 +65,6 @@ function bundle(entries: readonly { readonly item: EvidenceDeskItemV2; readonly 
 const records = (count: number, options: Parameters<typeof record>[2] = {}) => bundle(Array.from({ length: count }, (_, index) => ({ item: record(`r${index + 1}`, `Approved record ${index + 1}.`, options), full: true, touched: index + 1 })), Array.from({ length: count }, (_, index) => `E${index + 1}`));
 
 describe("Ask renderer", () => {
-  it("keeps the exact older part field set unless the client opts into typed explanations", async () => {
-    const research: AgenticEvidenceBundleV1 = { ...records(1), stop: { reason: "finished", completed: true, unsupported_action: true } };
-    const replies = [writerReply([{ text: "The rule applies.", evidence: ["E1"] }], { not_found: ["the approver"] })];
-    const old = await alone({ bundle: research, replies, typed_gaps: false }).render("What is the rule? Change the status.");
-    const current = await alone({ bundle: research, replies }).render("What is the rule? Change the status.");
-    expect(Object.keys(old.result.response.parts[0]!).sort()).toEqual(["blocks", "gap", "question", "statements", "status"]);
-    const { gap_details, ...plain } = current.result.response.parts[0]!;
-    expect(gap_details).toEqual({ unsupported_action: true, not_found: "Not found: the approver." });
-    expect(plain).toEqual(old.result.response.parts[0]);
-  });
-
   it("keeps the read-only explanation when a writer supplies a long missing-fact gap", async () => {
     const run = alone({ bundle: { ...records(1), stop: { reason: "finished", completed: true, unsupported_action: true } },
       replies: [writerReply([{ text: "The rule applies.", evidence: ["E1"] }], { not_found: ["Missing detail. ".repeat(40)] })] });

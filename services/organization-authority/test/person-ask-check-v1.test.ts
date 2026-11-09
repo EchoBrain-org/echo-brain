@@ -163,7 +163,7 @@ describe('Ask source check: the database kinds', () => {
     expect(f.originals.read({ access_token: 'ari', scope: GLOBAL, citation: old }).atom).toMatchObject({ text, label: `Imported meeting: ${title}` });
     expect(f.originals.deskOpen({ access_token: 'ari', scope: GLOBAL, citation: old }).items[0]).toMatchObject({ citation: old, text, label: `Imported meeting: ${title}` });
     const route = createPersonSourceEvidenceRouteV1({ originals: f.originals });
-    expect(route.readSource({ access_token: 'ari', include_imported_meeting_review: true, request: { schema_version: 1, scope: GLOBAL, citation: old } as never }))
+    expect(route.readSource({ access_token: 'ari', request: { schema_version: 1, scope: GLOBAL, citation: old } as never }))
       .toMatchObject({ citation: { ...old, label: `Imported meeting: ${title}` }, text, imported_meeting_review: 'reviewed' });
     // A later source revision leaves the old citation readable, and it still opens the original notes.
     f.editMeeting();

@@ -143,7 +143,15 @@ empty, and the V2 note write went on 2026-10-25.
 
 Update (2026-11-09): the update floor
 ([ADR-0050](ADR-0050-update-floor-only-rises.md)) is past release 20 (the live
-feed is sequence 22), so `/v7` no longer sends `x-echo-person-ask-route`.
+feed is sequence 22), so `/v7` no longer sends `x-echo-person-ask-route`. The
+two opt-ins are always on: the Authority no longer reads
+`x-echo-ask-gap-details` or `x-echo-source-review`, so every Ask answer carries
+its typed `gap_details` (the research evaluation's too), and every imported
+meeting's packet from `POST /v2/person/ask/source` carries its
+`imported_meeting_review`. Clients no longer send either header. Every release
+from 22 on already sent both, so it sees the same answers; an older client,
+built before 2026-11-04, refuses a typed gap and an imported meeting's packet,
+and none is installed.
 
 ## Migration, rollback, and evidence
 

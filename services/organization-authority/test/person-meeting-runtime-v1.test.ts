@@ -1252,7 +1252,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const scope = { kind: 'global' } as const;
     const citation = originals.deskSearch({ access_token: 'owner', scope, kinds: ['imported_meeting'] }).items[0]!.citation;
     const evidence = createPersonSourceEvidenceRouteV1({ originals });
-    const read = () => evidence.readSource({ access_token: 'owner', include_imported_meeting_review: true, request: { schema_version: 1, scope, citation } as never });
+    const read = () => evidence.readSource({ access_token: 'owner', request: { schema_version: 1, scope, citation } as never });
     const before = read();
     expect(before).toMatchObject({ citation: { label: 'Imported meeting: Test meeting' }, imported_meeting_review: 'not_reviewed' });
     // A partial item selection is not a completed review; the core refuses it atomically.

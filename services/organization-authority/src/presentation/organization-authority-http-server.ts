@@ -1,6 +1,5 @@
 import {
-  PERSON_ASK_GAP_DETAILS_HEADER_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
-  validatePersonAskGapDetailsHeaderV1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1,
+  PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1,
 } from "@echo-brain/organization-api";
 import {
   PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
@@ -66,8 +65,6 @@ import {
   PERSON_RESEARCH_EVAL_START_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
-  PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1,
-  validatePersonSourceEvidenceReviewHeaderV1,
   validatePersonAnswerRequestV3,
   validatePersonRunsRequestV1,
   validatePersonDiagnosticsRequestV1,
@@ -476,33 +473,16 @@ interface PersonReadGetApplication {
 function personSourcePost(application: PersonSourceEvidenceHttpApplicationV1): PersonPostHandler {
   return async (request, response) => {
     const requestBody = await personBody(request, validatePersonSourceEvidenceReadRequestV1);
-    let review: true | undefined;
-    try { review = validatePersonSourceEvidenceReviewHeaderV1(request.headers[PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1]); }
-    catch { throw new AuthorityOperationError('invalid_request', 'Ask source review header is invalid'); }
-    json(response, 200, application.readSource({
-      access_token: accessToken(request.headers.authorization), request: requestBody,
-      ...(review === undefined ? {} : { include_imported_meeting_review: review }),
-    }));
+    json(response, 200, application.readSource({ access_token: accessToken(request.headers.authorization), request: requestBody }));
   };
 }
 
-/** The client's optional clock and time zone headers an Ask may read. */
-function askTimeContext(request: IncomingMessage): PersonAskTimeContextV1 | undefined {
-  try { return validatePersonAskTimeContextV1(request.headers[PERSON_ASK_CLIENT_NOW_HEADER_V1], request.headers[PERSON_ASK_TIME_ZONE_HEADER_V1]); }
+/** An Ask's optional clock and time zone headers as its options. An invalid one is `invalid_request`. */
+function askOptions(request: IncomingMessage): { readonly time_context?: PersonAskTimeContextV1 } {
+  let time_context: PersonAskTimeContextV1 | undefined;
+  try { time_context = validatePersonAskTimeContextV1(request.headers[PERSON_ASK_CLIENT_NOW_HEADER_V1], request.headers[PERSON_ASK_TIME_ZONE_HEADER_V1]); }
   catch { throw new AuthorityOperationError('invalid_request', 'Ask time context is invalid'); }
-}
-
-/** Only explicitly opted-in clients can receive the additional V8 part field. */
-function askGapDetails(request: IncomingMessage): true | undefined {
-  try { return validatePersonAskGapDetailsHeaderV1(request.headers[PERSON_ASK_GAP_DETAILS_HEADER_V1]); }
-  catch { throw new AuthorityOperationError('invalid_request', 'Ask gap details header is invalid'); }
-}
-
-/** An Ask's optional client headers as its options. An invalid one is `invalid_request`. */
-function askOptions(request: IncomingMessage): { readonly time_context?: PersonAskTimeContextV1; readonly include_gap_details?: true } {
-  const time_context = askTimeContext(request);
-  const include_gap_details = askGapDetails(request);
-  return { ...(time_context === undefined ? {} : { time_context }), ...(include_gap_details === undefined ? {} : { include_gap_details }) };
+  return time_context === undefined ? {} : { time_context };
 }
 
 /** Ask, desk and list reads check the bearer and install cancellation before reading any body bytes. */
@@ -510,7 +490,7 @@ function personCancellablePost<Application, Request>(
   application: Application,
   validate: (value: unknown) => Request,
   read: (application: Application, input: {
-    readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly include_gap_details?: true; readonly signal: AbortSignal;
+    readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly signal: AbortSignal;
   }) => Promise<unknown>,
   ask = false,
 ): PersonPostHandler {

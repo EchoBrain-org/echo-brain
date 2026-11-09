@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   personWorkspaceRefV1,
   validatePersonAnswerResponseV8,
-  validatePersonAskGapDetailsHeaderV1,
   validatePersonItemRefV1,
   validatePersonWorkspaceCitationV1,
   validatePersonWorkspaceRefV1,
@@ -26,12 +25,6 @@ const response = (citations: readonly { readonly visibility: string }[] = [proje
 });
 
 describe('Workspace answer V8 (research tool contract v1)', () => {
-  it('accepts typed explanations only through its explicit opt-in header value', () => {
-    expect(validatePersonAskGapDetailsHeaderV1(undefined)).toBeUndefined();
-    expect(validatePersonAskGapDetailsHeaderV1('1')).toBe(true);
-    for (const value of ['', '0', '2', 'true', '1, 1', ['1'], true]) expect(() => validatePersonAskGapDetailsHeaderV1(value)).toThrow();
-  });
-
   it('carries bounded typed explanations separately from technical diagnostic gaps', () => {
     const value = { ...response([]), outcome: 'partial', parts: [{ question: 'Find a rule and change it.', status: 'not_found', statements: [],
       gap: 'Some evidence could not fit in this response.', gap_details: { unsupported_action: true, interrupted: true, not_found: 'Not found: the owner.' } }] };

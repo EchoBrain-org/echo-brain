@@ -162,8 +162,9 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       expect(headers.get('authorization')).toBe('Bearer bearer');
       expect(headers.get('x-echo-time-zone')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
       expect(Math.abs(Date.now() - Date.parse(headers.get('x-echo-client-now')!))).toBeLessThan(5_000);
+      // No opt-in: every answer comes in blocks (ADR-0051) and carries its typed gaps.
       expect(headers.get('x-echo-answer-layout')).toBeNull();
-      expect(headers.get('x-echo-ask-gap-details')).toBe('1');
+      expect(headers.get('x-echo-ask-gap-details')).toBeNull();
     }
   });
 
@@ -268,7 +269,6 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       expect(refused.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask']);
       // No Ask asks for an answer layout: every answer comes in blocks (ADR-0051), streamed or not.
       expect(headersOf(refused.mock.calls[0]![1]).get('x-echo-answer-layout')).toBeNull();
-      expect(headersOf(refused.mock.calls[0]![1]).get('x-echo-ask-gap-details')).toBe('1');
       expect(progress).toEqual([]);
     }
   });

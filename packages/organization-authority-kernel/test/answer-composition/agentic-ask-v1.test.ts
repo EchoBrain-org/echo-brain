@@ -738,7 +738,7 @@ describe("agentic Ask: research loop", () => {
       ? { items: [], truncated: false, receipt_digests: [], notice: 'Live pages could not be searched just now, so these results leave them out.', notice_kind: 'availability' }
       : { items: [], truncated: false, receipt_digests: [canonicalSha256({ query: request.query ?? null })] });
     const script = scripted([step([{}], [{ tool: 'search', args: { query: 'launch date', source: 'documents' } }, search('launch date'), search('launch schedule')]), finish([missing()])]);
-    const result = await createAgenticAskV5({ desk: evidence, model: script.model, generation, audit: { append: () => undefined }, today: () => '2026-09-28', include_gap_details: true })
+    const result = await createAgenticAskV5({ desk: evidence, model: script.model, generation, audit: { append: () => undefined }, today: () => '2026-09-28' })
       .answer({ question: 'When is launch?' });
     expect(script.inputs).toHaveLength(2);
     expect(result.outcome).toBe('partial');

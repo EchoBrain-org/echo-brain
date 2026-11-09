@@ -122,9 +122,9 @@ when the driver supplied `completed=false`. Open needs and interrupted reads
 remain incomplete. For Ask requests to change data or send messages, the driver
 can set `unsupported_action=true`: an action-only request has no factual parts
 and needs no search; mixed requests still validate their factual needs normally.
-Clients opt into typed `gap_details` with `x-echo-ask-gap-details: 1`; older
-requests keep the exact V8 part shape. The renderer supplies them separately
-from the diagnostic `gap`:
+Every Ask answer, the research evaluation's included, carries typed
+`gap_details` (the Authority no longer reads the old `x-echo-ask-gap-details`
+opt-in). The renderer supplies them separately from the diagnostic `gap`:
 unsupported action, unfinished research, and a bounded not-found explanation.
 The desktop and Copy use only these actionable reasons; coverage and formatting
 diagnostics stay hidden. The response stays partial for unsupported requests,

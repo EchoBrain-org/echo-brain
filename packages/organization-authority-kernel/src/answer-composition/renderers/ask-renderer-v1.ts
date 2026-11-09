@@ -138,7 +138,6 @@ export interface CreateAskRendererV1Options {
   readonly context: { readonly asked_by?: string; readonly today: string; readonly time_zone?: string };
   /** The response's scope: the desk's. */
   readonly desk_scope: AgenticEvidenceBundleV1["gathered_for"]["scope"];
-  readonly include_gap_details?: true;
   /**
    * For an Ask that carried its previous turn (ADR-0047): the full question the answer answers, which the response names.
    * Without it the response names none.
@@ -814,7 +813,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             question, status: draft.status === "answered" && Object.keys(gapDetails).length > 0 ? "partial" : draft.status,
             statements: released(draft.statements),
             ...(draft.gap === undefined ? {} : { gap: boundedBytes(draft.gap, 2 * 1024) }),
-            ...(!options.include_gap_details || Object.keys(gapDetails).length === 0 ? {} : { gap_details: Object.freeze(gapDetails) }),
+            ...(Object.keys(gapDetails).length === 0 ? {} : { gap_details: Object.freeze(gapDetails) }),
             ...(draft.records === undefined ? {} : { records: released(draft.records) }),
             ...(blocks === undefined ? {} : { blocks }),
           })]),

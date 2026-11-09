@@ -23,7 +23,7 @@ function harness(run: (session: AgenticResearchDriverSessionV1) => Promise<void>
     const wrapped = { ...session, call: async (...args: Parameters<AgenticResearchDriverSessionV1['call']>) => { const value = await session.call(...args); released.push(value); return value; } };
     packets.set(wrapped, released); return run(wrapped);
   }) };
-  const options = { include_gap_details: true as const, desk, model: { generate }, generation, audit: { append: (entry: AgenticAskAuditEntryV1) => { audit.push(entry); } }, research_driver: driver, today: () => '2026-10-20' };
+  const options = { desk, model: { generate }, generation, audit: { append: (entry: AgenticAskAuditEntryV1) => { audit.push(entry); } }, research_driver: driver, today: () => '2026-10-20' };
   return { options, desk, generate, revalidate, driver, audit, ask: () => createAgenticAskV5(options).answerWithResearch({ question: 'What was decided?' }) };
 }
 

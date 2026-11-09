@@ -95,6 +95,14 @@ meaning across ADR-0041. The writer answers such a part by selecting the
 member, and code states its row facts, citing the row: Ask leaves out a
 writer's sentence that cites only rows or list ids.
 
+**Baselines across always-on gap details (2026-11-09).** The eval endpoint's
+Ask now carries typed `gap_details` on a part with a typed gap, as the
+desktop's Ask already did
+([ADR-0048](../../../docs/decisions/ADR-0048-retire-older-person-routes.md),
+update of 2026-11-09). Research, the writer, the answer's other fields and
+grading are unchanged (the judge never reads `gap_details`), so earlier Ask
+baselines stay comparable. Approved-record runs are unchanged.
+
 **Baselines across the sweeps' retirement (2026-11-08).** The Sweep cases and
 the S1 world state went, and the judge's prompt and the report no longer
 cover sweep results or verdicts. The dataset and the judge prompt changed, so

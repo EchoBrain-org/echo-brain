@@ -100,8 +100,6 @@ export interface CreateAgenticAskOptions {
   readonly today?: () => string;
   /** Captured once by the calling client, used only to interpret temporal questions. */
   readonly time_context?: PersonAskTimeContextV1;
-  /** Typed actionable explanations are sent only to clients that explicitly request them. */
-  readonly include_gap_details?: true;
   /**
    * Who is asking, as the organization's directory names them, so "I", "me"
    * and "my" resolve to a person. Only the models see it; audits never do.
@@ -448,7 +446,6 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
         const writer = createAskRendererV1({
           answer_prompt: answerPrompt,
           source_catalog: sourceCatalog, scope, context: context(requestDay), desk_scope: options.desk.scope,
-          ...(options.include_gap_details === undefined ? {} : { include_gap_details: options.include_gap_details }),
           // An answer to an Ask that carried its previous turn names the question it answers, and an Ask again's writer also
           // says what is different since the earlier answer (ADR-0047). With none of its sentences left to compare with, an
           // Ask again is answered as asked: it cannot say what changed.
