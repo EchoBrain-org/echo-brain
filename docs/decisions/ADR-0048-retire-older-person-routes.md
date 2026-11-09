@@ -158,6 +158,11 @@ client from release 20 or older is installed.
 and stays reserved against provider adapters. No
 shipped client called it; the research-loop evaluation, its last caller, now
 binds approved meetings through the person list and the approved-record read.
+`POST /v1/person/diagnostics` is retired with the one-use diagnostic captures
+it prepared and read, and so is the research-loop evaluation's `trace`
+command, their only caller: staging traces live in LangSmith. The path answers
+the ordinary 404 and stays reserved against provider adapters, and an Ask or a
+run `start` that still sends a `capture_id` gets `invalid_request`.
 
 ## Migration, rollback, and evidence
 
@@ -192,7 +197,10 @@ binds approved meetings through the person list and the approved-record read.
     `person-documents-v1.test.ts`, `person-document-associations-v1.test.ts`
     and `person-upload-audience-disclosure.test.ts`.
   - The retired V2 and V3 tools lists stay reserved against provider adapters
-    (`person-tools-http-application.test.ts`).
+    (`person-tools-http-application.test.ts`), and so do the paths retired on
+    2026-11-09, which answer 404 before authentication
+    (`person-ask-http.test.ts`, which also refuses a `capture_id` on Ask, as
+    `person-runs-http.test.ts` does on a run `start`).
   - The client tests cover the plain 404 (`person-changes.test.ts`,
     `person-project-activity.test.ts`) and the unreadable V1 snapshot
     (`person-document-cli.test.ts`).
