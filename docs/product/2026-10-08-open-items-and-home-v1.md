@@ -17,6 +17,16 @@ the planner, take only items in tools the caller has connected, never let
 finding's own items and withhold a screened line without a repair; an
 affected row no model assessed makes no open item.
 Decision record: [ADR-0033](../decisions/ADR-0033-shared-open-items.md).
+
+Updated 2026-11-08: the founder retired sweeps (lean-down SVC-2), and nothing
+replaces them. ECHO no longer re-checks open items: the hourly re-check, Check
+now, every shown result (an item's last check, "matches now", Review rows) and
+the sweep evaluation cases are gone. Follow-ups close only by a person: Mark
+done, Dismiss or Reopen. Section 6 now says what was retired, and what
+remains of the wire until the V17 reset. In the same lean-down the Authority
+took over starting impact checks: the approver's desktop checks in and the
+Authority starts the oldest queued one
+([runs store and impact card v1](2026-10-07-runs-store-and-impact-card-v1.md)).
 Builds on
 [runs store and impact card v1](2026-10-07-runs-store-and-impact-card-v1.md),
 [unified meeting approval v1](2026-10-07-unified-meeting-approval-v1.md) and
@@ -33,8 +43,9 @@ shows each person only what waits on them.
 
 End state: approve a meeting → ECHO checks what it changes → the affected
 items appear in the project, unsent → the approver sends them to their owners
-→ each owner sees their item on Home and marks it updated → ECHO re-checks
-open items and shows which match the decision now.
+→ each owner sees their item on Home and marks it updated. (Until 2026-11-08
+ECHO then re-checked open items and showed which matched the decision now;
+see section 6.)
 
 ## Product rules this design follows
 
@@ -44,8 +55,8 @@ open items and shows which match the decision now.
   sees. A click by one person is what everyone else sees next.
 - **Nothing invisible.** An item exists in the shared state from the moment
   ECHO finds it, always with a named person on it.
-- **Status is written only by a person's click.** A check flags what matches
-  and what changed; it never closes or opens anything.
+- **Status is written only by a person's click.** No check ever closes or
+  opens anything.
 - **Never show more than the company's own permissions allow.** Who sees a
   row follows the decision's audience; who sees an outside item's words
   follows that tool's own permissions, checked live.
@@ -57,12 +68,11 @@ open items and shows which match the decision now.
 
 ```
 approval published
-   └─ impact run (pending) ── approver's desktop starts it ──► research
+   └─ impact run (pending) ── approver's desktop checks in, the Authority starts it ──► research
         └─ run done: impact card stored + one open item per affected item (unsent)
 
 Send (approver) ──► items open, each with an owner; unticked → not relevant
-Home (each person) ◄── rows that wait on them: Send, Update, Review
-Sweep (any desktop) ──► re-reads open items ──► last check on each item
+Home (each person) ◄── rows that wait on them: Send, Update
 Mark updated / No change needed (approver or owner) ──► item closed
 ```
 
@@ -78,11 +88,12 @@ live in existing tables; the rest are open items.
 | Check failed | the approver (Try again) | same | runs |
 | Found, not sent | the approver (Send) | same | open items: `unsent` |
 | Sent, open | the owner (Update, Mark updated) | same, plus the owner | open items: `open` |
-| ECHO saw it change, still not matching | the owner (Update) or the approver (Review) | same | open items: `open`, last check `changed` |
-| ECHO saw it match the decision, not closed | owner or approver (Close, on Your open items) | same | open items: `open`, last check `landed` |
 | Closed | nobody | same | open items: `done` or `not_relevant` |
 
-A meeting nobody has approved stays private to its reviewer, as today.
+A meeting nobody has approved stays private to its reviewer, as today. Until
+sweeps were retired (section 6), an open item also had two check stages: ECHO
+saw it change and still not match (Update, or Review for the approver), and
+ECHO saw it match the decision (Close).
 
 ## 2. Storage (Authority baseline V13)
 
@@ -101,6 +112,10 @@ reset (the founder confirmed all current data is disposable).
 
 Everything else in ADR-0032 stays: start, lease, attempts, failures, one live
 run per person, a frozen `done` row, no deletes.
+
+Since sweeps were retired (section 6), no code writes, lists, reads or starts
+a `sweep` run; the sweep columns and checks stay in the baseline, unused,
+until the V17 reset.
 
 ### Open items (`authority_impact_items_v1`, new)
 
@@ -130,7 +145,9 @@ One row per affected item, written when its impact run finishes.
 
 A check keeps only its verdict. ECHO's sentence about what an item says now
 summarizes outside text, which no stored row keeps (ADR-0032); a view shows the
-item's current details from a live read instead.
+item's current details from a live read instead. Since sweeps were retired
+(section 6), nothing writes or reads the four `checked_*` columns; they stay in
+the baseline until the V17 reset.
 
 Indexes: `(organization_id, owner_membership_id, state)`,
 `(organization_id, approver_membership_id, state)`, `(record_sha256)`.
@@ -206,7 +223,7 @@ functions next to the open-items service:
 
 ```
 policy(viewer, item, facts) → { see_row, see_decision, see_outside, set_state, assign, waits_on }
-decision_policy(facts)      → { see_decision }   (also asked alone: Send rows, stages, a sweep's desk)
+decision_policy(facts)      → { see_decision }   (also asked alone: Send rows, stages)
 send_policy(viewer, run)    → { send }   (its approver, while they can read the decision)
 
 facts: can the viewer read the decision now; can they open the item now;
@@ -220,8 +237,8 @@ impact card's `view` still checks the decision itself (see "Not in this
 round"). A later rule (an organization admin, an org-wide view, delegated
 roles, a team lead seeing their reports' items) is a change to these
 functions and their inputs, not to the table or the queries. The stored facts
-(approver, owner, how the owner was matched, who clicked and checked last, the
-decision) are what such rules will need.
+(approver, owner, how the owner was matched, who clicked last, the decision)
+are what such rules will need.
 
 One part is not a business choice and stays strict: an outside item's words
 are shown only to a viewer who can open it live (ADR-0032, Slack's API terms).
@@ -237,7 +254,6 @@ or done after Send (an item Send left out that someone reopened).
 | --- | --- |
 | The decision: its title, first decided line, approval time and projects | viewers who can read the decision (`see_decision`) |
 | `expected`, owner, approver, stage, age | everyone who sees the row |
-| Last check: verdict, time and who checked | everyone who sees the row |
 | Item title, what it says now, its current assignee, status and due date | only viewers who can open the item in its tool right now (live read) |
 
 Each row says how its live read went for this viewer (`reach`): `opened`, or
@@ -271,11 +287,10 @@ its reason and "Try again".
 
 **Update** (owner). Each owner gets one row per item sent to them: the item as
 they can see it, what the decision needs (`expected`), "Open in Jira" (or the
-tool), and "Mark updated", which sets `done`. Once ECHO saw the item change and
-still not match, the row opens the item's card first, with "Mark updated" and
-"No change needed" (`not_relevant`); the approver, when not the owner, then
-gets a Review row for it (section 8). The approver can set `done` or
-`not_relevant` on items they do not own.
+tool), and "Mark updated", which sets `done`. The approver can set `done` or
+`not_relevant` on items they do not own. (Until sweeps were retired, an item
+ECHO saw change and still not match opened its card first, and the approver,
+when not the owner, got a Review row for it.)
 
 **Reassign.** Once an item is sent, the approver, the current owner or a lead
 of one of the decision's active projects can change the owner to another
@@ -284,160 +299,50 @@ active member (`owner_match = reassigned`) through the API and the CLI
 desktop has no reassign control in this round (R71); its only person picker
 is Send's "Pick a person".
 
-## 6. Sweep
+## 6. Sweep (retired)
 
-A sweep is a run with `trigger = sweep`: same start, lease, attempts and
-storage rules. It acts as the person who asked, with their access.
-
-- **What it covers.** Open items on a Jira ticket, a page, or an ECHO record
-  or document. An item on a Slack message is left out, and the `sweep`
-  trigger refuses a Slack message citation: no reader in ECHO can open one
-  yet, so a sweep could only record it `unreadable` (see "Not in this
-  round"). An item on a ticket or a page counts only when the caller has
-  connected its tool: one of the live sources a desk binds is for that tool,
-  and the caller's link to it is live (a local read of the link, never a
-  provider call). Otherwise a sweep could only record it `unreadable`.
-  `mine`: those the caller sent or owns. `record` or `project`:
-  those there that the caller can see, as `items` shows them. At start, the
-  server reads the scope again and takes up to 20 items the caller still
-  sees: never checked first, then the oldest last check, then the oldest
-  item. An item one of the caller's sweeps that finished in the last day
-  could not read goes after all the others: someone else's judged check stays its last
-  check, so it would otherwise come first in every sweep and keep the
-  caller's other stale items waiting. It is still read when places remain,
-  and a day after that sweep it takes its usual place again. The rest wait
-  for the next sweep.
-- **Findings.** One per item, in that order. A finding names the item by what
-  the impact check found and its kind ("Outdated Jira ticket", "Conflicting
-  page", "Affected page" when not assessed). It adds "from <decision title>"
-  only when the policy shows the caller the decision (`see_decision`).
-  `expected` is the item's own phrase; else, for a caller shown the decision,
-  its first decided line cut to 120 characters; else "the approved
-  decision". When a finding carries that placeholder and research read its
-  decision, the renderer shows the judge the decision's current text in its
-  place. The citations are the item's pointer first, then the decision's
-  record citation, again only for a caller shown the decision. So an owner
-  sent an item without access to its decision never gets the decision in
-  their run. The existing `sweep` trigger definition turns the findings into
-  the brief, with no planner (R77): research re-reads every finding's
-  citations in full as its starting evidence and stops. It does not search
-  for newer related items. An item that cannot be read is reported, not
-  fatal. The renderer's one judge call then decides the verdicts, and a sweep
-  whose items are all unreadable makes no model call.
-- **Where research reads** (R75). A decision's or a project's sweep reads in
-  one project only when every item it checks comes from a decision the
-  caller is shown that is in exactly that one project, the rule the impact
-  run that found the items follows. Otherwise, and for a `mine` sweep, it
-  reads everywhere the caller may read, still fenced by the caller's own
-  access. A narrower read would refuse an item from a decision's other
-  project and store a false shared `unreadable`.
-- **A finding's own items.** Its first citation, and every further citation of
-  an item in an outside tool (a ticket or a page). A further ECHO record or
-  document, such as the decision, is context. Own items are matched by
-  identity: the same item and, for a page, the same section; the page's other
-  sections stand in only when that section is gone. A new text digest,
-  version or link does not matter: edited items are what a sweep checks.
-- **Sweep renderer** (new). One verdict and one ECHO line per finding:
-  - `unreadable` when research could not read one of the finding's own
-    items. No model hears of it. A context citation that could not be read,
-    such as the decision, is simply not shown.
-  - Otherwise one model call judges the findings. `landed` only when the
-    current items show the whole expected change; `changed` when a current
-    item changed in a way that differs from it; `still_open` when nothing
-    shows the change. A finding where only some of its items moved is not
-    `landed`; it is meant to be answered `still_open`. A change shows in the
-    item itself, so `landed` and `changed` cite at least one of the finding's
-    own items (R80); `still_open` may cite its decision alone.
-  - A finding is never judged blind. It goes to the model only together with
-    all of its own items. A finding whose own items do not all fit the
-    prompt, or that research holds in no form, gets no verdict (null, "Not
-    assessed."). The model is shown each finding's own items, the other
-    sections of those pages and the finding's decision, while they fit, and
-    nothing else research came across.
-  - A usable reply gives one verdict for each finding shown, each citing at
-    least one item the model was shown. A reply that misses or repeats a
-    finding, cites nothing or an item it was not shown, or gives a `landed`
-    or `changed` verdict that cites none of the finding's own items, is sent
-    back once. With no usable reply after that, no finding is assessed.
-  - A line that fails a screen (instructions or suggested edits, ownership
-    claims) costs no repair (R81): it reads "ECHO withheld this line." and its
-    verdict stands. The screen excuses words the line quotes from the items it
-    cites.
-  - The line is never stored or shown in the product: it serves the
-    evaluation and the staging endpoint. Unlike the card's stored lines, its
-    titles are not replaced. The product stores only the verdict.
-- **Finish.** In one transaction with the run's finish, each finding's
-  verdict becomes its item's last check when it is newer than the item's
-  current one and the caller still sees the item. The policy is asked again
-  who still sees each item just before that transaction, in the same
-  synchronous step with nothing in between. It cannot be asked inside the
-  transaction: the decision check behind it reads the person's project grants
-  in a transaction of its own, and transactions do not nest. The check
-  carries the time the attempt started, so a check someone else made
-  meanwhile stays newer. A judged verdict (`landed`, `still_open`,
-  `changed`) outranks `unreadable` (R79): it replaces an older check, and an
-  `unreadable` one whenever that was made; an `unreadable` verdict is
-  recorded only while the item has no judged check, from anyone. The
-  database lets a last check only move forward, so a judged check that
-  replaces a later unreadable one is stamped 1 ms after it. A null verdict
-  leaves the last check as it is: the item stays oldest, and the next sweep
-  takes it first. The run's stored result is the counts by verdict, not
-  assessed included, and the ECHO ids of the items it could not read; no
-  line, title or citation. A sweep never sets `state`. With no item left
-  to check at start (all closed, or out of the caller's sight, meanwhile), it
-  reads nothing and finishes with zero counts.
-- **When it runs.** Home reports `sweep_due` when all of these hold: the
-  caller has an open item they sent or own, of a kind a sweep covers (not a
-  Slack message, and a ticket or page only in a tool they have connected),
-  whose last check, by anyone, is older than 24 hours or missing, and that
-  none of their sweeps that finished in the last day found unreadable (such an
-  item waits a day from when that sweep finished, however long before it was
-  asked for, as its own unreadable check would, while someone else's judged
-  check stays its last check); no sweep of theirs is running; and none
-  of their sweeps was created in the last hour, whatever its state. So a sweep
-  that keeps failing, or leaves items not assessed, is not asked for again on
-  every Home load. A sweep left pending for more than an hour does not hold
-  `sweep_due` back, so a stuck sweep cannot stop automatic sweeps. When
-  `sweep_due` is true, the desktop asks for a `mine` sweep; if the stuck sweep
-  is a `mine` sweep, that request returns it. "Check now" on a record or a
-  project asks for a sweep of that scope, and the hour does not limit it. A
-  second request for the same scope while one is pending or running returns
-  that run. Impact runs start before sweeps, enforced by the server: starting
-  a sweep answers `busy` while one of the caller's impact runs is pending or
-  running.
-
-Because the last check is shared, one person's sweep refreshes the item for
-everyone; a person whose items were all checked in the last 24 hours is not
-due a sweep.
-
-**What opening ECHO costs.** An impact check runs once per approval; a sweep
-at most about once a day per person with stale items, and not at all if a
-teammate's desktop checked them that day. A sweep that fails or leaves items
-not assessed is asked for again at most once an hour, and so is the next
-sweep for a person with more than 20 stale items: a large backlog catches up
-20 items an hour. Opening ECHO with nothing waiting makes no model call.
-Estimated, not yet measured: a background run is two to five Asks' worth of
-model work (a measured Ask is about 6 calls, about $0.003 on DeepSeek V3.2
-and $0.023 on Gemini 3.8 Flash), so a 10-person team with 15 approvals a week
-runs about 65 runs a week, roughly $1 a week on DeepSeek or $3 to $8 on Gemini
-Flash. Jira and Confluence rate limits are the tighter limit: each run makes a
-dozen or more reads as one person.
+Retired on 2026-11-08 (lean-down SVC-2): the founder found no value in the
+checking, and nothing replaces it. A sweep was a second run kind
+(`trigger = sweep`) that re-read up to 20 of a person's open items as that
+person and judged each against its decision (`landed`, `still_open`,
+`changed` or `unreadable`), keeping the newest verdict as the item's shared
+last check; Home asked for one by itself at most once an hour (`sweep_due`),
+and Check now asked for one on a decision or a project. All of it went: the
+`sweep` operation (now refused as an invalid request), the `sweep` trigger and
+its renderer, the sweep result contract
+([`person-sweep-result-v1.ts`](https://github.com/EchoBrain-org/echo-brain/blob/257adcd3ae8059cfbe143e1cd79ce48b4997b2a7/packages/organization-api/src/person-sweep-result-v1.ts)),
+the hourly re-check, Check now, every shown result ("Checked … ago",
+"matches now", "ECHO checked …", the approver's Review rows and the
+changed-first order), Ask's view of the last check
+([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)) and the
+research-loop evaluation's sweep cases. Follow-ups close only by a person:
+Mark done, Dismiss or Reopen. Released desktops and CLIs validate exact keys,
+so until the V17 reset the runs API keeps its shape and sends the retired
+fields as constants: `home` answers `sweep_due` false, `landed` 0 and
+`last_checked_at` null; an item's `check` is null; a summary's `landed`,
+`changed` and `unreadable` are 0, as are each decision's `landed` and
+`unreadable`, and its `last_checked_at` is null; and `sweep` stays a valid run
+`trigger` for one release. The Authority lists, reads and starts impact runs
+only, so a sweep row or a last check left in the database never shows.
+Opening ECHO now makes no model call of its own; an impact check runs once per
+approval.
 
 ## 7. API
 
 Every operation is on `POST /v1/person/runs` (ruling 5). The contract as built
 is [`person-runs-v1.ts`](../../packages/organization-api/src/person-runs-v1.ts),
-with the sweep result in
-[`person-sweep-result-v1.ts`](https://github.com/EchoBrain-org/echo-brain/blob/257adcd3ae8059cfbe143e1cd79ce48b4997b2a7/packages/organization-api/src/person-sweep-result-v1.ts),
 and the
 [Authority runbook](../../services/organization-authority/README.md#person-reads-and-permissions)
-describes each operation. Two later designs changed it:
+describes each operation. Later changes:
 [follow-ups thread v1](../archive/2026-10-14-follow-ups-thread-v1.md) ("API changes":
 `items` takes `states` in place of `open_only`, and one `read` replaces
-`summary_only`), and
+`summary_only`);
 [desktop refresh and notifications v1](2026-10-15-desktop-refresh-and-notifications-v1.md)
 (the `involved` scope and `changed_since`,
-[ADR-0036](../decisions/ADR-0036-person-change-check.md)).
+[ADR-0036](../decisions/ADR-0036-person-change-check.md)); and the lean-down
+of 2026-11-08, which retired `sweep` (section 6) and added `next`, the
+desktop's check-in, which starts the caller's oldest queued impact check
+([ADR-0032](../decisions/ADR-0032-stored-trigger-runs.md)).
 
 ## 8. Desktop
 
@@ -471,7 +376,8 @@ with a stop between them:
 As delivered: Part 1 merged on its own as PR #300 after the founder's
 walkthrough, with the follow-up PR #301 (Home reads shared items without
 Granola; a Send replay answers the counts frozen at Send). Part 2 followed in a
-separate pull request, PR #303.
+separate pull request, PR #303. Its sweep parts were retired on 2026-11-08
+(section 6).
 
 ## Acceptance
 
@@ -486,8 +392,8 @@ separate pull request, PR #303.
   who cannot sees none, except items sent to them; an owner never receives the
   decision itself.
 - A viewer who cannot open an item in its tool gets no title, text or live
-  details for it, but does get its stage, owner, age and verdict.
-- No stored row holds a check sentence; a check stores its verdict only.
+  details for it, but does get its stage, owner and age.
+- No stored row holds a check sentence.
 - Only the approver or the owner changes `state`; only the approver, owner or
   a project lead reassigns; both only once the item is sent. Every operation
   gets these answers from the one access policy (a test table covers each
@@ -499,111 +405,53 @@ separate pull request, PR #303.
   leave, on the Home of the leads of the decision's active projects.
 - No stored row or column holds text, a title or a name read from outside ECHO
   (a test seeds distinctive outside text and searches every new row for it).
-- A sweep replaces an item's last check only with a newer one, never with
-  `unreadable` over a judged verdict, never changes `state`, and skips items
-  the sweeper no longer sees as it finishes. Its run stores the counts by
-  verdict and the ids of the items it could not read.
-- An item on a Slack message is not swept and does not make a sweep due; the
-  `sweep` trigger refuses a Slack message citation. Nor is a ticket or page
-  in a tool the caller has not connected.
-- A sweep makes no planner call. No finding is judged without all of its own
-  items, and a `landed` or `changed` verdict cites at least one of them. A
-  finding that was not assessed leaves its item's last check as it is. A
-  finding is `unreadable` only when one of its own items could not be read.
-  A line that fails a screen is withheld without a repair.
-- A sweep finding names the decision, its first line and its record only to
-  a caller who can read the decision.
-- `sweep_due` is true only with an open item of the caller's, of a kind a
-  sweep covers, whose last check is over 24 hours old or missing and that no
-  sweep of theirs of the last day found unreadable, no running sweep of
-  theirs, and none of their sweeps created in the last hour; a sweep
-  left pending longer than an hour does not block it, and asking again for a
-  `mine` sweep returns a stuck `mine` sweep.
-- Starting a sweep answers `busy` while the caller has a pending or running
-  impact run.
-- `sweep` answers `nothing_to_check`, and makes no run, when the scope holds
-  no open item the caller can see that a sweep covers.
+- The sweep criteria (last checks and their verdicts, `sweep_due`, `busy`
+  behind impact runs, `nothing_to_check`, Check now and the sweep evaluation)
+  were retired with sweeps on 2026-11-08 (section 6). Since then `home`,
+  `items` and `item` send the retired fields as constants, and `sweep` is
+  refused.
 - Your open items reads open items only. A decision's feed row and the
-  project line count "open" as unsent + open − landed − unreadable, the
-  project line from the project's whole summary; the Impact line's "open"
-  leaves unsent items out. The project line stays while any item is unsent or
-  open.
+  project line count "open" as unsent + open − landed − unreadable (since
+  2026-11-08 landed and unreadable are always 0), the project line from the
+  project's whole summary; the Impact line's "open" leaves unsent items out.
+  The project line stays while any item is unsent or open.
 - Desktop: approve in the test Authority → Send row → Send with one picked
   owner → that owner's Update row → Mark updated → the item leaves both Homes
   and shows `done` on the project page.
-- Desktop, against the test Authority: Home asks for a sweep by itself when
-  one is due and then shows the owner's changed item as an Update row ending
-  "changed since you got it, still doesn't match" and the footer "1 matches
-  its decision now"; View opens Your open items, and Close closes the
-  matching item. An approver sees someone else's changed item as a Review
-  row. Check now on a decision sweeps only that decision, and on a project
-  only that project. A sweep attempt that went back to the queue is started
-  again. A changed item's row opens the item card before anything is closed.
-- The research-loop evaluation grades each sweep finding against its key:
-  `landed` as landed, `still_open` and `changed` as not landed, `unreadable`
-  as no evidence. A null verdict is wrong, and a failed run scores zero.
 - Ask goldens unchanged; `npm run check` passes.
 
 ## Not in this round
 
 - Slack DMs to owners. Owners learn from Home only.
-- Scheduled checks (founder: keep it simple for now). Checks run only from a
-  signed-in desktop (Home, or Check now on a decision or project), so
-  "latest" means as fresh as the last time someone involved opened ECHO. Two
-  later options: a schedule in the desktop's background process (a fixed time
-  while the app runs in the menu bar, the same access, a small change), or
-  server-side checks for everyone, which need a revocable per-person "check
-  while I'm away" grant and a security decision.
-- More than one live run per person; sweeps queue behind impact checks.
+- Re-checking open items. Sweeps, which re-checked them from a signed-in
+  desktop, were retired on 2026-11-08 (section 6); a redesign of what moved
+  underneath a decision is parked.
+- More than one live run per person.
 - An organization-admin view across projects; any count that includes rows
   the viewer cannot see.
 - A fallback for a no-project decision whose approver and owner have both
   left: its items stay visible to the decision's readers but wait on no one.
 - Showing a pending (unapproved) meeting to anyone but its reviewer.
-- History of earlier checks and clicks; only the latest of each is kept.
-- Card and sweep quality: unmeasured until the approved-record and sweep
-  evaluations run (research loop evaluation, S1 world state).
+- History of earlier clicks; only the latest is kept.
+- Card quality: unmeasured until the approved-record evaluation runs
+  (research loop evaluation).
 - Sending for an approver who left. Unsent items of an approver who left
   before Send stay unsent: the decision's project leads see them but cannot
   send or reassign them.
 - An open item whose owner left waits on its approver. If the approver is
   still active but can no longer read the decision, the item is on nobody's
   Home. Readers of the decision still see it on its record and project pages.
-- A partial landing. A finding where only some of its items moved as
-  expected has no verdict of its own: it is not `landed`, and is meant to be
-  answered `still_open`. Naming it is a later call.
-- Verdicts that depend on who checked. A sweep reads as the person who asked.
-  A sweeper who cannot open an item no longer replaces anyone's judged
-  verdict (R79), but two readers' judged checks still replace each other by
-  time, and Home's footer count ("match their decision now") and Review rows
-  read the shared check. A judged check stamped 1 ms after the unreadable
-  check it replaced can make a later judged read of the same item lose; a
-  column keeping each check's own read time would fix that, a schema
-  change.
-- Checking Slack messages. No reader in ECHO can open a Slack message
+- Reading Slack messages. No reader in ECHO can open a Slack message
   citation yet: it names no tool connection, no live Slack reader is
-  registered, and ECHO's own desk leaves Slack messages to Slack. A sweep
-  could only record such an item `unreadable`, spending a background
-  research run on a result known in advance. So an item on a Slack message is
-  not swept, does not make a sweep due, and stays "not checked yet" until a
-  Slack reader exists. For the same reason a live read of it is refused as
-  `no_access`, so a viewer sees "A Slack message you can't open" even when
-  their own Slack access would allow it.
-- A revocation in the instant a sweep finishes. Who still sees each item is
-  asked just before the finishing transaction, not inside it. Nothing in the
-  Authority process can run in between, but access revoked by another
-  process in that instant is not seen, and that item's check is written.
+  registered, and ECHO's own desk leaves Slack messages to Slack. So a live
+  read of one is refused as `no_access`, and a viewer sees "A Slack message
+  you can't open" even when their own Slack access would allow it.
 - Undoing Not relevant on a reopened item. An item Send left out that someone
   reopened reaches its owner. If an owner who cannot read the decision sets
   it not relevant, it leaves their sight, and they cannot reopen it.
 - Reassigning from the desktop (R71). The API and the CLI support `assign`;
   the desktop's only person picker is Send's "Pick a person", so reassigning
   an item after Send needs the CLI this round.
-- A sweep that keeps going back to the queue (R58 corner). The hour that
-  holds `sweep_due` back counts from a sweep's creation, so a sweep released
-  after an outage is started again on each Home load until its three
-  attempts are spent, and one released because the search index lags is
-  claimed again on each Home load. Both are bounded, as before R58.
 - The impact card's `view` under the access policy. `view` checks who reads
   the decision itself, not through `decision_policy`: its approver keeps the
   card, decided lines included, after losing read access to the decision,
@@ -614,6 +462,12 @@ separate pull request, PR #303.
 Numbered rulings (1 to 23) were made while designing. R-numbered rulings (R1
 to R82) were made while building and since, and code cites them by number.
 Those that change behavior are folded into the sections above.
+
+Since 2026-11-08 the rulings about sweeps and their checks are history,
+retired with sweeps (section 6): ruling 9, R8, R10, R32–R34, R36, R38–R40,
+R42, R43, R45, R50, R55, R56, R58, R61–R65, R69, R75 and R77–R81 in full, and
+the sweep and check parts of rulings 3, 5, 10, 18 and 20, of the handoff's
+rules carried over, and of R31, R35, R49, R57, R67, R68 and R70.
 
 Made with the founder on 2026-10-08:
 

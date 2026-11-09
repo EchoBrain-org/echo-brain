@@ -199,3 +199,6 @@ removed the related-atom projection. The `planner_model` no longer feeds
 readable-search generation or the setup canary's retrieval-contract
 fingerprint, so changing it no longer rebuilds search. It still feeds
 person-update search hints.
+
+2026-11-08: the person-update search hints were retired (lean-down), so the
+`planner_model` no longer feeds them; saving a note makes no model call.

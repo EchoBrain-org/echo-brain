@@ -119,3 +119,8 @@ On 2026-10-25 [ADR-0047](ADR-0047-ask-timeline.md) retired progress V1 and V2,
 and `9863883` removed the V2 receipt check above: the kernel test now checks
 the V3 receipt only. The preload tests went with the small-scope preload,
 which `ec92b9b` removed on 2026-10-19.
+
+On 2026-11-08 the desktop stopped listing what Ask looked through. It shows
+`looked_through` only in an answer's foot label ("Looked through 30 items ·
+41s" when the answer has no sources), so the receipt that "opens onto its one
+search" above is history. The receipt and its counts are unchanged.

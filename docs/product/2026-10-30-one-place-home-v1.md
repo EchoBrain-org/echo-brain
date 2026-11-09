@@ -6,6 +6,11 @@ schema change. It follows [Home you can zoom](2026-10-29-home-altitude-v1.md)
 (merged as #376) and replaces parts of it, listed under "What changes from
 Home altitude v1".
 
+Updated 2026-11-08 (lean-down): the desktop no longer starts checks itself.
+After each change check, and on Try again, it checks in, and the Authority
+starts the oldest queued check (DSK-1, see "Checks keep moving"). Sweeps were
+retired (SVC-2): Check now, Review rows and "ECHO checked …" are gone.
+
 Mockups (throwaway, git-ignored), in
 `.superpowers/brainstorm/46988-1793387354/content/`:
 
@@ -201,8 +206,9 @@ One list of your follow-ups. It shows both what is open and who owns each one.
 - No page heading and no cards. Hover gives the long words: kind, the meeting
   it came from, "Sent to Mina 4 days ago".
 - Clicking a row opens the follow-up's page, as today. Everything the list
-  could do before (send what is ticked, pick an owner, Check now, Retry, More)
-  keeps working, in the new row style.
+  could do before (send what is ticked, pick an owner, Retry, More, and Check
+  now until sweeps were retired on 2026-11-08) keeps working, in the new row
+  style.
 
 The same list component serves a project's follow-ups, a meeting's follow-ups
 and a notification's "Changed follow-ups". They take the new rows too, so every
@@ -235,16 +241,24 @@ behind other apps, or closed to the tray:
   quits (unchanged).
 - Home's own reads still happen only when Home shows.
 
+Since 2026-11-08 the desktop has no runs driver
+([ADR-0032](../decisions/ADR-0032-stored-trigger-runs.md), amended). After each
+change check that reaches the Authority, and on Try again, it checks in
+(`runs` `next`), and the Authority starts the oldest queued check. The change
+check asks again within 15 s while a check is queued or running, so checks
+still move on every page, behind other apps and in the tray, while you are
+signed in, and nothing runs once ECHO quits. There are no sweeps any more.
+
 ## Calls made in design (the founder checks these on the desktop)
 
 1. The first stop keeps the name "My projects", as in the approved mock, even
    though the top level now also shows Needs you.
 2. Retry is its own category, shown only when a check failed. Review rows go
-   under Update.
+   under Update. (Review rows were retired with sweeps on 2026-11-08.)
 3. Checking with two or more is one faint line that opens nothing.
 4. A category list goes back to Home by itself when it empties.
 5. "ECHO checked …" (the footer's last-check time) moves to the Follow-ups
-   page, faint, under the list.
+   page, faint, under the list. (Retired with sweeps on 2026-11-08.)
 6. The project reason line names the oldest follow-up that needs attention,
    with its owner.
 7. Follow-ups' owner line counts open follow-ups only; not-sent ones show on
@@ -267,7 +281,8 @@ Authority fixtures. All data is already in the app:
 - Follow-ups and Only me: their existing list reads. The owner line and filter
   work only on rows the page has already read.
 - The run driver: split from Home's reads so it can run on any page. It keeps
-  `expect()` account isolation and today's start rules.
+  `expect()` account isolation and today's start rules. (Gone since
+  2026-11-08: the desktop checks in, and the Authority starts the check.)
 
 ## Known limits (v1)
 

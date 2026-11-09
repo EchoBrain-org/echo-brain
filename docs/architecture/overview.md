@@ -2,7 +2,8 @@
 
 **Status:** Current. Verified against `origin/main` at
 `aa92138e4a7d8386b2ff51a95c7d2f82e86236be` (2026-10-30), the first beta
-candidate.
+candidate; updated 2026-11-08 for the lean-down (the Authority starts impact
+checks on check-in; sweeps retired).
 
 ECHO turns each person's meetings and connected work tools into approved,
 permission-aware organization records, and lets a team ask questions across
@@ -117,7 +118,7 @@ migrates: a changed baseline means fresh state.
 | Organization record | `packages/organization-record` | Append-only `record-log.sqlite` and the permission-aware Person reader |
 | Search | `packages/organization-retrieval`, `composition/readable-search-generation-reconciler.ts` | Immutable, permission-segmented search generations rebuilt from the record log, with no model call |
 | Ask and research | `composition/person-live-answer-route-v1.ts`, the evidence desks, kernel `src/answer-composition/` | The research loop, the access check before every model call, the answer writer |
-| Impact checks and follow-ups | `composition/person-trigger-runs-v1.ts`, `person-open-items-v1.ts`, `person-sweep-runs-v1.ts`, `person-changes-v1.ts` | Background research after an approval, the follow-ups it writes, the change check |
+| Impact checks and follow-ups | `composition/person-trigger-runs-v1.ts`, `person-open-items-v1.ts`, `person-changes-v1.ts` | Background research after an approval, the follow-ups it writes, the change check |
 | Uploads and documents | `application/project-context-application-v1.ts`, `application/document-v1.ts` | Notes and documents for projects, extracted in worker threads |
 | Personal tool connections | `providers/shared` with `providers/granola`, `providers/jira`, `providers/confluence` | Nango consent, connection records, read-only live readers |
 | Lifecycle and model calls | `composition/organization-authority-service-lifecycle.ts`, `composition/model-call-limiter-v1.ts` | Worker cycle order and writer gate; at most 6 model calls at once, 4 of them background |
@@ -230,9 +231,10 @@ Owner: [Ask and research](ask-and-research.md).
 ### An impact check finds follow-ups
 
 1. Publishing a record queues an impact check for the approver.
-2. A client of the approver starts queued checks through `person runs`: in
-   practice the desktop's runs driver, while the app runs; the CLI can too.
-   The server never starts a check on its own.
+2. After each change check, the approver's desktop checks in through
+   `person runs` (`next`), and the Authority starts that person's oldest queued
+   check with the request's token; the CLI can start one too. The server never
+   starts a check without such a request, so nothing starts once the app quits.
 3. The check runs background research as the approver (20 rounds, 48 calls,
    300 s) and writes follow-ups, one shared row per affected item.
 4. The change check (`GET /v1/person/changes`) tells desktops what moved, and
@@ -345,8 +347,8 @@ Owners: [deploy/organization-authority/README.md](../../deploy/organization-auth
   [scaling decision guide](scaling-decision-guide.md).
 - **One process, one volume, no migrations.** A baseline change means fresh
   state.
-- **Impact checks need a client to start them.** The approver's desktop does
-  while it runs; the server never starts one on its own.
+- **Impact checks need a client to start them.** The approver's desktop
+  checks in while it runs; the server never starts one without that request.
 - **Layering debt.** Newer Person services in `composition/` open SQLite
   directly.
 - **Provider ownership debt.** The staging-only Claude research transport

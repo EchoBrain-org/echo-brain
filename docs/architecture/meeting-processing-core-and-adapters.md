@@ -157,21 +157,19 @@ meeting's own import, or a watch or baseline change, still refuses.
 **Writer gate.** The worker's single-file gate covers only recovery and
 approval publication: record-log appends and their after-record hooks. An
 approval therefore never waits
-behind a source poll, an extraction call or a Slack post. Notes enrichment,
-personal meeting intake, Slack card presentation and the staging canary run
-outside it. Durable fences keep that safe:
+behind a source poll, an extraction call or a Slack post. Personal meeting
+intake, Slack card presentation and the staging canary run outside it.
+Durable fences keep that safe:
 
 - the attempt reservation is also a 660 s in-flight lease: a younger pending
   attempt is left `in_flight` (no park, no cursor move), an older one parks as
   `interrupted`;
 - the cursor compare-and-swap, with the rebase above;
-- a 120 s notes claim lease whose `retry_at` fences a stale claimant's writes;
 - compare-and-swap on each presenter row, with one presenter turn at a time.
 
 One approval row that cannot publish does not block startup, intake or the
 other rows; it shows as a failed record append and is retried on later passes.
-A failing notes item is reported without aborting the cycle's intake and
-publication. Failed cycles and publication wakes still request search and card
+Failed cycles and publication wakes still request search and card
 presentation.
 
 **Meeting lanes.** Up to three personal sources (`MEETING_LANES`) run a meeting
@@ -196,7 +194,7 @@ grant: check `extraction-attempts` for `pending` attempts before granting.
 
 **Model calls.** One process-wide limiter admits the Authority's OpenRouter
 generation calls: at most six at once, at most four of them background
-(extraction, notes, impact research). Interactive Ask is
+(extraction and impact research). Interactive Ask is
 served first and may use every slot. A 429, a 5xx, a temporary failure or a
 timeout pauses background admission once per episode, 5 s doubling to 60 s
 until a call succeeds; the limiter never retries. Time spent queued does not
@@ -504,17 +502,19 @@ composed `automatic` decision workflow; common admission does not imply every
 source executes every downstream stage.
 
 Notes stored under the legacy `/v2/person/updates` contract keep their original
-inbox, read indexes and optional search-enrichment worker. Only its search route
-is still served; its write, status and content routes are retired
-([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)). The client-less
+inbox and read indexes. Only its search route is still served, for released
+desktops, until a later release retires it; its write, status and content
+routes are retired
+([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)), and the
+client's `updates search` went on 2026-11-08. The client-less
 `/v1/person/updates` route and its V1 search-hint worker are retired. Retained
 V1 notes stay in custody and remain citable by Ask. Server pull also admits
 accepted text notes, including retained V1 notes, through the same Person
 source capability as documents, without requiring a model. Its typed content
 distinguishes `person-text` from `person-document`; neither invents
-`MeetingDocument` facts. Existing enrichment hints cannot alter the original or
-audience and are not decision/action proposals; model failure preserves source
-readability. See
+`MeetingDocument` facts. Saving a note makes no model call: the per-note search
+hints and their worker were retired on 2026-11-08, so note searches match a
+note's title and text only, and hints stored before are never read. See
 [ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md),
 [project documents](../features/project-documents-v1.md), and the historical
 [upload scope](../product/2026-09-21-person-update-inbox-v1.md).

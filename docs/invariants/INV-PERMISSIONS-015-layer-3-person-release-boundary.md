@@ -92,8 +92,8 @@ in that request.
 
 ADR-0019, as updated by ADR-0022, permits the `/v7` Ask to make bounded desk
 calls and at most 24 model calls, including retries and repairs, in one
-request; a background trigger on the same loop (an impact check or a sweep)
-may make at most 48. The desk pins the record
+request; a background trigger on the same loop (an impact check) may make at
+most 48. The desk pins the record
 snapshot or fixes an explicitly original-only mode when the index starts
 behind. Every desk release is audited before bytes leave Layer 3. Before each
 model call, repairs included, recheck every item and metadata released since
@@ -160,22 +160,20 @@ outside ECHO. Every view re-releases the stored items through a fresh desk under
 the viewer's current session, membership tenure and grants: an item the viewer
 can no longer open is hidden and counted, and outside text is read again rather
 than stored. Anyone but the approver sees no such run in a list and gets
-`not_found` when starting or retrying it. ADR-0033 widens viewing: anyone who
-can read the decision may view the run's card, rebuilt the same way under that
-viewer's access; anyone else gets `not_found`.
+`not_found` when starting or retrying it, and a check-in (`next`) starts only
+the caller's own oldest queued run and answers only its state. ADR-0033 widens
+viewing: anyone who can read the decision may view the run's card, rebuilt the
+same way under that viewer's access; anyone else gets `not_found`.
 
 ADR-0033 applies the same rule to open items. A row keeps pointers, ECHO's own
-`expected` phrase, member ids and the latest check's verdict, never words read
-from outside ECHO. Every item read opens the item again through a fresh desk as
-the viewer, and only a viewer who can open it live gets its title, text or
-current details. Who sees a row and who may act on it comes from one access
-policy. A sweep acts as the person who asked and stores only verdicts and
-the ECHO ids of the items it could not read, never words read from outside
-ECHO. It names a decision in what it hands research only when the policy shows that
-person the decision, and records a verdict only on an item that person still
-sees as the sweep finishes. That check runs just before the finishing
-transaction, not inside it: access another process revokes in that instant is
-not seen, a known gap of open items and Home v1.
+`expected` phrase and member ids, never words read from outside ECHO. Every
+item read opens the item again through a fresh desk as the viewer, and only a
+viewer who can open it live gets its title, text or current details. Who sees
+a row and who may act on it comes from one access policy. Sweeps, which
+re-checked open items as the person who asked and stored only verdicts, were
+retired on 2026-11-08 (ADR-0033, amended): no code reads, stores or shows a
+verdict any more, and the runs API sends the fields that carried them as
+constants.
 
 [ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md) adds open
 items to Ask as follow-ups, first on V7 answers served by `POST /v6/person/ask`

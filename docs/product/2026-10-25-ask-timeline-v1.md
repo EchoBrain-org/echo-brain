@@ -16,6 +16,22 @@ original design; current source-revision checks cover the remaining imported
 meeting sources. No hand-in compatibility processing remains. This requires
 fresh Authority V16 state; V15 is not migrated.
 
+Implementation update, 2026-11-08 (lean-down): an old answer no longer says
+what changed. The "Changed" tag on a folded turn, the highlighted sentences
+and their "Highlighted parts changed since …" line, and the ticket baselines
+are retired. The source check (C1) answers readability only: `same` when the
+person can read a source now, `unreadable` or `unknown`, never `changed`. It
+reads no page body and no newer revision, and has no follow-up "moved" rule.
+For released clients, `changed` stays a valid state and ticket markers stay on
+the wire for one more release: the Authority still returns a marker on every
+readable ticket and accepts and ignores one in a request; the desktop sends
+none, ignores any it gets, and drops `markers` from saved turns. Hiding stays:
+a sentence whose source the person can no longer read is left out, on the page,
+in Copy and in a follow-up's previous turn. Ask again and its "Since …" list
+stay. So the "Changed" parts of the timeline, C1's "Changed when" column and
+ticket marker, the turn's `markers`, the checks' baseline and highlight rules,
+and the first three known limits below are history.
+
 ## What the founder asked for
 
 Ask was one question and one answer. Leaving the page threw the thread away,

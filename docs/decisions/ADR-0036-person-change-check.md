@@ -92,3 +92,14 @@ On 2026-10-25 [ADR-0048](ADR-0048-retire-older-person-routes.md) retired the
 compatibility fallback above: the person client reads a 404 from the check as
 `not_found`, as from any other read, and the desktop has no older-Authority
 mode.
+
+On 2026-11-08 (lean-down DSK-1) the desktop's runs driver went, and the check
+took over its pace. `reviews` also covers the caller's own impact checks:
+`[run_id, state]` for each check `runs` `list` shows, in the state it shows,
+so it moves when one of their checks starts, fails or ends. The Authority
+answers 15 s while one of the caller's checks is queued or running or one of
+their approvals is publishing, and 60 s otherwise. The check stays a read: it
+writes nothing and never starts a check. After each check that reached the
+Authority the desktop checks in with `runs` `next`, and the Authority starts
+the caller's oldest queued check
+([ADR-0032](ADR-0032-stored-trigger-runs.md)).

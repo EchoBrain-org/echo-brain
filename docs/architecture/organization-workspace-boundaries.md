@@ -30,8 +30,8 @@ modules; ordinary source modules still obey their narrower layer rules.
   LLM prompt/grounding behavior, and processing state.
 - `organization-authority-kernel` owns reusable Authority contracts, rules,
   telemetry, state verification, SQLite baseline access, and bundle ports,
-  plus the agentic research loop and answer composition that Ask, impact
-  checks and sweeps share, and the audited live-evidence boundary.
+  plus the agentic research loop and answer composition that Ask and impact
+  checks share, and the audited live-evidence boundary.
 - Federation/API/protocol, control-plane, record and retrieval retain their
   existing responsibilities. Record has no runtime dependency on protocol.
 - The Authority and Person composition modules select provider implementations.

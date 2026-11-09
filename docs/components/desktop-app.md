@@ -18,8 +18,9 @@ reviewed_ref: aa92138e4a7d8386b2ff51a95c7d2f82e86236be
 
 `product/echo-desktop/` owns the Electron app team members use: the window,
 tray, global shortcuts, system notifications, the device-only Ask timeline, the
-runs driver that starts impact checks, and self-update from the signed client
-feed. It holds no Authority logic and no organization state. Every read and
+check-in after each change check with which the Authority starts the person's
+queued impact checks, and self-update from the signed client feed. It holds no
+Authority logic and no organization state. Every read and
 write runs a [Person client](person-client.md) command in-process, in a host
 utility process that is the only part of the app holding a token. The app is
 its own package with its own `node_modules`, not a root workspace, and bundles

@@ -12,6 +12,18 @@ of Follow-ups. R8, and R9's `changes unsupported`, were retired on 2026-10-25
 the check is `not_found`, and a failed check backs off. Mine left the desktop
 on 2026-10-26 ([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)).
 
+Updated 2026-11-08 (lean-down): the change check took over the desktop's runs
+driver ([ADR-0036](../decisions/ADR-0036-person-change-check.md), later
+decisions). `reviews` also carries the state of the caller's own impact
+checks, and the Authority answers 15 s while one of them is queued or running
+or one of their approvals is publishing. After each check that reached the
+Authority the desktop checks in (`runs` `next`), and the Authority starts the
+oldest queued check ([ADR-0032](../decisions/ADR-0032-stored-trigger-runs.md)).
+An approval runs a check at once (R2), and a moved `reviews` also re-reads a
+meeting's follow-ups line (R3). Sweeps, which section 1 kept out of every
+area, were retired, and the bar's live matches (R4) went with the bar's
+search: the bar only asks.
+
 ## Why
 
 On 2026-10-15 the founder's Mac added ECHO 2 to a project (23:03:50Z) and sent
@@ -72,9 +84,10 @@ one fingerprint each for `projects`, `follow_ups` and `reviews`, built only
 from rows the caller may read (ADR-0012), with no audit row, no live read and
 a pace the Authority sets. The person client reports an Authority without the
 route as `not_supported`, and the desktop then runs R8's fallback. This
-design also decided that an area leaves checks out, so a sweep never wakes
-every desktop, and that the Authority ships with or before the desktop
-release. R3 cites the `involved` scope, so it stays below.
+design also decided that an area leaves a sweep's checks out, so a sweep never
+woke every desktop (sweeps were retired on 2026-11-08), and that the Authority
+ships with or before the desktop release. R3 cites the `involved` scope, so it
+stays below.
 
 ### 1.5 The `involved` scope
 
@@ -84,7 +97,7 @@ release. R3 cites the `involved` scope, so it stays below.
   and orders exactly as `mine` does: oldest first by creation, 50 a page. A
   change to an old item does not move it up, so a reader that looks for
   changes reads every page.
-- `read: 'rows'` and `states` behave as for `mine`. Sweep scopes are unchanged.
+- `read: 'rows'` and `states` behave as for `mine`.
 - `changed_since` (a UTC millisecond time; `mine` and `involved` only, never
   with `counts`) lists only items whose latest send, handoff or state change
   is at or after it, chosen before the scope's bound; it narrows the page and
@@ -110,6 +123,9 @@ release. R3 cites the `involved` scope, so it stays below.
     the tray or the shortcut, minimized, or covered by other windows), on both
     platforms, with no recorded departure required.
   - *Navigation to any page:* at most one check per 10 s from navigation.
+  - *An approval* (2026-11-08): a check at once, past the navigation limit,
+    so its impact check starts soon. If a check is still finishing, one fresh
+    check follows it, as for a wake (one for both).
   - *System wake:* main sends `system.woke` on `powerMonitor` `resume`.
     If a check is still finishing, queue one fresh check after it settles;
     repeated wake events coalesce, and stopping the account loop discards it.
@@ -138,7 +154,9 @@ release. R3 cites the `involved` scope, so it stays below.
     notifications (section 3). Whatever follow-ups surface is on screen is
     then re-read quietly: Home, the Follow-ups list, an item page, a project's
     follow-ups line, or a meeting's impact line.
-  - *`reviews`:* Home and the decision page are re-read if on screen.
+  - *`reviews`:* Home and the decision page are re-read if on screen, and
+    (since 2026-11-08) a meeting's follow-ups line in the reader, whose check
+    stage now moves `reviews`.
 - **R4. Came back is one handler on both platforms.** Each time the window is
   on screen and in front again, it does three things once:
   - It reads status.
@@ -154,7 +172,7 @@ release. R3 cites the `involved` scope, so it stays below.
     - People & invites;
     - the sidebar, when its last read failed or the check could not say
       whether projects moved (it failed, or an older Authority, R8);
-    - the bar's matches and an answer's sources.
+    - an answer's sources (and, until 2026-11-08, the bar's matches).
 
   The reader keeps what it shows.
 - **R5. Navigation.** The opened page reads as it does today, plus the

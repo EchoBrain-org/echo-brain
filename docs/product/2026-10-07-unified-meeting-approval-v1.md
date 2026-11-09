@@ -8,7 +8,7 @@ written-spec review. Decisions made while writing are listed at the end under
 Companion spec: [runs store and impact card](2026-10-07-runs-store-and-impact-card-v1.md).
 
 Implementation note, 2026-10-08: the current Authority baseline is V13, which
-adds the shared open items and sweep runs of
+adds the shared open items and sweep runs (sweeps were retired on 2026-11-08) of
 [open items and Home v1](2026-10-08-open-items-and-home-v1.md) (section 2) and
 replaces V12; it is fresh state only, like V12. Text below that names V12
 describes this design as written.
