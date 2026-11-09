@@ -805,6 +805,21 @@ describe('Home decisions and impact checks', () => {
     expect(checks()).toBe(before);
     expect(requests('start')).toEqual([]);
   });
+
+  it('stops counting a check as Retry at once when Try again on the decision page over Home starts it again (DSK-1)', async () => {
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.run = impactRun('failed');
+    const store = await start();
+    expect([store.homeRows().map(row => row.kind), store.needsCount()]).toEqual([['failed'], 1]);
+    await store.openDecision(approval, store.getState().home!.runs[0]!);
+    await flush();
+    await store.retryImpact(fx.run.run_id);
+    await flush();
+    // Started at the check-in: the decision and Home under it say so now, not at the next change check a minute away.
+    expect(store.getState().decision?.runs[0]).toMatchObject({ state: 'running' });
+    expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
+    expect(store.needsCount()).toBe(0);
+  });
 });
 
 describe('Checks keep moving (one place to look v1; DSK-1)', () => {

@@ -5823,7 +5823,8 @@ export async function decide(action: 'approve' | 'reject'): Promise<void> {
 
 /**
  * Try again on one record's failed impact check: queued again, then a check-in, so the Authority starts it (DSK-1); the
- * decision then reads its checks once more, as a meeting's line does.
+ * decision then reads its checks once more, as a meeting's line does, and Home under it reads them too, so its count and
+ * the sidebar's stop saying Retry at once.
  */
 export async function retryImpact(run_id: string): Promise<void> {
   const decision = state.decision;
@@ -5836,6 +5837,7 @@ export async function retryImpact(run_id: string): Promise<void> {
     if (!shown) return;
     editDecision({ runs: shown.runs.map(item => (item.run_id === run_id ? { ...item, state: 'pending', error_code: null } : item)) });
     await checkIn();
+    if (homeUnder()) void loadHome(false);
     await readRecordRuns(mine);
   } catch { /* the card still offers Try again */ }
 }
