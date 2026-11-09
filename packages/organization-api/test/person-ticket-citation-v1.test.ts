@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { validatePersonTicketCitationV1 } from '../src/person-ticket-citation-v1.js';
-import { validatePersonEvidenceDeskResponseV1 } from '../src/person-answer-v4.js';
 
 const citation = { kind: 'ticket', tool_id: 'tickets', external_scope_id: 'tenant-1', ticket_id: 'ECHO-42', permalink: 'https://tickets.example.test/browse/ECHO-42', text_sha256: `sha256:${'a'.repeat(64)}` };
 
@@ -18,11 +17,5 @@ describe('Live ticket citation V1', () => {
     for (const value of [{ ...citation, kind: 'issue' }, { ...citation, body: 'raw ticket content' }, { ...citation, ticket_id: '' }, { ...citation, ticket_id: 'e\u0301' }, { ...citation, text_sha256: 'sha256:invalid' }]) {
       expect(() => validatePersonTicketCitationV1(value)).toThrow();
     }
-  });
-
-  it('keeps the released evidence schema closed until a separate version admits tickets', () => {
-    expect(() => validatePersonEvidenceDeskResponseV1({ schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: { kind: 'global' }, truncated: false,
-      items: [{ id: 'desk_ticket', kind: 'ticket', citation, label: 'ECHO-42', visibility: 'only_me', receipt_sha256: citation.text_sha256 }],
-    })).toThrow();
   });
 });

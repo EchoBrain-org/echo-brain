@@ -408,3 +408,6 @@ On 2026-11-08 sweeps were retired, and `follow_ups` no longer declares
 `checked` ([ADR-0040](ADR-0040-follow-ups-as-ask-evidence.md)). `checked`
 stays in the shared list of date fields, so the step tool every Ask is given
 is unchanged; a `checked` filter on follow-ups is refused.
+
+Update (2026-11-09): `/v7` no longer sends `x-echo-person-ask-route`
+([ADR-0048](ADR-0048-retire-older-person-routes.md)).

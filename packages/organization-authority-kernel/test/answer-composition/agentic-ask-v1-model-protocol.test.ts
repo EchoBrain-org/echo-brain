@@ -1,20 +1,14 @@
-import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import {
   AgenticAskOutputErrorV1,
   ANSWER_BLOCK_CATALOG,
   ANSWER_BLOCKS_PROMPT,
   ANSWER_PROMPT,
-  ANSWER_SINCE_PROMPT,
   ASK_STEP_PROMPT,
   answerBlocksSchema,
   answerBlocksSinceSchema,
   cleanId,
   createStepSchema,
-  FOLLOW_UPS_ANSWER_GUIDANCE,
-  FOLLOW_UPS_STEP_GUIDANCE,
-  LONG_IDS_ONCE_RULE,
-  NO_RESTATING_RULE,
   normalizeQuery,
   parseBlocksAnswer,
   parseStep,
@@ -66,6 +60,9 @@ function corrected(read: () => unknown): CoreRuntimeModelCorrectionsV1 {
   return events.at(-1)!.model_corrections ?? {};
 }
 
+/** The tools a step schema offers, in its order. */
+const toolsOf = (schema: Schema): readonly string[] => ((schema.properties as Schema).actions.items.anyOf as Schema[]).map(variant => variant.properties.tool.enum[0] as string);
+
 describe("agentic Ask model protocol parity", () => {
   it("uses portable closed strings for request-scoped action choices", () => {
     const schema = createStepSchema(["meetings", "tickets"], ["E3", "E17"]);
@@ -101,72 +98,31 @@ describe("agentic Ask model protocol parity", () => {
   });
 
   it("can withhold finish without widening the discovery action set", () => {
-    const schema = createStepSchema(["meetings"], [], false);
-    const variants = ((schema.properties as Schema).actions as Schema).items as Schema;
-    const tools = (variants.anyOf as Schema[]).map(variant => ((variant.properties as Schema).tool as Schema).enum![0]);
-    expect(tools).toEqual(["search", "list"]);
+    expect(toolsOf(createStepSchema(["meetings"], [], false))).toEqual(["search", "list"]);
   });
 
-  it("can withhold list for a search-only run, in the schema and in the prompt", () => {
-    const schema = createStepSchema(["meetings", "tickets"], ["E1"], true, false);
-    const variants = ((schema.properties as Schema).actions as Schema).items as Schema;
-    expect((variants.anyOf as Schema[]).map(variant => ((variant.properties as Schema).tool as Schema).enum![0])).toEqual(["search", "open", "finish"]);
-    // The search-only prompt names no list tool and no inventory rule; the full prompt keeps both. Only rule 1 ("list only
-    // the facts") and rule 4, which says there is no list tool, still say "list".
-    expect(SEARCH_ONLY_STEP_PROMPT.split("\n").filter(line => /\blist\b/u.test(line)).map(line => line.slice(0, 2))).toEqual(["1.", "4."]);
-    expect(SEARCH_ONLY_STEP_PROMPT).not.toContain("inventor");
-    expect(SEARCH_ONLY_STEP_PROMPT).toContain("4. There is no list tool in this run");
-    expect(SEARCH_ONLY_STEP_PROMPT).toContain("\"tool\" is \"search\", \"open\" or \"finish\".");
-    expect(STEP_PROMPT).toContain("list, args {\"source\"");
-    expect(STEP_PROMPT.split("\n").length - SEARCH_ONLY_STEP_PROMPT.split("\n").length).toBe(8);
+  it("can withhold list for a search-only run", () => {
+    expect(toolsOf(createStepSchema(["meetings", "tickets"], ["E1"], true, false))).toEqual(["search", "open", "finish"]);
   });
 
-  it("gives Ask its own kind and list rules (5 and 6 since the research tool contract), and keeps the task prompt byte for byte (ADR-0041)", () => {
-    const rule = (prompt: string, number: number) => prompt.split("\n").find(line => line.startsWith(`${number}. `))!;
-    const line = (prompt: string, start: string) => prompt.split("\n").find(value => value.startsWith(start))!;
-    // Background task prompts stay byte-for-byte unchanged. Ask also explains its client-local date projection.
-    expect([STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT].map(prompt => canonicalSha256(prompt))).toEqual([
-      "sha256:8083e4e4f259bd9676bd3a685d30c3fb5b8a797ecd61727552488a31a5014d86", "sha256:d4d67ae7a306adbae70a9f5c2d5ebea59a9c9e69173657f82f7ccfac9e6bccaf",
-    ]);
-    expect(ASK_STEP_PROMPT).toContain('already converted to the request time_zone');
-    // Research declares each need's kind, with an example of each; a list's id supports only the list kinds. Its examples name
-    // nothing the research-loop evaluation asks about (tests/architecture/ask-kind-examples-eval-independence.test.ts).
-    // Research tool contract v1: rules 1 to 4 are how to look (understand, look around, choose paths, dig).
-    const [rule3, rule4] = [rule(ASK_STEP_PROMPT, 5), rule(ASK_STEP_PROMPT, 6)];
-    expect(rule3).toMatch(/^5\. Give each need a kind\. "which_items": which or how many items exist in a source, or in a set of its items picked by a date, owner, status, kind or channel/u);
-    for (const text of [
-      "picked by a date, owner, status, kind or channel (\"tickets updated since Monday\", \"my open follow-ups\", \"my open tasks due this week\")",
-      "\"which_say\": which members of such a picked set say something (\"which of the tickets updated since Monday mention the recall\")",
-      "which items say something when the question picks no set by a date, owner, status, kind or channel (\"which pages mention the recall\": search finds them)",
-      "(\"is the beta on hold\", \"who owns OPS-17\", \"when was the onboarding guide created\")",
-      // One named item's own fact stays content however research found the item, so its answer states no list (F01).
-      "or a fact about one particular item, its title, dates, status, owner or lead included (\"is the beta on hold\", \"who owns OPS-17\", \"when was the onboarding guide created\"), even when you list items to find that one item.",
-      "Mark a which_items need \"found\" with its inventory L id and every requested member E id.",
-      "Put supporting facts unrelated to that membership in a separate content need.",
-      "Give a which_say need the id of the list whose members it checks, whatever its status, and mark it \"found\" with that id and ids whose full text you have seen. Mark a content need \"found\" only with ids whose full text you have seen",
-    ]) expect(rule3).toContain(text);
-    expect([rule3.includes("For which items exist, and each one's title, dates, status and owner, a list's id"), rule(STEP_PROMPT, 3).includes("kind")]).toEqual([false, false]);
-    expect([ASK_STEP_PROMPT, STEP_PROMPT].map(prompt => prompt.split("\n")[0])).toEqual([expect.stringContaining("then your plan, lists, last_results"), expect.stringContaining("then your plan, inventories, last_results")]);
-    // Addition 6: early stopping never applies to which items exist; a which_say need reads what its list has shown.
-    expect(rule4).toContain("A which_items need is supported once each list it cites has more false: a complete list supports all its items, and one that cannot be read to its end (complete is false) supports \"at least\" its count. A list shows which items exist, never what an item says: open an item for its content, and for a which_say need open as many of the list's members as you can; it need not wait for the list's end.");
-    expect(rule4).not.toContain("A question about which or how many items exist");
-    expect(rule4.endsWith("Stop as soon as every requested fact is supported: for a which_items need, once each list it cites has more false; for a which_say need, once you have seen the full text of every member its list has shown, or no other member can be opened.")).toBe(true);
-    // Ask's tools never send research to open list members only to show that they exist.
-    expect(line(ASK_STEP_PROMPT, "  Returns: the ids of up to 8 items")).toContain("Open those items before relying on what they say; a list's members need no open to show which items exist.");
-    expect(line(ASK_STEP_PROMPT, "  When to use: before relying on")).toContain("before relying on what metadata-only items or incomplete previews say, or on a fact about one item; never only to show that a list's members exist or match its filter;");
-    expect(line(STEP_PROMPT, "  Returns: the ids of up to 8 items")).toContain("no body means metadata only. Open those items before relying on them.");
-    // The reply shape names all three kinds and shows none, so a model copying it copies no default; the example has one need of each.
-    const shape = line(ASK_STEP_PROMPT, "{\"parts\":[{\"question\":\"<one part of the question>\"");
-    expect(JSON.parse(shape).parts[0].needs).toEqual([{ id: "N1", need: "<a fact needed>", kind: "<which_items, which_say or content>", status: "open", evidence: [] }]);
-    expect(ASK_STEP_PROMPT).toContain("A need's \"status\" is \"open\", \"found\" or \"not_found\". A need's \"kind\" is \"which_items\", \"which_say\" or \"content\". \"tool\" is");
-    const example = JSON.parse(ASK_STEP_PROMPT.split("\n").at(-1)!) as { parts: { needs: { kind: string; evidence: string[] }[] }[] };
-    expect(example.parts.flatMap(part => part.needs.map(need => [need.kind, need.evidence]))).toEqual([["which_items", ["L1", "E3", "E4", "E5", "E6"]], ["which_say", ["L1", "E3"]], ["content", ["E2"]]]);
-    for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT]) expect(prompt).not.toMatch(/which_items|which_say|A need's "kind"|for a which_say need/u);
-    expect([ASK_STEP_PROMPT.includes("You may stop early"), ASK_STEP_PROMPT.includes("instead of paging through it")]).toEqual([false, false]);
-    for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT]) expect(prompt).toContain("You may stop early when the facts the question asks for are already supported.");
-    // Ask's argument and recovery clarifications are covered by agentic-ask-tool-contracts.test.ts.
-    // Background prompts above remain byte-for-byte pinned; Ask keeps the same discovery tools and evidence rules.
-    for (const prompt of [ASK_STEP_PROMPT, STEP_PROMPT]) for (const tool of ['search', 'open', 'list', 'finish']) expect(prompt).toContain(`${tool}, args`);
+  // A step prompt as code reads it, never its wording (T-5): the tools it describes, the fields of the reply shape it shows,
+  // and its example steps, against the schema its run is given and the parser (ADR-0041 for Ask's).
+  it.each([
+    ["Ask's", ASK_STEP_PROMPT, createStepSchema(["meetings"], ["E1"], true, true, true), { lists: true }],
+    ["a task's", STEP_PROMPT, createStepSchema(["meetings"], ["E1"]), {}],
+    ["a search-only task's", SEARCH_ONLY_STEP_PROMPT, createStepSchema(["meetings"], ["E1"], true, false), {}],
+  ] as const)("shows %s research its schema's tools and fields, and example steps the parser reads as written", (_run, prompt, schema, options) => {
+    const every = toolsOf(createStepSchema(["meetings"], ["E1"]));
+    expect(every.filter(tool => prompt.includes(`${tool}, args`))).toEqual(toolsOf(schema));
+    // The first reply in the prompt is the shape it asks for; the others are examples.
+    const [shape, ...examples] = prompt.split("\n").filter(line => line.startsWith('{"parts":'));
+    const fields = (value: Schema) => Object.keys(value).sort();
+    const reply = JSON.parse(shape!) as Schema;
+    const part = (schema.properties as Schema).parts.items as Schema;
+    expect([fields(reply), fields(reply.parts[0]), fields(reply.parts[0].needs[0])])
+      .toEqual([fields(schema.properties as Schema), fields(part.properties), fields(part.properties.needs.items.properties)]);
+    expect(examples.length).toBeGreaterThan(0);
+    for (const example of examples) expect(corrected(() => parseStep(JSON.parse(example), options))).toEqual({});
   });
 
   it("requires a need kind in Ask's step schema only with the list tool (ADR-0041)", () => {
@@ -174,11 +130,9 @@ describe("agentic Ask model protocol parity", () => {
     const kinded = needOf(createStepSchema(["pages", "tickets"], ["E1", "E2"], true, true, true));
     expect([Object.keys(kinded.properties as Schema), (kinded.properties as Schema).kind, kinded.required])
       .toEqual([["id", "need", "kind", "status", "evidence"], { type: "string", enum: ["which_items", "which_say", "content"] }, ["need", "kind", "status", "evidence"]]);
-    // Without it, the schema is the one built at 026f60d, byte for byte.
-    expect([createStepSchema(["pages", "tickets"], ["E1", "E2"], true, true), createStepSchema(["pages", "tickets"], ["E1", "E2"], true, true, false), createStepSchema(["pages"], undefined, false, false), stepSchema].map(schema => canonicalSha256(schema))).toEqual([
-      "sha256:89777c72b01f93f9335b2ec8165befe2c15d8fe1f067c8a50753f0e216cb968f", "sha256:89777c72b01f93f9335b2ec8165befe2c15d8fe1f067c8a50753f0e216cb968f",
-      "sha256:172f427c99d87ed7a210eba5972be0abdfc6c23d7d96271388934c6753231c3f", "sha256:d2903b4093e32c204330b6e39010d09ca1c2517f5902f6cf7250edd6d345401a",
-    ]);
+    // Without it, a need has no kind.
+    const plain = needOf(createStepSchema(["pages", "tickets"], ["E1", "E2"], true, true));
+    expect([Object.keys(plain.properties as Schema), plain.required]).toEqual([["id", "need", "status", "evidence"], ["need", "status", "evidence"]]);
     // Every step the kinded schema permits parses, as every step the plain one does.
     for (let seed = 1; seed <= 200; seed += 1) {
       const value = generator(seed)(createStepSchema(["meetings"], ["E1"], true, true, true)) as { parts: { question: string }[]; actions: { tool: string; args: Record<string, string> }[] };
@@ -510,12 +464,6 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect((answerBlocksSinceSchema.properties as Schema).lists.items.properties.members).not.toHaveProperty("maxItems");
   });
 
-  it("pins Ask again's prompt and schema with shared unbounded selections", () => {
-    expect([ANSWER_SINCE_PROMPT, answerBlocksSinceSchema].map(value => canonicalSha256(value))).toEqual([
-      "sha256:520c7b5aaae4fa05e1cf362dd3341675ba8fa803b5c00eefa563cf4d6d86a80c", "sha256:9a0778330ad9981ba2a94c6e344c8793a89494ada7510d9ecf6b7df5bd27cd46",
-    ]);
-  });
-
   it("describes each block as research sources are described, and builds the reply schema from the same entries", () => {
     expect(ANSWER_BLOCK_CATALOG.map(entry => entry.block)).toEqual(["answer", "text", "points", "table", "timeline", "card", "quote"]);
     for (const entry of ANSWER_BLOCK_CATALOG) {
@@ -529,44 +477,15 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect([Object.keys(answerBlocksSchema.properties as Schema), Object.keys(answerBlocksSinceSchema.properties as Schema)]).toEqual([["lists", "blocks", "not_found"], ["lists", "blocks", "not_found", "since"]]);
   });
 
-  it("tells the writer never to restate the question, to write a long identifier once, explicit member presentation, and its reply shape", () => {
-    const lines = ANSWER_BLOCKS_PROMPT.split("\n");
-    const answer = lines.findIndex(line => line.startsWith("- The first block is \"answer\""));
-    expect([lines[answer + 1], lines[answer + 2]]).toEqual([NO_RESTATING_RULE, LONG_IDS_ONCE_RULE]);
-    expect(NO_RESTATING_RULE).toMatch(/^- The app shows the answer right under the question, so never restate the question: the lead answers it at once\. Call what the question already names "it" or a word or two \("the follow-up", "the release"\), not its full title or identifier; name a follow-up by its title only when the question does not name it\. /u);
-    expect(LONG_IDS_ONCE_RULE).toBe("- Write a long identifier, such as a release or build name, at most once in the answer, and only where a short reference would not be clear.");
-    expect(ANSWER_BLOCKS_PROMPT).toContain("The member id identifies what the item presents; evidence alone does not.");
-    expect(ANSWER_PROMPT).toContain("If you omit a found membership need's list, code restores its requested_members");
-    expect(ANSWER_BLOCKS_PROMPT).not.toContain("Never write items, rows, events or facts for a list's members");
-    // A member is shown once: by code through a selection, or by a row or point that declares it, which is then the selection.
-    // The writer's lists selection decides what code states; a v2 row or point that declares and names a member shows it once.
-    expect(ANSWER_PROMPT).toContain("Return the members that answer the question in lists: that is your selection. Preserve every requested member; code adds any your selection leaves out.");
-    expect(ANSWER_PROMPT).not.toContain("replaces research's");
-    expect(ANSWER_PROMPT).toContain("Code states the members your selection names, with their grounded names and row facts.");
-    expect(ANSWER_PROMPT).toContain("To say that no member of a list answers, give it an empty members array and put the missing fact in not_found; code still states that list's requested_members.");
-    expect(ANSWER_PROMPT).not.toContain("never present those members again yourself");
-    expect(ANSWER_BLOCKS_PROMPT).toContain("A table row or points item that presents one member must declare member as that member's E id and name it by its title or key as its list shows it; code states the selected members you do not present that way, and never repeats one you do.");
-    expect(ANSWER_BLOCKS_PROMPT).not.toMatch(/never also select a member shown that way|no other member's|are your selection of their list/u);
-    // A question about one named item is answered from its text, never with a list of the items research looked through.
-    expect(ANSWER_PROMPT).toContain("Return lists only when the question asks which or how many items exist: answer a question about one named item, such as who leads it or when it is due, with sentences citing its text, and return no list.");
-    expect(ASK_STEP_PROMPT).not.toContain("names every member");
-    expect(lines[0]).toContain("\"block_catalog\" lists the blocks it can show");
-    expect(Object.keys(JSON.parse(lines.at(-1)!))).toEqual(["lists", "blocks", "not_found"]);
-    // Every answer is in blocks (ADR-0051): the writer is shown one reply shape, the blocks', and no count of sentences.
-    expect(lines).toContain("- An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds.");
-    const writer = [ANSWER_PROMPT, ANSWER_BLOCKS_PROMPT, ANSWER_SINCE_PROMPT].join("\n\n");
-    expect(writer.match(/Reply with ONLY a JSON object/gu)).toHaveLength(1);
-    expect(writer).not.toMatch(/up to 10|list of sentences|\{"lists":\[\],"sentences"|this shape instead|in "sentences"/u);
+  // The writer's wording is reviewed and measured by the research test, not pinned here (T-5); what code reads of it is.
+  it("shows the writer a reply shape with the answer schema's fields", () => {
+    expect(Object.keys(JSON.parse(ANSWER_BLOCKS_PROMPT.split("\n").at(-1)!) as Schema)).toEqual(Object.keys(answerBlocksSchema.properties as Schema));
+  });
+
+  it("shows the writer a nothing-found example the parser reads", () => {
     // Its nothing-found example is a blocks reply: an answer that cites nothing, which code leaves out (W1), and not_found.
     const nothingFound = /If neither the evidence nor a list answers the question, return (\{.*?\})\. Do not attach/u.exec(ANSWER_PROMPT)?.[1];
     expect(parseBlocksAnswer(JSON.parse(nothingFound!))).toMatchObject({ lists: [], sentences: [{ evidence: [] }], not_found: ["<the requested fact>"] });
-    // The writer every Ask gets: its prompt, follow-up guidance, layout part and schema, with the selection contract they share, pinned;
-    // and the follow-up guidance every Ask's research steps get, which the Ask golden never sees (its scenarios bind no follow-ups).
-    expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, ANSWER_BLOCKS_PROMPT, answerBlocksSchema, FOLLOW_UPS_STEP_GUIDANCE].map(value => canonicalSha256(value))).toEqual([
-      "sha256:badf426531d3b408a8b134858216787f147e493948cbbd249f1ffc0bf1cfc8e9", "sha256:77dc4e583a427323a32d72314fbb863c40d4b9ad6cb2c879dd7e9c609e347b64",
-      "sha256:1b55accb6d7ce3ff2a1ac95baeb0380c180af2576402786dae12f57beb1a2c05", "sha256:8d5d4b50ffbba9580067126dd95c5a59b0db6bfb569c78bb243c512e5168d32c",
-      "sha256:ae927b310a92f753194790d105d513f3c5f374ef2a7350fced7a1b416d0b6974",
-    ]);
   });
 
   it("never rejects a reply the blocks schema permits, asked again or not", () => {
@@ -673,6 +592,72 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     const variants = (((answerBlocksSchema.properties as Schema).blocks as Schema).items as Schema).anyOf as Schema[];
     const most = (value: Schema): readonly string[] => Object.entries(value).flatMap(([key, child]) => key === "maxItems" ? [String(child)] : child !== null && typeof child === "object" ? most(child as Schema) : []);
     expect([(answerBlocksSchema.properties as Schema).blocks.maxItems, ...variants.map(variant => most(variant).join(","))]).toEqual([undefined, "2,12", "12", "12", "12", "12", "12", "12"]);
+  });
+
+  it("bounds each list and text in its reply schemas exactly where the parser cuts it", () => {
+    type Path = readonly (string | number)[];
+    // A reply with every field the schemas take, which the parser reads with no correction.
+    const full = {
+      lists: [{ id: "L1", where: { field: "owner", value: "Dana" }, members: ["E1"] }, { id: "L2", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } }],
+      blocks: [
+        { block: "answer", sentences: [{ text: "One.", evidence: ["E1"] }] },
+        { block: "text", title: "Why", sentences: [{ text: "Two.", evidence: ["E1"] }] },
+        { block: "points", title: "Next", ordered: true, items: [{ text: "Three.", evidence: ["E1"], member: "E1" }] },
+        { block: "table", title: "Owners", columns: ["Item", "Owner"], rows: [{ cells: ["Fix", "Ana"], evidence: ["E1"], member: "E1" }] },
+        { block: "timeline", title: "Week", events: [{ date: "2026-10-20", text: "Four.", who: "Ana", evidence: ["E1"] }] },
+        { block: "card", title: "THERM-48", kind: "ticket", facts: [{ label: "Status", value: "Open", evidence: ["E1"] }] },
+        { block: "quote", text: "Five.", from: "Ana", evidence: ["E1"] },
+      ],
+      not_found: ["the due date"],
+      since: [{ text: "Six.", evidence: ["E1"] }],
+    };
+    const put = (path: Path, value: unknown) => {
+      const copy = structuredClone(full) as Record<string, any>;
+      path.slice(0, -1).reduce((node, key) => node[key], copy)[path.at(-1)!] = value;
+      return copy;
+    };
+    /** `count` entries like `first`, each one the parser keeps: other ids, other words, or copies. */
+    const entries = (first: unknown, count: number) => Array.from({ length: count }, (_, at) => typeof first === "string"
+      ? (/^[EL]\d+$/u.test(first) ? `${first[0]}${at + 1}` : `${first} ${at + 1}`)
+      : (first as Schema).id === undefined ? structuredClone(first) : { ...(first as Schema), id: `L${at + 1}` });
+    /** Every list and every free text or id a schema takes, by name. */
+    const fieldsOf = (node: Schema, name: string): string[] => node.anyOf !== undefined ? (node.anyOf as Schema[]).flatMap(variant => fieldsOf(variant, `${name}(${variant.properties.block.enum[0]})`))
+      : node.type === "object" ? Object.entries(node.properties as Schema).flatMap(([key, child]) => fieldsOf(child, `${name}.${key}`))
+      : node.type === "array" ? [name, ...fieldsOf(node.items as Schema, `${name}[]`)]
+      : node.type === "string" && node.enum === undefined && node.pattern === undefined ? [name] : [];
+    for (const schema of [answerBlocksSchema, answerBlocksSinceSchema]) {
+      const since = schema === answerBlocksSinceSchema;
+      const read = (reply: unknown) => corrected(() => parseBlocksAnswer(reply, { since }));
+      const cuts = (path: Path, length: number) => "model_text_truncated" in read(put(path, "x".repeat(length)));
+      const caps = (path: Path, first: unknown, count: number) => "model_items_capped" in read(put(path, entries(first, count)));
+      expect(read(full)).toEqual({});
+      const seen = new Set<string>(); const differ: string[] = []; const ids = { list: [] as number[], item: [] as number[] };
+      const visit = (node: Schema, value: any, path: Path, name: string): void => {
+        if (node.anyOf !== undefined) return visit((node.anyOf as Schema[]).find(variant => variant.properties.block.enum[0] === value.block)!, value, path, `${name}(${value.block})`);
+        if (node.type === "object") { for (const [key, child] of Object.entries(node.properties as Schema)) if (key in value) visit(child, value[key], [...path, key], `${name}.${key}`); return; }
+        if (node.type === "array") {
+          seen.add(name);
+          const most = node.maxItems as number | undefined;
+          // Past its bound the answer's sentences read as text; every other list is cut at its bound, and the cut counted.
+          const kept = name.endsWith("(answer).sentences")
+            ? parseBlocksAnswer(put(path, entries(value[0], 64)), { since }).sentences.filter(sentence => sentence.item?.kind === "answer").length === most
+            : most === undefined ? !caps(path, value[0], 64) : !caps(path, value[0], most) && caps(path, value[0], most + 1);
+          if (!kept) differ.push(`${name}: ${most}`);
+          (value as unknown[]).forEach((entry, at) => visit(node.items as Schema, entry, [...path, at], `${name}[]`));
+          return;
+        }
+        if (node.type !== "string" || node.enum !== undefined || node.pattern !== undefined) return;
+        seen.add(name);
+        // An id is read by its form, E or L and up to four digits, and never cut: its bound is the room the schema gives it.
+        if (/\.(id|member|members\[\]|evidence\[\])$/u.test(name)) { ids[name.endsWith(".id") ? "list" : "item"].push(node.maxLength as number); return; }
+        const most = node.maxLength as number | undefined;
+        if (most === undefined ? cuts(path, 4_096) : cuts(path, most) || !cuts(path, most + 1)) differ.push(`${name}: ${most}`);
+      };
+      visit(schema, full, [], "reply");
+      expect([...seen].sort()).toEqual([...new Set(fieldsOf(schema, "reply"))].sort());
+      expect(differ).toEqual([]);
+      expect({ list: [...new Set(ids.list)], item: [...new Set(ids.item)] }).toEqual({ list: [8], item: [16] });
+    }
   });
 
   it("reads a reply's lists, what it did not find and, asked again, since, beside its blocks", () => {

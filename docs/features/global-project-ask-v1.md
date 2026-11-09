@@ -266,13 +266,12 @@ Synthetic staging submissions accept optional `started_at`, `ended_at` and
 submissions stay undated, and capture/approval times never substitute for them.
 
 If the approved record log advances during Ask, a valid old snapshot is
-classified as unavailable rather than failed authentication. Ordinary Ask
+classified as unavailable rather than failed authentication. Ask
 restarts once with a new desk and research state, within the original 90-second
 work deadline. Cooperative timeout auditing finishes before the response returns;
 cleanup has a separate one-second bound if a connector does not settle after cancellation.
 The old evidence never enters the new attempt. Revoked access,
 changed grants, corrupt or foreign pointers and unknown failures are not
-retried. Diagnostic captures remain single-attempt so their content and fence
-cannot mix attempts; a snapshot change returns unavailable and the person may
-start a fresh capture. A still-building index can produce an explicit partial
-answer from other sources under the existing originals-only policy.
+retried. Each attempt is its own observed research run, and so its own staging
+LangSmith trace. A still-building index can produce an explicit partial answer
+from other sources under the existing originals-only policy.

@@ -162,6 +162,11 @@ Update (2026-10-31): both CLI commands and `POST /v3/person/evidence/open`
 are retired. `POST /v3/person/evidence/search` stays, because the
 research-loop evaluation reads it.
 
+Update (2026-11-09): `POST /v3/person/evidence/search` is retired too; the
+research-loop evaluation binds approved meetings through the person list and
+the approved-record read
+([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)).
+
 ### Ask loop
 
 All limits live in one configuration object:

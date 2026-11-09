@@ -1,6 +1,5 @@
 import {
-  PERSON_ASK_GAP_DETAILS_HEADER_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
-  validatePersonAskGapDetailsHeaderV1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1,
+  PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1,
 } from "@echo-brain/organization-api";
 import {
   PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
@@ -61,27 +60,19 @@ import type { PersonEmployeeHttpApplication } from "./person-employee-http-appli
 import {
   PERSON_ANSWER_PATH_V7,
   PERSON_RUNS_PATH_V1,
-  PERSON_DIAGNOSTICS_PATH_V1,
   PERSON_RESEARCH_EVAL_READ_PATH_V1,
   PERSON_RESEARCH_EVAL_START_PATH_V1,
-  PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
-  PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1,
-  validatePersonSourceEvidenceReviewHeaderV1,
   validatePersonAnswerRequestV3,
   validatePersonRunsRequestV1,
-  validatePersonDiagnosticsRequestV1,
   validatePersonResearchEvalReadRequestV1,
   validatePersonResearchEvalStartRequestV1,
-  validatePersonEvidenceSearchRequestV1,
   validatePersonSourceEvidenceReadRequestV1,
 } from "@echo-brain/organization-api";
 import type { PersonSourceEvidenceHttpApplicationV1 } from "./person-source-evidence-http-application.js";
-import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-application.js";
 import type { PersonAnswerV7HttpApplication } from "./person-live-answer-http-application.js";
 import type { PersonResearchEvalHttpApplicationV1 } from "./person-research-eval-http-application.js";
 import type { PersonTriggerRunsHttpApplicationV1 } from './person-trigger-runs-http-application.js';
-import type { PersonDiagnosticsHttpApplicationV1 } from './person-diagnostics-http-application.js';
 import { PERSON_ASK_CHECK_PATH_V1, validatePersonAskCheckRequestV1 } from '@echo-brain/organization-api';
 import type { PersonAskCheckHttpApplicationV1 } from './person-ask-check-http-application.js';
 import {
@@ -122,14 +113,12 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_RECORDS_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V7}`,
   `POST ${PERSON_ASK_CHECK_PATH_V1}`,
-  `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
   `GET ${PERSON_CHANGES_ROUTE_V1}`,
   `GET ${PERSON_PROJECT_ACTIVITY_PATH_V1}`,
   `POST ${PERSON_SOURCE_EVIDENCE_PATH_V1}`,
   `POST ${PERSON_LIST_PATH_V1}`,
   `POST ${PERSON_OPEN_PATH_V1}`,
   `POST ${PERSON_RUNS_PATH_V1}`,
-  `POST ${PERSON_DIAGNOSTICS_PATH_V1}`,
 ]);
 
 function routeKey(method: string, path: string): string {
@@ -158,11 +147,6 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Owner-only employee invite, reissue, and revoke. */
   readonly person_employees: PersonEmployeeHttpApplication;
   /**
-   * The evidence desk's search (`/v3/person/evidence/search`, ADR-0022), which only the research-loop evaluation reads. Its
-   * open and its Ask route, `/v3/person/ask`, were retired: Ask is `person_answer_v7`.
-   */
-  readonly person_answer_v3: PersonAnswerV3HttpApplication;
-  /**
    * Ask (`/v7`, the V8 answer, research tool contract v1): it may read and cite live tickets and pages, ECHO's shared
    * follow-ups (ADR-0040), and the asker's projects, people, tools and their connected tools' containers.
    */
@@ -172,7 +156,6 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Staging-only research evaluation; its routes do not exist unless composed. */
   readonly person_research_eval?: PersonResearchEvalHttpApplicationV1;
   readonly person_trigger_runs: PersonTriggerRunsHttpApplicationV1;
-  readonly person_diagnostics?: PersonDiagnosticsHttpApplicationV1;
   /** Provider-owned routes (account connections and the Slack approval click), selected by the composition root. */
   readonly person_tool_connections?: readonly ProviderHttpApplicationV1[];
   /** Opening a cited original; it needs no answer model. */
@@ -206,10 +189,11 @@ function providerIngressRoutes(
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
       // These Person families stay reserved, their retired paths too (V1 notes; V1 documents and the V2 and V3 tools lists,
-      // ADR-0048; the capability read and the evidence desk's open), so no adapter can mount one.
+      // ADR-0048; the capability read, the evidence desk's open and search, and the one-use diagnostic captures), so no
+      // adapter can mount one.
       if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) ||
         [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2,
-          '/v2/person/tools', '/v3/person/tools', '/v3/person/capabilities', '/v3/person/evidence/open']
+          '/v2/person/tools', '/v3/person/tools', '/v3/person/capabilities', '/v3/person/evidence/open', '/v3/person/evidence/search', '/v1/person/diagnostics']
           .some(path => route.path === path || route.path.startsWith(`${path}/`))) {
         throw new Error(`provider ingress route collides with Authority route: ${key}`);
       }
@@ -476,41 +460,24 @@ interface PersonReadGetApplication {
 function personSourcePost(application: PersonSourceEvidenceHttpApplicationV1): PersonPostHandler {
   return async (request, response) => {
     const requestBody = await personBody(request, validatePersonSourceEvidenceReadRequestV1);
-    let review: true | undefined;
-    try { review = validatePersonSourceEvidenceReviewHeaderV1(request.headers[PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1]); }
-    catch { throw new AuthorityOperationError('invalid_request', 'Ask source review header is invalid'); }
-    json(response, 200, application.readSource({
-      access_token: accessToken(request.headers.authorization), request: requestBody,
-      ...(review === undefined ? {} : { include_imported_meeting_review: review }),
-    }));
+    json(response, 200, application.readSource({ access_token: accessToken(request.headers.authorization), request: requestBody }));
   };
 }
 
-/** The client's optional clock and time zone headers an Ask may read. */
-function askTimeContext(request: IncomingMessage): PersonAskTimeContextV1 | undefined {
-  try { return validatePersonAskTimeContextV1(request.headers[PERSON_ASK_CLIENT_NOW_HEADER_V1], request.headers[PERSON_ASK_TIME_ZONE_HEADER_V1]); }
+/** An Ask's optional clock and time zone headers as its options. An invalid one is `invalid_request`. */
+function askOptions(request: IncomingMessage): { readonly time_context?: PersonAskTimeContextV1 } {
+  let time_context: PersonAskTimeContextV1 | undefined;
+  try { time_context = validatePersonAskTimeContextV1(request.headers[PERSON_ASK_CLIENT_NOW_HEADER_V1], request.headers[PERSON_ASK_TIME_ZONE_HEADER_V1]); }
   catch { throw new AuthorityOperationError('invalid_request', 'Ask time context is invalid'); }
+  return time_context === undefined ? {} : { time_context };
 }
 
-/** Only explicitly opted-in clients can receive the additional V8 part field. */
-function askGapDetails(request: IncomingMessage): true | undefined {
-  try { return validatePersonAskGapDetailsHeaderV1(request.headers[PERSON_ASK_GAP_DETAILS_HEADER_V1]); }
-  catch { throw new AuthorityOperationError('invalid_request', 'Ask gap details header is invalid'); }
-}
-
-/** An Ask's optional client headers as its options. An invalid one is `invalid_request`. */
-function askOptions(request: IncomingMessage): { readonly time_context?: PersonAskTimeContextV1; readonly include_gap_details?: true } {
-  const time_context = askTimeContext(request);
-  const include_gap_details = askGapDetails(request);
-  return { ...(time_context === undefined ? {} : { time_context }), ...(include_gap_details === undefined ? {} : { include_gap_details }) };
-}
-
-/** Ask, desk and list reads check the bearer and install cancellation before reading any body bytes. */
+/** Ask and list reads check the bearer and install cancellation before reading any body bytes. */
 function personCancellablePost<Application, Request>(
   application: Application,
   validate: (value: unknown) => Request,
   read: (application: Application, input: {
-    readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly include_gap_details?: true; readonly signal: AbortSignal;
+    readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly signal: AbortSignal;
   }) => Promise<unknown>,
   ask = false,
 ): PersonPostHandler {
@@ -748,29 +715,20 @@ export function createOrganizationAuthorityHttpServer(
   );
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
     [PERSON_ANSWER_PATH_V7, personAskV7Post(options.person_answer_v7)],
-    [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
     [PERSON_ASK_CHECK_PATH_V1, personCancellablePost(options.person_ask_check, validatePersonAskCheckRequestV1, (application, input) => application.check(input))],
     ...(options.person_research_eval === undefined ? [] : [
       [PERSON_RESEARCH_EVAL_START_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalStartRequestV1, (application, input) => application.start(input))],
       [PERSON_RESEARCH_EVAL_READ_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalReadRequestV1, (application, input) => application.read(input))],
-    ] as const),
-    ...(options.person_diagnostics === undefined ? [] : [
-      [PERSON_DIAGNOSTICS_PATH_V1, personCancellablePost(options.person_diagnostics, validatePersonDiagnosticsRequestV1, (application, input) => {
-        const common = { access_token: input.access_token, ...(input.signal === undefined ? {} : { signal: input.signal }) };
-        return input.request.operation === 'prepare'
-          ? application.prepare({ ...common, request: input.request })
-          : application.read({ ...common, request: input.request });
-      })],
     ] as const),
     [PERSON_RUNS_PATH_V1, personCancellablePost(options.person_trigger_runs, validatePersonRunsRequestV1, (application, input) => {
       const common = { access_token: input.access_token, ...(input.signal === undefined ? {} : { signal: input.signal }) };
       const request = input.request;
       switch (request.operation) {
         case 'list': return application.list(common);
-        case 'start': return application.start({ ...common, request: { schema_version: 1, operation: 'start', run_id: request.run_id, ...(request.capture_id === undefined ? {} : { capture_id: request.capture_id }) } });
+        case 'start': return application.start({ ...common, request });
         case 'next': return application.next({ ...common, request });
-        case 'retry': return application.retry({ ...common, request: { schema_version: 1, operation: 'retry', run_id: request.run_id } });
-        case 'view': return application.view({ ...common, request: { schema_version: 1, operation: 'view', run_id: request.run_id } });
+        case 'retry': return application.retry({ ...common, request });
+        case 'view': return application.view({ ...common, request });
         case 'home': return application.home({ ...common, request });
         case 'items': return application.items({ ...common, request });
         case 'item': return application.item({ ...common, request });
@@ -1106,13 +1064,7 @@ export function createOrganizationAuthorityHttpServer(
       }
       if (method === "POST" && url.search === "") {
         const personRead = personReadPosts.get(url.pathname);
-        if (personRead !== undefined) {
-          // Released clients (feed seq 20 and older) refuse a /v7 progress stream without this header and read a /v7 404
-          // without it as an Authority with no /v7; the current client ignores it. Set before any validation, so every /v7
-          // response carries it. Drop it once the update floor passes this release.
-          if (url.pathname === PERSON_ANSWER_PATH_V7) response.setHeader('x-echo-person-ask-route', '7');
-          await personRead(request, response); return;
-        }
+        if (personRead !== undefined) { await personRead(request, response); return; }
       }
       fail(response, 404, "not_found");
     } catch (error) {

@@ -85,12 +85,12 @@ describe('the previous turn on the Person client (ADR-0047)', () => {
   it('asks /v7 alone in JSON too: a 404, or a refused turn, fails the Ask with its own code', async () => {
     const answer = answered({ question: RESOLVED });
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer));
-    await expect(client(fetch).askWithLiveSources(QUESTION, undefined, undefined, undefined, PREVIOUS)).resolves.toEqual(answer);
+    await expect(client(fetch).askWithLiveSources(QUESTION, undefined, undefined, PREVIOUS)).resolves.toEqual(answer);
     expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask']);
     expect(bodyOf(fetch.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, previous: PREVIOUS });
     for (const [reply, code, status] of [[json({ error: { code: 'not_found', message: 'request failed' } }, 404), 'not_found', 404], [json({ error: { code: 'invalid_request', message: 'request failed' } }, 400), 'invalid_request', 400]] as const) {
       const refused = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(reply);
-      await expect(client(refused).askWithLiveSources(QUESTION, undefined, undefined, undefined, PREVIOUS)).rejects.toMatchObject({ code, status });
+      await expect(client(refused).askWithLiveSources(QUESTION, undefined, undefined, PREVIOUS)).rejects.toMatchObject({ code, status });
       expect(refused.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask']);
     }
   });

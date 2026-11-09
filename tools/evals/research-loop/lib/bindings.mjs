@@ -15,28 +15,42 @@ export function meetingCitation(bindings, meetingId, item) {
   return citations[0];
 }
 
-/** The most items an evidence search with words returns (validatePersonEvidenceSearchRequestV1). */
-const SEARCH_LIMIT = 10;
-const RECORD_KINDS = ["decision", "action", "rationale"];
+/** Each record kind a binding holds, and the section of the cited record (`PersonCitedRecordV1`) that lists it. */
+const RECORD_SECTIONS = { decision: "decisions", action: "actions", rationale: "rationales" };
 
 /**
- * Finds each approved meeting's record citations by searching its title in
- * the project, keeping only items whose label carries that title. Each kind
- * is its own search, so under the cap one kind's items never crowd out
- * another's.
+ * Finds each approved meeting's record citations as the product reads them.
+ * The project's list (`person list --project`) names every approved meeting
+ * in it by title. Each meeting whose title carries the dataset meeting's is
+ * read as Ask cites it (`person records --record-sha256 <digest> --brief`):
+ * every decision, action and rationale with its atom id, under the record's
+ * policy. Each kind keeps the record's order, newest record first.
  */
 export async function discoverMeetings(client, additions, projectId) {
+  const { personCitedRecordV1 } = await import("@echo-brain/organization-api");
+  const listed = [];
+  let cursor;
+  do {
+    const page = await client.list({ schema_version: 1, project_id: projectId, ...(cursor === undefined ? {} : { cursor }) });
+    listed.push(...page.items.filter(item => item.kind === "meeting"));
+    cursor = page.next_cursor ?? undefined;
+  } while (cursor !== undefined);
   const restricted = additions.restricted_project.name;
   const meetings = {};
   const missing = [];
   for (const meeting of additions.meetings.filter(value => value.project !== restricted)) {
     const title = meeting.title.toLowerCase();
-    const found = {};
-    for (const kind of RECORD_KINDS) {
-      const desk = await client.evidenceSearch({ schema_version: 1, query: meeting.title, kinds: [kind], limit: SEARCH_LIMIT, project_id: projectId });
-      found[kind] = desk.items.filter(item => item.kind === kind && typeof item.label === "string" && item.label.toLowerCase().includes(title)).map(item => item.citation);
+    const found = Object.fromEntries(Object.keys(RECORD_SECTIONS).map(kind => [kind, []]));
+    for (const row of listed.filter(item => item.title.toLowerCase().includes(title))) {
+      const digest = row.ref.slice("meeting:".length);
+      const record = (await client.records(undefined, undefined, digest)).records.find(value => value.record_sha256 === digest);
+      if (record === undefined) continue;
+      const cited = personCitedRecordV1(record);
+      for (const [kind, section] of Object.entries(RECORD_SECTIONS)) {
+        found[kind].push(...cited[section].items.map(item => ({ kind: "approved_record", atom_id: item.atom_id, record_sha256: cited.record_sha256, policy_id: cited.policy_id })));
+      }
     }
-    if (RECORD_KINDS.every(kind => found[kind].length === 0)) { missing.push(meeting.id); continue; }
+    if (Object.values(found).every(citations => citations.length === 0)) { missing.push(meeting.id); continue; }
     meetings[meeting.id] = found;
   }
   return { meetings, missing };

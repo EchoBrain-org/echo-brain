@@ -82,6 +82,9 @@ What runs today, and what acceptance would confirm:
   name: the person's own one-use capture, held in Authority memory, and the
   operator-selected, staging-only LangSmith exporter, which sends page text
   off-host where nothing revalidates or erases it.
+  Update (2026-11-09): the one-use capture is retired
+  ([ADR-0048](ADR-0048-retire-older-person-routes.md)), so the LangSmith
+  exporter is the only such path.
 - **Audit and revalidation.** Every release goes through the shared audited
   live-evidence path: coordinates and digests are committed to the
   Authority's read-decision audit before release, and a failed audit or a lost

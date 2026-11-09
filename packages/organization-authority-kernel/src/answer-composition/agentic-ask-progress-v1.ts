@@ -3,8 +3,8 @@ import type { PersonAnswerPreviousV1, PersonAnswerResponseV8, PersonAskProgressS
 /**
  * Ask progress (ADR-0039): what a live Ask run reports while it works, and
  * what it returns with its answer. Interface only; the run emits through the
- * sink it is given and never through the diagnostics observer, which would
- * replace a person's capture sink and copy full prompts.
+ * sink it is given and never through the diagnostics observer, whose events
+ * carry full prompts.
  */
 
 /**

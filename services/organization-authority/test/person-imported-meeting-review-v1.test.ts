@@ -105,7 +105,7 @@ describe('the review badge on imported meeting notes', () => {
     expect([f.review(restored.citation), f.review(repeated.citation)]).toEqual(['reviewed', 'reviewed']);
   });
 
-  it('has nothing to review in a revision with no decision or action, and says so only to its importer, on request', async () => {
+  it('has nothing to review in a revision with no decision or action, and says so only to its importer', async () => {
     const f = await world();
     // Another meeting whose notes hold no decision or action never gets a card.
     const discussion = await f.revise('discussion only', { meeting: 'note-discussion', signals: [] });
@@ -117,14 +117,13 @@ describe('the review badge on imported meeting notes', () => {
     const emptied = await f.revise('items removed', { signals: [] });
     expect(emptied.candidate.disposition).toBe('no_signals');
     expect([f.review(f.first), f.review(emptied.citation)]).toEqual(['reviewed', 'nothing_to_review']);
-    // Only a reader that opts in gets the state; an installed reader gets exactly the old keys.
-    expect(f.route.readSource({ access_token: 'ari', request: f.request(again.citation), include_imported_meeting_review: true }))
+    // The cited original's read carries the state.
+    expect(f.route.readSource({ access_token: 'ari', request: f.request(again.citation) }))
       .toMatchObject({ citation: { ...again.citation, label: 'Imported meeting: Untitled' }, imported_meeting_review: 'nothing_to_review' });
-    expect(Object.keys(f.route.readSource({ access_token: 'ari', request: f.request(again.citation) })).sort()).toEqual(['citation', 'kind', 'schema_version', 'scope', 'text']);
     // Another person's read is refused before any review lookup, and the lookup itself is bound to the importer.
     for (const citation of [discussion.citation, again.citation, emptied.citation]) {
       expect(() => f.review(citation, 'mina')).toThrow();
-      expect(() => f.route.readSource({ access_token: 'mina', request: f.request(citation), include_imported_meeting_review: true })).toThrow();
+      expect(() => f.route.readSource({ access_token: 'mina', request: f.request(citation) })).toThrow();
     }
     const imported = new SqlitePersonImportedMeetingsV1(f.db);
     const row = imported.rows(authorization(f.people.ari), GLOBAL, { source_id: again.citation.source_id, revision_id: again.citation.revision_id })[0]!;

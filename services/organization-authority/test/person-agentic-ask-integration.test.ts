@@ -8,7 +8,6 @@ import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sq
 import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { SqlitePersonAgenticAskAuditV1 } from "../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
-import { createPersonAnswerV3Route } from "../src/composition/person-answer-v3-route.js";
 import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from "../src/composition/person-live-answer-route-v1.js";
 import type { PersonPageCitationV1, PersonTicketCitationV1 } from "@echo-brain/organization-api";
 import type { PersonLiveEvidenceItemV1, PersonLiveEvidenceSourceV1 } from "@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1";
@@ -88,8 +87,8 @@ function fixture(options: { readonly membership?: (id: string) => Membership | u
     audit: new SqlitePersonAgenticAskAuditV1(database),
     ...(options.membership === undefined ? {} : { memberships: { membership: options.membership } }),
   };
-  // Ask, as `/v7` composes it with no live source, follow-ups or workspace, beside the evidence desk's reads.
-  const route = { ...createPersonAnswerV3Route(routeOptions), ...createPersonLiveAnswerRouteV1(routeOptions) };
+  // Ask, as `/v7` composes it with no live source, follow-ups or workspace.
+  const route = createPersonLiveAnswerRouteV1(routeOptions);
   const ask = (access_token = "owner") => route.ask({ access_token, request: { schema_version: 3, question: "Summarize this project", project_id: PROJECT_ALPHA } });
   return {
     database, originals, route, upload, uploadChunks, ask, prompts, roles,
@@ -145,7 +144,7 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(auditRow(f.database)!.body_json).not.toContain("transition table");
   });
 
-  it("lists keyword-free evidence, cites the exact source, finds it through the desk's search, and appends a bound terminal audit", async () => {
+  it("lists keyword-free evidence, cites the exact source, and appends a bound terminal audit", async () => {
     const f = fixture(); f.upload("Atlas plan", "The launch window is October.");
     const answer = await f.ask();
     expect(answer.outcome).toBe("answered");
@@ -156,9 +155,6 @@ describe("Agentic Ask with stored source evidence", () => {
     if (citation.kind !== "source_revision") throw new Error("wrong citation kind");
     expect(answer.scope).toEqual({ kind: "project", project_id: PROJECT_ALPHA });
     expect(f.originals.read({ access_token: "owner", scope: { kind: "project", project_id: PROJECT_ALPHA }, citation }).atom.text).toBe("Atlas plan.md\nThe launch window is October.");
-    const found = await f.route.searchEvidence({ access_token: "owner", request: { schema_version: 1, query: "launch window", project_id: PROJECT_ALPHA } });
-    expect(found.items.map(item => item.citation)).toContainEqual(citation);
-    for (const item of found.items) for (const key of ["dates", "date_kind"]) expect(item).not.toHaveProperty(key);
     const body = JSON.parse(auditRow(f.database)!.body_json) as Record<string, unknown>;
     expect(body.response_sha256).toBe(canonicalSha256(answer)); expect(body.principal_id).toBe(OWNER.principal_id);
     expect(body).toMatchObject({ model_calls: 4, rounds: 3 }); expect(auditRow(f.database)!.body_json).not.toContain("October");

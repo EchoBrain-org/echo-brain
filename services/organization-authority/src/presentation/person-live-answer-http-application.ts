@@ -8,8 +8,6 @@ export interface PersonAnswerHttpInputV1 {
   /** May carry the asker's previous turn (ADR-0047). */
   readonly request: PersonAnswerRequestV3;
   readonly time_context?: PersonAskTimeContextV1;
-  /** The client can read typed actionable explanations. */
-  readonly include_gap_details?: true;
   readonly signal?: AbortSignal;
 }
 

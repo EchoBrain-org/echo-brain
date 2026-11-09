@@ -70,8 +70,6 @@ interface Contract {
    */
   PERSON_ASK_PROGRESS_HEADER_VALUE_V3: string;
   formatPersonAskProgressEventV3(event: unknown): string;
-  PERSON_ASK_GAP_DETAILS_HEADER_V1: string;
-  PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1: string;
 }
 const api = organizationApi as unknown as Contract;
 
@@ -1698,14 +1696,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (mode === 'ask-progress' && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V3) {
         return progressStream(question, scope, init?.signal ?? undefined);
       }
-      // `ask-completion` answers what it can and says it cannot make changes: typed, only to a client that asks for typed reasons.
+      // `ask-completion` answers what it can and says, typed, that it cannot make changes.
       if (mode === 'ask-completion') {
         const [original] = desktop.answer.parts as Record<string, unknown>[];
         return json({ ...answer, scope, outcome: 'partial', citations: desktop.answer.citations,
           parts: [{ question, status: 'partial', statements: original!.statements, blocks: original!.blocks,
-            gap: 'The list did not reach the end. Unchecked entries and sentences did not fit.',
-            ...(new Headers(init?.headers).get(api.PERSON_ASK_GAP_DETAILS_HEADER_V1) === api.PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1
-              ? { gap_details: { unsupported_action: true } } : {}) }],
+            gap: 'The list did not reach the end. Unchecked entries and sentences did not fit.', gap_details: { unsupported_action: true } }],
         });
       }
       // `ask-ticket` answers from one Jira ticket read live.
@@ -1733,11 +1729,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const newer = mode === 'ask-imported-mixed' && citation.revision_id === 'rev-2';
       // The mixed-revision pane must not infer a shared review state before both proofs arrive.
       for (let waited = 0; newer && existsSync(join(home, 'hold-imported-newer')) && waited < 10_000; waited += 25) await new Promise(resolve => setTimeout(resolve, 25));
-      const review = new Headers(init?.headers).get(organizationApi.PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1) === organizationApi.PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_VALUE_V1;
+      // An imported meeting's packet always carries its review state.
       return json({
         schema_version: 1, kind: 'echo-person-source-evidence-v1', scope: body?.scope,
         citation: { ...citation, label: desktop.evidence_label }, text: newer ? 'Imported meeting (unapproved): Pilot\nThe updated notes defer the pilot.' : desktop.evidence_text,
-        ...(importedNotes && review ? { imported_meeting_review: newer ? 'not_reviewed' : mode === 'ask-imported-mixed' || existsSync(join(home, 'imported-reviewed')) ? 'reviewed' : 'not_reviewed' } : {}),
+        ...(importedNotes ? { imported_meeting_review: newer ? 'not_reviewed' : mode === 'ask-imported-mixed' || existsSync(join(home, 'imported-reviewed')) ? 'reviewed' : 'not_reviewed' } : {}),
       });
     }
     // One approved record, by the digest an answer cited or a meeting's row names. A record the person

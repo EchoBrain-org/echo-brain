@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   PERSON_SOURCE_EVIDENCE_PATH_V1,
-  PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1,
-  validatePersonSourceEvidenceReviewHeaderV1,
   validatePersonSourceEvidenceReadRequestV1,
   validatePersonSourceEvidenceV1,
 } from '../src/index.js';
@@ -16,13 +14,6 @@ const anchor_sha256 = `sha256:${'0'.repeat(64)}`;
 const sourceCitation = { kind: 'source_revision' as const, source_id, revision_id: 'r1', source_sha256, representation_sha256, anchor_sha256 };
 
 describe('cited original public contracts', () => {
-  it('opts into review metadata through one strict header without extending the request body', () => {
-    expect(PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1).toBe('x-echo-source-review');
-    expect(validatePersonSourceEvidenceReviewHeaderV1(undefined)).toBeUndefined();
-    expect(validatePersonSourceEvidenceReviewHeaderV1('1')).toBe(true);
-    for (const value of [null, true, 1, '', '0', 'true', '1, 1', ['1']]) expect(() => validatePersonSourceEvidenceReviewHeaderV1(value)).toThrow();
-    expect(() => validatePersonSourceEvidenceReadRequestV1({ schema_version: 1, scope: { kind: 'global' }, citation: sourceCitation, include_imported_meeting_review: true })).toThrow();
-  });
   it('reads a bounded immutable source packet only with complete source coordinates', () => {
     const citation = { ...sourceCitation, document_id };
     expect(PERSON_SOURCE_EVIDENCE_PATH_V1).toBe('/v2/person/ask/source');
@@ -44,9 +35,10 @@ describe('cited original public contracts', () => {
     })).toThrow('Ask response scope is invalid');
   });
 
-  it('rejects a caller-controlled label or a malformed project in a source read', () => {
+  it('rejects a caller-controlled label, a malformed project or any extra field in a source read', () => {
     expect(() => validatePersonSourceEvidenceReadRequestV1({ schema_version: 1, scope: { kind: 'global' }, citation: { ...sourceCitation, label: 'caller-controlled' } })).toThrow();
     expect(() => validatePersonSourceEvidenceReadRequestV1({ schema_version: 1, scope: { kind: 'project', project_id: 'not-a-project' }, citation: sourceCitation })).toThrow();
+    expect(() => validatePersonSourceEvidenceReadRequestV1({ schema_version: 1, scope: { kind: 'global' }, citation: sourceCitation, include_imported_meeting_review: true })).toThrow();
   });
 
   it('carries an imported meeting review state separately from the immutable packet and citation', () => {

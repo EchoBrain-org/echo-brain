@@ -9,7 +9,7 @@ import {
 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
 import { createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
-import { ANSWER_SINCE_PROMPT, answerBlocksSchema, answerBlocksSinceSchema } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
+import { ANSWER_PROMPT, ANSWER_SINCE_PROMPT, answerBlocksSchema, answerBlocksSinceSchema } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { agenticAskAnswerSha256V1, compactAndValidateAgenticAskResponseV1 } from "../../src/answer-composition/agentic-ask-v1-response.js";
 import { FOLLOW_UP_RESOLVER_PROMPT, followUpResolutionSchema } from "../../src/answer-composition/agentic-follow-up-resolver-v1.js";
 import { AgenticAskDeadlineErrorV1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
@@ -53,7 +53,7 @@ function scripted(script: { readonly resolver?: readonly unknown[]; readonly ste
   const inputs: StructuredGenerationInput[] = [];
   const queue = { resolver: [...(script.resolver ?? [])], step: [...(script.steps ?? [])], writer: [...(script.writer ?? [])] };
   const roleOf = (input: StructuredGenerationInput) => input.system_prompt === FOLLOW_UP_RESOLVER_PROMPT ? "resolver" as const
-    : input.system_prompt.startsWith("You write Echo's final answer") ? "writer" as const : "step" as const;
+    : input.system_prompt.startsWith(ANSWER_PROMPT) ? "writer" as const : "step" as const;
   return {
     inputs, of: (role: "resolver" | "step" | "writer") => inputs.filter(input => roleOf(input) === role),
     model: { generate: async (input: StructuredGenerationInput) => {
@@ -166,62 +166,10 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
     }
   });
 
-  it("goes on when the source it points to can no longer be read, and never seeds what research cannot open", async () => {
-    const run = scripted({
-      resolver: [{ resolution: "resolved", question: RESOLVED, about: [1, 2] }],
-      steps: [searchFor(RESOLVED, "THERM-482"), finishOn(RESOLVED, ["E1"])],
-      writer: [writerReply([{ text: "The DVT gate stays on hold until THERM-482 is fixed.", evidence: ["E1"] }])],
-    });
-    const openCitation = vi.fn(async (input: Parameters<NonNullable<EvidenceDeskPortV2["openCitation"]>>[0]) => {
-      if ((input.citation as { kind: string }).kind === "ticket") throw Object.assign(new Error("gone"), { name: "AuthorityOperationError", code: "not_found" });
-      return result([decisionItem]);
-    });
-    const followUp: PersonAnswerCitationV8 = { citation: { kind: "follow_up", item_id: "itm_launch-1" }, kind: "follow_up", label: "Fix THERM-482", visibility: "team", ref: "follow_up:itm_launch-1" };
-    const { ask } = askV8(desk({ openCitation }), run);
-    const response = await ask.answer({ question: QUESTION, previous: { ...FOLLOW_UP, citations: [FOLLOW_UP.citations[0]!, followUp] } });
-    expect(response).toMatchObject({ outcome: "answered", question: RESOLVED });
-    // The follow-up item is not a kind research opens before its first step; the ticket was tried and reported.
-    expect(openCitation.mock.calls.map(([input]) => (input.citation as { kind: string }).kind)).toEqual(["ticket"]);
-  });
-
-  it("goes on without a source its tool cannot read for now, and tells neither the planner nor the writer", async () => {
-    const replies = () => scripted({
-      resolver: [{ resolution: "resolved", question: RESOLVED, about: [1] }],
-      steps: [searchFor(RESOLVED, "THERM-482"), finishOn(RESOLVED, ["E1"])],
-      writer: [writerReply([{ text: "The DVT gate stays on hold until THERM-482 is fixed.", evidence: ["E1"] }])],
-    });
-    const promptsOf = (run: ReturnType<typeof scripted>) => run.inputs.map(({ signal: _signal, ...input }) => input);
-    // The same follow-up with nothing to start from: a desk that cannot open an earlier citation is given no starting item.
-    const unseeded = replies();
-    const { openCitation: _none, ...cannotOpen } = desk();
-    const expected = await askV8(cannotOpen, unseeded).ask.answer({ question: QUESTION, previous: FOLLOW_UP });
-    expect(expected).toMatchObject({ outcome: "answered", question: RESOLVED });
-    for (const code of ["unavailable", "rate_limited", "quota_exceeded"] as const) {
-      const run = replies();
-      const openCitation = vi.fn(async (_input: Parameters<NonNullable<EvidenceDeskPortV2["openCitation"]>>[0]): Promise<ReturnType<typeof result>> => {
-        throw new AuthorityOperationError(code, "Live evidence operation could not be completed");
-      });
-      const { ask, audits } = askV8(desk({ openCitation }), run);
-      const response = await ask.answer({ question: QUESTION, previous: FOLLOW_UP });
-      expect(openCitation.mock.calls.map(([input]) => input.citation), code).toEqual([ticketCitation]);
-      // The answer, and every prompt the planner and the writer were given, are those of an Ask with no starting item.
-      expect(response, code).toEqual(expected);
-      expect(promptsOf(run), code).toEqual(promptsOf(unseeded));
-      expect(audits, code).toEqual([expect.objectContaining({ outcome: "answered" })]);
-    }
-  });
-
-  it("still fails on a starting read that fails any other way: a stale access state, a conflict, an error of no known kind, a cancel or the deadline", async () => {
+  // Which earlier sources a resolved follow-up starts from, and how research goes on or stops when one cannot be read, are
+  // agenticFollowUpStartingV1's and the brief's rules: agentic-follow-up-resolver-v1.test.ts and agentic-brief-v1.test.ts.
+  it("still fails on a starting read that a cancel or the deadline ends", async () => {
     const resolved = () => scripted({ resolver: [{ resolution: "resolved", question: RESOLVED, about: [1] }] });
-    for (const error of [
-      new AuthorityOperationError("stale_access_state", "Access changed"), new AuthorityOperationError("conflict", "Changed while read"),
-      new AuthorityOperationError("invalid_request", "Evidence citation is invalid"), new Error("the desk broke"),
-    ]) {
-      const run = resolved();
-      const { ask } = askV8(desk({ openCitation: vi.fn(async () => { throw error; }) }), run);
-      await expect(ask.answer({ question: QUESTION, previous: FOLLOW_UP }), error.message).rejects.toBe(error);
-      expect(run.of("step"), error.message).toEqual([]);
-    }
     // A cancel or the deadline that ends the read stays what it is, whatever the tool said as it stopped.
     for (const reason of [new DOMException("Ask cancelled", "AbortError"), new AgenticAskDeadlineErrorV1()]) {
       const controller = new AbortController();
@@ -315,7 +263,7 @@ describe("an Ask without the previous turn is today's, byte for byte (ADR-0047)"
     expect(plain.of("resolver")).toEqual([]);
     const [writer] = plain.of("writer");
     expect(writer!.schema).toBe(answerBlocksSchema);
-    expect(writer!.system_prompt).not.toContain("Asked again");
+    expect(writer!.system_prompt).not.toContain(ANSWER_SINCE_PROMPT);
     expect(JSON.parse(writer!.user_prompt)).not.toHaveProperty("earlier");
     for (const key of ["question", "since", "choices"]) expect(absent).not.toHaveProperty(key);
   });

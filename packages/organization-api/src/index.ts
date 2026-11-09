@@ -69,7 +69,6 @@ export * from './person-meetings-v1.js';
 export * from './person-reviews-v1.js';
 
 export * from './person-runs-v1.js';
-export * from './person-diagnostics-v1.js';
 export * from './person-records-v1.js';
 export * from './person-cited-record-v1.js';
 export * from './person-employees-v1.js';

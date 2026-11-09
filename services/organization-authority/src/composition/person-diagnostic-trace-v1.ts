@@ -1,11 +1,13 @@
-import {
-  PERSON_DIAGNOSTICS_MAX_TRACE_BYTES_V1,
-  PERSON_DIAGNOSTICS_MAX_TRACE_DEPTH_V1,
-  PERSON_DIAGNOSTICS_MAX_TRACE_EVENTS_V1,
-  type PersonDiagnosticTraceV1,
-} from '@echo-brain/organization-api';
+/** A trace's serialized envelope, events included, stays within this many UTF-8 bytes. */
+export const PERSON_DIAGNOSTIC_TRACE_MAX_BYTES_V1 = 8 * 1024 * 1024;
+export const PERSON_DIAGNOSTIC_TRACE_MAX_EVENTS_V1 = 512;
+/** Includes the envelope itself; nested model JSON schemas need a larger allowance than request inputs. */
+const MAX_DEPTH = 48;
 
-/** One private, bounded prefix for a selected ordinary product request. */
+/**
+ * One private, bounded prefix of a run's diagnostic events: the collector the staging LangSmith exporter keeps for each
+ * research run and meeting extraction it admits.
+ */
 export function createPersonDiagnosticTraceV1(now: () => number) {
   const events: string[] = [];
   let eventBytes = 0;
@@ -21,7 +23,7 @@ export function createPersonDiagnosticTraceV1(now: () => number) {
   const drop = () => { dropped = Math.min(Number.MAX_SAFE_INTEGER, dropped + 1); };
   const depthFits = (value: unknown, depth: number): boolean => {
     if (value === null || typeof value !== 'object') return true;
-    return depth < PERSON_DIAGNOSTICS_MAX_TRACE_DEPTH_V1 && Object.values(value).every(child => depthFits(child, depth + 1));
+    return depth < MAX_DEPTH && Object.values(value).every(child => depthFits(child, depth + 1));
   };
 
   return Object.freeze({
@@ -30,12 +32,12 @@ export function createPersonDiagnosticTraceV1(now: () => number) {
       // Keep an exact prefix. A later smaller event must not make a trace with
       // a missing middle appear continuous or leave the loss unexplained.
       try {
-        if (dropped > 0 || events.length >= PERSON_DIAGNOSTICS_MAX_TRACE_EVENTS_V1 || event.kind === 'capture_error') { drop(); return; }
+        if (dropped > 0 || events.length >= PERSON_DIAGNOSTIC_TRACE_MAX_EVENTS_V1 || event.kind === 'capture_error') { drop(); return; }
         const serialized = JSON.stringify({ ...event, sequence: events.length + 1, observed_at: new Date(now()).toISOString() });
         const size = Buffer.byteLength(serialized) + (events.length === 0 ? 0 : 1);
-        if (envelopeBytes + eventBytes + size > PERSON_DIAGNOSTICS_MAX_TRACE_BYTES_V1) { drop(); return; }
-        // The response validator starts at the trace envelope; its events
-        // array is depth one and an individual event is depth two.
+        if (envelopeBytes + eventBytes + size > PERSON_DIAGNOSTIC_TRACE_MAX_BYTES_V1) { drop(); return; }
+        // Depth counts from the trace envelope: its events array is depth
+        // one and an individual event is depth two.
         if (!depthFits(JSON.parse(serialized), 2)) { drop(); return; }
         // Storing serialized events snapshots nested values without retaining
         // an observer's reference to model inputs or released source bodies.
@@ -43,7 +45,8 @@ export function createPersonDiagnosticTraceV1(now: () => number) {
         eventBytes += size;
       } catch { drop(); }
     },
-    snapshot(): PersonDiagnosticTraceV1 {
+    /** The exact prefix this collector kept: complete only when it dropped no event. */
+    snapshot() {
       return Object.freeze({
         schema_version: 1 as const, kind: 'echo-agentic-research-trace-v1' as const,
         complete: dropped === 0, events: Object.freeze(events.map(event => JSON.parse(event) as Readonly<Record<string, unknown>>)), dropped_events: dropped,

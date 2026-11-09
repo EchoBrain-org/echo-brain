@@ -773,7 +773,8 @@ describe("Person client", () => {
         now: () => NOW,
         fetch: async (input, init) => {
           expect(new URL(String(input)).pathname).toBe("/v2/person/ask/source");
-          expect(new Headers(init?.headers).get('x-echo-source-review')).toBe('1');
+          // Every imported meeting's packet carries its review state; the client asks for nothing more.
+          expect(new Headers(init?.headers).get('x-echo-source-review')).toBeNull();
           expect(JSON.parse(String(init?.body))).toEqual({
             schema_version: 1,
             scope: { kind: "global" },

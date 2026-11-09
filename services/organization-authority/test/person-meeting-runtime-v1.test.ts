@@ -20,15 +20,20 @@ vi.mock('@echo-brain/organization-protocol', async (importOriginal) => {
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { approvalRecordIdV2 } from '@echo-brain/organization-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import { coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeRootV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { PersonMeetingOperationV2, PersonMeetingResultsV2 } from '@echo-brain/organization-api';
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
 import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_WATCH_CURSOR_POLICY_V1, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 } from '@echo-brain/provider-granola/granola-watch-source-v1';
 import { SqliteExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
 import { AdapterError } from '@echo-brain/organization-processing/core/contracts/adapter';
 import { providerStatusError } from '@echo-brain/organization-processing/llm/llm-provider';
+import { LlmDecisionProcessor } from '@echo-brain/organization-processing/llm/llm-decision-processor';
+import type { DecisionProcessorBundleV1 } from '@echo-brain/organization-processing/ports/decision-processor-bundle-v1';
+import { createLangSmithRuntimeV1 } from '../src/composition/observability/langsmith-runtime-v1.js';
+import { uploadedRuns } from './fixtures/langsmith-uploads.js';
+import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
+import { writeFileSync } from 'node:fs';
 import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
-import { createPersonDiagnosticsV1 } from '../src/composition/person-diagnostics-v1.js';
 import { createPersonMeetingRuntimeV1, type PersonMeetingProviderV1 } from '../src/composition/person-meeting-runtime-v1.js';
 import { SqlitePersonMeetingIntakeV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { approvalContextFixture } from './fixtures/approval-core.js';
@@ -107,11 +112,11 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   });
   const provider = fakeProvider('granola', GRANOLA_WATCH_CURSOR_POLICY_V1.source_adapter_id);
   const sessions = { authenticateAccess: ({ access_token }: { access_token: string }) => authorization({ ...(actors[access_token as keyof typeof actors] ?? other), membership_type: access_token === 'owner' ? 'owner' : 'employee' }) };
-  const create = (providers: readonly PersonMeetingProviderV1[] = [provider], seams: { readonly approval_core?: Parameters<typeof createPersonMeetingRuntimeV1>[0]['approval_core']; readonly record_append?: typeof f.context.record_append; readonly database?: Database.Database; readonly meeting_lanes?: number; readonly observation?: CoreRuntimeObservationScopeV1 } = {}) =>
+  const create = (providers: readonly PersonMeetingProviderV1[] = [provider], seams: { readonly approval_core?: Parameters<typeof createPersonMeetingRuntimeV1>[0]['approval_core']; readonly record_append?: typeof f.context.record_append; readonly database?: Database.Database; readonly meeting_lanes?: number; readonly observation?: CoreRuntimeObservationScopeV1; readonly processor?: DecisionProcessorBundleV1 } = {}) =>
     createPersonMeetingRuntimeV1({ database: seams.database ?? f.db, approval: seams.record_append === undefined ? f.context : { ...f.context, record_append: seams.record_append }, providers,
     sessions, ...(seams.approval_core === undefined ? {} : { approval_core: seams.approval_core }), ...(seams.meeting_lanes === undefined ? {} : { meeting_lanes: seams.meeting_lanes }),
     ...(seams.observation === undefined ? {} : { observation: seams.observation }),
-    processor: { processor_adapter_id: 'llm', current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }), assert_admission_commitments() {},
+    processor: seams.processor ?? { processor_adapter_id: 'llm', current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }), assert_admission_commitments() {},
       create_processor(admission) { const identity = { kind: 'decision-processor' as const, adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
         return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
           async extract(meeting) {
@@ -205,32 +210,20 @@ function toolIsSynthetic(meeting: MeetingDocument) { return meeting.provenance.s
 const heldError = (external: string, stage = 'unknown', next = 'An operator can authorize one more attempt.') =>
   `Meeting ${external} is held after extraction attempt 1 failed at ${stage}. Later meetings continue. ${next}`;
 describe('personal meeting intake uses the shared processing path', () => {
-  it.each([false, true])('captures one authorized extraction, keeps normal traces private, and joins its approval (failed=%s)', async failed => {
+  it.each([false, true])('observes one extraction by attempt and opaque meeting id, keeps its payloads out of operational metadata, and joins its approval or holds it (failed=%s)', async failed => {
     const f = await fixture(), events: CoreRuntimeObservationV1[] = [];
     const observation = { observer: (event: CoreRuntimeObservationV1) => { events.push(event); } };
     const runtime = f.create(undefined, { observation });
-    const diagnostics = createPersonDiagnosticsV1({ sessions: f.sessions });
-    runtime.attachDiagnostics(diagnostics);
     const failures: unknown[] = [];
-    const process = async () => {
-      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, failure => { failures.push(failure); });
-      await runtime.processing.settle!();
-      expect(failures).toEqual([]);
-    };
     try {
       await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
       const source = f.intake.list(f.person)[0]!;
-      const capture = await diagnostics.prepare({ access_token: 'owner', request: { schema_version: 1, operation: 'prepare', target: {
-        kind: 'meeting_extraction', source_key: source.source_key, meeting_id: id,
-      } } });
+      // A model payload reaches diagnostic sinks only (the staging LangSmith trace), never the operational observer.
       f.duringExtract(() => { observeCoreRuntimeDiagnosticV1({ kind: 'model_response', role: 'extraction', call_id: 1, value: 'PRIVATE EXTRACTION' }); });
       if (failed) f.failNextExtraction(new AdapterError('temporarily_unavailable', 'LLM output contained invalid or unsupported signal grounding at stage: evidence_quote', true));
-      await process();
-      const read = () => diagnostics.read({ access_token: 'owner', request: { schema_version: 1, operation: 'read', capture_id: capture.capture_id } });
-      expect(await read()).toMatchObject({ status: failed ? 'failed' : 'completed', trace: { complete: true, events: [
-        { stage: 'extraction', event: 'started' }, { kind: 'model_response', value: 'PRIVATE EXTRACTION' },
-        { stage: 'extraction', event: failed ? 'failed' : 'succeeded' },
-      ] } });
+      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, failure => { failures.push(failure); });
+      await runtime.processing.settle!();
+      expect(failures).toEqual([]);
       expect(f.extracted()).toBe(1);
       const extraction = events.find(event => event.phase === 'extraction' && event.event !== 'started')!;
       expect(extraction).toMatchObject({ attempt: 1, meeting_id: expect.stringMatching(/^[a-f0-9]{64}$/), event: failed ? 'failed' : 'succeeded' });
@@ -245,15 +238,84 @@ describe('personal meeting intake uses the shared processing path', () => {
         await observeCoreRuntimeV1('http_request', () => f.call(runtime, { operation: 'review_open', approval_id: review!.approval_id }), observation);
         expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'approval_review', event: 'succeeded', approval_id, approval_surface: 'desktop', result: 'returned' })]));
       }
-      await f.call(runtime, { operation: 'import', meeting_id: folder, project_id: null, retain: true });
-      await process();
-      expect(f.extracted()).toBe(2);
-      expect((await read()).trace!.events).toHaveLength(3);
       for (const text of ['PRIVATE EXTRACTION', 'TRANSCRIPT_SECRET_DO_NOT_SHARE', id, source.source_key]) expect(JSON.stringify(events)).not.toContain(text);
-      // Source settings are revalidated when exporting the private payload, even after success/failure.
-      f.db.prepare('UPDATE authority_person_meeting_sources_v2 SET settings_revision=settings_revision+1 WHERE source_key=?').run(source.source_key);
-      expect(await read()).not.toHaveProperty('trace');
-    } finally { diagnostics.close(); runtime.close(); f.db.close(); }
+    } finally { runtime.close(); f.db.close(); }
+  });
+
+  it('exports one staging LangSmith trace per extraction through the service\'s tracing runtime, with the real processor\'s prompt, reply and token counts', async () => {
+    const f = await fixture(), events: CoreRuntimeObservationV1[] = [];
+    const tracing = stagingTracing({ observer: event => { events.push(event); } });
+    // The model cites the note's unit in another spelling, which code corrects, and gives two reasons for its decision.
+    const reply = JSON.stringify({ signals: [extractedItem('decision', 'Ship the cohort onboarding', ['[N1]']),
+      extractedItem('rationale', 'The cohort is ready', ['T1']), extractedItem('rationale', 'Onboarding is written down', ['N1'])] });
+    const runtime = f.create(undefined, { observation: tracing.scope, processor: llmProcessor(reply) });
+    const signal = new AbortController().signal, failures: unknown[] = [], third = '00000000-0000-4000-8000-000000000004';
+    try {
+      // A meeting lane extracts one meeting in its own operation.
+      await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+      await runtime.processing.pollAndStageAdmittedMeetings(signal, failure => { failures.push(failure); });
+      await runtime.processing.settle!();
+      // The staging canary runs passes one after another in one operation: each meeting still gets its own trace.
+      await f.call(runtime, { operation: 'import', meeting_id: folder, project_id: null, retain: true });
+      await f.call(runtime, { operation: 'import', meeting_id: third, project_id: null, retain: true });
+      const [source] = f.intake.list(f.person);
+      await observeCoreRuntimeRootV1('worker_execution', async () => {
+        for (let pass = 0; pass < 2; pass++) await runtime.pollAndStageSource(source!.source_key, signal);
+      }, tracing.scope);
+      await tracing.close();
+      expect(failures).toEqual([]);
+      expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(3);
+      const traces = await tracing.uploads();
+      expect(traces.map(runs => [runs[0]!.name, runs[0]!.inputs, runs[0]!.outputs, runs.slice(1).map(run => run.name)])).toEqual([id, folder, third].map(meeting => [
+        'ECHO meeting_extraction', { meeting, title: 'Test meeting' }, { decisions: 1, actions: 0, rationales: 2 }, ['model.extraction']]));
+      const operations = traces.map(runs => runs[0]!.extra.metadata.echo_operation_id);
+      expect([operations[0] === operations[1], operations[1] === operations[2]]).toEqual([false, true]);
+      for (const [root, model] of traces) {
+        expect(root!.extra.metadata).toMatchObject({ complete: true, result: 'completed', attempt: 1, model_corrections: { extraction_unit_id_respelled: 1 } });
+        expect(model).toMatchObject({ parent_run_id: root!.id, outputs: { value: reply }, prompt_tokens: 900, completion_tokens: 60, total_tokens: 960,
+          extra: { metadata: { usage: { cached_input_tokens: 300, reasoning_tokens: null } } } });
+        // While staging tracing is on, the trace carries the meeting's own text, as research traces carry evidence text.
+        expect(model!.inputs.user_prompt).toContain('TRANSCRIPT_SECRET_DO_NOT_SHARE');
+      }
+      // The trace links to its extraction's journey events by the opaque meeting id.
+      const extracted = events.filter(event => event.phase === 'extraction' && event.event === 'succeeded');
+      expect(traces.map(runs => runs[0]!.extra.metadata.echo_meeting_id)).toEqual(extracted.map(event => event.meeting_id));
+      // Research's counts, which the release preflight reads, stay clean; meeting extraction's are reported apart.
+      expect(JSON.parse(tracing.lines.at(-1)!)).toMatchObject({ exported: 0, failed: 0, dropped: 0, incomplete: 0, pending: 0,
+        meeting_extraction: { exported: 3, failed: 0, dropped: 0, incomplete: 0, pending: 0 } });
+      for (const text of [reply, 'TRANSCRIPT_SECRET_DO_NOT_SHARE', 'Ship the cohort', 'Test meeting', id, folder, third]) {
+        expect(JSON.stringify([events, tracing.lines])).not.toContain(text);
+      }
+    } finally { await tracing.close(); runtime.close(); f.db.close(); }
+  });
+
+  it('exports a held extraction\'s staging trace with its error, keeping meeting text out of operational metadata and the status record', async () => {
+    const f = await fixture(), events: CoreRuntimeObservationV1[] = [];
+    const tracing = stagingTracing({ observer: event => { events.push(event); } });
+    // The only item cites a unit the meeting does not have: code sets it aside, the extraction fails and the meeting is held.
+    const reply = JSON.stringify({ signals: [extractedItem('decision', 'Adopt the private plan', ['T9'])] });
+    const runtime = f.create(undefined, { observation: tracing.scope, processor: llmProcessor(reply) });
+    const failures: unknown[] = [];
+    try {
+      await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, failure => { failures.push(failure); });
+      await runtime.processing.settle!();
+      await tracing.close();
+      expect(failures).toEqual([]);
+      expect(f.held()).toEqual([expect.objectContaining({ external_id: id })]);
+      expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'worker_execution', result: 'held' })]));
+      const [[root, model, ...rest] = []] = await tracing.uploads();
+      expect(rest).toEqual([]);
+      expect(root).toMatchObject({ name: 'ECHO meeting_extraction', error: 'failed', inputs: { meeting: id, title: 'Test meeting' },
+        extra: { metadata: { complete: true, attempt: 1, model_corrections: { extraction_item_set_aside: 1 } } } });
+      expect(root).not.toHaveProperty('outputs');
+      expect(root!.events!.map(event => event.name)).toEqual(['extraction.started', 'grounding.skipped', 'grounding.failed', 'extraction.failed']);
+      expect(model).toMatchObject({ name: 'model.extraction', parent_run_id: root!.id, outputs: { value: reply }, prompt_tokens: 900 });
+      expect(JSON.parse(tracing.lines.at(-1)!)).toMatchObject({ exported: 0, failed: 0, meeting_extraction: { exported: 1, failed: 0, incomplete: 0 } });
+      for (const text of [reply, 'Adopt the private plan', 'TRANSCRIPT_SECRET_DO_NOT_SHARE', 'Test meeting', id]) {
+        expect(JSON.stringify([events, tracing.lines])).not.toContain(text);
+      }
+    } finally { await tracing.close(); runtime.close(); f.db.close(); }
   });
 
   it('reviews hidden sources without selecting or connecting a provider', async () => {
@@ -1200,7 +1262,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const scope = { kind: 'global' } as const;
     const citation = originals.deskSearch({ access_token: 'owner', scope, kinds: ['imported_meeting'] }).items[0]!.citation;
     const evidence = createPersonSourceEvidenceRouteV1({ originals });
-    const read = () => evidence.readSource({ access_token: 'owner', include_imported_meeting_review: true, request: { schema_version: 1, scope, citation } as never });
+    const read = () => evidence.readSource({ access_token: 'owner', request: { schema_version: 1, scope, citation } as never });
     const before = read();
     expect(before).toMatchObject({ citation: { label: 'Imported meeting: Test meeting' }, imported_meeting_review: 'not_reviewed' });
     // A partial item selection is not a completed review; the core refuses it atomically.
@@ -1413,3 +1475,32 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(await f.create().approvals()).not.toBe(core);
   });
 });
+
+/** One item of a model reply, with every field the extraction schema asks for; a rationale supports the first decision. */
+function extractedItem(kind: 'decision' | 'action' | 'rationale', text: string, units: readonly string[]) {
+  return { kind, text, status: kind === 'decision' ? 'decided' : 'unresolved', owner: null, due_at: null, confidence: null, evidence_units: units,
+    supports_decision_indexes: kind === 'rationale' ? [0] : [] };
+}
+/** The real decision processor for each person's source, over a fake provider that answers `reply` with token counts. */
+function llmProcessor(reply: string): DecisionProcessorBundleV1 {
+  const llm = (instance_id: string) => new LlmDecisionProcessor({ adapter_id: 'llm', instance_id, settings: { model: 'fixture-model' } }, { identityEndpoint: null,
+    validateProviderConfig: () => [], client: { provider: 'fixture', verifyModel: async () => {},
+      generateStructured: async () => ({ content: reply, inputTokens: 900, outputTokens: 60, totalTokens: 960, cachedInputTokens: 300, stopReason: 'stop' }) } });
+  return { processor_adapter_id: 'llm', assert_admission_commitments() {}, create_processor: admission => llm(admission.processor.instance_id),
+    current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: llm(instance_id).identity.version, configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }) };
+}
+/**
+ * The service's staging LangSmith tracing runtime, opened from a private selection file around operational metadata
+ * (`existing`), with uploads accepted locally; `uploads()` reads back each uploaded trace, root first.
+ */
+function stagingTracing(existing: CoreRuntimeObservationScopeV1) {
+  const directory = mkdtempSync(join(tmpdir(), 'echo-langsmith-')), path = join(directory, 'tracing.json');
+  writeFileSync(path, JSON.stringify({ project: 'echo-staging', region: 'us', api_key: 'fixture-langsmith-key', expires_at: null }), { mode: 0o600 });
+  const forms: FormData[] = [], lines: string[] = [];
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, options) => { forms.push(options!.body as FormData); return new Response('', { status: 202 }); });
+  const runtime = createLangSmithRuntimeV1({ path, authority_url: STAGING_AUTHORITY_ORIGIN_V1, release_sha: 'a'.repeat(40), existing, write: line => { lines.push(line); } });
+  runtime.start();
+  return { scope: runtime.scope!, lines,
+    async close() { try { await runtime.close(); } finally { fetcher.mockRestore(); rmSync(directory, { recursive: true, force: true }); } },
+    uploads: () => Promise.all(forms.map(uploadedRuns)) };
+}

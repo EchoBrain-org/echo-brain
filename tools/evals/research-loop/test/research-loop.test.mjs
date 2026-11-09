@@ -370,37 +370,55 @@ test("reports print research-loop and renderer numbers in separate sections", ()
   assert.match(renderers, /\| approved-record-t1-two-decimal-display \| approved_record \| background \| — \| 25% \|/u);
 });
 
-test("meeting bindings search each record kind within the evidence search cap, and skip the restricted project", async () => {
-  const { validatePersonEvidenceSearchRequestV1 } = await import("@echo-brain/organization-api");
+test("meeting bindings read every record of each approved meeting the THERM list names, and skip the restricted project", async () => {
+  const api = await import("@echo-brain/organization-api");
   const { additions } = loadDataset();
+  const projectId = bindings.project_id;
+  const project = { project_id: projectId, name: "THERM" };
+  // The listed records, newest first, and how many signals of each kind they hold. M1 has eleven decisions, M3 was approved
+  // twice, M5 has nothing approved yet, and M6 is the restricted project's.
+  const listed = [["M1-r1", "M1", [11, 1, 0]], ["M3-r2", "M3", [1, 0, 0]], ["M6-r1", "M6", [1, 0, 0]], ["M2-r1", "M2", [1, 1, 1]], ["M3-r1", "M3", [2, 1, 0]], ["M4-r1", "M4", [1, 0, 1]]]
+    .map(([id, meeting, counts], index) => ({ id, meeting, counts, digest: digest(id), added_at: new Date(Date.UTC(2026, 9, 20 - index)).toISOString() }));
+  const KINDS = ["decision", "action", "rationale"];
+  const row = entry => ({ ref: `meeting:${entry.digest}`, kind: "meeting", title: titleOf(entry.meeting), added_at: entry.added_at, visibility: "project", projects: [project] });
+  const note = { ref: `note:ctx_${"a".repeat(64)}`, kind: "note", title: titleOf("M5"), added_at: "2026-10-21T00:00:00.000Z", visibility: "project", projects: [project] };
   const requests = [];
-  const citation = (meeting, kind, index) => ({ kind: "approved_record", atom_id: `atom-${meeting}-${kind}-${index}`, record_sha256: `record-${meeting}` });
+  const read = [];
+  // As the Person client does, every request and reply is checked against its contract.
   const client = {
-    async evidenceSearch(request) {
-      // As the Person client does: the request's own validator runs before anything is sent.
-      validatePersonEvidenceSearchRequestV1(request);
-      requests.push(request);
-      const meeting = additions.meetings.find(value => value.title === request.query);
-      const [kind] = request.kinds;
-      // M1 has eleven decisions, more than one search returns; M5 has nothing approved yet.
-      const count = meeting.id === "M5" ? 0 : meeting.id === "M1" && kind === "decision" ? 11 : 1;
-      const items = Array.from({ length: count }, (_, index) => ({ kind, label: `${meeting.title} · ${kind} ${index}`, citation: citation(meeting.id, kind, index) }));
-      return { items: [...items.slice(0, request.limit), { kind, label: "Another meeting", citation: citation("other", kind, 0) }] };
+    async list(request) {
+      requests.push(api.validatePersonListRequestV1(request));
+      const page = request.cursor === undefined
+        ? { project: { ...project, role: "member", status: "active" }, items: [note, ...listed.slice(0, 3).map(row)], next_cursor: "page-2" }
+        : { items: listed.slice(3).map(row), next_cursor: null };
+      return api.validatePersonListResponseV1({ schema_version: 1, kind: "echo-person-list-v1", scope: { kind: "project", project_id: projectId }, ...page });
+    },
+    async records(limit, query, recordSha256) {
+      assert.deepEqual([limit, query], [undefined, undefined]);
+      read.push(recordSha256);
+      const entry = listed.find(value => value.digest === recordSha256);
+      const brief = Object.fromEntries(KINDS.map((kind, at) => [`${kind}s`, Array.from({ length: entry.counts[at] }, (_, index) => ({ id: `${kind}-${index}`, kind, text: `${entry.id} ${kind} ${index}.` }))]));
+      return api.validatePersonRecordListV1({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [{ position: 1, approval_id: "apr_1", record_sha256: recordSha256,
+        envelope: { record_sha256: recordSha256, body: { event: { kind: "approved", policy_id: "project-members-readable-person-v1",
+          approved_snapshot: { approved_payload: { brief: { meeting: { id: entry.meeting, title: titleOf(entry.meeting) }, ...brief } } } } } } }] });
     },
   };
-  const { meetings, missing } = await discoverMeetings(client, additions, bindings.project_id);
-  const searched = additions.meetings.filter(meeting => meeting.project !== additions.restricted_project.name);
-  assert.equal(requests.length, searched.length * 3);
-  for (const request of requests) {
-    assert.equal(request.limit, 10);
-    assert.equal(request.project_id, bindings.project_id);
-    assert.equal(request.kinds.length, 1);
-  }
-  assert.ok(!requests.some(request => request.query === additions.meetings.find(meeting => meeting.project === additions.restricted_project.name).title));
+  const cite = (id, kind, index) => ({ kind: "approved_record", atom_id: api.personRecordAtomIdV1(digest(id), `${kind}-${index}`), record_sha256: digest(id), policy_id: "project-members-readable-person-v1" });
+  const { meetings: bound, missing } = await discoverMeetings(client, additions, projectId);
+  // Both pages of the project are listed, and each meeting row of a bound meeting is read once: never M6, never the note.
+  assert.deepEqual(requests, [{ schema_version: 1, project_id: projectId }, { schema_version: 1, project_id: projectId, cursor: "page-2" }]);
+  assert.deepEqual(read, ["M1-r1", "M2-r1", "M3-r2", "M3-r1", "M4-r1"].map(digest));
   assert.deepEqual(missing, ["M5"]);
-  assert.equal(meetings.M1.decision.length, 10);
-  assert.deepEqual(meetings.M1.action, [citation("M1", "action", 0)]);
-  assert.deepEqual(meetings.M2, { decision: [citation("M2", "decision", 0)], action: [citation("M2", "action", 0)], rationale: [citation("M2", "rationale", 0)] });
+  assert.deepEqual(Object.keys(bound), ["M1", "M2", "M3", "M4"]);
+  // Every item is bound in the record's order, with its record's atom id and policy, past the ten a search once returned.
+  assert.deepEqual(bound.M1, { decision: Array.from({ length: 11 }, (_, index) => cite("M1-r1", "decision", index)), action: [cite("M1-r1", "action", 0)], rationale: [] });
+  assert.deepEqual(bound.M2, { decision: [cite("M2-r1", "decision", 0)], action: [cite("M2-r1", "action", 0)], rationale: [cite("M2-r1", "rationale", 0)] });
+  // A meeting approved twice binds the newer record first, so its record case starts from the newest approval.
+  assert.deepEqual(bound.M3.decision, [cite("M3-r2", "decision", 0), cite("M3-r1", "decision", 0), cite("M3-r1", "decision", 1)]);
+  // The command writes exactly that, beside the dataset's world and the test person; M5 is left to fill in by hand.
+  const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-bindings-")));
+  await main(["bindings", "--project-id", projectId, "--test-person", "Zhen Ye", "--out", out], { client });
+  assert.deepEqual(readJson(join(out, "bindings.json")), { schema_version: 1, world: additions.world, test_person: "Zhen Ye", project_id: projectId, meetings: bound });
 });
 
 test("reports weigh cases equally and keep unknowns unknown", () => {

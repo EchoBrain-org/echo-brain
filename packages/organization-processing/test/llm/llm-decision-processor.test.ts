@@ -562,6 +562,26 @@ describe('llm decision processor extraction', () => {
     await expect(withCoreRuntimeDiagnosticsV1(() => { throw new Error('diagnostic failure'); }, extract)).resolves.toMatchObject(kept);
   });
 
+  it('gives a selected private sink the reply with the token counts and stop reason the provider reported', async () => {
+    const responses = async (reported: Omit<StructuredGenerationResult, 'content'>) => {
+      const instance = processor({ provider: 'fixture-local', verifyModel: async () => {}, generateStructured: async () => ({ content: validModelOutput, ...reported }) });
+      const payload: CoreRuntimeDiagnosticObservationV1[] = [];
+      await withCoreRuntimeDiagnosticsV1((event) => { payload.push(event); },
+        () => observeCoreRuntimeV1('extraction', () => instance.extract(meeting, extractionContext(instance))));
+      return payload.filter((event) => event.kind === 'model_response');
+    };
+    expect(await responses({ inputTokens: 1200, outputTokens: 80, totalTokens: 1280, cachedInputTokens: 400, reasoningTokens: 30, stopReason: 'stop' })).toEqual([expect.objectContaining({
+      role: 'extraction', value: validModelOutput, finish_reason: 'stop',
+      usage: { input_tokens: 1200, output_tokens: 80, total_tokens: 1280, cached_input_tokens: 400, reasoning_tokens: 30 },
+    })]);
+    // Counts the provider did not report are null; a stop reason in the closed set keeps its name (the Claude account can
+    // reach here with `length`), one outside it is `other`, and none is null.
+    const none = { input_tokens: null, output_tokens: null, total_tokens: null, cached_input_tokens: null, reasoning_tokens: null };
+    for (const kept of ['length', 'content_filter', 'error']) expect(await responses({ stopReason: kept }), kept).toEqual([expect.objectContaining({ finish_reason: kept })]);
+    expect(await responses({ stopReason: 'tool_calls' })).toEqual([expect.objectContaining({ usage: none, finish_reason: 'other' })]);
+    expect(await responses({})).toEqual([expect.objectContaining({ usage: none, finish_reason: null })]);
+  });
+
   it('ignores values in fields irrelevant to a signal kind and drops an invalid confidence', async () => {
     const noisy = JSON.parse(validModelOutput) as { signals: Record<string, unknown>[] };
     Object.assign(noisy.signals[0]!, { owner: 'Zhen', due_at: 'not-used', supports_decision_indexes: [2] });

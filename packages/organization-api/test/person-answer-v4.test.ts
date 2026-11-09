@@ -1,11 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  PERSON_EVIDENCE_SEARCH_PATH_V1,
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV8,
-  validatePersonEvidenceDeskResponseV1,
   validatePersonEvidenceOpenRequestV1,
-  validatePersonEvidenceSearchRequestV1,
 } from '../src/index.js';
 
 const project_id = 'prj_00000000-0000-4000-8000-000000000001';
@@ -15,11 +12,9 @@ const citation = {
   record_sha256: `sha256:${'b'.repeat(64)}`,
   policy_id: 'project-members-readable-person-v1' as const,
 };
-const receipt_sha256 = `sha256:${'c'.repeat(64)}`;
 
 describe('Agentic Ask V1 public contracts', () => {
-  it('defines the desk endpoints and the Ask request', () => {
-    expect(PERSON_EVIDENCE_SEARCH_PATH_V1).toBe('/v3/person/evidence/search');
+  it('defines the Ask request', () => {
     expect(validatePersonAnswerRequestV3({ schema_version: 3, question: 'What changed?', project_id }))
       .toEqual({ schema_version: 3, question: 'What changed?', project_id });
   });
@@ -65,27 +60,19 @@ describe('Agentic Ask V1 public contracts', () => {
     expect(() => validatePersonAnswerResponseV8(response)).toThrow('policy_id is invalid');
   });
 
-  it('distinguishes an inventory result from released text and validates fresh HTTP open coordinates', () => {
-    expect(validatePersonEvidenceSearchRequestV1({ schema_version: 1, kinds: ['decision'], limit: 10, project_id }))
-      .toEqual({ schema_version: 1, kinds: ['decision'], limit: 10, project_id });
+  it('validates evidence open coordinates', () => {
     expect(validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation, neighbours: 2, project_id }))
       .toMatchObject({ citation, neighbours: 2, project_id });
-    const inventory = validatePersonEvidenceDeskResponseV1({
-      schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: { kind: 'global' }, truncated: false,
-      items: [{ id: 'desk-item-1', citation, kind: 'decision', label: 'Launch decision', visibility: 'team', receipt_sha256 }],
-    });
-    expect(inventory.items[0]).not.toHaveProperty('text');
     expect(() => validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation, neighbours: 3 })).toThrow();
   });
 
   it('preserves exact evidence whitespace while requiring model prose to be trimmed', () => {
-    const item = {
-      id: 'desk-item-1', citation, kind: 'decision', label: 'Launch decision', visibility: 'team', receipt_sha256,
-      text: '  Exact released evidence\n',
-    };
-    expect(validatePersonEvidenceDeskResponseV1({
-      schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: { kind: 'global' }, truncated: false, items: [item],
-    }).items[0]?.text).toBe(item.text);
+    const text = '  Exact released evidence\n';
+    expect(validatePersonAnswerResponseV8({
+      schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'partial',
+      citations: [{ citation, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
+      parts: [{ question: 'What changed?', status: 'records_only', statements: [], records: [{ text, citation_indexes: [0], private: false }] }],
+    }).parts[0]?.records?.[0]?.text).toBe(text);
     expect(() => validatePersonAnswerResponseV8({
       schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
       citations: [{ citation, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
@@ -129,24 +116,18 @@ describe('Agentic Ask V1 public contracts', () => {
     };
     expect(validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation: sourceCitation }))
       .toMatchObject({ citation: sourceCitation });
-    expect(validatePersonEvidenceDeskResponseV1({
-      schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: { kind: 'global' }, truncated: false,
-      items: [{ id: 'unicode-source', citation: sourceCitation, kind: 'document_passage', label: '🧪'.repeat(200), visibility: 'team', receipt_sha256 }],
-    }).items[0]?.label).toBe('🧪'.repeat(200));
   });
 
-  it('refuses the retired mine scope on answers and desk responses, alone or with a project', () => {
+  it('refuses the retired mine scope on answers, alone or with a project', () => {
     const answer = (scope: unknown) => ({
       schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered',
       citations: [{ citation, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
       parts: [{ question: 'What did I decide?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }], blocks: [{ kind: 'answer', statements: [0] }] }],
     });
-    const desk = (scope: unknown) => ({ schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope, truncated: false, items: [] });
     for (const scope of [{ kind: 'mine' }, { kind: 'mine', project_id }]) {
       expect(() => validatePersonAnswerResponseV8(answer(scope))).toThrow('Ask response scope is invalid');
-      expect(() => validatePersonEvidenceDeskResponseV1(desk(scope))).toThrow('Ask response scope is invalid');
     }
-    expect(validatePersonEvidenceDeskResponseV1(desk({ kind: 'global' })).scope).toEqual({ kind: 'global' });
+    expect(validatePersonAnswerResponseV8(answer({ kind: 'global' })).scope).toEqual({ kind: 'global' });
     expect(() => validatePersonAnswerResponseV8(answer({ kind: 'everyone' }))).toThrow('Ask response scope is invalid');
   });
 
@@ -157,11 +138,10 @@ describe('Agentic Ask V1 public contracts', () => {
     }
   });
 
-  it('keeps the evidence desk contract exact-key: a desk item never carries a ref', () => {
-    const item = { id: 'desk-item-1', citation, kind: 'decision', label: 'Launch decision', visibility: 'team', receipt_sha256 };
-    const desk = (value: unknown) => ({ schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: { kind: 'global' }, truncated: false, items: [value] });
-    expect(validatePersonEvidenceDeskResponseV1(desk(item)).items[0]).toEqual(item);
-    expect(() => validatePersonEvidenceDeskResponseV1(desk({ ...item, ref: `meeting:${citation.record_sha256}` }))).toThrow('Evidence desk item has an unexpected shape');
+  it('refuses an Ask with a capture id: diagnostic captures are retired (SVC-9)', () => {
+    const capture_id = 'cap_00000000-0000-4000-8000-000000000001';
+    expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'Why is Thermo DVT on hold?', capture_id })).toThrow('Ask request has an unexpected shape');
+    expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'Why is Thermo DVT on hold?', project_id, capture_id })).toThrow('Ask request has an unexpected shape');
   });
 
   it('allows more than RFC-0003\'s ten statements in a part, which its blocks arrange (ADR-0051)', () => {

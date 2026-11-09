@@ -1277,7 +1277,7 @@ export async function runPersonClientCli(
           print(stdout, validatePersonAskProgressResultLineV3({ ok: true, result: answer.result, ...(answer.receipt === undefined ? {} : { receipt: answer.receipt }) }));
           break;
         }
-        print(stdout, { ok: true, result: await client.askWithLiveSources(question, scope, dependencies.abort_signal, undefined, askPrevious) });
+        print(stdout, { ok: true, result: await client.askWithLiveSources(question, scope, dependencies.abort_signal, askPrevious) });
         break;
       }
       case "list":

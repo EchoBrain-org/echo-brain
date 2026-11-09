@@ -281,6 +281,20 @@ describe('staging research evaluation runs', () => {
     h.application.close();
   });
 
+  it('never releases a result that a close or its expiry dropped while its read fence was in flight', async () => {
+    for (const lapse of ['close', 'expiry'] as const) {
+      const h = harness();
+      const run = await h.application.start({ access_token: 'token-a', request: ask('Gone meanwhile?') });
+      await h.settled('token-a', run.run_id);
+      h.deskAuthorize.mockImplementationOnce(() => {
+        if (lapse === 'close') h.application.close(); else h.advance(RETAINED_RESULT_REREAD_MS_V1);
+        return { checked_at: '2026-10-06T00:00:00.000Z' };
+      });
+      await expect(h.read('token-a', run.run_id), lapse).rejects.toMatchObject({ code: 'not_found' });
+      h.application.close();
+    }
+  });
+
   it('rechecks the reading session after the execution source fence before releasing payloads', async () => {
     const h = harness();
     const run = await h.application.start({ access_token: 'token-a', request: ask('Session race?') });

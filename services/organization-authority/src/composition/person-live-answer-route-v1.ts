@@ -129,14 +129,13 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
     const { previous } = input.request;
     input.signal?.throwIfAborted();
     // Authenticated and validated once it starts: anything that fails from then on fails inside the stream.
-    return runPersonAskV1(options, input, async ({ authorization, context, capture, signal }) => {
+    return runPersonAskV1(options, input, async ({ authorization, context, signal }) => {
       const desk = await bindPersonLiveEvidenceDeskV1(options, options.live_sources ?? [], { access_token: input.access_token, scope, ask: true, signal }, context);
-      capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
       const asker = askerOf(options, authorization);
       const askOptions = { model: options.model, generation: options.generation,
         ...(options.research_driver === undefined ? {} : { research_driver: options.research_driver }),
         ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, audit: options.audit.forRequest(context),
-        ...(input.include_gap_details === undefined ? {} : { include_gap_details: input.include_gap_details }), ...(asker === undefined ? {} : { asker }),
+        ...(asker === undefined ? {} : { asker }),
       };
       // Each attempt audits what it named; only the released attempt's receipt is returned. It streams progress V3, whose
       // names may be follow-ups, workspace items and tool containers.

@@ -24,8 +24,8 @@ answers on the full catalog, which may also cite ECHO's shared follow-ups
 the asker's projects, people and tools, and the Jira projects and Confluence
 spaces of the tools they connected
 ([ADR-0042](../../../docs/decisions/ADR-0042-research-tool-contract.md)). To see
-the exact request a desktop sends, use the `trace` command below: it captures
-the ordinary live Ask on `/v7`.
+a run's exact prompts, replies and tool calls, read its staging LangSmith trace
+([LangSmith staging tracing](../../../deploy/organization-authority/README.md#langsmith-staging-tracing)).
 
 The report keeps the loop and the renderers apart. **Research loop**: every
 trigger, graded on its research result (needs, found, read, handed,
@@ -95,6 +95,27 @@ meaning across ADR-0041. The writer answers such a part by selecting the
 member, and code states its row facts, citing the row: Ask leaves out a
 writer's sentence that cites only rows or list ids.
 
+**The `trace` command's retirement (2026-11-09).** `trace`, which saved one
+ordinary Ask's or run's exact payloads from a one-use diagnostic capture
+(`POST /v1/person/diagnostics`), is retired with those captures. A staging run's
+exact prompts, replies and tool calls live in its
+[LangSmith trace](../../../deploy/organization-authority/README.md#langsmith-staging-tracing),
+which `release-check` already reads. Runs, grading and reports are unchanged, so
+baselines stay comparable.
+
+**Baselines across always-on gap details (2026-11-09).** The eval endpoint's
+Ask now carries typed `gap_details` on a part with a typed gap, as the
+desktop's Ask already did
+([ADR-0048](../../../docs/decisions/ADR-0048-retire-older-person-routes.md),
+update of 2026-11-09). Research, the writer, the answer's other fields and
+grading are unchanged (the judge never reads `gap_details`), so earlier Ask
+baselines stay comparable. Approved-record runs are unchanged. The same day,
+`bindings` stopped using the retired evidence search: it reads the THERM list
+and each meeting's record (step 4). A `bindings.json` written before stays
+valid; one written after may start the M2, M3 and M4 record cases from another of
+their decisions (the record's first, where the search ranked them), so compare
+approved-record runs under one `bindings.json`.
+
 **Baselines across the sweeps' retirement (2026-11-08).** The Sweep cases and
 the S1 world state went, and the judge's prompt and the report no longer
 cover sweep results or verdicts. The dataset and the judge prompt changed, so
@@ -144,9 +165,7 @@ citation of a kind that cannot start research) is saved as a
 first line as not started.
 
 The evaluation workflow is founder-run and starts research runs on staging as
-the signed-in person. It does not edit Jira or Confluence. The separate
-`trace` command below captures ordinary product requests in production or
-staging; an approved-record capture can start an existing pending ECHO run.
+the signed-in person. It does not edit Jira or Confluence.
 
 ## Open-ended family
 
@@ -217,7 +236,7 @@ See
 | `cases/development.json` | Cases used while improving the loop. |
 | `cases/holdout.json` | Held-out cases. Open them only for the final check. No other file quotes their questions, names them or gives their keys. |
 | `release-check.json` | The development cases the staging release check asks after its canary. |
-| `cli.mjs` | `validate`, `bindings`, `run`, `grade`, `report`, `calibrate`, `trace`, `release-check`. |
+| `cli.mjs` | `validate`, `bindings`, `run`, `grade`, `report`, `calibrate`, `release-check`. |
 | `lib/` | Reference matching, code checks, reach and cost, judge, report, calibration, the release check. |
 
 ## Founder steps, in order
@@ -240,10 +259,15 @@ See
    npm run eval:research-loop -- bindings --project-id prj_… --test-person "Your Name" --out ~/.local/state/echo-research-loop-eval-20261006
    ```
 
-   If a meeting is reported as not found, add its approved-record citations to
-   `bindings.json` by hand. The search runs inside the THERM project, so a
-   meeting it cannot find may belong to no project (see "Approved-record
-   scope").
+   It lists the THERM project as `person list --project` does, and reads each
+   approved meeting whose title carries a dataset meeting's as
+   `person records --record-sha256 <digest> --brief` does: every decision,
+   action and rationale, in the record's order (newest record first), each
+   with the atom id and policy its citation needs. An approved-record case
+   starts from its meeting's first decision. If a meeting is reported as not
+   found, add its approved-record citations to `bindings.json` by hand. Only
+   meetings listed in THERM are found, so a meeting it cannot find may belong
+   to no project (see "Approved-record scope").
 5. **Baseline at S0** (Ask and approved record, three runs each, plus one
    background-budget run of every live Ask):
 
@@ -301,89 +325,6 @@ their records belong to THERM. Linking the records to THERM during seeding
 THERM.
 
 ## Privacy
-
-### One ordinary-request diagnostic trace
-
-After deploying a capture-enabled server and building its matching Person
-client, capture one project-scoped Ask through the **ordinary live Ask route**:
-
-```bash
-npm run eval:research-loop -- trace --run --question "Why is Thermo DVT on hold and what must happen before PVT starts?" --project-id prj_… --out ~/.local/state/echo-thermo-diagnostic-<run>
-```
-
-This works in production and staging. It does not start an evaluation or need
-the staging evaluation switch. The client first prepares an actor-bound capture
-through `/v1/person/diagnostics`, saves its server-generated `capture_id` in
-`receipt.json`, and only then sends the ordinary Ask with that capture attached.
-The capture id is correlation, not authorization: every read authenticates the
-same person and revalidates access to retained source evidence, including when
-the product request failed. The runner never retries execution automatically.
-
-The export includes exact model-port inputs (system/user prompts, schema, model
-and limits), structured model responses including repair attempts, model-facing
-tool requests/results, and lifecycle events surrounding research and output.
-These are the model's exposed decisions, not hidden reasoning or raw provider
-HTTP/authentication traffic. Related-item references can be inspected in the
-exact subsequent prompt's `opened` and `seen` fields.
-
-| Saved path | Contents |
-| --- | --- |
-| `request.json` | The selected operation, local start time and source revision. |
-| `receipt.json` | The prepared capture receipt, saved before product execution. |
-| `execution-request.json` | The exact ordinary Ask or run-start request. |
-| `product-response.json` | The successful product response, when received. |
-| `product-error.json` | A sanitized product failure, when execution fails. |
-| `result.json` | The exact authenticated diagnostic response, including its retained events. |
-| `events/` | One JSON file per exact event, in sequence order. |
-| `models/` | Exact model requests and system/user prompt text, plus readable JSON copies of JSON user prompts. |
-| `inventory.json` | An index of captured calls and events for inspection. |
-| `transcript.md` | A readable view of the captured execution. |
-| `summary.json` | Capture completeness and request/terminal-event pairing checks. |
-
-**Capture completeness and product success are separate.** A failed Ask can
-have a complete trace; a successful answer can have an incomplete trace. A
-truncated, missing or incomplete capture is saved and reported as incomplete.
-Capture is bounded to 8 MiB and 512 events per run. Exact payloads stay in
-bounded server memory, except while an operator has enabled
-[staging LangSmith tracing](../../../deploy/organization-authority/README.md#langsmith-staging-tracing):
-then the staging server also exports each research run, including this traced
-Ask or run, to the chosen LangSmith project, with its exact prompts, model
-outputs, tool arguments and results and released source text. That export is
-separate from this capture. CloudWatch retains separate, content-free
-operational metadata.
-
-If execution or polling is interrupted, use the saved capture id to resume
-**reading only**, including when the ordinary Ask response was lost:
-
-```bash
-npm run eval:research-loop -- trace --capture-id cap_… --out ~/.local/state/echo-thermo-diagnostic-<run>
-```
-
-A prepared capture expires after 15 minutes if unused. A terminal capture
-expires after 15 minutes, shortened to a 60-second reread window after its first
-successful terminal read. Expiry or a server restart makes the in-memory
-payload unavailable; durable operational metadata does not reconstruct it.
-Do not start another product request to recover the same capture.
-
-To capture an existing **pending, already approved** record run instead of an
-Ask, use its durable run id:
-
-```bash
-npm run eval:research-loop -- trace --run --trigger-run-id run_… --out ~/.local/state/echo-approved-record-diagnostic-<run>
-```
-
-This prepares a capture bound to that run and calls the ordinary `runs:start`
-operation once. It does not approve a meeting or retry a failed run. While the
-Authority's search index has not caught up with the record log, as just after
-an approval, `start` holds the run `pending` and claims nothing, so no
-execution will ever claim that capture; `trace` says so. Start it again
-shortly with a new capture and a fresh `--out`.
-
-An existing completed export is never overwritten. Keep all trace files
-outside the repository as private source content; output directories are
-`0700` and files are `0600`.
-
-### Evaluation-run privacy
 
 Runs contain released text from Jira, Confluence and approved meetings. A
 saved run keeps the research result (the trimmed bundle) and Ask's answer or

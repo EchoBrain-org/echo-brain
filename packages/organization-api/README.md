@@ -15,11 +15,9 @@ or private-key implementation.
   project context, documents, and document associations.
 - Ask: the request, the V8 answer with its citations (approved records,
   sources, tickets, pages, follow-ups, workspace items), answer layout, the
-  previous turn, progress events, the source check, cited-original reads,
-  and the evidence desk.
+  previous turn, progress events, the source check and cited-original reads.
 - Lists and opens, meetings, runs and open items, impact cards, changes,
-  project activity, diagnostics, connector access, and the staging research
-  evaluation.
+  project activity, connector access, and the staging research evaluation.
 - The record list and record search, and the owner's employee roster and
   invitations.
 

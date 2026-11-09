@@ -4,7 +4,7 @@ import {
   validatePersonDocumentDissociateV1, validatePersonDocumentIdV1, validatePersonDocumentSearchV2, validatePersonListRequestV1, validatePersonOpenRequestV1,
   validatePersonQueryText, validatePersonSourceEvidenceReadRequestV1, validatePersonUpdateRequestId, validateProjectIdV1,
   type OrganizationDirectorySearchV1, type OrganizationPersonSessionV2, type PersonAnswerPreviousV1, type PersonAskCheckRequestV1, type PersonAskCheckV1,
-  type PersonChangesV1, type PersonDiagnosticCaptureIdV1, type PersonDiagnosticsRequestV1, type PersonDiagnosticsResultsV1, type PersonDocumentAssociateV1,
+  type PersonChangesV1, type PersonDocumentAssociateV1,
   type PersonDocumentDissociateV1, type PersonDocumentSearchV2, type PersonListRequestV1, type PersonOpenRequestV1, type PersonProjectActivityV1,
   type PersonResearchEvalReadResponseV1, type PersonResearchEvalStartReceiptV1, type PersonResearchEvalStartRequestV1, type PersonRunsRequestV1,
   type PersonRunsResultsV1, type PersonSourceEvidenceReadRequestV1, type PersonToolSessionV1, type PersonUpdateSubmitV3, type ProjectIdV1, type ProjectPageRequestV2,
@@ -20,8 +20,6 @@ import {
   unknownDocumentMutation,
   type EmployeeRosterV1,
   type PersonAnswerV8,
-  type PersonEvidenceDeskV1,
-  type PersonEvidenceSearchV1,
   type PersonAskSourceEvidenceV1,
   type PersonAskProgressSinkV3,
   type PersonLiveAnswerV3,
@@ -475,12 +473,11 @@ export class PersonClient {
    * request-advertised live evidence sources, ECHO's shared follow-ups
    * (ADR-0040), and the asker's projects, people, tools and tool containers
    * (research tool contract v1). It may carry the asker's previous turn
-   * (ADR-0047) and a diagnostic capture. It is the one streamed Ask
-   * (askWithLiveProgress) with its steps unread.
+   * (ADR-0047). It is the one streamed Ask (askWithLiveProgress) with its
+   * steps unread.
    */
-  async askWithLiveSources(question: string, scope?: ProjectIdV1, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1,
-    previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
-    return (await this.askWithLiveProgress(question, scope, signal, () => undefined, previous, captureId)).result;
+  async askWithLiveSources(question: string, scope?: ProjectIdV1, signal?: AbortSignal, previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
+    return (await this.askWithLiveProgress(question, scope, signal, () => undefined, previous)).result;
   }
 
   /**
@@ -499,7 +496,7 @@ export class PersonClient {
    * refused before the Ask is sent, so no step of that account reaches it.
    */
   async askWithLiveProgress(question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonLiveAnswerV3> {
+    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
     validateAskInput(question, scope);
     return this.withSession(async stored => {
       const authority = this.authority(stored.authority_origin);
@@ -513,15 +510,10 @@ export class PersonClient {
         if (!sameAccount(current, stored)) throw new Error("Person tool operation did not match the current account");
         onProgress(event);
       };
-      const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous, captureId);
+      const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous);
       this.assertCurrentSession(stored);
       return answer;
     }, signal, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
-  }
-
-  /** Prepare before starting work so the capture remains readable even if the product response is lost. */
-  async diagnostics<K extends PersonDiagnosticsRequestV1['operation']>(value: Extract<PersonDiagnosticsRequestV1, { readonly operation: K }>, signal?: AbortSignal): Promise<PersonDiagnosticsResultsV1[K]> {
-    return this.withReadSession((authority, token) => authority.diagnostics(token, value, signal), signal, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
   }
 
   /** Staging-only research evaluation (research loop evaluation v1); no CLI command exposes it. */
@@ -550,14 +542,6 @@ export class PersonClient {
   /** Whether each source old answers cited is the same, changed, unreadable or unknown now (ADR-0047). */
   async askCheck(value: PersonAskCheckRequestV1, signal?: AbortSignal): Promise<PersonAskCheckV1> {
     return this.withReadSession((authority, token) => authority.askCheck(token, value, signal), signal, ASK_CHECK_TIMEOUT_MS);
-  }
-
-  /**
-   * One evidence desk search under a new authenticated, scope-bound request. No command runs it: the research-loop
-   * evaluation finds approved meetings' record citations with it (tools/evals/research-loop/lib/bindings.mjs).
-   */
-  async evidenceSearch(value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    return this.withReadSession((authority, token) => authority.evidenceSearch(token, value, signal), signal);
   }
 
   /** One model-free list page under a fresh authenticated read (ADR-0024). */

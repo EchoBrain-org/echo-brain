@@ -102,6 +102,8 @@ describe('runs API request', () => {
     ['list with an extra key', { schema_version: 1, operation: 'list', limit: 5 }],
     ['start without a run id', { schema_version: 1, operation: 'start' }],
     ['start with an extra key', { schema_version: 1, operation: 'start', run_id: id, force: true }],
+    // Diagnostic captures are retired (SVC-9): the capture id the research-loop trace command sent is an unknown key.
+    ['start with a capture id', { schema_version: 1, operation: 'start', run_id: id, capture_id: 'cap_0f6c1a2e-3b4d-4c5e-8f90-123456789abc' }],
     // `next` names no run: the Authority picks the caller's oldest queued one.
     ['next with a run id', { schema_version: 1, operation: 'next', run_id: id }],
     ['next with a capture id', { schema_version: 1, operation: 'next', capture_id: 'cap_0f6c1a2e-3b4d-4c5e-8f90-123456789abc' }],

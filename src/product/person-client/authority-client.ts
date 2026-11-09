@@ -3,22 +3,22 @@ import { canonicalJson } from "@echo-brain/federation-protocol";
 import {
   MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH,
   ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, ORGANIZATION_API_PERSON_TOOLS_PATH_V4, PERSON_ANSWER_PATH_V7, PERSON_ASK_CHECK_LIMITS_V1, PERSON_ASK_CHECK_PATH_V1,
-  PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_GAP_DETAILS_HEADER_V1, PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_HEADER_V1,
-  PERSON_ASK_PROGRESS_HEADER_VALUE_V3, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, PERSON_CHANGES_ROUTE_V1, PERSON_DIAGNOSTICS_MAX_RESPONSE_BYTES_V1,
-  PERSON_DIAGNOSTICS_PATH_V1, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, PERSON_EMPLOYEES_PATH_V1,
-  PERSON_EVIDENCE_SEARCH_PATH_V1, PERSON_LIST_PATH_V1, PERSON_LIST_RESPONSE_MAX_BYTES_V1, PERSON_OPEN_PATH_V1, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, PERSON_PROJECTS_PATH_V1,
+  PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_HEADER_V1,
+  PERSON_ASK_PROGRESS_HEADER_VALUE_V3, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, PERSON_CHANGES_ROUTE_V1,
+  PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, PERSON_EMPLOYEES_PATH_V1,
+  PERSON_LIST_PATH_V1, PERSON_LIST_RESPONSE_MAX_BYTES_V1, PERSON_OPEN_PATH_V1, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, PERSON_PROJECTS_PATH_V1,
   PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_ACTIVITY_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_PROJECT_RENAME_PATH_V1, PERSON_RECORDS_PATH_V1,
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, PERSON_RESEARCH_EVAL_READ_PATH_V1, PERSON_RESEARCH_EVAL_START_PATH_V1, PERSON_RUNS_MAX_RESPONSE_BYTES_V1, PERSON_RUNS_PATH_V1,
-  PERSON_SOURCE_EVIDENCE_PATH_V1, PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1, PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_VALUE_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1,
+  PERSON_SOURCE_EVIDENCE_PATH_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1,
   PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PersonQueryInputError, createPersonAskProgressDecoderV3,
   isOrganizationApiValidationError, personRefKindV1, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, validateOrganizationPersonToolsV4,
   validatePersonAnswerRequestV3, validatePersonAnswerResponseV8, validatePersonAskCheckRequestV1, validatePersonAskCheckV1, validatePersonChangesV1,
-  validatePersonDiagnosticsRequestV1, validatePersonDiagnosticsResultV1, validatePersonDocumentAssociateV1, validatePersonDocumentAssociationReceiptV1,
+  validatePersonDocumentAssociateV1, validatePersonDocumentAssociationReceiptV1,
   validatePersonDocumentDissociateV1, validatePersonDocumentIdV1, validatePersonDocumentMetadataV2, validatePersonDocumentSearchResultV2, validatePersonDocumentSearchV2,
-  validatePersonDocumentStatusV2, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV2, validatePersonEvidenceDeskResponseV1,
-  validatePersonEvidenceSearchRequestV1, validatePersonListRequestV1, validatePersonListResponseV1, validatePersonOpenRequestV1, validatePersonOpenResponseV1,
+  validatePersonDocumentStatusV2, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV2,
+  validatePersonListRequestV1, validatePersonListResponseV1, validatePersonOpenRequestV1, validatePersonOpenResponseV1,
   validatePersonProjectActivityV1, validatePersonRecordListV1, validatePersonRecordSearchRequestV2, validatePersonRecordSearchV2, validatePersonResearchEvalReadRequestV1,
   validatePersonResearchEvalReadResponseV1, validatePersonResearchEvalStartReceiptV1, validatePersonResearchEvalStartRequestV1, validatePersonRunsRequestV1,
   validatePersonRunsResultV1, validatePersonSourceEvidenceReadRequestV1, validatePersonSourceEvidenceV1, validatePersonUpdateReceiptV3, validatePersonUpdateRequestId,
@@ -31,8 +31,8 @@ import {
   type EmployeeInvitationV1, type EmployeeRosterV1, type OrganizationAuthorityDescriptorResponseV1, type OrganizationPersonOidcBeginRequestV2,
   type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2, type PersonAnswerPreviousV1, type PersonAnswerResponseV8 as OrganizationPersonAnswerV8,
   type PersonAskCheckRequestV1, type PersonAskCheckV1, type PersonAskProgressStepEventV3, type PersonAskProgressTerminalEventV3, type PersonAskReceiptV3,
-  type PersonChangesV1, type PersonDiagnosticCaptureIdV1, type PersonDiagnosticsRequestV1, type PersonDiagnosticsResultsV1, type PersonDocumentAssociateV1,
-  type PersonDocumentDissociateV1, type PersonDocumentSearchV2, type PersonEvidenceDeskResponseV1, type PersonEvidenceSearchRequestV1, type PersonListRequestV1,
+  type PersonChangesV1, type PersonDocumentAssociateV1,
+  type PersonDocumentDissociateV1, type PersonDocumentSearchV2, type PersonListRequestV1,
   type PersonListResponseV1, type PersonOpenRequestV1, type PersonOpenResponseV1, type PersonProjectActivityV1, type PersonRecordListV1, type PersonRecordSearchV2,
   type PersonResearchEvalReadResponseV1, type PersonResearchEvalStartReceiptV1, type PersonResearchEvalStartRequestV1, type PersonRunsRequestV1, type PersonRunsResultsV1,
   type PersonSourceEvidenceReadRequestV1, type PersonSourceEvidenceV1, type PersonToolGetRequestV1, type PersonToolJsonRequestV1, type PersonToolTransportV1,
@@ -53,8 +53,6 @@ export type { EmployeeRosterV1, PersonRecordListItemV1, PersonRecordListV1, Pers
  * tool containers (research tool contract v1).
  */
 export type PersonAnswerV8 = OrganizationPersonAnswerV8;
-export type PersonEvidenceSearchV1 = PersonEvidenceSearchRequestV1;
-export type PersonEvidenceDeskV1 = PersonEvidenceDeskResponseV1;
 export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
 export type PersonListV1 = PersonListResponseV1;
 export type PersonOpenV1 = PersonOpenResponseV1;
@@ -286,16 +284,15 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
 type AskScope = ProjectIdV1 | undefined;
 
 /** The Ask's V3 request, which may carry the asker's previous turn (ADR-0047). */
-function askRequest(question: string, scope: AskScope, captureId: PersonDiagnosticCaptureIdV1 | undefined, previous?: PersonAnswerPreviousV1) {
+function askRequest(question: string, scope: AskScope, previous?: PersonAnswerPreviousV1) {
   return validatePersonAnswerRequestV3({ schema_version: 3, question,
-    ...(scope === undefined ? {} : { project_id: scope }), ...(captureId === undefined ? {} : { capture_id: captureId }),
+    ...(scope === undefined ? {} : { project_id: scope }),
     ...(previous === undefined ? {} : { previous }) });
 }
 
-/** Every Ask sends the client's clock and time zone, and asks for typed explanations of what an answer could not say. */
+/** Every Ask sends the client's clock and time zone. */
 function askHeaders(): Readonly<Record<string, string>> {
-  return { [PERSON_ASK_CLIENT_NOW_HEADER_V1]: new Date().toISOString(), [PERSON_ASK_TIME_ZONE_HEADER_V1]: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    [PERSON_ASK_GAP_DETAILS_HEADER_V1]: PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1 };
+  return { [PERSON_ASK_CLIENT_NOW_HEADER_V1]: new Date().toISOString(), [PERSON_ASK_TIME_ZONE_HEADER_V1]: Intl.DateTimeFormat().resolvedOptions().timeZone };
 }
 
 /**
@@ -741,16 +738,16 @@ export class PersonAuthorityClient {
    * The Ask's one transport (`/v7`, the V8 answer, research tool contract v1), streamed in Ask progress V3 (ADR-0039):
    * global by default, and a supplied project ID is a strict project-only scope. The answer may cite live tickets and
    * pages, follow-ups, and the asker's projects, people, tools and tool containers, and must echo the requested scope.
-   * The request may carry the asker's previous turn (ADR-0047) and a diagnostic capture. Each step event reaches
+   * The request may carry the asker's previous turn (ADR-0047). Each step event reaches
    * `onProgress` as it arrives, and the answer comes back with the receipt the Authority built after its final check.
    * An Authority that does not stream answers with the JSON answer, returned without a receipt, and an error inside
    * the stream is the error its JSON response would have had. The ask timeout and the caller's signal bound the whole
    * stream.
    */
   async askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonLiveAnswerV3> {
+    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
     const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
-    const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, captureId, previous), validate_request: validatePersonAnswerRequestV3,
+    const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, previous), validate_request: validatePersonAnswerRequestV3,
       access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json`, [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 } }, deadline);
     if (!isAskProgressStream(response)) {
       const value = await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
@@ -761,16 +758,6 @@ export class PersonAuthorityClient {
       throw new PersonAuthorityClientError(terminal.error.code, terminal.status, 'Person Authority rejected the request');
     }
     return Object.freeze({ result: inAskScope(terminal.response, scope, previous), receipt: terminal.receipt });
-  }
-
-  /** Prepares or reads an explicitly requested private capture on the ordinary product route. */
-  async diagnostics<K extends PersonDiagnosticsRequestV1['operation']>(accessToken: string, value: Extract<PersonDiagnosticsRequestV1, { readonly operation: K }>, signal?: AbortSignal): Promise<PersonDiagnosticsResultsV1[K]> {
-    const request = validatePersonDiagnosticsRequestV1(value);
-    const response = await this.json({ path: PERSON_DIAGNOSTICS_PATH_V1, body: request,
-      validate_request: validatePersonDiagnosticsRequestV1, validate_response: value => validatePersonDiagnosticsResultV1(request.operation, value),
-      access_token: accessToken, maximum_response_bytes: PERSON_DIAGNOSTICS_MAX_RESPONSE_BYTES_V1, timeout_ms: ASK_TIMEOUT_MS, signal });
-    if (request.operation === 'read' && response.capture_id !== request.capture_id) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned a different diagnostic capture');
-    return response as PersonDiagnosticsResultsV1[K];
   }
 
   /** Staging-only research evaluation: starts one research run (research loop evaluation v1). */
@@ -807,16 +794,6 @@ export class PersonAuthorityClient {
     });
   }
 
-  async evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    const request = validatePersonEvidenceSearchRequestV1(value);
-    const response = await this.json({ path: PERSON_EVIDENCE_SEARCH_PATH_V1, body: request,
-      validate_request: validatePersonEvidenceSearchRequestV1, validate_response: validatePersonEvidenceDeskResponseV1,
-      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, signal });
-    const expectedScope = request.project_id === undefined ? { kind: 'global' } : { kind: 'project', project_id: request.project_id };
-    if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different evidence scope');
-    return response;
-  }
-
   /** Model-free list (ADR-0024). Only the caller knows which page is first, so the header is checked here. */
   async list(accessToken: string, value: PersonListRequestV1, signal?: AbortSignal): Promise<PersonListV1> {
     const request = validatePersonListRequestV1(value);
@@ -848,7 +825,6 @@ export class PersonAuthorityClient {
   async askSourceEvidence(accessToken: string, value: PersonSourceEvidenceReadRequestV1): Promise<PersonAskSourceEvidenceV1> {
     const request = validatePersonSourceEvidenceReadRequestV1(value);
     const response = await this.json({ path: PERSON_SOURCE_EVIDENCE_PATH_V1, body: request,
-      headers: { [PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1]: PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_VALUE_V1 },
       validate_request: validatePersonSourceEvidenceReadRequestV1, validate_response: validatePersonSourceEvidenceV1,
       access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS });
     const { label: _label, ...citation } = response.citation;

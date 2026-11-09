@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  PERSON_ASK_GAP_DETAILS_HEADER_V1, PERSON_ANSWER_PATH_V7, PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
-  createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8,
+  PERSON_ANSWER_PATH_V7, PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8,
   type OrganizationPersonToolV4,
 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
@@ -26,6 +25,8 @@ afterEach(closeAskServers);
 const QUESTION = 'Who leads Project A, and what are my open tasks?';
 /** The layout header the Authority no longer reads, which older desktops and CLIs still send. */
 const LAYOUT_HEADER = 'x-echo-answer-layout';
+/** The typed-gaps opt-in the Authority no longer reads, which released desktops and CLIs still send. */
+const GAP_DETAILS_HEADER = 'x-echo-ask-gap-details';
 type StepPrompt = { readonly question?: string; readonly asked_by?: string;
   readonly last_results?: readonly { readonly tool: string; readonly args?: { readonly source?: string; readonly owner?: string }; readonly items?: readonly string[] }[] };
 
@@ -80,7 +81,7 @@ function ask(base: string, headers: Readonly<Record<string, string>>) {
 }
 
 describe('the answer layout on /v7 (ADR-0051)', () => {
-  it('sends typed gaps only to opted-in JSON and streaming clients, preserving the old exact part shape', async () => {
+  it('sends typed gaps to every JSON and streaming Ask, and answers one that still sends the retired opt-in the same', async () => {
     const f = await sentFixture();
     const original = leadAndSection();
     const model: StructuredGenerationPort = { async generate(input) {
@@ -98,13 +99,10 @@ describe('the answer layout on /v7 (ADR-0051)', () => {
         if (terminal.type !== 'answer') throw new Error('expected an answer');
         return terminal.response;
       };
-      const old = await read({});
-      const current = await read({ [PERSON_ASK_GAP_DETAILS_HEADER_V1]: '1' });
-      expect(Object.keys(old.parts[0]!).sort()).toEqual(['blocks', 'gap', 'question', 'statements', 'status']);
-      const { gap_details, ...plain } = current.parts[0]!;
-      expect(gap_details).toEqual({ not_found: 'Not found: the reviewer.' });
-      expect(plain).toEqual(old.parts[0]);
-      for (const value of ['true', '2', '1, 1']) expect((await ask(base, { ...headers, [PERSON_ASK_GAP_DETAILS_HEADER_V1]: value })).status).toBe(400);
+      const answered = await read({});
+      expect(answered.parts[0]!.gap_details).toEqual({ not_found: 'Not found: the reviewer.' });
+      // Released clients send `1`; a value once refused before the Ask ran is read as no header at all.
+      for (const value of ['1', 'true']) expect(await read({ [GAP_DETAILS_HEADER]: value })).toEqual(answered);
     }
   });
 

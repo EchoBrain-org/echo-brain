@@ -122,9 +122,9 @@ when the driver supplied `completed=false`. Open needs and interrupted reads
 remain incomplete. For Ask requests to change data or send messages, the driver
 can set `unsupported_action=true`: an action-only request has no factual parts
 and needs no search; mixed requests still validate their factual needs normally.
-Clients opt into typed `gap_details` with `x-echo-ask-gap-details: 1`; older
-requests keep the exact V8 part shape. The renderer supplies them separately
-from the diagnostic `gap`:
+Every Ask answer part with a typed gap, the research evaluation's included,
+carries `gap_details` (the Authority no longer reads the old
+`x-echo-ask-gap-details` opt-in). The renderer supplies them separately from the diagnostic `gap`:
 unsupported action, unfinished research, and a bounded not-found explanation.
 The desktop and Copy use only these actionable reasons; coverage and formatting
 diagnostics stay hidden. The response stays partial for unsupported requests,
@@ -141,8 +141,6 @@ selection facts; empty subsets of incomplete or unchecked lists do not qualify.
 | --- | --- | --- |
 | `POST /v1/person/ask/check` | Content-free check that an old turn's sources are still readable | Desktop, when an old turn opens |
 | `POST /v2/person/ask/source` | Open one cited source | Desktop |
-| `POST /v3/person/evidence/search` | The evidence desk's search, directly | The research-loop eval |
-| `POST /v1/person/diagnostics` | One-use diagnostic capture | Research-loop traces |
 | `POST /v1/person/research-eval/start`, `/read` | Staging evaluation runs | `npm run eval:research-loop` |
 
 ## Evaluation
@@ -151,6 +149,12 @@ selection facts; empty subsets of incomplete or unchecked lists do not qualify.
 questions against a staging Authority; `ask-follow-up` and `ask-blocks` (the
 Ask writer gate) under `tools/evals/` check the engine offline.
 Their unit tests run in CI's tail leg.
+
+A research run's exact prompts, replies and tool calls are read from its
+[staging LangSmith trace](../../deploy/organization-authority/README.md#langsmith-staging-tracing).
+The one-use diagnostic captures (`POST /v1/person/diagnostics`) and the
+research-loop `trace` command that read them were retired on 2026-11-09; the
+path answers 404 and stays reserved.
 
 See also: [impact checks and open items](impact-checks-and-open-items.md),
 [global and project Ask](../features/global-project-ask-v1.md),

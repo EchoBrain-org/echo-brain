@@ -6,7 +6,7 @@ export const RETAINED_RESULT_TTL_MS_V1 = 15 * 60_000;
 /** After a result is first read it stays this long, so a lost response can be read again. */
 export const RETAINED_RESULT_REREAD_MS_V1 = 60_000;
 
-/** The closed codes a retained diagnostic capture or research evaluation fails with. */
+/** The closed codes a retained research evaluation fails with. */
 export type RetainedResultFailureCodeV1 = 'conflict' | 'invalid_request' | 'invalid_output' | 'not_found' | 'stale_access_state'
   | 'unauthorized' | 'rate_limited' | 'quota_exceeded' | 'unavailable' | 'timed_out';
 export interface RetainedResultFailureV1 { readonly code: RetainedResultFailureCodeV1; readonly message: string }
@@ -19,9 +19,9 @@ export function retainedResultFailureV1(messages: Readonly<Record<RetainedResult
 }
 
 /**
- * The release edge of a result held in memory (person diagnostics, research
- * evaluation): the operation's own access fence, then the result still held,
- * then the reader's own session. A refused fence drops the result and answers
+ * The release edge of a result held in memory (research evaluation): the
+ * operation's own access fence, then the result still held, then the
+ * reader's own session. A refused fence drops the result and answers
  * the failure to report, an access it could not check as stale_access_state;
  * a cancelled read rethrows; a result gone or expired meanwhile is not_found;
  * a changed reader is dropped and refused. Undefined means it may be released.

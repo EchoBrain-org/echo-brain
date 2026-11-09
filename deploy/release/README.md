@@ -85,7 +85,9 @@ npm run authority:staging-release -- trace-preflight \
 
 It requires a complete trace from the exact candidate in the past 15 minutes,
 an enabled exporter with a positive export count, and zero failed, dropped,
-incomplete or pending exports. Failure exits non-zero before the full Ask round.
+incomplete or pending exports. These counts are research's: meeting
+extraction's are reported apart under `meeting_extraction` and do not gate the
+preflight. Failure exits non-zero before the full Ask round.
 These inputs are saved observations; obtain them freshly from that candidate.
 Reuse the user's persistent tracing selection when valid; a fresh-state reset
 still requires the human setup lane. Prepare short-lived onboarding transfers

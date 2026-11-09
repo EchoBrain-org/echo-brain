@@ -12,13 +12,14 @@ function scopeOf(scope: PersonSourceEvidenceReadRequestV1["scope"]): PersonAskSc
 /**
  * Opens one cited original (a note, document passage or imported meeting
  * packet) through the Layer-3 originals port, under the asker's current
- * access. Any Ask answer's source_revision citation opens here.
+ * access. Any Ask answer's source_revision citation opens here, and an
+ * imported meeting's packet carries its review state.
  */
 export function createPersonSourceEvidenceRouteV1(input: {
   readonly originals: PersonOriginalContextRetrievalPortV1;
 }): PersonSourceEvidenceHttpApplicationV1 {
   return Object.freeze({
-    readSource(request: { readonly access_token: string; readonly request: PersonSourceEvidenceReadRequestV1; readonly include_imported_meeting_review?: true }): PersonSourceEvidenceV1 {
+    readSource(request: { readonly access_token: string; readonly request: PersonSourceEvidenceReadRequestV1 }): PersonSourceEvidenceV1 {
       const proof = input.originals.read({
         access_token: request.access_token,
         scope: scopeOf(request.request.scope),
@@ -39,7 +40,7 @@ export function createPersonSourceEvidenceRouteV1(input: {
           label: proof.atom.label ?? "Saved context",
         },
         text: proof.atom.text,
-        ...(!request.include_imported_meeting_review || proof.imported_meeting_review === undefined ? {} : { imported_meeting_review: proof.imported_meeting_review }),
+        ...(proof.imported_meeting_review === undefined ? {} : { imported_meeting_review: proof.imported_meeting_review }),
       });
     },
   });

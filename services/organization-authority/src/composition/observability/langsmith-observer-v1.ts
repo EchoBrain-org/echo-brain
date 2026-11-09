@@ -76,33 +76,39 @@ function modelRouting(event: ModelRouting): ModelRouting {
   return { ...(event.upstream_provider === undefined ? {} : { upstream_provider: event.upstream_provider }),
     ...(event.generation_id === undefined ? {} : { generation_id: event.generation_id }) };
 }
-/** What a model call's provider span adds to its model run: provider time and status, and how long it queued before the provider. */
-function providerLeg(span: Span, run: LangSmithRunV1): Record<string, unknown> {
+/**
+ * What a model call's provider span adds to its model run: provider time and status, and, for a call asked before its
+ * provider span started, how long it queued before the provider.
+ */
+function providerLeg(span: Span, run: LangSmithRunV1, askedBefore: boolean): Record<string, unknown> {
   const done = span.end!;
   const queued = Date.parse(span.started_at) - Date.parse(run.start_time);
   return { provider_latency_ms: done.counts.provider_latency_ms ?? null, http_status: done.counts.http_status ?? null,
     active_models: done.counts.active_models ?? null, provider: done.provider, provider_result: done.result,
     // The runtime's opaque identity of the provider's request id, as operational telemetry records it.
-    provider_request: done.provider_request, ...(Number.isFinite(queued) ? { queue_ms: Math.max(0, queued) } : {}) };
+    provider_request: done.provider_request, ...(askedBefore && Number.isFinite(queued) ? { queue_ms: Math.max(0, queued) } : {}) };
 }
 
 function project(capture: Capture, end: CoreRuntimeObservationV1, projectName: string, release: string, interrupted: boolean): LangSmithRunV1[] {
   const snapshot = capture.collector.snapshot();
   const events = snapshot.events as unknown as readonly Recorded[];
   const rootId = capture.start.span_id;
+  const extraction = capture.start.phase === 'extraction';
   // Index lag is a wait for the search index, not the outage its `unavailable` code would say.
   const lagged = events.some(event => event.kind === 'lifecycle' && event.stage === 'application' && event.event === 'failed' && event.error_kind === 'index_lag');
   const result = lagged ? 'index_lag' : end.result;
   const corrected = CORE_RUNTIME_MODEL_CORRECTIONS_V1.filter(name => capture.corrections[name] !== undefined);
   const root: LangSmithRunV1 = {
-    id: rootId, name: `ECHO ${capture.start.trigger ?? 'research'}`, run_type: 'chain', trace_id: rootId,
+    id: rootId, name: extraction ? 'ECHO meeting_extraction' : `ECHO ${capture.start.trigger ?? 'research'}`, run_type: 'chain', trace_id: rootId,
     dotted_order: order(capture.start.observed_at, rootId), session_name: projectName,
     start_time: capture.start.observed_at, end_time: end.observed_at, inputs: {},
     extra: { metadata: { echo_operation_id: end.operation_id, echo_span_id: rootId, release_sha: release,
-      echo_run_id: end.run_id ?? null, echo_event_id: end.event_id ?? null, echo_attempt_id: end.attempt_id ?? null,
-      trigger: capture.start.trigger ?? 'research', complete: snapshot.complete && !interrupted, dropped_events: snapshot.dropped_events,
+      // A meeting extraction is not research: it has the opaque meeting id journey logs record and its attempt instead.
+      ...(extraction ? { echo_meeting_id: end.meeting_id ?? null, attempt: end.attempt ?? null } : {
+        echo_run_id: end.run_id ?? null, echo_event_id: end.event_id ?? null, echo_attempt_id: end.attempt_id ?? null,
+        trigger: capture.start.trigger ?? 'research' }), complete: snapshot.complete && !interrupted, dropped_events: snapshot.dropped_events,
       // `counts` CPU, memory and file-system figures are process-wide deltas: concurrent work shares them.
-      result, research_stop_reason: end.research_stop_reason ?? null, counts: end.counts, resource_scope: 'process',
+      result, ...(extraction ? {} : { research_stop_reason: end.research_stop_reason ?? null }), counts: end.counts, resource_scope: 'process',
       ...(capture.dropped_spans === 0 ? {} : { dropped_spans: capture.dropped_spans }),
       // Code's corrections of model output across every span of the run, by name (RB-OPERATIONS-001).
       ...(corrected.length === 0 ? {} : { model_corrections: Object.fromEntries(corrected.map(name => [name, capture.corrections[name]])) }),
@@ -182,9 +188,14 @@ function project(capture: Capture, end: CoreRuntimeObservationV1, projectName: s
       if (event.stage === 'run' && event.event === 'succeeded') root.outputs = { ...event.data };
       // A stage that runs in its own runtime span is its own run, so the time it takes (an access check above all) is not a
       // gap. Its started and succeeded data are that run's inputs and outputs, and are not repeated on the root's event.
+      // A meeting extraction's own stage is its root run.
       const key = `${event.span_id}:stage:${event.stage}`;
       let spanned = false;
-      if (event.event === 'started' && !bySpan.has(event.span_id)) {
+      if (extraction && event.stage === 'extraction' && event.span_id === rootId) {
+        spanned = true;
+        if (event.event === 'started') root.inputs = { ...event.data };
+        else if (event.event === 'succeeded') root.outputs = { ...event.data };
+      } else if (event.event === 'started' && !bySpan.has(event.span_id)) {
         const run = child(under(event.parent_span_id), { name: event.stage === 'revalidation' ? 'access_check' : event.stage, run_type: 'chain',
           start_time: event.observed_at, inputs: { ...event.data },
           extra: { metadata: { echo_operation_id: event.operation_id, echo_span_id: event.span_id, echo_sequence: event.sequence, stage: event.stage } } }, event.sequence);
@@ -206,9 +217,12 @@ function project(capture: Capture, end: CoreRuntimeObservationV1, projectName: s
     const done = span.end;
     if (done === undefined) continue;
     if (span.phase === 'model_call') {
-      const run = span.parent_span_id === null ? undefined : models.get(span.parent_span_id);
+      // Research asks for a call in its provider span's parent. Meeting extraction asks inside the provider span, so its
+      // provider time includes any wait for a model slot.
+      const asked = span.parent_span_id === null ? undefined : models.get(span.parent_span_id);
+      const run = asked ?? (extraction ? models.get(span.span_id) : undefined);
       // What the model event itself says wins over the runtime span's copy.
-      if (run !== undefined) run.extra.metadata = { ...providerLeg(span, run), ...run.extra.metadata };
+      if (run !== undefined) run.extra.metadata = { ...providerLeg(span, run, asked !== undefined), ...run.extra.metadata };
       continue;
     }
     const source = done.evidence_source ?? null;
@@ -226,11 +240,16 @@ function project(capture: Capture, end: CoreRuntimeObservationV1, projectName: s
   return runs;
 }
 
-/** Full diagnostics for selected research operations; unrelated HTTP/worker activity is not exported. */
+/**
+ * Full diagnostics for one kind of operation, research runs by default or meeting extractions; unrelated HTTP/worker
+ * activity is not exported. Each instance holds its own captures, upload queue and counts.
+ */
 export function createLangSmithObserverV1(options: {
   project: string;
   release_sha: string;
   send: (runs: LangSmithRunV1[], signal: AbortSignal) => Promise<void>;
+  /** The runtime span a capture starts at: `research_run`, or `extraction` for one trace per meeting extraction. */
+  root?: 'research_run' | 'extraction';
   now?: () => number;
   max_active?: number;
   max_pending?: number;
@@ -239,6 +258,7 @@ export function createLangSmithObserverV1(options: {
   expires_at?: number;
 }) {
   const now = options.now ?? Date.now;
+  const rootPhase = options.root ?? 'research_run';
   const active = new Map<string, Capture>();
   const pending: LangSmithRunV1[][] = [];
   const abort = new AbortController();
@@ -293,12 +313,13 @@ export function createLangSmithObserverV1(options: {
           capture.corrections[name] = (capture.corrections[name] ?? 0) + count;
         }
       }
-      if (event.phase !== 'research_run') {
+      if (event.phase !== rootPhase) {
         if (capture !== undefined && SPAN_PHASES.has(event.phase)) recordSpan(capture, event);
         return;
       }
       if (event.event === 'started') {
         if (options.expires_at !== undefined && now() >= options.expires_at) return;
+        // An operation holds one capture at a time; meetings it extracts one after another each get their own.
         if (capture !== undefined) return;
         if (active.size >= (options.max_active ?? 4)) { counts.dropped++; return; }
         active.set(event.operation_id, { start: event, collector: createPersonDiagnosticTraceV1(now), spans: new Map(), dropped_spans: 0, corrections: {} });

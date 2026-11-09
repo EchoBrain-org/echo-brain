@@ -3,11 +3,10 @@ import { RESTRICTED_REVIEWER_PERSON_POLICY_ID } from '@echo-brain/organization-p
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SqliteImpactItemsV1 } from '../src/adapters/persistence/sqlite/impact-items-v1.js';
 import { SqliteOpenItemPeopleV1 } from '../src/adapters/persistence/sqlite/open-item-people-v1.js';
 import { observeCoreRuntimeV1, coreRuntimeIdentityV1, annotateCoreRuntimeV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
-import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from '../src/composition/person-diagnostics-v1.js';
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from '../../../tests/support/telemetry-fixture-vocabulary-v1.js';
 
 import { SqliteTriggerRunsV1, enqueueApprovedRecordRunV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
@@ -17,9 +16,6 @@ import { PersonRecordSearchIndexLagV1, type PersonRecordActionV1 } from '../src/
 import { impactItemKeyV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { approvalCoreFixture } from './fixtures/approval-core.js';
 import { openItemsFixture } from './fixtures/open-items.js';
-
-const captures: PersonDiagnosticsV1[] = [];
-afterEach(() => { for (const capture of captures.splice(0)) capture.close(); });
 
 const record = { kind: 'approved_record' as const, atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'project-members-readable-person-v1' as const };
 const ticket = { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: 'cloud', ticket_id: '46', permalink: 'https://example.test/THERM-46', text_sha256: canonicalSha256('ticket') };
@@ -46,13 +42,11 @@ async function fixture(options: { readonly anchor?: () => typeof record; readonl
   // Only the approver reads this "only me" decision.
   const readableDecisions = ({ access_token, record_sha256s }: { readonly access_token: string; readonly record_sha256s: readonly string[] }) => new Map(access_token !== 'approver' ? [] :
     record_sha256s.map(sha => [sha, { approval_id: f.approvalId, record_sha256: sha, title: 'Approved display', approved_at: now.toISOString(), project_ids: [] }] as const));
-  const diagnostics = createPersonDiagnosticsV1({ sessions: { authenticateAccess: ({ access_token }) => auth(access_token) } });
-  captures.push(diagnostics);
-  const create = (serviceRuns: SqliteTriggerRunsV1 = runs, max_running?: number) => createPersonTriggerRunsV1({ ...(max_running === undefined ? {} : { max_running }), runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordActions: () => (options.actions ?? (() => []))(), recordProjects: () => [], readableDecisions: readableDecisions as never, projectRecords: () => [], ...(options.indexLags === undefined ? {} : { recordIndexLags: options.indexLags }) }, bindDesk: bindDesk as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage', diagnostics } as never, research: research as never, lease_ms: 1_000,
+  const create = (serviceRuns: SqliteTriggerRunsV1 = runs, max_running?: number) => createPersonTriggerRunsV1({ ...(max_running === undefined ? {} : { max_running }), runs: serviceRuns, sessions: { authenticateAccess: ({ access_token }) => auth(access_token) as never }, records: { recordAnchor: () => (options.anchor ?? (() => record))(), recordActions: () => (options.actions ?? (() => []))(), recordProjects: () => [], readableDecisions: readableDecisions as never, projectRecords: () => [], ...(options.indexLags === undefined ? {} : { recordIndexLags: options.indexLags }) }, bindDesk: bindDesk as never, bind_options: { authority_id: 'authority', state_lineage_id: 'lineage' } as never, research: research as never, lease_ms: 1_000,
     items: new SqliteImpactItemsV1(f.db, () => now), people: new SqliteOpenItemPeopleV1(f.db) });
   const app = create();
   const settled = async () => await vi.waitFor(() => expect(runs.read(f.person, row.run_id)!.state).not.toBe('running'), { interval: 1 });
-  return { ...f, runs, row, app, create, research, diagnostics, desk, renderInputs, bindDesk, openCitation, settled, advance: (ms: number) => { now = new Date(now.getTime() + ms); } };
+  return { ...f, runs, row, app, create, research, renderInputs, bindDesk, openCitation, settled, advance: (ms: number) => { now = new Date(now.getTime() + ms); } };
 }
 
 describe('durable approved-record trigger runs', () => {
@@ -93,21 +87,21 @@ describe('durable approved-record trigger runs', () => {
     expect(f.db.prepare("SELECT state FROM authority_trigger_runs_v1 WHERE trigger='sweep' ORDER BY run_id").pluck().all()).toEqual(['failed', 'pending']);
   });
 
-  it('captures one approved run with a linked background root and preserves its research outcome after committing output', async () => {
+  it('runs one approved run under a linked background root the runtime exporter follows, and preserves its research outcome after committing output', async () => {
     const f = await fixture({ render: async () => { annotateCoreRuntimeV1({ result: 'partial' }); return card; } });
-    const capture = await f.diagnostics.prepare({ access_token: 'approver', request: { schema_version: 1, operation: 'prepare', target: { kind: 'trigger_run', run_id: f.row.run_id } } });
     const events: CoreRuntimeObservationV1[] = [];
-    await observeCoreRuntimeV1('http_request', () => f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id, capture_id: capture.capture_id } }), {
+    const exported: CoreRuntimeDiagnosticObservationV1[] = [];
+    // The runtime's exporter (LangSmith) is what a detached run inherits.
+    await observeCoreRuntimeV1('http_request', () => f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }), {
       vocabulary: { ...TELEMETRY_FIXTURE_VOCABULARY_V1, triggers: ['approved_record'] }, observer: event => { events.push(event); },
+      diagnostic_exporter: () => event => { exported.push(event); },
     });
     await f.settled();
-    const result = await f.diagnostics.read({ access_token: 'approver', request: { schema_version: 1, operation: 'read', capture_id: capture.capture_id } });
-    expect(result).toMatchObject({ status: 'completed', trace: { complete: true, events: [
+    expect(exported).toMatchObject([
       { kind: 'lifecycle', stage: 'trigger', data: { trigger: 'approved_record', run_id: f.row.run_id, event_id: f.row.event_ref } },
       { kind: 'lifecycle', stage: 'persistence', event: 'succeeded' },
       { kind: 'lifecycle', stage: 'application', event: 'succeeded' },
-    ] } });
-    expect(f.desk.revalidate).toHaveBeenCalledTimes(1);
+    ]);
     const http = events.find(event => event.phase === 'http_request' && event.event === 'succeeded')!;
     const run = events.find(event => event.phase === 'research_run' && event.event === 'succeeded')!;
     expect(run).toMatchObject({ root: true, parent_operation_id: http.operation_id, parent_span_id: null, trigger: 'approved_record',
@@ -116,33 +110,23 @@ describe('durable approved-record trigger runs', () => {
     });
     expect(run.operation_id).not.toBe(http.operation_id);
     expect(events.find(event => event.phase === 'research_run' && event.event === 'started')).toMatchObject({ run_id: run.run_id, event_id: run.event_id, attempt_id: run.attempt_id, trigger: 'approved_record' });
-    expect(result.trace!.events.every(event => event.operation_id === run.operation_id)).toBe(true);
-    await expect(f.diagnostics.read({ access_token: 'other', request: { schema_version: 1, operation: 'read', capture_id: capture.capture_id } })).rejects.toMatchObject({ code: 'not_found' });
+    expect(exported.every(event => event.operation_id === run.operation_id)).toBe(true);
     await f.app.view({ access_token: 'approver', request: { schema_version: 1, operation: 'view', run_id: f.row.run_id } });
     expect(f.research).toHaveBeenCalledTimes(1);
   });
 
-  it('releases the run lease without an attempt when a capture belongs to another target', async () => {
+  it('reports a completed renderer that lost the durable run lease as skipped persistence and a failed run, never a success', async () => {
     const f = await fixture();
-    const capture = await f.diagnostics.prepare({ access_token: 'approver', request: { schema_version: 1, operation: 'prepare', target: { kind: 'ask' } } });
-    await expect(f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id, capture_id: capture.capture_id } })).rejects.toMatchObject({ code: 'invalid_request' });
-    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'pending', attempts: 0 });
-    expect(f.research).not.toHaveBeenCalled();
-  });
-
-  it('marks the capture failed when a completed renderer has lost the durable run lease', async () => {
-    const f = await fixture();
-    const capture = await f.diagnostics.prepare({ access_token: 'approver', request: { schema_version: 1, operation: 'prepare', target: { kind: 'trigger_run', run_id: f.row.run_id } } });
     const finish = vi.spyOn(f.runs, 'finish').mockReturnValueOnce(false);
-    await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id, capture_id: capture.capture_id } });
+    const exported: CoreRuntimeDiagnosticObservationV1[] = [];
+    await observeCoreRuntimeV1('http_request', () => f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }),
+      { diagnostic_exporter: () => event => { exported.push(event); } });
     await f.settled();
     expect(finish).toHaveBeenCalledTimes(1);
-    const result = await f.diagnostics.read({ access_token: 'approver', request: { schema_version: 1, operation: 'read', capture_id: capture.capture_id } });
-    expect(result).toMatchObject({ status: 'failed', error: { code: 'conflict' } });
-    expect(result.trace!.events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ stage: 'persistence', event: 'skipped' }), expect.objectContaining({ stage: 'application', event: 'failed' }),
+    expect(exported).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: 'persistence', event: 'skipped' }), expect.objectContaining({ stage: 'application', event: 'failed', error_kind: 'other' }),
     ]));
-    expect(result.trace!.events.some(event => event.stage === 'application' && event.event === 'succeeded')).toBe(false);
+    expect(exported.some(event => event.kind === 'lifecycle' && event.stage === 'application' && event.event === 'succeeded')).toBe(false);
   });
 
   it('answers busy past the process cap, and running to a duplicate start of a running run', async () => {
@@ -183,26 +167,21 @@ describe('durable approved-record trigger runs', () => {
     let lags = true;
     const f = await fixture({ indexLags: () => lags });
     const events: CoreRuntimeObservationV1[] = [];
-    const capture = await f.diagnostics.prepare({ access_token: 'approver', request: { schema_version: 1, operation: 'prepare', target: { kind: 'trigger_run', run_id: f.row.run_id } } });
-    const start = (capture_id?: typeof capture.capture_id) => observeCoreRuntimeV1('http_request', () => f.app.start({ access_token: 'approver',
-      request: { schema_version: 1, operation: 'start', run_id: f.row.run_id, ...(capture_id === undefined ? {} : { capture_id }) } }), { observer: event => { events.push(event); } });
+    const start = () => observeCoreRuntimeV1('http_request', () => f.app.start({ access_token: 'approver',
+      request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }), { observer: event => { events.push(event); } });
     const claim = vi.spyOn(f.runs, 'claim');
     await expect(start()).resolves.toEqual({ state: 'pending' });
-    await expect(start(capture.capture_id)).resolves.toEqual({ state: 'pending' });
     expect(claim).not.toHaveBeenCalled();
     expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'pending', attempts: 0, lease_token: null, error_code: null });
     expect(f.bindDesk).not.toHaveBeenCalled(); expect(f.research).not.toHaveBeenCalled();
     expect(events.some(event => event.phase === 'research_run')).toBe(false);
-    // The capture is not spent on a start that started nothing.
-    await expect(f.diagnostics.read({ access_token: 'approver', request: { schema_version: 1, operation: 'read', capture_id: capture.capture_id } })).resolves.toMatchObject({ status: 'prepared' });
     // Another person's start is refused as before, telling them nothing of the index.
     await expect(f.app.start({ access_token: 'other', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } })).rejects.toMatchObject({ code: 'not_found' });
     lags = false;
-    await expect(start(capture.capture_id)).resolves.toEqual({ state: 'running' });
+    await expect(start()).resolves.toEqual({ state: 'running' });
     await f.settled();
     expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'done', attempts: 0 });
     expect(events.filter(event => event.phase === 'research_run' && event.event === 'started')).toHaveLength(1);
-    await expect(f.diagnostics.read({ access_token: 'approver', request: { schema_version: 1, operation: 'read', capture_id: capture.capture_id } })).resolves.toMatchObject({ status: 'completed' });
     // A finished run answers as it is, lag or not.
     lags = true;
     await expect(start()).resolves.toEqual({ state: 'done' });

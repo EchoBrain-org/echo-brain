@@ -1,23 +1,18 @@
+/**
+ * The request helpers Ask (`/v7`, person-live-answer-route-v1.ts) and the staging research evaluation share. The `/v3`
+ * routes this module once served are retired: the evidence desk's search was the last (ADR-0048).
+ */
 import { withPersonAskSnapshotRetryV1 } from './person-ask-snapshot-retry-v1.js';
-import {
-  validatePersonEvidenceDeskResponseV1,
-  type PersonEvidenceDeskResponseV1,
-  type PersonEvidenceSearchRequestV1,
-} from "@echo-brain/organization-api";
 import { AgenticAskDeadlineErrorV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 import type { AnswerCompositionGenerationProfileV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
-import type { EvidenceDeskResultV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
 import type { PersonOriginalContextEvidenceDeskPortV1, PersonAskScopeV2 } from "../application/ports/person-original-context-retrieval-v1.js";
 import type { PersonEvidenceDeskRecordsV1 } from "./person-record-search-route.js";
-import { createPersonEvidenceDeskV1 } from "./person-evidence-desk-v1.js";
 import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
-import type { PersonAnswerV3HttpApplication } from "../presentation/person-answer-v3-http-application.js";
 import type { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
 import { randomUUID } from "node:crypto";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
-import type { PersonDiagnosticCaptureHandleV1, PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
 
 export interface CreatePersonAnswerV3RouteOptions {
@@ -31,7 +26,6 @@ export interface CreatePersonAnswerV3RouteOptions {
   readonly research_driver?: import('@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1').AgenticResearchDriverV1;
   readonly generation: AnswerCompositionGenerationProfileV1;
   readonly audit: SqlitePersonAgenticAskAuditV1;
-  readonly diagnostics?: PersonDiagnosticsV1;
   /**
    * The asker's own directory entry, so the loop reads "my" as a name. Only
    * the authenticated membership is looked up; its name reaches the model and
@@ -79,32 +73,27 @@ export function personAskRequestContextV1(
 }
 
 /**
- * One Ask after its own request checks: the asker authenticated, a diagnostic
- * capture claimed when the request names one, then `started`. Every attempt a
- * snapshot restart runs is one observed research run with that capture. A
- * deadline that is not the client's own cancellation answers unavailable.
+ * One Ask after its own request checks: the asker authenticated, then
+ * `started`. Every attempt a snapshot restart runs is one observed research
+ * run. A deadline that is not the client's own cancellation answers
+ * unavailable.
  */
 export async function runPersonAskV1<T>(
-  options: Pick<CreatePersonAnswerV3RouteOptions, "authority_id" | "organization_id" | "state_lineage_id" | "sessions" | "diagnostics">,
-  input: { readonly access_token: string; readonly request: { readonly capture_id?: string }; readonly signal?: AbortSignal },
+  options: Pick<CreatePersonAnswerV3RouteOptions, "authority_id" | "organization_id" | "state_lineage_id" | "sessions">,
+  input: { readonly access_token: string; readonly signal?: AbortSignal },
   attempt: (run: {
     readonly authorization: PersonAccessAuthorization;
     readonly context: ReturnType<typeof personAskRequestContextV1>;
-    readonly capture: PersonDiagnosticCaptureHandleV1 | undefined;
     readonly signal: AbortSignal;
   }) => Promise<T>,
   started?: () => void,
 ): Promise<T> {
   const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
   const context = personAskRequestContextV1(options, authorization, `ask_${randomUUID()}`);
-  const capture = input.request.capture_id === undefined ? undefined : options.diagnostics?.claim({
-    access_token: input.access_token, capture_id: input.request.capture_id, target: { kind: 'ask' },
-  });
-  if (input.request.capture_id !== undefined && capture === undefined) throw new AuthorityOperationError('unavailable', 'Diagnostic capture is not available');
   started?.();
   try {
-    return await withPersonAskSnapshotRetryV1({ signal: input.signal, capture: capture !== undefined, run: async signal =>
-      observePersonResearchV1({ trigger: 'ask', run_id: context.request_id, ...(capture === undefined ? {} : { capture }) }, () => attempt({ authorization, context, capture, signal })) });
+    return await withPersonAskSnapshotRetryV1({ signal: input.signal, run: async signal =>
+      observePersonResearchV1({ trigger: 'ask', run_id: context.request_id }, () => attempt({ authorization, context, signal })) });
   } catch (error) {
     // Observe the original timeout before translating it into the Person API error.
     if (error instanceof AgenticAskDeadlineErrorV1 && input.signal?.aborted !== true) {
@@ -112,47 +101,4 @@ export async function runPersonAskV1<T>(
     }
     throw error;
   }
-}
-
-function deskFor(options: CreatePersonAnswerV3RouteOptions, access_token: string, request: { readonly project_id?: string }) {
-  return createPersonEvidenceDeskV1({
-    access_token,
-    scope: scopeOf(request),
-    originals: options.originals,
-    records: options.records,
-  });
-}
-
-function deskResponse(desk: ReturnType<typeof deskFor>, result: EvidenceDeskResultV1): PersonEvidenceDeskResponseV1 {
-  return validatePersonEvidenceDeskResponseV1({
-    schema_version: 1,
-    kind: "echo-person-evidence-desk-v1",
-    scope: desk.scope,
-    // Preserve the public desk contract: named dates and list labels are internal
-    // research metadata, and only Ask citations carry ref (ADR-0024, ADR-0041).
-    items: result.items.map(({ ref: _ref, dates: _dates, date_kind: _dateKind, list_label: _listLabel, ...item }) => item),
-    truncated: result.truncated,
-    ...(result.notice === undefined ? {} : { notice: result.notice }),
-  });
-}
-
-/**
- * The evidence desk's search (ADR-0022): every search gets a new request-bound desk. Its open and its Ask,
- * `/v3/person/ask`, were retired; Ask is the live route (person-live-answer-route-v1.ts), which shares this module's
- * request helpers.
- */
-export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOptions): PersonAnswerV3HttpApplication {
-  return Object.freeze({
-    async searchEvidence(input: { readonly access_token: string; readonly request: PersonEvidenceSearchRequestV1; readonly signal?: AbortSignal }): Promise<PersonEvidenceDeskResponseV1> {
-      const desk = deskFor(options, input.access_token, input.request);
-      const result = await desk.search({
-        ...(input.request.query === undefined ? {} : { query: input.request.query }),
-        ...(input.request.kinds === undefined ? {} : { kinds: input.request.kinds }),
-        ...(input.request.limit === undefined ? {} : { limit: input.request.limit }),
-        ...(input.signal === undefined ? {} : { signal: input.signal }),
-      });
-      await desk.revalidate({ ...(input.signal === undefined ? {} : { signal: input.signal }) });
-      return deskResponse(desk, result);
-    },
-  });
 }

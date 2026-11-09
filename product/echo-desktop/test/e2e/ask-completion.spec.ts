@@ -1,6 +1,5 @@
-// What an answer could not do reaches the page only as a typed reason, and only because the real person client asks for
-// typed reasons (x-echo-ask-gap-details): the fixture Authority sends them to no other request. Which reason the page and
-// Copy answer show, in a project or not, is answer.test's and ask-timeline.test's.
+// What an answer could not do reaches the page only as a typed reason, which every Ask answer carries, through the real
+// person client. Which reason the page and Copy answer show, in a project or not, is answer.test's and ask-timeline.test's.
 import { expect, test } from '@playwright/test';
 import { launch, type Launched } from './launch.js';
 

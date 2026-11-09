@@ -440,7 +440,12 @@ describe("research loop: search only (a record in no project)", () => {
       affects("not_found"),
     ], { scope: { kind: "global" }, live_sources: [JIRA], openCitation: async () => result([approved]), list });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation], { list: false }) });
-    expect(h.inputs[0]!.system_prompt).toBe(`${SEARCH_ONLY_STEP_PROMPT}\n\nLive sources report current tool context under the asker's connection. They are not approved meeting records. Use each source's selector and capabilities from source_catalog. Metadata-only search discovers items; open their request-owned ids before relying on their bodies. The server already applies scope and permissions. Never choose a tenant, account, connection or project mapping.\n\n${TASK_RULE_PROMPT}`);
+    // The search-only step prompt, the live sources' guidance in one paragraph that names no list tool, and the task rule.
+    const prompt = h.inputs[0]!.system_prompt;
+    const live = prompt.slice(`${SEARCH_ONLY_STEP_PROMPT}\n\n`.length, -`\n\n${TASK_RULE_PROMPT}`.length);
+    expect(prompt).toBe(`${SEARCH_ONLY_STEP_PROMPT}\n\n${live}\n\n${TASK_RULE_PROMPT}`);
+    expect(live).toMatch(/^[^\n]+$/u);
+    expect(live).not.toMatch(/\blist\b/u);
     expect(tools(0, h)).toEqual(["search", "open", "finish"]);
     // The catalog keeps each source's description but drops what only list uses.
     const catalog = h.prompt(0).source_catalog as readonly Record<string, unknown>[];
@@ -618,15 +623,6 @@ describe("research loop: need ids", () => {
     ]);
     // A finish that leaves N3 open is refused by its id.
     expect(view.rounds[2]!.rejected[0]).toContain('part 1 need N3 "owner\'s team" is still open');
-  });
-
-  it("shows the need id in the reply shape both step prompts call exact, as rule 1 and the example do", () => {
-    for (const prompt of [STEP_PROMPT, SEARCH_ONLY_STEP_PROMPT]) {
-      const lines = prompt.split("\n");
-      const shape = JSON.parse(lines[lines.indexOf("Reply with ONLY a JSON object in exactly this shape:") + 1]!) as { parts: { needs: unknown[] }[] };
-      expect(shape.parts[0]!.needs[0]).toEqual({ id: "N1", need: "<a fact needed>", status: "open", evidence: [] });
-      expect(prompt).toContain("A need's \"id\" is its id from plan; leave it out in step 1 and for a new need.");
-    }
   });
 
   it("settles a need its id names in a part the step adds, where it was planned, and adds only the new needs", async () => {

@@ -1,4 +1,3 @@
-import { validatePersonDiagnosticCaptureIdV1, type PersonDiagnosticCaptureIdV1 } from './person-diagnostics-v1.js';
 import { validatePersonTicketCitationV1 } from './person-ticket-citation-v1.js';
 import { validatePersonPageCitationV1 } from './person-page-citation-v1.js';
 import {
@@ -45,23 +44,10 @@ import {
 export const PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 = 4 * 1024;
 /** The citations one statement may carry, in an answer of any length (ADR-0051 lifts only an answer's own count). */
 export const PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4 = 40;
-/**
- * The evidence desk search (ADR-0022). Ask itself is `/v7` with the V8 answer (person-answer-v8.ts): the Ask routes before
- * it, `/v3` to `/v6` with the V4 to V7 answers, were retired, and so were the capability read and the desk's open.
- */
-export const PERSON_EVIDENCE_SEARCH_PATH_V1 = '/v3/person/evidence/search';
 
 /** Optional Ask headers; older Authorities ignore them, preserving client-first upgrades. */
 export const PERSON_ASK_CLIENT_NOW_HEADER_V1 = 'x-echo-client-now';
 export const PERSON_ASK_TIME_ZONE_HEADER_V1 = 'x-echo-time-zone';
-/** Only opted-in clients receive typed Ask explanations; older exact-key V8 readers keep their response shape. */
-export const PERSON_ASK_GAP_DETAILS_HEADER_V1 = 'x-echo-ask-gap-details';
-export const PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1 = '1';
-export function validatePersonAskGapDetailsHeaderV1(value: unknown): true | undefined {
-  if (value === undefined) return undefined;
-  if (value === PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1) return true;
-  fail('Ask gap details header is invalid');
-}
 
 export interface PersonAskTimeContextV1 {
   readonly now: string;
@@ -86,15 +72,13 @@ export type PersonEvidenceKindV1 = 'imported_meeting' | 'decision' | 'action' | 
 export type PersonEvidenceVisibilityV1 = 'only_me' | 'team' | 'project' | 'projects' | 'approver_only';
 type ApprovedRecordPolicyV3 = Extract<PersonAnswerCitationV3, { readonly kind: 'approved_record' }>['policy_id'];
 
-/** Every citation an Ask answer or an evidence desk item may carry. Open requests stay V3-only. */
+/** An approved record's or a passage's citation, which every later citation version admits. Open requests stay V3-only. */
 export type PersonAnswerEvidenceCitationV4 = PersonAnswerCitationV3;
 
 export interface PersonAnswerRequestV3 {
   readonly schema_version: 3;
   readonly question: string;
   readonly project_id?: ProjectIdV1;
-  /** A capture prepared by this actor for this ordinary Ask. */
-  readonly capture_id?: PersonDiagnosticCaptureIdV1;
   /** The asker's previous turn (ADR-0047): the asker's own context, never evidence, and never stored. */
   readonly previous?: PersonAnswerPreviousV1;
 }
@@ -147,49 +131,11 @@ export interface PersonAnswerCitationV4 {
   readonly ref?: PersonItemRefV1;
 }
 
-export interface PersonEvidenceSearchRequestV1 {
-  readonly schema_version: 1;
-  readonly query?: string;
-  readonly kinds?: readonly PersonEvidenceKindV1[];
-  readonly limit?: number;
-  readonly project_id?: ProjectIdV1;
-}
-
 export interface PersonEvidenceOpenRequestV1 {
   readonly schema_version: 1;
   readonly citation: PersonAnswerCitationV3;
   readonly neighbours?: 0 | 1 | 2;
   readonly project_id?: ProjectIdV1;
-}
-
-export interface PersonEvidenceAttributesV1 {
-  readonly owner?: string;
-  readonly due_at?: string;
-  readonly status?: string;
-}
-
-/** An inventory item omits text; a search or open result includes it. */
-export interface PersonEvidenceDeskItemV1 {
-  /** Opaque, server-owned desk identity. It is never a model-authored coordinate. */
-  readonly id: string;
-  readonly citation: PersonAnswerEvidenceCitationV4;
-  readonly kind: PersonEvidenceKindV1;
-  readonly text?: string;
-  readonly label: string;
-  readonly visibility: PersonEvidenceVisibilityV1;
-  readonly attributes?: PersonEvidenceAttributesV1;
-  /** YYYY-MM-DD when the source knows the date. */
-  readonly occurred_at?: string;
-  readonly receipt_sha256: `sha256:${string}`;
-}
-
-export interface PersonEvidenceDeskResponseV1 {
-  readonly schema_version: 1;
-  readonly kind: 'echo-person-evidence-desk-v1';
-  readonly scope: PersonAnswerScopeV3;
-  readonly items: readonly PersonEvidenceDeskItemV1[];
-  readonly truncated: boolean;
-  readonly notice?: string;
 }
 
 function text(value: unknown, label: string, maximumBytes: number, multiline = false): asserts value is string {
@@ -205,7 +151,7 @@ function scope(value: unknown): PersonAnswerScopeV3 {
 }
 
 /**
- * The citations these validators serve, each admitting every kind of the one before it: 4, the evidence desk's (records
+ * The citations these validators serve, each admitting every kind of the one before it: 4, an evidence open's (records
  * and passages); 6, the impact card's (with tickets and pages); 8, the Ask answer's (with follow-ups, the workspace and
  * tool containers).
  */
@@ -291,7 +237,7 @@ export function personAnswerCitationKeyV8(value: PersonAnswerEvidenceCitationV8)
 const EVIDENCE_KINDS_V1: readonly string[] = ['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'];
 
 /** A record's or a passage's evidence kind, or, from its version, a citation kind named by itself. */
-function evidenceKind(value: unknown, label: string, version: CitationVersion = 4): asserts value is PersonEvidenceKindV5 {
+function evidenceKind(value: unknown, label: string, version: CitationVersion): asserts value is PersonEvidenceKindV5 {
   const kind = citationKind(value);
   if (kind?.named !== undefined && kind.since <= version) return;
   if (!EVIDENCE_KINDS_V1.includes(value as string)) fail(`${label} is invalid`);
@@ -362,30 +308,6 @@ function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): Per
   });
 }
 
-function deskItem(value: unknown) {
-  const input = object(value, 'Evidence desk item');
-  assertExactKeys(input, ['id', 'citation', 'kind', 'label', 'visibility', 'receipt_sha256', ...(Object.hasOwn(input, 'text') ? ['text'] : []), ...(Object.hasOwn(input, 'attributes') ? ['attributes'] : []), ...(Object.hasOwn(input, 'occurred_at') ? ['occurred_at'] : [])], 'Evidence desk item');
-  if (Object.hasOwn(input, 'occurred_at') && (typeof input.occurred_at !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(input.occurred_at))) fail('Evidence desk item occurred_at is invalid');
-  text(input.id, 'Evidence desk item id', 512);
-  evidenceKind(input.kind, 'Evidence desk item kind');
-  text(input.label, 'Evidence desk item label', PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
-  visibility(input.visibility, 'Evidence desk item visibility');
-  assertDigest(input.receipt_sha256, 'Evidence desk item receipt_sha256');
-  if (Object.hasOwn(input, 'text')) evidenceText(input.text, 'Evidence desk item text', PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
-  let attributes: PersonEvidenceAttributesV1 | undefined;
-  if (Object.hasOwn(input, 'attributes')) {
-    const raw = object(input.attributes, 'Evidence desk item attributes');
-    assertExactKeys(raw, [...(Object.hasOwn(raw, 'owner') ? ['owner'] : []), ...(Object.hasOwn(raw, 'due_at') ? ['due_at'] : []), ...(Object.hasOwn(raw, 'status') ? ['status'] : [])], 'Evidence desk item attributes');
-    if (Object.keys(raw).length === 0) fail('Evidence desk item attributes is invalid');
-    if (Object.hasOwn(raw, 'owner')) text(raw.owner, 'Evidence desk item owner', 512);
-    if (Object.hasOwn(raw, 'due_at')) text(raw.due_at, 'Evidence desk item due_at', 128);
-    if (Object.hasOwn(raw, 'status')) text(raw.status, 'Evidence desk item status', 128);
-    attributes = Object.freeze({ ...(Object.hasOwn(raw, 'owner') ? { owner: raw.owner as string } : {}), ...(Object.hasOwn(raw, 'due_at') ? { due_at: raw.due_at as string } : {}), ...(Object.hasOwn(raw, 'status') ? { status: raw.status as string } : {}) });
-  }
-  const cited = evidenceCitation(input.citation);
-  return Object.freeze({ id: input.id as string, citation: cited, kind: input.kind, ...(Object.hasOwn(input, 'text') ? { text: input.text as string } : {}), label: input.label as string, visibility: input.visibility, ...(attributes === undefined ? {} : { attributes }), ...(Object.hasOwn(input, 'occurred_at') ? { occurred_at: input.occurred_at as string } : {}), receipt_sha256: input.receipt_sha256 as `sha256:${string}` });
-}
-
 function boundedRequest<T>(result: T, label: string): T {
   if (canonicalJsonBytes(result).byteLength > MAX_ORGANIZATION_API_BODY_BYTES) fail(`${label} exceeds JSON byte bound`);
   return Object.freeze(result);
@@ -393,9 +315,9 @@ function boundedRequest<T>(result: T, label: string): T {
 
 export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerRequestV3 {
   const input = object(value, 'Ask request');
-  assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'capture_id') ? ['capture_id'] : []), ...(Object.hasOwn(input, 'previous') ? ['previous'] : [])], 'Ask request');
+  assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'previous') ? ['previous'] : [])], 'Ask request');
   if (input.schema_version !== 3) fail('Ask request schema_version is unsupported');
-  const request = boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'capture_id') ? { capture_id: validatePersonDiagnosticCaptureIdV1(input.capture_id) } : {}), ...(Object.hasOwn(input, 'previous') ? { previous: previousTurn(input.previous) } : {}) }, 'Ask request');
+  const request = boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'previous') ? { previous: previousTurn(input.previous) } : {}) }, 'Ask request');
   // Ask again asks the earlier question itself (ADR-0047), and its answer names that question: one of another is refused.
   if (request.previous?.purpose === 'ask_again' && request.previous.question !== request.question) fail('Ask previous question is not the question asked again');
   return request;
@@ -515,34 +437,9 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   return Object.freeze(result) as PersonAnswerResponseV8;
 }
 
-export function validatePersonEvidenceSearchRequestV1(value: unknown): PersonEvidenceSearchRequestV1 {
-  const input = object(value, 'Evidence search request');
-  assertExactKeys(input, ['schema_version', ...(Object.hasOwn(input, 'query') ? ['query'] : []), ...(Object.hasOwn(input, 'kinds') ? ['kinds'] : []), ...(Object.hasOwn(input, 'limit') ? ['limit'] : []), ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : [])], 'Evidence search request');
-  if (input.schema_version !== 1) fail('Evidence search request schema_version is unsupported');
-  if (Object.hasOwn(input, 'kinds') && (!Array.isArray(input.kinds) || input.kinds.length === 0 || input.kinds.length > 6)) fail('Evidence search request kinds is invalid');
-  const kinds = Object.hasOwn(input, 'kinds') ? (input.kinds as unknown[]).map((kind) => { evidenceKind(kind, 'Evidence search request kind'); return kind as PersonEvidenceKindV1; }) : undefined;
-  if (kinds !== undefined && new Set(kinds).size !== kinds.length) fail('Evidence search request kinds contains duplicates');
-  const maximumLimit = Object.hasOwn(input, 'query') ? 10 : 50;
-  if (Object.hasOwn(input, 'limit') && (!Number.isSafeInteger(input.limit) || (input.limit as number) < 1 || (input.limit as number) > maximumLimit)) fail('Evidence search request limit is invalid');
-  return boundedRequest({ schema_version: 1 as const, ...(Object.hasOwn(input, 'query') ? { query: validatePersonQueryText(input.query) } : {}), ...(kinds === undefined ? {} : { kinds: Object.freeze(kinds) }), ...(Object.hasOwn(input, 'limit') ? { limit: input.limit as number } : {}), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Evidence search request project_id') } : {}) }, 'Evidence search request');
-}
-
 export function validatePersonEvidenceOpenRequestV1(value: unknown): PersonEvidenceOpenRequestV1 {
   const input = object(value, 'Evidence open request');
   assertExactKeys(input, ['schema_version', 'citation', ...(Object.hasOwn(input, 'neighbours') ? ['neighbours'] : []), ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : [])], 'Evidence open request');
   if (input.schema_version !== 1 || (Object.hasOwn(input, 'neighbours') && (!Number.isSafeInteger(input.neighbours) || (input.neighbours as number) < 0 || (input.neighbours as number) > 2))) fail('Evidence open request is invalid');
   return boundedRequest({ schema_version: 1 as const, citation: evidenceCitation(input.citation) as PersonAnswerCitationV3, ...(Object.hasOwn(input, 'neighbours') ? { neighbours: input.neighbours as 0 | 1 | 2 } : {}), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Evidence open request project_id') } : {}) }, 'Evidence open request');
-}
-
-export function validatePersonEvidenceDeskResponseV1(value: unknown): PersonEvidenceDeskResponseV1 {
-  const input = object(value, 'Evidence desk response');
-  assertExactKeys(input, ['schema_version', 'kind', 'scope', 'items', 'truncated', ...(Object.hasOwn(input, 'notice') ? ['notice'] : [])], 'Evidence desk response');
-  if (input.schema_version !== 1 || input.kind !== 'echo-person-evidence-desk-v1' || !Array.isArray(input.items) || input.items.length > 50 || typeof input.truncated !== 'boolean') fail('Evidence desk response is invalid');
-  if (Object.hasOwn(input, 'notice')) text(input.notice, 'Evidence desk response notice', 2 * 1024, true);
-  const items = input.items.map(item => deskItem(item));
-  const ids = new Set<string>(); const coordinates = new Set<string>();
-  for (const item of items) { if (ids.has(item.id)) fail('Evidence desk response contains duplicate item IDs'); ids.add(item.id); const key = personAnswerCitationKeyV8(item.citation); if (coordinates.has(key)) fail('Evidence desk response contains duplicate citations'); coordinates.add(key); }
-  const result = { schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: scope(input.scope), items: Object.freeze(items), truncated: input.truncated, ...(Object.hasOwn(input, 'notice') ? { notice: input.notice as string } : {}) };
-  if (canonicalJsonBytes(result).byteLength > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1) fail('Evidence desk response exceeds JSON byte bound');
-  return Object.freeze(result) as PersonEvidenceDeskResponseV1;
 }

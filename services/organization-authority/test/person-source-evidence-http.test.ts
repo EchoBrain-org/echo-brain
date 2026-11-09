@@ -56,10 +56,10 @@ async function start(application: PersonSourceEvidenceHttpApplicationV1): Promis
   return `http://127.0.0.1:${address.port}`;
 }
 
-function request(origin: string, path: string, body: unknown, authorization = 'Bearer fixture-token', review?: string): Promise<Response> {
+function request(origin: string, path: string, body: unknown, authorization = 'Bearer fixture-token', headers: Readonly<Record<string, string>> = {}): Promise<Response> {
   return fetch(`${origin}${path}`, {
     method: 'POST',
-    headers: { authorization, 'content-type': 'application/json', ...(review === undefined ? {} : { 'x-echo-source-review': review }) },
+    headers: { authorization, 'content-type': 'application/json', ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -71,7 +71,7 @@ function failure(response: Response, status: number, code: string): Promise<void
 }
 
 describe('cited original HTTP transport', () => {
-  it('keeps the installed-client response shape and releases review metadata only after an opted-in authorized proof', async () => {
+  it('releases an imported meeting\'s review state with every authorized proof, and reads no review header', async () => {
     const packet = { ...evidence, scope: { kind: 'global' } as const, citation: { ...source, label: 'Imported meeting: Pilot' },
       text: 'Imported meeting (unapproved): Pilot\nThe notes propose shipping the pilot.' };
     const origin = await start(createPersonSourceEvidenceRouteV1({ originals: {
@@ -82,14 +82,13 @@ describe('cited original HTTP transport', () => {
       },
     } }));
     const body = { schema_version: 1, scope: packet.scope, citation: source };
-    const old = await request(origin, '/v2/person/ask/source', body);
-    expect(old.status).toBe(200);
-    expect(await old.json()).toEqual(packet); // Exactly the old five keys, not an undefined extra field.
-    const current = await request(origin, '/v2/person/ask/source', body, 'Bearer fixture-token', '1');
-    expect(current.status).toBe(200);
-    expect(await current.json()).toEqual({ ...packet, imported_meeting_review: 'reviewed' });
-    await failure(await request(origin, '/v2/person/ask/source', body, 'Bearer denied', '1'), 401, 'unauthorized');
-    for (const header of ['0', 'true', '1, 1']) await failure(await request(origin, '/v2/person/ask/source', body, 'Bearer fixture-token', header), 400, 'invalid_request');
+    // Released clients still send `x-echo-source-review: 1`; it, and a value once refused, is read as no header at all.
+    for (const review of [undefined, '1', 'true']) {
+      const read = await request(origin, '/v2/person/ask/source', body, 'Bearer fixture-token', review === undefined ? {} : { 'x-echo-source-review': review });
+      expect(read.status).toBe(200);
+      expect(await read.json()).toEqual({ ...packet, imported_meeting_review: 'reviewed' });
+    }
+    await failure(await request(origin, '/v2/person/ask/source', body, 'Bearer denied'), 401, 'unauthorized');
   });
   it('serializes source evidence separately from its public citation fields', async () => {
     const calls: unknown[] = [];

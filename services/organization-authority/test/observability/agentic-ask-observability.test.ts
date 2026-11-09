@@ -123,7 +123,7 @@ describe("agentic Ask observability through the canonical runtime channel", () =
     expect({ attempts: sum("LlmAttempt"), input: sum("LlmInputTokens"), output: sum("LlmOutputTokens"), total: sum("LlmTotalTokens"), cached: sum("LlmCachedInputTokens"), reasoning: sum("LlmReasoningTokens"), reported: sum("LlmUsageReported"), unavailable: sum("LlmUsageUnavailable") }).toEqual({ attempts: 4, input: 400, output: 80, total: 480, cached: 40, reasoning: 20, reported: 4, unavailable: 0 });
     expect({ released: sum("RetrievalReleasedAtoms"), context: sum("RetrievalContextAtoms"), citations: sum("RetrievalCitations"), outcomes: sum("TerminalOutcome") }).toEqual({ released: 1, context: 1, citations: 1, outcomes: 1 });
     expect(f.lines.filter(line => line.TerminalOutcome)).toEqual([expect.objectContaining({ workflow: "core_runtime", stage: "research_run", outcome: "answered" })]);
-    // Selected payload capture has its own private sink; operational rows carry no source or model content.
+    // Operational rows carry no source or model content.
     expect(JSON.stringify(f.lines)).not.toContain("The launch window is October.");
     expect(JSON.stringify(f.lines)).not.toContain("fixture-credential-never-record");
     expect(f.health().delivery).toMatchObject({ rejected_events: 0, writes_failed: 0 });

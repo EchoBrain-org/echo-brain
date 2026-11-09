@@ -13,7 +13,6 @@ import { createOpenRouterJudge, judgeInput, parseJudge } from "./lib/judge.mjs";
 import { aggregate, markdownReport, withholdJudgeMetrics } from "./lib/report.mjs";
 import { calibrationSheet, calibrationStatus, scoreCalibration } from "./lib/calibration.mjs";
 import { privateDirectory, readJson, savedRunFiles, writePrivateJson, writePrivateText } from "./lib/private-files.mjs";
-import { runTrace } from "./lib/trace.mjs";
 import { releaseCheck, releaseCheckLines } from "./lib/release-check.mjs";
 
 const USAGE = `Research loop evaluation (docs/product/2026-10-06-research-loop-eval-v1.md)
@@ -26,11 +25,6 @@ const USAGE = `Research loop evaluation (docs/product/2026-10-06-research-loop-e
                                              Run cases against the staging research endpoint, one at a time.
   release-check --out <dir> [--runs langsmith-runs.json] [--release-sha <sha>]
                                              Check the staging release's open-ended Asks from their saved LangSmith runs.
-  trace --run --question <question> --project-id <prj_…> --out <dir>
-                                             Capture one ordinary live Ask's exact model/tool payloads privately.
-  trace --run --trigger-run-id <run_…> --out <dir>
-                                             Capture one existing pending approval run; never approves or retries.
-  trace --capture-id <cap_…> --out <dir>     Resume reading a capture without repeating the product request.
   grade --out <dir> (--judge-model <openrouter-slug> --judge-credential-file <path> | --no-judge)
   report --out <dir>
   calibrate sheet --out <dir>                 Write a blind 15-run sheet for the founder.
@@ -95,11 +89,12 @@ function runReleaseCheck(args) {
   if (!result.passed) throw new Error(`release check failed; see ${join(out, "release-check.json")}`);
 }
 
-async function bindings(args) {
+/** Binds the approved meetings the THERM project lists, read as Ask cites them (lib/bindings.mjs). */
+async function bindings(args, { client: given } = {}) {
   const out = privateDirectory(args.out);
   if (!/^prj_[0-9a-f-]{36}$/u.test(args["project-id"] ?? "")) throw new Error("--project-id must be the THERM ECHO project id");
   const dataset = loadDataset();
-  const client = await personClient();
+  const client = given ?? await personClient();
   const { meetings, missing } = await discoverMeetings(client, dataset.additions, args["project-id"]);
   const bound = { schema_version: 1, world: dataset.additions.world, test_person: args["test-person"], project_id: args["project-id"], meetings };
   substitutePerson({}, bound.test_person);
@@ -238,12 +233,8 @@ export async function main(argv, dependencies = {}) {
     const problems = datasetProblems(loadDataset());
     if (problems.length > 0) throw new Error(`dataset problems:\n${problems.join("\n")}`);
     process.stdout.write("dataset is structurally valid\n");
-  } else if (command === "bindings") await bindings(args);
+  } else if (command === "bindings") await bindings(args, dependencies);
   else if (command === "run") await run(args, dependencies);
-  else if (command === "trace") {
-    const result = await runTrace(args, { ...dependencies, get_client: personClient, source_sha: sourceIdentity() });
-    process.stdout.write(`diagnostic ${result.capture_id ?? result.run_id}: ${result.status}, complete capture, ${result.model_calls} model calls, ${result.tool_calls} tool calls; saved to ${result.out}\n`);
-  }
   else if (command === "grade") await grade(args);
   else if (command === "report") report(args);
   else if (command === "release-check") runReleaseCheck(args);
