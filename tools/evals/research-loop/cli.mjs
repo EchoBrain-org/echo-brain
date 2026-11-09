@@ -151,6 +151,7 @@ async function run(args, { client: given, poll_ms: pollMs = 2_000 } = {}) {
       for (let trial = 1; trial <= (budget === testCase.budget ? trials : 1); trial += 1) {
         let request; let unstartable;
         // A case whose request cannot be built (an unbound or unstartable citation) is recorded and counted, and the run goes on; any other error stops it.
+        // That rethrow is defensive: no bindings file makes startRequest throw anything else today, but a later citation helper may.
         try { request = startRequest(testCase, bound, budget); } catch (error) { if (!(error instanceof CaseNotStartableError)) throw error; unstartable = error; }
         const saved = unstartable === undefined ? await runOne(client, testCase, request, budget, trial, model, pollMs)
           : { ...runBase(testCase, budget, trial, model, Date.now()), outcome: "error", error: { code: "case_not_startable", message: errorText(unstartable) }, elapsed_ms: 0 };
