@@ -43,7 +43,7 @@ async function exported(operation: () => Promise<unknown>): Promise<LangSmithRun
 }
 
 describe('LangSmith projection of the shared observer', () => {
-  it('exports exact parallel tool calls and model context from the runtime scope alone, with no person-selected capture', async () => {
+  it('exports exact parallel tool calls and model context from the runtime scope alone', async () => {
     const batches: LangSmithRunV1[][] = [];
     const send = vi.fn(async (runs: LangSmithRunV1[]) => { batches.push(runs); });
     const observer = createLangSmithObserverV1({ project: 'echo-staging', release_sha: 'a'.repeat(40), send });

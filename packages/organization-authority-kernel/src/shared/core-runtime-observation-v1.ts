@@ -136,9 +136,9 @@ export type CoreRuntimeObserverV1 = (event: CoreRuntimeObservationV1) => void | 
 export interface CoreRuntimeObservationScopeV1 {
   readonly vocabulary?: TelemetryVocabularyV1;
   readonly observer?: CoreRuntimeObserverV1;
-  /** Explicit private payload selection. It is never forwarded to the metadata observer. */
+  /** A caller's own private payload sink, set with `withCoreRuntimeDiagnosticsV1`. It is never forwarded to the metadata observer. */
   readonly diagnostic_observer?: CoreRuntimeDiagnosticObserverV1;
-  /** Runtime-selected diagnostic destination, independent of a person's one-use capture.
+  /** Runtime-selected diagnostic destination, independent of `diagnostic_observer`.
    * The sink owns operation selection and bounded delivery; never forwarded to metadata. */
   readonly diagnostic_exporter?: (operation_id: string) => CoreRuntimeDiagnosticObserverV1 | undefined;
   readonly correlation?: CoreRuntimeCorrelationV1;
@@ -276,8 +276,8 @@ export async function observeCoreRuntimeV1<T>(phase: CoreRuntimePhaseV1, operati
 /** A queued worker operation outlives its HTTP caller and owns an independent trace. */
 export function observeCoreRuntimeRootV1<T>(phase: CoreRuntimePhaseV1, operation: () => Promise<T>, scope?: CoreRuntimeObservationScopeV1): Promise<T> {
   const parent = context.getStore();
-  // Copy only operational observation and safe correlation. Payload capture is
-  // selected separately for the background run, never inherited from its caller.
+  // Copy only operational observation, safe correlation and the runtime's
+  // exporter; a caller's own payload sink is never inherited by the background run.
   const observer = scope?.observer ?? parent?.observer;
   const vocabulary = scope?.vocabulary ?? parent?.vocabulary;
   const parentOperationId = scope?.parent_operation_id ?? parent?.detail?.operation_id;

@@ -237,7 +237,7 @@ describe("admitted runtime CLI events", () => {
     expect(stderr.join('')).not.toContain('private shutdown detail');
   });
 
-  it.each(['bounded', 'persistent'])('wires %s hosted traces to ordinary research without a Person capture and drains on shutdown', async mode => {
+  it.each(['bounded', 'persistent'])('wires %s hosted traces to ordinary research and drains on shutdown', async mode => {
     runtimeState.authority_url = 'https://authority-staging.echobrain.org';
     process.env.ECHO_SOURCE_SHA = 'a'.repeat(40);
     const path = nangoKeyFile();
