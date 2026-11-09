@@ -1039,7 +1039,9 @@ contains exact model inputs and structured outputs, tool arguments and
 results, generated Jira JQL attached to the responsible tool, lifecycle
 outcomes, and final output/citations. Parallel tool calls retain separate IDs.
 The ECHO operation ID and release SHA link the trace to operational telemetry.
-Existing one-use Person diagnostic exports remain independent.
+These traces are the only exact payload record of a run: the one-use Person
+diagnostic captures and the research-loop `trace` command were retired on
+2026-11-09.
 
 It also selects each meeting extraction, one trace per meeting, named
 `ECHO meeting_extraction`. Its root names the meeting (the tool's meeting ID and

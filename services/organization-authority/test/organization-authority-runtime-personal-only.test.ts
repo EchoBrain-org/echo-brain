@@ -12,16 +12,6 @@ import { bootstrapOrganizationAuthorityState } from '../src/composition/organiza
 import { initializePersonSessionCredentials } from '../src/composition/person-onboarding-service.js';
 import { port as availablePort } from './fixtures/owner-session.js';
 
-// The real meeting runtime, recording the diagnostics its meeting worker claims captures through.
-const meetingDiagnostics = vi.hoisted(() => [] as unknown[]);
-vi.mock('../src/composition/person-meeting-runtime-v1.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/composition/person-meeting-runtime-v1.js')>();
-  return { ...actual, openPersonMeetingRuntimeV1: (...args: Parameters<typeof actual.openPersonMeetingRuntimeV1>) => {
-    const runtime = actual.openPersonMeetingRuntimeV1(...args);
-    return { ...runtime, attachDiagnostics: (value: Parameters<typeof runtime.attachDiagnostics>[0]) => { meetingDiagnostics.push(value); runtime.attachDiagnostics(value); } };
-  } };
-});
-
 // The search engine as shipped, unless a test makes builds refuse or reports a fuller published generation.
 const searchEngine = vi.hoisted(() => ({
   refuse: undefined as string | undefined,
@@ -178,8 +168,6 @@ describe('Organization Authority runtime without an organization source lane', (
       // The personal meeting runtime is composed and idle until a person connects a source.
       expect(runtime.processing).toBe('active');
       expect(runtime.run_staging_synthetic_canary).toBeUndefined();
-      // Prepared meeting_extraction captures are claimed only once the root hands the worker its diagnostics.
-      expect(meetingDiagnostics).toEqual([expect.objectContaining({ claimMeeting: expect.any(Function) })]);
       expect((await fetch(`http://127.0.0.1:${String(runtime.address.port)}/v1/authority-descriptor`)).status).toBe(200);
       expect(database.prepare('SELECT count(*) FROM authority_live_source_admission_v2').pluck().get()).toBe(0);
     } finally { database.close(); await runtime.close(); }

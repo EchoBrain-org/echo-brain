@@ -396,11 +396,6 @@ export async function openOrganizationAuthorityService(
           ],
           // The change check's reviews (ADR-0036) are this one personal meeting runtime's.
           reviewStatuses: () => meetings.reviewStatuses(),
-          // The meeting worker claims prepared extraction captures only through this.
-          attachDiagnostics(value) {
-            meetings.attachDiagnostics(value);
-            existing?.attachDiagnostics?.(value);
-          },
           close() {
             try {
               meetings.close();

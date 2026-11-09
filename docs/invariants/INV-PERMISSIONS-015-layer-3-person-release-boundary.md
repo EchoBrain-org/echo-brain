@@ -148,10 +148,10 @@ and `services/organization-authority/test/confluence-person-ask-integration.test
 
 Runtime model-content capture is
 suppressed once live metadata or text enters a prompt, except for the selected
-diagnostic paths that
+diagnostic path that
 [connector contracts](../architecture/connector-contracts.md#live-evidence)
-name (the person's own one-use capture and the operator-selected, staging-only
-LangSmith exporter); operational metrics remain.
+names (the operator-selected, staging-only LangSmith exporter; the person's own
+one-use capture was retired on 2026-11-09); operational metrics remain.
 
 ADR-0032 extends the same rule to a stored run of an approved record's impact
 check. The check runs as the approver with that person's own access, and the

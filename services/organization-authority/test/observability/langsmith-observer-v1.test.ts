@@ -43,13 +43,11 @@ async function exported(operation: () => Promise<unknown>): Promise<LangSmithRun
 }
 
 describe('LangSmith projection of the shared observer', () => {
-  it('exports exact parallel tool calls and model context alongside an independent private capture', async () => {
+  it('exports exact parallel tool calls and model context from the runtime scope alone, with no person-selected capture', async () => {
     const batches: LangSmithRunV1[][] = [];
     const send = vi.fn(async (runs: LangSmithRunV1[]) => { batches.push(runs); });
     const observer = createLangSmithObserverV1({ project: 'echo-staging', release_sha: 'a'.repeat(40), send });
-    const privateEvents: unknown[] = [];
-    const capture = { record: (event: unknown) => { privateEvents.push(event); }, complete() {}, fail() {} };
-    await observeCoreRuntimeV1('http_request', () => observePersonResearchV1({ trigger: 'ask', run_id: 'ask-fixture', capture }, async () => {
+    await observeCoreRuntimeV1('http_request', () => observePersonResearchV1({ trigger: 'ask', run_id: 'ask-fixture' }, async () => {
       await observeCoreRuntimeV1('ask_planner', async () => {
         observeCoreRuntimeDiagnosticV1({ kind: 'model_request', call_id: 1, role: 'step', recovery: false, input: modelInput });
         observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: 1, role: 'step', value: { actions: [{ tool: 'search', args: { query: 'DVT' } }] } });
@@ -79,7 +77,6 @@ describe('LangSmith projection of the shared observer', () => {
       { name: 'jira.search', time: expect.any(String), kwargs: { query: 'key = "BUG-412"', max_results: 5, echo_span_id: expect.any(String) } },
     ]);
     expect(runs.find(run => run.run_type === 'llm')?.inputs).toEqual(modelInput);
-    expect(privateEvents).toContainEqual(expect.objectContaining({ kind: 'tool_request', args: { query: 'BUG-412' } }));
     await observer.close();
   });
 

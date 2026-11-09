@@ -129,9 +129,8 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
     const { previous } = input.request;
     input.signal?.throwIfAborted();
     // Authenticated and validated once it starts: anything that fails from then on fails inside the stream.
-    return runPersonAskV1(options, input, async ({ authorization, context, capture, signal }) => {
+    return runPersonAskV1(options, input, async ({ authorization, context, signal }) => {
       const desk = await bindPersonLiveEvidenceDeskV1(options, options.live_sources ?? [], { access_token: input.access_token, scope, ask: true, signal }, context);
-      capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
       const asker = askerOf(options, authorization);
       const askOptions = { model: options.model, generation: options.generation,
         ...(options.research_driver === undefined ? {} : { research_driver: options.research_driver }),

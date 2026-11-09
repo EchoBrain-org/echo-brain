@@ -20,7 +20,6 @@ import type { AgenticAskAuditRequestContextV1 } from '../adapters/persistence/sq
 import type { PersonEvidenceDeskExclusionsV1 } from './person-evidence-desk-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
 import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, currentCoreRuntimeDetailV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
-import type { PersonDiagnosticCaptureHandleV1 } from './person-diagnostics-v1.js';
 import { taskLiveSourcesV1 } from './person-open-items-v1.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
 import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
@@ -171,18 +170,15 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     return { result: value, ...(drafts.length === 0 ? {} : { writes: (transaction: Database.Database) => options.items.insertForRun(transaction, row, drafts) }) };
   };
   const authenticates = (token: string) => { try { options.sessions.authenticateAccess({ access_token: token }); return true; } catch { return false; } };
-  const launch = (row: TriggerRunRowV1, token: string, authorization: PersonAccessAuthorization, lease_token: string, capture?: PersonDiagnosticCaptureHandleV1) => {
+  const launch = (row: TriggerRunRowV1, token: string, authorization: PersonAccessAuthorization, lease_token: string) => {
     const controller = new AbortController(); controllers.add(controller);
     const attemptId = randomUUID();
-    void observePersonResearchV1({ trigger: row.trigger, run_id: row.run_id, event_id: row.event_ref, attempt_id: attemptId,
-      detached: true, ...(capture === undefined ? {} : { capture }),
-    }, async () => {
+    void observePersonResearchV1({ trigger: row.trigger, run_id: row.run_id, event_id: row.event_ref, attempt_id: attemptId, detached: true }, async () => {
       try {
         const requestContext = { ...context(authorization), request_id: `${row.run_id}_${attemptId}` };
-        // The research reads as the person who started the run, on one desk; a capture checks access on the same desk.
+        // The research reads as the person who started the run, on one desk.
         const research = async (scope: DeskScope, exclude?: PersonEvidenceDeskExclusionsV1): Promise<RunResearch> => {
           const desk = await options.bindDesk(options.bind_options, compatible, { access_token: token, scope, signal: controller.signal, ...(exclude === undefined ? {} : { exclude }) }, requestContext);
-          capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
           return options.research({ desk, context: requestContext });
         };
         const output = await checkImpact(row, token, research, controller.signal);
@@ -206,7 +202,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
         else options.runs.fail(row.run_id, lease_token, 'research_failed');
         throw error;
       } finally { controllers.delete(controller); }
-    }).catch(() => undefined); // The durable run and optional capture own the terminal result.
+    }).catch(() => undefined); // The durable run owns the terminal result.
   };
   /**
    * Starts one of the caller's runs with the caller's own token: `start` names it, `next` picks their oldest queued one. An
@@ -214,7 +210,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
    * refuses it before any model call (and a desk would read ECHO records as unreadable): the run stays pending, with no claim,
    * attempt or trace, until a later start.
    */
-  const startRow = (authorization: PersonAccessAuthorization, token: string, run_id: string, capture_id?: string): PersonRunsResultsV1['start'] => {
+  const startRow = (authorization: PersonAccessAuthorization, token: string, run_id: string): PersonRunsResultsV1['start'] => {
     const actor = actorOf(authorization);
     const queued = options.runs.read(actor, run_id);
     if (queued !== undefined && triggerRunStateAtV1(queued, now().toISOString()) === 'pending' && options.records.recordIndexLags?.() === true) {
@@ -223,14 +219,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     const claim = options.runs.claim(actor, run_id, lease, () => controllers.size < maxRunning);
     if (claim.kind !== 'claimed') { if (claim.kind === 'not_found') throw new AuthorityOperationError('not_found', 'run is not available'); return Object.freeze({ state: claim.kind }); }
     const row = options.runs.read(actor, run_id); if (row === undefined) throw new AuthorityOperationError('not_found', 'run is not available');
-    let capture: PersonDiagnosticCaptureHandleV1 | undefined;
-    try {
-      capture = capture_id === undefined ? undefined : options.bind_options.diagnostics?.claim({
-        access_token: token, capture_id, target: { kind: 'trigger_run', run_id: row.run_id },
-      });
-      if (capture_id !== undefined && capture === undefined) throw new AuthorityOperationError('unavailable', 'Diagnostic capture is not available');
-    } catch (error) { options.runs.release(row.run_id, claim.lease_token, { counted: false }); throw error; }
-    launch(row, token, authorization, claim.lease_token, capture); return Object.freeze({ state: 'running' as const });
+    launch(row, token, authorization, claim.lease_token); return Object.freeze({ state: 'running' as const });
   };
   return Object.freeze({
     async list(input: Parameters<PersonTriggerRunsHttpApplicationV1['list']>[0]) {
@@ -242,7 +231,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     },
     async start(input: Parameters<PersonTriggerRunsHttpApplicationV1['start']>[0]) {
       input.signal?.throwIfAborted(); const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      return startRow(authorization, input.access_token, input.request.run_id, input.request.capture_id);
+      return startRow(authorization, input.access_token, input.request.run_id);
     },
     async next(input: Parameters<PersonTriggerRunsHttpApplicationV1['next']>[0]) {
       input.signal?.throwIfAborted(); const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });

@@ -60,13 +60,11 @@ import type { PersonEmployeeHttpApplication } from "./person-employee-http-appli
 import {
   PERSON_ANSWER_PATH_V7,
   PERSON_RUNS_PATH_V1,
-  PERSON_DIAGNOSTICS_PATH_V1,
   PERSON_RESEARCH_EVAL_READ_PATH_V1,
   PERSON_RESEARCH_EVAL_START_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
   validatePersonAnswerRequestV3,
   validatePersonRunsRequestV1,
-  validatePersonDiagnosticsRequestV1,
   validatePersonResearchEvalReadRequestV1,
   validatePersonResearchEvalStartRequestV1,
   validatePersonSourceEvidenceReadRequestV1,
@@ -75,7 +73,6 @@ import type { PersonSourceEvidenceHttpApplicationV1 } from "./person-source-evid
 import type { PersonAnswerV7HttpApplication } from "./person-live-answer-http-application.js";
 import type { PersonResearchEvalHttpApplicationV1 } from "./person-research-eval-http-application.js";
 import type { PersonTriggerRunsHttpApplicationV1 } from './person-trigger-runs-http-application.js';
-import type { PersonDiagnosticsHttpApplicationV1 } from './person-diagnostics-http-application.js';
 import { PERSON_ASK_CHECK_PATH_V1, validatePersonAskCheckRequestV1 } from '@echo-brain/organization-api';
 import type { PersonAskCheckHttpApplicationV1 } from './person-ask-check-http-application.js';
 import {
@@ -122,7 +119,6 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_LIST_PATH_V1}`,
   `POST ${PERSON_OPEN_PATH_V1}`,
   `POST ${PERSON_RUNS_PATH_V1}`,
-  `POST ${PERSON_DIAGNOSTICS_PATH_V1}`,
 ]);
 
 function routeKey(method: string, path: string): string {
@@ -160,7 +156,6 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Staging-only research evaluation; its routes do not exist unless composed. */
   readonly person_research_eval?: PersonResearchEvalHttpApplicationV1;
   readonly person_trigger_runs: PersonTriggerRunsHttpApplicationV1;
-  readonly person_diagnostics?: PersonDiagnosticsHttpApplicationV1;
   /** Provider-owned routes (account connections and the Slack approval click), selected by the composition root. */
   readonly person_tool_connections?: readonly ProviderHttpApplicationV1[];
   /** Opening a cited original; it needs no answer model. */
@@ -194,10 +189,11 @@ function providerIngressRoutes(
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
       // These Person families stay reserved, their retired paths too (V1 notes; V1 documents and the V2 and V3 tools lists,
-      // ADR-0048; the capability read and the evidence desk's open and search), so no adapter can mount one.
+      // ADR-0048; the capability read, the evidence desk's open and search, and the one-use diagnostic captures), so no
+      // adapter can mount one.
       if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) ||
         [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2,
-          '/v2/person/tools', '/v3/person/tools', '/v3/person/capabilities', '/v3/person/evidence/open', '/v3/person/evidence/search']
+          '/v2/person/tools', '/v3/person/tools', '/v3/person/capabilities', '/v3/person/evidence/open', '/v3/person/evidence/search', '/v1/person/diagnostics']
           .some(path => route.path === path || route.path.startsWith(`${path}/`))) {
         throw new Error(`provider ingress route collides with Authority route: ${key}`);
       }
@@ -724,20 +720,12 @@ export function createOrganizationAuthorityHttpServer(
       [PERSON_RESEARCH_EVAL_START_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalStartRequestV1, (application, input) => application.start(input))],
       [PERSON_RESEARCH_EVAL_READ_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalReadRequestV1, (application, input) => application.read(input))],
     ] as const),
-    ...(options.person_diagnostics === undefined ? [] : [
-      [PERSON_DIAGNOSTICS_PATH_V1, personCancellablePost(options.person_diagnostics, validatePersonDiagnosticsRequestV1, (application, input) => {
-        const common = { access_token: input.access_token, ...(input.signal === undefined ? {} : { signal: input.signal }) };
-        return input.request.operation === 'prepare'
-          ? application.prepare({ ...common, request: input.request })
-          : application.read({ ...common, request: input.request });
-      })],
-    ] as const),
     [PERSON_RUNS_PATH_V1, personCancellablePost(options.person_trigger_runs, validatePersonRunsRequestV1, (application, input) => {
       const common = { access_token: input.access_token, ...(input.signal === undefined ? {} : { signal: input.signal }) };
       const request = input.request;
       switch (request.operation) {
         case 'list': return application.list(common);
-        case 'start': return application.start({ ...common, request: { schema_version: 1, operation: 'start', run_id: request.run_id, ...(request.capture_id === undefined ? {} : { capture_id: request.capture_id }) } });
+        case 'start': return application.start({ ...common, request: { schema_version: 1, operation: 'start', run_id: request.run_id } });
         case 'next': return application.next({ ...common, request });
         case 'retry': return application.retry({ ...common, request: { schema_version: 1, operation: 'retry', run_id: request.run_id } });
         case 'view': return application.view({ ...common, request: { schema_version: 1, operation: 'view', run_id: request.run_id } });

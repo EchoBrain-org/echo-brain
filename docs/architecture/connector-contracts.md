@@ -177,13 +177,8 @@ credentials, and the Ask composition must keep model content capture off when
 live evidence can enter a prompt. The boundary's `team` display visibility
 does not authorize release to another person.
 
-Two selected diagnostic paths are explicit exceptions to that capture rule:
+One selected diagnostic path is the explicit exception to that capture rule:
 
-- **Person diagnostics.** A person may select a one-use capture of their own
-  Ask or run. It stays in Authority process memory, only that person can read
-  it, every terminal read revalidates source access, and known revocation
-  erases it (see the
-  [observability runbook](../operations/RB-OPERATIONS-001-authority-observability.md#follow-a-research-execution-and-select-private-payload-capture)).
 - **Staging LangSmith tracing.** An operator-selected, staging-only exporter
   sends each selected research run's model prompts and outputs and its tool
   arguments and results, including live Jira and Confluence text and generated
@@ -196,6 +191,9 @@ Two selected diagnostic paths are explicit exceptions to that capture rule:
   The Authority refuses to start with a tracing selection on any other origin,
   and the onboarding wrapper refuses non-staging Authorities (see
   [LangSmith staging tracing](../../deploy/organization-authority/README.md#langsmith-staging-tracing)).
+
+A person's one-use capture of their own Ask or run was the other path until it
+was retired on 2026-11-09.
 
 Ask progress is not a capture path. A streamed Ask
 ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)) may name a live ticket, page or message, or on

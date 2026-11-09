@@ -13,7 +13,6 @@ import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/pe
 import type { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
 import { randomUUID } from "node:crypto";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
-import type { PersonDiagnosticCaptureHandleV1, PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
 
 export interface CreatePersonAnswerV3RouteOptions {
@@ -27,7 +26,6 @@ export interface CreatePersonAnswerV3RouteOptions {
   readonly research_driver?: import('@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1').AgenticResearchDriverV1;
   readonly generation: AnswerCompositionGenerationProfileV1;
   readonly audit: SqlitePersonAgenticAskAuditV1;
-  readonly diagnostics?: PersonDiagnosticsV1;
   /**
    * The asker's own directory entry, so the loop reads "my" as a name. Only
    * the authenticated membership is looked up; its name reaches the model and
@@ -75,32 +73,27 @@ export function personAskRequestContextV1(
 }
 
 /**
- * One Ask after its own request checks: the asker authenticated, a diagnostic
- * capture claimed when the request names one, then `started`. Every attempt a
- * snapshot restart runs is one observed research run with that capture. A
- * deadline that is not the client's own cancellation answers unavailable.
+ * One Ask after its own request checks: the asker authenticated, then
+ * `started`. Every attempt a snapshot restart runs is one observed research
+ * run. A deadline that is not the client's own cancellation answers
+ * unavailable.
  */
 export async function runPersonAskV1<T>(
-  options: Pick<CreatePersonAnswerV3RouteOptions, "authority_id" | "organization_id" | "state_lineage_id" | "sessions" | "diagnostics">,
-  input: { readonly access_token: string; readonly request: { readonly capture_id?: string }; readonly signal?: AbortSignal },
+  options: Pick<CreatePersonAnswerV3RouteOptions, "authority_id" | "organization_id" | "state_lineage_id" | "sessions">,
+  input: { readonly access_token: string; readonly signal?: AbortSignal },
   attempt: (run: {
     readonly authorization: PersonAccessAuthorization;
     readonly context: ReturnType<typeof personAskRequestContextV1>;
-    readonly capture: PersonDiagnosticCaptureHandleV1 | undefined;
     readonly signal: AbortSignal;
   }) => Promise<T>,
   started?: () => void,
 ): Promise<T> {
   const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
   const context = personAskRequestContextV1(options, authorization, `ask_${randomUUID()}`);
-  const capture = input.request.capture_id === undefined ? undefined : options.diagnostics?.claim({
-    access_token: input.access_token, capture_id: input.request.capture_id, target: { kind: 'ask' },
-  });
-  if (input.request.capture_id !== undefined && capture === undefined) throw new AuthorityOperationError('unavailable', 'Diagnostic capture is not available');
   started?.();
   try {
-    return await withPersonAskSnapshotRetryV1({ signal: input.signal, capture: capture !== undefined, run: async signal =>
-      observePersonResearchV1({ trigger: 'ask', run_id: context.request_id, ...(capture === undefined ? {} : { capture }) }, () => attempt({ authorization, context, capture, signal })) });
+    return await withPersonAskSnapshotRetryV1({ signal: input.signal, run: async signal =>
+      observePersonResearchV1({ trigger: 'ask', run_id: context.request_id }, () => attempt({ authorization, context, signal })) });
   } catch (error) {
     // Observe the original timeout before translating it into the Person API error.
     if (error instanceof AgenticAskDeadlineErrorV1 && input.signal?.aborted !== true) {

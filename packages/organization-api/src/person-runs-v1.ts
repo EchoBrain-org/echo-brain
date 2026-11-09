@@ -1,6 +1,5 @@
 import { validatePersonAnswerCitationV6 } from './person-answer-v4.js';
 import type { PersonAnswerCitationV6 } from './person-answer-v8.js';
-import { validatePersonDiagnosticCaptureIdV1, type PersonDiagnosticCaptureIdV1 } from './person-diagnostics-v1.js';
 import { PERSON_IMPACT_CARD_LIMITS_V1, validatePersonImpactCardV1, type PersonImpactCardV1 } from './person-impact-card-v1.js';
 import { PERSON_UPLOAD_PROJECT_SET_MAX } from './person-upload-audience-v3.js';
 import { validateProjectIdV1 } from './project-context-v1.js';
@@ -67,7 +66,7 @@ export type PersonOpenItemsReadV1 = 'rows' | 'counts';
 export type PersonRunsRequestV1 =
   | { readonly schema_version: 1; readonly operation: 'list' }
   | { readonly schema_version: 1; readonly operation: 'home'; readonly read?: 'rows' }
-  | { readonly schema_version: 1; readonly operation: 'start'; readonly run_id: string; readonly capture_id?: PersonDiagnosticCaptureIdV1 }
+  | { readonly schema_version: 1; readonly operation: 'start'; readonly run_id: string }
   /** Starts the caller's oldest queued impact check, as `start` starts one by id; it names no run. */
   | { readonly schema_version: 1; readonly operation: 'next' }
   | { readonly schema_version: 1; readonly operation: 'retry'; readonly run_id: string }
@@ -354,7 +353,7 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
   const kind = operation as PersonRunsRequestV1['operation'];
   // `items` may leave out its scope id and its cursor, and may ask for items in some states only; `home`, `items` and `item` may
   // say how much to read.
-  const optional = (kind === 'items' ? ['id', 'cursor', 'read', 'states', 'changed_since'] : kind === 'home' || kind === 'item' ? ['read'] : kind === 'start' ? ['capture_id'] : [])
+  const optional = (kind === 'items' ? ['id', 'cursor', 'read', 'states', 'changed_since'] : kind === 'home' || kind === 'item' ? ['read'] : [])
     .filter(key => Object.hasOwn(request, key));
   assertExactKeys(request, ['schema_version', 'operation', ...REQUEST_KEYS[kind], ...optional], 'Runs request');
   if (request.schema_version !== 1) fail('Runs request version is invalid');
@@ -364,8 +363,7 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
     case 'home':
       return Object.freeze({ schema_version: 1 as const, operation: kind, ...readMode(request, ['rows'] as const) });
     case 'start':
-      return Object.freeze({ schema_version: 1 as const, operation: kind, run_id: runId(request.run_id, 'Runs request run id'),
-        ...(Object.hasOwn(request, 'capture_id') ? { capture_id: validatePersonDiagnosticCaptureIdV1(request.capture_id) } : {}) });
+      return Object.freeze({ schema_version: 1 as const, operation: kind, run_id: runId(request.run_id, 'Runs request run id') });
     case 'next':
       return Object.freeze({ schema_version: 1 as const, operation: kind });
     case 'retry':

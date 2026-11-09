@@ -21,11 +21,6 @@ describe('Ask snapshot restart', () => {
     await expect(withPersonAskSnapshotRetryV1({ run })).rejects.toBe(error);
     expect(run).toHaveBeenCalledTimes(1);
   });
-  it('never mixes attempts in a diagnostic capture', async () => {
-    const run = vi.fn().mockRejectedValue(new PersonRecordSearchSnapshotChangedV1());
-    await expect(withPersonAskSnapshotRetryV1({ capture: true, run })).rejects.toMatchObject({ code: 'unavailable' });
-    expect(run).toHaveBeenCalledTimes(1);
-  });
   it('enforces the deadline when a connector ignores cancellation', async () => {
     vi.useFakeTimers();
     try {

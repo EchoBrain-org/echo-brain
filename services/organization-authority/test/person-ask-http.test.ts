@@ -111,6 +111,24 @@ describe("Agentic Ask HTTP capability gate", () => {
     }
   });
 
+  it("answers the retired diagnostic captures as a route that never existed, keeps it from provider adapters, and refuses a capture id on Ask", async () => {
+    const capture_id = "cap_00000000-0000-4000-8000-000000000001";
+    const ask = vi.fn();
+    const value = await server({ ask: { ask } as never });
+    try {
+      for (const body of [{ schema_version: 1, operation: "prepare", target: { kind: "ask" } }, { schema_version: 1, operation: "read", capture_id }]) {
+        expect(await post(value.url, "/v1/person/diagnostics", body)).toEqual({ status: 404, body: { error: { code: "not_found", message: "request failed" } } });
+      }
+      expect(value.sessions.authenticateAccess).not.toHaveBeenCalled();
+      // Only the retired research-loop trace command sent one: the Ask request refuses it as an unknown key.
+      expect(await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What changed?", capture_id }))
+        .toEqual({ status: 400, body: { error: { code: "invalid_request", message: "request failed" } } });
+      expect(ask).not.toHaveBeenCalled();
+    } finally { await value.close(); }
+    const adapter = { routes: [{ route_id: "collision", method: "POST" as const, path: "/v1/person/diagnostics" }], accept: async () => ({ status: 200 as const, body: {} }) };
+    expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_tool_connections: [adapter] }))).toThrow("collides with Authority route");
+  });
+
   it("forwards a client disconnect as the Ask's abort signal", async () => {
     let started!: () => void;
     let observedAbort!: () => void;

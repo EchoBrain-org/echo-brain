@@ -365,7 +365,7 @@ name for release compatibility. The service selects `environment=staging` for
 the staging origin and `environment=production` otherwise. Production EMF uses
 `EchoBrain/AuthorityJourneyV1`; staging retains `EchoBrain/StagingJourneyV1`.
 
-#### Follow a research execution and select private payload capture
+#### Follow a research execution
 
 `shared/core-runtime-observation-v1.ts` owns operation/span context for source
 processing, approval, research, model calls, tools, release and output reads.
@@ -380,33 +380,27 @@ Follow the approval event hash across publication and execution, and the output
 hash from committed card storage to later card reads. The durable approval/run
 tables and audits remain the business source of truth.
 
-Routine traces contain finite labels, opaque hashes, counts and timings. Exact
-payload capture is selected separately through authenticated Person diagnostics:
-prepare an `ask` or exact `trigger_run` target, then supply its one-use
-`capture_id` on the ordinary Ask request or existing run `start`. This does not
-approve a meeting, change the research brief, or change the product response.
-A `start` that answers `pending` was held while the search index catches up
-with the record log: it claimed neither the run nor the
-capture, which nothing will claim now, so prepare a new capture and start again
-shortly.
-The same shared observer records model-port inputs, exposed structured replies,
-tool inputs/results, automatic starting reads and lifecycle outcomes. These are
-observable decisions, not hidden model reasoning or provider HTTP credentials.
+Routine traces contain finite labels, opaque hashes, counts and timings, never
+payloads. A run `start` that answers `pending` was held while the search index
+catches up with the record log: it claimed no run and started no
+`research_run`, so start it again shortly.
 
-Captures stay in process memory: at most eight globally and two per actor,
-8 MiB/512 events each, with a 15-minute expiry and a non-extending 60-second
-window after a terminal read. Capacity loss marks a trace incomplete. Restart
-or expiry loses its payloads; CloudWatch metadata has independent retention.
-Only the originating organization, principal and membership may claim/read it.
-Every terminal read revalidates source access and the reading session. Failed
-runs can be inspected only while those checks still pass; known revocation
-erases content. Payloads never enter CloudWatch or immutable audit/run storage.
+On staging, while an operator has enabled
+[LangSmith staging tracing](../../deploy/organization-authority/README.md#langsmith-staging-tracing),
+each research run's exact payloads are in its LangSmith trace: model-port
+inputs, exposed structured replies, tool inputs/results, automatic starting
+reads and lifecycle outcomes. These are observable decisions, not hidden model
+reasoning or provider HTTP credentials. The trace root's metadata carries the
+ECHO operation ID (`echo_operation_id`), the hashed run, event and attempt IDs
+(`echo_run_id`, `echo_event_id`, `echo_attempt_id`) and the release SHA, so it
+joins the journey events above. The staging evaluator's runs are traced the same
+way. Payloads never enter CloudWatch or immutable audit/run storage. Without
+staging tracing no exact payload is kept: follow a run by its journey metadata.
 
-Use the [research trace exporter](../../tools/evals/research-loop/README.md#one-ordinary-request-diagnostic-trace)
-to save the receipt before execution and export private files. Resume reads
-with the saved capture ID after a lost response; do not repeat the Ask to
-recover its trace. The staging evaluator uses the same operational spans;
-payload capture has one API and collector, on ordinary product requests.
+The one-use Person diagnostic captures (`POST /v1/person/diagnostics`, and a
+`capture_id` on the Ask request or a run `start`) and the research-loop `trace`
+command that exported them were retired on 2026-11-09. The path answers 404,
+and a request that still sends `capture_id` is refused as `invalid_request`.
 
 #### Follow a meeting from intake to approval delivery
 
@@ -437,45 +431,19 @@ and identity-link status in that case. Human wait is not an open machine span.
 These fields are available in the existing CloudWatch `diagnostic` JSON; no
 separate log stream is introduced.
 
-For one meeting's exact extraction evidence, use the existing Person client
-`diagnostics()` method to prepare this request **before** the next extraction:
-
-```json
-{
-  "schema_version": 1,
-  "operation": "prepare",
-  "target": {
-    "kind": "meeting_extraction",
-    "source_key": "pms_<64 lowercase hex characters>",
-    "meeting_id": "<external meeting ID in this person's source>"
-  }
-}
-```
-
-Use the existing source key from the person's meeting settings. Save the returned
-`capture_id`; then import the meeting normally or let its watched source run.
-The worker claims the selection only for that person's exact source/meeting
-and only when an already-authorized extraction actually runs. Preparation does
-not import, retry, approve, spend on a model, or consume a frozen-result replay.
-There is at most one active selection for that owner/source/meeting.
-
-Export it with the existing read-only trace command (matching built client):
-
-```sh
-npm run eval:research-loop -- trace --capture-id cap_… --out ~/.local/state/echo-meeting-diagnostic-<run>
-```
-
-The private trace includes the actual rendered evidence blocks, model request
-and raw structured reply. A quote rejection also identifies the signal index,
-evidence alias, source block ID/type, rejected quote and exact source text.
-The grounding rule and retry policy are unchanged. Capture uses the same
-bounded memory, expiry and owner-only read protocol described above; each read
-checks the retained source's current intake settings and pinned membership.
-Routine metadata contains none of these payloads.
-
-Prepare after any Authority restart: an existing host retry wrapper that
-restarts Authority discards an earlier in-memory selection. Capture keeps no
-persistent payload and adds no evidence for past attempts.
+For one meeting's exact extraction evidence on staging, read its
+`ECHO meeting_extraction` trace while
+[LangSmith staging tracing](../../deploy/organization-authority/README.md#langsmith-staging-tracing)
+is enabled: one trace per extracted meeting. Its root names the meeting (the
+tool's meeting ID and title) and how many decisions, actions and rationales came
+out, and its metadata carries the opaque `echo_meeting_id` and the `attempt` that
+the `extraction` events above record: join on those. Its `model.extraction` run
+holds the exact prompt, the model's raw structured reply and its token counts;
+items code set aside, a rejected quote among them, appear as events with their
+reason and cited units. The grounding rule and retry policy are unchanged.
+Routine metadata contains none of these payloads. Tracing covers only the
+extractions made while it is enabled: nothing reconstructs an earlier attempt's
+payloads.
 
 #### Follow failed open-item reads
 
@@ -521,10 +489,10 @@ just now" for those items.
 Inspect the stack, alarm state, and current journey before relying on the
 overview. It remains staging-only. The Journey Explorer, a separate staging
 Lambda behind the overview's custom widget, and the opt-in staging content
-telemetry were retired on 2026-10-19. Research and meeting extraction traces go to
-[LangSmith](../../deploy/organization-authority/README.md#langsmith-staging-tracing),
-and [selected diagnostics](#follow-a-research-execution-and-select-private-payload-capture)
-capture exact payloads. Read journeys with the Logs Insights queries in this
+telemetry were retired on 2026-10-19. Research and meeting extraction traces, with
+their exact payloads, go to
+[LangSmith](../../deploy/organization-authority/README.md#langsmith-staging-tracing)
+(see [Follow a research execution](#follow-a-research-execution)). Read journeys with the Logs Insights queries in this
 runbook. Remove the deployed Explorer with
 [Retire the Journey Explorer stack](#retire-the-journey-explorer-stack).
 
@@ -746,7 +714,7 @@ Meeting extraction (`llm-decision-processor.ts`):
 
 | Name | What code did |
 | --- | --- |
-| `extraction_item_set_aside` | Set aside a malformed or ungrounded item; its reason and cited units reach only a selected private capture and, while staging tracing is on, the extraction's LangSmith trace |
+| `extraction_item_set_aside` | Set aside a malformed or ungrounded item; its reason and cited units reach only the extraction's LangSmith trace, while staging tracing is on |
 | `extraction_repeat_dropped` | Dropped a repeated item: the same kind, text and units, or the same id after evidence trimming |
 | `extraction_owner_cleared` | Cleared a proposed action owner that no cited unit names |
 | `extraction_due_cleared` | Cleared a due date that is not a date or falls before the meeting |

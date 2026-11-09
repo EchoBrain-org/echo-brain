@@ -1,10 +1,7 @@
-import {
-  PERSON_DIAGNOSTICS_MAX_TRACE_BYTES_V1,
-  PERSON_DIAGNOSTICS_MAX_TRACE_EVENTS_V1,
-  validatePersonDiagnosticTraceV1,
-} from '@echo-brain/organization-api';
 import { describe, expect, it } from 'vitest';
-import { createPersonDiagnosticTraceV1 } from '../src/composition/person-diagnostic-trace-v1.js';
+import {
+  createPersonDiagnosticTraceV1, PERSON_DIAGNOSTIC_TRACE_MAX_BYTES_V1, PERSON_DIAGNOSTIC_TRACE_MAX_EVENTS_V1,
+} from '../src/composition/person-diagnostic-trace-v1.js';
 
 describe('private diagnostic trace collector', () => {
   it('snapshots nested payloads and returns independent copies with capture order and time', () => {
@@ -12,30 +9,33 @@ describe('private diagnostic trace collector', () => {
     const event = { kind: 'tool_response', tool_call_id: 1, result: { results: [{ id: 'E2', title: 'Fixture blocks PVT' }] } };
     capture.record(event);
     event.result.results[0]!.title = 'changed after capture';
-    const first = validatePersonDiagnosticTraceV1(capture.snapshot());
-    expect(first).toMatchObject({ complete: true, dropped_events: 0, events: [{ sequence: 1, observed_at: '2026-10-08T20:00:00.000Z', result: { results: [{ title: 'Fixture blocks PVT' }] } }] });
+    const first = capture.snapshot();
+    expect(first).toEqual({ schema_version: 1, kind: 'echo-agentic-research-trace-v1', complete: true, dropped_events: 0, events: [
+      { kind: 'tool_response', tool_call_id: 1, result: { results: [{ id: 'E2', title: 'Fixture blocks PVT' }] }, sequence: 1, observed_at: '2026-10-08T20:00:00.000Z' },
+    ] });
     (first.events[0]!.result as typeof event.result).results[0]!.title = 'changed by a reader';
     expect(capture.snapshot().events[0]).toMatchObject({ result: { results: [{ title: 'Fixture blocks PVT' }] } });
   });
 
   it('retains at most 512 events and reports every omitted event', () => {
     const capture = createPersonDiagnosticTraceV1(() => 0);
-    for (let index = 0; index < PERSON_DIAGNOSTICS_MAX_TRACE_EVENTS_V1 + 3; index += 1) capture.record({ kind: 'model_error', call_id: index + 1, error_kind: 'deadline' });
-    const trace = validatePersonDiagnosticTraceV1(capture.snapshot());
+    for (let index = 0; index < PERSON_DIAGNOSTIC_TRACE_MAX_EVENTS_V1 + 3; index += 1) capture.record({ kind: 'model_error', call_id: index + 1, error_kind: 'deadline' });
+    const trace = capture.snapshot();
     expect(trace).toMatchObject({ complete: false, dropped_events: 3 });
-    expect(trace.events).toHaveLength(PERSON_DIAGNOSTICS_MAX_TRACE_EVENTS_V1);
-    expect(trace.events.at(-1)!.sequence).toBe(PERSON_DIAGNOSTICS_MAX_TRACE_EVENTS_V1);
+    expect(PERSON_DIAGNOSTIC_TRACE_MAX_EVENTS_V1).toBe(512);
+    expect(trace.events).toHaveLength(PERSON_DIAGNOSTIC_TRACE_MAX_EVENTS_V1);
+    expect(trace.events.map(event => event.sequence)).toEqual(Array.from({ length: PERSON_DIAGNOSTIC_TRACE_MAX_EVENTS_V1 }, (_, index) => index + 1));
   });
 
   it('bounds the entire JSON envelope by UTF-8 bytes and stops at the first overflow', () => {
     const capture = createPersonDiagnosticTraceV1(() => 0);
-    capture.record({ kind: 'model_response', value: '界'.repeat(Math.floor(PERSON_DIAGNOSTICS_MAX_TRACE_BYTES_V1 / 3) - 300) });
+    capture.record({ kind: 'model_response', value: '界'.repeat(Math.floor(PERSON_DIAGNOSTIC_TRACE_MAX_BYTES_V1 / 3) - 300) });
     capture.record({ kind: 'model_response', value: 'overflow'.repeat(200) });
     capture.record({ kind: 'model_response', value: 'small but after the missing event' });
-    const trace = validatePersonDiagnosticTraceV1(capture.snapshot());
+    const trace = capture.snapshot();
     expect(trace).toMatchObject({ complete: false, dropped_events: 2 });
     expect(trace.events).toHaveLength(1);
-    expect(Buffer.byteLength(JSON.stringify(trace))).toBeLessThanOrEqual(PERSON_DIAGNOSTICS_MAX_TRACE_BYTES_V1);
+    expect(Buffer.byteLength(JSON.stringify(trace))).toBeLessThanOrEqual(PERSON_DIAGNOSTIC_TRACE_MAX_BYTES_V1);
   });
 
   it.each(['circular', 'too_deep', 'capture_error'])('reports %s snapshots as incomplete without exposing an invalid event', kind => {
@@ -45,7 +45,7 @@ describe('private diagnostic trace collector', () => {
     else if (kind === 'too_deep') { let value: unknown = {}; for (let index = 0; index < 48; index += 1) value = { child: value }; event.value = value; }
     else { event.kind = 'capture_error'; event.error_kind = 'snapshot_failed'; }
     capture.record(event);
-    expect(validatePersonDiagnosticTraceV1(capture.snapshot())).toMatchObject({ complete: false, dropped_events: 1, events: [] });
+    expect(capture.snapshot()).toEqual({ schema_version: 1, kind: 'echo-agentic-research-trace-v1', complete: false, dropped_events: 1, events: [] });
   });
 
   it('seals a settled run and clears it immediately on close, ignoring late callbacks', () => {

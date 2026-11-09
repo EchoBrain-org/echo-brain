@@ -141,7 +141,6 @@ selection facts; empty subsets of incomplete or unchecked lists do not qualify.
 | --- | --- | --- |
 | `POST /v1/person/ask/check` | Content-free check that an old turn's sources are still readable | Desktop, when an old turn opens |
 | `POST /v2/person/ask/source` | Open one cited source | Desktop |
-| `POST /v1/person/diagnostics` | One-use diagnostic capture | Research-loop traces |
 | `POST /v1/person/research-eval/start`, `/read` | Staging evaluation runs | `npm run eval:research-loop` |
 
 ## Evaluation
@@ -150,6 +149,12 @@ selection facts; empty subsets of incomplete or unchecked lists do not qualify.
 questions against a staging Authority; `ask-follow-up` and `ask-blocks` (the
 Ask writer gate) under `tools/evals/` check the engine offline.
 Their unit tests run in CI's tail leg.
+
+A research run's exact prompts, replies and tool calls are read from its
+[staging LangSmith trace](../../deploy/organization-authority/README.md#langsmith-staging-tracing).
+The one-use diagnostic captures (`POST /v1/person/diagnostics`) and the
+research-loop `trace` command that read them were retired on 2026-11-09; the
+path answers 404 and stays reserved.
 
 See also: [impact checks and open items](impact-checks-and-open-items.md),
 [global and project Ask](../features/global-project-ask-v1.md),

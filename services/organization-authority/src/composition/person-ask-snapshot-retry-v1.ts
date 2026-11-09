@@ -7,8 +7,6 @@ export const PERSON_ASK_TERMINAL_GRACE_MS_V1 = 1_000;
 /** Restart once with a completely new desk, evidence and model state, within the original deadline. */
 export async function withPersonAskSnapshotRetryV1<T>(input: {
   readonly signal?: AbortSignal;
-  /** Diagnostic captures retain one attempt and its fence; never mix two attempts in a capture. */
-  readonly capture?: boolean;
   readonly run: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
   const deadline = new AbortController();
@@ -36,7 +34,7 @@ export async function withPersonAskSnapshotRetryV1<T>(input: {
       }
       catch (error) {
         signal.throwIfAborted();
-        if (attempt > 0 || input.capture === true || !(error instanceof PersonRecordSearchSnapshotChangedV1)) throw error;
+        if (attempt > 0 || !(error instanceof PersonRecordSearchSnapshotChangedV1)) throw error;
       }
     }
   } finally { clearTimeout(timer); }

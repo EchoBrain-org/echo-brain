@@ -14,7 +14,6 @@ import { createPersonProjectActivityV1 } from './person-project-activity-v1.js';
 import { SqlitePersonProjectActivityV1 } from '../adapters/persistence/sqlite/person-project-activity-v1.js';
 import { createPersonAskCheckV1 } from './person-ask-check-v1.js';
 import type { PersonReviewStatusesV1 } from './person-meeting-runtime-v1.js';
-import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
 import { SqliteTriggerRunsV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
 import { SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open-item-people-v1.js';
@@ -100,7 +99,6 @@ interface PersonHttpRuntimeV1 {
   tools?(token: string): Promise<readonly import('@echo-brain/organization-api').OrganizationPersonToolV4[]>;
   /** The meetings waiting for each person's review, for the change check (ADR-0036); absent with no personal meeting runtime. */
   reviewStatuses?(): Promise<PersonReviewStatusesV1>;
-  attachDiagnostics?(diagnostics: PersonDiagnosticsV1): void;
   close(): void;
 }
 export interface OrganizationAuthorityApiRuntimeDependencies {
@@ -199,7 +197,6 @@ export async function startOrganizationAuthorityApiRuntime(
     { fileMustExist: true },
   );
   let documentWorker: ReturnType<typeof startPersonDocumentProcessingV1> | undefined;
-  let diagnostics: PersonDiagnosticsV1 | undefined;
   let recordDatabase:
     ReturnType<typeof openOrganizationRecordDatabase> | undefined;
   let externalIdentity:
@@ -326,8 +323,6 @@ export async function startOrganizationAuthorityApiRuntime(
     documentWorker = startPersonDocumentProcessingV1(documents,new SqlitePersonTextSourceInboxV1(database),{
       on_failure: event => console.error(JSON.stringify(event)),
     });
-    diagnostics = createPersonDiagnosticsV1({ sessions });
-    personHttp?.attachDiagnostics?.(diagnostics);
     const answerOptions = {
       authority_id: metadata.authority_id, organization_id: metadata.organization_id, state_lineage_id: lineage.root.state_lineage_id,
       sessions, originals, records: recordSearch,
@@ -336,7 +331,6 @@ export async function startOrganizationAuthorityApiRuntime(
       generation: dependencies.answer_composition_generation.generation,
       ...(dependencies.answer_composition_generation.research_driver === undefined ? {} : { research_driver: dependencies.answer_composition_generation.research_driver }),
       audit: new SqlitePersonAgenticAskAuditV1(database),
-      diagnostics,
     };
     const items = new SqliteImpactItemsV1(database);
     const people = new SqliteOpenItemPeopleV1(database);
@@ -419,7 +413,6 @@ export async function startOrganizationAuthorityApiRuntime(
       // source is configured.
       person_answer_v7: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps, workspace }),
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
-      person_diagnostics: diagnostics,
       person_trigger_runs: triggerRuns,
       person_ask_check: askCheck,
       person_changes: personChanges,
@@ -465,7 +458,6 @@ export async function startOrganizationAuthorityApiRuntime(
         stopAcceptingRequests();
         researchEval?.close();
         triggerRuns.close();
-        diagnostics?.close();
         await Promise.all([serverClosed, documentWorker?.close()]);
         for (const { runtime } of [...liveConnectors].reverse()) runtime.close();
         personHttp?.close();
@@ -475,7 +467,6 @@ export async function startOrganizationAuthorityApiRuntime(
       },
     };
   } catch (error) {
-    diagnostics?.close();
     await documentWorker?.close();
     for (const { runtime } of [...liveConnectors].reverse()) runtime.close();
     personHttp?.close();

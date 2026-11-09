@@ -138,6 +138,12 @@ describe('Agentic Ask V1 public contracts', () => {
     }
   });
 
+  it('refuses an Ask with a capture id: diagnostic captures are retired (SVC-9)', () => {
+    const capture_id = 'cap_00000000-0000-4000-8000-000000000001';
+    expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'Why is Thermo DVT on hold?', capture_id })).toThrow('Ask request has an unexpected shape');
+    expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'Why is Thermo DVT on hold?', project_id, capture_id })).toThrow('Ask request has an unexpected shape');
+  });
+
   it('allows more than RFC-0003\'s ten statements in a part, which its blocks arrange (ADR-0051)', () => {
     const response = (count: number) => ({
       schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',

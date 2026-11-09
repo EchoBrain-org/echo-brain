@@ -34,7 +34,6 @@ import { createLangSmithRuntimeV1 } from '../src/composition/observability/langs
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
 import { writeFileSync } from 'node:fs';
 import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
-import { createPersonDiagnosticsV1 } from '../src/composition/person-diagnostics-v1.js';
 import { createPersonMeetingRuntimeV1, type PersonMeetingProviderV1 } from '../src/composition/person-meeting-runtime-v1.js';
 import { SqlitePersonMeetingIntakeV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { approvalContextFixture } from './fixtures/approval-core.js';
@@ -211,32 +210,20 @@ function toolIsSynthetic(meeting: MeetingDocument) { return meeting.provenance.s
 const heldError = (external: string, stage = 'unknown', next = 'An operator can authorize one more attempt.') =>
   `Meeting ${external} is held after extraction attempt 1 failed at ${stage}. Later meetings continue. ${next}`;
 describe('personal meeting intake uses the shared processing path', () => {
-  it.each([false, true])('captures one authorized extraction, keeps normal traces private, and joins its approval (failed=%s)', async failed => {
+  it.each([false, true])('observes one extraction by attempt and opaque meeting id, keeps its payloads out of operational metadata, and joins its approval or holds it (failed=%s)', async failed => {
     const f = await fixture(), events: CoreRuntimeObservationV1[] = [];
     const observation = { observer: (event: CoreRuntimeObservationV1) => { events.push(event); } };
     const runtime = f.create(undefined, { observation });
-    const diagnostics = createPersonDiagnosticsV1({ sessions: f.sessions });
-    runtime.attachDiagnostics(diagnostics);
     const failures: unknown[] = [];
-    const process = async () => {
-      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, failure => { failures.push(failure); });
-      await runtime.processing.settle!();
-      expect(failures).toEqual([]);
-    };
     try {
       await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
       const source = f.intake.list(f.person)[0]!;
-      const capture = await diagnostics.prepare({ access_token: 'owner', request: { schema_version: 1, operation: 'prepare', target: {
-        kind: 'meeting_extraction', source_key: source.source_key, meeting_id: id,
-      } } });
+      // A model payload reaches diagnostic sinks only (the staging LangSmith trace), never the operational observer.
       f.duringExtract(() => { observeCoreRuntimeDiagnosticV1({ kind: 'model_response', role: 'extraction', call_id: 1, value: 'PRIVATE EXTRACTION' }); });
       if (failed) f.failNextExtraction(new AdapterError('temporarily_unavailable', 'LLM output contained invalid or unsupported signal grounding at stage: evidence_quote', true));
-      await process();
-      const read = () => diagnostics.read({ access_token: 'owner', request: { schema_version: 1, operation: 'read', capture_id: capture.capture_id } });
-      expect(await read()).toMatchObject({ status: failed ? 'failed' : 'completed', trace: { complete: true, events: [
-        { stage: 'extraction', event: 'started' }, { kind: 'model_response', value: 'PRIVATE EXTRACTION' },
-        { stage: 'extraction', event: failed ? 'failed' : 'succeeded' },
-      ] } });
+      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, failure => { failures.push(failure); });
+      await runtime.processing.settle!();
+      expect(failures).toEqual([]);
       expect(f.extracted()).toBe(1);
       const extraction = events.find(event => event.phase === 'extraction' && event.event !== 'started')!;
       expect(extraction).toMatchObject({ attempt: 1, meeting_id: expect.stringMatching(/^[a-f0-9]{64}$/), event: failed ? 'failed' : 'succeeded' });
@@ -251,15 +238,8 @@ describe('personal meeting intake uses the shared processing path', () => {
         await observeCoreRuntimeV1('http_request', () => f.call(runtime, { operation: 'review_open', approval_id: review!.approval_id }), observation);
         expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'approval_review', event: 'succeeded', approval_id, approval_surface: 'desktop', result: 'returned' })]));
       }
-      await f.call(runtime, { operation: 'import', meeting_id: folder, project_id: null, retain: true });
-      await process();
-      expect(f.extracted()).toBe(2);
-      expect((await read()).trace!.events).toHaveLength(3);
       for (const text of ['PRIVATE EXTRACTION', 'TRANSCRIPT_SECRET_DO_NOT_SHARE', id, source.source_key]) expect(JSON.stringify(events)).not.toContain(text);
-      // Source settings are revalidated when exporting the private payload, even after success/failure.
-      f.db.prepare('UPDATE authority_person_meeting_sources_v2 SET settings_revision=settings_revision+1 WHERE source_key=?').run(source.source_key);
-      expect(await read()).not.toHaveProperty('trace');
-    } finally { diagnostics.close(); runtime.close(); f.db.close(); }
+    } finally { runtime.close(); f.db.close(); }
   });
 
   it('exports one staging LangSmith trace per extraction through the service\'s tracing runtime, with the real processor\'s prompt, reply and token counts', async () => {

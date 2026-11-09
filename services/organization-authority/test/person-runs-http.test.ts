@@ -78,4 +78,18 @@ describe('person runs HTTP transport', () => {
     }
     for (const method of Object.values(methods)) expect(method).not.toHaveBeenCalled();
   });
+
+  it('dispatches a start with its run id alone, and refuses a capture id with 400 before any method: diagnostic captures are retired (SVC-9)', async () => {
+    const methods = { list: vi.fn(), start: vi.fn(async () => ({ state: 'running' as const })), next: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn() };
+    const base = await origin({ ...methods, close() {} } satisfies PersonTriggerRunsHttpApplicationV1);
+    const start = { schema_version: 1, operation: 'start', run_id: RUN };
+    const response = await post(base, start);
+    expect(response.status).toBe(200); expect(await response.json()).toEqual({ state: 'running' });
+    expect(methods.start).toHaveBeenCalledExactlyOnceWith({ access_token: 'fixture', request: start, signal: expect.any(AbortSignal) });
+    // The start the retired research-loop trace command sent.
+    const captured = await post(base, { ...start, capture_id: 'cap_00000000-0000-4000-8000-000000000001' });
+    expect(captured.status).toBe(400);
+    expect(await captured.json()).toMatchObject({ error: { code: 'invalid_request' } });
+    expect(methods.start).toHaveBeenCalledTimes(1);
+  });
 });
