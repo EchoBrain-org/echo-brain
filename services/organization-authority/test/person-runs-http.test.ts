@@ -28,7 +28,7 @@ const post = (base: string, body: unknown, authorization: string | null = 'Beare
 
 describe('person runs HTTP transport', () => {
   it('reserves the route, requires a bearer, and dispatches a validated list', async () => {
-    const app = { list: vi.fn(async () => ({ runs: [] })), start: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), sweep: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
+    const app = { list: vi.fn(async () => ({ runs: [] })), start: vi.fn(), next: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), sweep: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
     const base = await origin(app);
     expect((await post(base, { schema_version: 1, operation: 'list' }, null)).status).toBe(401);
     const response = await post(base, { schema_version: 1, operation: 'list' });
@@ -37,9 +37,26 @@ describe('person runs HTTP transport', () => {
     expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_tools: { routes: [{ route_id: 'collision', method: 'POST', path: PERSON_RUNS_PATH_V1 }], accept: async () => ({ status: 200, body: {} }) } }))).toThrow('collides with Authority route');
   });
 
+  it('dispatches a check-in (next) to its method with the validated request, and refuses one naming a run before any method', async () => {
+    const next = vi.fn(async () => ({ state: 'running' as const }));
+    const app = { list: vi.fn(), start: vi.fn(), next, retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), sweep: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
+    const base = await origin(app);
+    const request = { schema_version: 1, operation: 'next' };
+    expect((await post(base, request, null)).status).toBe(401);
+    const response = await post(base, request);
+    expect(response.status).toBe(200); expect(await response.json()).toEqual({ state: 'running' });
+    expect(next).toHaveBeenCalledExactlyOnceWith({ access_token: 'fixture', request, signal: expect.any(AbortSignal) });
+    // `next` names no run and binds no capture: the Authority picks the caller's oldest queued check.
+    for (const fields of [{ run_id: RUN }, { capture_id: 'cap_00000000-0000-4000-8000-000000000004' }, { scope: 'mine' }]) {
+      expect((await post(base, { ...request, ...fields })).status, JSON.stringify(fields)).toBe(400);
+    }
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(app.start).not.toHaveBeenCalled();
+  });
+
   it('dispatches each open-items operation to its method with the validated request', async () => {
     const methods = Object.fromEntries(Object.entries(OPEN_ITEMS).map(([operation, [, result]]) => [operation, vi.fn(async () => result)]));
-    const app = { list: vi.fn(), start: vi.fn(), retry: vi.fn(), view: vi.fn(), ...methods, close() {} } as unknown as PersonTriggerRunsHttpApplicationV1;
+    const app = { list: vi.fn(), start: vi.fn(), next: vi.fn(), retry: vi.fn(), view: vi.fn(), ...methods, close() {} } as unknown as PersonTriggerRunsHttpApplicationV1;
     const base = await origin(app);
     for (const [operation, [request, result]] of Object.entries(OPEN_ITEMS)) {
       const response = await post(base, request);
@@ -59,7 +76,7 @@ describe('person runs HTTP transport', () => {
 
   it('dispatches a valid sweep of each scope to its method, answers a run or nothing to check, and refuses an invalid one before any method', async () => {
     const sweep = vi.fn(async ({ request }: Parameters<PersonTriggerRunsHttpApplicationV1['sweep']>[0]) => (request.scope === 'mine' ? { run_id: RUN } : { state: 'nothing_to_check' as const }));
-    const app = { list: vi.fn(), start: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), sweep, close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
+    const app = { list: vi.fn(), start: vi.fn(), next: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), sweep, close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
     const base = await origin(app);
     const valid = [{ scope: 'mine' }, { scope: 'record', id: RECORD }, { scope: 'project', id: PROJECT }].map(fields => ({ schema_version: 1, operation: 'sweep', ...fields }));
     for (const request of valid) {

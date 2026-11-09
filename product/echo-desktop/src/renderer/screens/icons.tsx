@@ -108,15 +108,14 @@ export const Home = () => (
 /**
  * What a Home row asks of you, as a shape beside its verb, so the kinds tell
  * apart by more than colour: a decision (diamond) to approve, follow-ups to
- * send (arrow), a document to update (arrows round), one to review (eye), a
- * check to retry (alert), and one still checking (a ring).
+ * send (arrow), a document to update (arrows round), a check to retry
+ * (alert), and one still checking (a ring).
  */
-export const KindMark = ({ kind }: { kind: 'approve' | 'send' | 'update' | 'review' | 'failed' | 'checking' }) => {
+export const KindMark = ({ kind }: { kind: 'approve' | 'send' | 'update' | 'failed' | 'checking' }) => {
   switch (kind) {
     case 'approve': return <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 .9 11.1 6 6 11.1.9 6z" fill="currentColor" /></svg>;
     case 'send': return <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M4 10 10 4M5 4h5v5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>;
     case 'update': return <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M11.6 6.2A4.7 4.7 0 0 0 3 4.4M2.4 7.8A4.7 4.7 0 0 0 11 9.6M3 1.9v2.6h2.6M11 12.1V9.5H8.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>;
-    case 'review': return <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M1.2 7S3.3 3 7 3s5.8 4 5.8 4-2.1 4-5.8 4S1.2 7 1.2 7z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" fill="none" /><circle cx="7" cy="7" r="1.8" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>;
     case 'failed': return <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.6" stroke="currentColor" stroke-width="1.5" fill="none" /><path d="M7 4.2v3.4M7 9.6v.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>;
     case 'checking': return <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.4" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>;
   }

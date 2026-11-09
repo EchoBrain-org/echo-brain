@@ -1,5 +1,5 @@
 // A follow-up an answer cites (ADR-0040), in the store and on the page:
-// it opens in Ask's side panel with its title, owner, status and latest check
+// it opens in Ask's side panel with its title, owner and status
 // while Ask keeps running; once the answer came, Open goes to its item page;
 // and its source row says "owner · status", with no kind label.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,7 +21,7 @@ const row = (owner = mina): OpenItemView => ({
   approver: mina, owner: { ...owner, match: 'name' }, waits_on: 'owner', state: 'open',
   created_at: '2026-10-14T09:00:00.000Z', sent_at: '2026-10-14T10:00:00.000Z', state_set_at: '2026-10-14T10:00:00.000Z',
   state_set_by: mina, owner_set_at: null, owner_set_by: null, send_included: true,
-  check: { verdict: 'still_open', checked_at: '2026-10-16T09:00:00.000Z', checked_by: 'Mina Patel' }, can: { set_state: true, assign: true }, reach: 'not_read',
+  check: null, can: { set_state: true, assign: true }, reach: 'not_read',
 });
 const receipt: AskReceipt = { looked_through: 1 };
 const answer: Answer = {
@@ -49,7 +49,7 @@ const itemReads = () => rpc.mock.calls.filter(([name, params]) => name === 'runs
 const asking = (question = 'What are my open tasks?') => askingWith(rpc, held, question);
 
 describe('a follow-up opens beside Ask (ADR-0040)', () => {
-  it('shows its title, owner, status and latest check while Ask runs, with no Open until the answer, then opens its item page', async () => {
+  it('shows its title, owner and status while Ask runs, with no Open until the answer, then opens its item page', async () => {
     const first = await asking();
     first.release(ok({ ...answer, receipt: undefined }));
     await flush();
@@ -70,7 +70,6 @@ describe('a follow-up opens beside Ask (ADR-0040)', () => {
     expect(text(byTestId(shown, 'pane-follow-up-meta'))).toBe('Mina · Open');
     expect(elements(byTestId(shown, 'pane-follow-up')).some(node => node.type === 'dl' || node.type === 'dt')).toBe(false);
     expect(text(byTestId(shown, 'pane-follow-up'))).not.toMatch(/Owner|Status/u);
-    expect(text(byTestId(shown, 'pane-follow-up-check'))).toBe('Checked 2 h ago · not updated yet');
     // Leaving Ask would cancel it: no Open, and Open does nothing.
     expect(byTestId(shown, 'source-open')).toEqual([]);
     store.openFullPage();

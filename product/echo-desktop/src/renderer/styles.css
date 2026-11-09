@@ -829,7 +829,7 @@ button.toast:hover { background: var(--panel); }
 .need-row:hover:not(:disabled) { background: var(--hover); }
 .need-row:disabled { cursor: default; }
 .need-kind { flex-shrink: 0; width: 92px; height: 21px; display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 500; }
-/* Only what asks you to act now is coloured: Approve, and Retry. Send, Update, Review and Checking keep their mark and word, in grey. */
+/* Only what asks you to act now is coloured: Approve, and Retry. Send, Update and Checking keep their mark and word, in grey. */
 .need-row .need-kind { color: var(--muted); }
 .need-row.approve .need-kind { color: var(--approve); }
 .need-row.failed .need-kind { color: var(--review); }
@@ -839,8 +839,6 @@ button.toast:hover { background: var(--panel); }
 .need-change { font-size: 13.5px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
 .need-detail { font-size: 12.5px; color: var(--faint); }
 .need-detail b { font-weight: 500; color: var(--muted); }
-.need-open { height: 28px; padding: 0 10px; border: 0; border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--muted); background: transparent; }
-.need-open:hover { color: var(--text); background: var(--hover); }
 /* Where and when open the second line, in its own colour: the project's mark and name ("+1" for more), then the time. */
 .need-where { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; vertical-align: middle; white-space: nowrap; }
 .need-where-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -891,8 +889,6 @@ button.need-category:hover { background: var(--hover); }
 button.items-line-open:hover, button.items-line:hover { color: var(--text); }
 button.items-line:hover { background: var(--raise); }
 .items-line .link-button { flex-shrink: 0; padding: 2px 6px; }
-.items-line-check { flex-shrink: 0; display: flex; align-items: center; padding: 2px 6px; white-space: nowrap; }
-.items-line-check .link-button { padding: 2px 4px; }
 .project-line { flex-wrap: wrap; row-gap: 8px; margin-bottom: 8px; }
 .project-line .progress-bar { flex: 1 0 100%; margin-bottom: 4px; }
 
@@ -1051,7 +1047,6 @@ button.items-line:hover { background: var(--raise); }
 .follow-ups-head h1 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.02em; }
 .follow-ups-head h1:focus, #follow-up-title:focus, #decision-ask:focus { outline: none; }
 .follow-ups-sub { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--faint); }
-.follow-ups-sub .need-open { margin-left: -4px; }
 /* How far follow-ups have come: done, then sent and still open, over the not sent track. */
 .progress-bar { flex-shrink: 0; display: flex; height: 4px; border-radius: 2px; overflow: hidden; background: var(--line-strong); }
 .progress-bar span { flex: none; height: 100%; }
@@ -1119,8 +1114,6 @@ button.items-line:hover { background: var(--raise); }
 @media (prefers-reduced-motion: reduce) { .follow-ups-fold-head svg { transition: none; } }
 .follow-ups-fold .follow-up-title { color: var(--muted); }
 .follow-ups-fold .face, .follow-ups-fold .alt-tile { opacity: 0.6; }
-/* Your list's last line: when ECHO last checked one of yours, faint. */
-.follow-ups-checked { flex-shrink: 0; padding: 4px 12px 0; font-size: 12.5px; color: var(--faint); }
 /* Right under the current rows; held at the window's foot only while the list runs past it, the rows fading under it. */
 .follow-ups-foot { position: sticky; bottom: 0; flex-shrink: 0; display: flex; align-items: center; gap: 10px; margin-top: -4px; padding: 8px 0; background: var(--ink); box-shadow: 0 8px 0 var(--ink); }
 .follow-ups-foot::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 12px; background: linear-gradient(transparent, var(--ink)); pointer-events: none; }

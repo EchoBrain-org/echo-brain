@@ -327,11 +327,10 @@ describe('what never notifies (N3)', () => {
     expect(notices()).toEqual([]);
   });
 
-  it('a check, and other activity: items that do not involve you, and one you only own taken back by its sender', async () => {
+  it('other activity: items that do not involve you, and one you only own taken back by its sender', async () => {
     const item = followUp(1);
     await signedIn([item]);
-    authority.items = [{ ...item, check: { verdict: 'landed', checked_at: '2026-10-14T12:00:00.000Z', checked_by: 'Mina Patel' } },
-      followUp(2, { approver: MINA, owner: { ...RAFAEL, match: 'name' } })];
+    authority.items = [item, followUp(2, { approver: MINA, owner: { ...RAFAEL, match: 'name' } })];
     await nextCheck();
     authority.items = [owned(item, RAFAEL, MINA, 30)];
     await nextCheck();

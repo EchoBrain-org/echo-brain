@@ -405,7 +405,10 @@ export function openItemView(item: PersonOpenItemV1): OpenItemView {
   };
 }
 
-/** Home's part of the runs: Send rows, the items that wait on this viewer, the counts of the rest, and whether a sweep is due. */
+/**
+ * Home's part of the runs: Send rows, the items that wait on this viewer, and how many of the rest wait on others. `landed`,
+ * `last_checked_at` and `sweep_due` are retired (the Authority sends 0, null and false until V17) and cross unread.
+ */
 export function homeView(result: PersonRunsResultsV1['home']): HomeView {
   return {
     send: result.send, items: result.items.map(openItemView), landed: result.landed, waiting: result.waiting, last_checked_at: result.last_checked_at,

@@ -11,9 +11,11 @@ import {
 
 /**
  * Trigger runs (runs store and impact card v1, section 5; ADR-0032). A signed-in
- * person lists the runs made for their own approvals, starts the oldest
- * pending one, asks to try a failed one again, and views a finished one as an
- * impact card. One envelope: `{schema_version: 1, operation, ...}`.
+ * person lists the runs made for their own approvals, asks the Authority to
+ * start their oldest queued one (`next`, which the desktop sends with each
+ * change check) or one by id (`start`), asks to try a failed one again, and
+ * views a finished one as an impact card. One envelope:
+ * `{schema_version: 1, operation, ...}`.
  *
  * A run holds no word read from outside ECHO. `view` rebuilds the card from
  * fresh reads for the viewer on every call and the API never returns more than
@@ -72,6 +74,8 @@ export type PersonRunsRequestV1 =
   | { readonly schema_version: 1; readonly operation: 'list' }
   | { readonly schema_version: 1; readonly operation: 'home'; readonly read?: 'rows' }
   | { readonly schema_version: 1; readonly operation: 'start'; readonly run_id: string; readonly capture_id?: PersonDiagnosticCaptureIdV1 }
+  /** Starts the caller's oldest queued impact check, as `start` starts one by id; it names no run. */
+  | { readonly schema_version: 1; readonly operation: 'next' }
   | { readonly schema_version: 1; readonly operation: 'retry'; readonly run_id: string }
   | { readonly schema_version: 1; readonly operation: 'view'; readonly run_id: string }
   | { readonly schema_version: 1; readonly operation: 'items'; readonly scope: 'mine' | 'involved' | 'run' | 'record' | 'project'; readonly id?: string; readonly cursor?: string;
@@ -202,9 +206,16 @@ export interface PersonRunsResultsV1 {
    * `running` while an attempt is going, this call's or an earlier one's. `pending` when nothing started and the run stays
    * queued: a run is held, unclaimed, while the search index has not caught up (an impact run's decision is not yet searchable,
    * or a sweep would anchor its decisions and read ECHO records through it). Holding costs the Authority a few reads,
-   * so start it again at the next look; unlike `busy`, it is no reason to wait longer.
+   * so the next check-in (`next`) or `start` tries it again; unlike `busy`, it is no reason to wait longer.
    */
   start: { readonly state: 'pending' | 'running' | 'busy' | 'done' | 'failed' };
+  /**
+   * The caller's oldest queued impact check (pending, or running with a lapsed lease), started as `start` starts one:
+   * `running` once this call or an earlier one runs it, `pending` while the search index lags (held, unclaimed), `busy` while
+   * another of the caller's runs is running or the Authority already runs as many as it allows, and `idle` when none is
+   * queued (or another check-in finished it first).
+   */
+  next: { readonly state: 'idle' | 'pending' | 'running' | 'busy' };
   retry: { readonly state: 'pending' };
   view: { readonly card: PersonImpactCardV1; readonly checked_at: string; readonly hidden: number };
   home: { readonly send: readonly PersonHomeSendV1[];
@@ -245,16 +256,17 @@ const STATES: readonly string[] = ['pending', 'running', 'done', 'failed'];
 const TRIGGERS: readonly string[] = ['approved_record', 'sweep'];
 const ERROR_CODES: readonly string[] = ['no_access', 'unavailable', 'timed_out', 'research_failed'];
 const REQUEST_KEYS: Readonly<Record<PersonRunsRequestV1['operation'], readonly string[]>> = Object.freeze({
-  list: [], home: [], start: ['run_id'], retry: ['run_id'], view: ['run_id'], items: ['scope'], item: ['item_id'],
+  list: [], home: [], start: ['run_id'], next: [], retry: ['run_id'], view: ['run_id'], items: ['scope'], item: ['item_id'],
   send: ['run_id', 'command_id', 'items'], set_state: ['item_id', 'state'], assign: ['item_id', 'owner_membership_id'], sweep: ['scope'],
 });
 /** Each result's keys; null for a result with more than one shape, whose own case checks them. */
 const RESULT_KEYS: Readonly<Record<keyof PersonRunsResultsV1, readonly string[] | null>> = Object.freeze({
-  list: ['runs'], start: ['state'], retry: ['state'], view: ['card', 'checked_at', 'hidden'],
+  list: ['runs'], start: ['state'], next: ['state'], retry: ['state'], view: ['card', 'checked_at', 'hidden'],
   home: ['send', 'items', 'landed', 'waiting', 'last_checked_at', 'sweep_due'], items: ['items', 'next_cursor', 'summary', 'stages'],
   item: ['item'], send: ['sent', 'not_relevant'], set_state: ['state'], assign: ['owner'], sweep: null,
 });
 const START_STATES: readonly string[] = ['pending', 'running', 'busy', 'done', 'failed'];
+const NEXT_STATES: readonly string[] = ['idle', 'pending', 'running', 'busy'];
 /** `involved` (desktop refresh and notifications v1; ADR-0036): `mine` plus the items you last handed on, that you may read. */
 const SCOPES = ['mine', 'involved', 'run', 'record', 'project'] as const;
 /** A sweep checks the caller's items, a decision's or a project's; a run's items are its decision's. */
@@ -357,6 +369,8 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
     case 'start':
       return Object.freeze({ schema_version: 1 as const, operation: kind, run_id: runId(request.run_id, 'Runs request run id'),
         ...(Object.hasOwn(request, 'capture_id') ? { capture_id: validatePersonDiagnosticCaptureIdV1(request.capture_id) } : {}) });
+    case 'next':
+      return Object.freeze({ schema_version: 1 as const, operation: kind });
     case 'retry':
     case 'view':
       return Object.freeze({ schema_version: 1 as const, operation: kind, run_id: runId(request.run_id, 'Runs request run id') });
@@ -589,6 +603,9 @@ export function validatePersonRunsResultV1<K extends keyof PersonRunsResultsV1>(
     case 'start':
       if (typeof result.state !== 'string' || !START_STATES.includes(result.state)) fail('Runs start state is invalid');
       return checked({ state: result.state as PersonRunsResultsV1['start']['state'] });
+    case 'next':
+      if (typeof result.state !== 'string' || !NEXT_STATES.includes(result.state)) fail('Runs next state is invalid');
+      return checked({ state: result.state as PersonRunsResultsV1['next']['state'] });
     case 'retry':
       if (result.state !== 'pending') fail('Runs retry state is invalid');
       return checked({ state: 'pending' });

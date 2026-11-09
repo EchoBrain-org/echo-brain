@@ -30,10 +30,14 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   app = await launch('granola');
   const { page } = app;
   await approveFromHome(app.page);
-  // The check runs by itself; its Send row opens the meeting's follow-ups.
+  // The check runs by itself: Approve asks for a change check at once, which checks in, so the Authority starts it; while it
+  // is queued or running the Authority paces the checks at 15 s, and the one that sees it end reads what it found (DSK-1):
+  // two of those at most. Its Send row opens the meeting's follow-ups.
   const send = page.getByTestId('need-row').filter({ hasText: 'follow-ups to send' });
-  await expect(send).toContainText('Launch the pilot next week — 4 follow-ups to send', { timeout: 20_000 });
+  await expect(send).toContainText('Launch the pilot next week — 4 follow-ups to send', { timeout: 35_000 });
   await expect(send).toContainText('owners Mina, Rafael');
+  expect(requests('next').length).toBeGreaterThan(0);
+  expect(requests('start')).toEqual([]);
   await send.click();
   const list = page.getByTestId('follow-ups');
   await expect(list.getByRole('heading', { name: 'Pilot planning' })).toBeVisible();
@@ -179,9 +183,16 @@ test('a follow-up sent to you while ECHO runs comes as a notification within one
   await expect(updates).toContainText('Update2A Jira ticket you can\'t openand 1 more');
   await updates.click();
   await expect(page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' })).toBeVisible();
-  // The check starts no sweep or run.
-  expect(requests('sweep')).toEqual([]);
-  expect(requests('start')).toEqual([]);
+  // Each check checks in, and with nothing queued that starts nothing. The page never starts a run by its id: the host refuses
+  // one, before it leaves, as it refuses a check's card (DSK-1).
+  await expect.poll(() => requests('next').length).toBeGreaterThan(0);
+  const ari = { authority: 'https://authority.example', membership_id: 'mem_22222222-2222-4222-8222-222222222222' };
+  for (const operation of ['start', 'view']) {
+    const reply = await page.evaluate(([request, account]) => (window as unknown as { echo: { rpc(method: string, params: object): Promise<unknown> } })
+      .echo.rpc('runs', { expect: account, request }), [{ schema_version: 1, operation, run_id: 'run_00000000-0000-4000-8000-000000000020' }, ari] as const);
+    expect(reply).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
+  }
+  expect([requests('start'), requests('view')]).toEqual([[], []]);
   // Clicked with another app in front: its page opens over Home as ECHO comes forward.
   await emit(app.app, 'echo-test:conceal');
   await expect(page.getByTestId('concealed')).toBeVisible();
@@ -202,8 +213,9 @@ test('a follow-up sent to you while ECHO runs comes as a notification within one
 test('an owner change whose reply was lost shows the item as it is now, and holds nothing', async () => {
   app = await launch('granola-review-assign-lost');
   const { page } = app;
-  await page.getByTestId('need-category').and(page.locator('[data-category="update"]')).click();
-  await page.getByTestId('need-row').filter({ hasText: 'ECHO-12' }).click();
+  // ECHO-12 waits on Mina, its owner, so it is not on Ari's Home: Ari sent it, so it is on Ari's Follow-ups page.
+  await page.getByTestId('sidebar-follow-ups').click();
+  await row(page.getByTestId('follow-ups'), 'ECHO-12').locator('.follow-up-open').click();
   const item = page.getByTestId('follow-up');
   await item.getByRole('button', { name: /^Owner: Mina/ }).click();
   // Escape closes the picker first, then the page; the focus goes back to the owner.

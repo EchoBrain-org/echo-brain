@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { RESTRICTED_REVIEWER_PERSON_POLICY_ID } from '@echo-brain/organization-protocol';
-import { PERSON_IMPACT_CARD_LIMITS_V1, PERSON_RUN_MEETING_ACTIONS_MAX_V1, PERSON_RUNS_LIST_LIMIT_V1, validatePersonImpactCardV1, type PersonImpactCardV1 } from '@echo-brain/organization-api';
+import { PERSON_IMPACT_CARD_LIMITS_V1, PERSON_RUN_MEETING_ACTIONS_MAX_V1, PERSON_RUNS_LIST_LIMIT_V1, validatePersonImpactCardV1, type PersonImpactCardV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { impactCardLineV1, impactItemKeyV1, refreshImpactCardV1, storableImpactCardV1, type FreshImpactItemV1, type StoredImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
@@ -131,7 +131,9 @@ function itemCandidates(record_sha256: Sha256Digest, siblings: readonly Sha256Di
 }
 
 /** The runs themselves; the open items a finished run found are served by `createPersonOpenItemsV1`. */
-type PersonTriggerRunsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'list' | 'start' | 'retry' | 'view' | 'close'>;
+type PersonTriggerRunsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'list' | 'start' | 'next' | 'retry' | 'view' | 'close'>;
+/** A check-in that found nothing queued to start. */
+const IDLE: PersonRunsResultsV1['next'] = Object.freeze({ state: 'idle' });
 
 export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Options): PersonTriggerRunsApplicationV1 {
   const lease = options.lease_ms ?? LEASE_MS;
@@ -226,37 +228,60 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
       } finally { controllers.delete(controller); }
     }).catch(() => undefined); // The durable run and optional capture own the terminal result.
   };
+  /**
+   * Starts one of the caller's runs with the caller's own token: `start` names it, `next` picks their oldest queued one. An
+   * impact run is enqueued with its approval, before the search index publishes the record; a sweep anchors its findings'
+   * decisions and reads ECHO records through the same index. While the index lags, the anchor refuses either before any
+   * model call (and a desk would read ECHO records as unreadable): the run stays pending, with no claim, attempt or trace,
+   * until a later start.
+   */
+  const startRow = (authorization: PersonAccessAuthorization, token: string, run_id: string, capture_id?: string): PersonRunsResultsV1['start'] => {
+    const actor = actorOf(authorization);
+    const queued = options.runs.read(actor, run_id);
+    if (queued !== undefined && triggerRunStateAtV1(queued, now().toISOString()) === 'pending' && options.records.recordIndexLags?.() === true) {
+      return Object.freeze({ state: 'pending' as const });
+    }
+    const claim = options.runs.claim(actor, run_id, lease, () => controllers.size < maxRunning);
+    if (claim.kind !== 'claimed') { if (claim.kind === 'not_found') throw new AuthorityOperationError('not_found', 'run is not available'); return Object.freeze({ state: claim.kind }); }
+    const row = options.runs.read(actor, run_id); if (row === undefined) throw new AuthorityOperationError('not_found', 'run is not available');
+    let capture: PersonDiagnosticCaptureHandleV1 | undefined;
+    try {
+      capture = capture_id === undefined ? undefined : options.bind_options.diagnostics?.claim({
+        access_token: token, capture_id, target: { kind: 'trigger_run', run_id: row.run_id },
+      });
+      if (capture_id !== undefined && capture === undefined) throw new AuthorityOperationError('unavailable', 'Diagnostic capture is not available');
+    } catch (error) { options.runs.release(row.run_id, claim.lease_token, { counted: false }); throw error; }
+    launch(row, token, authorization, claim.lease_token, capture); return Object.freeze({ state: 'running' as const });
+  };
   return Object.freeze({
     async list(input: Parameters<PersonTriggerRunsHttpApplicationV1['list']>[0]) {
       input.signal?.throwIfAborted(); const actor = actorOf(options.sessions.authenticateAccess({ access_token: input.access_token }));
       // The caller's 20 newest sweeps, and as many of their newest impact runs as fill the rest, newest first.
       const sweeps = options.runs.list(actor, SWEEPS_LISTED, 'sweep');
       const rows = [...sweeps, ...options.runs.list(actor, PERSON_RUNS_LIST_LIMIT_V1 - sweeps.length, 'approved_record')].sort(newestFirst);
-      // A run whose attempt stopped without finishing is listed as pending, so the desktop starts it again (R60).
+      // A run whose attempt stopped without finishing is listed as pending, so the next check-in starts it again (R60).
       const at = now().toISOString();
       return Object.freeze({ runs: Object.freeze(rows.map(row => Object.freeze({ run_id: row.run_id, trigger: row.trigger, event_ref: row.event_ref, state: triggerRunStateAtV1(row, at), error_code: row.error_code, created_at: row.created_at, updated_at: row.updated_at }))) });
     },
     async start(input: Parameters<PersonTriggerRunsHttpApplicationV1['start']>[0]) {
-      input.signal?.throwIfAborted(); const authorization = options.sessions.authenticateAccess({ access_token: input.access_token }); const actor = actorOf(authorization);
-      // An impact run is enqueued with its approval, before the search index publishes the record; a sweep anchors its findings'
-      // decisions and reads ECHO records through the same index. While the index lags, the anchor refuses either before any
-      // model call (and a desk would read ECHO records as unreadable): the run stays pending, with no claim, attempt or trace,
-      // until a later start.
-      const queued = options.runs.read(actor, input.request.run_id);
-      if (queued !== undefined && triggerRunStateAtV1(queued, now().toISOString()) === 'pending' && options.records.recordIndexLags?.() === true) {
-        return Object.freeze({ state: 'pending' as const });
-      }
-      const claim = options.runs.claim(actor, input.request.run_id, lease, () => controllers.size < maxRunning);
-      if (claim.kind !== 'claimed') { if (claim.kind === 'not_found') throw new AuthorityOperationError('not_found', 'run is not available'); return Object.freeze({ state: claim.kind }); }
-      const row = options.runs.read(actor, input.request.run_id); if (row === undefined) throw new AuthorityOperationError('not_found', 'run is not available');
-      let capture: PersonDiagnosticCaptureHandleV1 | undefined;
+      input.signal?.throwIfAborted(); const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+      return startRow(authorization, input.access_token, input.request.run_id, input.request.capture_id);
+    },
+    async next(input: Parameters<PersonTriggerRunsHttpApplicationV1['next']>[0]) {
+      input.signal?.throwIfAborted(); const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+      // The desktop checks in with each change check: the caller's oldest queued impact check starts with this request's token,
+      // so a check still starts only while its approver is signed in (ADR-0032), and `claim` keeps one live run per person.
+      const queued = options.runs.nextQueued(actorOf(authorization));
+      if (queued === undefined) return IDLE;
       try {
-        capture = input.request.capture_id === undefined ? undefined : options.bind_options.diagnostics?.claim({
-          access_token: input.access_token, capture_id: input.request.capture_id, target: { kind: 'trigger_run', run_id: row.run_id },
-        });
-        if (input.request.capture_id !== undefined && capture === undefined) throw new AuthorityOperationError('unavailable', 'Diagnostic capture is not available');
-      } catch (error) { options.runs.release(row.run_id, claim.lease_token, { counted: false }); throw error; }
-      launch(row, input.access_token, authorization, claim.lease_token, capture); return Object.freeze({ state: 'running' as const });
+        const started = startRow(authorization, input.access_token, queued.run_id);
+        // Another check-in or start took the run first and it has already ended: nothing is left to start.
+        return started.state === 'done' || started.state === 'failed' ? IDLE : Object.freeze({ state: started.state });
+      } catch (error) {
+        // Nor when it has gone since it was picked.
+        if (error instanceof AuthorityOperationError && error.code === 'not_found') return IDLE;
+        throw error;
+      }
     },
     async retry(input: Parameters<PersonTriggerRunsHttpApplicationV1['retry']>[0]) {
       input.signal?.throwIfAborted(); const actor = actorOf(options.sessions.authenticateAccess({ access_token: input.access_token }));

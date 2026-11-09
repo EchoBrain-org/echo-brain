@@ -10,7 +10,7 @@ import {
 } from '../answer.js';
 import { askedToday, askedWhen, identity, initial, meetingTime } from '../format.js';
 import { message } from '../messages.js';
-import { checkWords, ownerAndStatus } from '../needs.js';
+import { ownerAndStatus } from '../needs.js';
 import { announceAfter, announcement, duration, headline, lookedThrough, PROGRESS_AFTER_MS, type AskProgress } from '../progress.js';
 import {
   activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
@@ -1129,16 +1129,14 @@ function paneHeading(source: AnswerSource, state: State): string {
 /**
  * A follow-up beside Ask (ADR-0040): its title as the answer cites it, then,
  * in its source row's own words and with no labels, who owns it and its
- * status ("Mina · Open"), and its latest check, as Home reads its row now.
- * Its item page, with everything else, is Open, once the answer came.
+ * status ("Mina · Open"), as Home reads its row now. Its item page, with
+ * everything else, is Open, once the answer came.
  */
 function FollowUpSource({ state, source, item }: { state: State; source: Extract<AnswerSource, { kind: 'follow_up' }>; item: OpenItemView }) {
-  const checked = checkWords(item.check);
   return (
     <div class="source-detail selectable" data-testid="pane-follow-up">
       <h2>{source.label}</h2>
       <div class="meta" data-testid="pane-follow-up-meta">{ownerAndStatus(item, state.status?.account?.membership_id)}</div>
-      {checked && <div class="meta" data-testid="pane-follow-up-check">{checked}</div>}
     </div>
   );
 }

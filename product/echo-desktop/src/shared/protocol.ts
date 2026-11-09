@@ -642,13 +642,15 @@ export interface OpenItemsView extends Omit<PersonRunsResultsV1['items'], 'items
   readonly items: readonly OpenItemView[];
 }
 /**
- * The impact checks of your own approvals, the open items they found, and the
- * sweeps that recheck them. What a check found shows as the meeting's
- * follow-ups, so the desktop never asks for its card (`view`).
+ * The impact checks of your own approvals and the open items they found.
+ * What a check found shows as the meeting's follow-ups, so the desktop never
+ * asks for its card (`view`). Nor does it start a check by its id (`start`):
+ * it checks in (`next`), and the Authority starts the oldest queued one
+ * (DSK-1).
  */
 export interface RunsResults {
   list: PersonRunsResultsV1['list'];
-  start: PersonRunsResultsV1['start'];
+  next: PersonRunsResultsV1['next'];
   retry: PersonRunsResultsV1['retry'];
   home: HomeView;
   items: OpenItemsView;
@@ -656,7 +658,6 @@ export interface RunsResults {
   send: PersonRunsResultsV1['send'];
   set_state: PersonRunsResultsV1['set_state'];
   assign: PersonRunsResultsV1['assign'];
-  sweep: PersonRunsResultsV1['sweep'];
 }
 
 export interface HostMethods {
@@ -829,9 +830,9 @@ export function isWriteCall(method: string, params: unknown): boolean {
   const operation = (params as { request?: { operation?: unknown } | null } | null | undefined)?.request?.operation;
   return !(typeof operation === 'string' && READ_OPERATIONS[method]?.has(operation) === true);
 }
-/** Every runs operation: only these reach the log by name. */
+/** Every runs operation the page sends: only these reach the log by name. */
 const RUNS_OPERATIONS: ReadonlySet<string> = new Set<PersonRunsRequestV1['operation']>(
-  ['list', 'home', 'start', 'retry', 'items', 'item', 'send', 'set_state', 'assign', 'sweep'],
+  ['list', 'home', 'next', 'retry', 'items', 'item', 'send', 'set_state', 'assign'],
 );
 /**
  * A call as desktop.log names it, content-free: the method, and for runs its operation and how much it read ("runs.home",
