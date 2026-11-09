@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AnswerSource, AskReceipt } from '../../src/shared/protocol.js';
 import {
-  ANNOUNCE_MS, announceAfter, announcement, duration, foundBefore, headline, listWords, namedPlaces, placeLabel, lookedThrough, searchedWords, startProgress,
-  withStep, type AskProgress,
+  ANNOUNCE_MS, announceAfter, announcement, duration, headline, namedPlaces, placeLabel, lookedThrough, startProgress, withStep, type AskProgress,
 } from '../../src/renderer/progress.js';
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
@@ -28,13 +27,13 @@ describe('the line', () => {
     expect(headline(steps({ type: 'stage', stage: 'reading', pending: 3 }))).toBe('Reading 3 items');
     expect(headline(steps({ type: 'stage', stage: 'reading', pending: 1 }))).toBe('Reading 1 item');
     // Two decisions of one meeting are one place, as the row names them: two other places.
-    const reading = steps({ type: 'searched', sources: [{ kind: 'meetings' }], found: 4 }, { type: 'stage', stage: 'reading', pending: 4 },
+    const reading = steps({ type: 'searched' }, { type: 'stage', stage: 'reading', pending: 4 },
       { type: 'read', items: [decision('1'), decision('2'), ticket('THERM-48'), passage('6')] });
     expect(headline(reading)).toBe('Reading Tuesday sync and 2 more');
     // A file is named as a person says it, and a read of one place names it alone.
     expect(headline(steps({ type: 'stage', stage: 'reading', pending: 2 }, { type: 'read', items: [passage('6'), passage('7')] }))).toBe('Reading Launch plan');
     // The names came for a read before the search after it: nothing to name yet.
-    expect(headline(withStep(withStep(reading, { type: 'searched', sources: [{ kind: 'documents' }], found: 1 }), { type: 'stage', stage: 'reading' }))).toBe('Reading');
+    expect(headline(withStep(withStep(reading, { type: 'searched' }), { type: 'stage', stage: 'reading' }))).toBe('Reading');
     expect(placeLabel(passage('6', 'launch_plan_v2.md'))).toBe('launch plan');
     expect(placeLabel(decision('1'))).toBe('Tuesday sync');
     // Your project, and a Jira project, are places of their own, named by their labels (research tool contract v1).
@@ -45,7 +44,7 @@ describe('the line', () => {
 
   it('keep every item read since the last search, and start over at the next search', () => {
     const progress = steps(
-      { type: 'searched', sources: [{ kind: 'meetings' }], found: 4 },
+      { type: 'searched' },
       { type: 'stage', stage: 'reading', pending: 4 },
       { type: 'read', items: [decision('1'), ticket('THERM-48')] },
       // The Authority names each citation once: two the page shows alike (two sections of one page) are two items read.
@@ -56,40 +55,9 @@ describe('the line', () => {
     expect(progress.pending).toBe(0);
     // A stage keeps them; a search starts the names over, and a read with no items names nothing new.
     expect(withStep(progress, { type: 'stage', stage: 'checking_access' }).read).toEqual(progress.read);
-    const searched = withStep(progress, { type: 'searched', sources: [{ kind: 'documents' }], found: 1 });
+    const searched = withStep(progress, { type: 'searched' });
     expect(searched.read).toEqual([]);
     expect(withStep(searched, { type: 'read', items: [] }).read).toEqual([]);
-  });
-
-  it('know whether an earlier search of a receipt found anything, so an empty one says nothing found or nothing new', () => {
-    const rows: AskReceipt['rows'] = [{ type: 'searched', sources: [{ kind: 'meetings' }], found: 0 }, { type: 'read', items: [decision('1')] },
-      { type: 'searched', sources: [{ kind: 'documents' }], found: 0 }];
-    expect(foundBefore(rows, 2)).toBe(false);
-    expect(foundBefore([{ type: 'searched', sources: [{ kind: 'meetings' }], found: 2 }, ...rows.slice(1)], 2)).toBe(true);
-  });
-
-  it('name sources as a person says them, never the words searched', () => {
-    expect(searchedWords({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 22 }))
-      .toBe('Searched meetings, documents and Jira · 22 found');
-    // ECHO's follow-ups (ADR-0040) are a kind of source like meetings: never a tool, never a label.
-    expect(searchedWords({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'follow_ups' }, { kind: 'tickets', tool_id: 'jira' }], found: 9 }))
-      .toBe('Searched meetings, follow-ups and Jira · 9 found');
-    // Your projects, people and tools (research tool contract v1) are kinds of source too; a tool's containers are its name.
-    expect(searchedWords({ type: 'searched', sources: [{ kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'confluence' }], found: 4 }))
-      .toBe('Searched projects, people, tools and Confluence · 4 found');
-    // Each word once: Jira's issues and its projects are both Jira, Confluence's pages and its spaces both Confluence.
-    expect(searchedWords({ type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'tickets', tool_id: 'jira' }, { kind: 'containers', tool_id: 'jira' }], found: 3 }))
-      .toBe('Searched meetings and Jira · 3 found');
-    expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'confluence' }, { kind: 'containers', tool_id: 'confluence' }, { kind: 'projects' }], found: 0 }))
-      .toBe('Searched Confluence and projects · nothing found');
-    expect(searchedWords({ type: 'searched', sources: [{ kind: 'containers', tool_id: 'jira' }, { kind: 'pages', tool_id: 'confluence' }, { kind: 'tickets', tool_id: 'jira' }],
-      found: 2 }, [{ tool_id: 'jira', name: 'Jira Cloud', status: 'linked' }])).toBe('Searched Jira Cloud and Confluence · 2 found');
-    // Nothing at all, or, after an earlier search found items, nothing those had not.
-    expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'knowledge-base' }], found: 0 })).toBe('Searched Knowledge Base · nothing found');
-    expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'knowledge-base' }], found: 0 }, null, true)).toBe('Searched Knowledge Base · nothing new');
-    expect(searchedWords({ type: 'searched', sources: [{ kind: 'pages', tool_id: 'confluence' }], found: 1 }, [{ tool_id: 'confluence', name: 'Wiki', status: 'linked' }]))
-      .toBe('Searched Wiki · 1 found');
-    expect(listWords(['meetings', 'documents'])).toBe('meetings and documents');
   });
 
   it('name a place once, with how many of its items were read: two items of one meeting, or two sections of one page, are one name', () => {
@@ -110,9 +78,7 @@ describe('the line', () => {
 });
 
 describe('the receipt', () => {
-  const receipt: AskReceipt = { looked_through: 14, rows: [
-    { type: 'searched', sources: [{ kind: 'meetings' }], found: 9 }, { type: 'read', items: [decision('1'), ticket('THERM-48')] },
-  ] };
+  const receipt: AskReceipt = { looked_through: 14 };
   it('says how many items it looked through and how long the person waited', () => {
     // The wait is the page's own, as its timer counted it, not the Authority's shorter research time.
     expect(lookedThrough(receipt)).toBe('Looked through 14 items');

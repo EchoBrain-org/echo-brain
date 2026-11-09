@@ -367,8 +367,6 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
 /* Copy shows while the pointer is on the turn or focus is in it. */
 .foot-action.copy { opacity: 0; transition: opacity 0.12s ease; }
 :is(.turn, .folded-turn):is(:hover, :focus-within) .foot-action.copy, .foot-action.copy:focus-visible { opacity: 1; }
-.foot-trail { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 4px; }
-.foot-trail-head { font-size: 12px; color: var(--faint); }
 .source-rows { display: flex; flex-direction: column; gap: 1px; padding-bottom: 6px; }
 .source-row { display: flex; align-items: center; gap: 10px; height: 34px; margin: 0 -8px; padding: 0 8px; border: 0; border-radius: 8px; font-size: 13.5px; text-align: left; background: transparent; }
 .source-row:hover { background: var(--hover); }
@@ -514,18 +512,9 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
   .ask-line .headline.working { animation: none; background: none; color: var(--muted); }
   .ask-line .pulse { animation: none; opacity: 0.85; }
 }
-.ask-steps { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0 0 0 2px; list-style: none; font-size: 13px; color: var(--faint); }
-.ask-step { display: flex; align-items: flex-start; gap: 8px; min-width: 0; line-height: 1.45; }
-.ask-step .mark { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 19px; color: var(--muted); }
-.ask-step .words { min-width: 0; overflow-wrap: anywhere; }
-/* A name opens its item beside Ask; the one the pane shows is lit. */
-.step-name { padding: 0; border: 0; font-size: inherit; text-align: left; color: var(--text); background: transparent; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 2px; }
-.step-name:hover, .step-name.on { color: var(--text); text-decoration-color: currentColor; }
-/* How many of a place's items Ask read, after its name: dim, never underlined. */
-.step-name .count { display: inline-block; margin-left: 1px; color: var(--faint); }
 /* The source pane's own buttons, at the right of its head. */
 .pane-actions { display: flex; flex-shrink: 0; align-items: center; gap: 2px; }
-/* The decision, action or rationale an answer or a name cites, lit in its meeting. */
+/* The decision, action or rationale an answer cites, lit in its meeting. */
 .record-item.on { border-color: var(--cite-line); background: var(--cite); }
 .reader { position: relative; width: var(--ask-width); max-width: calc(100% - 48px); height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
 .reader h1 { margin: 0; font-size: 26px; font-weight: 600; line-height: 1.2; letter-spacing: -0.02em; }

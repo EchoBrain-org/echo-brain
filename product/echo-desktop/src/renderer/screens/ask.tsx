@@ -1,7 +1,7 @@
 import { Fragment, type ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type {
-  Answer, AnswerEvent, AnswerFact, AnswerPart, AnswerSource, ArrangedBlock, AskReceipt, AskSearched, CardEntity, ExternalAnswerSource, AnswerStatement,
+  Answer, AnswerEvent, AnswerFact, AnswerPart, AnswerSource, ArrangedBlock, CardEntity, ExternalAnswerSource, AnswerStatement,
   ApprovedRecord, Match, OpenItemView, RecordItem, TimelineTurn, ToolContainerKind,
 } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
@@ -12,14 +12,10 @@ import {
 import { askedToday, askedWhen, identity, initial, marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import { checkWords, ownerAndStatus } from '../needs.js';
-import { sourceKey } from '../openers.js';
-import {
-  announceAfter, announcement, duration, foundBefore, headline, lookedThrough, namedPlaces, placeLabel, PROGRESS_AFTER_MS, searchedWords, type AskProgress,
-  type NamedPlace,
-} from '../progress.js';
+import { announceAfter, announcement, duration, headline, lookedThrough, PROGRESS_AFTER_MS, type AskProgress } from '../progress.js';
 import {
   activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
-  fullPageOffered, litAtoms, matchesShown, nothingLine, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
+  fullPageOffered, litAtoms, matchesShown, nothingLine, openCompose, openFullPage, openMatch, openExternalSource, pageCovered, paneCitations, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, searchAgain, setBarText, sourceName, submitBar, suggestionsShown, toggleEarlier, toggleSourceList, toggleTurn, turnOf, widenScope,
   UNTITLED,
   type AskClarify, type AskTook, type PaneTarget, type Read, type RecordSectionKey, type State,
@@ -28,7 +24,7 @@ import { MAX_QUESTION, questionCount } from '../bar.js';
 import {
   allOmitted, behindEarlierLine, shownInFull, showsOf, turnGroups, type Suggestion, type TurnChecks,
 } from '../timeline.js';
-import { Check, Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
+import { Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
 
 /** What an original source may show: 2,000 characters. */
 const MAX_EVIDENCE = 2_000;
@@ -602,24 +598,6 @@ function SourceRows({ state, view }: { state: State; view: TurnView }) {
   );
 }
 
-/**
- * What an answer asked in this Ask looked through (ADR-0043), after its
- * sources once they are opened: every search and read the Authority audited,
- * each name opening beside the answer. Kept out of the thread's live region:
- * rows that come open are not read out one by one.
- */
-function TrailRows({ state, receipt }: { state: State; receipt: AskReceipt }) {
-  return (
-    <div class="foot-trail">
-      <div class="foot-trail-head">{lookedThrough(receipt)}</div>
-      <ul class="ask-steps" data-testid="receipt-rows" aria-live="off">
-        {receipt.rows.map((row, index) => row.type === 'searched' ? <SearchedStep key={index} state={state} row={row} earlier={foundBefore(receipt.rows, index)} />
-          : <li key={index} class="ask-step done" data-testid="ask-step"><Mark /><span class="words">Read <Names state={state} places={namedPlaces(row.items)} /></span></li>)}
-      </ul>
-    </div>
-  );
-}
-
 /** How long Copy answer says Copied. */
 const COPIED_MS = 1_600;
 
@@ -639,9 +617,9 @@ function CopyAnswer({ turn }: { turn: TimelineTurn }) {
 
 /**
  * The one quiet line under an answer (ADR-0049): how many sources, and how
- * long it took when this Ask asked it ("3 sources · 20s"); with no sources,
- * what it looked through ("Looked through 68 items · 41s"). It opens onto a row per
- * source, then what it looked through. On the right, Ask again on a turn
+ * long it took when this Ask asked it ("3 sources · 20s"), which opens onto a
+ * row per source; with no sources, what it looked through ("Looked through 68
+ * items · 41s"), in words alone. On the right, Ask again on a turn
  * asked before this Ask (`again`), and Copy answer (`copy`), which shows
  * while the pointer is on the turn or focus is in it.
  */
@@ -656,11 +634,11 @@ function TurnFoot({ state, turn, view, took, again, copy }: {
   return (
     <div class="turn-foot" data-testid="turn-foot">
       <div class="foot-line">
-        {label !== '' && (
+        {label !== '' && (count > 0 ? (
           <button type="button" class={`foot-toggle${listed ? ' open' : ''}`} data-testid="sources-toggle" aria-expanded={listed} onClick={() => toggleSourceList(view.id)}>
             <span>{label}</span><Chevron />
           </button>
-        )}
+        ) : <span data-testid="foot-label">{label}</span>)}
         <span class="foot-actions">
           {again && (
             <button type="button" class="foot-action" data-testid="ask-again" disabled={Boolean(state.ask?.asking)} onClick={() => askAgain(turn.id)}><Refresh />Ask again</button>
@@ -669,7 +647,6 @@ function TurnFoot({ state, turn, view, took, again, copy }: {
         </span>
       </div>
       {listed && count > 0 && <SourceRows state={state} view={view} />}
-      {listed && took && <TrailRows state={state} receipt={took.receipt} />}
     </div>
   );
 }
@@ -892,7 +869,7 @@ export function AskView({ state }: { state: State }) {
     }
   }, [thread.focus]);
   // Pane and sidebar changes restore before paint. Native window resizing can happen without a render.
-  const paneOpen = state.sources?.open != null || state.sources?.named != null;
+  const paneOpen = state.sources?.open != null;
   useLayoutEffect(keepReading, [paneOpen, state.sidebarOpen]);
   useLayoutEffect(() => {
     const observer = new ResizeObserver(keepReading);
@@ -993,35 +970,6 @@ function Asking({ progress }: { progress: AskProgress }) {
     </div>
     <span class="sr-only" aria-live="polite" data-testid="ask-announcement">{heard}</span>
   </>;
-}
-
-/** A row's mark: done. */
-function Mark() {
-  return <span class="mark"><Check /></span>;
-}
-
-/** A search: its source kinds, never the words searched, and what it found (`earlier`: a search before it found something). */
-function SearchedStep({ state, row, earlier }: { state: State; row: AskSearched; earlier: boolean }) {
-  return <li class="ask-step done" data-testid="ask-step"><Mark /><span class="words">{searchedWords(row, state.tools?.items, earlier)}</span></li>;
-}
-
-/**
- * Names, each opening its place beside Ask with every item of it the name
- * stands for, and how many when more than one ("Tuesday sync ×4"). The one
- * the pane shows is lit: its first item read.
- */
-function Names({ state, places }: { state: State; places: readonly NamedPlace[] }) {
-  const first = state.sources?.named?.[0];
-  const shown = first ? sourceKey(first) : null;
-  return <>{places.map(({ source, items }, index) => {
-    const on = shown === sourceKey(source);
-    const label = placeLabel(source);
-    const count = items.length;
-    return <span key={sourceKey(source)}>{index > 0 && ', '}
-      <button type="button" class={`step-name${on ? ' on' : ''}`} data-testid="ask-step-name" aria-pressed={on}
-        aria-label={count > 1 ? `${label}, ${count} items` : undefined} onClick={() => openNamed(items)}>
-        {label}{count > 1 && <span class="count"> ×{count}</span>}</button></span>;
-  })}</>;
 }
 
 /**
@@ -1146,7 +1094,7 @@ function SourceReviewBadge({ review, shared = false }: { review: 'not_reviewed' 
 /**
  * An original's cited passages, each its verified evidence at most 2,000
  * characters. A sentence's number lights the passages it cites, when it cites
- * only some of them. A named place's are the passages its name stands for.
+ * only some of them.
  */
 function OriginalSource({ state, target, source }: { state: State; target: PaneTarget; source: Extract<AnswerSource, { kind: 'original' }> }) {
   const sources = state.sources!;
@@ -1154,7 +1102,7 @@ function OriginalSource({ state, target, source }: { state: State; target: PaneT
   const places = paneCitations(target);
   const count = places.length;
   const answer = activeTurn(state)?.answer;
-  const focused = target.group && answer ? answerSentences(answer).find(([id]) => id === sources.focus)?.[1].citation_indexes ?? [] : [];
+  const focused = answer ? answerSentences(answer).find(([id]) => id === sources.focus)?.[1].citation_indexes ?? [] : [];
   const lit = places.filter(index => focused.includes(index));
   const light = lit.length > 0 && lit.length < count;
   const all = places.map(index => reads[index] ?? { loading: true } as const);
@@ -1165,7 +1113,7 @@ function OriginalSource({ state, target, source }: { state: State; target: PaneT
   const review = verified?.imported_meeting_review;
   const sharedReview = review !== undefined && all.every(read => !read.loading && 'value' in read && read.value.imported_meeting_review === review) ? review : undefined;
   const label = verified?.label ?? source.label;
-  const meta = target.group ? originalMeta({ ...source, label }, target.group, 'passages cited') : documentName(label).version ?? '';
+  const meta = originalMeta({ ...source, label }, target.group, 'passages cited');
   return (
     <div class="source-detail">
       <h2>{documentName(label).name}</h2>
@@ -1259,8 +1207,7 @@ function WorkspaceSource({ source }: { source: Extract<AnswerSource, { kind: 'pr
 }
 
 /**
- * Beside Ask: one of the answer's sources, or an item Ask named, opened by
- * its kind (openers.ts): a meeting's approved record with the cited items lit,
+ * Beside Ask: one of the answer's sources, opened by its kind (openers.ts): a meeting's approved record with the cited items lit,
  * an original's cited passages, a follow-up, a project, a person or a tool, or
  * Open in its own app. Once the answer came, Open goes to the item's own page.
  */
@@ -1285,7 +1232,7 @@ export function SourcePane({ state }: { state: State }) {
     <aside class="source-pane" data-testid="source-pane" aria-label="Source">
       <div class="pane-head">
         <div class="pane-kind">
-          {target.number !== null && <span class="marker on">{target.number + 1}</span>}
+          <span class="marker on">{target.number + 1}</span>
           <span class="section-label">{paneHeading(source, state)}</span>
         </div>
         <div class="pane-actions">

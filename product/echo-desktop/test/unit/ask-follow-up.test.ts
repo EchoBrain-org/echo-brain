@@ -1,4 +1,4 @@
-// A follow-up Ask cites or names (ADR-0040), in the store and on the page:
+// A follow-up an answer cites (ADR-0040), in the store and on the page:
 // it opens in Ask's side panel with its title, owner, status and latest check
 // while Ask keeps running; once the answer came, Open goes to its item page;
 // and its source row says "owner · status", with no kind label.
@@ -23,7 +23,7 @@ const row = (owner = mina): OpenItemView => ({
   state_set_by: mina, owner_set_at: null, owner_set_by: null, send_included: true,
   check: { verdict: 'still_open', checked_at: '2026-10-16T09:00:00.000Z', checked_by: 'Mina Patel' }, can: { set_state: true, assign: true }, reach: 'not_read',
 });
-const receipt: AskReceipt = { looked_through: 1, rows: [{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 1 }, { type: 'read', items: [followUp] }] };
+const receipt: AskReceipt = { looked_through: 1 };
 const answer: Answer = {
   scope: { kind: 'global' }, sources: [followUp], outcome: 'answered', receipt,
   parts: [{ question: 'What are my open tasks?', status: 'answered', statements: [{ text: 'The launch checklist is still open.', citation_indexes: [0], private: false }],
@@ -50,9 +50,16 @@ const asking = (question = 'What are my open tasks?') => askingWith(rpc, held, q
 
 describe('a follow-up opens beside Ask (ADR-0040)', () => {
   it('shows its title, owner, status and latest check while Ask runs, with no Open until the answer, then opens its item page', async () => {
-    const { store, release, read, pane } = await asking();
-    read([followUp]);
-    store.openNamed([followUp]);
+    const first = await asking();
+    first.release(ok({ ...answer, receipt: undefined }));
+    await flush();
+    const { store, pane } = first;
+    const earlier = paneTurn(store)!;
+    // A follow-up question on its way: the follow-up the first answer cites, chosen meanwhile, opens beside Ask.
+    const release = held.hold('ask.run');
+    void store.ask('And who owns it?');
+    await flush();
+    store.chooseSource(0, null, earlier);
     await flush();
     // Its row, read as Home reads it, rows only.
     expect(itemReads()).toEqual([{ expect: EXPECT, request: { schema_version: 1, operation: 'item', item_id: ITEM, read: 'rows' } }]);
@@ -70,10 +77,10 @@ describe('a follow-up opens beside Ask (ADR-0040)', () => {
     expect(store.getState().ask?.asking).not.toBeNull();
     expect(rpc.mock.calls.some(([name]) => name === 'ask.cancel')).toBe(false);
 
-    // The answer cites it: the pane stays on it, with what it read, and Open shows.
-    vi.advanceTimersByTime(3_000);
+    // The answer comes: chosen again, the follow-up shows what was read for it, and Open.
     release(ok(answer));
     await flush();
+    store.chooseSource(0, null, earlier);
     expect(store.paneTarget()?.sources).toEqual([followUp]);
     expect(byTestId(pane(), 'source-open')).toHaveLength(1);
     store.openFullPage();

@@ -4,7 +4,7 @@
 // printed through the same validator, and copies explicitly only the fields
 // the renderer needs, so nothing else the client prints can reach it.
 import type {
-  Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskRead, AskScope, AskSearched, AskStep, Audience, ConnectedTools,
+  Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskScope, AskStep, Audience, ConnectedTools,
   CreatedProject, DocumentSummary, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, MemberPage, Opened,
   ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef,
   RecordSection, SourceEvidence, SourceRef, ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
@@ -14,7 +14,7 @@ import {
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
   validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2,
   validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1,
-  type PersonAnswerCitationV8, type PersonAskReceiptRowV3, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
+  type PersonAnswerCitationV8, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
   type PersonOpenItemV1, type PersonOpenMeetingAtomV1, type PersonOpenMeetingV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
   type PersonCitedRecordSectionV1,
 } from '@echo-brain/organization-api';
@@ -286,11 +286,12 @@ export function isRecordRef(value: unknown): value is RecordRef {
 
 /**
  * An Agentic Ask answer (V8): its statements, each with the exact sources
- * that support it, in the answer's order, and a streamed answer's receipt,
- * built by the Authority from what passed its final check. It is the last
- * line `person ask --progress` printed, in every scope: the answer on `/v7`,
- * with its receipt when the Authority streamed it (ADR-0039, ADR-0040,
- * research tool contract v1). An answer to an Ask that carried `previous`
+ * that support it, in the answer's order, and how many items a streamed
+ * answer looked through, from the receipt the Authority built from what
+ * passed its final check (its searches and reads never reach the page). It
+ * is the last line `person ask --progress` printed, in every scope: the
+ * answer on `/v7`, with its receipt when the Authority streamed it (ADR-0039,
+ * ADR-0040, research tool contract v1). An answer to an Ask that carried `previous`
  * (ADR-0047) also says the full question it answers, Ask again's "since" (its
  * citations among the answer's), or, asking which one (`clarify`), the
  * choices and no part. Its diagnostic notice stays out; the desktop and Copy
@@ -301,7 +302,7 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
   const { direct, parts, outcome } = result;
   const sources = result.citations.map(citedSource);
   return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
-    ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through, rows: receipt.rows.map(askRow) } }),
+    ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through } }),
     ...(result.question === undefined ? {} : { question: result.question }),
     ...(result.since === undefined ? {} : { since: result.since.statements }),
     ...(result.choices === undefined ? {} : { choices: result.choices }) };
@@ -341,22 +342,18 @@ export function projectActivityView(raw: unknown): { items: ProjectActivity[] } 
   return { items: validated(validatePersonProjectActivityV1, raw).items.map(({ project_id, latest_at }) => ({ project_id, latest_at })) };
 }
 
-function askRow(row: PersonAskReceiptRowV3): AskSearched | AskRead {
-  return row.type === 'searched'
-    ? { type: 'searched', sources: row.sources.map(source => 'tool_id' in source ? { kind: source.kind, tool_id: source.tool_id } : { kind: source.kind }), found: row.found }
-    : { type: 'read', items: row.items.map(answerSource) };
-}
-
 /**
  * One line `person ask --progress` printed before its answer: a step of the
  * Ask, as progress V3 has it (ADR-0039, ADR-0040, research tool contract v1).
- * Only the stage, a search's source kinds and count, and the items just read
- * cross, each item as an answer's citation does, a follow-up, a project, a
- * person, a tool or a tool's container included. Anything else is refused.
+ * Only the stage, that a search came (never its source kinds or count), and
+ * the items just read cross, each item as an answer's citation does, a
+ * follow-up, a project, a person, a tool or a tool's container included: the
+ * line names what it reads. Anything else is refused.
  */
 export function askStepView(raw: unknown): AskStep {
   const step = validated(validatePersonAskProgressLineV3, raw).progress;
-  if (step.type !== 'stage') return askRow(step);
+  if (step.type === 'searched') return { type: 'searched' };
+  if (step.type === 'read') return { type: 'read', items: step.items.map(answerSource) };
   return { type: 'stage', stage: step.stage, ...(step.pending === undefined ? {} : { pending: step.pending }) };
 }
 

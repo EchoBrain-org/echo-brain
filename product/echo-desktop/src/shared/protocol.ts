@@ -291,19 +291,9 @@ export function checkOf(source: AnswerSource): CheckCitation | undefined {
  * answer being written.
  */
 export type AskStage = 'searching' | 'reading' | 'checking_access' | 'writing';
-/**
- * A kind of source a step searched: meetings, documents or follow-ups; your
- * projects, the people in your organization or your tools; or a live tool's
- * tickets, pages or containers (its Jira projects or Confluence spaces), by
- * the tool's id.
- */
-export type AskSearchedSource = { readonly kind: 'meetings' | 'documents' | 'follow_ups' | 'projects' | 'people' | 'tools' }
-  | { readonly kind: 'tickets' | 'pages' | 'containers'; readonly tool_id: string };
-/** One step's searches: the source kinds, and how many items they returned that no earlier read had. */
+/** A step searched: the line's names start over with the next read. What it searched and found stays with the host. */
 export interface AskSearched {
   readonly type: 'searched';
-  readonly sources: readonly AskSearchedSource[];
-  readonly found: number;
 }
 /** Items whose full text research was just given, each after the access check before that read: as a source opens. */
 export interface AskRead {
@@ -313,15 +303,14 @@ export interface AskRead {
 /** One step of an Ask still working. `pending`, only while reading: items about to be read whose names have not come yet. */
 export type AskStep = { readonly type: 'stage'; readonly stage: AskStage; readonly pending?: number } | AskSearched | AskRead;
 /**
- * What an answered Ask looked through, rebuilt by the Authority from the
- * items that passed its final check: how many items it looked through (from
- * progress V3, ADR-0043, the rows it was shown as well as what it read in
- * full; before, only what it read in full), and its searches and reads in
- * order, neighbours of a type already merged.
+ * What an answered Ask looked through, from the receipt the Authority rebuilt
+ * from the items that passed its final check: how many items it looked
+ * through (from progress V3, ADR-0043, the rows it was shown as well as what
+ * it read in full; before, only what it read in full). Its searches and reads
+ * stay with the host.
  */
 export interface AskReceipt {
   readonly looked_through: number;
-  readonly rows: readonly (AskSearched | AskRead)[];
 }
 
 /** A cited statement in the Agentic Ask response. Citation indexes address Answer.sources. */

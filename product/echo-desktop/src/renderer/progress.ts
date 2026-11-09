@@ -1,5 +1,5 @@
-import type { AnswerSource, AskRead, AskReceipt, AskSearched, AskSearchedSource, AskStage, AskStep, ConnectedTool } from '../shared/protocol.js';
-import { documentName, externalSourceProvider, groupKey } from './answer.js';
+import type { AnswerSource, AskReceipt, AskStage, AskStep } from '../shared/protocol.js';
+import { documentName, groupKey } from './answer.js';
 
 /**
  * What Ask shows while it works (Ask progress and internal links v1,
@@ -42,11 +42,6 @@ export function withStep(progress: AskProgress, step: AskStep): AskProgress {
   return items.length === 0 ? { ...progress, pending } : { ...progress, pending, read: [...progress.read, ...items] };
 }
 
-/** Whether a search before `index` among `rows` found anything. */
-export function foundBefore(rows: readonly (AskSearched | AskRead)[], index: number): boolean {
-  return rows.slice(0, index).some(row => row.type === 'searched' && row.found > 0);
-}
-
 const VERBS: Record<AskStage, string> = { searching: 'Searching', reading: 'Reading', checking_access: 'Checking access', writing: 'Writing' };
 
 /**
@@ -66,33 +61,6 @@ export function headline(progress: AskProgress | null): string {
   return `Reading ${placeLabel(places[0]!.source)}${others > 0 ? ` and ${others} more` : ''}`;
 }
 
-/** "meetings, documents and Jira" */
-export function listWords(words: readonly string[]): string {
-  return words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
-}
-
-/**
- * A searched source as a person says it: a tool by its own name, once its
- * list is read, whether its tickets, pages or containers (its Jira projects or
- * Confluence spaces) were searched; ECHO's follow-ups as "follow-ups"; your
- * projects, people and tools as those words.
- */
-function sourceWords(source: AskSearchedSource, tools?: readonly ConnectedTool[] | null): string {
-  if (!('tool_id' in source)) return source.kind === 'follow_ups' ? 'follow-ups' : source.kind;
-  return externalSourceProvider(source, tools);
-}
-
-/**
- * "Searched meetings and Jira · 22 found": source kinds, never the words
- * searched, each named once (a tool's issues and its projects are both
- * "Jira"). An empty search found nothing, or, once one before it found
- * items (`earlier`), nothing new.
- */
-export function searchedWords(row: AskSearched, tools?: readonly ConnectedTool[] | null, earlier = false): string {
-  const found = row.found > 0 ? `${row.found} found` : earlier ? 'nothing new' : 'nothing found';
-  return `Searched ${listWords([...new Set(row.sources.map(source => sourceWords(source, tools)))])} · ${found}`;
-}
-
 /** A place Ask read, as one name: the first of its items read stands for it, and all of its items read go with it. */
 export interface NamedPlace {
   readonly source: AnswerSource;
@@ -102,8 +70,8 @@ export interface NamedPlace {
 /**
  * Names as a person reads them: one per place, as an answer's sources are
  * grouped. Two decisions of one meeting, or two sections of one page, carry
- * the same name and open the same place: one name for both, which counts and
- * opens both, so the names account for every item read.
+ * the same name: one name for both, which counts both, so the names account
+ * for every item read.
  */
 export function namedPlaces(items: readonly AnswerSource[]): NamedPlace[] {
   const places = new Map<string, AnswerSource[]>();

@@ -211,7 +211,7 @@ test('an answer the writer arranged in blocks draws every block in the window, a
   // A table keeps its own box.
   expect(await page.evaluate(() => document.querySelector('.ask')!.scrollWidth <= document.querySelector('.ask')!.clientWidth)).toBe(true);
 });
-test('a long Ask shows one quiet line that names what it looks through while it works, then a receipt', async () => {
+test('a long Ask shows one quiet line that names what it looks through while it works, then how many sources and how long', async () => {
   run = await launch('ask-progress');
   const { page } = run;
   await askFromHome(page, 'What did we agree?');
@@ -239,30 +239,18 @@ test('a long Ask shows one quiet line that names what it looks through while it 
   await expect(foot).not.toHaveText(/48s/);
   await expect(foot).toHaveAttribute('aria-expanded', 'false');
 
-  // Opened: its sources, then every search and read the Authority audited, each name opening beside the answer. The rows stay out of
-  // the thread's live region: a screen reader hears the answer, not the history again.
+  // Opened: its sources, and nothing of what it searched or read. A row opens beside the answer: the meeting with the decision the
+  // answer cites lit, then the note's cited passage, and its own page in place of Ask.
   await foot.click();
-  await expect(page.getByTestId('source-row')).toHaveCount(2);
-  await expect(page.locator('.foot-trail-head')).toHaveText('Looked through 4 items');
-  await expect(page.getByTestId('receipt-rows')).toHaveAttribute('aria-live', 'off');
-  const rows = page.getByTestId('receipt-rows').getByTestId('ask-step');
-  await expect(rows).toHaveText(['Searched meetings, documents and Jira · 3 found', 'Read Tuesday sync ×2, Apollo update, ECHO-7 · Jira launch']);
-  const named = page.getByTestId('receipt-rows').getByTestId('ask-step-name');
-  await expect(named.nth(0)).toHaveAccessibleName('Tuesday sync, 2 items');
-  // A place's name lights both decisions it stands for in their meeting.
-  await named.nth(0).click();
+  const rows = page.getByTestId('source-row');
+  await expect(rows).toHaveText([/^1\s*Tuesday sync$/, /^2\s*Apollo update$/]);
+  await expect(page.getByTestId('turn-foot')).not.toContainText(/Looked through|Searched|Jira launch/u);
+  await rows.nth(0).click();
   const pane = page.getByTestId('source-pane');
   await expect(pane).toContainText('Meeting · Approved record');
-  await expect(pane.locator('.record-item.on')).toHaveText([/Keep monthly plans until November\./, /Ship Apollo with annual plans first\./]);
-  await expect(named.nth(0)).toHaveAttribute('aria-pressed', 'true');
+  await expect(pane.locator('.record-item.on')).toHaveText([/Ship Apollo with annual plans first\./]);
   await expect(pane.getByTestId('source-open')).toBeVisible();
-  // A ticket opens only in Jira: it has no page here.
-  await named.nth(2).click();
-  await expect(pane).toContainText('Jira · Ticket');
-  await expect(pane.getByTestId('open-ticket-source')).toBeVisible();
-  await expect(pane.getByTestId('source-open')).toHaveCount(0);
-  // A note's cited passage, then its own page in place of Ask.
-  await named.nth(1).click();
+  await rows.nth(1).click();
   await expect(pane.getByTestId('evidence-text')).toHaveText('We agreed to ship.');
   await pane.getByTestId('source-open').click();
   await expect(page.getByTestId('ask-view')).toHaveCount(0);
