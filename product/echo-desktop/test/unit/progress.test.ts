@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AnswerSource, AskReceipt } from '../../src/shared/protocol.js';
 import {
-  ANNOUNCE_MS, announceAfter, announcement, duration, headline, namedPlaces, placeLabel, lookedThrough, startProgress, withStep, type AskProgress,
+  ANNOUNCE_MS, announceAfter, announcement, duration, headline, placeLabel, lookedThrough, startProgress, withStep, type AskProgress,
 } from '../../src/renderer/progress.js';
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
@@ -10,8 +10,6 @@ const decision = (atom: string, label = 'Tuesday sync'): AnswerSource =>
 const ticket = (key: string): AnswerSource => ({ kind: 'ticket', tool_id: 'jira', label: key, permalink: `https://example.atlassian.net/browse/${key}` });
 const passage = (anchor: string, label = 'Launch plan.md'): AnswerSource => ({ kind: 'original', label, ref: {
   source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'), representation_sha256: sha('5'), anchor_sha256: sha(anchor) } });
-/** A place's name as the line says it: its first item read stands for it, and all of its items read go with it. */
-const place = (...items: AnswerSource[]) => ({ source: items[0]!, items });
 
 const steps = (...events: Parameters<typeof withStep>[1][]): AskProgress => events.reduce(withStep, startProgress(0));
 
@@ -60,7 +58,7 @@ describe('the line', () => {
     expect(withStep(searched, { type: 'read', items: [] }).read).toEqual([]);
   });
 
-  it('name a place once, with how many of its items were read: two items of one meeting, or two sections of one page, are one name', () => {
+  it('name a place once: two items of one meeting, or two sections of one page, are one name', () => {
     // Two sections of one page come as one link: the host keeps no section.
     const page: AnswerSource = { kind: 'page', tool_id: 'confluence', label: 'Launch plan', permalink: 'https://example.atlassian.net/wiki/x/1' };
     const progress = steps(
@@ -70,10 +68,10 @@ describe('the line', () => {
     // Each item read stays, so its count is the Authority's; its names are its places.
     expect(progress.read).toEqual([decision('1'), decision('2'), page, ticket('THERM-48'), page]);
     expect(progress.pending).toBe(0);
-    expect(namedPlaces(progress.read)).toEqual([place(decision('1'), decision('2')), place(page, page), place(ticket('THERM-48'))]);
-    // Reading 7 items of two places: the names account for all seven.
+    expect(headline(progress)).toBe('Reading Tuesday sync and 2 more');
+    // Reading 7 items of two places: two names.
     const seven = [decision('1'), decision('2'), decision('3'), decision('4'), passage('6'), passage('7'), passage('8')];
-    expect(namedPlaces(seven)).toEqual([place(...seven.slice(0, 4)), place(...seven.slice(4))]);
+    expect(headline(steps({ type: 'stage', stage: 'reading', pending: 7 }, { type: 'read', items: seven }))).toBe('Reading Tuesday sync and 1 more');
   });
 });
 

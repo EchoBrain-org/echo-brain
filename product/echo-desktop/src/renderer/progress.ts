@@ -56,32 +56,10 @@ export function headline(progress: AskProgress | null): string {
   if (progress.stage !== 'reading') return VERBS[progress.stage];
   if (progress.pending > 0) return `Reading ${progress.pending} ${progress.pending === 1 ? 'item' : 'items'}`;
   if (progress.read.length === 0) return VERBS.reading;
-  const places = namedPlaces(progress.read);
-  const others = places.length - 1;
-  return `Reading ${placeLabel(places[0]!.source)}${others > 0 ? ` and ${others} more` : ''}`;
-}
-
-/** A place Ask read, as one name: the first of its items read stands for it, and all of its items read go with it. */
-interface NamedPlace {
-  readonly source: AnswerSource;
-  readonly items: readonly AnswerSource[];
-}
-
-/**
- * Names as a person reads them: one per place, as an answer's sources are
- * grouped. Two decisions of one meeting, or two sections of one page, carry
- * the same name: one name for both, which counts both, so the names account
- * for every item read.
- */
-export function namedPlaces(items: readonly AnswerSource[]): NamedPlace[] {
-  const places = new Map<string, AnswerSource[]>();
-  for (const item of items) {
-    const key = groupKey(item);
-    const place = places.get(key);
-    if (place) place.push(item);
-    else places.set(key, [item]);
-  }
-  return [...places.values()].map(read => ({ source: read[0]!, items: read }));
+  // One name per place, as an answer's sources are grouped: two decisions of one meeting, or two sections of one page,
+  // are one place. The first item read names the first place.
+  const others = new Set(progress.read.map(groupKey)).size - 1;
+  return `Reading ${placeLabel(progress.read[0]!)}${others > 0 ? ` and ${others} more` : ''}`;
 }
 
 /** What a named place is called: a file's name as a person says it, otherwise its label. */
