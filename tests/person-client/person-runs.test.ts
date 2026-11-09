@@ -73,7 +73,7 @@ describe('person runs client', () => {
     // Sweeps are retired (SVC-2): the help names none.
     expect(stdout).not.toContain('sweep');
     expect(stdout).toContain('list                 your own impact runs\n');
-    expect(stdout).toContain('next                 starts your oldest queued impact check, as start does by run_id: idle when none is queued, busy while another of yours runs');
+    expect(stdout).toContain('next                 starts your oldest queued impact check, as start does by run_id: idle when none is queued, busy while another of yours runs and one waits, pending while the search index catches up;');
     expect(stdout).toContain('false dismisses it, and unlisted items stay unsent');
     expect(stdout).toContain('before send the approver only');
     expect(stdout).toContain('read "rows" reads no item live (every reach not_read)\n');

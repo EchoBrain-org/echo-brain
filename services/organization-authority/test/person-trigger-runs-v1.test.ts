@@ -353,8 +353,8 @@ describe('check-in: the Authority starts the caller\'s next queued impact check 
     const newer = await queueNewer(f);
     const app = f.create(f.runs, 1);
     await expect(checkIn(app, 'approver')).resolves.toEqual({ state: 'running' });
-    // One live run per person: the newer check waits, unclaimed.
-    await expect(checkIn(app, 'approver')).resolves.toEqual({ state: 'busy' });
+    // One live run per person: even where the process has room (the default cap), the newer check waits, unclaimed.
+    await expect(checkIn(f.app, 'approver')).resolves.toEqual({ state: 'busy' });
     expect(f.runs.read(f.person, newer)).toMatchObject({ state: 'pending', lease_token: null });
     // The first attempt outlives its lease and still holds the process's one place: its check reads queued again, but waits.
     f.advance(1_001);
@@ -366,7 +366,8 @@ describe('check-in: the Authority starts the caller\'s next queued impact check 
 
   it('takes over an attempt that stopped without finishing once its lease has lapsed (R60), and leaves a live one be', async () => {
     let calls = 0;
-    const f = await fixture({ render: async ({ signal }) => {
+    let lags = false;
+    const f = await fixture({ indexLags: () => lags, render: async ({ signal }) => {
       calls++;
       if (calls === 1) return await new Promise<never>((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('the Authority stopped')), { once: true }));
       return card;
@@ -380,6 +381,13 @@ describe('check-in: the Authority starts the caller\'s next queued impact check 
     // Its lease still holds: nothing is queued to start.
     await expect(checkIn(restarted, 'approver')).resolves.toEqual({ state: 'idle' });
     f.advance(1_001);
+    // While the index lags, the lapsed attempt is held as any queued check is: no claim, attempt or trace.
+    lags = true;
+    const claim = vi.spyOn(f.runs, 'claim');
+    await expect(checkIn(restarted, 'approver')).resolves.toEqual({ state: 'pending' });
+    expect(claim).not.toHaveBeenCalled();
+    expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'running', attempts: 0 });
+    lags = false;
     await expect(checkIn(restarted, 'approver')).resolves.toEqual({ state: 'running' });
     await f.settled();
     expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'done', attempts: 0 });
@@ -436,6 +444,10 @@ describe('check-in: the Authority starts the caller\'s next queued impact check 
       await expect(checkIn(f.app, 'approver'), row.run_id).resolves.toEqual({ state: 'idle' });
     }
     expect(picked).toHaveBeenCalledTimes(3);
+    // Any other failure is no answer: a store error passes through rather than reading as nothing queued.
+    picked.mockReturnValueOnce(done);
+    vi.spyOn(f.runs, 'claim').mockImplementationOnce(() => { throw new Error('database is locked'); });
+    await expect(checkIn(f.app, 'approver')).rejects.toThrow('database is locked');
     expect(f.research).toHaveBeenCalledTimes(2);
   });
 });

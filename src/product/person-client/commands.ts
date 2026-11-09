@@ -265,7 +265,7 @@ Prints {ok:true,result:<operation result>}. Existing retained meetings remain re
 Runs a versioned request against approved-record impact runs and the open items they found. Every request is {"schema_version":1,"operation":<operation>,...}:
   list                 your own impact runs
   start, retry, view   with run_id; view shows a finished run's impact card to anyone who can read its decision
-  next                 starts your oldest queued impact check, as start does by run_id: idle when none is queued, busy while another of yours runs; the desktop sends it with each change check
+  next                 starts your oldest queued impact check, as start does by run_id: idle when none is queued, busy while another of yours runs and one waits, pending while the search index catches up; the desktop sends it with each change check
   home                 what waits on you: Send rows and open items; read "rows" reads no item live (every reach not_read)
   items                with scope mine, involved, run, record or project, an id for run, record and project, and an optional cursor; involved is mine plus the items you last handed on that you can still see; states (a non-empty list of unsent, open, done and not_relevant) pages over items in those states only, with the same states again beside a cursor; changed_since (a UTC millisecond time, mine and involved only) pages over the items sent, handed on or set since then, sent again beside a cursor; read "rows" answers the same page with no item read live (every reach not_read), and read "counts" the counts alone, with no cursor, states or changed_since
   item                 with item_id; read "rows" reads it with no live read
