@@ -75,7 +75,7 @@ describe('SQLite open items v1', () => {
     expect(rows.find(row => row.pointer.ticket_id === '46')).toMatchObject({
       run_id: f.run.run_id, item_key: draft('46').item_key, pointer: draft('46').pointer, record_sha256: f.recordSha256, organization_id: f.owner.organization_id,
       approver: { principal_id: f.owner.principal_id, membership_id: ARI }, relation: 'needs_updating', expected: 'launch next week',
-      owner_membership_id: f.mina, owner_match: 'jira_account', owner_set_by: null, owner_set_at: null, state: 'unsent', state_set_by: null, state_set_at: null, sent_at: null, send_command_id: null, check: null,
+      owner_membership_id: f.mina, owner_match: 'jira_account', owner_set_by: null, owner_set_at: null, state: 'unsent', state_set_by: null, state_set_at: null, sent_at: null, send_command_id: null,
       created_at: f.clock().toISOString(), updated_at: f.clock().toISOString(),
     });
     expect(rows.find(row => row.pointer.ticket_id === '47')).toMatchObject({ relation: 'conflicts', expected: null });
@@ -261,6 +261,20 @@ describe('SQLite open items v1', () => {
     expect(() => f.db.prepare("UPDATE authority_impact_items_v1 SET expected='something else' WHERE item_id=?").run(f.itemId)).toThrow('immutable');
     expect(() => f.db.prepare('DELETE FROM authority_impact_items_v1 WHERE item_id=?').run(f.itemId)).toThrow('denied');
     expect(f.items.read(f.itemId)).toMatchObject({ state: 'open' });
+  });
+
+  it('reads no check a sweep left before sweeps were retired (SVC-2)', async () => {
+    const f = await sentItemFixture();
+    const before = f.items.read(f.itemId)!;
+    const at = f.clock().toISOString();
+    // A finished sweep of the approver's and its verdict on the item, as a V16 Authority left them.
+    f.db.prepare(`INSERT INTO authority_trigger_runs_v1 (run_id, trigger, event_ref, organization_id, principal_id, membership_id, scope_kind, state, attempts,
+      result_json, result_sha256, created_at, updated_at) VALUES ('run_leftover-sweep', 'sweep', 'sweep_leftover', ?, ?, ?, 'mine', 'done', 1, '{}', ?, ?, ?)`)
+      .run(f.owner.organization_id, f.owner.principal_id, f.owner.membership_id, canonicalSha256({}), at, at);
+    f.db.prepare("UPDATE authority_impact_items_v1 SET checked_verdict='changed', checked_by=?, checked_at=?, checked_run_id='run_leftover-sweep' WHERE item_id=?").run(f.mina, at, f.itemId);
+    expect(f.items.read(f.itemId)).toEqual(before);
+    expect(f.items.forRun(f.run.run_id)).toEqual([before]);
+    expect(before).not.toHaveProperty('check');
   });
 
   it('finds items by person and by record', async () => {
