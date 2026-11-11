@@ -501,12 +501,11 @@ extracted document evidence. Existing meeting sources retain their explicitly
 composed `automatic` decision workflow; common admission does not imply every
 source executes every downstream stage.
 
-Notes stored under the legacy `/v2/person/updates` contract keep their original
-inbox and read indexes. Only its search route is still served, for released
-desktops, until a later release retires it; its write, status and content
-routes are retired
-([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)), and the
-client's `updates search` went on 2026-11-08. The client-less
+Every `/v2/person/updates` route is retired
+([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)): the write,
+status and content routes on 2026-10-25 and its search on 2026-11-11. No
+current Authority holds a V2 note; a V2 row the V16 table could still hold
+fails custody, so neither the inbox nor a read admits it. The client-less
 `/v1/person/updates` route and its V1 search-hint worker are retired. Retained
 V1 notes stay in custody and remain citable by Ask. Server pull also admits
 accepted text notes, including retained V1 notes, through the same Person
