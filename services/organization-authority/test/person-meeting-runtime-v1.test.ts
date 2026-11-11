@@ -21,7 +21,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { approvalRecordIdV2 } from '@echo-brain/organization-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeRootV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
-import type { PersonMeetingOperationV2, PersonMeetingResultsV2 } from '@echo-brain/organization-api';
+import type { PersonMeetingOperationV2, PersonMeetingResultsV2, PersonReviewOperationV1, PersonReviewResultsV1 } from '@echo-brain/organization-api';
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
 import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_WATCH_CURSOR_POLICY_V1, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 } from '@echo-brain/provider-granola/granola-watch-source-v1';
 import { SqliteExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
@@ -140,12 +140,12 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
     if (!('body' in response)) throw new Error('Expected JSON');
     return response.body as PersonMeetingResultsV2[K];
   };
-  const reviewCall = async <K extends 'reviews' | 'review_open' | 'review'>(runtime: ReturnType<typeof create>, op: PersonMeetingOperationV2 & { operation: K }, token = 'owner') => {
+  const reviewCall = async <K extends PersonReviewOperationV1['operation']>(runtime: ReturnType<typeof create>, op: PersonReviewOperationV1 & { operation: K }, token = 'owner') => {
     const application = runtime.applications.find(value => value.routes.some(route => route.route_id === 'personal-reviews'));
     if (!application) throw new Error('Provider-neutral review route is missing');
     const response = await application.accept({ route_id: 'personal-reviews', method: 'POST', path: '/v1/person/reviews', headers: { authorization: `Bearer ${token}` }, content_type: 'application/json', raw_body: Buffer.from(JSON.stringify({ schema_version: 1, ...op })) });
     if (!('body' in response)) throw new Error('Expected JSON');
-    return response.body as PersonMeetingResultsV2[K];
+    return response.body as PersonReviewResultsV1[K];
   };
   let grants = 0;
   const join = (project_id: string, member: keyof typeof actors) => {
@@ -185,8 +185,8 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   const pendingReview = async (runtime: ReturnType<typeof create>, project_id: string | null = null) => {
     await call(runtime, { operation: 'import', meeting_id: id, project_id, retain: true });
     await processUntilIdle(runtime);
-    const [pending] = (await call(runtime, { operation: 'reviews' })).reviews;
-    return { pending, opened: await call(runtime, { operation: 'review_open', approval_id: pending!.approval_id }) };
+    const [pending] = (await reviewCall(runtime, { operation: 'reviews' })).reviews;
+    return { pending, opened: await reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id }) };
   };
   const count = (table: string) => f.db.prepare(`SELECT count(*) FROM ${table}`).pluck().get();
   // Proposals are counted per personal source.
@@ -198,7 +198,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
     JOIN authority_live_source_candidates_v2 c ON c.candidate_id=o.candidate_id
     JOIN authority_live_source_admission_v2 a ON a.semantic_input_sha256=c.admission_semantic_input_sha256 WHERE a.source_key=? ORDER BY c.created_at, o.approval_id`).all(sourceKey) as { approval_id: string; state: string; suggested_projects_json: string | null }[];
   /** Routes for every item of an open review, each to one destination (null = not kept, [] = Only me) or as chosen per item. */
-  const routes = (opened: PersonMeetingResultsV2['review_open'], to: readonly string[] | null | ((item: PersonMeetingResultsV2['review_open']['items'][number]) => readonly string[] | null) = []) =>
+  const routes = (opened: PersonReviewResultsV1['review_open'], to: readonly string[] | null | ((item: PersonReviewResultsV1['review_open']['items'][number]) => readonly string[] | null) = []) =>
     opened.items.map(item => ({ signal_id: item.signal_id, project_ids: typeof to === 'function' ? to(item) : to }));
   return { ...f, person, sessions, create, call, reviewCall, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, browsed, watched, fullWindow: (value = true) => { windowFull = value; }, fakeProvider, sources, intake, processUntilIdle, pendingReview, routes, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
     duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: (error: unknown = new Error('extraction failed')) => { failExtraction = error; },
@@ -232,10 +232,10 @@ describe('personal meeting intake uses the shared processing path', () => {
         expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'worker_execution', result: 'held' })]));
         expect(events.some(event => event.phase === 'approval_staging')).toBe(false);
       } else {
-        const [review] = (await f.call(runtime, { operation: 'reviews' })).reviews;
+        const [review] = (await f.reviewCall(runtime, { operation: 'reviews' })).reviews;
         const approval_id = coreRuntimeIdentityV1('approval', review!.approval_id);
         expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'approval_staging', event: 'succeeded', meeting_id: extraction.meeting_id, approval_id, result: 'published' })]));
-        await observeCoreRuntimeV1('http_request', () => f.call(runtime, { operation: 'review_open', approval_id: review!.approval_id }), observation);
+        await observeCoreRuntimeV1('http_request', () => f.reviewCall(runtime, { operation: 'review_open', approval_id: review!.approval_id }), observation);
         expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'approval_review', event: 'succeeded', approval_id, approval_surface: 'desktop', result: 'returned' })]));
       }
       for (const text of ['PRIVATE EXTRACTION', 'TRANSCRIPT_SECRET_DO_NOT_SHARE', id, source.source_key]) expect(JSON.stringify(events)).not.toContain(text);
@@ -264,7 +264,7 @@ describe('personal meeting intake uses the shared processing path', () => {
       }, tracing.scope);
       await tracing.close();
       expect(failures).toEqual([]);
-      expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(3);
+      expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toHaveLength(3);
       const traces = await tracing.uploads();
       expect(traces.map(runs => [runs[0]!.name, runs[0]!.inputs, runs[0]!.outputs, runs.slice(1).map(run => run.name)])).toEqual([id, folder, third].map(meeting => [
         'ECHO meeting_extraction', { meeting, title: 'Test meeting' }, { decisions: 1, actions: 0, rationales: 2 }, ['model.extraction']]));
@@ -324,10 +324,12 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(await runtime.tools('owner')).toEqual([]);
     await expect(f.reviewCall(runtime, { operation: 'reviews', tool_id: 'meeting-fixture' } as never)).rejects.toMatchObject({ code: 'invalid_request' });
     await expect(f.reviewCall(runtime, { operation: 'home' } as never)).rejects.toMatchObject({ code: 'invalid_request' });
+    // Reviews are only the reviews route's: the meetings route knows no review operation.
+    for (const operation of ['reviews', 'review_open', 'review']) await expect(f.call(runtime, { operation } as never, 'owner', 'meeting-fixture')).rejects.toMatchObject({ code: 'invalid_request' });
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true }, 'owner', 'meeting-fixture');
     await f.processUntilIdle(runtime);
-    const [pending] = (await f.call(runtime, { operation: 'reviews' }, 'owner', 'meeting-fixture')).reviews;
-    const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id }, 'owner', 'meeting-fixture');
+    const [pending] = (await f.reviewCall(runtime, { operation: 'reviews' })).reviews;
+    const opened = await f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
     f.disconnect();
     const listing = await f.reviewCall(runtime, { operation: 'reviews' });
     expect(listing.reviews.map(row => row.approval_id)).toEqual([pending!.approval_id]);
@@ -405,16 +407,16 @@ describe('personal meeting intake uses the shared processing path', () => {
     const f = await fixture(), runtime = f.create(); f.grantProject();
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     await f.processUntilIdle(runtime);
-    const [pending] = (await f.call(runtime, { operation: 'reviews' })).reviews;
+    const [pending] = (await f.reviewCall(runtime, { operation: 'reviews' })).reviews;
     expect(pending).toMatchObject({ status: 'pending', project_ids: [project] });
     f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?").run(new Date().toISOString(), project);
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([{ ...pending, project_ids: [] }]);
-    const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toEqual([{ ...pending, project_ids: [] }]);
+    const opened = await f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
     expect(opened.suggested_projects).toEqual([]);
     // The left project is no longer a suggestion: every item starts Only me.
     expect(opened.items.map(item => item.project_ids)).toEqual(opened.items.map(() => []));
-    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-left-project', action: 'approve', routes: f.routes(opened, [project]), owners: [] })).rejects.toMatchObject({ code: 'unauthorized' });
-    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-only-me', action: 'approve', routes: f.routes(opened, []), owners: [] })).resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
+    await expect(f.reviewCall(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-left-project', action: 'approve', routes: f.routes(opened, [project]), owners: [] })).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(f.reviewCall(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-only-me', action: 'approve', routes: f.routes(opened, []), owners: [] })).resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
   });
   it('routes each stored source to the provider that owns its adapter id', async () => {
     const f = await fixture(); f.grantProject();
@@ -430,7 +432,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     expect(new Set(f.sources.filter(call => call.tool_id === 'granola').map(call => call.source_key))).toEqual(new Set([granola[0]!.source_key]));
     expect(new Set(f.sources.filter(call => call.tool_id === 'notes').map(call => call.source_key))).toEqual(new Set([notes[0]!.source_key]));
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(2);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toHaveLength(2);
     await expect(f.call(runtime, { operation: 'home' }, 'owner', 'calendar')).rejects.toMatchObject({ code: 'not_found' });
   });
 
@@ -442,14 +444,14 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(owner.sources[0]?.source_key).not.toBe(other.sources[0]?.source_key);
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
-    const a = (await f.call(runtime, { operation: 'reviews' })).reviews;
-    const b = (await f.call(runtime, { operation: 'reviews' }, 'other')).reviews;
+    const a = (await f.reviewCall(runtime, { operation: 'reviews' })).reviews;
+    const b = (await f.reviewCall(runtime, { operation: 'reviews' }, 'other')).reviews;
     expect(a).toHaveLength(1); expect(b).toHaveLength(1); expect(a[0]?.approval_id).not.toBe(b[0]?.approval_id);
-    await expect(f.call(runtime, { operation: 'review_open', approval_id: a[0]!.approval_id }, 'other')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.reviewCall(runtime, { operation: 'review_open', approval_id: a[0]!.approval_id }, 'other')).rejects.toMatchObject({ code: 'not_found' });
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
     for (const token of ['owner', 'other']) expect(originals.deskSearch({ access_token: token, scope: { kind: 'global' }, query: 'cohort' }).items).toHaveLength(1);
-    const opened = await f.call(runtime, { operation: 'review_open', approval_id: a[0]!.approval_id });
-    await f.call(runtime, { operation: 'review', approval_id: a[0]!.approval_id, snapshot_sha256: opened.snapshot_sha256,
+    const opened = await f.reviewCall(runtime, { operation: 'review_open', approval_id: a[0]!.approval_id });
+    await f.reviewCall(runtime, { operation: 'review', approval_id: a[0]!.approval_id, snapshot_sha256: opened.snapshot_sha256,
       command_id: 'review-first-importer', action: 'reject', routes: [], owners: [] });
     const scope = { kind: 'global' } as const;
     for (const token of ['owner', 'other']) {
@@ -467,15 +469,15 @@ describe('personal meeting intake uses the shared processing path', () => {
     await f.call(f.create(), { operation: 'import', meeting_id: id, project_id: null, retain: true });
     const home = await f.call(runtime, { operation: 'home' }); expect(home.sources[0]?.pending_imports).toEqual([id]);
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
-    const reviews = await f.call(runtime, { operation: 'reviews' }); expect(reviews.reviews).toHaveLength(1); expect(f.extracted()).toBe(1);
-    expect((await f.call(runtime, { operation: 'reviews' }, 'other')).reviews).toEqual([]);
-    const review = await f.call(runtime, { operation: 'review_open', approval_id: reviews.reviews[0]!.approval_id });
-    await expect(f.call(runtime, { operation: 'review', approval_id: review.review.approval_id, snapshot_sha256: review.snapshot_sha256, command_id: 'invalid command id', action: 'approve', routes: f.routes(review), owners: [] })).rejects.toMatchObject({ code: 'invalid_request' });
+    const reviews = await f.reviewCall(runtime, { operation: 'reviews' }); expect(reviews.reviews).toHaveLength(1); expect(f.extracted()).toBe(1);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' }, 'other')).reviews).toEqual([]);
+    const review = await f.reviewCall(runtime, { operation: 'review_open', approval_id: reviews.reviews[0]!.approval_id });
+    await expect(f.reviewCall(runtime, { operation: 'review', approval_id: review.review.approval_id, snapshot_sha256: review.snapshot_sha256, command_id: 'invalid command id', action: 'approve', routes: f.routes(review), owners: [] })).rejects.toMatchObject({ code: 'invalid_request' });
     expect(f.db.prepare('SELECT count(*) FROM authority_approval_decisions_v1').pluck().get()).toBe(0);
     f.disconnect();
-    await f.call(runtime, { operation: 'review', approval_id: review.review.approval_id, snapshot_sha256: review.snapshot_sha256, command_id: 'approve-once', action: 'approve', routes: f.routes(review), owners: [] });
+    await f.reviewCall(runtime, { operation: 'review', approval_id: review.review.approval_id, snapshot_sha256: review.snapshot_sha256, command_id: 'approve-once', action: 'approve', routes: f.routes(review), owners: [] });
     await f.create().processing.recoverV4Appends(new AbortController().signal);
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]?.status).toBe('approved');
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews[0]?.status).toBe('approved');
     expect(f.record.prepare('SELECT count(*) AS n FROM organization_record_log').get()).toEqual({ n: 1 });
   });
   it('honors cancellation while the queued meeting is being fetched', async () => {
@@ -565,9 +567,9 @@ describe('personal meeting intake uses the shared processing path', () => {
     f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     await f.processUntilIdle(runtime);
-    const [pending] = (await f.call(runtime, { operation: 'reviews' })).reviews;
-    const review = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
-    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: review.snapshot_sha256,
+    const [pending] = (await f.reviewCall(runtime, { operation: 'reviews' })).reviews;
+    const review = await f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    await f.reviewCall(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: review.snapshot_sha256,
       command_id: 'approve-no-transcript', action: 'approve', routes: f.routes(review, sharedWithProject ? [projectB] : []), owners: [] });
     await runtime.processing.recoverV4Appends(new AbortController().signal);
     f.disconnect(); // Reading retained evidence must not require a provider connection.
@@ -616,7 +618,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     const [source] = (await f.call(f.create(), { operation: 'home' })).sources;
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([]);
-    expect((await f.call(f.create(), { operation: 'reviews' })).reviews).toEqual([expect.objectContaining({ status: 'pending', project_ids: [] })]);
+    expect((await f.reviewCall(f.create(), { operation: 'reviews' })).reviews).toEqual([expect.objectContaining({ status: 'pending', project_ids: [] })]);
     expect(await f.readers()).toEqual(['owner']);
   });
   it('makes no review of a meeting with no decision and no action, and keeps it in its importer\'s context', async () => {
@@ -625,7 +627,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     await f.processUntilIdle(runtime);
     const [source] = (await f.call(runtime, { operation: 'home' })).sources;
     expect([f.extracted(), source!.pending_imports, source!.error, f.proposals(source!.source_key)]).toEqual([1, [], null, 0]);
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([]);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toEqual([]);
     expect(await f.readers()).toEqual(['owner']);
     // With no card to wait for, its notes have nothing to review rather than staying "Not reviewed yet".
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
@@ -708,14 +710,14 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.intake.checkpoint(queued!.source_key).manual).toEqual([]);
     expect(f.count('authority_person_meeting_suggestions_v1')).toBe(0);
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([]);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toEqual([]);
     expect(f.held()).toEqual([]);
     expect(await f.readers()).toEqual(['owner']);
   });
   it.each([false, true])('keeps the paid result and an import queued during its extraction (extraction fails: %s)', async (fails) => {
     const f = await fixture(), runtime = f.create(), b = '00000000-0000-4000-8000-000000000004'; f.grantProject(); f.grantProject(projectB);
     const poll = async () => { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal); return (await f.call(runtime, { operation: 'home' })).sources[0]!; };
-    const reviews = async () => (await f.call(runtime, { operation: 'reviews' })).reviews.length;
+    const reviews = async () => (await f.reviewCall(runtime, { operation: 'reviews' })).reviews.length;
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     if (fails) f.failNextExtraction();
     f.duringExtract(async () => { f.duringExtract(undefined); await f.call(runtime, { operation: 'import', meeting_id: b, project_id: projectB, retain: true }); });
@@ -740,7 +742,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     expect(f.intake.checkpoint(queued!.source_key).manual).toEqual([]);
     expect(f.extracted()).toBe(1);
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(fails ? 0 : 1);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toHaveLength(fails ? 0 : 1);
     // A failure parks with its own stage, not the blocked path's not_recorded.
     expect(f.held()).toEqual(fails ? [expect.objectContaining({ external_id: id, failure_stage: 'unknown' })] : []);
   });
@@ -755,7 +757,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     await f.call(runtime, { operation: 'cancel_import', source_key: queued!.source_key, meeting_id: x });
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     expect(f.intake.checkpoint(queued!.source_key).manual).toEqual([]);
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
     expect(f.extracted()).toBe(1);
   });
   it('runs one pass per source at a time: a poll skips a source in flight and a targeted pass waits for it', async () => {
@@ -891,7 +893,7 @@ describe('personal meeting intake uses the shared processing path', () => {
       // The next poll re-runs it and consumes the grant; a second unbilled failure parks it.
       expect((await poll()).pending_imports).toEqual([]);
       expect(f.extracted()).toBe(2);
-      expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(failsAgain ? 0 : 1);
+      expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toHaveLength(failsAgain ? 0 : 1);
       expect(f.held()).toEqual(failsAgain ? [expect.objectContaining({ external_id: id, failure_stage: 'temporarily_unavailable' })] : []);
       expect(f.ledger.inspect(attempt!)).toMatchObject({ attempt: 2, outcome: failsAgain ? 'failed' : 'succeeded', retry_authorized: false });
     } finally { later.mockRestore(); }
@@ -922,7 +924,7 @@ describe('personal meeting intake uses the shared processing path', () => {
       expect(await poll()).toMatchObject({ pending_imports: [b], error: heldError(a) });
       expect(f.held()).toEqual([expect.objectContaining({ external_id: a, failure_stage: 'unknown' })]);
       expect(await poll()).toMatchObject({ pending_imports: [], error: heldError(a) });
-      expect((await f.call(runtime, { operation: 'reviews' }, 'owner', tool)).reviews).toHaveLength(1);
+      expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
       expect(f.extracted()).toBe(2);
     } finally { storage.close(); }
   });
@@ -966,7 +968,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     f.revise(' (edited)');
     await importAndPoll();
     expect(f.held()).toEqual([]);
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
     expect(f.extracted()).toBe(2);
   });
   it('re-runs from custody only the held meeting whose exact key an operator authorized, once', async () => {
@@ -996,7 +998,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     await poll();
     expect(f.pulls()).toBe(pulls); expect(f.extracted()).toBe(3);
     expect(f.held()).toEqual([heldB]);
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
     expect(await error()).toBe(heldError(b));
     // The grant is spent.
     expect(f.ledger.inspect(key)).toMatchObject({ attempt: 2, outcome: 'succeeded', retry_authorized: false });
@@ -1017,7 +1019,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     f.ledger.authorizeRetry({ key, expected_attempt: 1, expected_outcome: 'failed' });
     await f.call(runtime, { operation: 'import', meeting_id: b, project_id: null, retain: true });
     await poll(); await poll();
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
     expect(f.extracted()).toBe(2);
     expect(f.held()).toEqual([expect.objectContaining({ external_id: id })]);
   });
@@ -1194,7 +1196,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const [proposal] = f.outbox(source!.source_key);
     expect(JSON.parse(proposal!.suggested_projects_json!)).toEqual([project, projectB].sort());
     expect((await runtime.approvals()).proposal(proposal!.approval_id)!.project_ids).toEqual([project, projectB].sort());
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews.map(review => review.project_ids)).toEqual([[project, projectB].sort()]);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews.map(review => review.project_ids)).toEqual([[project, projectB].sort()]);
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
   });
   it('shows a failed first freeze on its source and re-freezes it on a later tick with no new import', async () => {
@@ -1207,7 +1209,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(source).toMatchObject({ pending_imports: [], error: expect.stringContaining('needs attention') });
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([project]);
     expect(f.outbox(source!.source_key)).toEqual([expect.objectContaining({ state: 'queued', suggested_projects_json: null })]);
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([]);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toEqual([]);
     // The retry waits out the source's backoff; it needs no new import and no provider access.
     f.disconnect();
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
@@ -1218,7 +1220,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(frozen).toMatchObject({ state: 'staged' });
     expect(JSON.parse(frozen!.suggested_projects_json!)).toEqual([project]);
     expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ error: null });
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([expect.objectContaining({ approval_id: frozen!.approval_id, project_ids: [project] })]);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toEqual([expect.objectContaining({ approval_id: frozen!.approval_id, project_ids: [project] })]);
     // A frozen source with nothing to import drops out of the poll.
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     expect(f.extracted()).toBe(1);
@@ -1247,7 +1249,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const proposals = f.outbox(source!.source_key);
     expect(proposals).toHaveLength(1);
     expect(JSON.parse(proposals[0]!.suggested_projects_json!)).toEqual([project]);
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]?.project_ids).toEqual([project]);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews[0]?.project_ids).toEqual([project]);
     expect((await runtime.approvals()).proposal(proposals[0]!.approval_id)!.project_ids).toEqual([project]);
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([project, projectB].sort());
     expect(await f.readers()).toEqual(['owner']);
@@ -1266,10 +1268,10 @@ describe('personal meeting intake uses the shared processing path', () => {
     const before = read();
     expect(before).toMatchObject({ citation: { label: 'Imported meeting: Test meeting' }, imported_meeting_review: 'not_reviewed' });
     // A partial item selection is not a completed review; the core refuses it atomically.
-    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256,
+    await expect(f.reviewCall(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256,
       command_id: 'partial-b', action: 'approve', routes: f.routes(opened, [projectB]).slice(1), owners: [] })).rejects.toMatchObject({ code: 'invalid_request' });
     expect(read()).toEqual(before);
-    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-b', action: 'approve', routes: f.routes(opened, [projectB]), owners: [] }))
+    await expect(f.reviewCall(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-b', action: 'approve', routes: f.routes(opened, [projectB]), owners: [] }))
       .resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
     expect(read()).toEqual({ ...before, imported_meeting_review: 'reviewed' });
     expect(originals.checkSourceRevisions({ access_token: 'owner', citations: [citation] })).toEqual(['same']);
@@ -1279,7 +1281,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     await runtime.processing.recoverV4Appends(new AbortController().signal);
     const envelope = JSON.parse(f.record.prepare('SELECT canonical_envelope FROM organization_record_log').pluck().get() as string);
     expect(envelope.body.human_act_resolution_ref.audience_project_ids).toEqual([projectB]);
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]).toMatchObject({ status: 'approved', project_ids: [projectB], decided_on: 'desktop',
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews[0]).toMatchObject({ status: 'approved', project_ids: [projectB], decided_on: 'desktop',
       records: [{ approval_id: approvalRecordIdV2(pending!.approval_id, [projectB]), project_ids: [projectB] }] });
     // Approval publishes a separate record; the source keeps its neutral provenance label and private audience.
     expect((await list.list({ access_token: 'owner', request: { schema_version: 1, only_me: true } })).items).toEqual(imported);
@@ -1308,23 +1310,23 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(opened).toMatchObject({ reasons: [], records: [], suggested_projects: [{ project_id: project, name: 'ECHO' }], review: { status: 'pending', records: [] } });
     // Mixed destinations: THERM-like project B for the decision, both for the owned action, the other action not kept.
     const routes = f.routes(opened, item => ({ 'decision-1': [projectB], 'act-1': [project, projectB].sort(), 'act-2': null })[item.signal_id] ?? null);
-    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-mixed', action: 'approve',
+    await f.reviewCall(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-mixed', action: 'approve',
       routes, owners: [{ signal_id: 'act-1', owner: 'Rafael M.' }] });
-    const publishing = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    const publishing = await f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
     expect(publishing.items.map(item => [item.signal_id, item.project_ids, item.owner, item.owner_editable])).toEqual([
       ['decision-1', [projectB], null, false], ['act-1', [project, projectB].sort(), 'Rafael M.', false], ['act-2', null, null, false]]);
     expect(publishing.records).toEqual([]);
     expect(publishing.suggested_projects.map(entry => entry.project_id)).toEqual([project, projectB].sort());
     await runtime.processing.recoverV4Appends(new AbortController().signal);
-    const approved = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    const approved = await f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
     const records = [{ approval_id: approvalRecordIdV2(pending!.approval_id, [projectB]), project_ids: [projectB] },
       { approval_id: approvalRecordIdV2(pending!.approval_id, [project, projectB].sort()), project_ids: [project, projectB].sort() }];
     expect(approved.records).toEqual(records);
     expect(approved.review).toMatchObject({ status: 'approved', project_ids: [project, projectB].sort(), records });
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]!.records).toEqual(records);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews[0]!.records).toEqual(records);
     // A destination the reviewer can no longer read keeps its route but loses its name.
     f.leave(projectB, 'owner');
-    const later = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    const later = await f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
     expect(later.items[0]!.project_ids).toEqual([projectB]);
     expect(later.suggested_projects.map(entry => entry.project_id)).toEqual([project]);
   });
@@ -1335,54 +1337,54 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(opened.items.every(item => !('private' in item))).toBe(true);
     const review = { operation: 'review' as const, approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, action: 'approve' as const, owners: [] };
     for (const [command_id, to] of [['private-only-me', []], ['private-not-kept', null]] as const) {
-      await expect(f.call(runtime, { ...review, command_id, routes: f.routes(opened, to).map(route => ({ ...route, private: true as const })) })).rejects.toMatchObject({ code: 'invalid_request' });
+      await expect(f.reviewCall(runtime, { ...review, command_id, routes: f.routes(opened, to).map(route => ({ ...route, private: true as const })) })).rejects.toMatchObject({ code: 'invalid_request' });
     }
     expect(f.count('authority_approval_decisions_v1')).toBe(0);
     const routes = f.routes(opened, item => ({ 'decision-1': [project], 'act-1': [project], 'act-2': [] })[item.signal_id] ?? null)
       .map(route => route.signal_id === 'decision-1' ? { ...route, private: true as const } : route);
-    await f.call(runtime, { ...review, command_id: 'approve-private', routes });
+    await f.reviewCall(runtime, { ...review, command_id: 'approve-private', routes });
     await runtime.processing.recoverV4Appends(new AbortController().signal);
-    const approved = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    const approved = await f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
     expect(approved.items.map(item => [item.signal_id, item.project_ids, item.private])).toEqual([['decision-1', [project], true], ['act-1', [project], undefined], ['act-2', [], undefined]]);
     expect(approved.items.filter(item => 'private' in item).map(item => item.signal_id)).toEqual(['decision-1']);
     const records = [{ approval_id: approvalRecordIdV2(pending!.approval_id, [project], true), project_ids: [project], private: true },
       { approval_id: approvalRecordIdV2(pending!.approval_id, [project]), project_ids: [project] }, { approval_id: approvalRecordIdV2(pending!.approval_id, []), project_ids: [] }];
     expect(approved.records).toEqual(records);
     expect(approved.review).toMatchObject({ status: 'approved', project_ids: [project], records });
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]!.records).toEqual(records);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews[0]!.records).toEqual(records);
   });
   it('opens a review by one of its published records\' own approval ids (a run\'s event_ref), for its reviewer only', async () => {
     const f = await fixture({ ownedAction: true, actions: 1 }), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
     const { pending, opened } = await f.pendingReview(runtime, project);
     const routes = f.routes(opened, item => ({ 'decision-1': [projectB], 'act-1': [], 'act-2': null })[item.signal_id] ?? null);
-    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-split', action: 'approve', routes, owners: [] });
+    await f.reviewCall(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-split', action: 'approve', routes, owners: [] });
     const recordIds = [approvalRecordIdV2(pending!.approval_id, [projectB]), approvalRecordIdV2(pending!.approval_id, [])];
     // While the approval publishes, no record exists yet to name it.
-    await expect(f.call(runtime, { operation: 'review_open', approval_id: recordIds[0]! })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.reviewCall(runtime, { operation: 'review_open', approval_id: recordIds[0]! })).rejects.toMatchObject({ code: 'not_found' });
     await runtime.processing.recoverV4Appends(new AbortController().signal);
-    const byProposal = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    const byProposal = await f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
     expect(byProposal.records.map(record => record.approval_id)).toEqual(recordIds);
     for (const id of recordIds) {
-      const byRecord = await f.call(runtime, { operation: 'review_open', approval_id: id });
+      const byRecord = await f.reviewCall(runtime, { operation: 'review_open', approval_id: id });
       // The proposal's own review, under its approval id: the desktop decides and links by that.
       expect(byRecord).toEqual(byProposal);
       expect(byRecord.review.approval_id).toBe(pending!.approval_id);
     }
     // Another member opens it by neither id, as if neither existed.
     for (const id of [pending!.approval_id, ...recordIds]) {
-      await expect(f.call(runtime, { operation: 'review_open', approval_id: id }, 'other')).rejects.toMatchObject({ code: 'not_found' });
+      await expect(f.reviewCall(runtime, { operation: 'review_open', approval_id: id }, 'other')).rejects.toMatchObject({ code: 'not_found' });
     }
     // A decision never takes a record id, and an id that names no record of theirs opens nothing.
-    await expect(f.call(runtime, { operation: 'review', approval_id: recordIds[1]!, snapshot_sha256: opened.snapshot_sha256, command_id: 'reject-record', action: 'reject', routes: [], owners: [] }))
+    await expect(f.reviewCall(runtime, { operation: 'review', approval_id: recordIds[1]!, snapshot_sha256: opened.snapshot_sha256, command_id: 'reject-record', action: 'reject', routes: [], owners: [] }))
       .rejects.toMatchObject({ code: 'not_found' });
-    await expect(f.call(runtime, { operation: 'review_open', approval_id: `apr_${'e'.repeat(64)}` })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.reviewCall(runtime, { operation: 'review_open', approval_id: `apr_${'e'.repeat(64)}` })).rejects.toMatchObject({ code: 'not_found' });
     expect(f.count('authority_approval_decisions_v1')).toBe(1);
   });
   it('opens a rejected review with nothing kept', async () => {
     const f = await fixture({ ownedAction: true }), runtime = f.create(); f.grantProject();
     const { pending, opened } = await f.pendingReview(runtime, project);
-    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'reject-it', action: 'reject', routes: [], owners: [] });
-    const rejected = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    await f.reviewCall(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'reject-it', action: 'reject', routes: [], owners: [] });
+    const rejected = await f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
     expect(rejected.items.map(item => [item.project_ids, item.owner, item.owner_editable])).toEqual([[null, null, false], [null, null, false]]);
     expect(rejected).toMatchObject({ suggested_projects: [], records: [], review: { status: 'rejected', project_ids: [], records: [] } });
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
@@ -1395,7 +1397,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const calls: AfterApprovedRecordEventV1[] = [];
     const f = await fixture(), runtime = f.create(undefined, { approval_core: { after_record: (tx, event) => { expect(tx.inTransaction).toBe(true); calls.push(event); } } });
     const { pending, opened } = await f.pendingReview(runtime);
-    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-hooked', action: 'approve', routes: f.routes(opened), owners: [] });
+    await f.reviewCall(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-hooked', action: 'approve', routes: f.routes(opened), owners: [] });
     await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
     await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
     expect(calls).toEqual([expect.objectContaining({ approval_id: approvalRecordIdV2(pending!.approval_id, []), proposal_approval_id: pending!.approval_id,
@@ -1407,7 +1409,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const f = await fixture();
     const crashing = f.create(undefined, { approval_core: { after_record }, record_append: { async append(input) { await f.context.record_append.append(input); throw new Error('crash after append'); } } });
     const { pending, opened } = await f.pendingReview(crashing);
-    await f.call(crashing, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-crash', action: 'approve', routes: f.routes(opened), owners: [] });
+    await f.reviewCall(crashing, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-crash', action: 'approve', routes: f.routes(opened), owners: [] });
     // A row failure does not fail recovery; the row stays unpublished for the next pass.
     await crashing.processing.recoverV4Appends(new AbortController().signal);
     expect(calls).toEqual([]);
@@ -1423,10 +1425,10 @@ describe('personal meeting intake uses the shared processing path', () => {
     const f = await fixture(), runtime = f.create();
     const { pending, opened } = await f.pendingReview(runtime);
     const review = { operation: 'review' as const, approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'reject-once', action: 'reject' as const, routes: [], owners: [] };
-    await expect(f.call(runtime, review)).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
-    await expect(f.call(runtime, review)).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
-    await expect(f.call(runtime, { ...review, command_id: 'approve-later', action: 'approve', routes: f.routes(opened) })).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
-    await expect(f.call(runtime, { ...review, command_id: 'approve-stale', action: 'approve', routes: f.routes(opened), snapshot_sha256: canonicalSha256('other') })).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
+    await expect(f.reviewCall(runtime, review)).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
+    await expect(f.reviewCall(runtime, review)).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
+    await expect(f.reviewCall(runtime, { ...review, command_id: 'approve-later', action: 'approve', routes: f.routes(opened) })).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
+    await expect(f.reviewCall(runtime, { ...review, command_id: 'approve-stale', action: 'approve', routes: f.routes(opened), snapshot_sha256: canonicalSha256('other') })).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
     expect(f.count('authority_approval_decisions_v1')).toBe(1);
   });
   it('approves into two projects with a confirmed owner through the route', async () => {
@@ -1434,7 +1436,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const { pending, opened } = await f.pendingReview(runtime, project);
     expect(opened.items.find(item => item.signal_id === 'act-1')).toMatchObject({ text: 'Send the pilot plan.', due_at: null, owner: 'Rafael Moreno', owner_editable: true });
     expect(opened.suggested_projects).toEqual([{ project_id: project, name: 'ECHO' }]);
-    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, command_id: 'c1', snapshot_sha256: opened.snapshot_sha256,
+    await expect(f.reviewCall(runtime, { operation: 'review', approval_id: pending!.approval_id, command_id: 'c1', snapshot_sha256: opened.snapshot_sha256,
       action: 'approve', routes: f.routes(opened, [project, projectB].sort()), owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }] }))
       .resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
   });
@@ -1444,29 +1446,29 @@ describe('personal meeting intake uses the shared processing path', () => {
     const slackReview = validateApprovalDecisionRequestV1('slack', { approval_id: pending!.approval_id, command_id: 'slack:k', snapshot_sha256: opened.snapshot_sha256,
       action: 'approve', routes: f.routes(opened), owners: [] });
     (await runtime.approvals()).decide('slack', slackReview, () => ({ actor: f.person, evidence: { kind: 'slack-click', sha256: canonicalSha256('slack click') } }));
-    expect((await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id })).review.decided_on).toBe('slack');
-    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, command_id: 'c2', snapshot_sha256: opened.snapshot_sha256,
+    expect((await f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id })).review.decided_on).toBe('slack');
+    await expect(f.reviewCall(runtime, { operation: 'review', approval_id: pending!.approval_id, command_id: 'c2', snapshot_sha256: opened.snapshot_sha256,
       action: 'reject', routes: [], owners: [] })).resolves.toEqual({ status: 'publishing', decided_on: 'slack' });
   });
   it('names the first decision, the action count and the meeting time on review rows', async () => {
     const f = await fixture({ ownedAction: true, started: '2026-10-06T16:00:00.000Z' }), runtime = f.create();
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
     await f.processUntilIdle(runtime);
-    const [row] = (await f.call(runtime, { operation: 'reviews' })).reviews;
+    const [row] = (await f.reviewCall(runtime, { operation: 'reviews' })).reviews;
     expect(row).toMatchObject({ first_line: 'Ship the cohort onboarding.', action_count: 1, meeting_at: '2026-10-06T16:00:00.000Z' });
-    expect((await f.call(runtime, { operation: 'review_open', approval_id: row!.approval_id })).review).toEqual(row);
+    expect((await f.reviewCall(runtime, { operation: 'review_open', approval_id: row!.approval_id })).review).toEqual(row);
     const g = await fixture(), plain = g.create();
     await g.call(plain, { operation: 'import', meeting_id: id, project_id: null, retain: true });
     await g.processUntilIdle(plain);
-    expect((await g.call(plain, { operation: 'reviews' })).reviews).toEqual([expect.objectContaining({ first_line: 'Ship the cohort onboarding.', action_count: 0, meeting_at: null })]);
+    expect((await g.reviewCall(plain, { operation: 'reviews' })).reviews).toEqual([expect.objectContaining({ first_line: 'Ship the cohort onboarding.', action_count: 0, meeting_at: null })]);
   });
   it('counts every action on a review row, past 40, and the Authority still accepts its own list', async () => {
     const f = await fixture({ actions: 41 }), runtime = f.create();
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
     await f.processUntilIdle(runtime);
-    const [row] = (await f.call(runtime, { operation: 'reviews' })).reviews;
+    const [row] = (await f.reviewCall(runtime, { operation: 'reviews' })).reviews;
     expect(row).toMatchObject({ first_line: 'Ship the cohort onboarding.', action_count: 41 });
-    expect((await f.call(runtime, { operation: 'review_open', approval_id: row!.approval_id })).review).toEqual(row);
+    expect((await f.reviewCall(runtime, { operation: 'review_open', approval_id: row!.approval_id })).review).toEqual(row);
   });
   it('approvals() returns one core per runtime', async () => {
     const f = await fixture(), runtime = f.create();

@@ -813,7 +813,7 @@ export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
 ]);
 /** Operations of a write method that only read. */
 const READ_OPERATIONS: Readonly<Record<string, ReadonlySet<string>>> = {
-  'tools.meetings': new Set<PersonMeetingRequestV2['operation']>(['home', 'reviews', 'browse', 'open', 'review_open']),
+  'tools.meetings': new Set<PersonMeetingRequestV2['operation']>(['home', 'browse', 'open']),
   reviews: new Set<PersonReviewRequestV1['operation']>(['reviews', 'review_open']),
   runs: new Set<PersonRunsRequestV1['operation']>(['list', 'home', 'items', 'item']),
 };

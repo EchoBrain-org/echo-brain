@@ -1045,6 +1045,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return body?.operation === 'reviews' ? json({ reviews: [] }) : failure('not_found', 404);
       }
     }
+    // Reviews are only the reviews route's: the meetings route knows no review operation.
+    if (method === 'POST' && path === '/v1/person/meetings' && ['reviews', 'review_open', 'review'].includes(String(body?.operation))) return failure('invalid_request', 400);
     if ((method === 'POST' && path === '/v1/person/meetings' && mode.startsWith('granola')) || reviewsRequest) {
       const meetingId = '00000000-0000-4000-8000-000000000010';
       const folderId = '00000000-0000-4000-8000-000000000011';

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { PERSON_MEETINGS_PATH_V2, validatePersonMeetingRequestV2, validatePersonMeetingResultV2,
   PERSON_REVIEWS_PATH_V1, validatePersonReviewRequestV1, validatePersonReviewResultV1, type PersonReviewOperationV1,
-  type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2, type PersonSubmittedMeetingV2 } from '@echo-brain/organization-api';
+  type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2, type PersonReviewResultsV1, type PersonSubmittedMeetingV2 } from '@echo-brain/organization-api';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, coreRuntimeDiagnosticErrorKindV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeSyncV1, observeCoreRuntimeV1, observeCoreRuntimeRootV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
@@ -360,7 +360,7 @@ export function createPersonMeetingRuntimeV1(options: {
    * its route (null = not kept; `private` when kept for the reviewer alone inside its projects) and its confirmed owner. A
    * rejection kept nothing.
    */
-  function reviewItems(view: ApprovalProposalViewV1, proposed: ReadonlyMap<string, string>): PersonMeetingResultsV2['review_open']['items'] {
+  function reviewItems(view: ApprovalProposalViewV1, proposed: ReadonlyMap<string, string>): PersonReviewResultsV1['review_open']['items'] {
     const routes = new Map((view.routes ?? []).map(route => [route.signal_id, route]));
     const confirmed = new Map((view.confirmed_owners ?? []).map(owner => [owner.signal_id, owner.owner]));
     const decided = view.routes !== null;
@@ -371,7 +371,7 @@ export function createPersonMeetingRuntimeV1(options: {
         project_ids: decided ? route?.project_ids ?? null : view.project_ids, ...(route?.private === true ? { private: true as const } : {}) };
     });
   }
-  /** One person-owned review application, shared by the neutral route and legacy meeting requests. */
+  /** The person-owned review application behind `/v1/person/reviews`. */
   async function reviewResult(input: PersonReviewOperationV1, token: string, person: MeetingIntakePersonV1, current: () => void): Promise<unknown> {
     // Reviews belong to the person who brought the meeting in, whatever projects it suggests.
     const reviewer = allowed(() => intake.currentPerson(person)) ? person : null;
@@ -432,7 +432,6 @@ export function createPersonMeetingRuntimeV1(options: {
       const provider = providers.find(p => p.id === input.tool_id);
       if (!provider) throw new AuthorityOperationError('not_found', 'Meeting tool unavailable');
       const result = async (): Promise<unknown> => {
-        if (input.operation === 'reviews' || input.operation === 'review_open' || input.operation === 'review') return reviewResult(input, token, person, current);
         if (input.operation === 'cancel_import') {
           const setting = intake.list(person).find(s => s.source_key === input.source_key);
           if (!setting) throw new AuthorityOperationError('not_found', 'Meeting import unavailable');

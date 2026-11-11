@@ -5045,7 +5045,7 @@ interface HomeState {
   reading: boolean;
 }
 
-type ReviewOpen = PersonMeetingResultsV2['review_open'];
+type ReviewOpen = PersonReviewResultsV1['review_open'];
 /**
  * Where one decision or action goes: null = not kept, otherwise its projects (sorted) and the Only me lock. No project is
  * Only me, always locked; projects with the lock are where it is filed for you alone (ADR-0049).
