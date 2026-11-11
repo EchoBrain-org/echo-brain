@@ -86,8 +86,14 @@ describe("Linux Person onboarding kit", () => {
     const elf = Buffer.alloc(20);
     elf.set([0x7f, 0x45, 0x4c, 0x46, 2, 1]);
     elf.writeUInt16LE(62, 18);
+    const bootstrap = {
+      schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'fixture',
+      feed_url: 'https://fixture.invalid/feed.json',
+      public_key_spki: generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
+      minimum_sequence: 1, automatic: true, installation: 'cli-kit',
+    };
     writeFileSync(runtime, elf);
-    writeManifest();
+    writeManifest(bootstrap);
     const systemNode = run(process.execPath, [
       join(REPO, "deploy/release/verify-person-onboarding-kit.mjs"),
       root,
@@ -96,14 +102,9 @@ describe("Linux Person onboarding kit", () => {
     expect(systemNode.stderr).toContain("bundled Node runtime");
     expect(verify().status).toBe(0);
 
-    const bootstrap = {
-      schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'fixture',
-      feed_url: 'https://fixture.invalid/feed.json',
-      public_key_spki: generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
-      minimum_sequence: 1, automatic: true, installation: 'cli-kit',
-    };
-    writeManifest(bootstrap);
-    expect(verify().status).toBe(0);
+    // A Linux kit carries its update bootstrap.
+    writeManifest();
+    expect(verify().status).toBe(1);
     for (const invalid of [null, { ...bootstrap, automatic: false }, { ...bootstrap, minimum_sequence: 0 },
       { ...bootstrap, feed_url: 'http://fixture.invalid/feed.json' },
       { ...bootstrap, feed_url: `https://fixture.invalid/${'a'.repeat(2048)}` },
@@ -116,13 +117,13 @@ describe("Linux Person onboarding kit", () => {
 
     elf.writeUInt16LE(3, 18);
     writeFileSync(runtime, elf);
-    writeManifest();
+    writeManifest(bootstrap);
     const wrongMachine = verify();
     expect(wrongMachine.status).toBe(1);
     expect(wrongMachine.stderr).toContain("Linux x86_64 ELF executable");
 
     writeFileSync(runtime, elf.subarray(0, 8));
-    writeManifest();
+    writeManifest(bootstrap);
     const truncated = verify();
     expect(truncated.status).toBe(1);
     expect(truncated.stderr).toContain("Linux x86_64 ELF executable");
