@@ -198,13 +198,12 @@ describe('Home altitudes', () => {
     expect(store.getState().altitude.project_id).toBeNull();
   });
 
-  it('opens at the top on every start, never where an earlier one was zoomed, and forgets the place an older version kept', async () => {
+  it('opens at the top on every start, never where an earlier one was zoomed', async () => {
     const left = JSON.stringify({ account: `${ACCOUNT.authority} ${ACCOUNT.membership_id}`, level: 'project', project_id: THERMAL.project_id });
     const storage = { getItem: vi.fn((key: string) => (key === 'echo.home.altitude' ? left : null)), setItem: vi.fn(), removeItem: vi.fn() };
     vi.stubGlobal('localStorage', storage);
     const store = await startStore();
     expect(store.getState().altitude).toMatchObject({ level: 'projects', category: null, project_id: null });
-    expect(storage.removeItem).toHaveBeenCalledWith('echo.home.altitude');
     // Zooming keeps nothing for the next start.
     store.zoomTo('project', { project_id: THERMAL.project_id });
     expect(storage.setItem.mock.calls.filter(([key]) => key === 'echo.home.altitude')).toEqual([]);

@@ -55,11 +55,8 @@ it. Every item is one cited sentence that keeps its sources' numbers, faint
 footnote digits with no box that brighten with the sentence under the pointer,
 and lights on its own. A table shows its caption only when it opens the
 answer, ISO dates as "Oct 14" and only your own late row's due date in the
-signal colour, and scrolls in its own box when the window is narrow. A
-timeline turn an older desktop saved without blocks, plain or with answer
-layout v1 (ADR-0045, retired), loads with an untitled text block a sentence,
-so each still reads as its own paragraph, and is saved so. Every answer's
-sources start as one quiet closed line under it ("4 sources") that a click
+signal colour, and scrolls in its own box when the window is narrow. Every
+answer's sources start as one quiet closed line under it ("4 sources") that a click
 opens, and a source's number opens that source beside the answer. A lock shows
 only on a source's row, for what ECHO keeps for you alone, never for a live
 tool's item.

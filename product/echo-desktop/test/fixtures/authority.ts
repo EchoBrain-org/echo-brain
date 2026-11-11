@@ -4,7 +4,7 @@
 import * as organizationApi from '@echo-brain/organization-api';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const AUTHORITY = 'https://authority.example';
@@ -370,7 +370,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   if (mode.startsWith('granola')) desktop.people.push(...[MINA, RAFAEL, OKAFOR].map(person => ({ membership_id: person.membership_id, display_name: person.name })));
 
   const store = new SessionStore(realpathSync(home)) as Store;
-  const expired = mode === 'expired-claim';
   const clock = mode.startsWith('refresh-') ? LATER : mode === 'weekly-passed' ? WEEK_LATER : NOW;
   const session = {
     organization_id: 'org_00000000-0000-4000-8000-000000000001',
@@ -385,17 +384,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   };
   if (!existsSync(store.paths.live) && !mode.startsWith('signed-out')) {
     store.install(AUTHORITY, 'oau_00000000-0000-4000-8000-000000000001', {
-      // A week-old session: every deadline already passed, consistently.
-      ...session, ...(expired ? {
-        access_expires_at: '2026-09-20T12:00:00.000Z', refresh_expires_at: '2026-09-21T00:00:00.000Z',
-        hard_reauthentication_at: '2026-09-21T00:00:00.000Z',
-      } : {}),
+      ...session,
     });
-    if (expired) {
-      // What an older client's weekly expiry left behind: the session set aside under a claim.
-      renameSync(store.paths.live, store.paths.refreshing);
-      writeFileSync(store.paths.refresh_claim, '00000000-0000-4000-8000-000000000099\n', { mode: 0o600 });
-    }
   }
   // The organization as it is now: its projects, who is in each, and what is filed in it.
   const projects = mode === 'no-projects' ? [] : structuredClone(desktop.projects);
