@@ -37,6 +37,14 @@ verdict count 0. The baseline keeps the sweep columns, unread, until then.
 Ask no longer sees a sweep's check either
 ([ADR-0040](ADR-0040-follow-ups-as-ask-evidence.md)).
 
+Update (2026-11-11): the founder cut old apps off in one go. The runs API no
+longer carries the retired fields: `home` has no `landed`, `last_checked_at`
+or `sweep_due`, an item has no `check`, a summary has no `landed`, `changed`,
+`unreadable` or `last_checked_at`, and a decision's counts have no `landed` or
+`unreadable`; each is refused as an unknown key. A run's `trigger` is
+`approved_record` only. The desktop no longer passes them through. The
+baseline still keeps the sweep columns, unread, until the V17 reset.
+
 ## Context and options
 
 ADR-0032 stores an approved record's impact card as a frozen, approver-only

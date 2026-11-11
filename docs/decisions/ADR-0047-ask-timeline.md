@@ -134,6 +134,13 @@ carries, and so does Ask again with its "since" list. Where this record's
 title and its "An old answer always says what changed" say more than
 readability, they are history.
 
+Update (2026-11-11): the founder cut old apps off in one go, so that later
+release is this one. `changed` is no longer a state and ticket markers are off
+the wire in both directions: a request item is `asked_at` and `citation` only,
+and an answer item is its `state` only. The Authority reads a ticket for
+readability only, as it reads a page: Jira's bulk read asks for one field and
+reads none, so `providers/jira` no longer hashes ticket fields.
+
 On 2026-11-09 typed `gap_details` stopped being an opt-in: every Ask answer
 part with a typed gap carries them, the Authority no longer reads
 `x-echo-ask-gap-details`, and clients no longer send it
