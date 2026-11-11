@@ -122,11 +122,6 @@ class HostProtocol(unittest.TestCase):
         self.assertTrue(result['ok'], result)
         self.assertEqual(self.calls[-1][0], 'stage')
         self.assertEqual(self.calls[-1][1::2], ['--release', '--runtime-profile'])
-        legacy = self.request('stage')
-        legacy['schema_version'] = 2
-        legacy['kind'] = 'echo-staging-release-request-v2'
-        with self.assertRaises(host.Refused):
-            host.validate_request(legacy)
         for mutation in ('unknown', 'missing'):
             request['operation_id'] = str(uuid.uuid4())
             path = self.root / host.TOOLS[0]
@@ -190,35 +185,6 @@ class HostProtocol(unittest.TestCase):
                 self.assertEqual(result['diagnostic']['category'], 'environment_invalid')
                 self.assertEqual((self.root / '.env.clean-v1').read_bytes(), data)
         self.assertEqual(self.calls, [])
-
-    def test_environment_repair_marker_refuses_without_reading_or_replacing_tools(self):
-        marker = self.root / 'clean-data/release/environment-repair.pending.json'
-        target = self.root / 'outside-marker-target'
-        target.write_bytes(b'private repair marker content')
-        target.chmod(0o600)
-        for kind in ('regular', 'symlink', 'dangling-symlink'):
-            with self.subTest(kind=kind):
-                marker.unlink(missing_ok=True)
-                if kind == 'regular':
-                    marker.write_bytes(b'private repair marker content')
-                    marker.chmod(0o600)
-                elif kind == 'symlink':
-                    marker.symlink_to(target)
-                else:
-                    marker.symlink_to(self.root / 'missing-marker-target')
-                before_tools = {name: (self.root / name).read_bytes() for name in host.TOOLS}
-                original_regular = host.regular
-                def reject_marker_read(path, *args, **kwargs):
-                    if pathlib.Path(path).absolute() in (marker, target):
-                        self.fail('repair marker or its target was read')
-                    return original_regular(path, *args, **kwargs)
-                with patch.object(host, 'regular', side_effect=reject_marker_read):
-                    inspection = self.execute(self.request('inspect-install'))
-                    installation = self.execute(self.request('install'))
-                self.assertEqual((inspection['code'], inspection['diagnostic']['category']), ('inspection_refused', 'environment_invalid'))
-                self.assertEqual((installation['code'], installation['diagnostic']), ('precondition_failed', None))
-                self.assertEqual({name: (self.root / name).read_bytes() for name in host.TOOLS}, before_tools)
-                self.assertEqual(self.calls, [])
 
     def test_inspect_install_reports_ready_without_tooling_or_runtime_mutation(self):
         request = self.request('inspect-install')

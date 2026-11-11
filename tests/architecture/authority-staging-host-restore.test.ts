@@ -151,7 +151,7 @@ fi
     }
   });
 
-  it("restores a selected staging connector profile from its digest alone, without the retired rehearsal sidecar", () => {
+  it("restores a selected staging connector profile from its digest alone", () => {
     const recovery = /^require_staging_connector_rehearsal_recovery_state\(\) \{\n.*?<<'PY'\n(.*?\n)PY\n/ms.exec(restoreScript());
     expect(recovery).not.toBeNull();
     const root = mkdtempSync(join(tmpdir(), "echo-restore-connector-profile-"));
@@ -166,23 +166,18 @@ fi
       const environment = join(root, "runtime.env");
       const setup = join(root, "onboard-clean-v1.conf");
       const profile = join(root, "staging-connector-rehearsal.json");
-      const sidecar = join(root, "staging-connector-rehearsal-v1");
-      const run = () => spawnSync("python3", ["-", environment, setup, profile, sidecar], { input: recovery![1], encoding: "utf8" });
+      const run = () => spawnSync("python3", ["-", environment, setup, profile], { input: recovery![1], encoding: "utf8" });
       writeFileSync(environment, "ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=/echo-clean/private/staging-connector-rehearsal.json\n");
       writeFileSync(setup, `staging_connector_rehearsal_profile_sha256=${digest}\n`);
       writeFileSync(profile, `${canonical}\n`, { mode: 0o600 });
       expect(run()).toMatchObject({ status: 0, stdout: "enabled\n" });
-      // Jira connections now stay in the retained state directory; an old sidecar is no longer read.
-      mkdirSync(sidecar, { mode: 0o700 });
-      expect(run()).toMatchObject({ status: 0, stdout: "enabled\n" });
       writeFileSync(setup, `staging_connector_rehearsal_profile_sha256=sha256:${"0".repeat(64)}\n`);
       expect(run().status).toBe(1);
-      // A retired selection still refuses any leftover of the rehearsal.
+      // No selection refuses a leftover profile.
       writeFileSync(environment, "ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=\n");
       writeFileSync(setup, "");
-      rmSync(profile);
       expect(run().status).toBe(1);
-      rmSync(sidecar, { recursive: true });
+      rmSync(profile);
       expect(run()).toMatchObject({ status: 0, stdout: "disabled\n" });
     } finally {
       rmSync(root, { force: true, recursive: true });

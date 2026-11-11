@@ -13,8 +13,6 @@ reviewed_ref: 3aea847cca4fa44cfa1ab28dbf44b1b707590b8b
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Approval core frozen proposal and decision row; Slack presenter target check and click check
-invariant_ids:
-  - INV-12
 failure_pattern_ids:
   - FP-PERMISSIONS-001
 ---

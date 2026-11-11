@@ -182,18 +182,17 @@ PY
 }
 
 # The selected profile only chooses providers of the ordinary Authority, whose Jira
-# connections stay in the retained state directory. A leftover retired rehearsal
-# sidecar is ignored while the profile is selected.
+# connections stay in the retained state directory.
 require_staging_connector_rehearsal_recovery_state() {
   local selected
-  selected="$(python3 - "$ACCEPTED_ENVIRONMENT" "$SETUP_FILE" "$PRIVATE_DIR/staging-connector-rehearsal.json" "$DATA_DIR/staging-connector-rehearsal-v1" <<'PY'
+  selected="$(python3 - "$ACCEPTED_ENVIRONMENT" "$SETUP_FILE" "$PRIVATE_DIR/staging-connector-rehearsal.json" <<'PY'
 import hashlib
 import json
 import pathlib
 import stat
 import sys
 
-environment, setup, profile_path, sidecar = map(pathlib.Path, sys.argv[1:])
+environment, setup, profile_path = map(pathlib.Path, sys.argv[1:])
 
 def rows(path, key):
     return [line[len(key) + 1:] for line in path.read_text(encoding='utf-8').splitlines()
@@ -204,7 +203,7 @@ if len(profile_rows) > 1:
     raise SystemExit(1)
 digests = rows(setup, 'staging_connector_rehearsal_profile_sha256')
 if profile_rows in ([], ['']):
-    if digests or profile_path.exists() or profile_path.is_symlink() or sidecar.exists() or sidecar.is_symlink():
+    if digests or profile_path.exists() or profile_path.is_symlink():
         raise SystemExit(1)
     print('disabled')
     raise SystemExit(0)

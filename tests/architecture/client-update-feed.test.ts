@@ -66,13 +66,9 @@ function fixture(desktop: Parameters<typeof desktopArtifacts>[1] = {}) {
   };
   const seal = () => run(['seal', '--prepared', output, '--signature', signaturePath, '--authorization', approvalPath]);
   const retain = (keep: (artifact: ManifestArtifact) => boolean) => rewriteJson(join(output, 'manifest.json'), manifest => { manifest.artifacts = manifest.artifacts.filter(keep); }, canonicalLine);
-  const writeHistoricalEnvelope = () => writeFileSync(join(output, 'feed.json'), canonical({
-    payload: readFileSync(join(output, 'manifest.json')).toString('base64'),
-    signature: readFileSync(signaturePath).toString('base64'),
-  }) + '\n');
   const validateSealed = (now = Date.now(), allowExpired = false) => spawnSync(process.execPath, ['--input-type=module', '-e',
     'import { validateSealedClientUpdateFeed } from "./tools/client-update-feed.mjs"; validateSealedClientUpdateFeed({prepared: process.argv[1], authorizationPath: process.argv[2], now: Number(process.argv[3]), allowExpired: process.argv[4] === "true"});', output, approvalPath, String(now), String(allowExpired)], { cwd: REPO, encoding: 'utf8' });
-  return { root, config, kits, desktops, output, prepare, authorize, seal, signaturePath, approvalPath, retain, writeHistoricalEnvelope, validateSealed };
+  return { root, config, kits, desktops, output, prepare, authorize, seal, signaturePath, approvalPath, retain, validateSealed };
 }
 afterEach(() => { for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
@@ -81,7 +77,7 @@ describe('approved update feed publisher', () => {
   it.each<{ name: string; target: CliKitTarget; mutate: (kit: string) => void }>([
     { name: 'a kit enrolled to a different feed configuration', target: 'linux', mutate: kit => rewriteJson(kitManifest(kit), manifest => { manifest.update_bootstrap.feed_url = 'https://fixture.invalid/different-feed.json'; }, JSON.stringify) },
     { name: 'a macOS kit whose runtime claims Linux', target: 'macos', mutate: kit => rewriteJson(kitManifest(kit), manifest => { manifest.runtime.platform = 'linux'; }, JSON.stringify) },
-    { name: 'the legacy macOS desktop-kit shape', target: 'macos', mutate: kit => rewriteJson(kitManifest(kit), manifest => { manifest.schema_version = 1; manifest.kind = 'echo-person-onboarding-kit-v1'; }, JSON.stringify) },
+    { name: 'a Linux kit without bootstrap metadata', target: 'linux', mutate: kit => rewriteJson(kitManifest(kit), manifest => { delete manifest.update_bootstrap; }, JSON.stringify) },
     { name: 'unreviewed installer bytes', target: 'linux', mutate: kit => writeFileSync(join(kit, 'Start-ECHO.sh'), 'unreviewed source') },
     { name: 'an unexpected archive member', target: 'linux', mutate: kit => writeFileSync(join(kit, 'unexpected'), 'not in the kit contract') },
   ])('rejects $name before preparing a feed', ({ target, mutate }) => {
@@ -92,18 +88,6 @@ describe('approved update feed publisher', () => {
     expect(existsSync(f.output)).toBe(false);
   });
 
-  it('retains preparation and audit support for legacy Linux kits without bootstrap metadata', () => {
-    const f = fixture();
-    rewriteJson(kitManifest(f.kits.linux.directory), manifest => { delete manifest.update_bootstrap; }, JSON.stringify);
-    f.kits.linux.rebuild();
-    const prepared = f.prepare();
-    expect(prepared.status, prepared.stderr).toBe(0);
-    f.authorize();
-    expect(f.seal().status).toBe(0);
-    expect(f.validateSealed().status).toBe(0);
-  });
-
-  // A refused preparation writes nothing, so one fixture serves every case.
   it('refuses preparation without any one of the release artifacts', () => {
     const f = fixture();
     for (const missing of RELEASE_ARTIFACTS) {
@@ -130,23 +114,6 @@ describe('approved update feed publisher', () => {
       expect(sealed.status, name).toBe(1);
       expect(sealed.stderr, name).toContain('all_release_targets_required');
       expect(existsSync(join(f.output, 'feed.json')), name).toBe(false);
-    }
-  });
-
-  it('still audits previously signed reduced feeds, including after expiry', () => {
-    const f = fixture();
-    expect(f.prepare().status).toBe(0);
-    const prepared = readFileSync(join(f.output, 'manifest.json'));
-    for (const [name, keep] of reductions) {
-      writeFileSync(join(f.output, 'manifest.json'), prepared);
-      const manifest = f.retain(keep);
-      f.authorize();
-      // Historical bytes are constructed directly, without asking new-release
-      // preparation or sealing to authorize a CLI-only publication.
-      f.writeHistoricalEnvelope();
-      const audited = f.validateSealed();
-      expect(audited.status, `${name}: ${audited.stderr}`).toBe(0);
-      expect(f.validateSealed(Date.parse(manifest.expires_at) + 1, true).status, name).toBe(0);
     }
   });
 

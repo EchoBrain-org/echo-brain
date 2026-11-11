@@ -683,15 +683,12 @@ try:
     status = json.loads(raw)
     if len(raw) > 16384 or not isinstance(status, dict):
         raise ValueError()
-    # V1 is a read-only release-health contract needed when rolling back to an
-    # accepted older image. It does not re-enable organization Granola setup.
-    versions = {1: "echo-clean-founder-setup-status-v1", 2: "echo-organization-authority-setup-status-v2"}
     version = status.get("schema_version")
-    if type(version) is not int or versions.get(version) != status.get("kind"):
+    if type(version) is not int or version != 2 or status.get("kind") != "echo-organization-authority-setup-status-v2":
         raise ValueError()
     if status.get("runtime_status") == "ready_to_start":
         print("ready")
-    elif version == 2 and all(status.get(key) is True for key in (
+    elif all(status.get(key) is True for key in (
         "setup_plan_present", "genesis_published", "credentials_ready",
         "invitation_file_present", "founder_oidc_bound",
     )) and status.get("founder_invitation_valid") is False and \

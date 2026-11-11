@@ -300,13 +300,6 @@ describe("authority offline recovery verifier", () => {
         ),
     ],
     [
-      "a connector rehearsal sidecar in an offline backup restore",
-      (cleanData: string) =>
-        mkdirSync(join(cleanData, "staging-connector-rehearsal-v1"), {
-          mode: 0o700,
-        }),
-    ],
-    [
       "a state SQLite symlink before lineage or SQLite inspection",
       (cleanData: string) => {
         const database = join(cleanData, "state", "authority.sqlite");

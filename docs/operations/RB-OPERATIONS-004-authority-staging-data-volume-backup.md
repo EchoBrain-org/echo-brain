@@ -266,9 +266,8 @@ requirements. Only the differences below apply to the slot.
   release, onboarding, backup-maintenance and Session Manager paths. The
   account administrator picks one and accepts that pause for the drill.
 - Provider grants. The offline verifier refuses, by design, any restore that
-  contains `state/confluence-person-connections.sqlite`,
-  `private/staging-connector-rehearsal.json` or a
-  `staging-connector-rehearsal-v1/` sidecar, because an archived person-bound
+  contains `state/confluence-person-connections.sqlite` or
+  `private/staging-connector-rehearsal.json`, because an archived person-bound
   grant cannot be requalified offline. It refuses before its lineage and
   SQLite integrity checks, with one opaque message. If anyone on the slot has
   connected Confluence, or the staging connector rehearsal is selected, the

@@ -314,7 +314,6 @@ function inspectPrivateDirectory(path, expectedOwner) {
 function refuseLiveProviderGrantRecovery(cleanData, privateDirectory) {
   for (const path of [
     join(privateDirectory, "staging-connector-rehearsal.json"),
-    join(cleanData, "staging-connector-rehearsal-v1"),
     join(cleanData, "state", "confluence-person-connections.sqlite"),
   ]) {
     try {

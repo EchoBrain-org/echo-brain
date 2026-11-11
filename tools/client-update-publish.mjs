@@ -242,8 +242,6 @@ export async function executeClientUpdatePublish({ receipt: path, approveManifes
     if (receipt.state === 'unconfirmed') fail('publication_unconfirmed_use_status');
     let inputs = boundInputs(receipt, d);
     if (receipt.state === 'succeeded') return summary(receipt, inputs, d);
-    // Historical CLI-only receipts may be inspected, but never resumed with new writes.
-    if (receipt.objects.some(object => !object.attempted)) requireReleaseTargets(inputs.manifest);
     const verifyServer = acceptedServerCheck(serverStatus, d);
     if (receipt.objects.some(object => !object.attempted)) verifyServer(inputs.manifest);
     try {

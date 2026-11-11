@@ -153,9 +153,8 @@ a human deletes the old connections in Nango's dashboard, with no host access:
 the Jira connections created for the staging organization before that release,
 under the profile's Jira integration and tagged with the staging
 organization's `organization_id`. A member's new connection is created after
-the release, so it is never one of them. Keeping or removing the old sidecar
-directory does not change startup or host restore while the profile is
-selected. The owner-only `status` and `verify-read` runner
+the release, so it is never one of them. Nothing reads or checks the old
+sidecar directory. The owner-only `status` and `verify-read` runner
 (`npm run authority:staging-connector-rehearsal`) and its
 `/v1/staging/connector-rehearsal` route are gone; check Jira with an ordinary
 Ask instead.

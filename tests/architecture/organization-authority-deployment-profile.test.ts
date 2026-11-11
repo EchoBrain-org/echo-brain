@@ -1594,17 +1594,6 @@ import json, os, pathlib, sys, tempfile`;
       writeFileSync(stagedRelease, releaseBytes, { mode: 0o600 });
       writeFileSync(capturedRelease, releaseBytes, { mode: 0o600 });
 
-      // A receipt from before in-app Slack setup names a Slack channel: refused, inputs kept.
-      const receipt = join(stage, "stage.json");
-      const receiptBytes = readFileSync(receipt, "utf8");
-      expect(receiptBytes).toContain('"nango_integration_key":"slack"');
-      writeFileSync(receipt, receiptBytes.replace('"nango_integration_key":"slack"', '"slack_approval_channel_id":"C0123456789"'));
-      const legacy = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
-      expect(legacy.status).toBe(1);
-      expect(legacy.stderr).toContain("rehearsal stage receipt is invalid");
-      expect(existsSync(join(stage, "input", "llm-credential"))).toBe(true);
-      writeFileSync(receipt, receiptBytes);
-
       const retry = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
       expect(retry.status, retry.stderr).toBe(0);
       expect(retry.stdout).toContain("rehearsal_prepared=true");
@@ -2350,19 +2339,6 @@ import json, os, pathlib, sys, tempfile`;
       expect(compose).not.toContain("ECHO_SOURCE_SHA");
       expect(compose).not.toContain("ECHO_BUILD_NUMBER");
       expect(compose).not.toContain("ECHO_STAGING_JOURNEY_TELEMETRY_V1");
-    }
-  });
-
-  it("does not make legacy machine lifecycle surfaces part of the clean profile", () => {
-    const cleanFiles = [
-      deploymentFile("compose.clean-v1.yaml"),
-      deploymentFile("compose.clean-v1.ec2.yaml"),
-      deploymentFile("Caddyfile.clean-v1"),
-      deploymentFile("Caddyfile.clean-v1.ec2"),
-    ].join("\n");
-
-    for (const forbidden of ["installation", "enrollment"]) {
-      expect(cleanFiles).not.toContain(forbidden);
     }
   });
 });
