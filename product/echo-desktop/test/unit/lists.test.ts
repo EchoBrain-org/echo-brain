@@ -34,7 +34,7 @@ beforeEach(() => {
       return ok(params.cursor === undefined ? { items: people.slice(0, 10), next_cursor: `dir|${query}` } : { items: people.slice(10), next_cursor: null });
     },
     'runs': params => (params.request as { operation: string }).operation === 'items'
-      ? ok({ items: [], next_cursor: null, summary: { open: 0, last_checked_at: null }, stages: [] }) : fail('unavailable', { retryable: true }),
+      ? ok({ items: [], next_cursor: null, summary: { open: 0 }, stages: [] }) : fail('unavailable', { retryable: true }),
     'dialog.openDocument': () => ok({ handle: 'h1', name: 'brief.txt' }),
     'documents.retry': params => ok({ request_id: params.request_id }),
     'account.signOut': () => ok({ signed_in: false, account: null }),

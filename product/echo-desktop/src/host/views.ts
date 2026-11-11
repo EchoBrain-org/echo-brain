@@ -399,19 +399,13 @@ export function openItemView(item: PersonOpenItemV1): OpenItemView {
     } }),
     relation: item.relation, expected: item.expected, approver: item.approver, owner: item.owner, waits_on: item.waits_on, state: item.state,
     created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at, state_set_by: item.state_set_by, owner_set_at: item.owner_set_at,
-    owner_set_by: item.owner_set_by, send_included: item.send_included, check: item.check, can: item.can, reach: item.reach,
+    owner_set_by: item.owner_set_by, send_included: item.send_included, can: item.can, reach: item.reach,
   };
 }
 
-/**
- * Home's part of the runs: Send rows, the items that wait on this viewer, and how many of the rest wait on others. `landed`,
- * `last_checked_at` and `sweep_due` are retired (the Authority sends 0, null and false until V17) and cross unread.
- */
+/** Home's part of the runs: Send rows, the items that wait on this viewer, and how many of the rest wait on others. */
 export function homeView(result: PersonRunsResultsV1['home']): HomeView {
-  return {
-    send: result.send, items: result.items.map(openItemView), landed: result.landed, waiting: result.waiting, last_checked_at: result.last_checked_at,
-    sweep_due: result.sweep_due,
-  };
+  return { send: result.send, items: result.items.map(openItemView), waiting: result.waiting };
 }
 
 /** A page of a scope's open items, with the scope's summary and each decision's check. */

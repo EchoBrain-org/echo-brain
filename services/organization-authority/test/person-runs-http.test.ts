@@ -12,8 +12,8 @@ const RECORD = `sha256:${'a'.repeat(64)}`;
 const PROJECT = 'prj_00000000-0000-4000-8000-000000000003';
 /** One valid request per open-items operation, and the result its method answers. */
 const OPEN_ITEMS = {
-  home: [{ schema_version: 1, operation: 'home' }, { send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false }],
-  items: [{ schema_version: 1, operation: 'items', scope: 'record', id: RECORD }, { items: [], next_cursor: null, stages: [], summary: { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] } }],
+  home: [{ schema_version: 1, operation: 'home' }, { send: [], items: [], waiting: 0 }],
+  items: [{ schema_version: 1, operation: 'items', scope: 'record', id: RECORD }, { items: [], next_cursor: null, stages: [], summary: { unsent: 0, open: 0, done: 0, not_relevant: 0, decisions: 0, by_decision: [] } }],
   item: [{ schema_version: 1, operation: 'item', item_id: ITEM }, { item: { item_id: ITEM } }],
   send: [{ schema_version: 1, operation: 'send', run_id: RUN, command_id: 'cmd-1', items: [{ item_id: ITEM, include: true, owner_membership_id: MEMBER }] }, { sent: 1, not_relevant: 0 }],
   set_state: [{ schema_version: 1, operation: 'set_state', item_id: ITEM, state: 'done' }, { state: 'done' }],

@@ -5098,13 +5098,13 @@ export interface DecisionState {
  * Rows that wait on you first; what is on its way last. A check that did not
  * finish (Retry) comes right after the decisions to approve: it needs you, and
  * further down a long Home would hide it. Every item that waits on you is an
- * Update row, in the order Home read them. Only impact checks make rows.
+ * Update row, in the order Home read them.
  * An approval's checks are its records' runs, one per destination: a meeting
  * makes one row, failed when any check did not finish, else checking while
  * any is on its way.
  */
 export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readonly PersonRunV1[], open: HomeView | null): NeedRow[] {
-  const byRecord = new Map(runs.filter(run => run.trigger === 'approved_record').map(run => [run.event_ref, run]));
+  const byRecord = new Map(runs.map(run => [run.event_ref, run]));
   const approve: NeedRow[] = [];
   const failed: NeedRow[] = [];
   const checking: NeedRow[] = [];

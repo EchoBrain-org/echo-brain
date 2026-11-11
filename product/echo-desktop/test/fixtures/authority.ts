@@ -920,8 +920,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       relation: item.relation, expected: item.expected, approver: { ...item.approver, active: true }, owner: { ...item.owner, active: true },
       waits_on: item.state === 'unsent' ? 'approver' : 'owner', state: item.state, created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at,
       state_set_by: person(item.state_set_by), owner_set_at: item.owner_set_at, owner_set_by: person(item.owner_set_by),
-      // `check` is retired with sweeps: null, as the Authority sends it until V17.
-      send_included: item.send_included, check: null,
+      send_included: item.send_included,
       can: { set_state: item.state !== 'unsent' && involved(item), assign: item.state === 'unsent' ? item.approver.membership_id === ARI.membership_id : involved(item) },
       reach,
     };
@@ -1175,8 +1174,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         }
         // Home: the Send row while Ari's check has items not sent, and the open items that wait on
         // Ari; then how many of the open items Ari sent wait on others. Rows only: no live read.
-        // `landed`, `last_checked_at` and `sweep_due` are retired with sweeps: 0, null and false, as
-        // the Authority sends them until V17.
         case 'home': {
           const unsent = shown.filter(item => item.run_id === runId && item.state === 'unsent');
           const send = run?.state === 'done' && unsent.length > 0 ? [{
@@ -1189,8 +1186,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           const theirs = shown.filter(item => item.state === 'open' && involved(item));
           return result('home', {
             send, items: theirs.filter(mineAsOwner).sort((a, b) => since(b).localeCompare(since(a))).slice(0, 20).map(item => itemView(item, live)),
-            landed: 0, waiting: theirs.filter(item => item.approver.membership_id === ARI.membership_id && !mineAsOwner(item)).length,
-            last_checked_at: null, sweep_due: false,
+            waiting: theirs.filter(item => item.approver.membership_id === ARI.membership_id && !mineAsOwner(item)).length,
           });
         }
         case 'items': {
@@ -1226,12 +1222,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           const counts = request.read === 'counts';
           const paged = counts ? [] : listed.slice(from, from + size);
           const next = !counts && from + size < listed.length ? pageCursor(pageKey, from + size) : null;
-          // The verdict counts and `last_checked_at` are retired with sweeps: 0 and null, as the Authority sends them until V17.
           return result('items', { items: paged.map(item => itemView(item, live)), next_cursor: next, stages, summary: {
             unsent: count('unsent'), open: count('open'), done: count('done'), not_relevant: count('not_relevant'),
-            landed: 0, changed: 0, unreadable: 0, decisions: records.length, last_checked_at: null, by_decision: records.map(record => {
+            decisions: records.length, by_decision: records.map(record => {
               const of = items.filter(item => item.decision.record_sha256 === record);
-              return { record_sha256: record, unsent: count('unsent', of), open: count('open', of), landed: 0, unreadable: 0 };
+              return { record_sha256: record, unsent: count('unsent', of), open: count('open', of) };
             }),
           } });
         }

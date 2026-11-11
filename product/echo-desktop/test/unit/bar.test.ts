@@ -25,7 +25,7 @@ const item = (title: string, approved_at: string): OpenItemView => ({
   item_id: `itm_${title.length}`, run_id: 'run_00000000-0000-4000-8000-000000000020', kind: 'ticket', decision: decision(title, approved_at), relation: 'conflicts',
   expected: 'launch next week', approver: person, owner: { ...person, match: 'jira_account' }, waits_on: 'owner', state: 'open',
   created_at: approved_at, sent_at: approved_at, state_set_at: approved_at, state_set_by: person, owner_set_at: null, owner_set_by: null, send_included: true,
-  check: null, can: { set_state: true, assign: true }, reach: 'not_read',
+  can: { set_state: true, assign: true }, reach: 'not_read',
 });
 const meeting = (title: string, day: number): ListItem => ({
   ref: { kind: 'meeting', id: `sha256:${String(day).padStart(64, '0')}` }, title, added_at: `2026-10-${String(day).padStart(2, '0')}T10:00:00.000Z`, visibility: 'project',
@@ -39,7 +39,7 @@ let home: HomeView;
 let feed: ListItem[];
 storeLifecycle(new Date('2026-10-19T11:00:00.000Z'));
 beforeEach(() => {
-  home = { send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false };
+  home = { send: [], items: [], waiting: 0 };
   feed = [];
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(new Held(), {
