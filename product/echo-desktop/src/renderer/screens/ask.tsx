@@ -1,7 +1,7 @@
 import { Fragment, type ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type {
-  Answer, AnswerEvent, AnswerFact, AnswerPart, AnswerSource, ArrangedBlock, CardEntity, ExternalAnswerSource, AnswerStatement,
+  TimelineAnswer, AnswerEvent, AnswerFact, AnswerPart, AnswerSource, ArrangedBlock, CardEntity, ExternalAnswerSource, AnswerStatement,
   ApprovedRecord, OpenItemView, RecordItem, TimelineTurn, ToolContainerKind,
 } from '../../shared/protocol.js';
 import {
@@ -129,7 +129,7 @@ export function Bar({ state }: { state: State }) {
  */
 interface TurnView {
   readonly id: string;
-  readonly answer: Answer;
+  readonly answer: TimelineAnswer;
   readonly groups: readonly SourceGroup[];
   readonly checks: TurnChecks | undefined;
   readonly shows: Shows;

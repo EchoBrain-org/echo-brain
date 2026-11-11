@@ -2,8 +2,6 @@ import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type {
   PersonDocumentExtractionStateV1,
   PersonDocumentMediaTypeV1,
-  PersonOpenMeetingAtomV1,
-  PersonOpenMeetingDetailV1,
   ProjectIdV1,
   ProjectRoleV1,
   ProjectStatusV2,
@@ -83,12 +81,10 @@ export type PersonMeetingCollectionV1 =
   /** A verified index lag with a record this reader can read after it: nothing collected, nothing audited. */
   | Readonly<{ status: "held" }>
   | Readonly<{ status: "ok"; rows: readonly PersonStoreMeetingRowV1[]; handle: PersonStoreHandleV1 }>;
-/** Inclusive: the first part the next page returns. */
-export interface PersonMeetingPartPositionV1 { readonly atom_order: number; readonly part: number }
 
 /**
- * Approved meetings, listed from the exact-head readable-search generation and
- * opened through the Layer 1 exact read. The approver stays server-only.
+ * Approved meetings, listed from the exact-head readable-search generation. A
+ * listed meeting is read as its record (`GET /v1/person/records`), never opened.
  */
 export interface PersonMeetingItemsPortV1 {
   /** Unaudited. rows.length < limit ⇒ meetings are exhausted. */
@@ -101,19 +97,6 @@ export interface PersonMeetingItemsPortV1 {
   }): PersonMeetingCollectionV1;
   /** Fences the session and grants, then audits exactly the first `count` rows it returned. */
   commitMeetings(input: { readonly access_token: string; readonly handle: PersonStoreHandleV1; readonly count: number }): PersonStoreReleaseV1;
-  /** Global access. Every item failure: AuthorityOperationError('not_found'). Audited. */
-  openMeeting(input: {
-    readonly access_token: string;
-    readonly record_sha256: `sha256:${string}`;
-    readonly from?: PersonMeetingPartPositionV1;
-  }): {
-    readonly row: PersonStoreMeetingRowV1;
-    /** Present iff `from` is undefined. */
-    readonly meeting?: PersonOpenMeetingDetailV1;
-    readonly atoms: readonly PersonOpenMeetingAtomV1[];
-    readonly next: PersonMeetingPartPositionV1 | null;
-    readonly release: PersonStoreReleaseV1;
-  };
   /** Throws unauthorized when the session tuple or the caller's grants changed. */
   revalidateMeetingRelease(input: { readonly access_token: string; readonly release: PersonStoreReleaseV1 }): void;
 }

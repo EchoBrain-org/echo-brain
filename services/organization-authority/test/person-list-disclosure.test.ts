@@ -5,9 +5,8 @@ import {
   PERSON_ANSWER_PATH_V7,
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
-  validatePersonAnswerResponseV8,
+  createPersonAskProgressDecoderV3,
   type PersonListResponseV1,
-  type PersonOpenMeetingV1,
   type PersonOpenResponseV1,
 } from "@echo-brain/organization-api";
 import type { StructuredGenerationInput, StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
@@ -32,6 +31,7 @@ import { createPersonListRouteV1 } from "../src/composition/person-list-v1-route
 import { personMeetingReleaseOptionsV1 } from "../src/composition/person-record-search-route.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
+import { decodeAll } from "./fixtures/ask-over-http.js";
 import { APPROVER_X, EMP_A, EMP_B, EMP_C, EVERYONE, OWNER, PROJECT_NAMES, PROJ_X, SHARED, T, UNJOINED, meetingWorld, type MeetingWorldV1 } from "./fixtures/person-meeting-world.js";
 import { addMembership, authorization, seedProject } from "./fixtures/project-context-sqlite.js";
 import { SIGNED_APPROVAL_APPROVER, SIGNED_APPROVAL_PRIVATE_MARKER } from "./fixtures/signed-approval-decision-v1.js";
@@ -174,7 +174,6 @@ async function disclosureWorld() {
   const meetings: PersonMeetingItemsPortV1 = counted({
     collectMeetings: (input) => { const collected = records.collectMeetings(input); hooks.afterCollect?.(); return collected; },
     commitMeetings: (input) => records.commitMeetings(input),
-    openMeeting: (input) => records.openMeeting(input),
     revalidateMeetingRelease: (input) => records.revalidateMeetingRelease(input),
   } satisfies PersonMeetingItemsPortV1, storeCalls);
   // N-16's Ask model lists both sources, opens everything they list, four reads a step, and cites all of it.
@@ -255,15 +254,16 @@ async function disclosureWorld() {
     .map((row) => JSON.parse(row.body_json) as Record<string, unknown>).filter((body) => body.kind === "echo-person-original-item-release-audit-v1");
   const meeting = (name: string) => `meeting:${w.digest(name)}`;
   const ask = async (token: Token, request: Readonly<Record<string, unknown>> = {}) => post(PERSON_ANSWER_PATH_V7, token, { schema_version: 3, question: "What did I add?", ...request });
-  return { w, refs, requestIds, list, open, walk, listed, refsOf, openAll, ask, admitNotes, bodies, pageAudits, originalAudits, meeting, storeCalls, hooks };
+  return { w, refs, requestIds, list, open, walk, listed, refsOf, openAll, ask, admitNotes, bodies, pageAudits, originalAudits, meeting, records, storeCalls, hooks };
 }
 
 type World = Awaited<ReturnType<typeof disclosureWorld>>;
 const guessed = {
   note: `note:ctx_${"0".repeat(64)}`,
   document: `document:doc_${"0".repeat(64)}`,
-  meeting: `meeting:${sha256Digest("pending-approval-without-a-record")}`,
 };
+/** A listed meeting is read as its record, never opened (2026-11-11): only notes and documents open. */
+const opens = (ref: string) => !ref.startsWith("meeting:");
 
 /** Every scope a reader can list: only me and each project the reader joined, as the list reads them. */
 function scopes(f: World, token: Token): Readonly<Record<string, unknown>>[] {
@@ -279,12 +279,11 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
     expect(before.map((item) => item.ref)).toEqual(expect.arrayContaining([f.refs.empASharedDocument, f.refs.empATeamNote, f.meeting("r4"), f.meeting("r3")]));
     // r6 went with PROJ_X, which EMP_A left after approving it.
     expect(await f.list("emp_a", { project_id: PROJ_X })).toEqual({ status: 401, text: UNAUTHORIZED_BODY });
-    expect(await f.open("emp_a", f.meeting("r6"))).toEqual({ status: 404, text: NOT_FOUND_BODY });
     f.w.leave(SHARED, EMP_A);
     const gone = [f.refs.empASharedNote, f.refs.empASharedDocument, f.meeting("r4"), f.meeting("r3"), f.meeting("r6")];
     const onlyMe = await f.listed("emp_a", { only_me: true });
     for (const ref of gone) expect(onlyMe.map((item) => item.ref)).not.toContain(ref);
-    for (const ref of gone) expect(await f.open("emp_a", ref)).toEqual({ status: 404, text: NOT_FOUND_BODY });
+    for (const ref of gone.filter(opens)) expect(await f.open("emp_a", ref)).toEqual({ status: 404, text: NOT_FOUND_BODY });
     // The team note stays readable, but no longer names the left project.
     expect((JSON.parse((await f.open("emp_a", f.refs.empATeamNote)).text) as PersonOpenResponseV1).item).toMatchObject({ visibility: "team", projects: [] });
     // Only me is who can read it, not where it is filed: it stays the reader's, filed in no project of theirs.
@@ -305,7 +304,7 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
       for (const ref of gone) expect({ scope, ref, listed: items.some((item) => item.ref === ref) }).toEqual({ scope, ref, listed: false });
     }
     expect((JSON.parse((await f.open("owner", f.refs.empATeamNote)).text) as PersonOpenResponseV1).item).toMatchObject({ visibility: "team", projects: [] });
-    for (const ref of gone) expect(await f.open("owner", ref)).toEqual({ status: 404, text: NOT_FOUND_BODY });
+    for (const ref of gone.filter(opens)) expect(await f.open("owner", ref)).toEqual({ status: 404, text: NOT_FOUND_BODY });
     expect(await f.list("owner", { project_id: SHARED })).toEqual({ status: 401, text: UNAUTHORIZED_BODY });
     expect((await f.list("owner", { project_id: OWNER_B })).status).toBe(200);
     // A member who stayed still sees the owner's item there.
@@ -334,14 +333,14 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
         }
         // Own only-me items are listed to their author.
         if (token !== "emp_b") expect(await f.refsOf(token, { only_me: true })).toContain(token === "owner" ? f.refs.ownerOnlyNote : f.refs.empAOnlyNote);
-        for (const ref of [...hidden[token], ...Object.values(guessed)]) {
+        for (const ref of [...hidden[token].filter(opens), ...Object.values(guessed)]) {
           const response = await f.open(token, ref);
           expect({ ref, status: response.status, text: response.text }).toEqual({ ref, status: 404, text: NOT_FOUND_BODY });
         }
       }
       // N-8: a guess and an existing unreadable ref of each kind answer byte for byte alike.
-      const unreadable = { note: f.refs.ownerOnlyNote, document: f.refs.ownerOnlyDocument, meeting: f.meeting("r2") };
-      for (const kind of ["note", "document", "meeting"] as const) {
+      const unreadable = { note: f.refs.ownerOnlyNote, document: f.refs.ownerOnlyDocument };
+      for (const kind of ["note", "document"] as const) {
         expect((await f.open("emp_b", unreadable[kind])).text).toBe((await f.open("emp_b", guessed[kind])).text);
       }
       expect(f.pageAudits().filter((audit) => audit.operation === "person_open")).toHaveLength(0);
@@ -362,7 +361,7 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
           }
         }
         for (const ref of [f.meeting("r1"), f.meeting("r7a"), f.meeting("r7b"), f.meeting("quoted")]) expect({ token, ref, listed: opened.has(ref) }).toEqual({ token, ref, listed: true });
-        for (const ref of opened) await f.openAll(token, ref);
+        for (const ref of [...opened].filter(opens)) await f.openAll(token, ref);
       }
       for (const token of ["owner", "emp_a"] as const) {
         const multi = (await f.listed(token, { project_id: SHARED })).filter((item) => item.ref === f.refs.unjoinedNote || item.ref === f.refs.unjoinedDocument || item.ref === f.meeting("r3"));
@@ -421,10 +420,10 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
       expect(await f.list("emp_b", { only_me: true, cursor: documentPage!.next_cursor! })).toEqual(refused);
     });
 
-    it("N-6, N-7: every scope lists an item as its open names it, so no scope shapes a row of its own", async () => {
+    it("N-6, N-7: every scope lists a note or document as its open names it, so no scope shapes a row of its own", async () => {
       for (const token of ["owner", "emp_a", "emp_b"] as const) {
         for (const scope of scopes(f, token)) {
-          for (const item of await f.listed(token, scope)) {
+          for (const item of (await f.listed(token, scope)).filter((row) => opens(row.ref))) {
             const opened = JSON.parse((await f.open(token, item.ref)).text) as PersonOpenResponseV1;
             expect({ scope, item: "item" in opened ? opened.item : undefined }).toEqual({ scope, item });
           }
@@ -475,15 +474,13 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
     });
   });
 
-  it("N-13: no meeting offers a transcript, and a transcript ref, the retired open kind (ADR-0046), is an invalid request for every reader", async () => {
+  it("N-13: a transcript ref (ADR-0046) and a meeting ref, the retired open kinds, are an invalid request for every reader", async () => {
     const f = await disclosureWorld();
-    const r4 = (await f.openAll("emp_a", f.meeting("r4")))[0] as PersonOpenMeetingV1;
-    // The final approver's current directory name, the only approver attribution.
-    expect(r4.meeting?.approved_by).toBe("Ari Employee");
-    for (const name of ["r1", "r4", "quoted"]) expect((await f.openAll("emp_a", f.meeting(name)))[0]).not.toHaveProperty("transcript_ref");
     const refused = [
       ["emp_a", `transcript:${f.w.digest("r4")}`], ["emp_b", `transcript:${f.w.digest("r4")}`],
       ["owner", `transcript:${f.w.digest("r2")}`], ["owner", `transcript:${sha256Digest("pending-approval-without-a-record")}`],
+      // Readable, unreadable and unknown alike: a listed meeting is read as its record.
+      ["emp_a", f.meeting("r4")], ["emp_b", f.meeting("r4")], ["owner", f.meeting("r2")], ["owner", `meeting:${sha256Digest("pending-approval-without-a-record")}`],
     ] as const;
     for (const [token, ref] of refused) expect(await f.open(token, ref)).toEqual({ status: 400, text: INVALID_BODY });
   });
@@ -509,7 +506,7 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
     }
   });
 
-  it("N-16, N-17: Ask cites only what the reader may read, every citation opens, and mine is no Ask scope", async () => {
+  it("N-16, N-17: Ask cites only what the reader may read, every citation opens or is a readable record, and mine is no Ask scope", async () => {
     const f = await disclosureWorld();
     await f.admitNotes();
     // EMP_B holds only EVERYONE: it reads its own Only me approval, the meetings shared with EVERYONE (the quoted one
@@ -519,12 +516,16 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
     ]);
     const response = await f.ask("emp_b");
     expect(response.status).toBe(200);
-    const answer = validatePersonAnswerResponseV8(JSON.parse(response.text));
+    const terminal = decodeAll(createPersonAskProgressDecoderV3(), response.text).at(-1);
+    if (terminal?.type !== "answer") throw new Error("expected the answer event");
+    const answer = terminal.response;
     expect(answer.scope).toEqual({ kind: "global" });
     const refs = answer.citations.map((citation) => citation.ref ?? "");
     // The model took every item the desk offered: exactly what the reader may read, and nothing else.
     expect(new Set(refs)).toEqual(readable);
-    for (const ref of readable) expect({ ref, status: (await f.open("emp_b", ref)).status }).toEqual({ ref, status: 200 });
+    for (const ref of [...readable].filter(opens)) expect({ ref, status: (await f.open("emp_b", ref)).status }).toEqual({ ref, status: 200 });
+    const records = [...readable].filter((ref) => !opens(ref)).map((ref) => ref.slice("meeting:".length) as Sha256Digest);
+    expect([...f.records.readableDecisions({ access_token: "emp_b", record_sha256s: records }).keys()].sort()).toEqual([...records].sort());
     // Mine, only what the asker added or approved, is retired: alone or with a project it is a bad request.
     for (const token of ["owner", "emp_a"] as const) {
       for (const request of [{ mine: true }, { mine: true, project_id: SHARED }]) expect(await f.ask(token, request)).toEqual({ status: 400, text: INVALID_BODY });

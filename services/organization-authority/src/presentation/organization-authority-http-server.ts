@@ -1,10 +1,7 @@
 import {
   PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1,
 } from "@echo-brain/organization-api";
-import {
-  PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
-  type PersonAskProgressErrorStatusV1,
-} from "@echo-brain/organization-api";
+import type { PersonAskProgressErrorStatusV1 } from "@echo-brain/organization-api";
 import { startPersonAskProgressStreamV1, type PersonAskProgressStreamV1 } from "./person-ask-progress-stream-v1.js";
 import {
   PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
@@ -468,21 +465,18 @@ function askOptions(request: IncomingMessage): { readonly time_context?: PersonA
   return time_context === undefined ? {} : { time_context };
 }
 
-/** Ask and list reads check the bearer and install cancellation before reading any body bytes. */
+/** List and other cancellable reads check the bearer and install cancellation before reading any body bytes. */
 function personCancellablePost<Application, Request>(
   application: Application,
   validate: (value: unknown) => Request,
-  read: (application: Application, input: {
-    readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly signal: AbortSignal;
-  }) => Promise<unknown>,
-  ask = false,
+  read: (application: Application, input: { readonly access_token: string; readonly request: Request; readonly signal: AbortSignal }) => Promise<unknown>,
 ): PersonPostHandler {
   return async (request, response) => {
     const access_token = accessToken(request.headers.authorization);
     const disconnect = disconnectSignal(request, response);
     try {
       const requestBody = await personBody(request, validate);
-      json(response, 200, await read(application, { access_token, request: requestBody, ...(ask ? askOptions(request) : {}), signal: disconnect.signal }));
+      json(response, 200, await read(application, { access_token, request: requestBody, signal: disconnect.signal }));
     } finally { disconnect.dispose(); }
   };
 }
@@ -496,17 +490,15 @@ const streamedFailureStatus = new WeakMap<ServerResponse, number>();
 
 /**
  * `POST /v7/person/ask`, the V8 answer (research tool contract v1): the only
- * Ask route, since `/v3` to `/v6` were retired. A client that sends the
- * progress header value `3` gets the same Ask as server-sent events in Ask
- * progress V3 (ADR-0039), once the request authenticated and validated; before
- * that, and for any other value, the response is the JSON V8 answer. The
- * request may carry the asker's previous turn (ADR-0047), streamed or not. A
- * disconnect still cancels the Ask, and nothing more is written.
+ * Ask route, since `/v3` to `/v6` were retired. Every Ask streams as
+ * server-sent events in Ask progress V3 (ADR-0039) once the request
+ * authenticated and validated; before that, a failure is the JSON error. The
+ * plain JSON answer and the opt-in header were retired on 2026-11-11. The
+ * request may carry the asker's previous turn (ADR-0047). A disconnect still
+ * cancels the Ask, and nothing more is written.
  */
 function personAskV7Post(application: PersonAnswerV7HttpApplication): PersonPostHandler {
-  const plain = personCancellablePost(application, validatePersonAnswerRequestV3, (served, input) => served.ask(input), true);
   return async (request, response) => {
-    if (application.askWithProgress === undefined || request.headers[PERSON_ASK_PROGRESS_HEADER_V1] !== PERSON_ASK_PROGRESS_HEADER_VALUE_V3) { await plain(request, response); return; }
     const access_token = accessToken(request.headers.authorization);
     const disconnect = disconnectSignal(request, response);
     let stream: PersonAskProgressStreamV1 | undefined;

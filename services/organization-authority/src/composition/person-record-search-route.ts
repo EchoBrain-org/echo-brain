@@ -21,12 +21,8 @@ import {
 import { validateOrganizationRecordEnvelopeV4, type OrganizationRecordDecisionBriefV1, type RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import {
   PERSON_LIST_TEXT_MAX_BYTES_V1,
-  PERSON_OPEN_ATOMS_BUDGET_BYTES_V1,
-  PERSON_OPEN_ATOMS_MAX_V1,
   validateProjectIdV1,
   type PersonAnswerCitationV3,
-  type PersonOpenMeetingAtomV1,
-  type PersonOpenMeetingDetailV1,
   type PersonRecordSearchV2,
   type ProjectIdV1,
 } from "@echo-brain/organization-api";
@@ -56,9 +52,8 @@ import {
   approverDisplayNameV1,
   approverTupleV1,
   confirmedOwners,
-  meetingAtomsV1,
   meetingDateV1,
-  meetingDetailV1,
+  meetingParticipantsV1,
   type ApproverMembershipsV1,
   type RecordMetadataV1,
 } from "./person-meeting-items-v1.js";
@@ -67,7 +62,6 @@ import type {
   PersonListStoreScopeV1,
   PersonMeetingCollectionV1,
   PersonMeetingItemsPortV1,
-  PersonMeetingPartPositionV1,
   PersonStoreHandleV1,
   PersonStoreMeetingRowV1,
   PersonStoreReleaseV1,
@@ -200,8 +194,8 @@ interface PersonRecordDeskItemV1 {
   readonly list_label: string;
   readonly visibility: "project" | "projects" | "approver_only";
   /**
-   * The atom's own facts, and its meeting's as the person open shows them (PersonOpenMeetingDetailV1): the participants'
-   * names, and the final approver's current directory name (research tool contract v1). Released with the atom only.
+   * The atom's own facts, and its meeting's: the participants' names, and the final approver's current directory name
+   * (research tool contract v1). Released with the atom only.
    */
   readonly attributes?: Readonly<{ owner?: string; due_at?: string; status?: string; participants?: string; approved_by?: string }>;
   readonly occurred_at?: string;
@@ -299,7 +293,7 @@ export interface PersonRecordIndexReadinessV1 {
 export interface PersonRecordActionV1 {
   /** The action's signal id in the approved brief. */
   readonly signal_id: string;
-  /** The action's approved text, as the person open contract releases a body. */
+  /** The action's approved text, released as a body is (releasableBodyV1). */
   readonly text: string;
   /** The owner the approver confirmed on Approve (ADR-0021), else null; never the brief's own owner field. */
   readonly owner: string | null;
@@ -631,14 +625,6 @@ function approvalTime(envelope: RecordEnvelopeV4): string {
   return receiptTime(envelope.body.issued_at);
 }
 
-/**
- * A meeting's participants as one row fact (research tool contract v1): the names the person open releases
- * (`meetingDetailV1`), joined with ", ", ending ", and more" when the meeting recorded more than it releases.
- */
-function participantsLine(detail: Pick<PersonOpenMeetingDetailV1, "participants" | "participants_more">): string | undefined {
-  return detail.participants.length === 0 ? undefined : `${detail.participants.join(", ")}${detail.participants_more ? ", and more" : ""}`;
-}
-
 /** What naming a record's final approver takes: the record's coordinates, the approver projectors and the directory. */
 type DeskPresentationV1 = Pick<CreatePersonRecordSearchRouteV1Options, "authority_id" | "organization_id" | "state_lineage_id" | "record_approver" | "memberships" | "record_input_codecs">;
 
@@ -674,12 +660,11 @@ function deskItems(record: Database.Database, items: readonly ReadableSearchResu
     const cached = meetings.get(key);
     if (cached !== undefined) return cached;
     const { row, parsed, envelope, brief } = approvedEnvelope(record, presentation.record_input_codecs, item.record_position, item.record_sha256);
-    // The meeting as the person open names it: participants' display names, and the approver's current directory name.
-    const detail = meetingDetailV1(brief,
-      boundedTextV1(approverDisplayNameV1(parsed, row.approval_id, presentation, presentation.record_approver, presentation.memberships), PERSON_LIST_TEXT_MAX_BYTES_V1));
-    const participants = participantsLine(detail);
+    // The meeting's participants' display names, and the approver's current directory name.
+    const approved_by = boundedTextV1(approverDisplayNameV1(parsed, row.approval_id, presentation, presentation.record_approver, presentation.memberships), PERSON_LIST_TEXT_MAX_BYTES_V1);
+    const participants = meetingParticipantsV1(brief);
     const meeting: Meeting = Object.freeze({ envelope_sha256: row.envelope_sha256, envelope, approved_at: approvalTime(envelope),
-      ...(participants === undefined ? {} : { participants }), ...(detail.approved_by === undefined ? {} : { approved_by: detail.approved_by }) });
+      ...(participants === undefined ? {} : { participants }), ...(approved_by === undefined ? {} : { approved_by }) });
     meetings.set(key, meeting);
     return meeting;
   };
@@ -750,7 +735,6 @@ function readGeneration<T>(read: () => T): T {
 const MEETING_COLLECT_MAX = 26;
 /** The Layer 1 reader page limit: a longer lag holds Only me without reading further. */
 const MEETING_WAITING_ONLY_ME_MAX = 100;
-const MEETING_PART_MAX = 65_535;
 const RECORD_SHA256 = /^sha256:[0-9a-f]{64}$/;
 /** The most records one project lookup returns, and the candidates it reads per page. */
 const PROJECT_RECORDS_MAX = 500;
@@ -819,21 +803,10 @@ function meetingPosition(value: PersonItemPositionV1 | null | undefined): Person
   return Object.freeze({ added_at: value.added_at, id: value.id });
 }
 
-function partPosition(value: PersonMeetingPartPositionV1): PersonMeetingPartPositionV1 {
-  if (value === null || typeof value !== "object" ||
-    !Number.isSafeInteger(value.atom_order) || value.atom_order < 0 || value.atom_order > MEETING_PART_MAX ||
-    !Number.isSafeInteger(value.part) || value.part < 1 || value.part > MEETING_PART_MAX) invalidRequest();
-  return Object.freeze({ atom_order: value.atom_order, part: value.part });
-}
-
 /** Newest first, then the record digest ascending (binary): meetings' list order. */
 function newestFirst(left: PersonItemPositionV1, right: PersonItemPositionV1): number {
   if (left.added_at !== right.added_at) return left.added_at > right.added_at ? -1 : 1;
   return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
-}
-
-function isRecordPolicy(value: unknown): value is ReadableSearchResultItemV1["policy_id"] {
-  return value === "restricted-reviewer-person-v2" || value === "project-members-readable-person-v1";
 }
 
 /**
@@ -1479,51 +1452,6 @@ export function createPersonRecordSearchRouteV1(
       meetingReleases.set(release, { initial: state.authorization, current: released, grants_sha256: state.grants_sha256 });
       return release;
     },
-    openMeeting(input: Parameters<PersonMeetingItemsPortV1["openMeeting"]>[0]): ReturnType<PersonMeetingItemsPortV1["openMeeting"]> {
-      if (typeof input.record_sha256 !== "string" || !RECORD_SHA256.test(input.record_sha256)) itemNotFound();
-      const from = input.from === undefined ? undefined : partPosition(input.from);
-      const { authorization, projects } = reader(input.access_token);
-      const admitted = admittedRecord(authorization, projects, input.record_sha256);
-      const record = approvedRecord(admitted.position, admitted.record_sha256);
-      const parts = meetingAtomsV1(record.brief, confirmedOwners(record.reference));
-      // A cursor is checked only after admission, so a guessed position on an
-      // unreadable record is the same miss as the record itself.
-      const start = from === undefined ? 0 : parts.findIndex((part) => part.atom_order === from.atom_order && part.part_index === from.part);
-      if (start < 0) itemNotFound();
-      const atoms: PersonOpenMeetingAtomV1[] = [];
-      let index = start;
-      while (index < parts.length && atoms.length < PERSON_OPEN_ATOMS_MAX_V1) {
-        const candidate = parts[index]!.atom;
-        if (atoms.length > 0 && Buffer.byteLength(canonicalJson([...atoms, candidate])) > PERSON_OPEN_ATOMS_BUDGET_BYTES_V1) break;
-        atoms.push(candidate);
-        index += 1;
-      }
-      const following = parts[index];
-      const next = following === undefined ? null : Object.freeze({ atom_order: following.atom_order, part: following.part_index });
-      if (!isRecordPolicy(record.policy_id)) metadataUnavailable();
-      const audience = (options.record.prepare("SELECT count(*) AS count FROM organization_record_project_members_readable_person_record_fact WHERE record_position = ? AND record_sha256 = ?")
-        .get(admitted.position, admitted.record_sha256) as { readonly count: number }).count;
-      const meeting_date = meetingDateV1(record.brief.meeting.time);
-      const row: PersonStoreMeetingRowV1 = Object.freeze({
-        kind: "meeting" as const, id: admitted.record_sha256, title: record.brief.meeting.title ?? null, added_at: record.added_at,
-        visibility: recordVisibility(record.policy_id, audience),
-        association_project_ids: Object.freeze(recordAssociations([{ record_position: admitted.position, record_sha256: admitted.record_sha256 }], projects.project_ids).get(admitted.record_sha256) ?? []),
-        ...(meeting_date === undefined ? {} : { meeting_date }),
-      });
-      const meeting = from === undefined
-        ? meetingDetailV1(record.brief, boundedTextV1(approverDisplayNameV1(record.envelope, admitted.approval_id, options, options.record_approver, options.memberships), PERSON_LIST_TEXT_MAX_BYTES_V1))
-        : undefined;
-      const released = fence(input.access_token, [authorization], projects.grants_sha256);
-      const receipt = options.audit.append({
-        read_mode: "person_open", authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
-        principal_id: released.principal_id, membership_id: released.membership_id, session_family_id: released.session_family_id, result_count: atoms.length,
-        response_sha256: canonicalSha256({ schema_version: 1, kind: "echo-person-open-meeting-release-v1", record_sha256: admitted.record_sha256, row, ...(meeting === undefined ? {} : { meeting }), atoms, next }),
-        checked_at: released.checked_at,
-      });
-      const release: PersonStoreReleaseV1 = Object.freeze({ receipt });
-      meetingReleases.set(release, { initial: releaseAuthorization(authorization), current: released, grants_sha256: projects.grants_sha256 });
-      return Object.freeze({ row, ...(meeting === undefined ? {} : { meeting }), atoms: Object.freeze(atoms), next, release });
-    },
     recordAnchor(input: Parameters<PersonRecordAnchorV1["recordAnchor"]>[0]): ReturnType<PersonRecordAnchorV1["recordAnchor"]> {
       // The exact Layer 1 read first, so index lag never tells a reader that a record exists.
       const { authorization, projects } = admit(input);
@@ -1541,7 +1469,7 @@ export function createPersonRecordSearchRouteV1(
       return personRecordSearchIndexLagsV1(options);
     },
     recordActions(input: Parameters<PersonRecordActionsV1["recordActions"]>[0]): ReturnType<PersonRecordActionsV1["recordActions"]> {
-      // Admitted as openMeeting admits a record; then the approved record itself, read as open reads it.
+      // Admitted as any exact record read admits it; then the approved record itself.
       const { admitted } = admit(input);
       const record = approvedRecord(admitted.position, admitted.record_sha256);
       const owners = confirmedOwners(record.reference);

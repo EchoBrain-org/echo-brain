@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PERSON_ASK_PROGRESS_HEADER_V1,
   PERSON_ASK_PROGRESS_HEARTBEAT_V1,
   PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1,
   formatPersonAskProgressEventV3,
@@ -22,8 +21,8 @@ import { PersonClient } from '../../src/product/person-client/client.js';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 
-// Ask progress (ADR-0039) on the Person client: V3 on /v7 (research tool contract v1), the one Ask route, its opt-in
-// stream, and `person ask --progress`.
+// Ask progress (ADR-0039) on the Person client: V3 on /v7 (research tool contract v1), the one Ask route, which always
+// streams, and `person ask --progress`.
 
 const ORIGIN = 'https://authority.example.test';
 const NOW = '2026-10-16T10:00:00.000Z';
@@ -143,7 +142,7 @@ function cli(home: string, fetch: typeof globalThis.fetch, abort_signal?: AbortS
 const lines = (text: string) => text.split('\n').filter(line => line !== '').map(line => JSON.parse(line) as unknown);
 
 describe('Ask progress stream on the Person client (ADR-0039)', () => {
-  it('opts in on /v7 and reads every event across any chunking, heartbeats included', async () => {
+  it('asks /v7 and reads every event across any chunking, heartbeats included', async () => {
     const bytes = encoder.encode(STREAM);
     for (const size of [1, 2, 3, 5, 64, 1000, bytes.length]) {
       const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(bytes, size));
@@ -157,7 +156,8 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       expect(init?.method).toBe('POST');
       expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: 'What did we decide?' });
       const headers = headersOf(init);
-      expect(headers.get(PERSON_ASK_PROGRESS_HEADER_V1)).toBe('3');
+      // No opt-in: every Ask streams.
+      expect(headers.get('x-echo-ask-progress')).toBeNull();
       expect(headers.get('accept')).toBe('text/event-stream, application/json');
       expect(headers.get('authorization')).toBe('Bearer bearer');
       expect(headers.get('x-echo-time-zone')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
@@ -241,19 +241,12 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     }
   });
 
-  it('answers from an Authority that does not stream with its JSON, without progress or a receipt', async () => {
+  it('refuses an answer in JSON: only an error comes before the stream', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answerV8()));
     const progress: PersonAskProgressStepEventV3[] = [];
-    const result = await new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch }).askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event));
-    expect(result).toEqual({ result: answerV8() });
-    expect('receipt' in result).toBe(false);
+    await expect(new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch }).askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event)))
+      .rejects.toMatchObject({ code: 'invalid_response', status: 200 });
     expect(progress).toEqual([]);
-    expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask']);
-    // A JSON body is still bound to the V8 validator and the scope.
-    for (const body of [{ ...answer(), receipt: receipt() }, answerProjectV8(), { ...answer(), schema_version: 7, kind: 'echo-clean-person-answer-v7' }]) {
-      await expect(authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body))).askV7WithProgress('bearer', 'What did we decide?', undefined, undefined, () => undefined))
-        .rejects.toMatchObject({ code: 'invalid_response' });
-    }
   });
 
   it('fails with the JSON failure /v7 gives before any stream, a 404 as not_found, and asks no other route', async () => {
@@ -289,10 +282,9 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
   });
 
   it('reads a real streamed response as it is written, and a caller abort disconnects the Authority', async () => {
-    const seen: { header?: string | undefined; closed: boolean } = { closed: false };
+    const seen: { closed: boolean } = { closed: false };
     let wrote!: (text: string) => void;
-    const server = createServer((request, response) => {
-      seen.header = request.headers[PERSON_ASK_PROGRESS_HEADER_V1] as string | undefined;
+    const server = createServer((_request, response) => {
       response.writeHead(200, STREAM_HEADERS);
       response.on('close', () => { seen.closed = !response.writableEnded; });
       wrote = text => { response.write(text); };
@@ -306,7 +298,6 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       const progress: PersonAskProgressStepEventV3[] = [];
       const pending = client.askV7WithProgress('bearer', 'What did we decide?', undefined, caller.signal, event => progress.push(event));
       await vi.waitFor(() => expect(progress).toEqual(STEPS.slice(0, 1)));
-      expect(seen.header).toBe('3');
       wrote(frames(STEPS.slice(1, 2)));
       await vi.waitFor(() => expect(progress).toEqual(STEPS.slice(0, 2)));
       caller.abort();
@@ -422,7 +413,6 @@ describe('person ask --progress', () => {
     expect(validatePersonAskProgressResultLineV3(printed.at(-1))).toEqual({ ok: true, result: answerV8(), receipt: receiptV3() });
     expect(output.stdout.endsWith('\n')).toBe(true);
     expect(pathOf(fetch.mock.calls[0]![0])).toBe('/v7/person/ask');
-    expect(headersOf(fetch.mock.calls[0]![1]).get(PERSON_ASK_PROGRESS_HEADER_V1)).toBe('3');
   });
 
   it('keeps the project scope on the streamed request', async () => {
@@ -432,18 +422,6 @@ describe('person ask --progress', () => {
     await expect(run(['ask', '--question', 'What did we decide?', '--progress', '--project', project])).resolves.toBe(0);
     expect(JSON.parse(String(fetch.mock.calls[0]![1]?.body))).toEqual({ schema_version: 3, question: 'What did we decide?', project_id: project });
     expect(lines(output.stdout)).toEqual([{ ok: true, result: answerV8({ kind: 'project', project_id: project }), receipt: receiptV3() }]);
-  });
-
-  it('prints exactly the plain Ask\'s line from an Authority that does not stream', async () => {
-    const home = sessionHome();
-    const ask = async (argv: readonly string[]) => {
-      const { output, run } = cli(home, vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answerV8())));
-      await expect(run(argv)).resolves.toBe(0);
-      return output;
-    };
-    const plain = await ask(['ask', '--question', 'What did we decide?']);
-    await expect(ask(['ask', '--question', 'What did we decide?', '--progress'])).resolves.toEqual(plain);
-    expect(lines(plain.stdout)).toEqual([{ ok: true, result: answerV8() }]);
   });
 
   // One Ask transport: a plain Ask streams too, under the session's own credential, and prints only the answer's line.
@@ -457,7 +435,6 @@ describe('person ask --progress', () => {
       await expect(run(argv)).resolves.toBe(0);
       const [url, init] = fetch.mock.calls[0]!;
       expect([pathOf(url), init?.method, JSON.parse(String(init?.body))]).toEqual(['/v7/person/ask', 'POST', request]);
-      expect(headersOf(init).get(PERSON_ASK_PROGRESS_HEADER_V1)).toBe('3');
       expect(headersOf(init).get('authorization')).toBe(`Bearer ${SESSION.access_token}`);
       expect(output).toEqual({ stdout: `${JSON.stringify({ ok: true, result: body })}\n`, stderr: '' });
     }
@@ -469,8 +446,8 @@ describe('person ask --progress', () => {
     const { output, run } = cli(sessionHome(), fetch);
     await expect(run(['ask', '--question', 'What did we decide?', '--progress', '--project', projectId])).resolves.toBe(0);
     expect(output.stderr).toBe('');
-    expect(fetch.mock.calls.map(([url, init]) => [pathOf(url), headersOf(init).get(PERSON_ASK_PROGRESS_HEADER_V1), JSON.parse(String(init?.body))]))
-      .toEqual([['/v7/person/ask', '3', { schema_version: 3, question: 'What did we decide?', project_id: projectId }]]);
+    expect(fetch.mock.calls.map(([url, init]) => [pathOf(url), JSON.parse(String(init?.body))]))
+      .toEqual([['/v7/person/ask', { schema_version: 3, question: 'What did we decide?', project_id: projectId }]]);
     expect(lines(output.stdout)).toEqual([...STEPS_PROJECT.map(progress => ({ ok: true, progress })), { ok: true, result: answerProjectV8(), receipt: receiptProject() }]);
   });
 

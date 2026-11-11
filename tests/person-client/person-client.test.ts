@@ -87,6 +87,13 @@ const OWNER_SESSION = { ...ROTATED_SESSION, membership_type: "owner" } as const;
 /** An owner whose access has expired, so any refresh is a remote call. */
 const OWNER_SESSION_EXPIRED = { ...SESSION, membership_type: "owner" } as const;
 
+/** A `/v7` Ask's reply: its answer, streamed (ADR-0039), unchecked, with an empty receipt. */
+function askStream(answer: unknown): Response {
+  return new Response(`data: ${JSON.stringify({ type: "answer", response: answer, receipt: { looked_through: 0, elapsed_ms: 0, rows: [] } })}\n\n`, {
+    status: 200, headers: { "content-type": "text/event-stream; charset=utf-8" },
+  });
+}
+
 function json(value: unknown, status = 200): Response {
   return new Response(canonicalJson(value), {
     status,
@@ -809,7 +816,7 @@ describe("Person client", () => {
       schema_version: 1, kind: "echo-person-source-evidence-v1", scope: { kind: "global" },
       citation: { ...SOURCE_CITATION, label: "Prior account source" }, text: "Prior account proof.",
     }],
-  ] as const)("does not return %s after the local account changes while its response is pending", async (_name, call, body) => {
+  ] as const)("does not return %s after the local account changes while its response is pending", async (name, call, body) => {
     await withHome(async home => {
       let resolveResponse: ((response: Response) => void) | undefined;
       const pendingResponse = new Promise<Response>(resolve => { resolveResponse = resolve; });
@@ -820,7 +827,7 @@ describe("Person client", () => {
         ...ROTATED_SESSION,
         membership_id: fixtureId("mem", 2), principal_id: fixtureId("prn", 2), session_family_id: fixtureId("psf", 2),
       });
-      resolveResponse?.(json(body));
+      resolveResponse?.(name === "an Ask answer" ? askStream(body) : json(body));
       await expect(result).rejects.toThrow("current account");
     });
   });
@@ -830,7 +837,7 @@ describe("Person client", () => {
       let asks = 0;
       const client = await signedInClient(home, async () => {
         asks += 1;
-        return json(v8Answer({ text: "Bounded answer.", citations: [RECORD_CITATION] }));
+        return askStream(v8Answer({ text: "Bounded answer.", citations: [RECORD_CITATION] }));
       });
       const question = (count: number) =>
         Array.from({ length: count }, (_, index) => `term${index}`).join(" ");
@@ -845,12 +852,11 @@ describe("Person client", () => {
 
   it.each(["ask", "search"])("rejects retired global metadata in a %s response", async (mode) => {
     await withHome(async (home) => {
-      const client = await signedInClient(home, async () => json({ ...(mode === "ask"
-        ? v8Answer()
-        : { schema_version: 2, kind: "echo-clean-person-record-search-v2", items: [] }),
-      generation_id: `sha256:${"a".repeat(64)}`, record_head: { position: 9, record_sha256: `sha256:${"b".repeat(64)}` } }));
+      const retired = { generation_id: `sha256:${"a".repeat(64)}`, record_head: { position: 9, record_sha256: `sha256:${"b".repeat(64)}` } };
+      const client = await signedInClient(home, async () => mode === "ask" ? askStream({ ...v8Answer(), ...retired })
+        : json({ schema_version: 2, kind: "echo-clean-person-record-search-v2", items: [], ...retired }));
       await expect(mode === "ask" ? client.askWithLiveSources("pricing") : client.records(undefined, "pricing")).rejects.toThrow(
-        mode === "ask" ? "malformed response" : "response is invalid",
+        mode === "ask" ? "malformed progress stream" : "response is invalid",
       );
     });
   });
@@ -860,13 +866,13 @@ describe("Person client", () => {
       let asks = 0;
       const client = await signedInClient(home, async () => {
         asks += 1;
-        return json(v8Answer({ text: "Use simple pricing.", citations: [{ ...RECORD_CITATION, citation: { ...RECORD_CITATION.citation, unexpected: true } }] }));
+        return askStream(v8Answer({ text: "Use simple pricing.", citations: [{ ...RECORD_CITATION, citation: { ...RECORD_CITATION.citation, unexpected: true } }] }));
       });
 
       await expect(client.askWithLiveSources(" pricing")).rejects.toMatchObject({ code: "query_whitespace" });
       expect(asks).toBe(0);
       await expect(client.askWithLiveSources("pricing")).rejects.toThrow(
-          "malformed response",
+          "malformed progress stream",
       );
       expect(asks).toBe(1);
     });
@@ -978,7 +984,7 @@ describe("Person client", () => {
         expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
         calls.push(path);
         if (path === "/v1/person/records") return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [] });
-        if (path === "/v7/person/ask") return json(v8Answer());
+        if (path === "/v7/person/ask") return askStream(v8Answer());
         expect(path).toBe("/v4/person/tools");
         if (tools === "failure") return new Response("provider raw body", { status: 503 });
         return json({ schema_version: 4, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools });

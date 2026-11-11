@@ -1,20 +1,19 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  PERSON_ANSWER_PATH_V7, PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8,
-  type OrganizationPersonToolV4,
+  PERSON_ANSWER_PATH_V7, type OrganizationPersonToolV4,
 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
 import { personWorkspaceGrantsV1 } from '../src/composition/person-workspace-evidence-v1.js';
-import { closeAskServers, decodeAll, liveAskOptions, serveAsk } from './fixtures/ask-over-http.js';
+import { closeAskServers, liveAskOptions, serveAsk, streamedAnswer } from './fixtures/ask-over-http.js';
 import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 /**
  * The answer layout over HTTP: `POST /v7/person/ask` answers a V8 part that
  * carries its blocks (ADR-0051), arranged by the writer from the block
- * catalog, in JSON and in the progress stream alike. The Authority reads no
+ * catalog, in the progress stream. The Authority reads no
  * layout header: a desktop or CLI that still sends `x-echo-answer-layout`,
  * with retired layout v1's `1`, layout v2's `2` or a value it once refused,
  * gets the same answer as an Ask without it.
@@ -81,7 +80,7 @@ function ask(base: string, headers: Readonly<Record<string, string>>) {
 }
 
 describe('the answer layout on /v7 (ADR-0051)', () => {
-  it('sends typed gaps to every JSON and streaming Ask, and answers one that still sends the retired opt-in the same', async () => {
+  it('sends typed gaps to every Ask, and answers one that still sends the retired opt-in the same', async () => {
     const f = await sentFixture();
     const original = leadAndSection();
     const model: StructuredGenerationPort = { async generate(input) {
@@ -89,41 +88,23 @@ describe('the answer layout on /v7 (ADR-0051)', () => {
       return typeof reply === 'object' && reply !== null && 'not_found' in reply ? { ...reply, not_found: ['the reviewer'] } : reply;
     } };
     const base = await origin(f, model);
-    for (const progress of [false, true]) {
-      const headers: Readonly<Record<string, string>> = progress ? { [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 } : {};
-      const read = async (extra: Record<string, string>) => {
-        const response = await ask(base, { ...headers, ...extra });
-        expect(response.status).toBe(200);
-        if (!progress) return validatePersonAnswerResponseV8(await response.json());
-        const terminal = decodeAll(createPersonAskProgressDecoderV3(), await response.text()).at(-1)!;
-        if (terminal.type !== 'answer') throw new Error('expected an answer');
-        return terminal.response;
-      };
-      const answered = await read({});
-      expect(answered.parts[0]!.gap_details).toEqual({ not_found: 'Not found: the reviewer.' });
-      // Released clients send `1`; a value once refused before the Ask ran is read as no header at all.
-      for (const value of ['1', 'true']) expect(await read({ [GAP_DETAILS_HEADER]: value })).toEqual(answered);
-    }
+    const answered = await streamedAnswer(await ask(base, {}));
+    expect(answered.parts[0]!.gap_details).toEqual({ not_found: 'Not found: the reviewer.' });
+    // Released clients send `1`; a value once refused before the Ask ran is read as no header at all.
+    for (const value of ['1', 'true']) expect(await streamedAnswer(await ask(base, { [GAP_DETAILS_HEADER]: value }))).toEqual(answered);
   });
 
-  it('arranges the V8 answer in the writer\'s blocks without a layout header, and answers an Ask that still sends one the same, whatever its value, in JSON and in the progress stream', async () => {
+  it('arranges the V8 answer in the writer\'s blocks without a layout header, and answers an Ask that still sends one the same, whatever its value', async () => {
     const f = await sentFixture();
     const base = await origin(f, leadAndSection());
-    const answered = validatePersonAnswerResponseV8(await (await ask(base, {})).json());
+    const answered = await streamedAnswer(await ask(base, {}));
     const [part] = answered.parts;
     expect(part!.statements.map(statement => statement.text)).toEqual(['Ari leads Project A.', 'Your open follow-up is on the launch ticket.']);
     expect(part!.blocks).toEqual([{ kind: 'answer', statements: [0] }, { kind: 'text', title: 'Your tasks', statements: [1] }]);
     expect(part).not.toHaveProperty('layout');
     // Retired layout v1's 1, layout v2's 2, and the values once refused before the Ask ran are each read as no header at all.
-    for (const headers of [{}, ...['1', '2', '3', 'true', '1, 2'].map(value => ({ [LAYOUT_HEADER]: value }))]) {
-      const plain = await ask(base, headers);
-      expect(plain.status).toBe(200);
-      expect(validatePersonAnswerResponseV8(await plain.json())).toEqual(answered);
-      const streamed = await ask(base, { ...headers, [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 });
-      expect(streamed.status).toBe(200);
-      const terminal = decodeAll(createPersonAskProgressDecoderV3(), await streamed.text()).at(-1)!;
-      if (terminal.type !== 'answer') throw new Error('expected the answer event');
-      expect(terminal.response).toEqual(answered);
+    for (const headers of ['1', '2', '3', 'true', '1, 2'].map(value => ({ [LAYOUT_HEADER]: value }))) {
+      expect(await streamedAnswer(await ask(base, headers))).toEqual(answered);
     }
   });
 });

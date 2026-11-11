@@ -172,8 +172,8 @@ unapproved evidence. The source-card behavior below describes approved
 records; original evidence uses its exact source/revision/representation
 coordinates and a fresh authorized read.
 
-`person ask --progress` asks `/v7/person/ask` to stream its progress
-([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)) in progress V3 by sending `x-echo-ask-progress: 3`.
+`person ask --progress` prints the progress `/v7/person/ask` streams
+([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)) in progress V3; every Ask streams, with or without `--progress`.
 
 - **Reading the stream.** The client reads the server-sent events with the
   shared progress V3 decoder in `@echo-brain/organization-api`.
@@ -336,15 +336,17 @@ person who runs them; an agent has no membership of its own
   end: follow its cursor later. A later page that could only wait answers 503
   `unavailable`; retry the same cursor later.
 - `person open --ref <ref>` reads one row or one Ask citation's `ref`,
-  except a follow-up's `follow_up:<item_id>`, which `person runs` reads with
+  except an approved meeting's `meeting:sha256:<digest>`, which
+  `person records --record-sha256 sha256:<digest> --brief` reads (open of a
+  meeting was retired on 2026-11-11), a follow-up's `follow_up:<item_id>`,
+  which `person runs` reads with
   operation `item` and that `item_id`
   ([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)), a
   project's `project:<project-id>`, which `person projects read-v2` reads,
   and a tool's `tool:<tool>`, which `person tools` lists. A person and a tool
   container carry no ref
   ([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)).
-  Documents, imported meetings and approved meetings page with `--cursor` and
-  the same ref. Anything the person cannot read is `not_found`.
+  Documents and imported meetings page with `--cursor` and the same ref. Anything the person cannot read is `not_found`.
 - `person ask --question <text>` answers with citations from everything the
   person can read, or with `--project` from one joined project; `--only-me` is
   a `list` scope only.

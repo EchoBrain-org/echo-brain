@@ -31,7 +31,6 @@ export type PersonListSourcePositionV1 =
 export type PersonListPositionsV1 = Readonly<Record<PersonListSourceV1, PersonListSourcePositionV1>>;
 export type PersonOpenPositionV1 =
   | Readonly<{ kind: "document"; from_ordinal: number }>
-  | Readonly<{ kind: "meeting"; atom_order: number; part: number }>
   | Readonly<{ kind: "imported_meeting"; offset: number }>;
 
 export interface PersonListCursorBindingV1 {
@@ -108,16 +107,14 @@ function number(value: string, minimum: number, maximum: number): number {
 function openPosition(ref: PersonItemRefV1, fields: readonly string[]): PersonOpenPositionV1 {
   const kind = ref.slice(0, ref.indexOf(":"));
   if (kind === "document" && fields.length === 1) return Object.freeze({ kind, from_ordinal: number(fields[0]!, 1, 65_535) });
-  if (kind === "meeting" && fields.length === 2) return Object.freeze({ kind, atom_order: number(fields[0]!, 0, 65_535), part: number(fields[1]!, 1, 65_535) });
   if (kind === "imported_meeting" && fields.length === 1) return Object.freeze({ kind, offset: number(fields[0]!, 1, 10_000_000) });
-  // A note is one page; any other shape is another ref's cursor.
+  // A note is one page, and a meeting is never opened; any other shape is another ref's cursor.
   return invalid();
 }
 
 function openFields(position: PersonOpenPositionV1): string[] {
   switch (position.kind) {
     case "document": return [String(position.from_ordinal)];
-    case "meeting": return [String(position.atom_order), String(position.part)];
     case "imported_meeting": return [String(position.offset)];
   }
 }

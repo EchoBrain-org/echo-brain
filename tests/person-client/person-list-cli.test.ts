@@ -42,6 +42,12 @@ function setup(): string {
   return home;
 }
 
+/** A `/v7` Ask's reply: its answer, streamed (ADR-0039), with an empty receipt. */
+function askStream(answer: unknown): Response {
+  return new Response(`data: ${JSON.stringify({ type: 'answer', response: answer, receipt: { looked_through: 0, elapsed_ms: 0, rows: [] } })}\n\n`,
+    { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8' } });
+}
+
 function json(value: unknown, status = 200): Response {
   return new Response(canonicalJson(value), { status, headers: { 'content-type': 'application/json' } });
 }
@@ -77,11 +83,6 @@ function page(scope: unknown, header: Record<string, unknown> = {}, extra: Recor
   return { schema_version: 1, kind: 'echo-person-list-v1', scope, ...header, items: [noteRow, meetingRow], next_cursor: null, ...extra };
 }
 
-function meetingOpen(extra: Record<string, unknown> = {}) {
-  return { schema_version: 1, kind: 'echo-person-open-v1', ref: MEETING, item: meetingRow,
-    atoms: [{ kind: 'decision', text: 'Annual plans first.', status: 'decided' }], next_cursor: null, ...extra };
-}
-const meetingDetail = { all_day: false, participants: ['Ari', 'Maya Chen'], participants_more: false, approved_by: 'Ari' };
 
 /** Answers every list or open call with one response and records what was sent. */
 function network(response: () => Response) {
@@ -205,8 +206,6 @@ describe('person open CLI', () => {
     const cases: readonly [string[], Record<string, unknown>, unknown][] = [
       [['open', '--ref', NOTE], { schema_version: 1, ref: NOTE },
         { schema_version: 1, kind: 'echo-person-open-v1', ref: NOTE, item: noteRow, text: 'Annual plans first.\n', next_cursor: null }],
-      [['open', '--ref', MEETING], { schema_version: 1, ref: MEETING }, meetingOpen({ meeting: meetingDetail, next_cursor: CURSOR })],
-      [['open', '--ref', MEETING, '--cursor', CURSOR], { schema_version: 1, ref: MEETING, cursor: CURSOR }, meetingOpen()],
     ];
     for (const [argv, body, response] of cases) {
       const { fetch, sent } = network(() => json(response));
@@ -231,6 +230,8 @@ describe('person open CLI', () => {
       ['open', '--cursor', CURSOR],
       ['open', '--ref', `note:ctx_${'A'.repeat(64)}`],
       ['open', '--ref', `meeting:${record}`],
+      // A listed meeting is read with person records --record-sha256 --brief, never opened (2026-11-11).
+      ['open', '--ref', MEETING],
       ['open', '--ref', `record:sha256:${record}`],
       ['open', '--ref', `sha256:${record}`],
       ['open', '--ref', TRANSCRIPT],
@@ -249,12 +250,10 @@ describe('person open CLI', () => {
     }
   });
 
-  it('rejects an open response for another ref or with meeting detail on the wrong page', async () => {
+  it('rejects an open response for another ref', async () => {
     const cases: readonly [string[], unknown][] = [
-      [['open', '--ref', MEETING], meetingOpen({ ref: `meeting:sha256:${'d'.repeat(64)}`, item: { ...meetingRow, ref: `meeting:sha256:${'d'.repeat(64)}` }, meeting: meetingDetail })],
       [['open', '--ref', NOTE], { schema_version: 1, kind: 'echo-person-open-v1', ref: `note:ctx_${'e'.repeat(64)}`, item: { ...noteRow, ref: `note:ctx_${'e'.repeat(64)}` }, text: 'Other.', next_cursor: null }],
-      [['open', '--ref', MEETING, '--cursor', CURSOR], meetingOpen({ meeting: meetingDetail })],
-      [['open', '--ref', MEETING], meetingOpen()],
+      [['open', '--ref', NOTE], { schema_version: 1, kind: 'echo-person-open-v1', ref: MEETING, item: meetingRow, atoms: [], next_cursor: null }],
     ];
     for (const [argv, response] of cases) {
       const result = await run(argv, network(() => json(response)).fetch);
@@ -288,7 +287,7 @@ describe('person ask in a project', () => {
   }
 
   it('sends the project on the newest route and returns citations that carry refs', async () => {
-    const { fetch, sent } = network(() => json(answer({ kind: 'project', project_id: projectId })));
+    const { fetch, sent } = network(() => askStream(answer({ kind: 'project', project_id: projectId })));
     const result = await run(['ask', '--question', 'What did I decide?', '--project', projectId], fetch);
     expect(result.code, result.stderr).toBe(0);
     expect(sent.map(({ path, body }) => ({ path, body }))).toEqual([{ path: '/v7/person/ask', body: canonicalJson({ schema_version: 3, question: 'What did I decide?', project_id: projectId }) }]);
@@ -296,7 +295,7 @@ describe('person ask in a project', () => {
   });
 
   it('fails when the Authority answers under another scope', async () => {
-    const result = await run(['ask', '--question', 'What did I decide?', '--project', projectId], network(() => json(answer({ kind: 'global' }))).fetch);
+    const result = await run(['ask', '--question', 'What did I decide?', '--project', projectId], network(() => askStream(answer({ kind: 'global' }))).fetch);
     expect(result.code).toBe(1);
     expect(result.stdout).toBe('');
     expect(JSON.parse(result.stderr)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_response', status: 200 });

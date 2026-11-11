@@ -549,3 +549,13 @@ receives the whole signed record for reader reads too. `POST /v1/person/open`
 still opens meetings for released desktops and the CLI. The bar no longer
 searches as a person types, so it has no live matches, and the CLI's V2
 `updates search` is retired.
+
+Update (2026-11-11): the founder cut old apps off in one go, so open of a
+meeting is retired. `POST /v1/person/open` opens notes, imported meetings and
+documents only: a `meeting:` ref is a 400 `invalid_request` before any store
+runs, like a `transcript:` ref, and its open cursor and paged atoms
+(`PersonOpenMeetingV1`, the atom part position, `openMeeting` on the meetings
+port) are gone, with `person-meeting-open-route.test.ts`. The list still lists
+approved meetings by `meeting:` ref. The desktop and the CLI read one with
+`person records --record-sha256 <digest> --brief`, and `person open` refuses a
+meeting ref before the network.

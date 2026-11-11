@@ -230,24 +230,24 @@ Removes the local session. A revoked session is also removed locally.
 `,
   ask: `usage: echo-brain person ask --question <text> [--project <project-id>] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>]
 
-Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without --project, ECHO retrieves across context you may read. With --project, only context associated with that project. Answers include typed citations; each opens with person open --ref when it carries a ref, except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
+Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without --project, ECHO retrieves across context you may read. With --project, only context associated with that project. Answers include typed citations; each opens with person open --ref when it carries a ref, except a meeting's meeting:sha256:<digest>, which reads with person records --record-sha256 sha256:<digest> --brief, a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
 
 Ask asks POST /v7/person/ask, with every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings.
 
---progress prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them, follow-ups, projects, people, tools and tool containers included. The last line is the usual {"ok":true,"result":...} with the answer's receipt. An Authority that does not stream prints only the usual last line. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
+--progress prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them, follow-ups, projects, people, tools and tool containers included. The last line is the usual {"ok":true,"result":...} with the answer's receipt. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
 
 --previous carries your previous turn as JSON: {"purpose":"follow_up" or "ask_again","question":...,"asked_at":...,"statements":[{"text":...,"citation_indexes":[...]}],"citations":[...]}, with at most 8 sentences of at most 400 characters each and at most 12 of that answer's citations, as it carried them. It is your own context, never evidence, and is not stored. A follow-up answers the full question it worked out, naming it as "question", or, when more than one thing could fit, has the outcome "clarify" and one full question per thing in "choices". Ask again also says what is different "since" the earlier answer. One that is not valid is refused with invalid_request.
 `,
   list: `usage: echo-brain person list (--project <project-id> | --only-me) [--cursor <next_cursor>]
 
-Lists the newest things you can read now, 25 per page: notes, documents, imported meetings and approved meetings. Each row has a ref for person open, a title, when it was added (added_at), who can see it (only_me, team or project) and the projects you belong to that it is filed under. Rows never carry text.
+Lists the newest things you can read now, 25 per page: notes, documents, imported meetings and approved meetings. Each row has a ref (person open reads it; an approved meeting's meeting:sha256:<digest> reads with person records --record-sha256 sha256:<digest> --brief), a title, when it was added (added_at), who can see it (only_me, team or project) and the projects you belong to that it is filed under. Rows never carry text.
 Give exactly one scope. --project lists one project you belong to, as ask can read it there; its first page also shows the project. --only-me lists everything only you can read, filed in a project or not: your only-me notes and documents, meetings you imported, and approved meetings kept for you alone; a filed row names its projects.
 Pass next_cursor as --cursor with the same scope for the next page; null means the end.
 notice "meetings_unavailable" means meetings are still being indexed and come on a later page. A first page with no items and that notice is not the end: follow its next_cursor later. A later page that could only wait for meetings fails with unavailable (503): retry the same --cursor later.
 `,
   open: `usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]
 
-Reads one item under your current access: a note's full text, a document's extracted text, or a meeting's decisions, actions and rationales. Documents and meetings are paged. Refs come from person list and from ask citations. Anything you cannot read returns not_found. Pass next_cursor as --cursor with the same --ref for the next page.
+Reads one item under your current access: a note's full text, an imported meeting's notes, or a document's extracted text. Imported meetings and documents are paged. Refs come from person list and from ask citations; an approved meeting (meeting:sha256:<digest>) is not opened here but read with person records --record-sha256 sha256:<digest> --brief. Anything you cannot read returns not_found. Pass next_cursor as --cursor with the same --ref for the next page.
 `,
   reviews: `usage: echo-brain person reviews --request <json>
 
@@ -1258,11 +1258,11 @@ export async function runPersonClientCli(
         const question = requiredText(values, "question");
         const scope = values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, "project"));
         if (values.progress === true) {
-          // One line per step event as it arrives; the last line is the answer's, with the receipt when the Authority streamed.
+          // One line per step event as it arrives; the last line is the answer's, with its receipt.
           // Progress V3 lines: a step may name a follow-up, a project, a person, a tool or a tool container.
           const answer = await client.askWithLiveProgress(question, scope, dependencies.abort_signal,
             progress => print(stdout, validatePersonAskProgressLineV3({ ok: true, progress })), askPrevious);
-          print(stdout, validatePersonAskProgressResultLineV3({ ok: true, result: answer.result, ...(answer.receipt === undefined ? {} : { receipt: answer.receipt }) }));
+          print(stdout, validatePersonAskProgressResultLineV3({ ok: true, result: answer.result, receipt: answer.receipt }));
           break;
         }
         print(stdout, { ok: true, result: await client.askWithLiveSources(question, scope, dependencies.abort_signal, askPrevious) });

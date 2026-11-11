@@ -275,7 +275,7 @@ export function recordRead(value: unknown): RecordRead | null {
  * answer looked through, from the receipt the Authority built from what
  * passed its final check (its searches and reads never reach the page). It
  * is the last line `person ask --progress` printed, in every scope: the
- * answer on `/v7`, with its receipt when the Authority streamed it (ADR-0039,
+ * answer on `/v7`, with the receipt of its stream (ADR-0039,
  * ADR-0040, research tool contract v1). An answer to an Ask that carried `previous`
  * (ADR-0047) also says the full question it answers, Ask again's "since" (its
  * citations among the answer's), or, asking which one (`clarify`), the
@@ -286,8 +286,7 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
   const { result, receipt } = validated(validatePersonAskProgressResultLineV3, raw);
   const { direct, parts, outcome } = result;
   const sources = result.citations.map(citedSource);
-  return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
-    ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through } }),
+  return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome, receipt: { looked_through: receipt.looked_through },
     ...(result.question === undefined ? {} : { question: result.question }),
     ...(result.since === undefined ? {} : { since: result.since.statements }),
     ...(result.choices === undefined ? {} : { choices: result.choices }) };

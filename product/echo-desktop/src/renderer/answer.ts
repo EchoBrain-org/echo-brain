@@ -1,5 +1,5 @@
 import type {
-  Answer, AnswerPart, AnswerSource, AnswerStatement, AnswerTableRow, ArrangedBlock, CardEntity, ConnectedTool, ExternalAnswerSource,
+  Answer, AnswerPart, AnswerSource, AnswerStatement, AnswerTableRow, ArrangedBlock, CardEntity, ConnectedTool, ExternalAnswerSource, TimelineAnswer,
 } from '../shared/protocol.js';
 import { sourceKey } from './openers.js';
 
@@ -48,7 +48,7 @@ export function rowStatement(row: AnswerTableRow): Sentence {
  * ("0.t4.1"). An arranged part's point, event, fact and quote are its
  * sentences, by their place.
  */
-export function answerSentences(answer: Answer): [string, Sentence][] {
+export function answerSentences(answer: TimelineAnswer): [string, Sentence][] {
   return [
     ...(answer.direct ? [['direct', answer.direct] as [string, AnswerStatement]] : []),
     ...answer.parts.flatMap((part, p) => [
@@ -283,7 +283,7 @@ export function partShows(part: AnswerPart, shows: Shows): boolean {
 }
 
 /** Only actionable, typed explanations. Older complete not-found answers retain their gap; other untyped diagnostics stay hidden. */
-export function answerGaps(answer: Answer, shows: Shows): string[] {
+export function answerGaps(answer: TimelineAnswer, shows: Shows): string[] {
   // Only free-text missing facts can contain source content; fixed capability/retry messages remain safe.
   const readable = shows(answer.sources.map((_, index) => index));
   return [...new Set(answer.parts.flatMap(part => part.gap_details === undefined
@@ -306,12 +306,12 @@ export function nothingMatched(answer: Pick<Answer, 'outcome'>): string {
 }
 
 /** Whether the page shows anything an answer says: its direct answer, or a part with something to show. */
-export function answerSays(answer: Answer, shows: Shows): boolean {
+export function answerSays(answer: TimelineAnswer, shows: Shows): boolean {
   return (answer.direct !== undefined && shows(answer.direct.citation_indexes)) || answer.parts.some(part => partShows(part, shows));
 }
 
 /** What Copy answer writes after what an answer says, as the page shows it: its explanations, or `nothing` when it has neither. */
-function answerEnd(answer: Answer, shows: Shows, nothing: string): string[] {
+function answerEnd(answer: TimelineAnswer, shows: Shows, nothing: string): string[] {
   const gaps = answerGaps(answer, shows);
   return gaps.length === 0 && !answerSays(answer, shows) ? [nothing] : gaps;
 }
@@ -339,7 +339,7 @@ interface CopiedSince {
  * explanation that is the whole answer; an answer that says nothing and shows
  * no explanation says `nothing`, the line the page shows for it.
  */
-export function answerMarkdown(answer: Answer, names: readonly string[], groups: readonly SourceGroup[], shows: Shows, since?: CopiedSince,
+export function answerMarkdown(answer: TimelineAnswer, names: readonly string[], groups: readonly SourceGroup[], shows: Shows, since?: CopiedSince,
   nothing = nothingMatched(answer)): string {
   const numbers = (citations: readonly number[]) => statementGroups(citations, groups).map(group => `[${group + 1}]`).join('');
   /** Text, then the numbers of what it cites: they stay on their claim. */
@@ -370,7 +370,7 @@ export function answerMarkdown(answer: Answer, names: readonly string[], groups:
  * part's question first when there are several, without what a check left
  * out, then its explanations, or `nothing`, as the Markdown ends.
  */
-export function answerText(answer: Answer, shows: Shows, since?: CopiedSince, nothing = nothingMatched(answer)): string {
+export function answerText(answer: TimelineAnswer, shows: Shows, since?: CopiedSince, nothing = nothingMatched(answer)): string {
   const said = (statements: readonly AnswerStatement[]) => statements.filter(statement => shows(statement.citation_indexes)).map(statement => statement.text);
   const listed = since === undefined ? [] : said(since.statements);
   const changes = since === undefined ? [] : since.statements.length === 0 ? [`Nothing changed since ${since.when}`] : listed.length > 0 ? [`Since ${since.when}`, ...listed] : [];

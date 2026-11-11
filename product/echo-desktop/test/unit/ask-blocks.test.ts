@@ -17,6 +17,7 @@ import {
   ACCOUNT, asking as askingWith, byClass, byTestId, byType, classes, click, elements, fail, fileOf, flush, Held, ok, paneTurn, plainHooks, render, rpcFor,
   startStore, storeLifecycle, text, timelineFiles, type Handler, type Node,
 } from './harness.js';
+import { askLine } from './ask-line.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -26,17 +27,17 @@ vi.mock('preact/hooks', original => plainHooks(original));
 const GLOBAL = { kind: 'global' } as const;
 const QUESTION = 'Can THERM start PVT?';
 /** The fixture's THERM answer in its blocks, as the host hands it to the page. */
-const therm = (): Answer => answerView({ ok: true, result: blocksAnswer(QUESTION, GLOBAL) }, GLOBAL);
+const therm = (): Answer => answerView(askLine(blocksAnswer(QUESTION, GLOBAL)), GLOBAL);
 /** An answer in blocks citing `count` Confluence pages, past ADR-0041's 40 (ADR-0051): the answer, then a point for each other page. */
 function pagesAnswer(count: number): Answer {
   const citations = Array.from({ length: count }, (_, at) => ({ kind: 'page', label: `Page ${at + 1}`, visibility: 'team', citation: {
     kind: 'page', tool_id: 'confluence', external_scope_id: '22222222-3333-4444-8555-666666666666', page_id: String(41_000 + at), section_id: 'summary', version: '1',
     permalink: `https://example.atlassian.net/wiki/pages/viewpage.action?pageId=${41_000 + at}`, text_sha256: `sha256:${'0'.repeat(64)}` } }));
   const statements = citations.map((_, at) => ({ text: `Page ${at + 1} applies.`, citation_indexes: [at], private: false }));
-  return answerView({ ok: true, result: { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: GLOBAL, outcome: 'answered', citations, parts: [{
+  return answerView(askLine({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: GLOBAL, outcome: 'answered', citations, parts: [{
     question: QUESTION, status: 'answered', statements,
     blocks: [{ kind: 'answer', statements: [0] }, { kind: 'points', ordered: false, statements: statements.slice(1).map((_, at) => at + 1) }],
-  }] } }, GLOBAL);
+  }] }), GLOBAL);
 }
 /** The fixture's answer with its blocks changed by `change`. */
 const changed = (change: (blocks: ArrangedBlock[]) => ArrangedBlock[], answer = therm()): Answer =>
@@ -423,8 +424,8 @@ describe('only actionable answer explanations are shown', () => {
   it('hides legacy partial coverage prose after its blocks without adding a coverage banner or retry button', async () => {
     const result = blocksAnswer(QUESTION, GLOBAL) as { parts: Record<string, unknown>[] };
     // Research stopped short: the answer says what it did not cover, and its part, as prose with no typed details, what was not found.
-    const partial = answerView({ ok: true, result: { ...result, outcome: 'partial', notice: 'One of three THERM meetings in range was not read before the time limit.',
-      parts: [{ ...result.parts[0], status: 'partial', gap: 'Who signs off PVT was not found in the evidence read.' }] } }, GLOBAL);
+    const partial = answerView(askLine({ ...result, outcome: 'partial', notice: 'One of three THERM meetings in range was not read before the time limit.',
+      parts: [{ ...result.parts[0], status: 'partial', gap: 'Who signs off PVT was not found in the evidence read.' }] }), GLOBAL);
     const { thread } = await answered(partial);
     const answer = byTestId(thread(), 'answer')[0]!;
     expect(text(thread())).not.toContain('THERM meetings in range');

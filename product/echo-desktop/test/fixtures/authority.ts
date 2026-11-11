@@ -62,13 +62,7 @@ interface Contract {
   validatePersonRunsResultV1(operation: string, value: unknown): unknown;
   /** Personal review requests never select a provider. */
   validatePersonReviewRequestV1(value: unknown): unknown;
-  /** Ask progress (ADR-0039): the header an Ask opts in with. */
-  PERSON_ASK_PROGRESS_HEADER_V1: string;
-  /**
-   * Ask progress V3 on `/v7` (research tool contract v1): its header value, and one event, which may name a project, a
-   * person, a tool or a tool's container, as its frame.
-   */
-  PERSON_ASK_PROGRESS_HEADER_VALUE_V3: string;
+  /** Ask progress V3 on `/v7` (research tool contract v1): one event, which may name a project, a person, a tool or a tool's container, as its frame. */
   formatPersonAskProgressEventV3(event: unknown): string;
 }
 const api = organizationApi as unknown as Contract;
@@ -706,6 +700,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
    * A streamed Ask: research progress, then its answer and receipt once the test writes `release-ask`. A client that stops
    * the request first ends the research, and `ask-stopped` holds the question it stopped.
    */
+  /** Every Ask streams (ADR-0039): an answer at once, with nothing looked through. */
+  const answered = (response: unknown): Response => new Response(api.formatPersonAskProgressEventV3({ type: 'answer', response, receipt: { looked_through: 0, elapsed_ms: 0, rows: [] } }),
+    { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' } });
   const progressStream = (question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined): Response => {
     const format = api.formatPersonAskProgressEventV3;
     const items = progressItems();
@@ -989,9 +986,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const metadata = new Headers(init?.headers).get('x-echo-document-metadata');
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown>
       : metadata ? JSON.parse(Buffer.from(metadata, 'base64url').toString('utf8')) as Record<string, unknown> : undefined;
-    // An Ask that asked for its progress says so (ADR-0039).
-    const progress = new Headers(init?.headers).get('x-echo-ask-progress');
-    appendFileSync(join(home, 'calls.jsonl'), `${JSON.stringify({ method, path: url.pathname, query: url.search, body, ...(progress === null ? {} : { progress }) })}\n`);
+    appendFileSync(join(home, 'calls.jsonl'), `${JSON.stringify({ method, path: url.pathname, query: url.search, body })}\n`);
     if (url.origin !== AUTHORITY) throw new Error('Unexpected authority');
     const path = url.pathname;
     // Kim signs in on this computer while the request named in `switch-on` is on its way; it is still answered.
@@ -1681,39 +1676,36 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const question = request.question;
       const answer = { ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8' };
       // The Ask timeline's answers, by the earlier turn the Ask carries; every other mode's take one and answer as if none came.
-      if (mode === 'ask-timeline-unreadable') return json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
-      // A client requesting progress gets the Ask's steps, then its answer and receipt.
-      const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
-      if (mode === 'ask-progress' && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V3) {
-        return progressStream(question, scope, init?.signal ?? undefined);
-      }
+      if (mode === 'ask-timeline-unreadable') return answered(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
+      // `ask-progress` streams the Ask's steps, then its answer and receipt; every other mode streams its answer alone.
+      if (mode === 'ask-progress') return progressStream(question, scope, init?.signal ?? undefined);
       // `ask-completion` answers what it can and says, typed, that it cannot make changes.
       if (mode === 'ask-completion') {
         const [original] = desktop.answer.parts as Record<string, unknown>[];
-        return json({ ...answer, scope, outcome: 'partial', citations: desktop.answer.citations,
+        return answered({ ...answer, scope, outcome: 'partial', citations: desktop.answer.citations,
           parts: [{ question, status: 'partial', statements: original!.statements, blocks: original!.blocks,
             gap: 'The list did not reach the end. Unchecked entries and sentences did not fit.', gap_details: { unsupported_action: true } }],
         });
       }
       // `ask-ticket` answers from one Jira ticket read live.
       if (mode === 'ask-ticket') {
-        return json({ ...answer, scope, outcome: 'answered', citations: [thermTicket('ECHO-7', 'Jira launch', '10007')],
+        return answered({ ...answer, scope, outcome: 'answered', citations: [thermTicket('ECHO-7', 'Jira launch', '10007')],
           parts: [{ question, status: 'answered', statements: [{ text: 'ECHO-7 is titled Jira launch.', citation_indexes: [0], private: true }], blocks: [{ kind: 'text', statements: [0] }] }] });
       }
       // `ask-blocks` answers THERM's question in every block of answer layout v2 (ADR-0051).
-      if (mode === 'ask-blocks') return json(blocksAnswer(question, scope));
+      if (mode === 'ask-blocks') return answered(blocksAnswer(question, scope));
       if (mode === 'ask-scroll') {
         const statements = question === 'Quick status' ? [{ text: 'The release remains scheduled for Friday, and the team has confirmed the owner and the remaining checks.', citation_indexes: [0], private: false }] : Array.from({ length: 12 }, (_, index) => ({
           text: `${question} Item ${index + 1}: The team reviewed the supplier report, the manufacturing checklist, and the latest test results. The next review will compare those results with the release requirements before confirming the schedule and assigning the remaining follow-ups.`,
           citation_indexes: [0], private: false,
         }));
-        return json({ ...answer, scope, citations: THERM_BLOCK_CITATIONS.slice(0, 1), parts: [{ question, status: 'answered', statements,
+        return answered({ ...answer, scope, citations: THERM_BLOCK_CITATIONS.slice(0, 1), parts: [{ question, status: 'answered', statements,
           blocks: [{ kind: 'text', statements: statements.map((_, index) => index) }],
         }] });
       }
       // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
       const [part] = desktop.answer.parts as Record<string, unknown>[];
-      return json({ ...answer, scope, parts: [{ ...part, question }] });
+      return answered({ ...answer, scope, parts: [{ ...part, question }] });
     }
     if (method === 'POST' && path === '/v2/person/ask/source') {
       const citation = body?.citation as Record<string, unknown>;

@@ -62,8 +62,7 @@ export interface AskClarify extends AskQuestion {
 }
 
 /**
- * What an answer looked through, on the line under it (ADR-0049): only when the Authority streamed it and the Ask took long
- * enough to show it.
+ * What an answer looked through, on the line under it (ADR-0049): only when the Ask took long enough to show it.
  */
 export interface AskTook {
   receipt: AskReceipt;
@@ -3800,7 +3799,7 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   keepTurn(turn);
   // Only an Ask that took long enough to show its work keeps its receipt, timed as its live line was.
   const took = Date.now() - started;
-  const shown = receipt !== undefined && took >= PROGRESS_AFTER_MS ? { ...current.took, [turn.id]: { receipt, took } } : current.took;
+  const shown = took >= PROGRESS_AFTER_MS ? { ...current.took, [turn.id]: { receipt, took } } : current.took;
   set({ ask: { ...current, asking: null, asked: [...current.asked, turn.id], took: shown } });
   startSources(turn.id);
 }

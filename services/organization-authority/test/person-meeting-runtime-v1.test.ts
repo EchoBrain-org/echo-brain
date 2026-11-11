@@ -21,7 +21,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { approvalRecordIdV2 } from '@echo-brain/organization-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeRootV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
-import type { PersonMeetingOperationV2, PersonMeetingResultsV2, PersonReviewOperationV1, PersonReviewResultsV1 } from '@echo-brain/organization-api';
+import type { PersonMeetingOperationV2, PersonMeetingResultsV2, PersonOpenRefV1, PersonReviewOperationV1, PersonReviewResultsV1 } from '@echo-brain/organization-api';
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
 import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_WATCH_CURSOR_POLICY_V1, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 } from '@echo-brain/provider-granola/granola-watch-source-v1';
 import { SqliteExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
@@ -160,7 +160,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   const leave = (project_id: string, member: keyof typeof actors) => f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'")
     .run(new Date().toISOString(), project_id, actors[member].membership_id);
   const listRoute = () => createPersonListRouteV1({ organization_id: person.organization_id, sessions, directory: new SqlitePersonListDirectoryV1(f.db), originals: new SqlitePersonOriginalItemsV1(f.db, sessions, person.organization_id),
-    meetings: { collectMeetings: () => ({ status: 'ok', rows: [], handle: {} }), commitMeetings: () => ({}), revalidateMeetingRelease() {}, openMeeting() { throw new Error('unused'); } },
+    meetings: { collectMeetings: () => ({ status: 'ok', rows: [], handle: {} }), commitMeetings: () => ({}), revalidateMeetingRelease() {} },
   });
   // Who can find and open the imported note through the list route's Only me (an unapproved import is its importer's alone) and the original-context desk.
   const readers = async (tokens: readonly (keyof typeof actors)[] = ['owner', 'other', 'reader-a', 'reader-b']) => {
@@ -509,7 +509,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(page.items).toHaveLength(1); expect(page.items[0]).toMatchObject({ kind: 'imported_meeting', title: 'Imported meeting: Test meeting', visibility: 'only_me', projects: [] });
     // A suggested project's list holds no unapproved note either.
     expect((await list.list({ access_token: 'owner', request: { schema_version: 1, project_id: project } })).items).toEqual([]);
-    const opened = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } });
+    const opened = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref as PersonOpenRefV1 } });
     expect(JSON.stringify(opened)).toContain('Ship the cohort'); expect(JSON.stringify(opened)).not.toContain('TRANSCRIPT_SECRET');
     // A suggested project grants nothing: its scope holds no unapproved notes, for its members or the importer.
     for (const token of ['owner', 'reader-a']) {
@@ -521,7 +521,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     for (const token of ['other', 'reader-a']) {
       expect(originals.deskSearch({ access_token: token, scope: { kind: 'global' }, query: 'cohort' }).items).toEqual([]);
       expect(() => originals.deskOpen({ access_token: token, scope: { kind: 'global' }, citation: search.items[0]!.citation })).toThrow();
-      await expect(list.open({ access_token: token, request: { schema_version: 1, ref: page.items[0]!.ref } })).rejects.toMatchObject({ code: 'not_found' });
+      await expect(list.open({ access_token: token, request: { schema_version: 1, ref: page.items[0]!.ref as PersonOpenRefV1 } })).rejects.toMatchObject({ code: 'not_found' });
       expect((await list.list({ access_token: token, request: { schema_version: 1, only_me: true } })).items).toEqual([]);
     }
     expect(originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }).items).toEqual([]);
@@ -529,7 +529,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     // Project scope itself still needs current project membership; the importer's own notes do not.
     expect(() => originals.deskSearch({ access_token: 'owner', scope: { kind: 'project', project_id: project }, query: 'cohort' })).toThrow();
     expect(originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'cohort', kinds: ['imported_meeting'] }).items).toHaveLength(1);
-    expect(JSON.stringify(await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } }))).toContain('Ship the cohort');
+    expect(JSON.stringify(await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref as PersonOpenRefV1 } }))).toContain('Ship the cohort');
   });
   it.each([undefined, '2026-10-02T15:00:00.000Z'])('dates imported notes by their meeting when recorded and by their arrival, and counts them where a date cannot test them (started: %s)', async started => {
     const f = await fixture(started === undefined ? {} : { started }), runtime = f.create();
@@ -1058,7 +1058,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const list = f.listRoute();
     const page = await list.list({ access_token: 'owner', request: { schema_version: 1, only_me: true } });
     expect(page.items).toHaveLength(1);
-    const opened = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } });
+    const opened = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref as PersonOpenRefV1 } });
     expect(opened).toMatchObject({ text: '', next_cursor: null });
     expect(JSON.stringify(opened)).not.toContain('TRANSCRIPT_SECRET_DO_NOT_SHARE');
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
@@ -1285,7 +1285,7 @@ describe('personal meeting intake uses the shared processing path', () => {
       records: [{ approval_id: approvalRecordIdV2(pending!.approval_id, [projectB]), project_ids: [projectB] }] });
     // Approval publishes a separate record; the source keeps its neutral provenance label and private audience.
     expect((await list.list({ access_token: 'owner', request: { schema_version: 1, only_me: true } })).items).toEqual(imported);
-    const source = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: imported[0]!.ref } });
+    const source = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: imported[0]!.ref as PersonOpenRefV1 } });
     expect(source).toMatchObject({ item: imported[0] });
     expect(JSON.stringify(source)).toContain('Ship the cohort');
     expect(JSON.stringify(source)).not.toContain('TRANSCRIPT_SECRET');

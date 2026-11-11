@@ -5,6 +5,7 @@ import {
 } from '../../src/renderer/answer.js';
 import { blocksAnswer, paragraphs } from '../fixtures/authority.js';
 import { answerView } from '../../src/host/views.js';
+import { askLine } from './ask-line.js';
 
 const digest = (digit: string) => `sha256:${digit.repeat(64)}`;
 /** Copy answer's Markdown of an answer no check left anything out of: its sources numbered as the page numbers them. */
@@ -101,7 +102,7 @@ const GLOBAL = { kind: 'global' } as const;
 const NOW = new Date(2026, 9, 23, 12).getTime();
 /** An answer of `statements`, each its own paragraph, citing the sources given by place. */
 const paragraphed = (statements: readonly [string, number[]][], extra: Partial<Answer> = {}): Answer => ({
-  scope: GLOBAL, outcome: 'answered', sources: [page('1'), page('2'), page('3')],
+  scope: GLOBAL, outcome: 'answered', sources: [page('1'), page('2'), page('3')], receipt: { looked_through: 0 },
   parts: [{ question: 'Q?', status: 'answered', statements: statements.map(([text, citation_indexes]) => ({ text, citation_indexes, private: false })),
     ...(statements.length === 0 ? {} : { blocks: paragraphs(statements) }) }], ...extra,
 });
@@ -222,7 +223,7 @@ describe('Copy answer\'s Markdown keeps the text as it was written', () => {
 
 // Answer layout v2 (ADR-0051): the fixture's THERM answer in its blocks, as the host hands it to the page.
 const BLOCKS_QUESTION = 'Can THERM start PVT?';
-const arranged = (): Answer => answerView({ ok: true, result: blocksAnswer(BLOCKS_QUESTION, GLOBAL) }, GLOBAL);
+const arranged = (): Answer => answerView(askLine(blocksAnswer(BLOCKS_QUESTION, GLOBAL)), GLOBAL);
 /** The fixture's arranged answer with its blocks changed by `change`. */
 const rearranged = (change: (blocks: ArrangedBlock[]) => ArrangedBlock[]): Answer => {
   const base = arranged();

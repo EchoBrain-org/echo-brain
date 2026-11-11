@@ -12,7 +12,7 @@ vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
 
 const apollo = project(1, 30, { name: 'Apollo' });
 const answer: Answer = {
-  scope: { kind: 'global' }, sources: [], outcome: 'answered',
+  scope: { kind: 'global' }, sources: [], outcome: 'answered', receipt: { looked_through: 0 },
   parts: [{ question: 'When do we ship?', status: 'answered', statements: [{ text: 'We ship on Friday.', citation_indexes: [], private: false }],
     blocks: [{ kind: 'text', statements: [0] }] }],
 };

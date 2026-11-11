@@ -1025,7 +1025,8 @@ describe("Person Layer 2 route: readable decisions for open items (open items an
       expect(() => route.readableDecisions({ access_token: "nobody", record_sha256s: [w.digest("r4")] })).toThrow(expect.objectContaining({ code: "unauthorized" }));
       expect(auditCount(w.authority)).toBe(before);
       // The approval time is the person list's own time for the meeting.
-      expect(found.get(w.digest("r4"))!.approved_at).toBe(route.openMeeting({ access_token: "emp_a", record_sha256: w.digest("r4") }).row.added_at);
+      const listed = route.collectMeetings({ access_token: "emp_a", scope: { kind: "project", project_id: SHARED }, after: null, limit: 26 });
+      expect(found.get(w.digest("r4"))!.approved_at).toBe(listed.status === "ok" ? listed.rows.find((row) => row.id === w.digest("r4"))?.added_at : "held");
       // Current grants decide: after leaving SHARED, r4 is no longer readable.
       w.leave(SHARED, EMP_A);
       expect(route.readableDecisions({ access_token: "emp_a", record_sha256s: [w.digest("r4")] }).size).toBe(0);
@@ -1281,7 +1282,7 @@ describe("Person Layer 2 route: Ask's list rows name each meeting record by its 
 describe("Person Layer 2 route: approved records carry their dates and their meeting's people (research tool contract v1)", () => {
   const people = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `p-${index}`, display_name: `Person ${String(index + 1).padStart(2, "0")}` }));
 
-  it("gives every atom its approval time, and its meeting's participants and final approver as the person open names them, released and audited with it", async () => {
+  it("gives every atom its approval time, and its meeting's participants and final approver as `person records --brief` names them, released and audited with it", async () => {
     const w = await meetingWorld({ extra: [
       { name: "r9", approval_id: "apr_r9", projects: [SHARED], final_approver: OWNER, issued_at: "2026-10-05T23:30:00.000Z", signals: { decisions: 1, actions: 1 },
         brief: (brief) => ({ ...brief, meeting: { ...brief.meeting, title: "THERM DVT sync", time: { actual_start_at: "2026-10-04T16:00:00.000Z" },

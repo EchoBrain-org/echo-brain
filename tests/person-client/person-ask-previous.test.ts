@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PERSON_ASK_PROGRESS_HEADER_V1,
   formatPersonAskProgressEventV3,
   validatePersonAskProgressResultLineV3,
   type OrganizationPersonSessionV2,
@@ -15,7 +14,7 @@ import { PersonClient } from '../../src/product/person-client/client.js';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 
-// The asker's previous turn on `person ask` (ADR-0047): sent to /v7, the one Ask route, streamed or not; validated before
+// The asker's previous turn on `person ask` (ADR-0047): sent to /v7, the one Ask route, which streams; validated before
 // anything is sent; and an answer to an Ask without it never names a question, says what changed since or asks which one.
 
 const ORIGIN = 'https://authority.example.test';
@@ -44,6 +43,7 @@ const clarified = {
   choices: [{ label: 'THERM-482', question: RESOLVED }, { label: 'MECH-214', question: 'What are the details on MECH-214?' }],
 };
 const json = (value: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json', ...headers } });
+const RECEIPT = { looked_through: 0, elapsed_ms: 1, rows: [] };
 const stream = (events: readonly PersonAskProgressEventV3[]) => new Response(events.map(event => formatPersonAskProgressEventV3(event)).join(''),
   { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' } });
 const pathOf = (input: unknown) => new URL(String(input)).pathname;
@@ -78,13 +78,12 @@ describe('the previous turn on the Person client (ADR-0047)', () => {
     expect(result).toEqual({ result: clarified, receipt: { looked_through: 0, elapsed_ms: 900, rows: [] } });
     const [url, init] = fetch.mock.calls[0]!;
     expect(pathOf(url)).toBe('/v7/person/ask');
-    expect(new Headers(init?.headers).get(PERSON_ASK_PROGRESS_HEADER_V1)).toBe('3');
     expect(bodyOf(init)).toEqual({ schema_version: 3, question: QUESTION, previous: PREVIOUS });
   });
 
-  it('asks /v7 alone in JSON too: a 404, or a refused turn, fails the Ask with its own code', async () => {
+  it('asks /v7 alone without progress too: a 404, or a refused turn, fails the Ask with its own code', async () => {
     const answer = answered({ question: RESOLVED });
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream([{ type: 'answer', response: answer, receipt: RECEIPT }]));
     await expect(client(fetch).askWithLiveSources(QUESTION, undefined, undefined, PREVIOUS)).resolves.toEqual(answer);
     expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask']);
     expect(bodyOf(fetch.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, previous: PREVIOUS });
@@ -97,23 +96,23 @@ describe('the previous turn on the Person client (ADR-0047)', () => {
 
   it('refuses an answer that names a question, a since or choices when the Ask did not send the turn', async () => {
     for (const answer of [answered({ question: RESOLVED }), answered({ question: RESOLVED, since: { statements: [] } }), clarified]) {
-      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer));
+      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream([{ type: 'answer', response: answer, receipt: RECEIPT }]));
       await expect(client(fetch).askWithLiveSources(QUESTION)).rejects.toMatchObject({ code: 'invalid_response' });
-      const streamed = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream([{ type: 'answer', response: answer, receipt: { looked_through: 0, elapsed_ms: 1, rows: [] } }]));
+      const streamed = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream([{ type: 'answer', response: answer, receipt: RECEIPT }]));
       await expect(client(streamed).askWithLiveProgress(QUESTION, undefined, undefined, () => undefined)).rejects.toMatchObject({ code: 'invalid_response' });
     }
   });
 });
 
 describe('person ask --previous (ADR-0047)', () => {
-  it('sends the validated turn and prints the answer it gets, streamed or not', async () => {
+  it('sends the validated turn and prints the answer it gets, with or without progress', async () => {
     const answer = answered({ question: RESOLVED });
     const streamed = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream([{ type: 'answer', response: answer, receipt: { looked_through: 1, elapsed_ms: 2_000, rows: [] } }]));
     const progress = cli(streamed);
     expect(await progress.run(['ask', `--question=${QUESTION}`, '--progress', `--previous=${JSON.stringify(PREVIOUS)}`])).toBe(0);
     expect(validatePersonAskProgressResultLineV3(lines(progress.output.stdout).at(-1))).toMatchObject({ result: { question: RESOLVED } });
     expect(bodyOf(streamed.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, previous: PREVIOUS });
-    const plain = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer));
+    const plain = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream([{ type: 'answer', response: answer, receipt: RECEIPT }]));
     const once = cli(plain);
     const project_id = 'prj_00000000-0000-4000-8000-000000000001';
     expect(await once.run(['ask', `--question=${PREVIOUS.question}`, '--project', project_id, `--previous=${JSON.stringify({ ...PREVIOUS, purpose: 'ask_again' })}`])).toBe(1);

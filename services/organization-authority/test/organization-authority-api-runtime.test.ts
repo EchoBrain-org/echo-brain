@@ -958,7 +958,8 @@ describe("Organization Authority API runtime", () => {
         expect(await post("/v1/person/list", body, 400)).toEqual({ error: { code: "invalid_request", message: "request failed" } });
       }
       expect(await post("/v1/person/open", { schema_version: 1, ref: `note:${context_id}` })).toMatchObject({ kind: "echo-person-open-v1", text: upload.text, next_cursor: null });
-      expect(await post("/v1/person/open", { schema_version: 1, ref: `meeting:sha256:${"0".repeat(64)}` }, 404)).toEqual({ error: { code: "not_found", message: "request failed" } });
+      // A listed meeting is read as its record, never opened (2026-11-11).
+      expect(await post("/v1/person/open", { schema_version: 1, ref: `meeting:sha256:${"0".repeat(64)}` }, 400)).toEqual({ error: { code: "invalid_request", message: "request failed" } });
 
       const searchBeforeGeneration = await fetch(
         `${origin}/v1/person/records`,

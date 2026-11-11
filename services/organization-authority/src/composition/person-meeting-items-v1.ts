@@ -1,24 +1,17 @@
 import type { JsonObject, Sha256Digest } from "@echo-brain/federation-protocol";
-import {
-  PERSON_LIST_TEXT_MAX_BYTES_V1,
-  PERSON_OPEN_ATOM_PART_MAX_BYTES_V1,
-  PERSON_OPEN_PARTICIPANTS_MAX_V1,
-  type PersonOpenMeetingAtomV1,
-  type PersonOpenMeetingDetailV1,
-} from "@echo-brain/organization-api";
+import { PERSON_CITED_RECORD_PARTICIPANTS_MAX_V1, PERSON_LIST_TEXT_MAX_BYTES_V1 } from "@echo-brain/organization-api";
 import type { OrganizationRecordDecisionBriefV1, OrganizationRecordMeetingTimeV1 } from "@echo-brain/organization-protocol";
 import type { RecordApproverProjectorV1 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { READABLE_SEARCH_ADMISSION_BUDGET_V1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
-import { boundedTextV1, releasableBodyV1 } from "../application/person-item-text-v1.js";
+import { boundedTextV1 } from "../application/person-item-text-v1.js";
 
 /**
- * Pure meeting presentation for the person list and open (ADR-0024). Every
+ * Pure meeting presentation for the person list and the desk (ADR-0024). Every
  * value here is projected from an approved record the caller was already
  * admitted to; nothing here reads a database or decides access.
  */
 
-const TIMEZONE = /^[A-Za-z0-9_+\-/]{1,64}$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 function metadataUnavailable(): never {
@@ -54,25 +47,6 @@ export function meetingDateV1(time: OrganizationRecordMeetingTimeV1 | undefined)
   return day(local);
 }
 
-/** Code-point-safe parts of at most 3,072 bytes; the parts join to the exact text. */
-function splitAtomTextV1(text: string): readonly string[] {
-  const parts: string[] = [];
-  let current = "";
-  let bytes = 0;
-  for (const scalar of text) {
-    const size = Buffer.byteLength(scalar, "utf8");
-    if (bytes + size > PERSON_OPEN_ATOM_PART_MAX_BYTES_V1 && current.length > 0) {
-      parts.push(current);
-      current = "";
-      bytes = 0;
-    }
-    current += scalar;
-    bytes += size;
-  }
-  if (current.length > 0 || parts.length === 0) parts.push(current);
-  return Object.freeze(parts);
-}
-
 /**
  * Owners the approver confirmed (ADR-0021), carried by the approval decision
  * reference by signal ID; the approved brief never carries them. Read by
@@ -92,69 +66,21 @@ export function confirmedOwners(reference: unknown): ReadonlyMap<string, string>
   return owners;
 }
 
-/** One part of one approved signal, at its place in the brief's atom order. */
-interface MeetingAtomPartV1 {
-  readonly atom_order: number;
-  /** 1-based. */
-  readonly part_index: number;
-  readonly atom: PersonOpenMeetingAtomV1;
-}
-
 /**
- * Every approved signal in brief order (decisions, actions, rationales),
- * split into parts rather than dropped. Text the open contract refuses in a
- * body is replaced before the split, so the parts join to the released text.
- * Attributes sit on the first part only; an owner comes only from the signed
- * human act, never the brief. Evidence spans are verbatim transcript quotes
- * and are never released.
+ * A meeting's participants as one row fact (research tool contract v1): display names only, each once, at most 32,
+ * joined with ", " and ending ", and more" when the meeting recorded more. Never participant ids, identities, roles,
+ * organizations, metadata, the meeting or brief id, provenance, subjects or confidence.
  */
-export function meetingAtomsV1(brief: OrganizationRecordDecisionBriefV1, owners: ReadonlyMap<string, string>): readonly MeetingAtomPartV1[] {
-  return Object.freeze([...brief.decisions, ...brief.actions, ...brief.rationales].flatMap((signal, atom_order) => {
-    const texts = splitAtomTextV1(releasableBodyV1(signal.text));
-    const owner = signal.kind === "action" ? owners.get(signal.id) : undefined;
-    const attributes = signal.kind === "decision" ? { status: signal.status }
-      : signal.kind === "action" ? { ...(owner === undefined ? {} : { owner }), ...(signal.due_at === null ? {} : { due_at: signal.due_at }) }
-      : {};
-    return texts.map((text, index) => Object.freeze({
-      atom_order,
-      part_index: index + 1,
-      atom: Object.freeze({
-        kind: signal.kind, text, ...(index === 0 ? attributes : {}),
-        ...(texts.length === 1 ? {} : { part: Object.freeze({ index: index + 1, count: texts.length }) }),
-      }),
-    }));
-  }));
-}
-
-function meetingTime(value: string | undefined): string | undefined {
-  return value !== undefined && value.length <= 64 && Number.isFinite(Date.parse(value)) ? value : undefined;
-}
-
-/**
- * Names only: never participant ids, identities, roles, organizations,
- * metadata, the meeting or brief id, provenance, subjects or confidence.
- */
-export function meetingDetailV1(brief: OrganizationRecordDecisionBriefV1, approved_by?: string): PersonOpenMeetingDetailV1 {
-  const time = brief.meeting.time;
+export function meetingParticipantsV1(brief: OrganizationRecordDecisionBriefV1): string | undefined {
   const participants: string[] = [];
   let more = false;
   for (const participant of brief.meeting.participants) {
     const name = boundedTextV1(participant.display_name, PERSON_LIST_TEXT_MAX_BYTES_V1);
     if (name === undefined || participants.includes(name)) continue;
-    if (participants.length === PERSON_OPEN_PARTICIPANTS_MAX_V1) { more = true; break; }
+    if (participants.length === PERSON_CITED_RECORD_PARTICIPANTS_MAX_V1) { more = true; break; }
     participants.push(name);
   }
-  const started_at = meetingTime(time?.actual_start_at ?? time?.scheduled_start_at);
-  const ended_at = meetingTime(time?.actual_end_at ?? time?.scheduled_end_at);
-  return Object.freeze({
-    ...(started_at === undefined ? {} : { started_at }),
-    ...(ended_at === undefined ? {} : { ended_at }),
-    ...(time?.timezone !== undefined && TIMEZONE.test(time.timezone) ? { timezone: time.timezone } : {}),
-    all_day: time?.all_day === true,
-    participants: Object.freeze(participants),
-    participants_more: more,
-    ...(approved_by === undefined ? {} : { approved_by }),
-  });
+  return participants.length === 0 ? undefined : `${participants.join(", ")}${more ? ", and more" : ""}`;
 }
 
 interface RecordCoordinatesV1 {
