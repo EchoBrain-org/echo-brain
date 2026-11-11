@@ -686,13 +686,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       thermTicket('ECHO-7', 'Jira launch', '10007'),
     ];
   };
+  /** Every Ask streams (ADR-0039): an answer at once, with nothing looked through. */
+  const answered = (response: unknown): Response => new Response(api.formatPersonAskProgressEventV3({ type: 'answer', response, receipt: { looked_through: 0, elapsed_ms: 0, rows: [] } }),
+    { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' } });
   /**
    * A streamed Ask: research progress, then its answer and receipt once the test writes `release-ask`. A client that stops
    * the request first ends the research, and `ask-stopped` holds the question it stopped.
    */
-  /** Every Ask streams (ADR-0039): an answer at once, with nothing looked through. */
-  const answered = (response: unknown): Response => new Response(api.formatPersonAskProgressEventV3({ type: 'answer', response, receipt: { looked_through: 0, elapsed_ms: 0, rows: [] } }),
-    { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' } });
   const progressStream = (question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined): Response => {
     const format = api.formatPersonAskProgressEventV3;
     const items = progressItems();

@@ -5,6 +5,7 @@ import { canonicalJson } from '@echo-brain/federation-protocol';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
+import { askStream } from './ask-stream.js';
 
 const now = '2026-09-29T20:01:00.000Z';
 const projectId = 'prj_11111111-1111-4111-8111-111111111111';
@@ -38,12 +39,6 @@ function setup(): string {
   });
   shared = { home, session: readFileSync(store.paths.live, 'utf8') };
   return home;
-}
-
-/** A `/v7` Ask's reply: its answer, streamed (ADR-0039), with an empty receipt. */
-function askStream(answer: unknown): Response {
-  return new Response(`data: ${JSON.stringify({ type: 'answer', response: answer, receipt: { looked_through: 0, elapsed_ms: 0, rows: [] } })}\n\n`,
-    { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8' } });
 }
 
 function json(value: unknown, status = 200): Response {

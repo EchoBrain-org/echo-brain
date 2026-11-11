@@ -6,10 +6,10 @@
 // A file that cannot be read, or is not what a put writes, reads as empty and
 // is replaced by the next put; a turn an older desktop saved that no page
 // draws now goes on its own (so does a malformed one that merely looks like
-// it, rather than emptying the file), and the next put writes the rest. Our
-// own sign-out deletes the account's file; reading one account's timeline
-// deletes any other account's, so an account change leaves nothing of the
-// last one here. Kept apart from host.ts so all of it is tested on a real folder.
+// it, rather than emptying the file), and the next put writes the rest. Our own
+// sign-out deletes the account's file; reading one account's timeline deletes
+// any other account's, so an account change leaves nothing of the last one
+// here. Kept apart from host.ts so all of it is tested on a real folder.
 import { PERSON_ANSWER_CARD_ENTITIES_V2, validatePersonAnswerGapDetailsV1, validateProjectIdV1 } from '@echo-brain/organization-api';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';

@@ -27,6 +27,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { EmployeeMutationError, PersonClient } from "../../src/product/person-client/client.js";
 import type { PersonClientCliDependencies } from "../../src/product/person-client/commands.js";
 import { PersonSessionStore } from "../../src/product/person-client/session-store.js";
+import { askStream } from "./ask-stream.js";
 
 function fixtureId(prefix: string, suffix: number): string {
   return `${prefix}_00000000-0000-4000-8000-${String(suffix).padStart(12, "0")}`;
@@ -86,13 +87,6 @@ const ROTATED_SESSION = {
 const OWNER_SESSION = { ...ROTATED_SESSION, membership_type: "owner" } as const;
 /** An owner whose access has expired, so any refresh is a remote call. */
 const OWNER_SESSION_EXPIRED = { ...SESSION, membership_type: "owner" } as const;
-
-/** A `/v7` Ask's reply: its answer, streamed (ADR-0039), unchecked, with an empty receipt. */
-function askStream(answer: unknown): Response {
-  return new Response(`data: ${JSON.stringify({ type: "answer", response: answer, receipt: { looked_through: 0, elapsed_ms: 0, rows: [] } })}\n\n`, {
-    status: 200, headers: { "content-type": "text/event-stream; charset=utf-8" },
-  });
-}
 
 function json(value: unknown, status = 200): Response {
   return new Response(canonicalJson(value), {
