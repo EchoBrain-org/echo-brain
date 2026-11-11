@@ -147,16 +147,15 @@ current session.
 
 Releases before the one that retired the owner's `verify-read` runner kept Jira
 connections in a runtime-owned sidecar, `clean-data/staging-connector-rehearsal-v1/`.
-Nothing reads it now: after that release, every staging member who used Jira
+Nothing reads or checks it now: after that release, every staging member who used Jira
 connects it again through Tools (see the
 [service guide](../../services/organization-authority/README.md#staging-connector-rehearsal)).
 
 Same-volume host reconstruction by `restore-clean-v1-host.sh`, including the
 CloudFormation bootstrap's `materialize`, allows only the profile at its fixed
-path with its recorded digest. It ignores a leftover sidecar while the profile is
-selected and refuses one once the selection is retired. The offline whole-volume
-backup verifier refuses any selected connector rehearsal, its profile file or a
-leftover sidecar, so a backup restore always requires provider revocation and a
+path with its recorded digest, and refuses a leftover profile once the selection
+is retired. The offline whole-volume backup verifier refuses any selected
+connector rehearsal or its profile file, so a backup restore always requires provider revocation and a
 fresh rehearsal. The human host operator must first disconnect or revoke the
 affected Jira connections at the provider, then prepare a fresh profile.
 

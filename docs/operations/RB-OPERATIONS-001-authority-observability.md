@@ -307,10 +307,12 @@ to inspect the hold; a successful HTTP response alone does not prove that its
 output passed grounding or became an approval candidate.
 
 Do not place or infer meeting/provider content, identifiers, credentials,
-prompts, raw errors, or stack traces from these fields. The legacy
-`echo-clean-live-worker-failed-v1` event remains only for the host's
-worker-failure metric and alarm. It is not part of new lifecycle diagnosis,
-and this slice does not add alarms, a status API, correlation, or close #87.
+prompts, raw errors, or stack traces from these fields. The content-free
+`echo-clean-live-worker-failed-v1` event marks every worker failure, including
+those outside a lifecycle phase (a source poll, a personal meeting lane,
+retiring an old search generation), and is what the host's worker-failure
+metric and alarm count. This slice does not add alarms, a status API,
+correlation, or close #87.
 
 #### Watch the record-search ceiling
 

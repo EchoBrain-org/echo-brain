@@ -613,10 +613,6 @@ function emptyAltitude(): AltitudeState {
     listFailure: null, listStale: false };
 }
 
-// Home no longer remembers where it was zoomed (One place to look v1): every start opens its top. Where an older version
-// kept it on this computer goes, once, if it can.
-try { localStorage.removeItem('echo.home.altitude'); } catch { /* Nothing kept, or nothing to keep it in. */ }
-
 function rememberedSidebar(): boolean {
   try { return localStorage.getItem(SIDEBAR_OPEN) !== 'false'; } catch { return true; }
 }

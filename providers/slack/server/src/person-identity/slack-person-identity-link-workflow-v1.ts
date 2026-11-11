@@ -198,12 +198,7 @@ function repositoryOperation<T>(operation: () => T): T {
   try {
     return operation();
   } catch (error) {
-    if (
-      error instanceof Error &&
-      (error.name === "OrganizationIntegrationConflictError" ||
-        error.message ===
-          "organization integration command ID was reused with different input")
-    ) {
+    if (error instanceof Error && error.name === "PersonSlackIdentityLinkConflictError") {
       throw new AuthorityOperationError("conflict", error.message);
     }
     throw error;

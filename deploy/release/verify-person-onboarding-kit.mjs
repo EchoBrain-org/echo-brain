@@ -184,7 +184,7 @@ function main() {
   const manifestKeys = [
       'kind', 'build_identity_sha256', 'person_client_artifact_sha256', 'release_id',
       'release_record_sha256', 'runtime', 'schema_version', 'source_sha',
-      ...(linux && Object.hasOwn(manifest, 'update_bootstrap') ? ['update_bootstrap'] : []),
+      ...(linux ? ['update_bootstrap'] : []),
   ];
   exactKeys(
     manifest,
@@ -215,7 +215,7 @@ function main() {
         manifest.runtime.architecture !== 'arm64'
       ))
   ) fail('manifest identity is invalid');
-  if (linux && manifest.update_bootstrap !== undefined) verifyUpdateBootstrap(manifest.update_bootstrap);
+  if (linux) verifyUpdateBootstrap(manifest.update_bootstrap);
   if (raw !== `${canonicalJson(manifest)}\n`) fail('manifest is not canonical');
   if (linux) verifyLinuxRuntime(root, manifest);
   else verifyMacCliRuntime(root, manifest);
@@ -237,7 +237,7 @@ function main() {
     ? { platform: 'linux', architecture: 'x64' }
     : { platform: 'darwin', architecture: 'arm64' });
   if (process.argv[3] === '--update-bootstrap') {
-    if (linux && manifest.update_bootstrap !== undefined) process.stdout.write(`${JSON.stringify(manifest.update_bootstrap)}\n`);
+    if (linux) process.stdout.write(`${JSON.stringify(manifest.update_bootstrap)}\n`);
     return;
   }
   process.stdout.write(`${JSON.stringify({

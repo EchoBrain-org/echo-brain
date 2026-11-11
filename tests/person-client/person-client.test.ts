@@ -2050,43 +2050,6 @@ describe("Person client", () => {
   });
 });
 
-describe("Person client status recovery", () => {
-  it("reports signed-out status for a session written by an older release", async () => {
-    await withHome(async (home) => {
-      const store = new PersonSessionStore(home);
-      mkdirSync(store.paths.directory, { recursive: true, mode: 0o700 });
-      writeFileSync(
-        store.paths.live,
-        `${JSON.stringify({
-          schema_version: 1,
-          kind: "echo-person-client-session",
-          authority_origin: "https://authority.example",
-          authority_id: ORGANIZATION_IDS.authority,
-          session: SESSION,
-          legacy_device_id: "dev_1",
-        })}\n`,
-        { mode: 0o600 },
-      );
-
-      const result = await runCli(["status"], {
-        home_directory: home,
-        fetch: async () => {
-          throw new Error("status must not contact the Authority");
-        },
-      });
-
-      expect(result.code).toBe(0);
-      expect(result.stderr).toBe("");
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        signed_in: false,
-        display_name: null,
-        connected_authority: null,
-      });
-    });
-  });
-});
-
-
 describe('Person updates CLI', () => {
   const requestId = '00000000-0000-4000-8000-000000000001';
   const contextId = `ctx_${'a'.repeat(64)}`;

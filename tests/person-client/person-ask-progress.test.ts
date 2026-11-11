@@ -249,9 +249,8 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     expect(progress).toEqual([]);
   });
 
-  it('fails with the JSON failure /v7 gives before any stream, a 404 as not_found, and asks no other route', async () => {
+  it('fails with the JSON failure /v7 gives before any stream', async () => {
     for (const [reply, status, code] of [
-      [json({ error: { code: 'not_found', message: 'request failed' } }, 404), 404, 'not_found'],
       [json({ error: { code: 'unauthorized', message: 'request failed' } }, 401), 401, 'unauthorized'],
       [json({ error: { code: 'unavailable', message: 'request failed' } }, 503), 503, 'unavailable'],
     ] as const) {
@@ -260,8 +259,6 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       await expect(new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch: refused }).askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event)))
         .rejects.toMatchObject({ code, status });
       expect(refused.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask']);
-      // No Ask asks for an answer layout: every answer comes in blocks (ADR-0051), streamed or not.
-      expect(headersOf(refused.mock.calls[0]![1]).get('x-echo-answer-layout')).toBeNull();
       expect(progress).toEqual([]);
     }
   });

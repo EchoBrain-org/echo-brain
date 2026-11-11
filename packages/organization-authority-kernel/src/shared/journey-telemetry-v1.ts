@@ -59,15 +59,9 @@ export interface JourneyTelemetryEventV1 extends JourneyTelemetryContextV1 {
   readonly sequence: number;
   readonly stage: JourneyStageV1;
   readonly event: JourneyEventV1;
-  /** Preserved null fields keep the live core record shape compatible with existing queries. */
-  readonly outcome: null;
   readonly failure_class: JourneyFailureClassV1 | null;
   readonly retryable: boolean | null;
-  readonly attempt: 1;
   readonly elapsed_ms: number;
-  readonly queue_age_ms: null;
-  readonly retrieval: null;
-  readonly llm_usage: null;
   readonly diagnostic: CoreRuntimeDetailV1;
 }
 
@@ -184,14 +178,9 @@ export function createJourneyTelemetryEventV1(
     ...context,
     stage: "core_operation",
     event,
-    outcome: null,
     failure_class: failureClass,
     retryable,
-    attempt: 1,
     elapsed_ms: elapsed,
-    queue_age_ms: null,
-    retrieval: null,
-    llm_usage: null,
     diagnostic: normalizeCoreRuntimeDetailV1(
       input.event.diagnostic,
       createTelemetryVocabularyV1(vocabulary),

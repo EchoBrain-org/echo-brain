@@ -13,9 +13,6 @@ reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 normative: MUST
 enforcement_status: retired
 enforcement_scope: None; no client holds a cached access lease
-invariant_ids:
-  - INV-05
-  - INV-06
 failure_pattern_ids:
   - FP-IDENTITY-003
 ---

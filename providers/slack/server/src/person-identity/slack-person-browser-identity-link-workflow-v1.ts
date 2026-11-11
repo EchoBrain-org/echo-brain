@@ -153,7 +153,7 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
         this.settle(attempt, "complete");
       } catch (error) {
         this.settle(attempt, "failed", error instanceof Error &&
-          (error.name === "OrganizationIntegrationConflictError" || error.name === "PersonSlackIdentityLinkConflictError")
+          error.name === "PersonSlackIdentityLinkConflictError"
           ? "identity_conflict" : "provider_unavailable");
       }
       return statusResponse(attempt);

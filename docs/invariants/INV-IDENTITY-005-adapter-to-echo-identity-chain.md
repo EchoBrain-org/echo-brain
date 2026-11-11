@@ -18,8 +18,6 @@ normative: MUST
 enforcement_status: partial
 enforcement_scope: Clean V1 source custody, approval, current V4 record append, two-policy Layer 1 and Layer 2 retrieval, current-Person Layer 3 release, and minimized read audit
 invariant_ids:
-  - INV-11B
-  - INV-12
   - INV-PERMISSIONS-014
 failure_pattern_ids:
   - FP-IDENTITY-001

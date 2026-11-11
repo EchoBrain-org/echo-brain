@@ -2,8 +2,8 @@
 // account, owner-only, written whole through a temporary file, at most 200
 // turns and 90 days, a bad file read as empty, a turn an older desktop saved
 // dropped on its own, our sign-out deleting it and an account change deleting
-// the last one's), and the checks of what the page sends with an Ask
-// and a source check before the client sees it.
+// the last one's), and the checks of what the page
+// sends with an Ask and a source check before the client sees it.
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -149,22 +149,6 @@ describe('the timeline file (C5)', () => {
     expect((JSON.parse(readFileSync(path, 'utf8')) as { turns: TimelineTurn[] }).turns).toEqual([current, fresh]);
   });
 
-  it('reads a turn an older desktop saved with its tickets\' baseline markers without them, and never writes them again', () => {
-    mkdirSync(folder(), { mode: 0o700 });
-    const path = timelinePath(person, ARI);
-    const [older, malformed] = [turn(2), turn(1)];
-    const saved = [{ ...older, markers: { 0: sha('b') } }, { ...malformed, markers: { first: 'v1' } }];
-    writeFileSync(path, JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: saved }), { mode: 0o600 });
-    // Retired, so not checked: even a malformed one leaves its turn and the file as they are.
-    expect(readTimeline(person, ARI)).toEqual([older, malformed]);
-    // A put of a turn that still carries one, as an older page would send, writes it and the rest without them.
-    const fresh = turn();
-    const sent = timelineTurn({ ...fresh, markers: { 0: sha('c') } });
-    expect(sent).toEqual(fresh);
-    putTimeline(person, ARI, sent!, NOW);
-    expect((JSON.parse(readFileSync(path, 'utf8')) as { turns: unknown[] }).turns).toEqual([older, malformed, fresh]);
-  });
-
   it('never uses a folder that is a link, nor reads one open to others; a put makes it owner-only again', () => {
     const elsewhere = mkdtempSync(join(tmpdir(), 'echo-elsewhere-'));
     try {
@@ -231,12 +215,9 @@ describe('the timeline file (C5)', () => {
     expect(timelineTurn(good)).toEqual(good);
     const { blocks: _blocks, ...bare } = good.answer.parts[0]!;
     for (const bad of [
-      // Never what a put writes now: a part's statements without blocks (ADR-0051), plain or laid out by retired layout v1 (ADR-0045), a
-      // turn asked in Mine, and blocks with nothing to arrange.
-      { ...good, answer: { ...good.answer, parts: [bare] } }, { ...good, answer: { ...good.answer, parts: [{ ...bare, layout: [{ kind: 'lead', statements: [0] }] }] } },
+      // Never what a put writes: a part's statements without blocks (ADR-0051), a scope the page has not got, and blocks with nothing to arrange.
+      { ...good, answer: { ...good.answer, parts: [bare] } },
       { ...good, scope: { kind: 'mine' } }, { ...good, answer: { ...good.answer, parts: [{ ...good.answer.parts[0]!, statements: [] }] } },
-      // A v1 layout even beside valid blocks: what a read drops, a put never writes.
-      { ...good, answer: { ...good.answer, parts: [{ ...good.answer.parts[0]!, layout: [{ kind: 'lead', statements: [0] }] }] } },
       { ...good, id: 'turn-1' }, { ...good, asked_at: 'yesterday' }, { ...good, scope: { kind: 'project', project_id: 'Apollo' } },
       { ...good, again_of: 'turn-0' },
       // What a check found unreadable: distinct places among the answer's own sources.

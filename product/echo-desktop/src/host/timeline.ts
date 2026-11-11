@@ -6,10 +6,10 @@
 // A file that cannot be read, or is not what a put writes, reads as empty and
 // is replaced by the next put; a turn an older desktop saved that no page
 // draws now goes on its own (so does a malformed one that merely looks like
-// it, rather than emptying the file), and the next put writes the rest. Our own
-// sign-out deletes the account's file; reading one account's timeline deletes
-// any other account's, so an account change leaves nothing of the last one
-// here. Kept apart from host.ts so all of it is tested on a real folder.
+// it, rather than emptying the file), and the next put writes the rest. Our
+// own sign-out deletes the account's file; reading one account's timeline
+// deletes any other account's, so an account change leaves nothing of the
+// last one here. Kept apart from host.ts so all of it is tested on a real folder.
 import { PERSON_ANSWER_CARD_ENTITIES_V2, validatePersonAnswerGapDetailsV1, validateProjectIdV1 } from '@echo-brain/organization-api';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
@@ -241,14 +241,13 @@ function gapDetails(value: unknown): boolean {
 /**
  * An answer as the timeline keeps it: what the page reads back of a turn
  * (TimelineAnswer). A part with statements has them in blocks (answer layout
- * v2, ADR-0051), one with none has nothing to arrange, and none carries a
- * retired v1 layout: what a read drops, a put never writes.
+ * v2, ADR-0051), and one with none has nothing to arrange.
  */
 function answer(value: unknown): value is TimelineAnswer {
   if (!record(value) || !scope(value.scope) || !OUTCOMES.has(value.outcome)) return false;
   if (!Array.isArray(value.sources) || value.sources.length > MOST || !value.sources.every(source)) return false;
   if (value.direct !== undefined && !statement(value.direct)) return false;
-  return Array.isArray(value.parts) && value.parts.length <= 64 && value.parts.every(part => record(part) && !Object.hasOwn(part, 'layout') && string(part.question) && STATUSES.has(part.status)
+  return Array.isArray(value.parts) && value.parts.length <= 64 && value.parts.every(part => record(part) && string(part.question) && STATUSES.has(part.status)
     && statements(part.statements) && (part.gap === undefined || string(part.gap)) && (part.gap_details === undefined || gapDetails(part.gap_details)) && (part.records === undefined || statements(part.records))
     && (part.blocks === undefined ? part.statements.length === 0 : part.statements.length > 0 && arranged(part.blocks, part.statements.length)));
 }
@@ -257,7 +256,9 @@ function answer(value: unknown): value is TimelineAnswer {
  * A turn an older desktop saved that no page draws now, dropped on read while
  * the rest of its file stays: one asked in Mine (ADR-0049), or one with a part
  * whose statements have no blocks, plain or laid out by answer layout v1
- * (ADR-0045, ADR-0051).
+ * (ADR-0045, ADR-0051). Release 1441d68 still keeps and rewrites Mine turns
+ * asked around 2026-10-26 to 10-31. Remove after about 2027-01-25, once 90
+ * days of turn retention have passed every such turn (noted 2026-11-11).
  */
 function retired(turn: unknown): boolean {
   const parts = record(turn) && record(turn.answer) && Array.isArray(turn.answer.parts) ? turn.answer.parts : [];
@@ -265,11 +266,7 @@ function retired(turn: unknown): boolean {
     || parts.some(part => record(part) && (Object.hasOwn(part, 'layout') || (part.blocks === undefined && Array.isArray(part.statements) && part.statements.length > 0)));
 }
 
-/**
- * A turn as a put writes it, or null for anything else. The tickets'
- * baseline markers an older desktop kept on a turn are retired: never read
- * back, so never written again.
- */
+/** A turn as a put writes it, or null for anything else. */
 export function timelineTurn(value: unknown): TimelineTurn | null {
   if (!record(value) || !string(value.id) || !ID.test(value.id) || !time(value.asked_at) || !string(value.text, 2_000) || !string(value.question, 2_000)
       || !scope(value.scope) || !answer(value.answer)) return null;
@@ -281,6 +278,5 @@ export function timelineTurn(value: unknown): TimelineTurn | null {
       && value.unreadable.every(at => at < sources))) {
     return null;
   }
-  const { markers: _retired, ...turn } = value;
-  return turn as unknown as TimelineTurn;
+  return value as unknown as TimelineTurn;
 }

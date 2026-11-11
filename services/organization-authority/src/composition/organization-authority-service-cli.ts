@@ -37,16 +37,17 @@ const PROCESS_IO: OrganizationAuthorityServiceCliIo = {
   stderr: (value) => process.stderr.write(value),
 };
 
-const LEGACY_CLEAN_LIVE_WORKER_FAILURE_EVENT_V1 = canonicalJson({
+// The only line a worker failure writes: it never carries the failure. It is
+// also the only stderr signal for failures outside a lifecycle phase (a
+// source poll, a personal meeting lane, retiring an old search generation),
+// and the host's worker-failure metric counts it.
+const CLEAN_LIVE_WORKER_FAILURE_EVENT_V1 = canonicalJson({
   schema_version: 1,
   kind: "echo-clean-live-worker-failed-v1",
 } as never);
 
-// Retained solely for the existing CloudWatch metric/alarm compatibility.
-// New operational diagnostics query the ordered lifecycle events instead:
-// phase failed, then cycle failed, then this legacy marker.
-
-const LEGACY_CLEAN_LIVE_STARTUP_FAILURE_EVENT_V1 = canonicalJson({
+// The only line a failed start writes: it never carries the failure.
+const CLEAN_LIVE_STARTUP_FAILURE_EVENT_V1 = canonicalJson({
   schema_version: 1,
   kind: "echo-clean-live-startup-failed-v1",
 } as never);
@@ -183,13 +184,6 @@ export async function runOrganizationAuthorityServiceCli(
     };
     const host = required(parsed, "--host");
     if (host !== "127.0.0.1" && host !== "::1") throw new Error(USAGE);
-    // Agentic Ask is the only Ask (ADR-0022). ECHO_AGENTIC_ASK_V1 is still
-    // written by older release records and profiles; it no longer has an effect.
-    // Release records still carry the removed small-scope shortcut's switch:
-    // false has no effect, and true is refused rather than ignored.
-    if (process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT === "true") {
-      throw new Error("the small-scope shortcut was removed; release records must set it to false");
-    }
     const environmentSyntheticMeetingsDirectory =
       process.env.ECHO_STAGING_SYNTHETIC_MEETINGS_DIR;
     const requestedSyntheticMeetingsDirectory =
@@ -317,7 +311,7 @@ export async function runOrganizationAuthorityServiceCli(
               stagingSyntheticMeetingsDirectory,
           }),
       on_worker_error: () => {
-        io.stderr(`${LEGACY_CLEAN_LIVE_WORKER_FAILURE_EVENT_V1}\n`);
+        io.stderr(`${CLEAN_LIVE_WORKER_FAILURE_EVENT_V1}\n`);
       },
       on_worker_telemetry: (event) => {
         // The lifecycle reporter constructs this closed, content-free schema.
@@ -389,7 +383,7 @@ export async function runOrganizationAuthorityServiceCli(
   } catch {
     await langSmith?.close();
     journeyTelemetry?.close();
-    io.stderr(`${LEGACY_CLEAN_LIVE_STARTUP_FAILURE_EVENT_V1}\n`);
+    io.stderr(`${CLEAN_LIVE_STARTUP_FAILURE_EVENT_V1}\n`);
     return 1;
   }
 }
