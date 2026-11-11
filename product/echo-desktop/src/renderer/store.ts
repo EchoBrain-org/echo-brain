@@ -5564,7 +5564,7 @@ function recordRuns(decision: DecisionState, runs: readonly PersonRunV1[]): read
   const records = decision.open?.records;
   if (!records) return decision.runs;
   return records.flatMap(record => {
-    const run = runs.find(item => item.trigger === 'approved_record' && item.event_ref === record.approval_id)
+    const run = runs.find(item => item.event_ref === record.approval_id)
       ?? decision.runs.find(item => item.event_ref === record.approval_id);
     return run ? [run] : [];
   });

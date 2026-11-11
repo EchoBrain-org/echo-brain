@@ -11,7 +11,7 @@ function readMeeting(path: string) {
 
 export function createSyntheticMeetingToolV1(): PersonToolProviderV1 {
   return { tool_id: 'synthetic', verbs: { meetings: {
-    description: 'Staging owner only: submit custom meeting JSON with --meeting-file and --retain; optionally suggest --echo-project. Or inspect/import/review using --request JSON. Submissions still require human approval.',
+    description: 'Staging owner only: submit custom meeting JSON with --meeting-file and --retain; optionally suggest --echo-project. Or inspect/import using --request JSON. Submissions still require human approval through person reviews.',
     options: { 'meeting-file': { type: 'string' }, retain: { type: 'boolean' }, 'echo-project': { type: 'string' }, request: { type: 'string' } },
     async run(context) {
       const { values } = context;

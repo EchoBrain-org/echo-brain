@@ -2,7 +2,7 @@ import { createPersonToolConnectionVerbsV1, PersonToolConnectionClientV1, person
 function granolaTool(): PersonToolProviderV1 {
   const connection = createPersonToolConnectionVerbsV1('Granola', host => new PersonToolConnectionClientV1(host, 'Granola', 'granola'));
   return { tool_id: 'granola', verbs: { ...connection, setup: connection.connect,
-    meetings: { description: 'Browse, import, watch and review meetings with a versioned JSON request.', options: { request: { type: 'string' } }, requires: ['request'],
+    meetings: { description: 'Browse, import and watch meetings with a versioned JSON request. Reviews go through person reviews.', options: { request: { type: 'string' } }, requires: ['request'],
       async run(context) {
         const request = validatePersonMeetingRequestV2(JSON.parse(String(context.values.request)));
         if (request.tool_id !== 'granola') throw new Error('Meeting request must select Granola');

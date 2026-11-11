@@ -344,7 +344,7 @@ describe('Ask on the timeline', () => {
   it('checks the newest ten turns\' sources once when Ask opens, keeps that five minutes, and leaves out by it', async () => {
     const turns = Array.from({ length: 11 }, (_, at) => turn(`Turn ${at}?`, (11 - at) * DAY, status()));
     seed(...turns);
-    checks = items => ok({ items: items.map(item => (item.citation.kind === 'page' ? { state: 'same' } : item.citation.kind === 'follow_up'
+    checks = items => ok({ items: items.map(item => (item.citation.kind === 'follow_up'
       ? { state: 'unreadable' } : { state: 'same' })) });
     const store = await startStore();
     await store.ask('What changed?');
@@ -559,7 +559,7 @@ describe('Ask on the timeline', () => {
     seed(one, two);
     let failing = false;
     checks = items => (failing ? fail('unavailable', { retryable: true }) : ok({ items: items.map(item => ({
-      state: item.citation.kind === 'page' ? 'same' : item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) }));
+      state: item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) }));
     const store = await startStore();
     store.pickSuggestion({ question: 'One?', turn: one.id });
     await flush();
@@ -656,7 +656,7 @@ describe('Ask on the timeline', () => {
 
   it('clears what a check said when it goes stale, so the page stops showing it then', async () => {
     seed(turn('One?', 2 * DAY, status()), turn('Two?', DAY, status()));
-    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'same' : 'same' })) });
+    checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
     const store = await startStore();
     await store.ask('What changed?');
     await flush();
@@ -833,7 +833,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
   it('checks a turn past the newest ten once it is opened, and a follow-up of it waits for that check', async () => {
     const turns = Array.from({ length: 12 }, (_, at) => turn(`Turn ${at}?`, (12 - at) * DAY, status()));
     seed(...turns);
-    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'same' : item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
     const store = await startStore();
     await store.ask('What changed?');
     await flush();
@@ -868,7 +868,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
   it('opens a suggestion past the newest ten checked first, in the one check Ask opening makes', async () => {
     const turns = Array.from({ length: 12 }, (_, at) => turn(`Turn ${at}?`, (12 - at) * DAY, status()));
     seed(...turns);
-    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'same' : 'same' })) });
+    checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
     const store = await startStore();
     store.pickSuggestion({ question: 'Turn 0?', turn: turns[0]!.id });
     await flush();
@@ -944,7 +944,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
 
   it('asks a turn again with it, keeps the new answer at the end with what changed since, and the old one folds away (ADR-0049)', async () => {
     const one = turn('What is open on THERM?', 3 * DAY, status());
-    checks = items => ok({ items: items.map(item => (item.citation.kind === 'page' ? { state: 'same' } : { state: 'same' })) });
+    checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
     rpc.mockImplementation(rpcFor(held, {
       'ask.run': params => {
         const answer = answerOf(String(params.question), [ticket('THERM-482', '20482')], [['THERM-482 is in progress.', [0]]]);

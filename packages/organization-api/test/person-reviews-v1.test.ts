@@ -40,6 +40,9 @@ describe('person-owned review contract', () => {
     }
     expect(validatePersonReviewResultV1('reviews', { reviews: [] })).toEqual({ reviews: [] });
     expect(() => validatePersonReviewResultV1('reviews', { reviews: [], tool_id: 'hidden' })).toThrow();
+    expect(validatePersonReviewResultV1('review', { status: 'approved', decided_on: 'slack' })).toEqual({ status: 'approved', decided_on: 'slack' });
+    expect(() => validatePersonReviewResultV1('review', { status: 'pending', decided_on: 'desktop' })).toThrow();
+    expect(() => validatePersonReviewResultV1('review', { status: 'approved', decided_on: 'email' })).toThrow();
   });
   it('refuses provider-selected requests before opening a session', () => {
     const withToolSession = vi.fn();

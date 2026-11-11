@@ -438,8 +438,8 @@ echo-brain person tools meetings --tool synthetic \
 echo-brain person tools meetings --tool synthetic \
   --request '{"schema_version":2,"tool_id":"synthetic","operation":"home"}'
 
-echo-brain person tools meetings --tool synthetic \
-  --request '{"schema_version":2,"tool_id":"synthetic","operation":"reviews"}'
+echo-brain person reviews \
+  --request '{"schema_version":1,"operation":"reviews"}'
 ```
 
 Use an actual joined project ID, or omit `--echo-project` for no suggestion.

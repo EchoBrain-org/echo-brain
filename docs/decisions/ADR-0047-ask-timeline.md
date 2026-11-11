@@ -139,7 +139,9 @@ release is this one. `changed` is no longer a state and ticket markers are off
 the wire in both directions: a request item is `asked_at` and `citation` only,
 and an answer item is its `state` only. The Authority reads a ticket for
 readability only, as it reads a page: Jira's bulk read asks for one field and
-reads none, so `providers/jira` no longer hashes ticket fields.
+reads none, so `providers/jira` no longer hashes ticket fields. A ticket
+that comes back is `same` whatever its fields hold, where one whose fields no
+marker could be made from used to answer `unknown`.
 
 On 2026-11-09 typed `gap_details` stopped being an opt-in: every Ask answer
 part with a typed gap carries them, the Authority no longer reads
