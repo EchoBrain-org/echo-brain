@@ -366,3 +366,13 @@ the follow-up while the writer ran.
 Update (2026-11-09): `/v7` no longer sends `x-echo-person-ask-route`, and the
 person's capture sink named above is retired with the one-use diagnostic
 captures ([ADR-0048](ADR-0048-retire-older-person-routes.md)).
+
+Update (2026-11-11): the founder cut old apps off in one go, so every `/v7`
+Ask streams. The opt-in header `x-echo-ask-progress` and the plain JSON answer
+for a request without it are retired: the Authority streams whatever headers
+arrive, and only a failure before the stream starts is JSON. Clients no longer
+send the header, and the person client refuses a JSON success as
+`invalid_response` (it still reads a JSON error), so a streamed Ask always
+returns its receipt. The `PERSON_ASK_PROGRESS_HEADER_*` constants are gone. The
+route keeps an in-process `ask` without progress for the authority-core eval
+and the route's tests; HTTP never calls it.

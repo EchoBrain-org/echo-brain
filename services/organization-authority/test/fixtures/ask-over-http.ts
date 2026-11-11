@@ -1,6 +1,6 @@
 import { once } from 'node:events';
 import { expect, vi } from 'vitest';
-import { PERSON_ASK_PROGRESS_HEADER_V1 } from '@echo-brain/organization-api';
+import { createPersonAskProgressDecoderV3, type PersonAnswerResponseV8 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { SqlitePersonAgenticAskAuditV1 } from '../../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
@@ -89,30 +89,40 @@ export async function serveAsk(routes: Partial<OrganizationAuthorityHttpServerOp
 }
 
 /**
- * A client's Ask of `question` on `path` as `token` (Mina unless told otherwise), asking for `progress` unless told
- * otherwise; `progress: null` sends no progress header, `headers` adds others, and `body` replaces the request.
+ * A client's Ask of `question` on `path` as `token` (Mina unless told otherwise); `headers` adds headers, and `body`
+ * replaces the request. Every Ask streams.
  */
-export function askClient(defaults: { readonly path: string; readonly progress: string; readonly question: string; readonly token?: string }) {
-  return (base: string, input: { readonly path?: string; readonly progress?: string | null; readonly token?: string; readonly body?: unknown; readonly signal?: AbortSignal;
+export function askClient(defaults: { readonly path: string; readonly question: string; readonly token?: string }) {
+  return (base: string, input: { readonly path?: string; readonly token?: string; readonly body?: unknown; readonly signal?: AbortSignal;
     readonly headers?: Readonly<Record<string, string>> } = {}) => fetch(`${base}${input.path ?? defaults.path}`, {
     method: 'POST', ...(input.signal === undefined ? {} : { signal: input.signal }),
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${input.token ?? defaults.token ?? 'mina'}`,
-      ...(input.progress === null ? {} : { [PERSON_ASK_PROGRESS_HEADER_V1]: input.progress ?? defaults.progress }), ...input.headers },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${input.token ?? defaults.token ?? 'mina'}`, ...input.headers },
     body: JSON.stringify(input.body ?? { schema_version: 3, question: defaults.question }),
   });
 }
 
+/** The answer a streamed Ask ended with; any other end fails the test. */
+export async function streamedAnswer(response: Response): Promise<PersonAnswerResponseV8> {
+  expect(response.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
+  const last = decodeAll(createPersonAskProgressDecoderV3(), await response.text()).at(-1);
+  if (last?.type !== 'answer') throw new Error(`the Ask ended with ${JSON.stringify(last)}`);
+  return last.response;
+}
+
 /**
- * What the streamed Ask route answers in JSON: a progress value other than its own gets the answer `validate` accepts,
- * and a failure before the stream starts is the ordinary JSON error.
+ * Any reply as a status and a body: a JSON reply as it is, and a streamed Ask as its terminal event, the answer at 200
+ * or the error at the status it carries, as a JSON error would be.
  */
-export async function expectJsonAskFallbacks(ask: ReturnType<typeof askClient>, base: string,
-  route: { readonly others: readonly string[]; readonly validate: (value: unknown) => unknown }): Promise<void> {
-  for (const progress of route.others) {
-    const response = await ask(base, { progress });
-    expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8');
-    route.validate(await response.json());
-  }
+export async function askReply(response: Response): Promise<{ readonly status: number; readonly body: Record<string, any> }> {
+  if (!/^text\/event-stream/.test(response.headers.get('content-type') ?? '')) return { status: response.status, body: await response.json() as Record<string, any> };
+  const last = decodeAll(createPersonAskProgressDecoderV3(), await response.text()).at(-1);
+  if (last?.type === 'answer') return { status: 200, body: last.response as unknown as Record<string, any> };
+  if (last?.type === 'error') return { status: last.status, body: { error: last.error } };
+  throw new Error(`the Ask ended with ${JSON.stringify(last)}`);
+}
+
+/** A failure before the stream starts is the ordinary JSON error. */
+export async function expectJsonAskError(ask: ReturnType<typeof askClient>, base: string): Promise<void> {
   const unauthenticated = await ask(base, { token: 'stranger' });
   expect([unauthenticated.status, unauthenticated.headers.get('content-type')]).toEqual([401, 'application/json; charset=utf-8']);
   await expect(unauthenticated.json()).resolves.toEqual({ error: { code: 'unauthorized', message: 'request failed' } });

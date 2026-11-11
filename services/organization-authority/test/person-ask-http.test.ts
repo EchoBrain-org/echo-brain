@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { request as httpRequest } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import { PERSON_ANSWER_PATH_V7, validatePersonAnswerResponseV8 } from "@echo-brain/organization-api";
+import { PERSON_ANSWER_PATH_V7 } from "@echo-brain/organization-api";
 import type { StructuredGenerationInput } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 import type { AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -15,6 +15,7 @@ import { PersonRecordSearchIndexLagV1, type PersonEvidenceDeskRecordsV1 } from "
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type { PersonAnswerV7HttpApplication } from "../src/presentation/person-live-answer-http-application.js";
 import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
+import { streamedAnswer } from "./fixtures/ask-over-http.js";
 
 /** Ask on `/v7` (`ask`) behind the real HTTP server. */
 async function server(input: { readonly ask?: PersonAnswerV7HttpApplication }) {
@@ -37,7 +38,7 @@ async function server(input: { readonly ask?: PersonAnswerV7HttpApplication }) {
 describe("Agentic Ask HTTP capability gate", () => {
   it('passes validated optional client time headers to Ask without changing the request body', async () => {
     const ask = vi.fn(async () => { throw new AuthorityOperationError('not_found', 'fixture'); });
-    const value = await server({ ask: { ask } });
+    const value = await server({ ask: { askWithProgress: ask } });
     const body = { schema_version: 3, question: 'What happened yesterday?' };
     try {
       const headers = { authorization: 'Bearer token', 'content-type': 'application/json', 'x-echo-client-now': '2026-10-17T04:30:00.000Z', 'x-echo-time-zone': 'America/Los_Angeles' };
@@ -51,7 +52,7 @@ describe("Agentic Ask HTTP capability gate", () => {
 
   it('answers /v7 provider errors and invalid requests with their codes, and retired Ask routes with the plain 404', async () => {
     const ask = vi.fn(async () => { throw new AuthorityOperationError('not_found', 'Provider resource unavailable'); });
-    const value = await server({ ask: { ask } as never });
+    const value = await server({ ask: { askWithProgress: ask } as never });
     try {
       const post = (path: string, body: unknown) => fetch(`${value.url}${path}`, {
         method: 'POST', headers: { authorization: 'Bearer token', 'content-type': 'application/json' }, body: JSON.stringify(body),
@@ -74,7 +75,7 @@ describe("Agentic Ask HTTP capability gate", () => {
 
   it("returns the existing unavailable response when Ask asks the client to try again", async () => {
     const ask = vi.fn(async () => { throw new AuthorityOperationError("unavailable", "Ask deadline exhausted"); });
-    const value = await server({ ask: { ask } as never });
+    const value = await server({ ask: { askWithProgress: ask } as never });
     try {
       expect(await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What changed?" }))
         .toEqual({ status: 503, body: { error: { code: "unavailable", message: "request failed" } } });
@@ -114,7 +115,7 @@ describe("Agentic Ask HTTP capability gate", () => {
   it("answers the retired diagnostic captures as a route that never existed, keeps it from provider adapters, and refuses a capture id on Ask", async () => {
     const capture_id = "cap_00000000-0000-4000-8000-000000000001";
     const ask = vi.fn();
-    const value = await server({ ask: { ask } as never });
+    const value = await server({ ask: { askWithProgress: ask } as never });
     try {
       for (const body of [{ schema_version: 1, operation: "prepare", target: { kind: "ask" } }, { schema_version: 1, operation: "read", capture_id }]) {
         expect(await post(value.url, "/v1/person/diagnostics", body)).toEqual({ status: 404, body: { error: { code: "not_found", message: "request failed" } } });
@@ -135,7 +136,7 @@ describe("Agentic Ask HTTP capability gate", () => {
     const startedPromise = new Promise<void>((resolve) => { started = resolve; });
     const abortedPromise = new Promise<void>((resolve) => { observedAbort = resolve; });
     const application = {
-      ask: vi.fn(({ signal }) => new Promise<never>((_resolve, reject) => {
+      askWithProgress: vi.fn(({ signal }) => new Promise<never>((_resolve, reject) => {
         started();
         signal?.addEventListener("abort", () => {
           observedAbort();
@@ -154,7 +155,7 @@ describe("Agentic Ask HTTP capability gate", () => {
       await startedPromise;
       request.destroy();
       await abortedPromise;
-      expect(application.ask).toHaveBeenCalledWith(expect.objectContaining({ access_token: "token", request: { schema_version: 3, question: "What changed?" } }));
+      expect(application.askWithProgress).toHaveBeenCalledWith(expect.objectContaining({ access_token: "token", request: { schema_version: 3, question: "What changed?" } }));
     } finally { await value.close(); }
   });
 });
@@ -215,8 +216,13 @@ function askFixture(nativeDriver = false) {
   return { note, cited: { ...note.citation, label: note.label }, scopes, originals, records, generate, route };
 }
 
+function send(url: string, path: string, body: unknown): Promise<Response> {
+  return fetch(`${url}${path}`, { method: "POST", headers: { authorization: "Bearer token", "content-type": "application/json" }, body: JSON.stringify(body) });
+}
+
+/** A JSON reply: an error, or an Ask's failure before its stream started. */
 async function post(url: string, path: string, body: unknown): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
-  const response = await fetch(`${url}${path}`, { method: "POST", headers: { authorization: "Bearer token", "content-type": "application/json" }, body: JSON.stringify(body) });
+  const response = await send(url, path, body);
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
@@ -225,9 +231,7 @@ describe("Ask scope, and citation refs (ADR-0024)", () => {
     const f = askFixture(true);
     const value = await server({ ask: f.route });
     try {
-      const answer = await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'What did I decide?' });
-      expect(answer.status).toBe(200);
-      const validated = validatePersonAnswerResponseV8(answer.body);
+      const validated = await streamedAnswer(await send(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'What did I decide?' }));
       expect(validated.outcome).toBe('answered');
       expect(validated.scope).toEqual({ kind: 'global' });
       expect(validated.citations).toEqual([{ citation: f.cited, kind: 'note', label: 'My launch note', visibility: 'only_me', ref: f.note.ref }]);
@@ -247,9 +251,7 @@ describe("Ask scope, and citation refs (ADR-0024)", () => {
     const f = askFixture();
     const value = await server({ ask: f.route });
     try {
-      const answer = await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What did I decide?" });
-      expect(answer.status).toBe(200);
-      const validated = validatePersonAnswerResponseV8(answer.body);
+      const validated = await streamedAnswer(await send(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What did I decide?" }));
       expect(validated.scope).toEqual({ kind: "global" });
       expect(validated.citations).toEqual([{ citation: f.cited, kind: "note", label: "My launch note", visibility: "only_me", ref: f.note.ref }]);
       expect(f.scopes.length).toBeGreaterThan(1);
@@ -265,7 +267,7 @@ describe("Ask scope, and citation refs (ADR-0024)", () => {
       // With a project, every store reads that project.
       f.scopes.length = 0;
       const project_id = "prj_00000000-0000-4000-8000-000000000001";
-      expect((await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What did I decide?", project_id })).body.scope).toEqual({ kind: "project", project_id });
+      expect((await streamedAnswer(await send(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What did I decide?", project_id }))).scope).toEqual({ kind: "project", project_id });
       expect(f.scopes.length).toBeGreaterThan(1);
       for (const scope of f.scopes) expect(scope).toEqual({ kind: "project", project_id });
       expect(f.records.initializeDesk.mock.calls[1]![0]).toMatchObject({ project_id });

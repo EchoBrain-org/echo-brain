@@ -13,6 +13,7 @@ import { openOrganizationAuthorityService } from '../src/composition/organizatio
 import { createJourneyTelemetryTransportV1 } from '../src/composition/observability/journey-telemetry-transport-v1.js';
 import { FIXTURE_JIRA_CLOUD_V1 as CLOUD, FIXTURE_JIRA_SITE_V1 as SITE, fakeJiraCloudFetchV1, fakeJiraNangoV1 } from './fixtures/fake-jira-v1.js';
 import { ownerGenesis, port, signInHttp, syntheticOidcProvider } from './fixtures/owner-session.js';
+import { askReply } from './fixtures/ask-over-http.js';
 
 const EMAIL = 'founder@example.test';
 const AUTHORITY = 'https://authority.example.test';
@@ -78,7 +79,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     slack: { nango: slackNango, manifest_provider: { createApp: vi.fn(async () => ({ app_id: 'AFIXTURE', client_id: '111.222', client_secret: 'synthetic-slack-client-secret', signing_secret: 'synthetic-slack-signing-secret' })), updateApp: vi.fn() }, provider: { verifyConnection: verifySlack, openIdentityLinkDirectMessage: vi.fn(), postIdentityLinkChallenge: vi.fn(), observeIdentityLinkChallenge: vi.fn() } },
   });
   const origin = `http://127.0.0.1:${runtime.address.port}`;
-  const post = async (path: string, body: unknown, token = owner) => { const response = await fetch(`${origin}${path}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() as Record<string, any> }; };
+  const post = async (path: string, body: unknown, token = owner) => askReply(await fetch(`${origin}${path}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) }));
   let owner = '';
   const tools = async (token = owner) => {
     const response = await fetch(`${origin}/v4/person/tools`, { headers: { authorization: `Bearer ${token}` } });

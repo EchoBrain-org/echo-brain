@@ -236,7 +236,7 @@ Ask one question using at most 240 Unicode code points, 1–32 distinct normaliz
 
 Ask asks POST /v7/person/ask, with every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings.
 
---progress prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them, follow-ups, projects, people, tools and tool containers included. The last line is the usual {"ok":true,"result":...} with the answer's receipt. An Authority that does not stream prints only the usual last line. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
+--progress prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them, follow-ups, projects, people, tools and tool containers included. The last line is the usual {"ok":true,"result":...} with the answer's receipt. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
 
 --previous carries your previous turn as JSON: {"purpose":"follow_up" or "ask_again","question":...,"asked_at":...,"statements":[{"text":...,"citation_indexes":[...]}],"citations":[...]}, with at most 8 sentences of at most 400 characters each and at most 12 of that answer's citations, as it carried them. It is your own context, never evidence, and is not stored. A follow-up answers the full question it worked out, naming it as "question", or, when more than one thing could fit, has the outcome "clarify" and one full question per thing in "choices". Ask again also says what is different "since" the earlier answer. One that is not valid is refused with invalid_request.
 `,
@@ -1270,11 +1270,11 @@ export async function runPersonClientCli(
         const question = requiredText(values, "question");
         const scope = values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, "project"));
         if (values.progress === true) {
-          // One line per step event as it arrives; the last line is the answer's, with the receipt when the Authority streamed.
+          // One line per step event as it arrives; the last line is the answer's, with its receipt.
           // Progress V3 lines: a step may name a follow-up, a project, a person, a tool or a tool container.
           const answer = await client.askWithLiveProgress(question, scope, dependencies.abort_signal,
             progress => print(stdout, validatePersonAskProgressLineV3({ ok: true, progress })), askPrevious);
-          print(stdout, validatePersonAskProgressResultLineV3({ ok: true, result: answer.result, ...(answer.receipt === undefined ? {} : { receipt: answer.receipt }) }));
+          print(stdout, validatePersonAskProgressResultLineV3({ ok: true, result: answer.result, receipt: answer.receipt }));
           break;
         }
         print(stdout, { ok: true, result: await client.askWithLiveSources(question, scope, dependencies.abort_signal, askPrevious) });

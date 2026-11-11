@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PERSON_ANSWER_PATH_V7, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
-  createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8, type PersonAskProgressEventV3,
+  PERSON_ANSWER_PATH_V7, createPersonAskProgressDecoderV3, type PersonAskProgressEventV3,
 } from '@echo-brain/organization-api';
 import type { AgenticAskAuditEntryV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
@@ -10,7 +9,7 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
 import { PersonRecordSearchIndexLagV1, PersonRecordSearchSnapshotChangedV1 } from '../src/composition/person-record-search-route.js';
 import type { CoreRuntimeObservationV1, CoreRuntimeObserverV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
-import { askClient, closeAskServers, decodeAll, expectJsonAskFallbacks, serveAsk } from './fixtures/ask-over-http.js';
+import { askClient, closeAskServers, decodeAll, expectJsonAskError, serveAsk } from './fixtures/ask-over-http.js';
 
 /**
  * Ask progress over HTTP (ADR-0039): the real `/v7` route (the V8 answer,
@@ -81,17 +80,13 @@ function fixture(options: { readonly writer?: (attempt: number, written: () => u
 function origin(f: ReturnType<typeof fixture>, observer?: CoreRuntimeObserverV1) {
   return serveAsk({ person_answer_v7: f.route, ...(observer === undefined ? {} : { core_runtime_observation: { observer } }) });
 }
-const ask = askClient({ path: PERSON_ANSWER_PATH_V7, progress: PERSON_ASK_PROGRESS_HEADER_VALUE_V3, question: 'Is the PVT fixture ready?', token: 'owner' });
+const ask = askClient({ path: PERSON_ANSWER_PATH_V7, question: 'Is the PVT fixture ready?', token: 'owner' });
 const decode = (text: string): readonly PersonAskProgressEventV3[] => decodeAll(createPersonAskProgressDecoderV3(), text);
 
 describe('Ask progress over HTTP', () => {
-  it('streams progress, then the released answer with its receipt, as server-sent events when the client opts in', async () => {
+  it('streams progress, then the released answer with its receipt, as server-sent events', async () => {
     const f = fixture();
     const base = await origin(f);
-    const plain = await ask(base, { progress: null });
-    expect(plain.headers.get('content-type')).toBe('application/json; charset=utf-8');
-    const json = validatePersonAnswerResponseV8(await plain.json());
-
     const streamed = await ask(base);
     expect(streamed.status).toBe(200);
     expect(streamed.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
@@ -111,18 +106,17 @@ describe('Ask progress over HTTP', () => {
     ]);
     const terminal = events.at(-1)!;
     if (terminal.type !== 'answer') throw new Error('expected the answer event');
-    // The answer is byte for byte what the JSON route returns; the receipt lists what was read.
-    expect(terminal.response).toEqual(json);
+    // The receipt lists what was read.
     expect(terminal.receipt).toMatchObject({ looked_through: 1, rows: [{ type: 'searched', found: 1 }, { type: 'read', items: [expect.objectContaining(named)] }] });
     // While it ran, no body, query, planner note or scratchpad id left the Authority.
     const progress = raw.slice(0, raw.lastIndexOf('data: '));
     for (const secret of ['PVT fixture is ready', 'Manufacturing', QUERY, 'private planner note', '"E1"']) expect(progress).not.toContain(secret);
   });
 
-  it('keeps JSON for any other header value, the retired progress values included, and for failures before the stream starts', async () => {
+  it('keeps JSON for failures before the stream starts', async () => {
     const f = fixture();
     const base = await origin(f);
-    await expectJsonAskFallbacks(ask, base, { others: ['0', 'yes', '11', '1', '2'], validate: validatePersonAnswerResponseV8 });
+    await expectJsonAskError(ask, base);
     const invalid = await ask(base, { body: { schema_version: 3 } });
     expect(invalid.status).toBe(400);
     expect(invalid.headers.get('content-type')).toBe('application/json; charset=utf-8');

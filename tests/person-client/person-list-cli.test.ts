@@ -42,6 +42,12 @@ function setup(): string {
   return home;
 }
 
+/** A `/v7` Ask's reply: its answer, streamed (ADR-0039), with an empty receipt. */
+function askStream(answer: unknown): Response {
+  return new Response(`data: ${JSON.stringify({ type: 'answer', response: answer, receipt: { looked_through: 0, elapsed_ms: 0, rows: [] } })}\n\n`,
+    { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8' } });
+}
+
 function json(value: unknown, status = 200): Response {
   return new Response(canonicalJson(value), { status, headers: { 'content-type': 'application/json' } });
 }
@@ -281,7 +287,7 @@ describe('person ask in a project', () => {
   }
 
   it('sends the project on the newest route and returns citations that carry refs', async () => {
-    const { fetch, sent } = network(() => json(answer({ kind: 'project', project_id: projectId })));
+    const { fetch, sent } = network(() => askStream(answer({ kind: 'project', project_id: projectId })));
     const result = await run(['ask', '--question', 'What did I decide?', '--project', projectId], fetch);
     expect(result.code, result.stderr).toBe(0);
     expect(sent.map(({ path, body }) => ({ path, body }))).toEqual([{ path: '/v7/person/ask', body: canonicalJson({ schema_version: 3, question: 'What did I decide?', project_id: projectId }) }]);
@@ -289,7 +295,7 @@ describe('person ask in a project', () => {
   });
 
   it('fails when the Authority answers under another scope', async () => {
-    const result = await run(['ask', '--question', 'What did I decide?', '--project', projectId], network(() => json(answer({ kind: 'global' }))).fetch);
+    const result = await run(['ask', '--question', 'What did I decide?', '--project', projectId], network(() => askStream(answer({ kind: 'global' }))).fetch);
     expect(result.code).toBe(1);
     expect(result.stdout).toBe('');
     expect(JSON.parse(result.stderr)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_response', status: 200 });

@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PERSON_ANSWER_PATH_V7, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
-  createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8,
-  type OrganizationPersonToolV4,
+  PERSON_ANSWER_PATH_V7, createPersonAskProgressDecoderV3, type OrganizationPersonToolV4,
 } from '@echo-brain/organization-api';
 import { createAgenticAskV5 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
@@ -78,7 +76,7 @@ function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort) {
   } };
   return serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(options) });
 }
-const ask = askClient({ path: PERSON_ANSWER_PATH_V7, progress: PERSON_ASK_PROGRESS_HEADER_VALUE_V3, question: QUESTION });
+const ask = askClient({ path: PERSON_ANSWER_PATH_V7, question: QUESTION });
 const decode = (text: string) => decodeAll(createPersonAskProgressDecoderV3(), text);
 
 describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
@@ -86,17 +84,8 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     const f = await sentFixture();
     const planner = leadsAndTasks();
     const base = await origin(f, planner.model);
-    const plain = await ask(base, { progress: null });
-    expect(plain.headers.get('content-type')).toBe('application/json; charset=utf-8');
-    const json = validatePersonAnswerResponseV8(await plain.json());
-    planner.reset();
     const project = { citation: { kind: 'project', project_id: f.projectA }, kind: 'project', label: 'Project A', visibility: 'project', ref: `project:${f.projectA}` };
     const followUp = { citation: { kind: 'follow_up', item_id: f.ticket.item_id }, kind: 'follow_up', label: `ECHO-12 ${f.outsideText}`, visibility: 'only_me', ref: `follow_up:${f.ticket.item_id}` };
-    expect(json.schema_version).toBe(8);
-    expect(json.citations).toEqual([project, followUp]);
-    // The V8 catalog holds the asker's workspace beside follow-ups and their connected tool.
-    expect(planner.catalogs[0]).toEqual(expect.arrayContaining(['projects', 'people', 'tools', 'follow_ups']));
-
     const streamed = await ask(base);
     expect(streamed.status).toBe(200);
     expect(streamed.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
@@ -107,33 +96,34 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     expect(events.filter(event => event.type === 'read').flatMap(event => event.items)).toContainEqual(followUp);
     const terminal = events.at(-1)!;
     if (terminal.type !== 'answer') throw new Error('expected the answer event');
-    // The V8 answer, byte for byte the JSON route's.
-    expect(terminal.response).toEqual(json);
+    // The V8 answer.
+    expect(terminal.response.schema_version).toBe(8);
+    expect(terminal.response.citations).toEqual([project, followUp]);
+    // The V8 catalog holds the asker's workspace beside follow-ups and their connected tool.
+    expect(planner.catalogs[0]).toEqual(expect.arrayContaining(['projects', 'people', 'tools', 'follow_ups']));
     // Each workspace release is witnessed without content: its source, operation and each item's kind and id.
     const released = audits(f, 'echo-person-workspace-release-audit-v1');
-    expect(released.length).toBeGreaterThanOrEqual(2);
+    expect(released.length).toBeGreaterThanOrEqual(1);
     expect(released[0]).toMatchObject({ source: 'projects', operation: 'list', items: expect.arrayContaining([expect.objectContaining({ kind: 'project', item_id: f.projectA, linked: false })]) });
     expect(JSON.stringify(released)).not.toContain('Project A');
     // The streamed request's Ask record names the project by its citation commitment.
     expect(audits(f, 'echo-person-agentic-ask-audit-v1').at(-1)).toMatchObject({ outcome: 'answered', named_citation_digests: expect.arrayContaining([canonicalSha256(project.citation)]) });
   });
 
-  it('runs the V8 Ask whatever layout header an older client still sends, streamed or not, and refuses none of its values (ADR-0051)', async () => {
+  it('runs the V8 Ask whatever layout header an older client still sends, and refuses none of its values (ADR-0051)', async () => {
     const f = await sentFixture();
     const planner = leadsAndTasks();
     const base = await origin(f, planner.model);
     const created = vi.mocked(createAgenticAskV5);
     created.mockClear();
-    for (const progress of [null, PERSON_ASK_PROGRESS_HEADER_VALUE_V3]) {
-      // Retired layout v1's 1, layout v2's 2, and the values the Authority once refused before the Ask ran.
-      for (const headers of [...['1', '2', '3', 'true', '1, 2'].map(value => ({ 'x-echo-answer-layout': value })), {}] as readonly Readonly<Record<string, string>>[]) {
-        planner.reset();
-        const response = await ask(base, { progress, headers });
-        expect(response.status).toBe(200);
-        await response.text();
-      }
+    // Retired layout v1's 1, layout v2's 2, and the values the Authority once refused before the Ask ran.
+    for (const headers of [...['1', '2', '3', 'true', '1, 2'].map(value => ({ 'x-echo-answer-layout': value })), {}] as readonly Readonly<Record<string, string>>[]) {
+      planner.reset();
+      const response = await ask(base, { headers });
+      expect(response.status).toBe(200);
+      await response.text();
     }
-    // Each request created its Ask, for the JSON answer and the stream alike.
-    expect(created).toHaveBeenCalledTimes(12);
+    // Each request created its Ask.
+    expect(created).toHaveBeenCalledTimes(6);
   });
 });

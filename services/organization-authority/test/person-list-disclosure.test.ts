@@ -5,7 +5,7 @@ import {
   PERSON_ANSWER_PATH_V7,
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
-  validatePersonAnswerResponseV8,
+  createPersonAskProgressDecoderV3,
   type PersonListResponseV1,
   type PersonOpenResponseV1,
 } from "@echo-brain/organization-api";
@@ -31,6 +31,7 @@ import { createPersonListRouteV1 } from "../src/composition/person-list-v1-route
 import { personMeetingReleaseOptionsV1 } from "../src/composition/person-record-search-route.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
+import { decodeAll } from "./fixtures/ask-over-http.js";
 import { APPROVER_X, EMP_A, EMP_B, EMP_C, EVERYONE, OWNER, PROJECT_NAMES, PROJ_X, SHARED, T, UNJOINED, meetingWorld, type MeetingWorldV1 } from "./fixtures/person-meeting-world.js";
 import { addMembership, authorization, seedProject } from "./fixtures/project-context-sqlite.js";
 import { SIGNED_APPROVAL_APPROVER, SIGNED_APPROVAL_PRIVATE_MARKER } from "./fixtures/signed-approval-decision-v1.js";
@@ -515,7 +516,9 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
     ]);
     const response = await f.ask("emp_b");
     expect(response.status).toBe(200);
-    const answer = validatePersonAnswerResponseV8(JSON.parse(response.text));
+    const terminal = decodeAll(createPersonAskProgressDecoderV3(), response.text).at(-1);
+    if (terminal?.type !== "answer") throw new Error("expected the answer event");
+    const answer = terminal.response;
     expect(answer.scope).toEqual({ kind: "global" });
     const refs = answer.citations.map((citation) => citation.ref ?? "");
     // The model took every item the desk offered: exactly what the reader may read, and nothing else.

@@ -3,8 +3,7 @@ import { canonicalJson } from "@echo-brain/federation-protocol";
 import {
   MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH,
   ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, ORGANIZATION_API_PERSON_TOOLS_PATH_V4, PERSON_ANSWER_PATH_V7, PERSON_ASK_CHECK_LIMITS_V1, PERSON_ASK_CHECK_PATH_V1,
-  PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_HEADER_V1,
-  PERSON_ASK_PROGRESS_HEADER_VALUE_V3, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, PERSON_CHANGES_ROUTE_V1,
+  PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, PERSON_CHANGES_ROUTE_V1,
   PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, PERSON_EMPLOYEES_PATH_V1,
   PERSON_LIST_PATH_V1, PERSON_LIST_RESPONSE_MAX_BYTES_V1, PERSON_OPEN_PATH_V1, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, PERSON_PROJECTS_PATH_V1,
   PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_ACTIVITY_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_PROJECT_RENAME_PATH_V1, PERSON_RECORDS_PATH_V1,
@@ -14,7 +13,7 @@ import {
   isOrganizationApiValidationError, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, validateOrganizationPersonToolsV4,
-  validatePersonAnswerRequestV3, validatePersonAnswerResponseV8, validatePersonAskCheckRequestV1, validatePersonAskCheckV1, validatePersonChangesV1,
+  validatePersonAnswerRequestV3, validatePersonAskCheckRequestV1, validatePersonAskCheckV1, validatePersonChangesV1,
   validatePersonDocumentAssociateV1, validatePersonDocumentAssociationReceiptV1,
   validatePersonDocumentDissociateV1, validatePersonDocumentIdV1, validatePersonDocumentMetadataV2, validatePersonDocumentSearchResultV2, validatePersonDocumentSearchV2,
   validatePersonDocumentStatusV2, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV2,
@@ -57,13 +56,10 @@ export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
 export type PersonListV1 = PersonListResponseV1;
 export type PersonOpenV1 = PersonOpenResponseV1;
 
-/**
- * A streamed Ask's answer (ADR-0039): the V8 answer, with its V3 receipt when
- * the Authority streamed, and no receipt when it answered in JSON.
- */
+/** A streamed Ask's answer (ADR-0039): the V8 answer, with its V3 receipt. */
 export interface PersonLiveAnswerV3 {
   readonly result: PersonAnswerV8;
-  readonly receipt?: PersonAskReceiptV3;
+  readonly receipt: PersonAskReceiptV3;
 }
 /**
  * Receives each step of a streamed Ask in progress V3, as it arrives,
@@ -207,7 +203,7 @@ function isJsonResponse(response: Response): boolean {
   return /^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(response.headers.get("content-type") ?? "");
 }
 
-/** `PERSON_ASK_PROGRESS_CONTENT_TYPE_V1`; any other reply to an opted-in Ask is read as today's JSON. */
+/** `PERSON_ASK_PROGRESS_CONTENT_TYPE_V1`; any other reply to an Ask is an error from before its stream started. */
 function isAskProgressStream(response: Response): boolean {
   return /^text\/event-stream(?:\s*;\s*charset=utf-8)?$/i.test(response.headers.get("content-type") ?? "");
 }
@@ -740,18 +736,17 @@ export class PersonAuthorityClient {
    * pages, follow-ups, and the asker's projects, people, tools and tool containers, and must echo the requested scope.
    * The request may carry the asker's previous turn (ADR-0047). Each step event reaches
    * `onProgress` as it arrives, and the answer comes back with the receipt the Authority built after its final check.
-   * An Authority that does not stream answers with the JSON answer, returned without a receipt, and an error inside
-   * the stream is the error its JSON response would have had. The ask timeout and the caller's signal bound the whole
-   * stream.
+   * Every Ask streams: a JSON reply is an error from before the stream started, and an error inside the stream is the
+   * error its JSON response would have had. The ask timeout and the caller's signal bound the whole stream.
    */
   async askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
     const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
     const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, previous), validate_request: validatePersonAnswerRequestV3,
-      access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json`, [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 } }, deadline);
+      access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json` } }, deadline);
     if (!isAskProgressStream(response)) {
-      const value = await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
-      return Object.freeze({ result: inAskScope(validateSuccess(value, response.status, validatePersonAnswerResponseV8), scope, previous) });
+      await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
+      throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority answered the Ask without its stream");
     }
     const terminal = await readAskProgressStream(response, deadline, onProgress);
     if (terminal.type === 'error') {

@@ -320,15 +320,6 @@ describe('the receipt above an answer', () => {
     expect(byTestId(foot, 'sources-toggle')).toEqual([]);
     expect(text(byTestId(foot, 'foot-label'))).toBe('Looked through 3 items · 3s');
   });
-
-  it('an Authority that answers without streaming sends none, and the answer shows without a receipt', async () => {
-    const { store, release } = await asking();
-    vi.advanceTimersByTime(10_000);
-    release(ok(answer(false)));
-    await flush();
-    expect(latestTurn(store)).toMatchObject({ question: 'What did we agree?' });
-    expect(latestTurn(store)?.receipt).toBeUndefined();
-  });
 });
 
 describe('the cited evidence as it reads now', () => {

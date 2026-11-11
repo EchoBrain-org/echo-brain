@@ -821,8 +821,8 @@ do not add separate live-source spans. Older releases have no Jira fields;
 their absence is not evidence that Jira was skipped or returned no data.
 Requests that fail before the Ask loop starts have no ticket summary counters.
 
-A streamed `/v7/person/ask` (`x-echo-ask-progress: 3`, ADR-0042), the only
-Ask route since ADR-0047 retired `/v3` to `/v6`, always answers HTTP `200`
+A `/v7/person/ask` (ADR-0042), the only Ask route since ADR-0047 retired
+`/v3` to `/v6`, streams every Ask since 2026-11-11 and always answers HTTP `200`
 once its stream starts; a later failure is its terminal `error` event. Its terminal `http_request` span records that event's status
 as `http_status`, the status the JSON route would have returned, so a filter
 on `http_status` finds streamed failures as it finds JSON ones. A streamed

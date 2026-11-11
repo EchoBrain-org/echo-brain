@@ -8,6 +8,7 @@ import type { StructuredGenerationInput } from '@echo-brain/organization-authori
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
 import { FIXTURE_CONFLUENCE_CLOUD_V1 as CLOUD, FIXTURE_CONFLUENCE_SITE_V1 as SITE, fakeConfluenceCloudFetchV1, fakeConfluenceNangoV1 } from './fixtures/fake-confluence-v1.js';
 import { ownerGenesis, port, signInHttp, syntheticOidcProvider } from './fixtures/owner-session.js';
+import { askReply } from './fixtures/ask-over-http.js';
 
 const EMAIL = 'founder@example.test';
 const AUTHORITY = 'https://authority.example.test';
@@ -47,8 +48,7 @@ it('catalogs, connects, maps, cites, and disconnects Confluence page evidence th
   const origin = `http://127.0.0.1:${runtime.address.port}`;
   let owner = '';
   const post = async (path: string, body: unknown) => {
-    const response = await fetch(`${origin}${path}`, { method: 'POST', headers: { authorization: `Bearer ${owner}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    return { status: response.status, body: await response.json() as Record<string, unknown> };
+    return askReply(await fetch(`${origin}${path}`, { method: 'POST', headers: { authorization: `Bearer ${owner}`, 'content-type': 'application/json' }, body: JSON.stringify(body) }));
   };
   const tools = async () => {
     const response = await fetch(`${origin}/v4/person/tools`, { headers: { authorization: `Bearer ${owner}` } });

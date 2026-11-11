@@ -218,7 +218,7 @@ test('a long Ask shows one quiet line that names what it looks through while it 
   const asking = page.getByTestId('asking');
   // The first seconds look as Ask always did.
   await expect(asking).toContainText('Thinking…');
-  await expect.poll(() => run.calls().filter(call => call.path === '/v7/person/ask').map(call => call.progress)).toEqual(['3']);
+  await expect.poll(() => run.calls().filter(call => call.path === '/v7/person/ask').length).toBe(1);
 
   // Then the line names the step now, and opens onto nothing: a place is named once, and the other places counted.
   await expect(page.getByTestId('ask-stage')).toHaveText('Reading Tuesday sync and 2 more', { timeout: 10_000 });

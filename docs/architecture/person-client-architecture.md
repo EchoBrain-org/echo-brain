@@ -172,8 +172,8 @@ unapproved evidence. The source-card behavior below describes approved
 records; original evidence uses its exact source/revision/representation
 coordinates and a fresh authorized read.
 
-`person ask --progress` asks `/v7/person/ask` to stream its progress
-([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)) in progress V3 by sending `x-echo-ask-progress: 3`.
+`person ask --progress` prints the progress `/v7/person/ask` streams
+([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)) in progress V3; every Ask streams, with or without `--progress`.
 
 - **Reading the stream.** The client reads the server-sent events with the
   shared progress V3 decoder in `@echo-brain/organization-api`.
