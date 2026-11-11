@@ -60,15 +60,11 @@ describe('project untrusted keyset cursors', () => {
     }
   });
 
-  it('carries only public time/id/score ordering coordinates for projects and search', () => {
-    for (const operation of ['project_list_v2', 'search_v2'] as const) {
-      const scoped = { ...scope, operation };
-      const key = operation === 'project_list_v2' ? `prj_${id}` : `ctx_${'a'.repeat(64)}`;
-      const position = operation === 'search_v2' ? [4, time, key] as const : [time, key] as const;
-      expect(decodeProjectCursorV1(encodeProjectCursorV1(scoped, position), scoped)).toEqual(position);
-      expect(() => encodeProjectCursorV1(scoped, ['2026-02-30T00:00:00.000Z', key])).toThrow();
-    }
-    expect(() => encodeProjectCursorV1({ ...scope, operation: 'search_v2' }, [-1, time, `ctx_${'a'.repeat(64)}`])).toThrow();
+  it('carries only public time/id ordering coordinates for projects', () => {
+    const scoped = { ...scope, operation: 'project_list_v2' as const };
+    const position = [time, `prj_${id}`] as const;
+    expect(decodeProjectCursorV1(encodeProjectCursorV1(scoped, position), scoped)).toEqual(position);
+    expect(() => encodeProjectCursorV1(scoped, ['2026-02-30T00:00:00.000Z', `prj_${id}`])).toThrow();
   });
 
   it('preserves the existing lexical normalization and unique term semantics', () => {

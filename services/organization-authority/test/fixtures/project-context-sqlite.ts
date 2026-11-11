@@ -1,14 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { canonicalJson, canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import {
-  assertPersonDocumentOriginalV1, validatePersonUpdateReceiptV2, validatePersonUpdateSubmitV2,
-  type PersonUpdateReceiptV2, type PersonUploadAudienceV2, type ProjectIdV1,
+  assertPersonDocumentOriginalV1, type ProjectContextAudienceV1, type ProjectIdV1,
 } from "@echo-brain/organization-api";
 import { applyAuthorityBaseline } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import type { AuthorityPersonMembershipBinding } from "@echo-brain/organization-authority-kernel/application/ports/authority-repository";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import Database from "better-sqlite3";
-import { personNoteContextIdV1 } from "../../src/adapters/persistence/sqlite/person-upload-custody-v1.js";
 
 /** Stable fixture time keeps durable receipt/order assertions meaningful. */
 export const PROJECT_CONTEXT_NOW = "2026-09-21T22:01:00.000Z";
@@ -132,57 +130,6 @@ export function seedProjectMember(
 }
 
 /**
- * A note as the retired V2 submit stored it (ADR-0048), for the reads that still find stored V2 notes: its search, the
- * person list and open, and Ask. The same rows, context ID, payload digest and receipt the submit wrote, with the same
- * project checks left to the caller: it is a seed, not a route.
- */
-export function insertStoredNoteV2(
-  database: Database.Database,
-  actor: AuthorityPersonMembershipBinding,
-  input: { readonly request_id?: string; readonly title: string; readonly text: string; readonly project_id: ProjectIdV1 | null; readonly audience: PersonUploadAudienceV2 },
-  receivedAt = PROJECT_CONTEXT_NOW,
-): PersonUpdateReceiptV2 {
-  const request = validatePersonUpdateSubmitV2({
-    schema_version: 2, kind: "echo-person-update-submit-v2", request_id: input.request_id ?? randomUUID(),
-    title: input.title, text: input.text, project_id: input.project_id, audience: input.audience,
-  });
-  const context_id = personNoteContextIdV1(actor, request.request_id, 2);
-  const audienceProjectId = request.audience.kind === "project" ? request.audience.project_id : null;
-  database.prepare(`INSERT INTO authority_person_updates_v2
-    (organization_id,principal_id,membership_id,membership_type,request_id,request_version,context_id,payload_sha256,title,text,audience_kind,audience_project_id,submitted_association_project_ids_json,audience_project_ids_json,project_id,received_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type, request.request_id, 2, context_id,
-    canonicalSha256(request), request.title, request.text, request.audience.kind, audienceProjectId,
-    canonicalJson(request.project_id === null ? [] : [request.project_id]), canonicalJson(audienceProjectId === null ? [] : [audienceProjectId]),
-    request.project_id, receivedAt,
-  );
-  if (request.project_id !== null) {
-    database.prepare(`INSERT INTO authority_project_context_associations_v1
-      (context_id, project_id, organization_id, associator_principal_id, associator_membership_id, associator_membership_type, associated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(context_id, request.project_id, actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type, receivedAt);
-  }
-  if (audienceProjectId !== null) {
-    database.prepare("INSERT INTO authority_person_update_audience_projects_v1 (context_id, project_id, organization_id) VALUES (?, ?, ?)").run(context_id, audienceProjectId, actor.organization_id);
-  }
-  const receipt = validatePersonUpdateReceiptV2({
-    schema_version: 2, kind: "echo-person-update-receipt-v2", request_id: request.request_id, context_id, received_at: receivedAt,
-    project_id: request.project_id, audience: request.audience, state: "received",
-  });
-  const command_sha256 = canonicalSha256({
-    schema_version: 1, kind: "echo-project-command-identity-v1",
-    actor: { organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id },
-    operation: "upload_submit", request,
-  });
-  database.prepare(`INSERT INTO authority_project_command_receipts_v1
-    (organization_id, principal_id, membership_id, membership_type, request_id, operation, command_sha256, receipt_json, receipt_sha256, committed_at)
-    VALUES (?, ?, ?, ?, ?, 'upload_submit', ?, ?, ?, ?)`).run(
-    actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type, request.request_id,
-    command_sha256, canonicalJson(receipt), canonicalSha256(receipt), receivedAt,
-  );
-  return receipt;
-}
-
-/**
  * A document as the retired V1 upload stored it (ADR-0048), for the reads that still serve stored V1 documents: V2
  * status, metadata, original, text and search, the person list and open, Ask and extraction. The same rows, document ID,
  * payload digest and receipt the upload wrote, with its project checks left to the caller: it is a seed, not a route.
@@ -191,7 +138,7 @@ export function insertStoredNoteV2(
 export function insertStoredDocumentV1(
   database: Database.Database,
   actor: AuthorityPersonMembershipBinding,
-  input: { readonly request_id?: string; readonly filename: string; readonly title: string; readonly audience: PersonUploadAudienceV2; readonly project_id: ProjectIdV1 | null },
+  input: { readonly request_id?: string; readonly filename: string; readonly title: string; readonly audience: ProjectContextAudienceV1; readonly project_id: ProjectIdV1 | null },
   bytes: Uint8Array,
   receivedAt = PROJECT_CONTEXT_NOW,
 ): { readonly kind: "echo-person-document-receipt-v1"; readonly request_id: string; readonly document_id: `doc_${string}`; readonly received_at: string } & Record<string, unknown> {

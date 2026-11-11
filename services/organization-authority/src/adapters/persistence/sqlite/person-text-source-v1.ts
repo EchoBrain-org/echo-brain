@@ -1,10 +1,10 @@
 import type Database from 'better-sqlite3';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3 } from '@echo-brain/organization-api';
+import { validatePersonUpdateSubmitV3 } from '@echo-brain/organization-api';
 import { sourceContentSha256V1, sourceItemIdV1 } from '@echo-brain/organization-processing/core';
 import type { PersonTextSourceInboxV1, PersonTextSourceContentV1, PersonTextSourceFailureObservationV1 } from '../../../application/ports/person-text-source-v1.js';
 import { PERSON_SOURCE_IDENTITY_V1 } from '../../../application/person-document-source-v1.js';
-import { personNoteContextIdV1, storedProjectIdsV1, storedUploadAudienceV2, storedUploadAudienceV3, storedUploadCustodyRefV1 } from './person-upload-custody-v1.js';
+import { personNoteContextIdV1, storedProjectIdsV1, storedUploadAudienceV3, storedUploadCustodyRefV1 } from './person-upload-custody-v1.js';
 
 type TextRow = {
   api_version: 2 | 3; organization_id: string; principal_id: string; membership_id: string;
@@ -14,18 +14,18 @@ type TextRow = {
   audience_project_ids_json: string | null; received_at: string;
 };
 
-/** One retained note (V2 or V3) as custody stores it. */
+/** One retained note as custody stores it. The V16 table still allows a retired V2 row, which never passes custody. */
 export type PersonTextCustodyRowV1 = TextRow;
 
 /**
- * Rebuilds the note's accepted request from custody and checks its payload
- * hash and context id. Throws when retained text no longer binds its request.
+ * Rebuilds the note's accepted V3 request from custody and checks its payload
+ * hash and context id. Throws when retained text no longer binds its request,
+ * and for a retired V2 note (ADR-0048), which the inbox quarantines like any other.
  */
 export function assertPersonTextCustodyV1(row: PersonTextCustodyRowV1): void {
-  const request = row.api_version === 2
-    ? validatePersonUpdateSubmitV2({ schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: row.request_id, title: row.title, text: row.text, audience: storedUploadAudienceV2(row), project_id: row.project_id })
-    : validatePersonUpdateSubmitV3({ schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: row.request_id, title: row.title, text: row.text, association_project_ids: storedProjectIdsV1(row.submitted_association_project_ids_json), audience: storedUploadAudienceV3(row) });
-  if (personNoteContextIdV1(row, row.request_id, row.api_version) !== row.context_id || canonicalSha256(request) !== row.payload_sha256) throw new Error('Person text source integrity failed');
+  if (row.api_version !== 3) throw new Error('Person text source integrity failed');
+  const request = validatePersonUpdateSubmitV3({ schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: row.request_id, title: row.title, text: row.text, association_project_ids: storedProjectIdsV1(row.submitted_association_project_ids_json), audience: storedUploadAudienceV3(row) });
+  if (personNoteContextIdV1(row, row.request_id) !== row.context_id || canonicalSha256(request) !== row.payload_sha256) throw new Error('Person text source integrity failed');
 }
 
 function policy(row: TextRow): { custody_ref: string; access_policy_ref: string } {
@@ -61,7 +61,7 @@ export class SqlitePersonTextSourceInboxV1 implements PersonTextSourceInboxV1 {
   takeFailureObservations(): readonly PersonTextSourceFailureObservationV1[] { return this.failures.splice(0); }
   private sourceFrom(row: TextRow): Exclude<ReturnType<PersonTextSourceInboxV1['next']>, undefined> {
     assertPersonTextCustodyV1(row);
-    const content: PersonTextSourceContentV1 = { schema_version: 1, kind: 'person-text', original_api_version: row.api_version, context_id: row.context_id, title: row.title, text: row.text };
+    const content: PersonTextSourceContentV1 = { schema_version: 1, kind: 'person-text', original_api_version: 3, context_id: row.context_id, title: row.title, text: row.text };
     const sourceId = sourceItemIdV1(PERSON_SOURCE_IDENTITY_V1, row.context_id);
     return {
       source: { item: { schema_version: 1, source_id: sourceId, adapter: PERSON_SOURCE_IDENTITY_V1, external_id: row.context_id }, revision: { schema_version: 1, source_id: sourceId, revision_id: row.payload_sha256, captured_at: row.received_at, content_sha256: sourceContentSha256V1(content), contributor: { principal_id: row.principal_id, membership_id: row.membership_id }, artifact_refs: [{ artifact_id: row.context_id, media_type: 'text/plain', sha256: sha256Digest(row.text).slice(7), byte_length: Buffer.byteLength(row.text) }], representation_refs: [] }, content },

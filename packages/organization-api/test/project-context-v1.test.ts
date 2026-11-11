@@ -3,14 +3,10 @@ import {
   PERSON_DIRECTORY_PATH_V1,
   validateOrganizationDirectorySearchV1,
   validateOrganizationDirectoryV1,
-  validatePersonUpdateSubmitV2,
-  validatePersonUpdateReceiptV2,
-  validatePersonUploadSearchResultV2,
+  validatePersonUpdateSubmitV3,
   validateProjectContextAssociateV1,
   validateProjectContextBrowseV1,
   validateProjectContextDissociateV1,
-  validateProjectContextSearchV1,
-  validateProjectContextSearchResultV2,
   validateProjectCreateReceiptV1,
   validateProjectCreateV1,
   validateProjectRenameV1,
@@ -34,7 +30,6 @@ const project_id = 'prj_00000000-0000-4000-8000-000000000002';
 const membership_id = 'mem_00000000-0000-4000-8000-000000000003';
 const context_id = `ctx_${'a'.repeat(64)}`;
 const received_at = '2026-09-21T00:00:00.000Z';
-const project_id_2 = 'prj_00000000-0000-4000-8000-000000000004';
 
 describe('project context V1 public codecs', () => {
   it('admits a canonical project and immutable receipts without exposing current state', () => {
@@ -86,12 +81,6 @@ describe('project context V1 public codecs', () => {
     expect(() => validateProjectContextAssociateV1({ schema_version: 1, kind: 'echo-project-context-associate-v1', request_id, project_id, context_id, audience: { kind: 'project', project_id } })).toThrow();
   });
 
-  it('uses a complete audience object for scoped releases, including a differently-associated project audience', () => {
-    const audience_project = 'prj_00000000-0000-4000-8000-000000000004';
-    const page = validateProjectContextSearchResultV2({ schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id, items: [{ context_id, received_at, title: 'Original', excerpt: 'Exact source excerpt.', audience: { kind: 'project', project_id: audience_project } }], next_cursor: null });
-    expect(page.items[0]?.audience).toEqual({ kind: 'project', project_id: audience_project });
-  });
-
   it('admits an initial project-directory browse without a search query', () => {
     expect(validateProjectDirectorySearchV1({ project_id, limit: 2 })).toEqual({ project_id, limit: 2 });
     expect(validateProjectDirectorySearchV1({ project_id, query: 'Ada', limit: 2 })).toEqual({ project_id, query: 'Ada', limit: 2 });
@@ -126,83 +115,51 @@ describe('project context V1 public codecs', () => {
     ]) expect(() => validateOrganizationDirectoryV1(invalid), JSON.stringify(invalid)).toThrow();
   });
 
-  it('V2 carries a nullable association and a separate audience', () => {
-    const v2 = validatePersonUpdateSubmitV2({ schema_version: 2, kind: 'echo-person-update-submit-v2', request_id, title: 'Original', text: 'Body', project_id: null, audience: { kind: 'project', project_id } });
-    expect(v2).toMatchObject({ project_id: null, audience: { kind: 'project', project_id } });
-  });
-
-  it('does not allow generic V2 search results to disclose associations', () => {
-    const results = { schema_version: 2, kind: 'echo-person-upload-search-v2', results: [{ context_id, received_at, audience: { kind: 'only_me' }, title: 'Original', excerpt: 'Body' }] };
-    expect(validatePersonUploadSearchResultV2(results)).toEqual(results);
-    expect(() => validatePersonUploadSearchResultV2({ ...results, results: [{ ...results.results[0], project_id }] })).toThrow();
-  });
-
   it('rejects nested enumerable surprises and invalid project audience shapes', () => {
-    const value = { schema_version: 2, kind: 'echo-person-update-submit-v2', request_id, title: 'Original', text: 'Body', project_id, audience: { kind: 'project', project_id } };
+    const value = { schema_version: 3, kind: 'echo-person-update-submit-v3', request_id, title: 'Original', text: 'Body', association_project_ids: [project_id], audience: { kind: 'project', project_id } };
     Object.defineProperty(value.audience, 'hidden', { value: 'unexpected', enumerable: false });
-    expect(() => validatePersonUpdateSubmitV2(value)).toThrow();
-    expect(() => validatePersonUpdateSubmitV2({ schema_version: 2, kind: 'echo-person-update-submit-v2', request_id, title: 'Original', text: 'Body', project_id, audience: { kind: 'team', project_id } })).toThrow();
+    expect(() => validatePersonUpdateSubmitV3(value)).toThrow();
+    expect(() => validatePersonUpdateSubmitV3({ schema_version: 3, kind: 'echo-person-update-submit-v3', request_id, title: 'Original', text: 'Body', association_project_ids: [], audience: { kind: 'team', project_id } })).toThrow();
   });
 
-  it('keeps the V2 original-text byte and whitespace rules while bounding escaped JSON', () => {
-    const common = { schema_version: 2 as const, kind: 'echo-person-update-submit-v2' as const, request_id, project_id: null, title: ' Title ', text: '  exact original whitespace\n', audience: { kind: 'only_me' as const } };
-    expect(validatePersonUpdateSubmitV2(common)).toEqual(common);
-    expect(validatePersonUpdateSubmitV2({ ...common, audience: { kind: 'team' } }).audience).toEqual({ kind: 'team' });
-    expect(validatePersonUpdateSubmitV2({ ...common, title: 'é'.repeat(100), text: '😀'.repeat(2048) }).text).toBe('😀'.repeat(2048));
-    expect(() => validatePersonUpdateSubmitV2({ ...common, text: '"'.repeat(8192) })).toThrow();
-  });
-
-  it('keeps a stored near-request-bound V2 original valid', () => {
-    const text = '\n'.repeat(8047) + 'a';
-    const submit = { schema_version: 2 as const, kind: 'echo-person-update-submit-v2' as const, request_id, title: 'x', text, project_id: null, audience: { kind: 'only_me' as const } };
-    expect(validatePersonUpdateSubmitV2(submit).text).toBe(text);
-  });
-
-  it('admits the worst bounded escaped page under the dedicated response ceiling', () => {
-    const items = Array.from({ length: 10 }, (_, index) => ({
-      context_id: `ctx_${String(index).padStart(64, '0')}`,
-      received_at,
-      title: 'x',
-      excerpt: '"'.repeat(300),
-      audience: { kind: 'team' as const },
-    }));
-    expect(validateProjectContextSearchResultV2({ schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id, items, next_cursor: null }).items).toHaveLength(10);
+  it('keeps the original-text byte and whitespace rules while bounding escaped JSON', () => {
+    const common = { schema_version: 3 as const, kind: 'echo-person-update-submit-v3' as const, request_id, title: ' Title ', text: '  exact original whitespace\n', association_project_ids: [], audience: { kind: 'only_me' as const } };
+    expect(validatePersonUpdateSubmitV3(common)).toEqual(common);
+    expect(validatePersonUpdateSubmitV3({ ...common, audience: { kind: 'team' } }).audience).toEqual({ kind: 'team' });
+    expect(validatePersonUpdateSubmitV3({ ...common, title: 'é'.repeat(100), text: '😀'.repeat(2048) }).text).toBe('😀'.repeat(2048));
+    expect(() => validatePersonUpdateSubmitV3({ ...common, text: '"'.repeat(8192) })).toThrow();
   });
 
   it('rejects hostile recursive input before any project contract can observe a different shape', () => {
-    const base = { schema_version: 2, kind: 'echo-person-update-submit-v2', request_id, title: 'Original', text: 'Body', project_id: null, audience: { kind: 'only_me' } };
+    const base = { schema_version: 3, kind: 'echo-person-update-submit-v3', request_id, title: 'Original', text: 'Body', association_project_ids: [], audience: { kind: 'only_me' } };
     const accessor = { ...base }; Object.defineProperty(accessor, 'title', { enumerable: true, get: () => 'Original' });
     const symbol = { ...base, [Symbol('private')]: 'x' };
     const nonEnumerable = { ...base }; Object.defineProperty(nonEnumerable, 'hidden', { value: 'x' });
     const cyclic: Record<string, unknown> = { ...base }; cyclic.self = cyclic;
     const inherited = Object.create({ audience: { kind: 'team' } }); Object.assign(inherited, base); delete inherited.audience;
-    for (const [label, hostile] of Object.entries({ accessor, symbol, nonEnumerable, cyclic, inherited })) expect(() => validatePersonUpdateSubmitV2(hostile), label).toThrow();
+    for (const [label, hostile] of Object.entries({ accessor, symbol, nonEnumerable, cyclic, inherited })) expect(() => validatePersonUpdateSubmitV3(hostile), label).toThrow();
   });
 
   it('fails closed for all page/result families on duplicate, oversized, hidden, or malformed nested data', () => {
     const summary = (id = project_id) => ({ schema_version: 2, kind: 'echo-project-summary-v2' as const, project_id: id, name: 'Project', created_at: received_at, role: 'lead' as const, status: 'active' as const });
     const member = (id = membership_id) => ({ membership_id: id, display_name: 'Ada', role: 'member' as const });
     const directory = (id = membership_id) => ({ membership_id: id, display_name: 'Ada' });
-    const context = (id = context_id) => ({ context_id: id, received_at, title: 'Original', excerpt: 'Exact source excerpt.', audience: { kind: 'project' as const, project_id: project_id_2 } });
     const page = (schema_version: number, kind: string, items: unknown[], scope: object = { project_id }) => ({ schema_version, kind, ...scope, items, next_cursor: null });
     const eleven = (make: (id: string) => unknown, id: (index: number) => string) => Array.from({ length: 11 }, (_, index) => make(id(index)));
     const uuid = (prefix: string) => (index: number) => `${prefix}_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
-    const contextId = (index: number) => `ctx_${String(index).padStart(64, '0')}`;
     const cases: readonly [string, (value: unknown) => unknown, number, string, (id?: string) => unknown, (index: number) => string, object?][] = [
       ['project list', validateProjectListV2, 2, 'echo-project-list-v2', summary, uuid('prj'), {}],
       ['project members', validateProjectMembersV1, 1, 'echo-project-members-v1', member, uuid('mem')],
       ['project directory', validateProjectDirectoryV1, 1, 'echo-project-directory-v1', directory, uuid('mem')],
-      ['project search', validateProjectContextSearchResultV2, 2, 'echo-project-context-search-result-v2', context, contextId],
     ];
     for (const [label, validate, version, kind, make, id, scope] of cases) {
       expect(validate(page(version, kind, [make()], scope)), label).toBeTruthy();
       expect(() => validate(page(version, kind, [make(), make()], scope)), `${label} duplicate`).toThrow();
       expect(() => validate(page(version, kind, eleven(make, id), scope)), `${label} oversized`).toThrow();
     }
-    expect(() => validateProjectContextSearchResultV2({ schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id, items: [{ ...context(), audience: { kind: 'project', project_id: project_id_2, global_auth: true } }], next_cursor: null })).toThrow();
     expect(() => validateProjectMembersV1({ schema_version: 1, kind: 'echo-project-members-v1', project_id, items: [{ ...member(), global_auth: true }], next_cursor: null })).toThrow();
-    const sparse = [context()]; sparse.length = 2;
-    expect(() => validateProjectContextSearchResultV2({ schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id, items: sparse, next_cursor: null })).toThrow();
+    const sparse = [member()]; sparse.length = 2;
+    expect(() => validateProjectMembersV1({ schema_version: 1, kind: 'echo-project-members-v1', project_id, items: sparse, next_cursor: null })).toThrow();
   });
 
   it('rejects invalid paging, missing fields, and unreal timestamps at each public result boundary', () => {
@@ -221,16 +178,9 @@ describe('project context V1 public codecs', () => {
     ['member remove', validateProjectMemberRemoveV1, { schema_version: 1, kind: 'echo-project-member-remove-v1', request_id, project_id, membership_id }],
     ['dissociate', validateProjectContextDissociateV1, { schema_version: 1, kind: 'echo-project-context-dissociate-v1', request_id, project_id, context_id }],
     ['context browse', validateProjectContextBrowseV1, { project_id, limit: 10, cursor: 'AQ' }],
-    ['context search', validateProjectContextSearchV1, { project_id, query: 'Source', limit: 10, cursor: 'AQ' }],
   ] as const)('admits the exact V1 %s request shape and rejects forged version/global fields', (_name, validate, valid) => {
     expect(validate(valid)).toBeTruthy();
     expect(() => validate({ ...valid, schema_version: 2 })).toThrow();
     expect(() => validate({ ...valid, global_authorization: 'forged' })).toThrow();
-  });
-
-  it('keeps the stored V2 receipt coordinates closed, including private project association', () => {
-    const coordinates = { request_id, context_id, received_at, project_id, audience: { kind: 'project' as const, project_id } };
-    expect(validatePersonUpdateReceiptV2({ schema_version: 2, kind: 'echo-person-update-receipt-v2', ...coordinates, state: 'received' })).toMatchObject({ project_id, audience: { kind: 'project', project_id } });
-    expect(() => validatePersonUpdateReceiptV2({ schema_version: 2, kind: 'echo-person-update-receipt-v2', ...coordinates, state: 'received', memberships: [membership_id] })).toThrow();
   });
 });

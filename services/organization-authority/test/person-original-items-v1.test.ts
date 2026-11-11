@@ -11,10 +11,10 @@ import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sq
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import type { PersonItemPositionV1, PersonListStoreScopeV1, PersonStoreDocumentRowV1, PersonStoreNoteRowV1, PersonStoreReleaseV1 } from "../src/application/ports/person-list-v1.js";
-import type { PersonUploadAudienceV2, ProjectIdV1 } from "@echo-brain/organization-api";
+import type { ProjectContextAudienceV1, ProjectIdV1 } from "@echo-brain/organization-api";
 import {
   MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, RETURNED_MEMBER,
-  addMembership, authorization, insertStoredDocumentV1, insertStoredNoteV2, projectContextDatabase, revokeMembership, seedProject, seedProjectMember,
+  addMembership, authorization, insertStoredDocumentV1, projectContextDatabase, revokeMembership, seedProject, seedProjectMember,
 } from "./fixtures/project-context-sqlite.js";
 import { failure } from "./authority-failure.js";
 
@@ -65,13 +65,11 @@ function fixture() {
   const retrieval = new SqlitePersonOriginalContextRetrievalV1(database, sessions, OWNER.organization_id);
   const requestIds: string[] = [];
 
-  /** A V3 note through its submit, or a note stored as V2 before that submit was retired (ADR-0048). */
-  const note = (token: string, audience: NoteAudience, associations: readonly string[] = [], version: 2 | 3 = 3, text = "note text"): `ctx_${string}` => {
+  /** A note through its V3 submit. */
+  const note = (token: string, audience: NoteAudience, associations: readonly string[] = [], text = "note text"): `ctx_${string}` => {
     const request_id = randomUUID();
     requestIds.push(request_id);
-    const receipt = version === 2
-      ? insertStoredNoteV2(database, ACTORS[token]!, { request_id, title: `Note ${requestIds.length}`, text, project_id: (associations[0] ?? null) as ProjectIdV1 | null, audience: audience as PersonUploadAudienceV2 }, now())
-      : projects.submitUploadV3(token, { schema_version: 3, kind: "echo-person-update-submit-v3", request_id, title: `Note ${requestIds.length}`, text, association_project_ids: associations, audience });
+    const receipt = projects.submitUploadV3(token, { schema_version: 3, kind: "echo-person-update-submit-v3", request_id, title: `Note ${requestIds.length}`, text, association_project_ids: associations, audience });
     return receipt.context_id as `ctx_${string}`;
   };
   /** Documents that finish extraction must be uploaded before any left extracting: claims take the oldest pending. */
@@ -85,7 +83,7 @@ function fixture() {
     const common = { request_id, filename: `document-${requestIds.length}.md`, title: `Doc ${requestIds.length}`, content_length: bytes.byteLength, sha256: sha256Digest(bytes), audience };
     // A V1 document is one stored before its upload was retired (ADR-0048).
     const saved = options.version === 1
-      ? insertStoredDocumentV1(database, ACTORS[token]!, { request_id, filename: common.filename, title: common.title, audience: audience as PersonUploadAudienceV2, project_id: (associations[0] ?? null) as ProjectIdV1 | null }, bytes, now())
+      ? insertStoredDocumentV1(database, ACTORS[token]!, { request_id, filename: common.filename, title: common.title, audience: audience as ProjectContextAudienceV1, project_id: (associations[0] ?? null) as ProjectIdV1 | null }, bytes, now())
       : documents.uploadV2(token, { schema_version: 2, kind: "echo-person-document-upload-v2", ...common, association_project_ids: associations }, bytes);
     const state = options.state ?? "extracting";
     // "unavailable" is terminal only on the third attempt.
@@ -148,12 +146,12 @@ function fixture() {
 }
 
 describe("person original items store", () => {
-  it("lists every note version and document state the reader may read, and nothing private to another member", () => {
+  it("lists every note audience and document state the reader may read, and nothing private to another member", () => {
     const f = fixture();
     // Shared items are filed in a project, so a project lists them.
-    const ownerV2Private = f.note("owner", { kind: "only_me" }, [], 2);
-    const ownerV2Team = f.note("owner", { kind: "team" }, [PROJECT_ALPHA], 2);
-    const ownerV2Alpha = f.note("owner", { kind: "project", project_id: PROJECT_ALPHA }, [PROJECT_ALPHA], 2);
+    const ownerPrivate = f.note("owner", { kind: "only_me" });
+    const ownerTeam = f.note("owner", { kind: "team" }, [PROJECT_ALPHA]);
+    const ownerAlpha = f.note("owner", { kind: "project", project_id: PROJECT_ALPHA }, [PROJECT_ALPHA]);
     const ownerV3Projects = f.note("owner", { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, [PROJECT_ALPHA, PROJECT_BETA]);
     const ownerV3Beta = f.note("owner", { kind: "project", project_id: PROJECT_BETA }, [PROJECT_BETA]);
     const memberPrivate = f.note("member", { kind: "only_me" }, [PROJECT_ALPHA]);
@@ -168,7 +166,7 @@ describe("person original items store", () => {
 
     const owner = listed("owner", [ONLY_ME, inProject(PROJECT_ALPHA), inProject(PROJECT_BETA)]);
     expect(new Set(owner.map((row) => row.id))).toEqual(new Set([
-      ownerV2Private, ownerV2Team, ownerV2Alpha, ownerV3Projects, ownerV3Beta,
+      ownerPrivate, ownerTeam, ownerAlpha, ownerV3Projects, ownerV3Beta,
       ownerReady, ownerUnavailable, ownerExtracting, ownerBetaDocument,
     ]));
     expect(owner.filter((row): row is PersonStoreDocumentRowV1 => row.kind === "document").map((row) => row.extraction_state).sort())
@@ -178,7 +176,7 @@ describe("person original items store", () => {
 
     const member = listed("member", [ONLY_ME, inProject(PROJECT_ALPHA)]);
     expect(new Set(member.map((row) => row.id))).toEqual(new Set([
-      ownerV2Team, ownerV2Alpha, ownerV3Projects, ownerReady, ownerExtracting, memberPrivate, memberReady,
+      ownerTeam, ownerAlpha, ownerV3Projects, ownerReady, ownerExtracting, memberPrivate, memberReady,
     ]));
     // Associations are filtered to the reader's own grants.
     expect(member.find((row) => row.id === ownerV3Projects)?.association_project_ids).toEqual([PROJECT_ALPHA]);
@@ -191,10 +189,9 @@ describe("person original items store", () => {
     const f = fixture();
     const unfiled = f.note("member", { kind: "only_me" });
     const filed = f.note("member", { kind: "only_me" }, [PROJECT_ALPHA]);
-    const filedV2 = f.note("member", { kind: "only_me" }, [PROJECT_ALPHA], 2);
     const filedDocument = f.document("member", { kind: "only_me" }, [PROJECT_ALPHA], { state: "ready" });
     const unfiledDocument = f.document("member", { kind: "only_me" });
-    const own = [unfiled, filed, filedV2, filedDocument, unfiledDocument];
+    const own = [unfiled, filed, filedDocument, unfiledDocument];
     // The caller's team and project items, and the owner's only-me items filed in the same project, are not the caller's only_me.
     const team = f.note("member", { kind: "team" }, [PROJECT_ALPHA]);
     const project = f.note("member", { kind: "project", project_id: PROJECT_ALPHA }, [PROJECT_ALPHA]);
@@ -212,13 +209,13 @@ describe("person original items store", () => {
     const alpha = f.ids("member", inProject(PROJECT_ALPHA));
     for (const id of [team, project, projectDocument]) expect(alpha).toContain(id);
     // The filed ones show in their project, for the caller alone.
-    expect(alpha).toEqual(expect.arrayContaining([filed, filedV2, filedDocument]));
+    expect(alpha).toEqual(expect.arrayContaining([filed, filedDocument]));
     expect(new Set(f.ids("owner", ONLY_ME))).toEqual(new Set([ownerFiled, ownerDocument]));
     for (const scope of [ONLY_ME, inProject(PROJECT_ALPHA), inProject(PROJECT_BETA)]) {
       const owner = f.ids("owner", scope);
       for (const id of own) expect(owner).not.toContain(id);
     }
-    for (const id of [unfiled, filed, filedV2]) expect(failure(() => f.items.open({ access_token: "owner", ref: { kind: "note", id } })).code).toBe("not_found");
+    for (const id of [unfiled, filed]) expect(failure(() => f.items.open({ access_token: "owner", ref: { kind: "note", id } })).code).toBe("not_found");
     for (const id of [filedDocument, unfiledDocument]) expect(failure(() => f.items.open({ access_token: "owner", ref: { kind: "document", id } })).code).toBe("not_found");
 
     // Leaving the project leaves them the caller's alone, filed in no project the caller holds.
@@ -234,7 +231,7 @@ describe("person original items store", () => {
     expect(f.ids("returned", ONLY_ME)).toEqual([returned]);
     // The earlier tenure's team items are shared context the new one still reads; its only-me items are not readable at all.
     expect(f.items.open({ access_token: "returned", ref: { kind: "note", id: team } }).row).toMatchObject({ id: team, visibility: "team" });
-    for (const id of [unfiled, filed, filedV2]) expect(failure(() => f.items.open({ access_token: "returned", ref: { kind: "note", id } })).code).toBe("not_found");
+    for (const id of [unfiled, filed]) expect(failure(() => f.items.open({ access_token: "returned", ref: { kind: "note", id } })).code).toBe("not_found");
     for (const id of [filedDocument, unfiledDocument]) expect(failure(() => f.items.open({ access_token: "returned", ref: { kind: "document", id } })).code).toBe("not_found");
   });
 
@@ -271,33 +268,24 @@ describe("person original items store", () => {
     expect(serialized).not.toContain(PROJECT_BETA);
   });
 
-  it("lists a project exactly as the project search and document search do, and denies it like Ask", () => {
+  it("lists a project's readable filed notes newest first and its documents exactly as document search does, and denies it like Ask", () => {
     const f = fixture();
-    f.note("owner", { kind: "team" }, [PROJECT_ALPHA]);
-    f.note("owner", { kind: "only_me" }, [PROJECT_ALPHA, PROJECT_BETA]);
-    f.note("owner", { kind: "project", project_id: PROJECT_BETA }, [PROJECT_ALPHA]);
-    f.note("owner", { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, [PROJECT_BETA]);
-    f.note("owner", { kind: "team" }, [], 2);
-    f.note("member", { kind: "only_me" }, [PROJECT_ALPHA]);
-    f.note("member", { kind: "team" }, [PROJECT_ALPHA], 2);
+    const team = f.note("owner", { kind: "team" }, [PROJECT_ALPHA]);
+    const ownerPrivate = f.note("owner", { kind: "only_me" }, [PROJECT_ALPHA, PROJECT_BETA]);
+    const betaAudience = f.note("owner", { kind: "project", project_id: PROJECT_BETA }, [PROJECT_ALPHA]);
+    const both = f.note("owner", { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, [PROJECT_BETA]);
+    f.note("owner", { kind: "team" });
+    const memberPrivate = f.note("member", { kind: "only_me" }, [PROJECT_ALPHA]);
+    const memberTeam = f.note("member", { kind: "team" }, [PROJECT_ALPHA]);
     f.document("owner", { kind: "team" }, [PROJECT_ALPHA], { state: "ready" });
     f.document("owner", { kind: "project", project_id: PROJECT_BETA }, [PROJECT_ALPHA], { state: "ready" });
     f.document("member", { kind: "only_me" }, [PROJECT_ALPHA]);
     f.document("owner", { kind: "team" }, [PROJECT_BETA], { version: 1 });
-    // Every note says "note text", so one search term pages through all of a project's notes, newest first.
-    const search = (token: string, project_id: string) => {
-      const found: string[] = [];
-      for (let cursor: string | undefined, guard = 0; guard < 50; guard += 1) {
-        const page = f.projects.searchV2(token, { project_id, query: "note", ...(cursor === undefined ? {} : { cursor }) });
-        found.push(...page.items.map((item) => item.context_id));
-        if (page.next_cursor === null) return found;
-        cursor = page.next_cursor;
-      }
-      throw new Error("search did not end");
-    };
+    // The notes filed in the project that the reader may read, newest first.
+    const expected = { owner: { [PROJECT_ALPHA]: [memberTeam, betaAudience, ownerPrivate, team], [PROJECT_BETA]: [both, ownerPrivate] }, member: { [PROJECT_ALPHA]: [memberTeam, memberPrivate, team] } } as const;
     for (const [token, projectId] of [["owner", PROJECT_ALPHA], ["owner", PROJECT_BETA], ["member", PROJECT_ALPHA]] as const) {
       const rows = f.walk(token, inProject(projectId)).rows;
-      expect(rows.filter((row) => row.kind === "note").map((row) => row.id)).toEqual(search(token, projectId));
+      expect(rows.filter((row) => row.kind === "note").map((row) => row.id)).toEqual((expected[token] as Record<string, readonly string[]>)[projectId]);
       expect(rows.filter((row) => row.kind === "document").map((row) => row.id)).toEqual(f.searchAll(token, projectId));
       expect(rows.length).toBeGreaterThan(0);
     }
@@ -340,7 +328,7 @@ describe("person original items store", () => {
 
   it("lists a just-submitted note from custody before the inbox admits it, and opens its text", () => {
     const f = fixture();
-    const id = f.note("member", { kind: "only_me" }, [], 3, "fresh custody text");
+    const id = f.note("member", { kind: "only_me" }, [], "fresh custody text");
     expect(f.database.prepare("SELECT COUNT(*) AS count FROM authority_sources_v1").get()).toEqual({ count: 0 });
     expect(f.ids("member", ONLY_ME)).toEqual([id]);
     const opened = f.items.open({ access_token: "member", ref: { kind: "note", id } });
@@ -379,8 +367,8 @@ describe("person original items store", () => {
 
   it("gives guessed, unreadable, left, quarantined and past-the-end refs one identical not_found", () => {
     const f = fixture();
-    const quarantined = f.note("member", { kind: "team" }, [], 2);
-    f.database.prepare("INSERT INTO authority_person_text_source_failures_v1(organization_id,api_version,context_id,disposition,recorded_at) VALUES (?,2,?,'invalid_retained_text',?)").run(OWNER.organization_id, quarantined, PROJECT_CONTEXT_NOW);
+    const quarantined = f.note("member", { kind: "team" });
+    f.database.prepare("INSERT INTO authority_person_text_source_failures_v1(organization_id,api_version,context_id,disposition,recorded_at) VALUES (?,3,?,'invalid_retained_text',?)").run(OWNER.organization_id, quarantined, PROJECT_CONTEXT_NOW);
     const ownerPrivateNote = f.note("owner", { kind: "only_me" });
     const readable = f.document("owner", { kind: "team" }, [], { state: "ready" });
     const ownerPrivateDocument = f.document("owner", { kind: "only_me" });
@@ -404,18 +392,18 @@ describe("person original items store", () => {
 
   it("hides a quarantined note and fails closed on a retained note that no longer binds its request", () => {
     const f = fixture();
-    const quarantined = f.note("owner", { kind: "only_me" }, [PROJECT_ALPHA], 2);
-    const kept = f.note("owner", { kind: "only_me" }, [PROJECT_ALPHA], 2);
-    f.database.prepare("INSERT INTO authority_person_text_source_failures_v1(organization_id,api_version,context_id,disposition,recorded_at) VALUES (?,2,?,'invalid_retained_text',?)").run(OWNER.organization_id, quarantined, PROJECT_CONTEXT_NOW);
+    const quarantined = f.note("owner", { kind: "only_me" }, [PROJECT_ALPHA]);
+    const kept = f.note("owner", { kind: "only_me" }, [PROJECT_ALPHA]);
+    f.database.prepare("INSERT INTO authority_person_text_source_failures_v1(organization_id,api_version,context_id,disposition,recorded_at) VALUES (?,3,?,'invalid_retained_text',?)").run(OWNER.organization_id, quarantined, PROJECT_CONTEXT_NOW);
     expect(f.ids("owner", inProject(PROJECT_ALPHA))).toEqual([kept]);
     expect(f.ids("owner", ONLY_ME)).toEqual([kept]);
 
     // The member's own only-me note, tampered so it no longer binds its request.
     const request_id = randomUUID();
-    const context_id = `ctx_${canonicalSha256({ schema_version: 2, kind: "echo-person-update-source-v2", organization_id: MEMBER.organization_id, membership_id: MEMBER.membership_id, request_id }).slice(7)}`;
+    const context_id = `ctx_${canonicalSha256({ schema_version: 3, kind: "echo-person-update-source-v3", organization_id: MEMBER.organization_id, membership_id: MEMBER.membership_id, request_id }).slice(7)}`;
     f.database.prepare(`INSERT INTO authority_person_updates_v2
       (organization_id,principal_id,membership_id,membership_type,request_id,request_version,context_id,payload_sha256,title,text,audience_kind,audience_project_id,submitted_association_project_ids_json,audience_project_ids_json,project_id,received_at)
-      VALUES (?,?,?,?,?,2,?,?,?,?,'only_me',NULL,'[]','[]',NULL,?)`).run(MEMBER.organization_id, MEMBER.principal_id, MEMBER.membership_id, MEMBER.membership_type, request_id, context_id, canonicalSha256("not the request"), "Tampered", "tampered text", PROJECT_CONTEXT_NOW);
+      VALUES (?,?,?,?,?,3,?,?,?,?,'only_me',NULL,'[]','[]',NULL,?)`).run(MEMBER.organization_id, MEMBER.principal_id, MEMBER.membership_id, MEMBER.membership_type, request_id, context_id, canonicalSha256("not the request"), "Tampered", "tampered text", PROJECT_CONTEXT_NOW);
     expect(failure(() => f.items.collect({ access_token: "member", scope: ONLY_ME, limit: 26, notes: { after: null } })).code).toBe("unavailable");
     expect(failure(() => f.items.open({ access_token: "member", ref: { kind: "note", id: context_id as `ctx_${string}` } })).code).toBe("unavailable");
     // Documents alone still list.
@@ -476,50 +464,34 @@ describe("person original items store", () => {
     expect(failure(() => f.items.revalidate({ access_token: "member", release: committed })).code).toBe("unauthorized");
   });
 
-  it("uses Ask's ACL: documents list like document search, notes like the upload reads", () => {
+  it("uses Ask's ACL: documents list like document search, notes by their audience", () => {
     const f = fixture();
-    // A V2 note is found by the V2 search alone: each carries its own word to search for.
-    const markers = new Map<string, string>();
     // Every note and document is filed in ALPHA, which both readers hold, so ALPHA lists what each may read.
-    const stored = (token: string, audience: NoteAudience) => {
-      const marker = `oraclemarker${markers.size}`;
-      const id = f.note(token, audience, [PROJECT_ALPHA], 2, marker);
-      markers.set(id, marker);
-      return id;
-    };
     const notes = [
-      stored("owner", { kind: "only_me" }), stored("owner", { kind: "team" }),
-      stored("owner", { kind: "project", project_id: PROJECT_ALPHA }), stored("owner", { kind: "project", project_id: PROJECT_BETA }),
       f.note("owner", { kind: "only_me" }, [PROJECT_ALPHA]), f.note("owner", { kind: "team" }, [PROJECT_ALPHA]),
+      f.note("owner", { kind: "project", project_id: PROJECT_ALPHA }, [PROJECT_ALPHA]), f.note("owner", { kind: "project", project_id: PROJECT_BETA }, [PROJECT_ALPHA]),
       f.note("owner", { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, [PROJECT_ALPHA]), f.note("owner", { kind: "projects", project_ids: [PROJECT_BETA] }, [PROJECT_ALPHA]),
-      f.note("member", { kind: "only_me" }, [PROJECT_ALPHA]), stored("member", { kind: "project", project_id: PROJECT_ALPHA }),
+      f.note("member", { kind: "only_me" }, [PROJECT_ALPHA]), f.note("member", { kind: "project", project_id: PROJECT_ALPHA }, [PROJECT_ALPHA]),
     ];
+    // The member holds ALPHA alone: no owner's only-me note, and no audience that names only BETA.
+    const readable = { owner: [0, 1, 2, 3, 4, 5, 7], member: [1, 2, 4, 6, 7] } as const;
     f.document("owner", { kind: "only_me" }, [PROJECT_ALPHA], { version: 1 });
     f.document("owner", { kind: "project", project_id: PROJECT_BETA }, [PROJECT_ALPHA], { version: 1 });
     f.document("owner", { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, [PROJECT_ALPHA]);
     f.document("owner", { kind: "projects", project_ids: [PROJECT_BETA] }, [PROJECT_ALPHA]);
     f.document("member", { kind: "only_me" }, [PROJECT_ALPHA]);
     f.document("member", { kind: "team" }, [PROJECT_ALPHA]);
-    for (const token of ["owner", "member"]) {
+    for (const token of ["owner", "member"] as const) {
       const rows = f.walk(token, inProject(PROJECT_ALPHA)).rows;
       expect(rows.filter((row) => row.kind === "document").map((row) => row.id)).toEqual(f.searchAll(token, null));
-      const listed = new Set(rows.map((row) => row.id));
-      for (const id of notes) {
-        const version = (f.database.prepare("SELECT request_version FROM authority_person_updates_v2 WHERE context_id=?").get(id) as { request_version: 2 | 3 }).request_version;
-        let readable = true;
-        try {
-          if (version === 2) readable = f.projects.searchUploads(token, { query: markers.get(id)! }).results.some((result) => result.context_id === id);
-          else readable = f.projects.searchUploadsV3(token, { query: "note" }).results.some((result) => result.context_id === id);
-        } catch { readable = false; }
-        expect(listed.has(id), `${token} ${id}`).toBe(readable);
-      }
+      expect(new Set(rows.filter((row) => row.kind === "note").map((row) => row.id)), token).toEqual(new Set(readable[token].map((index) => notes[index])));
     }
   });
 
   it("never releases a request_id, a membership id or a principal id", () => {
     const f = fixture();
     f.note("owner", { kind: "team" }, [PROJECT_ALPHA]);
-    f.note("member", { kind: "only_me" }, [PROJECT_ALPHA], 2);
+    f.note("member", { kind: "only_me" }, [PROJECT_ALPHA]);
     f.document("owner", { kind: "team" }, [PROJECT_ALPHA], { state: "ready" });
     f.document("member", { kind: "only_me" });
     const outputs: unknown[] = [];

@@ -201,7 +201,7 @@ describe('document binary HTTP boundary and real service integration',()=>{
   expect(h.db.prepare('SELECT count(*) n FROM authority_person_documents_v1').get()).toEqual({n:1});
  });
  it('reserves the entire document family from provider ingress',()=>{
-  for(const path of ['/v1/person/documents','/v1/person/documents/search','/v1/person/documents/arbitrary/original','/v2/person/documents/search','/v2/person/documents/arbitrary/original']){const application={routes:[{route_id:'collision',method:'POST' as const,path}],accept:async()=>({status:200 as const,body:{}})};for(const ingress of [{person_tool_connections:[application]},{person_external_identity_link:application},{person_tools:application}])expect(()=>createOrganizationAuthorityHttpServer(authorityHttpServerOptions(ingress))).toThrow('collides with Authority route');}
+  for(const path of ['/v2/person/documents/search','/v2/person/documents/arbitrary/original']){const application={routes:[{route_id:'collision',method:'POST' as const,path}],accept:async()=>({status:200 as const,body:{}})};for(const ingress of [{person_tool_connections:[application]},{person_external_identity_link:application},{person_tools:application}])expect(()=>createOrganizationAuthorityHttpServer(authorityHttpServerOptions(ingress))).toThrow('collides with Authority route');}
  });
  it('preserves the legacy 16KiB JSON request cap while admitting larger binary documents',async()=>{
   let calls=0;const h=await fixture({server:{project_context:{createProject(){calls++;return {schema_version:1,kind:'echo-project-create-receipt-v1',request_id:'00000000-0000-4000-8000-000000000001',project_id:PROJECT_ALPHA,name:'SCOUT',created_at:PROJECT_CONTEXT_NOW,role:'lead'};}} as never}});

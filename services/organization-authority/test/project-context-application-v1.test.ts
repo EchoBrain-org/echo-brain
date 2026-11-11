@@ -2,8 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type Database from 'better-sqlite3';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
-import type { ProjectIdV1 } from '@echo-brain/organization-api';
-import { MEMBER, OWNER, PROJECT_CONTEXT_NOW, RETURNED_MEMBER, addMembership, authorization, insertStoredNoteV2, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
+import { MEMBER, OWNER, PROJECT_CONTEXT_NOW, RETURNED_MEMBER, addMembership, authorization, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
 
 const databases: Database.Database[] = [];
 afterEach(() => { for (const database of databases.splice(0)) if (database.open) database.close(); });
@@ -49,10 +48,6 @@ describe('ProjectContextApplicationV1', () => {
     expect(() => f.application.archiveProject('member', { schema_version: 1, kind: 'echo-project-archive-v1', request_id: requestId(122), project_id: alpha.project_id, archived: true })).toThrow(expect.objectContaining({ code: 'not_found' }));
     const activePage = f.application.listProjectsV2('member', { status: 'active', limit: 1 });
     expect(activePage.next_cursor).not.toBeNull();
-    const alphaUpload = f.application.submitUploadV3('owner', {
-      schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: requestId(114), title: 'Archived evidence', text: 'Existing project text remains readable.',
-      association_project_ids: [alpha.project_id], audience: { kind: 'project', project_id: alpha.project_id },
-    });
     const betaUpload = f.application.submitUploadV3('owner', {
       schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: requestId(115), title: 'Active evidence', text: 'Alternate project access remains readable.',
       association_project_ids: [beta.project_id], audience: { kind: 'project', project_id: beta.project_id },
@@ -64,12 +59,7 @@ describe('ProjectContextApplicationV1', () => {
     expect(f.application.listProjectsV2('member', {}).items.map(item => item.project_id)).not.toContain(alpha.project_id);
     expect(f.application.listProjectsV2('member', { status: 'archived' }).items).toEqual([expect.objectContaining({ project_id: alpha.project_id, status: 'archived' })]);
     expect(f.application.readProjectV2('member', alpha.project_id)).toMatchObject({ status: 'archived' });
-    expect(f.application.searchV2('member', { project_id: alpha.project_id, query: 'readable' }).items)
-      .toEqual([expect.objectContaining({ context_id: alphaUpload.context_id, excerpt: 'Existing project text remains readable.' })]);
-    expect(f.application.searchUploadsV3('member', { query: 'alternate' }).results)
-      .toEqual([expect.objectContaining({ context_id: betaUpload.context_id, excerpt: 'Alternate project access remains readable.' })]);
-    // A note must hold every term of the query.
-    expect(f.application.searchUploadsV3('member', { query: 'alternate zebra' }).results).toEqual([]);
+    expect(f.application.listMembers('member', { project_id: alpha.project_id }).items.map(item => item.membership_id)).toContain(MEMBER.membership_id);
     expect(() => f.application.submitUploadV3('owner', {
       schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: requestId(117), title: 'Blocked', text: 'No new archive content.',
       association_project_ids: [alpha.project_id], audience: { kind: 'team' },
@@ -98,42 +88,27 @@ describe('ProjectContextApplicationV1', () => {
     expect(() => f.application.setMember('owner', memberSet(20, reused.project_id, reused.membership_id, 'member'))).toThrow(expect.objectContaining({ code: 'conflict' }));
   });
 
-  // Notes stored as V2 before their submit was retired (ADR-0048) still take one project association at most.
-  it('keeps a stored V2 note audience separate from association, visibility, and association replay', () => {
-    const f = fixture(); const alpha = project(f, 20); const beta = project(f, 21);
-    const alphaId = alpha.project_id as ProjectIdV1;
-    f.application.setMember('owner', memberSet(22, alpha.project_id, MEMBER.membership_id, 'member'));
-    const privateReceipt = insertStoredNoteV2(f.database, OWNER, { request_id: requestId(23), title: 'Private', text: 'Private original', project_id: null, audience: { kind: 'only_me' } });
-    const association = { schema_version: 1 as const, kind: 'echo-project-context-associate-v1' as const, request_id: requestId(24), project_id: alpha.project_id, context_id: privateReceipt.context_id };
-    const first = f.application.associateContext('owner', association);
-    expect(f.application.associateContext('owner', association)).toEqual(first);
-    expect(() => f.application.associateContext('owner', { ...association, request_id: requestId(25), project_id: beta.project_id })).toThrow(expect.objectContaining({ code: 'conflict' }));
-    expect(f.application.searchV2('member', { project_id: alpha.project_id, query: 'private' }).items).toEqual([]);
-    expect(() => f.application.dissociateContext('member', { schema_version: 1, kind: 'echo-project-context-dissociate-v1', request_id: requestId(26), project_id: alpha.project_id, context_id: privateReceipt.context_id })).toThrow(expect.objectContaining({ code: 'not_found' }));
-    f.application.dissociateContext('owner', { schema_version: 1, kind: 'echo-project-context-dissociate-v1', request_id: requestId(27), project_id: alpha.project_id, context_id: privateReceipt.context_id });
-    expect(f.application.associateContext('owner', association)).toEqual(first);
-    expect(f.database.prepare('SELECT count(*) AS n FROM authority_project_context_associations_v1 WHERE context_id = ?').get(privateReceipt.context_id)).toEqual({ n: 0 });
-
-    const team = insertStoredNoteV2(f.database, OWNER, { request_id: requestId(28), title: 'Team', text: 'Team original', project_id: alphaId, audience: { kind: 'team' } });
-    const scoped = insertStoredNoteV2(f.database, OWNER, { request_id: requestId(29), title: 'Project', text: 'Project original', project_id: alphaId, audience: { kind: 'project', project_id: alphaId } });
-    const found = f.application.searchV2('member', { project_id: alpha.project_id, query: 'original' }).items;
-    expect(found.map(item => item.context_id).sort()).toEqual([scoped.context_id, team.context_id].sort());
-    expect(found.find(item => item.context_id === team.context_id)?.excerpt).toBe('Team original');
-    expect(found.find(item => item.context_id === scoped.context_id)?.excerpt).toBe('Project original');
-    expect(f.application.searchUploads('member', { query: 'original' }).results.map(result => result.context_id).sort()).toEqual([scoped.context_id, team.context_id].sort());
+  it('finds no retired V2 note: its association and status answer not_found (ADR-0048)', () => {
+    const f = fixture(); const alpha = project(f, 20);
+    const context_id = `ctx_${'e'.repeat(64)}`;
+    f.database.prepare(`INSERT INTO authority_person_updates_v2
+      (organization_id,principal_id,membership_id,membership_type,request_id,request_version,context_id,payload_sha256,title,text,audience_kind,audience_project_id,submitted_association_project_ids_json,audience_project_ids_json,project_id,received_at)
+      VALUES (?,?,?,?,?,2,?,?,?,?,'only_me',NULL,'[]','[]',NULL,?)`).run(OWNER.organization_id, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type,
+      requestId(23), context_id, `sha256:${'0'.repeat(64)}`, 'Retired', 'Retired V2 note', PROJECT_CONTEXT_NOW);
+    expect(() => f.application.associateContext('owner', { schema_version: 1, kind: 'echo-project-context-associate-v1', request_id: requestId(24), project_id: alpha.project_id, context_id }))
+      .toThrow(expect.objectContaining({ code: 'not_found' }));
+    expect(() => f.application.uploadStatusV3('owner', requestId(23))).toThrow(expect.objectContaining({ code: 'not_found' }));
   });
 
   it('requires a fresh organization and project grant after rejoin without reusing old access', () => {
     const f = fixture(); const alpha = project(f, 30);
     f.application.setMember('owner', memberSet(31, alpha.project_id, MEMBER.membership_id, 'member'));
-    const receipt = f.application.submitUploadV3('owner', { schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: requestId(32), title: 'Project', text: 'Project original', association_project_ids: [alpha.project_id], audience: { kind: 'project', project_id: alpha.project_id } });
     f.application.removeMember('owner', { schema_version: 1, kind: 'echo-project-member-remove-v1', request_id: requestId(33), project_id: alpha.project_id, membership_id: MEMBER.membership_id });
     revokeMembership(f.database, MEMBER);
-    expect(() => f.application.searchUploadsV3('member', { query: 'original' })).toThrow(expect.objectContaining({ code: 'unauthorized' }));
+    expect(() => f.application.listProjectsV2('member', {})).toThrow(expect.objectContaining({ code: 'unauthorized' }));
     addMembership(f.database, RETURNED_MEMBER, 'Member returned', 'member@example.test');
     f.application.setMember('owner', memberSet(34, alpha.project_id, RETURNED_MEMBER.membership_id, 'member'));
-    expect(f.application.searchUploadsV3('returned', { query: 'original' }).results)
-      .toEqual([expect.objectContaining({ context_id: receipt.context_id, excerpt: 'Project original' })]);
+    expect(f.application.readProjectV2('returned', alpha.project_id)).toMatchObject({ project_id: alpha.project_id, role: 'member' });
     expect(f.database.prepare("SELECT count(*) AS n FROM authority_project_memberships_v1 WHERE project_id = ? AND principal_id = ? AND status = 'active'").get(alpha.project_id, MEMBER.principal_id)).toEqual({ n: 1 });
   });
 });

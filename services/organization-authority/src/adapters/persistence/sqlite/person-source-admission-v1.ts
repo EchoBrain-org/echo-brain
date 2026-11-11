@@ -48,14 +48,12 @@ export function assertPersonSourceAdmissionV1(database:Database.Database,source:
     artifact={artifact_id:document.document_id,media_type:document.detected_media_type,sha256:document.original_sha256.slice(7),byte_length:document.original_size};
   }else if(content.kind==='person-text'){
     const version=content.original_api_version;
-    if(version!==2&&version!==3)throw new Error('Person text source version is invalid');
+    if(version!==3)throw new Error('Person text source version is invalid');
     const text=database.prepare('SELECT * FROM authority_person_updates_v2 WHERE organization_id=? AND context_id=?').get(scope.organization_id,source.item.external_id) as TextRow|undefined;
     if(!text || text.request_version !== version)throw new Error('Person text source is not in accepted custody');
     row=text;table='text';external=text.context_id;revision=text.payload_sha256;
-    if (version === 3) {
-      const request = validatePersonUpdateSubmitV3({ schema_version:3, kind:'echo-person-update-submit-v3', request_id:text.request_id, title:text.title, text:text.text, association_project_ids:storedProjectIdsV1(text.submitted_association_project_ids_json), audience:storedUploadAudienceV3(text) });
-      if (canonicalSha256(request)!==text.payload_sha256 || personNoteContextIdV1(text,text.request_id,3)!==text.context_id) throw new Error('Person text V3 custody integrity failed');
-    }
+    const request = validatePersonUpdateSubmitV3({ schema_version:3, kind:'echo-person-update-submit-v3', request_id:text.request_id, title:text.title, text:text.text, association_project_ids:storedProjectIdsV1(text.submitted_association_project_ids_json), audience:storedUploadAudienceV3(text) });
+    if (canonicalSha256(request)!==text.payload_sha256 || personNoteContextIdV1(text,text.request_id)!==text.context_id) throw new Error('Person text V3 custody integrity failed');
     expected={schema_version:1,kind:'person-text',original_api_version:version,context_id:text.context_id,title:text.title,text:text.text};
     artifact={artifact_id:text.context_id,media_type:'text/plain',sha256:sha256Digest(text.text).slice(7),byte_length:Buffer.byteLength(text.text)};
   }else throw new Error('Person source content kind is unsupported');

@@ -3,7 +3,7 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { isCanonicalUtcMillisTimestampV1 } from '../../../application/canonical-utc-timestamp-v1.js';
 
 export interface ProjectCursorScopeV1 {
-  readonly operation: 'project_list_v2' | 'members' | 'directory' | 'organization_directory' | 'search_v2';
+  readonly operation: 'project_list_v2' | 'members' | 'directory' | 'organization_directory';
   readonly project_id?: string;
   readonly status?: 'active' | 'archived';
   readonly canonical_query?: string;
@@ -11,23 +11,17 @@ export interface ProjectCursorScopeV1 {
   readonly organization_id: string;
   readonly membership_id: string;
 }
-type ProjectCursorPositionV1 = readonly [string, string] | readonly [number, string, string];
+type ProjectCursorPositionV1 = readonly [string, string];
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const projectId = new RegExp(`^prj_${UUID}$`);
 const membershipId = new RegExp(`^mem_${UUID}$`);
-const contextId = /^ctx_[0-9a-f]{64}$/;
 function invalid(): never { throw new AuthorityOperationError('invalid_request', 'request failed'); }
 function displayName(value: string): boolean {
   return value.trim().length > 0 && Buffer.byteLength(value, 'utf8') <= 200 &&
     !/[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(value);
 }
 function position(fields: readonly string[], scope: ProjectCursorScopeV1): ProjectCursorPositionV1 {
-  if (scope.operation === 'search_v2') {
-    if (fields.length !== 3 || !/^(0|[1-9][0-9]*)$/.test(fields[0]!) ||
-        !Number.isSafeInteger(Number(fields[0])) || !isCanonicalUtcMillisTimestampV1(fields[1]!) || !contextId.test(fields[2]!)) invalid();
-    return [Number(fields[0]), fields[1]!, fields[2]!];
-  }
   if (fields.length !== 2) invalid();
   const [first, second] = fields as [string, string];
   if (scope.operation === 'members' || scope.operation === 'directory' || scope.operation === 'organization_directory') {

@@ -82,7 +82,7 @@ describe("Agentic Ask HTTP capability gate", () => {
     } finally { await value.close(); }
   });
 
-  it("answers the retired capability read as a route that never existed, and keeps it from provider adapters", async () => {
+  it("answers the retired capability read as a route that never existed", async () => {
     const value = await server({});
     try {
       const response = await fetch(`${value.url}/v3/person/capabilities`, { headers: { authorization: "Bearer token" } });
@@ -90,11 +90,9 @@ describe("Agentic Ask HTTP capability gate", () => {
       await expect(response.json()).resolves.toEqual({ error: { code: "not_found", message: "request failed" } });
       expect(value.sessions.authenticateAccess).not.toHaveBeenCalled();
     } finally { await value.close(); }
-    const adapter = { routes: [{ route_id: "collision", method: "GET" as const, path: "/v3/person/capabilities" }], accept: async () => ({ status: 200 as const, body: {} }) };
-    expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_tool_connections: [adapter] }))).toThrow("collides with Authority route");
   });
 
-  it("answers the evidence desk's retired search and open as routes that never existed, and keeps both from provider adapters", async () => {
+  it("answers the evidence desk's retired search and open as routes that never existed", async () => {
     const citation = { kind: "source_revision", source_id: `source:${"d".repeat(64)}`, revision_id: "revision-1", source_sha256: canonicalSha256({ source: 1 }),
       representation_sha256: canonicalSha256({ representation: 1 }), anchor_sha256: canonicalSha256({ anchor: 1 }) };
     const retired = [["/v3/person/evidence/search", { schema_version: 1, query: "launch" }], ["/v3/person/evidence/open", { schema_version: 1, citation }]] as const;
@@ -105,13 +103,9 @@ describe("Agentic Ask HTTP capability gate", () => {
       }
       expect(value.sessions.authenticateAccess).not.toHaveBeenCalled();
     } finally { await value.close(); }
-    for (const [path] of retired) {
-      const adapter = { routes: [{ route_id: "collision", method: "POST" as const, path }], accept: async () => ({ status: 200 as const, body: {} }) };
-      expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_tool_connections: [adapter] }))).toThrow("collides with Authority route");
-    }
   });
 
-  it("answers the retired diagnostic captures as a route that never existed, keeps it from provider adapters, and refuses a capture id on Ask", async () => {
+  it("answers the retired diagnostic captures as a route that never existed, and refuses a capture id on Ask", async () => {
     const capture_id = "cap_00000000-0000-4000-8000-000000000001";
     const ask = vi.fn();
     const value = await server({ ask: { ask } as never });
@@ -125,8 +119,6 @@ describe("Agentic Ask HTTP capability gate", () => {
         .toEqual({ status: 400, body: { error: { code: "invalid_request", message: "request failed" } } });
       expect(ask).not.toHaveBeenCalled();
     } finally { await value.close(); }
-    const adapter = { routes: [{ route_id: "collision", method: "POST" as const, path: "/v1/person/diagnostics" }], accept: async () => ({ status: 200 as const, body: {} }) };
-    expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_tool_connections: [adapter] }))).toThrow("collides with Authority route");
   });
 
   it("forwards a client disconnect as the Ask's abort signal", async () => {

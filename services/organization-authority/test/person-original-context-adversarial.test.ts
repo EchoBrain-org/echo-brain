@@ -14,7 +14,7 @@ import { createProjectContextApplicationV1 } from "../src/application/project-co
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import { PersonDocumentProcessingV1 } from "../src/composition/person-document-processing-v1.js";
 import type { OriginalContextCitationV1 } from "../src/application/ports/person-original-context-retrieval-v1.js";
-import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, authorization, insertStoredDocumentV1, insertStoredNoteV2, projectContextDatabase, seedProject, seedProjectMember } from "./fixtures/project-context-sqlite.js";
+import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, authorization, insertStoredDocumentV1, projectContextDatabase, seedProject, seedProjectMember } from "./fixtures/project-context-sqlite.js";
 
 const databases: Database.Database[] = [];
 afterEach(() => { for (const database of databases.splice(0)) database.close(); });
@@ -82,9 +82,10 @@ function fixture() {
   const upload = (title: string, text: string, changes: Parameters<typeof uploadChunks>[2] = {}) =>
     uploadChunks(title, [text], changes);
 
-  // A note stored as V2 before its submit was retired (ADR-0048): Ask still admits it.
+  // A team note, admitted through the common Person source as Ask reads it.
+  const notes = createProjectContextApplicationV1({ authenticate: () => authorization(OWNER), repository: new SqliteProjectContextRepositoryV1(database, now) });
   const admitTeamNote = async (title: string, text: string) => {
-    insertStoredNoteV2(database, OWNER, { title, text, audience: { kind: "team" }, project_id: null }, now());
+    notes.submitUploadV3("owner", { schema_version: 3, kind: "echo-person-update-submit-v3", request_id: randomUUID(), title, text, association_project_ids: [], audience: { kind: "team" } });
     const worker = new PersonDocumentProcessingV1(repository, undefined, new SqlitePersonTextSourceInboxV1(database, now));
     expect(await worker.runOnce(new AbortController().signal)).toBe("admitted");
   };

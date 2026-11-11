@@ -7,7 +7,7 @@ import {
 } from "@echo-brain/organization-api";
 import { startPersonAskProgressStreamV1, type PersonAskProgressStreamV1 } from "./person-ask-progress-stream-v1.js";
 import {
-  PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
+  PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
   validateProjectCreateV1, validateProjectCreateReceiptV1,
   validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1, validateProjectSettingsReceiptV1,
   validateProjectListV2, validateProjectPageRequestV2, validateProjectSummaryV2,
@@ -17,18 +17,14 @@ import {
   validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1,
   validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectMutationReceiptV1,
   validateProjectContextAssociateV1, validateProjectContextDissociateV1,
-  validateProjectContextSearchV1, validateProjectContextSearchResultV2,
   validatePersonUpdateRequestId,
-  validatePersonUploadSearchV2, validatePersonUploadSearchResultV2,
   validatePersonUpdateSubmitV3, validatePersonUpdateReceiptV3, validatePersonUpdateStatusResultV3,
-  validatePersonUploadSearchV3, validatePersonUploadSearchResultV3,
 } from '@echo-brain/organization-api';
 import type { ProjectContextApplicationV1 } from '../application/ports/project-context-v1.js';
 import type { PersonDocumentApplicationV1 } from '../application/ports/document-v1.js';
 import type { PersonDocumentUploadStagingV1 } from '../application/ports/document-upload-staging-v1.js';
 import { createPersonDocumentsHttpHandlerV1, uniqueMemberJsonV1 } from './person-documents-http-route-v1.js';
-import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2 } from '@echo-brain/organization-api';
-import { PERSON_UPDATES_PATH_V1, MAX_ORGANIZATION_API_BODY_BYTES } from '@echo-brain/organization-api';
+import { PERSON_DOCUMENTS_PATH_V2, MAX_ORGANIZATION_API_BODY_BYTES } from '@echo-brain/organization-api';
 import { PERSON_EMPLOYEES_PATH_V1, PERSON_RECORDS_PATH_V1, validatePersonRecordSearchRequestV2 } from "@echo-brain/organization-api";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { Buffer } from "node:buffer";
@@ -188,12 +184,9 @@ function providerIngressRoutes(
       ) throw new Error("invalid provider ingress route");
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
-      // These Person families stay reserved, their retired paths too (V1 notes; V1 documents and the V2 and V3 tools lists,
-      // ADR-0048; the capability read, the evidence desk's open and search, and the one-use diagnostic captures), so no
-      // adapter can mount one.
+      // The Person families the Authority serves stay reserved as a whole, so no adapter can mount a path under one.
       if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) ||
-        [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2,
-          '/v2/person/tools', '/v3/person/tools', '/v3/person/capabilities', '/v3/person/evidence/open', '/v3/person/evidence/search', '/v1/person/diagnostics']
+        [PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V2]
           .some(path => route.path === path || route.path.startsWith(`${path}/`))) {
         throw new Error(`provider ingress route collides with Authority route: ${key}`);
       }
@@ -659,11 +652,7 @@ const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   [`${PERSON_PROJECTS_PATH_V1}/members/remove`, { operation: 'removeMember', request: validateProjectMemberRemoveV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/associate`, { operation: 'associateContext', request: validateProjectContextAssociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/dissociate`, { operation: 'dissociateContext', request: validateProjectContextDissociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
-  [`${PERSON_PROJECTS_PATH_V2}/context/search`, { operation: 'searchV2', request: validateProjectContextSearchV1, response: validateProjectContextSearchResultV2, status: 200 }],
-  // The one V2 notes route: the notes stored as V2, which no V3 read returns (ADR-0048).
-  [`${PERSON_UPDATES_PATH_V2}/search`, { operation: 'searchUploads', request: validatePersonUploadSearchV2, response: validatePersonUploadSearchResultV2, status: 200 }],
   [PERSON_UPDATES_PATH_V3, { operation: 'submitUploadV3', request: validatePersonUpdateSubmitV3, response: validatePersonUpdateReceiptV3, status: 202 }],
-  [`${PERSON_UPDATES_PATH_V3}/search`, { operation: 'searchUploadsV3', request: validatePersonUploadSearchV3, response: validatePersonUploadSearchResultV3, status: 200 }],
 ]);
 
 /** Route selection returns a synchronous release callback after all input I/O. */
