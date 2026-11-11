@@ -27,6 +27,7 @@ import { askArgv, askCheckArgv, askCheckRequest, askPrevious } from '../../src/h
 import { deleteOtherTimelines, deleteTimeline, pruneTurns, putTimeline, readTimeline, timelinePath, timelineTurn } from '../../src/host/timeline.js';
 import { answerView } from '../../src/host/views.js';
 import { blocksAnswer } from '../fixtures/authority.js';
+import { askLine } from './ask-line.js';
 
 const ARI: Expect = { authority: 'https://authority.example', membership_id: 'mem_11111111-1111-4111-8111-111111111111' };
 const MINA: Expect = { authority: 'https://authority.example', membership_id: 'mem_22222222-2222-4222-8222-222222222222' };
@@ -262,7 +263,7 @@ describe('the timeline file (C5)', () => {
     const scope = { kind: 'global' } as const;
     /** An answer as the page keeps it: what the host handed it, less what only its Ask reads. */
     const kept = (result: Record<string, unknown>): TimelineTurn['answer'] => {
-      const { receipt: _receipt, question: _question, since: _since, choices: _choices, ...answer } = answerView({ ok: true, result }, scope);
+      const { receipt: _receipt, question: _question, since: _since, choices: _choices, ...answer } = answerView(askLine(result), scope);
       return answer;
     };
     const arranged = turn(1, { answer: kept(blocksAnswer('Can THERM start PVT?', scope)) });

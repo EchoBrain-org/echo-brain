@@ -19,11 +19,11 @@ const decision: AnswerSource = { kind: 'record', label: 'Tuesday sync', record: 
 const note: AnswerSource = { kind: 'original', label: 'Launch notes', ref: coordinates, item: { kind: 'note', id: `ctx_${'8'.repeat(64)}` } };
 const ticket: AnswerSource = { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7' };
 const receipt: AskReceipt = { looked_through: 3 };
-const answer = (withReceipt = true): Answer => ({
+const answer = (): Answer => ({
   scope: { kind: 'global' }, sources: [decision], outcome: 'answered',
   parts: [{ question: 'What did we agree?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0], private: false }],
     blocks: [{ kind: 'text', statements: [0] }] }],
-  ...(withReceipt ? { receipt } : {}),
+  receipt,
 });
 const record = { title: 'Tuesday sync', all_day: false, participants: [], participants_more: false, visibility: 'project',
   decisions: { items: [{ text: 'Ship it.', excerpts: [], atom_id: sha('1') }] }, actions: { items: [] }, rationales: { items: [] } };
@@ -99,7 +99,7 @@ describe('the steps of the Ask on its way', () => {
 describe('an answer\'s source opens beside Ask, and Ask keeps running', () => {
   it('a decision an answer cites opens its meeting, lit, while a new question is on its way; Open waits for that answer', async () => {
     const first = await asking();
-    first.release(ok(answer(false)));
+    first.release(ok(answer()));
     await flush();
     const { store } = first;
     const earlier = paneTurn(store)!;
@@ -120,7 +120,7 @@ describe('an answer\'s source opens beside Ask, and Ask keeps running', () => {
     expect(store.getState().ask?.asking).not.toBeNull();
 
     // The answer comes, and the pane starts over, closed on its sources. Chosen again, the decision offers Open.
-    second(ok(answer(false)));
+    second(ok(answer()));
     await flush();
     expect(store.paneTarget()).toBeNull();
     store.chooseSource(0, null, earlier);
@@ -180,7 +180,7 @@ describe('an answer\'s source opens beside Ask, and Ask keeps running', () => {
   it('a meeting an answer cites at two of its items lights both when its row opens it, and only the one a sentence cites by its number', async () => {
     const other: AnswerSource = { ...decision, atom_id: sha('9') } as AnswerSource;
     const { store, release } = await asking();
-    release(ok({ ...answer(false), sources: [decision, other], parts: [{ question: 'What did we agree?', status: 'answered', statements: [
+    release(ok({ ...answer(), sources: [decision, other], parts: [{ question: 'What did we agree?', status: 'answered', statements: [
       { text: 'Ship it.', citation_indexes: [0], private: false }, { text: 'Hold monthly plans.', citation_indexes: [1], private: false },
     ], blocks: [{ kind: 'text', statements: [0] }, { kind: 'text', statements: [1] }] }] }));
     await flush();
@@ -203,7 +203,7 @@ describe('an answer\'s source opens beside Ask, and Ask keeps running', () => {
     const first = held.hold('ask.run');
     void store.ask('What did we agree?', inApollo);
     await flush();
-    first(ok({ ...answer(false), scope: inApollo, sources: [note, ticket], parts: [{ question: 'What did we agree?', status: 'answered',
+    first(ok({ ...answer(), scope: inApollo, sources: [note, ticket], parts: [{ question: 'What did we agree?', status: 'answered',
       statements: [{ text: 'Ship it, as ECHO-7 says.', citation_indexes: [0, 1], private: false }], blocks: [{ kind: 'text', statements: [0] }] }] }));
     await flush();
     const earlier = paneTurn(store)!;
@@ -220,7 +220,7 @@ describe('an answer\'s source opens beside Ask, and Ask keeps running', () => {
     expect(store.paneTarget()?.sources).toEqual([ticket]);
     expect(await store.openExternalSource(ticket as Extract<AnswerSource, { kind: 'ticket' }>)).toBe(true);
     expect(calls('source.openExternal')).toEqual([{ kind: 'ticket', permalink: ticket.kind === 'ticket' ? ticket.permalink : '' }]);
-    second(ok(answer(false)));
+    second(ok(answer()));
     await flush();
     store.chooseSource(1, null, earlier);
     // A ticket has no page in the app: Open in Jira is all it has.
@@ -230,7 +230,7 @@ describe('an answer\'s source opens beside Ask, and Ask keeps running', () => {
   it('heads a live item beside Ask by its tool and kind: a Jira ticket, a Confluence page', async () => {
     const page: AnswerSource = { kind: 'page', tool_id: 'confluence', label: 'DVT plan', permalink: 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=31010' };
     const { store, release, pane } = await asking();
-    release(ok({ ...answer(false), sources: [ticket, page], parts: [{ question: 'What did we agree?', status: 'answered',
+    release(ok({ ...answer(), sources: [ticket, page], parts: [{ question: 'What did we agree?', status: 'answered',
       statements: [{ text: 'ECHO-7 and the DVT plan agree.', citation_indexes: [0, 1], private: false }], blocks: [{ kind: 'text', statements: [0] }] }] }));
     await flush();
     for (const [group, heading] of [[0, 'Jira · Ticket'], [1, 'Confluence · Page']] as const) {
@@ -251,7 +251,7 @@ describe('an answer\'s source opens beside Ask, and Ask keeps running', () => {
     const answered = held.hold('ask.run');
     void store.ask('Answered?');
     await flush();
-    answered(ok(answer(false)));
+    answered(ok(answer()));
     await flush();
     const earlier = paneTurn(store)!;
     const refused = held.hold('ask.run');
@@ -275,7 +275,7 @@ describe('an answer\'s source opens beside Ask, and Ask keeps running', () => {
 
   it('closes when another app comes in front', async () => {
     const { store, release } = await asking();
-    release(ok(answer(false)));
+    release(ok(answer()));
     await flush();
     store.chooseSource(0, null, paneTurn(store));
     expect(store.paneTarget()?.sources).toEqual([decision]);
@@ -326,7 +326,7 @@ describe('the cited evidence as it reads now', () => {
   it('says a cited record you can no longer read is gone, with no Try again that cannot work', async () => {
     rpc.mockImplementation(rpcFor(held, { 'ask.record': () => fail('not_found') }, () => ({ active: [], archived: [] })));
     const { store, release, pane, thread } = await asking();
-    release(ok(answer(false)));
+    release(ok(answer()));
     await flush();
     store.toggleSourceList(paneTurn(store));
     expect(text(byTestId(thread(), 'source-row'))).toBe('1Tuesday sync');
@@ -344,7 +344,7 @@ describe('the cited evidence as it reads now', () => {
       text: (params.ref as { anchor_sha256: string }).anchor_sha256 === sha('a')
         ? 'Apollo-launch-plan-v2.md ## Pricing\n\n- **Monthly** plans follow the launch.' : 'We agreed to ship.' }) }, () => ({ active: [], archived: [] })));
     const { store, release, pane } = await asking();
-    release(ok({ ...answer(false), sources: [decision, first, second], parts: [{ question: 'What did we agree?', status: 'answered', statements: [
+    release(ok({ ...answer(), sources: [decision, first, second], parts: [{ question: 'What did we agree?', status: 'answered', statements: [
       { text: 'We agreed to ship Apollo with annual plans first.', citation_indexes: [0, 1], private: false },
       { text: 'Monthly plans follow the launch.', citation_indexes: [2], private: false },
     ], blocks: [{ kind: 'text', statements: [0] }, { kind: 'text', statements: [1] }] }] }));
@@ -367,7 +367,7 @@ describe('the cited evidence as it reads now', () => {
     let reads = 0;
     rpc.mockImplementation(rpcFor(held, { 'ask.source': () => ++reads === 1 ? fail('unavailable', { retryable: true }) : ok({ label: note.label, text: 'We agreed to ship.' }) }, () => ({ active: [], archived: [] })));
     const { store, release, pane } = await asking();
-    release(ok({ ...answer(false), sources: [note] }));
+    release(ok({ ...answer(), sources: [note] }));
     await flush();
     store.chooseSource(0, null, paneTurn(store));
     await flush();
@@ -383,7 +383,7 @@ describe('the cited evidence as it reads now', () => {
   it('shows at most 2,000 characters of a passage', async () => {
     rpc.mockImplementation(rpcFor(held, { 'ask.source': () => ok({ label: note.label, text: 'x'.repeat(3_000) }) }, () => ({ active: [], archived: [] })));
     const { store, release, pane } = await asking();
-    release(ok({ ...answer(false), sources: [note] }));
+    release(ok({ ...answer(), sources: [note] }));
     await flush();
     store.chooseSource(0, null, paneTurn(store));
     await flush();

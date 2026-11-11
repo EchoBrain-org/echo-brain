@@ -347,8 +347,8 @@ export interface Answer {
   readonly parts: readonly AnswerPart[];
   /** `clarify`: a follow-up could mean more than one thing, and `choices` asks which; Ask never guesses (ADR-0047). */
   readonly outcome: 'answered' | 'partial' | 'not_found' | 'clarify';
-  /** Only from an Authority that streamed the Ask: what it looked through. */
-  readonly receipt?: AskReceipt;
+  /** What the Ask looked through, from its stream's receipt. The saved turn (TimelineAnswer) never keeps it. */
+  readonly receipt: AskReceipt;
   /** Only for an Ask that carried `previous`: the full question the answer answers ("Who owns THERM-482?"). */
   readonly question?: string;
   /** Only for Ask again: what is different now, each cited; empty when nothing material changed. */

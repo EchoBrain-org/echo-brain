@@ -1282,7 +1282,7 @@ describe("Person Layer 2 route: Ask's list rows name each meeting record by its 
 describe("Person Layer 2 route: approved records carry their dates and their meeting's people (research tool contract v1)", () => {
   const people = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `p-${index}`, display_name: `Person ${String(index + 1).padStart(2, "0")}` }));
 
-  it("gives every atom its approval time, and its meeting's participants and final approver as the person open names them, released and audited with it", async () => {
+  it("gives every atom its approval time, and its meeting's participants and final approver as `person records --brief` names them, released and audited with it", async () => {
     const w = await meetingWorld({ extra: [
       { name: "r9", approval_id: "apr_r9", projects: [SHARED], final_approver: OWNER, issued_at: "2026-10-05T23:30:00.000Z", signals: { decisions: 1, actions: 1 },
         brief: (brief) => ({ ...brief, meeting: { ...brief.meeting, title: "THERM DVT sync", time: { actual_start_at: "2026-10-04T16:00:00.000Z" },

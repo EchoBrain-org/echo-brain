@@ -171,11 +171,11 @@ export interface PersonAskProgressLineV3 {
   readonly ok: true;
   readonly progress: PersonAskProgressStepEventV3;
 }
-/** The final line: the answer, with its receipt when the Authority streamed. */
+/** The final line: the answer, with its stream's receipt. */
 export interface PersonAskProgressResultLineV3 {
   readonly ok: true;
   readonly result: PersonAnswerResponseV8;
-  readonly receipt?: PersonAskReceiptV3;
+  readonly receipt: PersonAskReceiptV3;
 }
 
 const STAGES: readonly string[] = ['searching', 'reading', 'checking_access', 'writing'];
@@ -345,8 +345,7 @@ export function validatePersonAskProgressLineV3(value: unknown): PersonAskProgre
 
 export function validatePersonAskProgressResultLineV3(value: unknown): PersonAskProgressResultLineV3 {
   const input = object(value, 'Ask result line');
-  assertExactKeys(input, ['ok', 'result', ...(Object.hasOwn(input, 'receipt') ? ['receipt'] : [])], 'Ask result line');
+  assertExactKeys(input, ['ok', 'result', 'receipt'], 'Ask result line');
   if (input.ok !== true) fail('Ask result line is invalid');
-  const result = validatePersonAnswerResponseV8(input.result);
-  return Object.freeze({ ok: true, result, ...(Object.hasOwn(input, 'receipt') ? { receipt: validatePersonAskReceiptV3(input.receipt) } : {}) });
+  return Object.freeze({ ok: true, result: validatePersonAnswerResponseV8(input.result), receipt: validatePersonAskReceiptV3(input.receipt) });
 }

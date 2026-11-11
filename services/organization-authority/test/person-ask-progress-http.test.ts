@@ -113,6 +113,16 @@ describe('Ask progress over HTTP', () => {
     for (const secret of ['PVT fixture is ready', 'Manufacturing', QUERY, 'private planner note', '"E1"']) expect(progress).not.toContain(secret);
   });
 
+  it('streams whatever retired x-echo-ask-progress value an older client still sends', async () => {
+    const f = fixture();
+    const base = await origin(f);
+    for (const value of ['0', '1', '2', '3']) {
+      const response = await ask(base, { headers: { 'x-echo-ask-progress': value } });
+      expect([value, response.status, response.headers.get('content-type')]).toEqual([value, 200, 'text/event-stream; charset=utf-8']);
+      expect(decode(await response.text()).at(-1)?.type).toBe('answer');
+    }
+  });
+
   it('keeps JSON for failures before the stream starts', async () => {
     const f = fixture();
     const base = await origin(f);

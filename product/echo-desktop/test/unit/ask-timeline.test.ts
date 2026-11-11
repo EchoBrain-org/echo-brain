@@ -64,7 +64,7 @@ const said = (text: string, citation_indexes: number[], sources: readonly Answer
 /** An answer citing `sources`, one sentence per `statements`, each its own paragraph. */
 function answerOf(question: string, sources: readonly AnswerSource[], statements: readonly [string, number[]][], extra: Partial<Answer> = {}): Answer {
   const shown = statements.map(([words, cited]) => said(words, cited, sources));
-  return { scope: { kind: 'global' }, sources: [...sources], outcome: 'answered',
+  return { scope: { kind: 'global' }, sources: [...sources], outcome: 'answered', receipt: { looked_through: 0 },
     parts: [{ question, status: 'answered', statements: shown, ...(shown.length === 0 ? {} : { blocks: paragraphs(shown) }) }], ...extra };
 }
 

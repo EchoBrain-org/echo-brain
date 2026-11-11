@@ -245,11 +245,11 @@ describe('person ask --progress lines', () => {
     expect(() => validatePersonAskProgressLineV3({ ok: true, result: v8() })).toThrow();
   });
 
-  it('ends with the V8 answer, with its receipt when the Authority streamed it', () => {
+  it('ends with the V8 answer and its receipt, which every Ask streams', () => {
     expect(validatePersonAskProgressResultLineV3({ ok: true, result: v8(), receipt: receipt() })).toEqual({ ok: true, result: v8(), receipt: receipt() });
-    expect(validatePersonAskProgressResultLineV3({ ok: true, result: v8() })).toEqual({ ok: true, result: v8() });
+    expect(() => validatePersonAskProgressResultLineV3({ ok: true, result: v8() })).toThrow('unexpected shape');
     for (const version of [5, 6, 7]) {
-      expect(() => validatePersonAskProgressResultLineV3({ ok: true, result: { ...decided(), schema_version: version, kind: `echo-clean-person-answer-v${version}` } })).toThrow('Ask response is invalid');
+      expect(() => validatePersonAskProgressResultLineV3({ ok: true, result: { ...decided(), schema_version: version, kind: `echo-clean-person-answer-v${version}` }, receipt: receipt() })).toThrow('Ask response is invalid');
     }
     expect(() => validatePersonAskProgressResultLineV3({ ok: true, result: v8(), receipt: { ...receipt(), looked_through: 1 } })).toThrow('less than the items');
     expect(() => validatePersonAskProgressResultLineV3({ ok: true, result: v8(), receipt: receipt(), progress: {} })).toThrow('unexpected shape');
