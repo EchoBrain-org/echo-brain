@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { PERSON_RESEARCH_EVAL_READ_PATH_V1, PERSON_RESEARCH_EVAL_START_PATH_V1 } from "@echo-brain/organization-api";
 import { createOrganizationAuthorityHttpServer } from "../../src/presentation/organization-authority-http-server.js";
 import { PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1, type PrivateSlackApprovalInteractionHttpPortV1 } from "../../../../providers/slack/server/src/presentation/private-slack-approval-interaction-http-port-v1.js";
 import { createPrivateSlackApprovalHttpAdapterV1 } from "../../../../providers/slack/server/src/private-approval/private-slack-approval-http-adapter-v1.js";
@@ -131,6 +132,21 @@ describe("provider identity and approval HTTP transport V1", () => {
     ).toThrow(
       `provider ingress route collides with Authority route: POST ${PERSON_SESSION_OIDC_BEGIN_PATH}`,
     );
+  });
+
+  it("reserves the staging research evaluation routes even where they are not composed", () => {
+    for (const path of [PERSON_RESEARCH_EVAL_START_PATH_V1, PERSON_RESEARCH_EVAL_READ_PATH_V1]) {
+      expect(() =>
+        createOrganizationAuthorityHttpServer(
+          serverOptions({
+            approval: {
+              routes: [{ route_id: "collision", method: "POST", path }],
+              accept: async () => ({ status: 200, raw_body: new Uint8Array() }),
+            },
+          }),
+        ),
+      ).toThrow(`provider ingress route collides with Authority route: POST ${path}`);
+    }
   });
 
   it("rejects duplicate provider routes across independently selected adapters", () => {

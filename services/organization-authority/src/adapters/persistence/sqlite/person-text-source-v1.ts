@@ -14,13 +14,13 @@ type TextRow = {
   audience_project_ids_json: string | null; received_at: string;
 };
 
-/** One retained note as custody stores it. The V16 table still allows a retired V2 row, which never passes custody. */
+/** One retained note as custody stores it. Every reader selects V3 rows only; a retired V2 row the V16 table could still hold also fails custody. */
 export type PersonTextCustodyRowV1 = TextRow;
 
 /**
  * Rebuilds the note's accepted V3 request from custody and checks its payload
  * hash and context id. Throws when retained text no longer binds its request,
- * and for a retired V2 note (ADR-0048), which the inbox quarantines like any other.
+ * and for a retired V2 note (ADR-0048), which no reader selects.
  */
 export function assertPersonTextCustodyV1(row: PersonTextCustodyRowV1): void {
   if (row.api_version !== 3) throw new Error('Person text source integrity failed');
@@ -39,9 +39,9 @@ export class SqlitePersonTextSourceInboxV1 implements PersonTextSourceInboxV1 {
   next(): ReturnType<PersonTextSourceInboxV1['next']> {
     const result = this.database.transaction(() => {
       const failures: PersonTextSourceFailureObservationV1[] = [];
-      const v2 = `SELECT request_version AS api_version,organization_id,principal_id,membership_id,request_id,context_id,title,text,payload_sha256,audience_kind,audience_project_id,project_id,submitted_association_project_ids_json,audience_project_ids_json,received_at FROM authority_person_updates_v2`;
+      const notes = `SELECT request_version AS api_version,organization_id,principal_id,membership_id,request_id,context_id,title,text,payload_sha256,audience_kind,audience_project_id,project_id,submitted_association_project_ids_json,audience_project_ids_json,received_at FROM authority_person_updates_v2 WHERE request_version=3`;
       for (let inspected = 0; inspected < 16; inspected += 1) {
-        const row = this.database.prepare(`SELECT * FROM (${v2}) u WHERE NOT EXISTS (SELECT 1 FROM authority_sources_v1 s WHERE s.organization_id=u.organization_id AND s.adapter_id=? AND s.instance_id=? AND s.external_id=u.context_id)
+        const row = this.database.prepare(`SELECT * FROM (${notes}) u WHERE NOT EXISTS (SELECT 1 FROM authority_sources_v1 s WHERE s.organization_id=u.organization_id AND s.adapter_id=? AND s.instance_id=? AND s.external_id=u.context_id)
           AND NOT EXISTS (SELECT 1 FROM authority_person_text_source_failures_v1 f WHERE f.organization_id=u.organization_id AND f.api_version=u.api_version AND f.context_id=u.context_id)
           AND (u.audience_kind!='only_me' OR EXISTS(SELECT 1 FROM authority_memberships m WHERE m.organization_id=u.organization_id AND m.principal_id=u.principal_id AND m.membership_id=u.membership_id AND m.status='active'))
           ORDER BY received_at,context_id LIMIT 1`).get(PERSON_SOURCE_IDENTITY_V1.adapter_id, PERSON_SOURCE_IDENTITY_V1.instance_id) as TextRow | undefined;

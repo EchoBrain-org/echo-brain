@@ -8,6 +8,8 @@ import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1, type MeetingDocument 
 import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sqlite/document-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { SqlitePersonTextSourceInboxV1 } from "../src/adapters/persistence/sqlite/person-text-source-v1.js";
+import { SqlitePersonOriginalItemsV1 } from "../src/adapters/persistence/sqlite/person-original-items-v1.js";
+import { SqlitePersonProjectActivityV1 } from "../src/adapters/persistence/sqlite/person-project-activity-v1.js";
 import { SqliteSourceAdmissionStoreV1 } from "../src/adapters/persistence/sqlite/source-admission-v1.js";
 import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
@@ -84,10 +86,11 @@ function fixture() {
 
   // A team note, admitted through the common Person source as Ask reads it.
   const notes = createProjectContextApplicationV1({ authenticate: () => authorization(OWNER), repository: new SqliteProjectContextRepositoryV1(database, now) });
-  const admitTeamNote = async (title: string, text: string) => {
-    notes.submitUploadV3("owner", { schema_version: 3, kind: "echo-person-update-submit-v3", request_id: randomUUID(), title, text, association_project_ids: [], audience: { kind: "team" } });
+  const admitTeamNote = async (title: string, text: string, association_project_ids: readonly string[] = []) => {
+    const receipt = notes.submitUploadV3("owner", { schema_version: 3, kind: "echo-person-update-submit-v3", request_id: randomUUID(), title, text, association_project_ids, audience: { kind: "team" } });
     const worker = new PersonDocumentProcessingV1(repository, undefined, new SqlitePersonTextSourceInboxV1(database, now));
     expect(await worker.runOnce(new AbortController().signal)).toBe("admitted");
+    return receipt.context_id as `ctx_${string}`;
   };
 
   return { database, retrieval, repository, documents, upload, uploadChunks, admitTeamNote, leave, admit };
@@ -393,6 +396,26 @@ describe("adversarial original-context retrieval", () => {
     const input = { access_token: "member", scope: { kind: "global" as const }, query: "repeated-audit-marker" };
     expect(fixedSession.deskSearch(input).items).toHaveLength(1);
     expect(() => fixedSession.deskSearch(input)).not.toThrow();
+  });
+
+  it("leaves an admitted retired V2 note out of the list, open, Ask retrieval and project activity, and keeps the other notes (ADR-0048)", async () => {
+    const f = fixture();
+    const kept = await f.admitTeamNote("Kept note", "keptv3marker stays readable", [PROJECT_ALPHA]);
+    const retired = await f.admitTeamNote("Retired note", "retiredv2marker was stored as V2", [PROJECT_ALPHA]);
+    // The row as a V2 submit would have stored it, after its source was admitted: one association, kept in project_id.
+    f.database.exec("DROP TRIGGER authority_person_updates_v2_immutable");
+    f.database.prepare("UPDATE authority_person_updates_v2 SET request_version=2, project_id=? WHERE context_id=?").run(PROJECT_ALPHA, retired);
+    const items = new SqlitePersonOriginalItemsV1(f.database, { authenticateAccess: () => authorization(MEMBER) }, OWNER.organization_id);
+    const listed = items.collect({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, limit: 26, notes: { after: null } });
+    expect(listed.notes.map(row => row.id)).toEqual([kept]);
+    expect(items.open({ access_token: "member", ref: { kind: "note", id: kept } })).toMatchObject({ kind: "note", text: "keptv3marker stays readable" });
+    expect(() => items.open({ access_token: "member", ref: { kind: "note", id: retired } })).toThrow(expect.objectContaining({ code: "not_found" }));
+    expect(texts(f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "keptv3marker" })).join(" ")).toContain("keptv3marker");
+    expect(f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "retiredv2marker" }).items).toEqual([]);
+    const activity = new SqlitePersonProjectActivityV1(f.database);
+    const latest = (contextId: string) => f.database.prepare("SELECT associated_at FROM authority_project_context_associations_v1 WHERE context_id=?").pluck().get(contextId) as string;
+    expect(f.database.transaction(() => activity.originals(authorization(MEMBER), [PROJECT_ALPHA]))().get(PROJECT_ALPHA)).toBe(latest(kept));
+    expect(latest(retired) > latest(kept)).toBe(true);
   });
 
   it("uses actual V8 source admission for notes and excludes a raw meeting source, its transcript included", async () => {

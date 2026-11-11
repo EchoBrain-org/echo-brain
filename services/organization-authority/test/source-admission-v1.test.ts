@@ -83,6 +83,28 @@ describe('durable common source admission',()=>{
     ]);
     expect(db.prepare('SELECT content_json FROM authority_source_contents_v1').pluck().all().join(' ')).toContain('software interface');
   });
+  it('refuses a note whose retained payload digest no longer binds its request',()=>{
+    const {db}=fixture();
+    const actor=seedActor(db);
+    const id=insertNote(db,actor,{request_id:'11111111-1111-4111-8111-111111111111',title:'Team note',text:'hardware handoff',audience:'team'});
+    const pulled=new SqlitePersonTextSourceInboxV1(db).next()!;
+    expect(()=>db.transaction(()=>assertPersonSourceAdmissionV1(db,pulled.source,pulled.scope))()).not.toThrow();
+    db.exec('DROP TRIGGER authority_person_updates_v2_immutable');
+    db.prepare('UPDATE authority_person_updates_v2 SET payload_sha256=? WHERE context_id=?').run(`sha256:${'0'.repeat(64)}`,id);
+    expect(()=>db.transaction(()=>assertPersonSourceAdmissionV1(db,pulled.source,pulled.scope))()).toThrow('Person text V3 custody integrity failed');
+  });
+  it('refuses a retired V2 note envelope, even over a V2 row (ADR-0048)',()=>{
+    const {db}=fixture();
+    const actor=seedActor(db);
+    const id=insertNote(db,actor,{request_id:'11111111-1111-4111-8111-111111111111',title:'Team note',text:'hardware handoff',audience:'team'});
+    const pulled=new SqlitePersonTextSourceInboxV1(db).next()!;
+    db.exec('DROP TRIGGER authority_person_updates_v2_immutable');
+    db.prepare('UPDATE authority_person_updates_v2 SET request_version=2 WHERE context_id=?').run(id);
+    const v2={...pulled.source,content:{...pulled.source.content,original_api_version:2}} as unknown as typeof pulled.source;
+    expect(()=>db.transaction(()=>assertPersonSourceAdmissionV1(db,v2,pulled.scope))()).toThrow('Person text source version is invalid');
+    // The inbox selects no V2 row at all.
+    expect(new SqlitePersonTextSourceInboxV1(db).next()).toBeUndefined();
+  });
   it('durably skips a malformed retained text row and admits the next shared note without retaining corrupt content',async()=>{
     const {db}=fixture();
     const store=personStore(db);

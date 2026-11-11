@@ -176,7 +176,8 @@ Authority retains authenticated original text notes and document files with
 their selected audience and an immutable receipt. Upload-specific reads verify the
 current reader, enforce that audience, and audit before release. No model
 reads a note when it is saved: the per-note search hints were retired on
-2026-11-08, and note search matches a note's title and text. The V1 upload
+2026-11-08. No route searches notes any more; Ask's retrieval matches a note's
+title and text. The V1 upload
 route is retired; V1 originals already retained keep their Only me/Team
 visibility and remain citable by Ask. Every V2 note route and every V1 document
 route are retired too
