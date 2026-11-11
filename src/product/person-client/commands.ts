@@ -232,7 +232,7 @@ Removes the local session. A revoked session is also removed locally.
 `,
   ask: `usage: echo-brain person ask --question <text> [--project <project-id>] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>]
 
-Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without --project, ECHO retrieves across context you may read. With --project, only context associated with that project. Answers include typed citations; each opens with person open --ref when it carries a ref, except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
+Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without --project, ECHO retrieves across context you may read. With --project, only context associated with that project. Answers include typed citations; each opens with person open --ref when it carries a ref, except a meeting's meeting:sha256:<digest>, which reads with person records --record-sha256 sha256:<digest> --brief, a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
 
 Ask asks POST /v7/person/ask, with every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings.
 
@@ -242,14 +242,14 @@ Ask asks POST /v7/person/ask, with every configured request-local live source, i
 `,
   list: `usage: echo-brain person list (--project <project-id> | --only-me) [--cursor <next_cursor>]
 
-Lists the newest things you can read now, 25 per page: notes, documents, imported meetings and approved meetings. Each row has a ref for person open, a title, when it was added (added_at), who can see it (only_me, team or project) and the projects you belong to that it is filed under. Rows never carry text.
+Lists the newest things you can read now, 25 per page: notes, documents, imported meetings and approved meetings. Each row has a ref (person open reads it; an approved meeting's meeting:sha256:<digest> reads with person records --record-sha256 sha256:<digest> --brief), a title, when it was added (added_at), who can see it (only_me, team or project) and the projects you belong to that it is filed under. Rows never carry text.
 Give exactly one scope. --project lists one project you belong to, as ask can read it there; its first page also shows the project. --only-me lists everything only you can read, filed in a project or not: your only-me notes and documents, meetings you imported, and approved meetings kept for you alone; a filed row names its projects.
 Pass next_cursor as --cursor with the same scope for the next page; null means the end.
 notice "meetings_unavailable" means meetings are still being indexed and come on a later page. A first page with no items and that notice is not the end: follow its next_cursor later. A later page that could only wait for meetings fails with unavailable (503): retry the same --cursor later.
 `,
   open: `usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]
 
-Reads one item under your current access: a note's full text, a document's extracted text, or a meeting's decisions, actions and rationales. Documents and meetings are paged. Refs come from person list and from ask citations. Anything you cannot read returns not_found. Pass next_cursor as --cursor with the same --ref for the next page.
+Reads one item under your current access: a note's full text, an imported meeting's notes, or a document's extracted text. Imported meetings and documents are paged. Refs come from person list and from ask citations; an approved meeting (meeting:sha256:<digest>) is not opened here but read with person records --record-sha256 sha256:<digest> --brief. Anything you cannot read returns not_found. Pass next_cursor as --cursor with the same --ref for the next page.
 `,
   reviews: `usage: echo-brain person reviews --request <json>
 

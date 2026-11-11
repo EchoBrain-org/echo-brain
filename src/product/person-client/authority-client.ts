@@ -11,7 +11,7 @@ import {
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, PERSON_RESEARCH_EVAL_READ_PATH_V1, PERSON_RESEARCH_EVAL_START_PATH_V1, PERSON_RUNS_MAX_RESPONSE_BYTES_V1, PERSON_RUNS_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1,
   PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PersonQueryInputError, createPersonAskProgressDecoderV3,
-  isOrganizationApiValidationError, personRefKindV1, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, validateOrganizationApiError,
+  isOrganizationApiValidationError, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, validateOrganizationPersonToolsV4,
   validatePersonAnswerRequestV3, validatePersonAnswerResponseV8, validatePersonAskCheckRequestV1, validatePersonAskCheckV1, validatePersonChangesV1,
@@ -809,14 +809,13 @@ export class PersonAuthorityClient {
     return response;
   }
 
-  /** Opens one ref under the caller's current access; a meeting's detail belongs to its first page only. */
+  /** Opens one note, imported meeting or document under the caller's current access; a meeting is read as its record. */
   async open(accessToken: string, value: PersonOpenRequestV1, signal?: AbortSignal): Promise<PersonOpenV1> {
     const request = validatePersonOpenRequestV1(value);
     const response = await this.json({ path: PERSON_OPEN_PATH_V1, body: request,
       validate_request: validatePersonOpenRequestV1, validate_response: validatePersonOpenResponseV1,
       access_token: accessToken, maximum_response_bytes: PERSON_OPEN_RESPONSE_MAX_BYTES_V1, timeout_ms: DEFAULT_TIMEOUT_MS, signal });
-    if (response.ref !== request.ref ||
-      (personRefKindV1(request.ref) === 'meeting' && ('meeting' in response) !== (request.cursor === undefined))) {
+    if (response.ref !== request.ref) {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different open coordinates');
     }
     return response;

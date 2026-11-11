@@ -1025,7 +1025,8 @@ describe("Person Layer 2 route: readable decisions for open items (open items an
       expect(() => route.readableDecisions({ access_token: "nobody", record_sha256s: [w.digest("r4")] })).toThrow(expect.objectContaining({ code: "unauthorized" }));
       expect(auditCount(w.authority)).toBe(before);
       // The approval time is the person list's own time for the meeting.
-      expect(found.get(w.digest("r4"))!.approved_at).toBe(route.openMeeting({ access_token: "emp_a", record_sha256: w.digest("r4") }).row.added_at);
+      const listed = route.collectMeetings({ access_token: "emp_a", scope: { kind: "project", project_id: SHARED }, after: null, limit: 26 });
+      expect(found.get(w.digest("r4"))!.approved_at).toBe(listed.status === "ok" ? listed.rows.find((row) => row.id === w.digest("r4"))?.added_at : "held");
       // Current grants decide: after leaving SHARED, r4 is no longer readable.
       w.leave(SHARED, EMP_A);
       expect(route.readableDecisions({ access_token: "emp_a", record_sha256s: [w.digest("r4")] }).size).toBe(0);

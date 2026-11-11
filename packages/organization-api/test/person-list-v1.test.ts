@@ -4,9 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   PERSON_LIST_PATH_V1,
   PERSON_LIST_RESPONSE_MAX_BYTES_V1,
-  PERSON_OPEN_ATOMS_BUDGET_BYTES_V1,
   PERSON_OPEN_PATH_V1,
-  PERSON_OPEN_RESPONSE_MAX_BYTES_V1,
   personRefIdV1,
   personRefKindV1,
   validatePersonAnswerScopeV3,
@@ -62,19 +60,6 @@ const openDocument = {
   schema_version: 1, kind: 'echo-person-open-v1', ref: DOCUMENT, item: documentRow, filename: 'pricing-memo.pdf',
   chunks: [{ anchor: { kind: 'page', start: 1 }, text: 'Pricing memo\n' }], next_cursor: 'AnR3',
 };
-const meetingDetail = { started_at: '2026-09-21T20:00:00.000Z', timezone: 'America/Los_Angeles', all_day: false, participants: ['Ari', 'Maya Chen'], participants_more: false, approved_by: 'Ari' };
-/** An undefined field is left out, so a test can drop a default key. */
-const defined = (value: Record<string, unknown>) => Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined));
-const openMeeting = (fields: Record<string, unknown> = {}) => defined({
-  schema_version: 1, kind: 'echo-person-open-v1', ref: MEETING, item: meetingRow, meeting: meetingDetail,
-  atoms: [
-    { kind: 'decision', text: 'Annual plans first.', status: 'decided' },
-    { kind: 'action', text: 'Draft the ', owner: 'Maya Chen', due_at: '2026-10-01', part: { index: 1, count: 2 } },
-    { kind: 'action', text: 'pricing page.', part: { index: 2, count: 2 } },
-  ],
-  next_cursor: null, ...fields,
-});
-const withAtom = (fields: Record<string, unknown>) => openMeeting({ atoms: [fields] });
 const openTranscript = { schema_version: 1, kind: 'echo-person-open-v1', ref: TRANSCRIPT, text: 'Ari: annual first.', next_cursor: 'AAA' };
 
 describe('Person list and open public contracts', () => {
@@ -118,10 +103,12 @@ describe('Person list and open public contracts', () => {
     expect(validatePersonOpenRequestV1({ schema_version: 1, ref: DOCUMENT, cursor: 'AnR3' })).toEqual({ schema_version: 1, ref: DOCUMENT, cursor: 'AnR3' });
     for (const request of [
       { schema_version: 1, ref: TRANSCRIPT },
-      { schema_version: 1, ref: NOTE, cursor: 'AnR3' }, { schema_version: 1, ref: MEETING, scope: { kind: 'global' } },
-      { schema_version: 1, ref: MEETING, project_id: PROJECT_A }, { schema_version: 1, ref: MEETING, mine: true },
-      { schema_version: 1, ref: MEETING, cursor: 'An=' }, { schema_version: 2, ref: MEETING },
+      { schema_version: 1, ref: NOTE, cursor: 'AnR3' }, { schema_version: 1, ref: DOCUMENT, scope: { kind: 'global' } },
+      { schema_version: 1, ref: DOCUMENT, project_id: PROJECT_A }, { schema_version: 1, ref: DOCUMENT, mine: true },
+      { schema_version: 1, ref: DOCUMENT, cursor: 'An=' }, { schema_version: 2, ref: DOCUMENT },
     ]) expect(() => validatePersonOpenRequestV1(request)).toThrow();
+    // A listed meeting is read as its record, never opened (2026-11-11).
+    expect(() => validatePersonOpenRequestV1({ schema_version: 1, ref: MEETING })).toThrow('Person open request ref is invalid');
   });
 
   it('carries the project header on a project page only, and has no global or mine page', () => {
@@ -221,17 +208,11 @@ describe('Person list and open public contracts', () => {
       for (const index of [0, 1, 2]) expect(() => validatePersonListResponseV1(withRow(index, { [key]: 'x' }))).toThrow('unexpected shape');
       expect(() => validatePersonOpenResponseV1({ ...openNote, item: { ...noteRow, [key]: 'x' } })).toThrow('unexpected shape');
       expect(() => validatePersonOpenResponseV1({ ...openDocument, item: { ...documentRow, [key]: 'x' } })).toThrow('unexpected shape');
-      expect(() => validatePersonOpenResponseV1(openMeeting({ item: { ...meetingRow, [key]: 'x' } }))).toThrow('unexpected shape');
     }
     for (const key of ['count', 'total', 'position', 'generation_id']) {
       expect(() => validatePersonListResponseV1(page({ [key]: 0 }))).toThrow('unexpected shape');
       expect(() => validatePersonOpenResponseV1({ ...openNote, [key]: 0 })).toThrow('unexpected shape');
-      expect(() => validatePersonOpenResponseV1(openMeeting({ [key]: 0 }))).toThrow('unexpected shape');
     }
-    for (const key of ['excerpts', 'evidence', 'title', 'participant_ids']) {
-      expect(() => validatePersonOpenResponseV1(openMeeting({ meeting: { ...meetingDetail, [key]: [] } }))).toThrow('unexpected shape');
-    }
-    expect(() => validatePersonOpenResponseV1(withAtom({ kind: 'decision', text: 'Annual first.', excerpts: [] }))).toThrow('unexpected shape');
   });
 
   it('opens a note whole and bounded', () => {
@@ -267,40 +248,9 @@ describe('Person list and open public contracts', () => {
     expect(() => validatePersonOpenResponseV1({ ...openDocument, item: meetingRow })).toThrow('inconsistent');
   });
 
-  it('opens a meeting as detail plus split atoms, never as the envelope', () => {
-    expect(validatePersonOpenResponseV1(openMeeting())).toEqual(openMeeting());
-    const next = validatePersonOpenResponseV1(openMeeting({ meeting: undefined, next_cursor: 'AnR3' }));
-    expect(next).not.toHaveProperty('meeting');
-    expect(validatePersonOpenResponseV1(openMeeting({ atoms: [] }))).toMatchObject({ atoms: [] });
-    expect(() => validatePersonOpenResponseV1(openMeeting({ atoms: [], next_cursor: 'AnR3' }))).toThrow('atoms is invalid');
-    expect(() => validatePersonOpenResponseV1(openMeeting({ meeting: undefined, atoms: [] }))).toThrow('atoms is invalid');
-    for (const atom of [
-      { kind: 'action', text: 'Ship it.', status: 'decided' }, { kind: 'decision', text: 'Ship it.', owner: 'Ari' },
-      { kind: 'rationale', text: 'Because.', due_at: '2026-10-01' }, { kind: 'decision', text: 'Ship it.', status: 'maybe' },
-      { kind: 'action', text: 'Rest.', owner: 'Ari', part: { index: 2, count: 2 } }, { kind: 'decision', text: 'Rest.', status: 'decided', part: { index: 2, count: 3 } },
-      { kind: 'action', text: 'Whole.', part: { index: 1, count: 1 } }, { kind: 'action', text: 'Past.', part: { index: 3, count: 2 } },
-      { kind: 'action', text: 'Zero.', part: { index: 0, count: 2 } }, { kind: 'action', text: 'Extra.', part: { index: 1, count: 2, atom_order: 0 } },
-      { kind: 'signal', text: 'Unknown kind.' }, { kind: 'action', text: 'x'.repeat(3 * 1024 + 1) }, { kind: 'action', text: 'Bell\u0007' },
-      { kind: 'action', text: 'Owner.', owner: ' Ari' },
-    ]) expect(() => validatePersonOpenResponseV1(withAtom(atom))).toThrow('atom');
-    const atoms = (count: number) => Array.from({ length: count }, (_, index) => ({ kind: 'rationale', text: `Reason ${index}.` }));
-    expect(validatePersonOpenResponseV1(openMeeting({ atoms: atoms(25) }))).toHaveProperty(['atoms', 'length'], 25);
-    expect(() => validatePersonOpenResponseV1(openMeeting({ atoms: atoms(26) }))).toThrow('atoms is invalid');
-    // The retired transcript_ref (ADR-0046) is an unknown field.
-    expect(() => validatePersonOpenResponseV1(openMeeting({ transcript_ref: TRANSCRIPT }))).toThrow('unexpected shape');
-    expect(() => validatePersonOpenResponseV1(openMeeting({ item: { ...meetingRow, ref: `meeting:sha256:${'d'.repeat(64)}` } }))).toThrow('inconsistent');
-    const detail = (fields: Record<string, unknown>) => openMeeting({ meeting: defined({ ...meetingDetail, ...fields }) });
-    const names = (count: number) => Array.from({ length: count }, (_, index) => `Person ${index}`);
-    expect(validatePersonOpenResponseV1(detail({ participants: names(32), participants_more: true }))).toHaveProperty(['meeting', 'participants', 'length'], 32);
-    for (const fields of [
-      { participants: names(33) }, { participants: [{ display_name: 'Ari', id: 'U1' }] }, { participants: ['Ari', 'Ari'] },
-      { participants: [' Ari'] }, { all_day: 'false' }, { participants_more: undefined }, { timezone: 'America/Los Angeles' },
-      { started_at: 'soon' }, { ended_at: 'x'.repeat(65) }, { approved_by: '' },
-    ]) expect(() => validatePersonOpenResponseV1(detail(fields))).toThrow();
-  });
-
-  it('refuses a transcript page, the retired open kind (ADR-0046)', () => {
+  it('refuses a transcript page (ADR-0046) and a meeting page, the retired open kinds', () => {
     expect(() => validatePersonOpenResponseV1(openTranscript)).toThrow('ref is invalid');
+    expect(() => validatePersonOpenResponseV1({ schema_version: 1, kind: 'echo-person-open-v1', ref: MEETING, item: meetingRow, atoms: [], next_cursor: null })).toThrow('ref is invalid');
   });
 
   it('fits a worst-case list page inside the list bound and refuses anything larger', () => {
@@ -321,33 +271,5 @@ describe('Person list and open public contracts', () => {
     expect(canonicalJsonBytes(response).byteLength).toBeLessThanOrEqual(PERSON_LIST_RESPONSE_MAX_BYTES_V1);
     vi.mocked(canonicalJsonBytes).mockReturnValueOnce(Buffer.alloc(PERSON_LIST_RESPONSE_MAX_BYTES_V1 + 1));
     expect(() => validatePersonListResponseV1(page())).toThrow('exceeds JSON byte bound');
-  });
-
-  it('fits a worst-case first meeting page inside the open bound and refuses anything larger', () => {
-    const quotes = (bytes: number) => '"'.repeat(bytes);
-    // 32 distinct 200-byte names that each double under JSON escaping.
-    const participants = Array.from({ length: 32 }, (_, index) => index.toString(2).padStart(5, '0').replace(/0/g, '"').replace(/1/g, '\\') + quotes(195));
-    const atoms: Record<string, unknown>[] = [];
-    for (let index = 0; ; index += 1) {
-      const next = index % 3 === 0
-        ? { kind: 'decision', text: quotes(3 * 1024), status: 'unresolved' }
-        : index % 3 === 1
-          ? { kind: 'action', text: quotes(3 * 1024), owner: quotes(512), due_at: quotes(128) }
-          : { kind: 'rationale', text: quotes(3 * 1024) };
-      if (canonicalJsonBytes([...atoms, next]).byteLength > PERSON_OPEN_ATOMS_BUDGET_BYTES_V1) break;
-      atoms.push(next);
-    }
-    const worst = openMeeting({
-      item: { ...meetingRow, title: quotes(200), projects: Array.from({ length: 20 }, (_, index) => ({ project_id: projectId(index + 1), name: quotes(200) })) },
-      meeting: {
-        started_at: '2026-09-21T20:00:00.000Z', ended_at: '2026-09-21T21:00:00.000Z', timezone: 'A'.repeat(64), all_day: false,
-        participants, participants_more: true, approved_by: quotes(200),
-      },
-      atoms, next_cursor: 'A'.repeat(512),
-    });
-    expect(canonicalJsonBytes(atoms).byteLength).toBeGreaterThan(PERSON_OPEN_ATOMS_BUDGET_BYTES_V1 - 8 * 1024);
-    expect(canonicalJsonBytes(validatePersonOpenResponseV1(worst)).byteLength).toBeLessThanOrEqual(PERSON_OPEN_RESPONSE_MAX_BYTES_V1);
-    const oversized = Array.from({ length: 25 }, () => ({ kind: 'rationale', text: quotes(3 * 1024) }));
-    expect(() => validatePersonOpenResponseV1(openMeeting({ atoms: oversized }))).toThrow('exceeds JSON byte bound');
   });
 });

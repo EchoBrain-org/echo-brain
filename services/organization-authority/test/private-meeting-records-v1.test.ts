@@ -64,8 +64,8 @@ describe("a meeting item kept private inside a project (ADR-0049)", () => {
       expect(records(route.searchBatch({ access_token: "owner", query: "reserve", desk: true, ...scoped })).sort()).toEqual([kept, open].sort());
       expect(records(route.listDeskBatch({ access_token: "owner", ...scoped }))).toContain(kept);
     }
-    // Open, and what the open items and a project's follow-ups read.
-    expect(route.openMeeting({ access_token: "owner", record_sha256: kept }).row).toMatchObject({ visibility: "approver_only", association_project_ids: [SHARED] });
+    // What the open items and a project's follow-ups read.
+    expect(route.recordProjects({ access_token: "owner", record_sha256: kept })).toEqual([SHARED]);
     expect(route.readableDecisions({ access_token: "owner", record_sha256s: [kept] }).get(kept))
       .toMatchObject({ approval_id: approvalRecordIdV2("apr_kept", [SHARED], true), project_ids: [SHARED], visibility: "approver_only" });
     expect(route.projectRecords({ access_token: "owner", project_id: SHARED, limit: 500 })).toContain(kept);
@@ -88,7 +88,6 @@ describe("a meeting item kept private inside a project (ADR-0049)", () => {
       expect(records(route.listDeskBatch({ access_token: "emp_a", ...scoped }))).not.toContain(kept);
     }
     // A guessed digest opens nothing and names nothing, as a record that does not exist.
-    expect(failure(() => route.openMeeting({ access_token: "emp_a", record_sha256: kept }))).toEqual({ code: "not_found", message: "item is not available" });
     expect(route.readableDecisions({ access_token: "emp_a", record_sha256s: [kept] }).size).toBe(0);
     expect(route.projectRecords({ access_token: "emp_a", project_id: SHARED, limit: 500 })).not.toContain(kept);
     expect(() => route.recordProjects({ access_token: "emp_a", record_sha256: kept })).toThrow(expect.objectContaining({ code: "not_found" }));

@@ -81,8 +81,6 @@ describe("person list and open cursors", () => {
     const cases: readonly [string, PersonOpenPositionV1][] = [
       [`document:${DOCUMENT}`, { kind: "document", from_ordinal: 1 }],
       [`document:${DOCUMENT}`, { kind: "document", from_ordinal: 65_535 }],
-      [`meeting:${MEETING}`, { kind: "meeting", atom_order: 0, part: 1 }],
-      [`meeting:${MEETING}`, { kind: "meeting", atom_order: 65_535, part: 65_535 }],
       [`imported_meeting:${IMPORTED}`, { kind: "imported_meeting", offset: 1 }],
       [`imported_meeting:${IMPORTED}`, { kind: "imported_meeting", offset: 10_000_000 }],
     ];
@@ -113,10 +111,11 @@ describe("person list and open cursors", () => {
     refused(() => decodePersonOpenCursorV1(openCursor, open(`document:doc_${"d".repeat(64)}`)));
     refused(() => decodePersonOpenCursorV1(openCursor, open(`document:${DOCUMENT}`, { membership_id: OTHER_MEMBERSHIP })));
     refused(() => decodePersonOpenCursorV1(openCursor, open(`document:${DOCUMENT}`, { organization_id: "org_other" })));
-    // One kind's position is never another kind's, and the retired transcript ref (ADR-0046) has none.
-    const meetingCursor = encodePersonOpenCursorV1(open(`meeting:${MEETING}`), { kind: "meeting", atom_order: 1, part: 1 });
-    refused(() => decodePersonOpenCursorV1(meetingCursor, open(`transcript:${MEETING}`)));
-    refused(() => encodePersonOpenCursorV1(open(`meeting:${MEETING}`), { kind: "imported_meeting", offset: 1 }));
+    // One kind's position is never another kind's, and the retired transcript (ADR-0046) and meeting (2026-11-11) refs have none.
+    refused(() => decodePersonOpenCursorV1(openCursor, open(`transcript:${MEETING}`)));
+    refused(() => encodePersonOpenCursorV1(open(`document:${DOCUMENT}`), { kind: "imported_meeting", offset: 1 }));
+    const meeting = open(`meeting:${MEETING}`);
+    for (const fields of [["1", "1"], ["2"]]) refused(() => decodePersonOpenCursorV1(frameCursorV1(3, openDigest(meeting), fields), meeting));
   });
 
   it("refuses malformed list fields, a finished walk and a non-canonical time", () => {
@@ -145,16 +144,13 @@ describe("person list and open cursors", () => {
     refused(() => decodePersonOpenCursorV1(frameCursorV1(3, openDigest(note), ["1"]), note));
     refused(() => encodePersonOpenCursorV1(note, { kind: "document", from_ordinal: 1 }));
     const document = open(`document:${DOCUMENT}`);
-    const meeting = open(`meeting:${MEETING}`);
     const imported = open(`imported_meeting:${IMPORTED}`);
     for (const [binding, fields] of [
       [document, ["0"]], [document, ["65536"]], [document, ["01"]], [document, ["1", "1"]], [document, [""]],
-      [meeting, ["0", "0"]], [meeting, ["65536", "1"]], [meeting, ["0"]], [meeting, ["-1", "1"]],
       [imported, ["0"]], [imported, ["10000001"]], [imported, ["1e3"]],
     ] as const) {
       refused(() => decodePersonOpenCursorV1(frameCursorV1(3, openDigest(binding), fields), binding));
     }
-    expect(decodePersonOpenCursorV1(frameCursorV1(3, openDigest(meeting), ["3", "2"]), meeting)).toEqual({ kind: "meeting", atom_order: 3, part: 2 });
   });
 
   it("decodes only positions: a time and an id the walk already emitted, never counts or other state", () => {

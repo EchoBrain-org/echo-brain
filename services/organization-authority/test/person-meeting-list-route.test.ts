@@ -60,10 +60,9 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     expect(byName("r4")).toEqual({ kind: "meeting", id: w.digest("r4"), title: "Pricing review", added_at: T(4), visibility: "project", association_project_ids: [SHARED], meeting_date: "2026-09-04" });
     // The audience also names UNJOINED; only the reader's own project leaves.
     expect(byName("r3")).toEqual({ kind: "meeting", id: w.digest("r3"), title: null, added_at: T(3), visibility: "projects", association_project_ids: [SHARED] });
-    // r1, shared with EVERYONE, opens with the row EVERYONE lists: its date is the meeting's own day.
+    // r1, shared with EVERYONE: its date is the meeting's own day.
     const r1 = everyone.find((row) => row.id === w.digest("r1"));
     expect(r1).toMatchObject({ title: "Weekly sync", visibility: "project", association_project_ids: [EVERYONE], meeting_date: "2026-08-31" });
-    expect(route.openMeeting({ access_token: "emp_a", record_sha256: w.digest("r1") }).row).toEqual(r1);
     expect(walk(route, "owner", ONLY_ME).find((row) => row.id === w.digest("r2"))).toMatchObject({ visibility: "approver_only", meeting_date: "2026-09-02" });
 
     const everything = [...empA, ...everyone, ...walk(route, "owner", inProject(SHARED)), ...walk(route, "owner", ONLY_ME)];
@@ -74,14 +73,10 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     }
   });
 
-  it("lists a project only to its members, each row as its open reads it, and nothing of a left project", async () => {
+  it("lists a project only to its members, and nothing of a left project", async () => {
     const w = await world();
     const route = w.route();
-    for (const token of ["owner", "emp_a"] as const) {
-      const rows = walk(route, token, inProject(SHARED));
-      expect(ids(rows)).toEqual([w.digest("r4"), w.digest("r3")]);
-      for (const row of rows) expect(route.openMeeting({ access_token: token, record_sha256: row.id }).row).toEqual(row);
-    }
+    for (const token of ["owner", "emp_a"] as const) expect(ids(walk(route, token, inProject(SHARED)))).toEqual([w.digest("r4"), w.digest("r3")]);
     // A project the reader does not hold, or that does not exist, is the Ask denial before any read.
     const denied = { code: "unauthorized", message: "person authentication failed" };
     for (const projectId of [UNJOINED, "prj_dddddddd-dddd-4ddd-8ddd-dddddddddddd"]) {
@@ -93,7 +88,7 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     w.leave(SHARED, OWNER);
     expect(failure(() => route.collectMeetings({ access_token: "owner", scope: inProject(SHARED), after: null, limit: 26 }))).toEqual(denied);
     expect(ids(walk(route, "owner", ONLY_ME))).toEqual([w.digest("r2")]);
-    expect(failure(() => route.openMeeting({ access_token: "owner", record_sha256: w.digest("r3") })).code).toBe("not_found");
+    expect(failure(() => route.recordActions({ access_token: "owner", record_sha256: w.digest("r3") })).code).toBe("not_found");
   });
 
   it("narrows only_me to the records kept for the reader alone, and holds it only for such a record (ADR-0049)", async () => {
@@ -105,10 +100,7 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     expect(walk(route, "emp_a", ONLY_ME)).toEqual([]);
     expect(walk(route, "emp_c", ONLY_ME)).toEqual([]);
     for (const token of ["owner", "emp_a", "emp_b", "emp_c"] as const) {
-      for (const row of walk(route, token, ONLY_ME)) {
-        expect(row.visibility).toBe("approver_only");
-        expect(route.openMeeting({ access_token: token, record_sha256: row.id }).row).toEqual(row);
-      }
+      for (const row of walk(route, token, ONLY_ME)) expect(row.visibility).toBe("approver_only");
     }
     // The policy alone decides it, so it needs no approver projectors.
     expect(ids(walk(w.route({ record_approver: undefined }), "owner", ONLY_ME))).toEqual([w.digest("r2")]);
@@ -176,7 +168,7 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     expect(ids(walk(route, "owner", ONLY_ME))).toEqual([w.digest("r8"), w.digest("r2")]);
   });
 
-  it("faces the owner with another member's Only me approval: never listed, held or opened", async () => {
+  it("faces the owner with another member's Only me approval: never listed, held or read", async () => {
     const w = await world();
     const route = w.route();
     // EMP_A's Only me approval: the owner can neither read it nor tell it is waiting.
@@ -187,7 +179,7 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     expect(route.collectMeetings({ access_token: "emp_a", scope: ONLY_ME, after: null, limit: 26 })).toEqual({ status: "held" });
     w.rebuild();
     expect(ids(walk(route, "owner", ONLY_ME))).toEqual([w.digest("r2")]);
-    expect(failure(() => route.openMeeting({ access_token: "owner", record_sha256: w.digest("r11") })).code).toBe("not_found");
+    expect(failure(() => route.recordActions({ access_token: "owner", record_sha256: w.digest("r11") })).code).toBe("not_found");
     expect(ids(walk(route, "emp_a", ONLY_ME))).toEqual([w.digest("r11")]);
   });
 

@@ -3,9 +3,7 @@ import type {
   PersonListRequestV1,
   PersonListResponseV1,
   PersonOpenDocumentV1,
-  PersonOpenMeetingAtomV1,
-  PersonItemRefV1,
-  PersonOpenMeetingV1,
+  PersonOpenRefV1,
   PersonOpenResponseV1,
 } from "@echo-brain/organization-api";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -29,7 +27,6 @@ type Row = PersonStoreNoteRowV1 | PersonStoreDocumentRowV1 | PersonStoreMeetingR
 
 const UNJOINED = "prj_99999999-9999-4999-8999-999999999999";
 const NONEXISTENT = "prj_88888888-8888-4888-8888-888888888888";
-const MEETING_ATOMS_PER_PAGE = 2;
 const CHUNKS_PER_PAGE = 3;
 const hex = (value: number): string => value.toString(16).padStart(64, "0");
 const T = (minute: number): string => new Date(Date.UTC(2026, 8, 1) + minute * 60_000).toISOString();
@@ -148,22 +145,6 @@ function fixture(options: Options = {}) {
       record("commitMeetings", { count: input.count });
       return input.count === 0 ? {} : { receipt: receipt(["meetings", calls.length]) };
     },
-    openMeeting(input) {
-      record("openMeeting", { record_sha256: input.record_sha256, from: input.from });
-      hooks.open?.();
-      const row = world.meetings.find((candidate) => candidate.id === input.record_sha256);
-      if (row === undefined) throw new AuthorityOperationError("not_found", "item is not available");
-      const start = input.from === undefined ? 0 : PARTS.findIndex((part) => part.atom_order === input.from!.atom_order && part.part === input.from!.part);
-      if (start < 0) throw new AuthorityOperationError("not_found", "item is not available");
-      const taken = PARTS.slice(start, start + MEETING_ATOMS_PER_PAGE);
-      const following = PARTS[start + taken.length];
-      return {
-        row, atoms: taken.map((part) => part.atom),
-        ...(input.from === undefined ? { meeting: { all_day: false, participants: ["Ari"], participants_more: false } } : {}),
-        next: following === undefined ? null : { atom_order: following.atom_order, part: following.part },
-        release: { receipt: receipt(["meeting", row.id, start]) },
-      };
-    },
     revalidateMeetingRelease(input) {
       record("revalidateMeetingRelease", { receipt: input.release.receipt });
       hooks.revalidate?.();
@@ -194,20 +175,13 @@ function fixture(options: Options = {}) {
   const route = createPersonListRouteV1({ organization_id: OWNER.organization_id, sessions, directory, originals, meetings });
   const list = (request: Omit<PersonListRequestV1, "schema_version">, access_token = "owner", signal?: AbortSignal) =>
     route.list({ access_token, request: { schema_version: 1, ...request }, ...(signal === undefined ? {} : { signal }) });
-  const open = (value: PersonItemRefV1, cursor?: string, access_token = "owner") =>
+  const open = (value: PersonOpenRefV1, cursor?: string, access_token = "owner") =>
     route.open({ access_token, request: { schema_version: 1, ref: value, ...(cursor === undefined ? {} : { cursor }) } });
   const called = (method: string) => calls.filter((call) => call.method === method);
   return { world, calls, called, audits, hooks, list, open };
 }
 
 const CHUNKS = Array.from({ length: 7 }, (_, index) => ({ ordinal: index + 1, text: `chunk ${index + 1}. ` }));
-const PARTS: readonly { readonly atom_order: number; readonly part: number; readonly atom: PersonOpenMeetingAtomV1 }[] = [
-  { atom_order: 0, part: 1, atom: { kind: "decision", text: "Annual plans first.", status: "decided" } },
-  { atom_order: 1, part: 1, atom: { kind: "action", text: "First half ", owner: "Maya Chen", part: { index: 1, count: 2 } } },
-  { atom_order: 1, part: 2, atom: { kind: "action", text: "second half.", part: { index: 2, count: 2 } } },
-  { atom_order: 2, part: 1, atom: { kind: "rationale", text: "Churn drops." } },
-  { atom_order: 3, part: 1, atom: { kind: "decision", text: "Ship in October.", status: "proposed" } },
-];
 
 type Fixture = ReturnType<typeof fixture>;
 async function walk(f: Fixture, request: Omit<PersonListRequestV1, "schema_version" | "cursor">, access_token = "owner"): Promise<PersonListResponseV1[]> {
@@ -467,7 +441,6 @@ describe("person list route", () => {
     const f = fixture({
       notes: [note(1, T(1), { association_project_ids: [PROJECT_ALPHA, UNJOINED] })],
       documents: [document(1, T(1))],
-      meetings: [meeting(1, T(1)), meeting(2, T(2))],
     });
     const opened = await f.open(`note:ctx_${hex(1)}`);
     expect(opened).toMatchObject({ kind: "echo-person-open-v1", ref: `note:ctx_${hex(1)}`, text: "Text of Note 1", next_cursor: null, item: { projects: [{ project_id: PROJECT_ALPHA, name: "Alpha" }] } });
@@ -486,33 +459,22 @@ describe("person list route", () => {
     } while (cursor !== null);
     expect(chunks).toEqual(CHUNKS.map((chunk) => chunk.text));
 
-    const meetingRef = `meeting:sha256:${hex(1)}` as const;
-    const atoms: PersonOpenMeetingAtomV1[] = [];
-    const pages: PersonOpenMeetingV1[] = [];
-    cursor = undefined;
-    do {
-      const page = await f.open(meetingRef, cursor ?? undefined) as PersonOpenMeetingV1;
-      pages.push(page);
-      atoms.push(...page.atoms);
-      cursor = page.next_cursor;
-    } while (cursor !== null);
-    expect(atoms).toEqual(PARTS.map((part) => part.atom));
-    expect(pages[0]).toMatchObject({ meeting: { participants: ["Ari"] } });
-    expect(pages.slice(1).every((page) => page.meeting === undefined)).toBe(true);
-    await expect(f.open(documentRef, pages[0]!.next_cursor!)).rejects.toMatchObject({ code: "invalid_request" });
-    // The retired transcript ref (ADR-0046) is a bad request, before any store runs.
+    // A listed meeting is read as its record, never opened (2026-11-11), and the retired transcript ref (ADR-0046):
+    // each is a bad request, before any store runs.
     const calls = f.calls.length;
-    await expect(f.open(`transcript:sha256:${hex(1)}` as PersonItemRefV1)).rejects.toMatchObject({ code: "invalid_request" });
+    for (const retired of [`meeting:sha256:${hex(1)}`, `transcript:sha256:${hex(1)}`]) {
+      await expect(f.open(retired as PersonOpenRefV1)).rejects.toMatchObject({ code: "invalid_request" });
+    }
     expect(f.calls.slice(calls)).toEqual([]);
     expect(f.audits.every((audit) => audit.operation === "person_open" && audit.scope_kind === "item" && audit.released_count === 1)).toBe(true);
   });
 
   it("answers every store refusal of an open with one not_found, but passes unavailable and a bug through", async () => {
-    const refs: readonly PersonItemRefV1[] = [`note:ctx_${hex(1)}`, `document:doc_${hex(1)}`, `meeting:sha256:${hex(1)}`];
+    const refs: readonly PersonOpenRefV1[] = [`note:ctx_${hex(1)}`, `document:doc_${hex(1)}`];
     const answers: unknown[] = [];
     for (const code of ["not_found", "unauthorized", "invalid_request", "conflict", "stale_access_state", "invalid_output"] as const) {
       for (const value of refs) {
-        const f = fixture({ notes: [note(1, T(1))], documents: [document(1, T(1))], meetings: [meeting(1, T(1))] });
+        const f = fixture({ notes: [note(1, T(1))], documents: [document(1, T(1))] });
         f.hooks.open = () => { throw new AuthorityOperationError(code, `store said ${code}`); };
         answers.push(await rejected(f.open(value)));
         expect(f.audits).toEqual([]);
@@ -522,21 +484,21 @@ describe("person list route", () => {
     const guessed = fixture();
     for (const value of refs) expect(await rejected(guessed.open(value))).toEqual({ code: "not_found", message: "item is not available" });
 
-    const unavailable = fixture({ meetings: [meeting(1, T(1))] });
-    unavailable.hooks.open = () => { throw new AuthorityOperationError("unavailable", "record evidence is unavailable"); };
-    expect(await rejected(unavailable.open(`meeting:sha256:${hex(1)}`))).toMatchObject({ code: "unavailable" });
-    const bug = fixture({ meetings: [meeting(1, T(1))] });
+    const unavailable = fixture({ documents: [document(1, T(1))] });
+    unavailable.hooks.open = () => { throw new AuthorityOperationError("unavailable", "document text is unavailable"); };
+    expect(await rejected(unavailable.open(`document:doc_${hex(1)}`))).toMatchObject({ code: "unavailable" });
+    const bug = fixture({ documents: [document(1, T(1))] });
     bug.hooks.open = () => { throw new TypeError("bug"); };
-    await expect(bug.open(`meeting:sha256:${hex(1)}`)).rejects.toBeInstanceOf(TypeError);
+    await expect(bug.open(`document:doc_${hex(1)}`)).rejects.toBeInstanceOf(TypeError);
 
     // A revalidation failure after the read is the same not_found, with no audit.
     const revoked = fixture({ notes: [note(1, T(1))] });
     revoked.hooks.revalidate = () => { throw new AuthorityOperationError("stale_access_state", "request failed"); };
     expect(await rejected(revoked.open(`note:ctx_${hex(1)}`))).toEqual({ code: "not_found", message: "item is not available" });
     expect(revoked.audits).toEqual([]);
-    const regranted = fixture({ meetings: [meeting(1, T(1))] });
+    const regranted = fixture({ documents: [document(1, T(1))] });
     regranted.hooks.open = () => { regranted.world.grants += 1; };
-    expect(await rejected(regranted.open(`meeting:sha256:${hex(1)}`))).toEqual({ code: "not_found", message: "item is not available" });
+    expect(await rejected(regranted.open(`document:doc_${hex(1)}`))).toEqual({ code: "not_found", message: "item is not available" });
     expect(regranted.audits).toEqual([]);
   });
 
