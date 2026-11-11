@@ -36,9 +36,9 @@ export class PersonConnectionStoreV1 {
     if (row === undefined) this.provider.failure('unauthorized');
     const value = JSON.parse(row.body_json) as Partial<AttemptBody>;
     if (value.person === undefined || this.key(value.person) !== this.key(person) || typeof value.expires !== 'number' || !Number.isSafeInteger(value.expires)) this.provider.failure('unauthorized');
-    const status = value.status;
+    const status = value.status ?? 'pending';
     if (status !== 'pending' && status !== 'complete' && status !== 'cancelled' && status !== 'expired' && status !== 'failed') this.provider.failure('unauthorized');
-    const failure_reason = value.failure_reason;
+    const failure_reason = value.failure_reason ?? null;
     if (failure_reason !== null && failure_reason !== 'provider_rejected' && failure_reason !== 'provider_unavailable' && failure_reason !== 'account_mismatch') this.provider.failure('unauthorized');
     return { person: Object.freeze({ ...value.person }), expires: value.expires, status, failure_reason,
       ...(typeof value.expected_account === 'string' ? { expected_account: value.expected_account } : {}),

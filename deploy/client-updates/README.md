@@ -311,10 +311,9 @@ sets it. The desktop packages carry the same configuration with
 than the currently published feed. The lane adds no signer-rotation,
 channel-change, rollback, deletion, or hosting-replacement command.
 
-Every new publication or replacement requires all four release targets. A
-historical single-platform or two-artifact predecessor or receipt can still be
-verified through the read-only status path; it does not authorize another
-such write.
+Every publication or replacement requires all four release targets. A
+historical single-platform or two-artifact feed or receipt is refused,
+including by the read-only status path.
 
 Obtain the expected predecessor SHA-256 from the preserved succeeded most-recent
 publication or replacement receipt's `hashes.feed.json` field. For the first

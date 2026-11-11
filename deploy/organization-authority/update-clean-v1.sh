@@ -241,10 +241,10 @@ names = {
     'ECHO_CLEAN_RELEASE_SOURCE_SHA': source_sha,
     'ECHO_CLEAN_RUNTIME_PROFILE_SHA256': profile_sha,
     'ECHO_CLEAN_RUNTIME_PROFILE_VERSION': profile_version,
-    # Retired Ask switches: the Authority ignores the first (ADR-0022) and
-    # Compose defaults both to false, so neither is written or carried
-    # forward. An older record's true shortcut is still written so the
-    # Authority keeps refusing to start with it. Do not accept arbitrary names.
+    # Retired Ask switches: the Authority ignores both (ADR-0022) and Compose
+    # defaults both to false, so neither is carried forward. An older record's
+    # true shortcut is still written, which the Authority now ignores too.
+    # Do not accept arbitrary names.
     'ECHO_AGENTIC_ASK_V1': None,
     'ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT': 'true' if small_scope_shortcut == 'true' else None,
 }

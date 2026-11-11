@@ -1594,6 +1594,17 @@ import json, os, pathlib, sys, tempfile`;
       writeFileSync(stagedRelease, releaseBytes, { mode: 0o600 });
       writeFileSync(capturedRelease, releaseBytes, { mode: 0o600 });
 
+      // A stage receipt with a field it never carries is refused, and the captured inputs are kept.
+      const receipt = join(stage, "stage.json");
+      const receiptBytes = readFileSync(receipt, "utf8");
+      expect(receiptBytes).toContain('"nango_integration_key":"slack"');
+      writeFileSync(receipt, receiptBytes.replace('"nango_integration_key":"slack"', '"nango_integration_key":"slack","unexpected_field":"x"'));
+      const invalidReceipt = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
+      expect(invalidReceipt.status).toBe(1);
+      expect(invalidReceipt.stderr).toContain("rehearsal stage receipt is invalid");
+      expect(existsSync(join(stage, "input", "llm-credential"))).toBe(true);
+      writeFileSync(receipt, receiptBytes);
+
       const retry = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
       expect(retry.status, retry.stderr).toBe(0);
       expect(retry.stdout).toContain("rehearsal_prepared=true");

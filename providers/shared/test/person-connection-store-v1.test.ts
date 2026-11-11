@@ -67,6 +67,20 @@ describe('shared Atlassian custody with separate product identities', () => {
     } finally { database.close(); }
   });
 
+  it('reads an attempt row stored without status as pending, so it never blocks a new consent', () => {
+    const database = new Database(':memory:');
+    try {
+      const store = new JiraConnectionStoreV1(database);
+      const stale = store.begin(person);
+      // A Jira attempt row written before attempts carried status (2026-10-01).
+      database.prepare('UPDATE jira_person_attempt_v1 SET body_json=? WHERE attempt=?').run(JSON.stringify({ person, expires: stale.expires }), stale.attempt);
+      const next = store.begin(person);
+      expect(next).toMatchObject({ status: 'pending', failure_reason: null });
+      expect(next.attempt).not.toBe(stale.attempt);
+      expect(store.complete(person, next.attempt, 'reference-fixture', cloud, 'account-fixture', site).active).toBe(true);
+    } finally { database.close(); }
+  });
+
   it('keeps grants and consent attempts independent even for the same person and reference', () => {
     const database = new Database(':memory:');
     try {

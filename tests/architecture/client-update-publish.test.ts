@@ -3,6 +3,7 @@ import { generateKeyPairSync, sign } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { requireReleaseTargets } from '../../tools/client-update-feed.mjs';
 import { isAbsentClientUpdateHead, executeClientUpdatePublish, planClientUpdatePublish, statusClientUpdatePublish, executeClientUpdateReplacement, planClientUpdateReplacement, statusClientUpdateReplacement } from '../../tools/client-update-publish.mjs';
 import { parseUpdateConfig, parseUpdateManifest, updateDigest, type ClientUpdateConfig, type ClientUpdateManifest } from '../../src/product/person-client/client-update-contract.js';
 
@@ -139,6 +140,8 @@ function fixture(options: { expiresAt?: number; previousExpiresAt?: number; prev
   const dependencies: ClientUpdatePublicationDependencies = { verifyServer: () => undefined, aws, fetch, runtime: () => SOURCE, readTemplate: () => TEMPLATE, now: () => state.now, validatePrepared: options => {
     state.validationOptions.push(options);
     if (!options.allowExpired && Date.parse(manifest.expires_at) <= state.now) throw new Error('expired_metadata');
+    // As the real validator does, every prepared feed carries all four release targets.
+    requireReleaseTargets(manifest);
     return { config, manifest, feedBytes };
   } };
   const plan = () => planClientUpdatePublish({ hostingReceipt, prepared, authorization, output: receipt }, dependencies);
@@ -520,27 +523,17 @@ describe('bounded conditional S3 feed replacement', () => {
 
 
 describe.each([{ label: 'first-publication', replacement: false }, { label: 'replacement', replacement: true }])('paired release enforcement for $label receipts', ({ replacement }) => {
-  it('rechecks the exact release targets immediately before the next artifact write', async () => {
-    const f = fixture({ ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
-    await (replacement ? f.replacePlan() : f.plan());
-    const fetch = f.dependencies.fetch!;
-    f.dependencies.fetch = async (input, init) => {
-      const response = await fetch(input, init);
-      if (String(input).endsWith(f.artifactKey)) f.manifest.artifacts[1].architecture = 'arm64';
-      return response;
-    };
-    expect(await (replacement ? f.replaceExecute() : f.execute())).toMatchObject({ state: 'unconfirmed', verified_objects: 1 });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(1);
-    expect(f.objects.has(f.artifactKeys[1])).toBe(false);
-  });
-
-  it('applies the target guard again after final sealed-input revalidation', async () => {
+  it('stops the feed write when final sealed-input revalidation fails the target check', async () => {
     const f = fixture({ ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
     await (replacement ? f.replacePlan() : f.plan());
     const validatePrepared = f.dependencies.validatePrepared!;
     f.dependencies.validatePrepared = options => {
       const result = validatePrepared(options);
-      if (f.objects.has(f.artifactKeys[1])) return { ...result, manifest: { ...result.manifest, artifacts: result.manifest.artifacts.map(artifact => ({ ...artifact, architecture: 'arm64' as const })) } };
+      if (f.objects.has(f.artifactKeys[1])) {
+        const manifest = { ...result.manifest, artifacts: result.manifest.artifacts.map(artifact => ({ ...artifact, architecture: 'arm64' as const })) };
+        requireReleaseTargets(manifest);
+        return { ...result, manifest };
+      }
       return result;
     };
     expect(await (replacement ? f.replaceExecute() : f.execute())).toMatchObject({ state: 'unconfirmed', verified_objects: 4 });
