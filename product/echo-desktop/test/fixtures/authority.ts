@@ -55,7 +55,7 @@ interface Contract {
   validatePersonOpenResponseV1(value: unknown): unknown;
   validatePersonAnswerRequestV3(value: unknown): { question: string; project_id?: string };
   /** The Ask timeline's reads (ADR-0047): the source check's request and answer, and what arrived in your projects. */
-  validatePersonAskCheckRequestV1(value: unknown): { items: { citation: Record<string, unknown>; marker?: string }[] };
+  validatePersonAskCheckRequestV1(value: unknown): { items: { citation: Record<string, unknown> }[] };
   validatePersonAskCheckV1(value: unknown): unknown;
   validatePersonProjectActivityV1(value: unknown): unknown;
   validatePersonRunsRequestV1(value: unknown): RunsRequest;
@@ -314,15 +314,9 @@ function timelineAnswer(question: string, scope: Record<string, unknown>, previo
     cites(citations, 'Confirm the trace is still open.', [2])]);
 }
 
-/**
- * Readability only: the follow-up is no longer readable, everything else is. A readable ticket still carries a marker, as
- * the Authority keeps sending one for a release (SVC-13) and released clients refuse a readable ticket without it.
- */
+/** Readability only: the follow-up is no longer readable, everything else is. */
 function timelineCheck(items: readonly { citation: Record<string, unknown> }[]): Record<string, unknown> {
-  return { schema_version: 1, kind: 'echo-person-ask-check-v1', items: items.map(({ citation }) => {
-    if (citation.kind === 'ticket') return { state: 'same', marker: digestOf(`marker:${String(citation.ticket_id)}`) };
-    return { state: citation.kind === 'follow_up' ? 'unreadable' : 'same' };
-  }) };
+  return { schema_version: 1, kind: 'echo-person-ask-check-v1', items: items.map(({ citation }) => ({ state: citation.kind === 'follow_up' ? 'unreadable' : 'same' })) };
 }
 
 /** Project activity (C2): every project you are in, with its newest arrival from someone else, or null. */
@@ -920,8 +914,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       relation: item.relation, expected: item.expected, approver: { ...item.approver, active: true }, owner: { ...item.owner, active: true },
       waits_on: item.state === 'unsent' ? 'approver' : 'owner', state: item.state, created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at,
       state_set_by: person(item.state_set_by), owner_set_at: item.owner_set_at, owner_set_by: person(item.owner_set_by),
-      // `check` is retired with sweeps: null, as the Authority sends it until V17.
-      send_included: item.send_included, check: null,
+      send_included: item.send_included,
       can: { set_state: item.state !== 'unsent' && involved(item), assign: item.state === 'unsent' ? item.approver.membership_id === ARI.membership_id : involved(item) },
       reach,
     };
@@ -1052,6 +1045,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return body?.operation === 'reviews' ? json({ reviews: [] }) : failure('not_found', 404);
       }
     }
+    // Reviews are only the reviews route's: the meetings route knows no review operation.
+    if (method === 'POST' && path === '/v1/person/meetings' && ['reviews', 'review_open', 'review'].includes(String(body?.operation))) return failure('invalid_request', 400);
     if ((method === 'POST' && path === '/v1/person/meetings' && mode.startsWith('granola')) || reviewsRequest) {
       const meetingId = '00000000-0000-4000-8000-000000000010';
       const folderId = '00000000-0000-4000-8000-000000000011';
@@ -1175,8 +1170,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         }
         // Home: the Send row while Ari's check has items not sent, and the open items that wait on
         // Ari; then how many of the open items Ari sent wait on others. Rows only: no live read.
-        // `landed`, `last_checked_at` and `sweep_due` are retired with sweeps: 0, null and false, as
-        // the Authority sends them until V17.
         case 'home': {
           const unsent = shown.filter(item => item.run_id === runId && item.state === 'unsent');
           const send = run?.state === 'done' && unsent.length > 0 ? [{
@@ -1189,8 +1182,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           const theirs = shown.filter(item => item.state === 'open' && involved(item));
           return result('home', {
             send, items: theirs.filter(mineAsOwner).sort((a, b) => since(b).localeCompare(since(a))).slice(0, 20).map(item => itemView(item, live)),
-            landed: 0, waiting: theirs.filter(item => item.approver.membership_id === ARI.membership_id && !mineAsOwner(item)).length,
-            last_checked_at: null, sweep_due: false,
+            waiting: theirs.filter(item => item.approver.membership_id === ARI.membership_id && !mineAsOwner(item)).length,
           });
         }
         case 'items': {
@@ -1226,12 +1218,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           const counts = request.read === 'counts';
           const paged = counts ? [] : listed.slice(from, from + size);
           const next = !counts && from + size < listed.length ? pageCursor(pageKey, from + size) : null;
-          // The verdict counts and `last_checked_at` are retired with sweeps: 0 and null, as the Authority sends them until V17.
           return result('items', { items: paged.map(item => itemView(item, live)), next_cursor: next, stages, summary: {
             unsent: count('unsent'), open: count('open'), done: count('done'), not_relevant: count('not_relevant'),
-            landed: 0, changed: 0, unreadable: 0, decisions: records.length, last_checked_at: null, by_decision: records.map(record => {
+            decisions: records.length, by_decision: records.map(record => {
               const of = items.filter(item => item.decision.record_sha256 === record);
-              return { record_sha256: record, unsent: count('unsent', of), open: count('open', of), landed: 0, unreadable: 0 };
+              return { record_sha256: record, unsent: count('unsent', of), open: count('open', of) };
             }),
           } });
         }

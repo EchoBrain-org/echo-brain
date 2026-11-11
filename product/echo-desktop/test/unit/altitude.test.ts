@@ -17,7 +17,7 @@ function item(overrides: Partial<OpenItemView> & { sentDaysAgo?: number } = {}):
     item_id: `itm_${Math.random().toString(16).slice(2)}`, run_id: 'run_1', kind: 'action', decision: decision('Pilot planning', 5),
     relation: null, expected: 'Send the revised quote', approver: person('Ari'), owner: { ...person('Mina Patel'), match: 'name' },
     waits_on: 'owner', state: 'open', created_at: ago(sentDaysAgo), sent_at: ago(sentDaysAgo), state_set_at: ago(sentDaysAgo),
-    state_set_by: person('Ari'), owner_set_at: null, owner_set_by: null, send_included: true, check: null,
+    state_set_by: person('Ari'), owner_set_at: null, owner_set_by: null, send_included: true,
     can: { set_state: true, assign: true }, reach: 'not_read', ...rest,
   };
 }

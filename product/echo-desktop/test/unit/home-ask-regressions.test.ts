@@ -36,7 +36,7 @@ it('keeps identical actions from different meetings distinguishable on Home, in 
   const two = followUp(2, { expected: one.expected, decision: { ...one.decision!, title: 'Supplier review', record_sha256: 'sha256:' + '2'.repeat(64) } });
   const state = store.getState();
   const home = { ...state.home!, loading: false, reading: false, reviews: [], runs: [], failure: undefined,
-    open: { send: [], items: [one, two], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false } };
+    open: { send: [], items: [one, two], waiting: 0 } };
   // At the top the two are one Update line, which names the newest by its qualified name.
   const top = render(Home({ state: { ...state, home } }));
   expect(text(byTestId(top, 'need-category')[0])).toMatch(/Send the prototype · from (Pilot planning|Supplier review)/);

@@ -91,7 +91,7 @@ describe('your follow-ups (F9) and Only me', () => {
   /** The store's first state, signed in, with no projects at all, Home read (`waiting` on others), on `route`. */
   async function signedIn(route: State['route'], waiting: number | null = null): Promise<State> {
     const { getState } = await import('../../src/renderer/store.js');
-    const open = waiting === null ? null : { send: [], items: [], landed: 0, waiting, last_checked_at: null, sweep_due: false };
+    const open = waiting === null ? null : { send: [], items: [], waiting };
     return {
       ...getState(), route,
       status: { client_version: 'test', signed_in: true, account: ACCOUNT },

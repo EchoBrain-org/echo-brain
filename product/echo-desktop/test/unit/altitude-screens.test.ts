@@ -26,7 +26,7 @@ function item(id: string, of: ProjectSummary, extra: Partial<OpenItemView> & { d
     decision: { approval_id: 'apr_1', record_sha256: `sha256:${of.name}`, title: `${of.name} sync`, first_line: null, approved_at: ago(10), project_ids: [of.project_id] },
     relation: null, expected: `Follow-up ${id}`, approver: person('Lin Chen'), owner: { ...person(owner_name), match: 'name' }, waits_on: 'owner', state: 'open',
     created_at: ago(days), sent_at: ago(days), state_set_at: ago(days), state_set_by: person('Lin Chen'), owner_set_at: null, owner_set_by: null,
-    send_included: true, check: null, can: { set_state: true, assign: true }, reach: 'not_read', ...rest,
+    send_included: true, can: { set_state: true, assign: true }, reach: 'not_read', ...rest,
   };
 }
 const read = (active: OpenItemView[], extra: Partial<ProjectRead> = {}): ProjectRead => ({
@@ -51,7 +51,7 @@ const meeting = (title: string, meeting_at: string | null = null): PersonMeeting
   action_count: 1, meeting_at, all_day: false, records: [],
 });
 /** What waits on you: these follow-ups, yours to update. */
-const waiting = (items: OpenItemView[]): HomeView => ({ send: [], items, landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
+const waiting = (items: OpenItemView[]): HomeView => ({ send: [], items, waiting: 0 });
 
 const READS = {
   [THERMAL.project_id]: read([item('t1', THERMAL, { days: 9, kind: 'ticket' }), item('t2', THERMAL, { days: 4, owner_name: 'Rafael Moreno' }),

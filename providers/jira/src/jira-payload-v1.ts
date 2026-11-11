@@ -1,5 +1,5 @@
 import { normalizeAtlassianDocumentTextV1 } from '@echo-brain/provider-runtime/atlassian-document-text-v1';
-import { canonicalSha256, sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
+import { sha256Digest } from '@echo-brain/federation-protocol';
 import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import type { PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
@@ -79,9 +79,9 @@ function issueSummary(fields: Record<string, unknown>): string {
   return fields.summary;
 }
 
-/** An issue's description as text, empty when it has none; embedded content it cannot read is refused unless `omit` leaves it out. */
-function issueDescription(fields: Record<string, unknown>, unsupported: 'reject' | 'omit' = 'reject'): string {
-  return fields.description === null ? '' : normalizeAtlassianDocumentTextV1(fields.description, JIRA_PERSON_PROVIDER_V1, { unsupported }).text.trim();
+/** An issue's description as text, empty when it has none; embedded content it cannot read is refused. */
+function issueDescription(fields: Record<string, unknown>): string {
+  return fields.description === null ? '' : normalizeAtlassianDocumentTextV1(fields.description, JIRA_PERSON_PROVIDER_V1, { unsupported: 'reject' }).text.trim();
 }
 
 /** An issue's status name, its assignee's display name and its due day, when it has them. */
@@ -90,19 +90,6 @@ function issueState(fields: Record<string, unknown>): { readonly status: string;
   const owner = fields.assignee === null ? undefined : jiraString(jiraRecord(fields.assignee).displayName, 128);
   const due_at = fields.duedate === null ? undefined : jiraDay(fields.duedate);
   return { status, ...(owner === undefined ? {} : { owner }), ...(due_at === undefined ? {} : { due_at }) };
-}
-
-/**
- * A ticket's marker for the Ask source check (Ask timeline v1, C1; ADR-0047): `sha256:` and the hex SHA-256 of the canonical
- * JSON of its summary, description, status name, assignee display name and due date, each parsed as `parseJiraIssueV1` parses
- * it, so the marker moves when what an answer read of the ticket does. A description with embedded content the reader cannot
- * read (an image, say), which an answer could only cite by its row, keeps the rest of its text with that content left out.
- * Jira's `updated` is not in it: it moves on every comment.
- */
-export function jiraTicketMarkerV1(fields: unknown): Sha256Digest {
-  const record = jiraRecord(fields);
-  const { status, owner, due_at } = issueState(record);
-  return canonicalSha256({ summary: issueSummary(record), description: issueDescription(record, 'omit'), status, assignee: owner ?? null, due_date: due_at ?? null });
 }
 
 export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: string; readonly origin: string; readonly inventory: boolean; readonly related?: boolean }): ParsedJiraIssueV1 {
@@ -165,22 +152,18 @@ async function* jiraBulkIssues(transport: JiraCloudTransportV1, input: { readonl
 /** The Ask source check reads 50 issues per bulk call (Jira allows 100), in at most two calls. */
 const TICKET_CHECK_BATCH = 50;
 const TICKET_CHECK_MAX_IDS = 100;
-const TICKET_CHECK_FIELDS = Object.freeze(['summary', 'description', 'status', 'assignee', 'duedate']);
+/** Readability only: one small field, never read. */
+const TICKET_CHECK_FIELDS = Object.freeze(['status']);
 
 /**
- * Each readable ticket's check marker by its id (`jiraTicketMarkerV1`), for distinct valid issue ids, in bulk reads that apply
- * this person's current issue permissions. Hidden, deleted and unknown issues do not come back and are left out. A ticket that
- * came back with fields its marker cannot be made from is readable with no marker (null), and the others keep theirs; an issue
+ * The ids of the tickets this person can read now (Ask timeline v1, C1; ADR-0047), for distinct valid issue ids, in bulk reads
+ * that apply their current issue permissions. Hidden, deleted and unknown issues do not come back and are left out; an issue
  * Jira could not return just now (issueErrors) or a malformed page fails the whole read, never a partial answer.
  */
-export async function readJiraTicketMarkersV1(transport: JiraCloudTransportV1, input: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, Sha256Digest | null>> {
+export async function readJiraReadableTicketsV1(transport: JiraCloudTransportV1, input: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlySet<string>> {
   if (input.ticket_ids.length > TICKET_CHECK_MAX_IDS) jiraFailure('invalid_request');
-  const found = new Map<string, Sha256Digest | null>();
-  for await (const issue of jiraBulkIssues(transport, input, { batch: TICKET_CHECK_BATCH, fields: TICKET_CHECK_FIELDS, issue_errors: true, abort: true })) {
-    let marker: Sha256Digest | null;
-    try { marker = jiraTicketMarkerV1(issue.fields); } catch { marker = null; }
-    found.set(issue.id, marker);
-  }
+  const found = new Set<string>();
+  for await (const issue of jiraBulkIssues(transport, input, { batch: TICKET_CHECK_BATCH, fields: TICKET_CHECK_FIELDS, issue_errors: true, abort: true })) found.add(issue.id);
   return found;
 }
 

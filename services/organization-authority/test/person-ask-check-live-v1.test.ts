@@ -6,7 +6,6 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import type { PersonLiveEvidenceReleaseV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { ConfluenceConnectionStoreV1 } from '@echo-brain/provider-confluence/confluence-connection-store-v1';
 import { JiraConnectionStoreV1 } from '@echo-brain/provider-jira/jira-connection-store-v1';
-import { jiraTicketMarkerV1 } from '@echo-brain/provider-jira/jira-person-connection-v1';
 import { SqliteImpactItemsV1 } from '../src/adapters/persistence/sqlite/impact-items-v1.js';
 import { SqliteOpenItemPeopleV1 } from '../src/adapters/persistence/sqlite/open-item-people-v1.js';
 import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
@@ -60,7 +59,7 @@ function askCheck(live: readonly PersonSourceCheckV1[]) {
   };
   return { check, failures };
 }
-const item = (citation: unknown, marker?: string) => ({ asked_at: '2026-10-20T09:00:00.000Z', citation, ...(marker === undefined ? {} : { marker }) });
+const item = (citation: unknown) => ({ asked_at: '2026-10-20T09:00:00.000Z', citation });
 
 describe('Ask source check through the Jira connection', () => {
   const BULK = `/ex/jira/${FIXTURE_JIRA_CLOUD_V1}/rest/api/3/issue/bulkfetch`;
@@ -91,45 +90,29 @@ describe('Ask source check through the Jira connection', () => {
     return { runtime, store, bulk, fetch, ...askCheck([runtime.checks]) };
   }
 
-  it('answers a readable ticket same with the fingerprint of what an answer read of it', async () => {
-    const f = jira(new Map([['10012', fields('10012')]]));
-    const [baseline] = await f.check([item(ticket('10012'))]);
-    // The canonical JSON of the parsed summary, description, status, assignee and due date.
-    const marker = canonicalSha256({ summary: 'Kestrel issue 10012', description: 'Ship 10012 after the review.', status: 'In Progress', assignee: 'Mina Patel', due_date: '2026-10-30' });
-    expect(baseline).toEqual({ state: 'same', marker });
-    expect(jiraTicketMarkerV1(fields('10012'))).toBe(marker);
-    expect(f.failures).toEqual([]);
-  });
-
-  it('fingerprints a description with content the reader cannot read by the rest of its text', async () => {
+  it('answers a readable ticket same, whatever its description holds', async () => {
     const image = { type: 'mediaSingle', content: [{ type: 'media', attrs: { id: 'image-1', type: 'file', collection: 'jira' } }] };
-    const withImage = (text: string) => ({ ...fields('10012'), description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text }] }, image] } });
-    const issues = new Map<string, Record<string, unknown>>([['10012', withImage('Ship 10012 after the review.')]]);
-    const f = jira(issues);
-    const [baseline] = await f.check([item(ticket('10012'))]);
-    expect(baseline).toEqual({ state: 'same', marker: jiraTicketMarkerV1(withImage('Ship 10012 after the review.')) });
-    expect(await f.check([item(ticket('10012'), baseline!.marker)])).toEqual([baseline]);
+    const withImage = { ...fields('10013'), description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Ship 10013.' }] }, image] } };
+    const f = jira(new Map([['10012', fields('10012')], ['10013', withImage]]));
+    expect(await f.check([item(ticket('10012')), item(ticket('10013'))])).toEqual([{ state: 'same' }, { state: 'same' }]);
     expect(f.failures).toEqual([]);
   });
 
   it('answers a hidden, deleted or never-existing ticket unreadable, and reads no key or malformed id', async () => {
     const f = jira(new Map([['10012', fields('10012')]]));
     // 10013 was deleted or is hidden from the owner; 10099 never existed: Jira returns neither.
-    expect(await f.check([item(ticket('10013')), item(ticket('10099')), item(ticket('10012'))])).toEqual([{ state: 'unreadable' }, { state: 'unreadable' }, { state: 'same', marker: jiraTicketMarkerV1(fields('10012')) }]);
+    expect(await f.check([item(ticket('10013')), item(ticket('10099')), item(ticket('10012'))])).toEqual([{ state: 'unreadable' }, { state: 'unreadable' }, { state: 'same' }]);
     f.bulk.length = 0;
     expect(await f.check([item(ticket('ECHO-12')), item(ticket('012'))])).toEqual([{ state: 'unreadable' }, { state: 'unreadable' }]);
     expect(f.bulk).toEqual([]);
     expect(f.failures).toEqual([]);
   });
 
-  it('reads at most a hundred tickets in two bulk calls of fifty, asking only for the fields the marker covers', async () => {
+  it('reads at most a hundred tickets in two bulk calls of fifty, asking for one field only', async () => {
     const ids = Array.from({ length: 100 }, (_, index) => String(20_000 + index));
     const f = jira(new Map(ids.map(id => [id, fields(id)])));
-    expect(await f.check(ids.map(id => item(ticket(id))))).toEqual(ids.map(id => ({ state: 'same', marker: jiraTicketMarkerV1(fields(id)) })));
-    expect(f.bulk).toEqual([
-      { ids: ids.slice(0, 50), fields: ['summary', 'description', 'status', 'assignee', 'duedate'] },
-      { ids: ids.slice(50), fields: ['summary', 'description', 'status', 'assignee', 'duedate'] },
-    ]);
+    expect(await f.check(ids.map(id => item(ticket(id))))).toEqual(ids.map(() => ({ state: 'same' })));
+    expect(f.bulk).toEqual([{ ids: ids.slice(0, 50), fields: ['status'] }, { ids: ids.slice(50), fields: ['status'] }]);
   });
 
   it('answers unknown when Jira fails or answers something malformed, or the owner is not connected, reporting only where and why', async () => {
@@ -147,10 +130,10 @@ describe('Ask source check through the Jira connection', () => {
       expect(await f.check([item(ticket('10012')), item(ticket('10013'))]), label).toEqual([{ state: 'unknown' }, { state: 'unknown' }]);
       expect(f.failures, label).toEqual([{ kind: 'person_ask_check_live_read', reason: 'tickets', code }]);
     }
-    // One issue whose fields no marker can be made from is unknown on its own; the others keep their answers.
+    // An issue that came back is readable, whatever its fields say.
     const malformed = jira(new Map<string, Record<string, unknown>>([['10012', { ...fields('10012'), status: null }], ['10014', fields('10014')]]));
     expect(await malformed.check([item(ticket('10012')), item(ticket('10013')), item(ticket('10014'))]))
-      .toEqual([{ state: 'unknown' }, { state: 'unreadable' }, { state: 'same', marker: jiraTicketMarkerV1(fields('10014')) }]);
+      .toEqual([{ state: 'same' }, { state: 'unreadable' }, { state: 'same' }]);
     expect(malformed.failures).toEqual([]);
     const f = jira(new Map([['10012', fields('10012')]]));
     f.store.revoke(person);

@@ -37,13 +37,13 @@ describe('Ask source check request (Ask timeline v1, C1)', () => {
     expect([...PERSON_ASK_CHECK_CITATION_KINDS_V1]).toEqual(['approved_record', 'source_revision', 'follow_up', 'ticket', 'page']);
   });
 
-  it('accepts each checkable kind exactly as an answer cited it, with a marker on a ticket only, and returns a frozen copy', () => {
-    const value = request([...Object.values(citations).map(citation => item(citation)), item(citations.ticket, { marker: MARKER })]);
+  it('accepts each checkable kind exactly as an answer cited it, and returns a frozen copy', () => {
+    const value = request(Object.values(citations).map(citation => item(citation)));
     const validated = validatePersonAskCheckRequestV1(value);
     expect(validated).toEqual(value);
     expect(Object.isFrozen(validated)).toBe(true);
     expect(Object.isFrozen(validated.items)).toBe(true);
-    expect(Object.isFrozen(validated.items[5])).toBe(true);
+    expect(Object.isFrozen(validated.items[4])).toBe(true);
     // The citations are the V8 answer's own, validated by the same rules.
     for (const citation of Object.values(citations)) expect(validatePersonAnswerEvidenceCitationV8(citation)).toEqual(citation);
     // The same source may be asked about for several turns.
@@ -91,13 +91,7 @@ describe('Ask source check request (Ask timeline v1, C1)', () => {
     ['a time with an offset', request([item(citations.ticket, { asked_at: '2026-10-20T09:30:00.000+02:00' })])],
     ['a time that does not exist', request([item(citations.ticket, { asked_at: '2026-02-30T09:30:00.000Z' })])],
     ['a time that is a number', request([item(citations.ticket, { asked_at: Date.parse(ASKED) })])],
-    ['a marker on a page', request([item(citations.page, { marker: MARKER })])],
-    ['a marker on a follow-up', request([item(citations.follow_up, { marker: MARKER })])],
-    ['a marker on a record', request([item(citations.approved_record, { marker: MARKER })])],
-    ['a marker without its prefix', request([item(citations.ticket, { marker: MARKER.slice(7) })])],
-    ['a marker in upper case', request([item(citations.ticket, { marker: MARKER.toUpperCase() })])],
-    ['a short marker', request([item(citations.ticket, { marker: MARKER.slice(0, -1) })])],
-    ['a null marker', request([item(citations.ticket, { marker: null })])],
+    ['a retired marker on a ticket', request([item(citations.ticket, { marker: MARKER })])],
   ])('refuses a request with %s', (label, value) => {
     refused(() => validatePersonAskCheckRequestV1(value), label);
   });
@@ -108,31 +102,21 @@ describe('Ask source check request (Ask timeline v1, C1)', () => {
 });
 
 describe('Ask source check answer (Ask timeline v1, C1)', () => {
-  const asked = validatePersonAskCheckRequestV1(request([item(citations.ticket), item(citations.page), item(citations.ticket, { marker: MARKER }), item(citations.follow_up)]));
+  const asked = validatePersonAskCheckRequestV1(request([item(citations.ticket), item(citations.page), item(citations.ticket), item(citations.follow_up)]));
 
-  it('answers each item in order, with a marker only on a readable ticket, and returns a frozen copy', () => {
-    const value = answer([{ state: 'same', marker: MARKER }, { state: 'changed' }, { state: 'changed', marker: canonicalSha256('later') }, { state: 'unreadable' }]);
+  it('answers each item in order, and returns a frozen copy', () => {
+    const value = answer([{ state: 'same' }, { state: 'unknown' }, { state: 'same' }, { state: 'unreadable' }]);
     const validated = validatePersonAskCheckV1(value, asked);
     expect(validated).toEqual(value);
     expect(Object.isFrozen(validated)).toBe(true);
     expect(Object.isFrozen(validated.items[0])).toBe(true);
-    // Unreadable and unknown tickets carry no marker.
-    expect(validatePersonAskCheckV1(answer([{ state: 'unreadable' }, { state: 'unknown' }, { state: 'unknown' }, { state: 'same' }]), asked).items)
-      .toEqual([{ state: 'unreadable' }, { state: 'unknown' }, { state: 'unknown' }, { state: 'same' }]);
-    // A readable ticket may come without its marker, so a later Authority can stop sending it.
-    expect(validatePersonAskCheckV1(answer([{ state: 'same' }, { state: 'same' }, { state: 'same' }, { state: 'same' }]), asked).items)
-      .toEqual([{ state: 'same' }, { state: 'same' }, { state: 'same' }, { state: 'same' }]);
     // Without its request, only the shape is checked.
     expect(validatePersonAskCheckV1(answer([{ state: 'same' }, { state: 'unknown' }])).items).toHaveLength(2);
   });
 
   it.each([
-    ['fewer items than asked', answer([{ state: 'same', marker: MARKER }, { state: 'same' }, { state: 'same', marker: MARKER }])],
-    ['more items than asked', answer([{ state: 'same', marker: MARKER }, { state: 'same' }, { state: 'same', marker: MARKER }, { state: 'same' }, { state: 'same' }])],
-    ['a marker on a page', answer([{ state: 'same', marker: MARKER }, { state: 'same', marker: MARKER }, { state: 'same', marker: MARKER }, { state: 'same' }])],
-    ['a marker on a follow-up', answer([{ state: 'same', marker: MARKER }, { state: 'same' }, { state: 'same', marker: MARKER }, { state: 'same', marker: MARKER }])],
-    ['a marker on an unreadable ticket', answer([{ state: 'unreadable', marker: MARKER }, { state: 'same' }, { state: 'same', marker: MARKER }, { state: 'same' }])],
-    ['a marker on an unknown ticket', answer([{ state: 'same', marker: MARKER }, { state: 'same' }, { state: 'unknown', marker: MARKER }, { state: 'same' }])],
+    ['fewer items than asked', answer([{ state: 'same' }, { state: 'same' }, { state: 'same' }])],
+    ['more items than asked', answer([{ state: 'same' }, { state: 'same' }, { state: 'same' }, { state: 'same' }, { state: 'same' }])],
   ])('refuses an answer with %s', (label, value) => {
     refused(() => validatePersonAskCheckV1(value, asked), label);
   });
@@ -146,10 +130,10 @@ describe('Ask source check answer (Ask timeline v1, C1)', () => {
     ['another state', answer([{ state: 'stale' }])],
     ['no state', answer([{}])],
     ['a reason', answer([{ state: 'unreadable', reason: 'deleted' }])],
-    ['a label', answer([{ state: 'changed', label: 'ECHO-12' }])],
-    ['a count', answer([{ state: 'changed', changed: 2 }])],
-    ['a marker on an unreadable item', answer([{ state: 'unreadable', marker: MARKER }])],
-    ['a marker that is not a digest', answer([{ state: 'same', marker: 'ECHO-12' }])],
+    ['the retired changed state', answer([{ state: 'changed' }])],
+    ['a label', answer([{ state: 'same', label: 'ECHO-12' }])],
+    ['a count', answer([{ state: 'same', changed: 2 }])],
+    ['a retired marker on a readable ticket', answer([{ state: 'same', marker: MARKER }])],
   ])('refuses an answer with %s', (label, value) => {
     refused(() => validatePersonAskCheckV1(value), label);
   });

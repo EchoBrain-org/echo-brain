@@ -50,8 +50,7 @@ import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
  * limit, a timeout) is `unavailable` and is reported without content, so an
  * outage is never shown as lost access.
  *
- * Sweeps are retired (SVC-2): the fields that carried their results are sent
- * as the runs API's constants, whatever check a sweep left on a row.
+ * Sweeps are retired (SVC-2): a check a sweep left on a row is never shown.
  */
 interface CreatePersonOpenItemsV1Options extends OpenItemSourcesV1 {
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
@@ -501,8 +500,6 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         state_set_by: row.state_set_by === null ? null : personOf(context.people, row.state_set_by),
         owner_set_at: row.owner_set_at, owner_set_by: row.owner_set_by === null ? null : personOf(context.people, row.owner_set_by),
         send_included: row.send_included,
-        // Retired with sweeps (SVC-2): a check a sweep left on the row is never shown.
-        check: null,
         can: Object.freeze({ set_state: access.set_state, assign: access.assign }),
         reach,
       }, unshowable);
@@ -574,8 +571,6 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         send: send.slice(0, PERSON_HOME_ROWS_V1), items: await present(viewer, context, shown, { signal: input.signal, live: !rowsOnly }),
         // The open items the caller approved that wait on someone else, counted with no live read.
         waiting: visible.filter(entry => approvedBy(entry.row, viewer) && !entry.access.waits_on_viewer).length,
-        // Retired with sweeps (SVC-2).
-        landed: 0, last_checked_at: null, sweep_due: false,
       });
     },
 
@@ -632,15 +627,13 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         if (row.created_at > counts.latest) counts.latest = row.created_at;
         byDecision.set(row.record_sha256, counts);
       }
-      // `landed`, `changed`, `unreadable` and `last_checked_at` here and in each decision's counts: retired with sweeps (SVC-2).
       const summary: PersonOpenItemsSummaryV1 = {
         unsent: visible.filter(entry => entry.row.state === 'unsent').length, open: open.length,
         done: visible.filter(entry => entry.row.state === 'done').length, not_relevant: visible.filter(entry => entry.row.state === 'not_relevant').length,
-        landed: 0, changed: 0, unreadable: 0,
-        decisions: new Set(visible.map(entry => entry.row.record_sha256)).size, last_checked_at: null,
+        decisions: new Set(visible.map(entry => entry.row.record_sha256)).size,
         // Most recent decisions first, when a scope holds more than the API carries.
         by_decision: [...byDecision].sort(([leftRecord, left], [rightRecord, right]) => ascending(right.latest, left.latest) || ascending(leftRecord, rightRecord))
-          .slice(0, SCOPE_DECISIONS_MAX).map(([record_sha256, { latest: _latest, ...counts }]) => ({ record_sha256, ...counts, landed: 0, unreadable: 0 })),
+          .slice(0, SCOPE_DECISIONS_MAX).map(([record_sha256, { latest: _latest, ...counts }]) => ({ record_sha256, ...counts })),
       };
 
       // Each decision's impact check stage, for the decisions in scope the policy shows the viewer: a project lists the records they read now.

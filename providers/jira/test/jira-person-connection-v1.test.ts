@@ -148,16 +148,16 @@ describe('Nango-backed personal Jira connection', () => {
 
   it('reads tickets in bulk only through the current person connection, never without it or for another actor', async () => {
     const f = fixture(); try {
-      for (const read of [f.service.assigneeAccounts, f.service.ticketMarkers]) {
+      for (const read of [f.service.assigneeAccounts, f.service.readableTickets]) {
         await expect(read({ access_token: f.token, ticket_ids: ['10001'] })).rejects.toMatchObject({ code: 'unauthorized' });
       }
       expect(f.nango.connection).not.toHaveBeenCalled();
       await f.connected(); const stored = f.store.current(person)!; f.transport.mockClear();
-      for (const read of [f.service.assigneeAccounts, f.service.ticketMarkers]) {
+      for (const read of [f.service.assigneeAccounts, f.service.readableTickets]) {
         await expect(read({ access_token: 'synthetic-person-two', ticket_ids: ['10001'] })).rejects.toMatchObject({ code: 'unauthorized' });
       }
       expect(f.transport).not.toHaveBeenCalled();
-      await f.service.ticketMarkers({ access_token: f.token, ticket_ids: ['10001'] });
+      await f.service.readableTickets({ access_token: f.token, ticket_ids: ['10001'] });
       expect(f.nango.connection).toHaveBeenLastCalledWith(stored.reference, expect.any(AbortSignal));
       expect(f.transport).toHaveBeenLastCalledWith(`https://api.atlassian.com/ex/jira/${cloud}/rest/api/3/issue/bulkfetch`, expect.objectContaining({
         redirect: 'error', headers: expect.any(Headers),
@@ -181,7 +181,7 @@ describe('Nango-backed personal Jira connection', () => {
   it('refuses bulk ticket reads after the authenticated membership is revoked', async () => {
     const f = fixture(); try {
       await f.connected(); f.setActive(false); f.transport.mockClear();
-      for (const read of [f.service.assigneeAccounts, f.service.ticketMarkers]) {
+      for (const read of [f.service.assigneeAccounts, f.service.readableTickets]) {
         await expect(read({ access_token: f.token, ticket_ids: ['10001'] })).rejects.toMatchObject({ code: 'unauthorized' });
       }
       expect(f.transport).not.toHaveBeenCalled();

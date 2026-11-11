@@ -21,7 +21,7 @@ const row = (owner = mina): OpenItemView => ({
   approver: mina, owner: { ...owner, match: 'name' }, waits_on: 'owner', state: 'open',
   created_at: '2026-10-14T09:00:00.000Z', sent_at: '2026-10-14T10:00:00.000Z', state_set_at: '2026-10-14T10:00:00.000Z',
   state_set_by: mina, owner_set_at: null, owner_set_by: null, send_included: true,
-  check: null, can: { set_state: true, assign: true }, reach: 'not_read',
+  can: { set_state: true, assign: true }, reach: 'not_read',
 });
 const receipt: AskReceipt = { looked_through: 1 };
 const answer: Answer = {

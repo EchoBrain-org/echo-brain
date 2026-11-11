@@ -52,20 +52,19 @@ const CURRENT = { citation: echo12, says_now: 'ECHO-12 · Pilot launch: planned 
 const APPROVER = { membership_id: ARI, name: 'Ari', active: true };
 const OWNER = { membership_id: MINA, name: 'Mina Patel', active: true, match: 'jira_account' };
 const OWNER_PERSON = { membership_id: MINA, name: 'Mina Patel', active: true };
-const CHECK = { verdict: 'changed', checked_at: LATER, checked_by: 'Mina Patel' };
 /** An item the viewer opened carries what it says now; any other says why it does not. */
 const openItem = (overrides: Record<string, unknown>) => ({
   item_id: ITEM, run_id: RUN, kind: 'ticket', relation: 'conflicts', expected: 'launch next week', approver: APPROVER, owner: OWNER,
   waits_on: 'owner', state: 'open', created_at: NOW, sent_at: LATER, state_set_at: LATER, state_set_by: APPROVER, owner_set_at: null, owner_set_by: null, send_included: true,
-  check: CHECK, can: { set_state: true, assign: true },
+  can: { set_state: true, assign: true },
   reach: Object.hasOwn(overrides, 'current') ? 'opened' : 'no_access',
   ...overrides,
 });
 const without = (value: Record<string, unknown>, key: string) => Object.fromEntries(Object.entries(value).filter(([name]) => name !== key));
 const sendRow = (overrides: Record<string, unknown> = {}) => ({ run_id: RUN, decision: DECISION, items: 2, kinds: ['ticket', 'page'], owners: ['Mina Patel'], finished_at: LATER, ...overrides });
-const decisionCount = { record_sha256: RECORD, unsent: 1, open: 1, landed: 0, unreadable: 0 };
+const decisionCount = { record_sha256: RECORD, unsent: 1, open: 1 };
 const summary = (overrides: Record<string, unknown> = {}) => ({
-  unsent: 1, open: 1, done: 0, not_relevant: 0, landed: 0, changed: 1, unreadable: 0, decisions: 1, last_checked_at: LATER, by_decision: [decisionCount], ...overrides,
+  unsent: 1, open: 1, done: 0, not_relevant: 0, decisions: 1, by_decision: [decisionCount], ...overrides,
 });
 const stage = (overrides: Record<string, unknown> = {}) => ({ record_sha256: RECORD, run_id: RUN, state: 'done', error_code: null, mine: true, ...overrides });
 
@@ -158,6 +157,7 @@ describe('runs API list result', () => {
     ['an extra key on a run', { runs: [run({ result_json: '{}' })] }],
     ['a run missing a key', { runs: [{ ...run(), error_code: undefined }] }],
     ['a trigger that is not a run trigger', { runs: [run({ trigger: 'check' })] }],
+    ['a retired sweep trigger', { runs: [run({ trigger: 'sweep' })] }],
     ['a bad run id', { runs: [run({ run_id: 'rr_1234' })] }],
     ['an empty event ref', { runs: [run({ event_ref: '' })] }],
     ['an event ref over 128 characters', { runs: [run({ event_ref: 'a'.repeat(129) })] }],
@@ -266,7 +266,7 @@ describe('runs API open items', () => {
     expect(validatePersonRunsResultV1('item', { item: seen }).item.current?.says_now).toBe(CURRENT.says_now);
     expect(validatePersonRunsResultV1('item', { item: openItem({}) }).item).not.toHaveProperty('current');
     expect(() => validatePersonRunsResultV1('item', { item: { ...seen, pointer: {} } })).toThrow();      // no extra key ever
-    expect(() => validatePersonRunsResultV1('home', { send: [], items: Array.from({ length: 21 }, () => seen), landed: 0, waiting: 0, last_checked_at: null, sweep_due: false })).toThrow();
+    expect(() => validatePersonRunsResultV1('home', { send: [], items: Array.from({ length: 21 }, () => seen), waiting: 0 })).toThrow();
   });
   it('accepts read counts on items only and never with a cursor, and requires reach', () => {
     // Counts and stages only: a line that shows how many items there are opens none of them.
@@ -405,18 +405,18 @@ describe('runs API open-item requests', () => {
 describe('runs API open-item results', () => {
   const seen = openItem({ decision: DECISION, current: CURRENT });
   const withItem = (fields: Record<string, unknown>) => ({ item: { ...seen, ...fields } });
-  const home = (fields: Record<string, unknown> = {}) => ({ send: [sendRow()], items: [seen], landed: 1, waiting: 0, last_checked_at: LATER, sweep_due: false, ...fields });
+  const home = (fields: Record<string, unknown> = {}) => ({ send: [sendRow()], items: [seen], waiting: 0, ...fields });
   const page = (fields: Record<string, unknown> = {}) => ({ items: [seen], next_cursor: null, summary: summary(), stages: [stage()], ...fields });
 
   it('returns a fresh item, frozen with all its parts', () => {
     const { item } = validatePersonRunsResultV1('item', { item: seen });
     expect(item).toEqual(seen);
-    for (const part of [item, item.decision, item.decision?.project_ids, item.current, item.current?.citation, item.approver, item.owner, item.check, item.can]) expect(Object.isFrozen(part)).toBe(true);
+    for (const part of [item, item.decision, item.decision?.project_ids, item.current, item.current?.citation, item.approver, item.owner, item.can]) expect(Object.isFrozen(part)).toBe(true);
   });
 
   it('accepts an unsent item that was never assessed or checked and waits on the leads', () => {
     const orphan = openItem({
-      relation: null, expected: null, state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, send_included: null, check: null, waits_on: 'leads', can: { set_state: false, assign: true },
+      relation: null, expected: null, state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, send_included: null, waits_on: 'leads', can: { set_state: false, assign: true },
       approver: { ...APPROVER, active: false }, owner: { ...APPROVER, active: false, match: 'approver' },
     });
     expect(validatePersonRunsResultV1('item', { item: orphan }).item).toEqual(orphan);
@@ -440,18 +440,18 @@ describe('runs API open-item results', () => {
 
   it('carries a meeting action as an item of kind action, and a run\'s items up to its affected rows and actions', () => {
     const action = openItem({ kind: 'action', relation: 'needs_updating', expected: 'Send the pilot plan to the vendor', state: 'unsent', sent_at: null, state_set_at: null,
-      state_set_by: null, send_included: null, check: null, owner: { ...OWNER, match: 'name' } });
+      state_set_by: null, send_included: null, owner: { ...OWNER, match: 'name' } });
     expect(validatePersonRunsResultV1('item', { item: action }).item.kind).toBe('action');
     const kinds = ['action', 'ticket', 'page', 'record', 'document'];
-    expect(validatePersonRunsResultV1('home', { send: [sendRow({ kinds, items: 40, owners: Array.from({ length: 40 }, (_, at) => `Owner ${at}`) })], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false })
+    expect(validatePersonRunsResultV1('home', { send: [sendRow({ kinds, items: 40, owners: Array.from({ length: 40 }, (_, at) => `Owner ${at}`) })], items: [], waiting: 0 })
       .send[0]!.kinds).toEqual(kinds);
-    refused(() => validatePersonRunsResultV1('home', { send: [sendRow({ owners: Array.from({ length: 41 }, (_, at) => `Owner ${at}`) })], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false }), 'one owner too many');
+    refused(() => validatePersonRunsResultV1('home', { send: [sendRow({ owners: Array.from({ length: 41 }, (_, at) => `Owner ${at}`) })], items: [], waiting: 0 }), 'one owner too many');
   });
 
   it('accepts a home and an items page up to their bounds', () => {
     const fullHome = home({ send: Array.from({ length: 20 }, () => sendRow()), items: Array.from({ length: 20 }, () => seen) });
     expect(validatePersonRunsResultV1('home', fullHome)).toEqual(fullHome);
-    const empty = { send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: true };
+    const empty = { send: [], items: [], waiting: 0 };
     expect(validatePersonRunsResultV1('home', empty)).toEqual(empty);
     refused(() => validatePersonRunsResultV1('home', home({ send: Array.from({ length: 21 }, () => sendRow()) })), 'one send row too many');
     const fullPage = page({
@@ -462,22 +462,6 @@ describe('runs API open-item results', () => {
     refused(() => validatePersonRunsResultV1('items', page({ items: Array.from({ length: 51 }, () => seen) })), 'one item too many');
     refused(() => validatePersonRunsResultV1('items', page({ summary: summary({ by_decision: Array.from({ length: 101 }, () => decisionCount) }) })), 'one decision count too many');
     refused(() => validatePersonRunsResultV1('items', page({ stages: Array.from({ length: 101 }, () => stage()) })), 'one stage too many');
-  });
-
-  it('counts, of a decision\'s open items, those that landed and those ECHO could not read', () => {
-    // Canvas 9.6: three sent items, one still open, one landed, one unreadable.
-    const counted = { record_sha256: RECORD, unsent: 0, open: 3, landed: 1, unreadable: 1 };
-    const read = validatePersonRunsResultV1('items', page({ summary: summary({ open: 3, landed: 1, unreadable: 1, by_decision: [counted] }) }));
-    expect(read.summary.by_decision).toEqual([counted]);
-    expect(Object.isFrozen(read.summary.by_decision[0])).toBe(true);
-    // Every open item may have landed or gone unread, and no more than those.
-    for (const counts of [{ open: 3, landed: 3, unreadable: 0 }, { open: 3, landed: 0, unreadable: 3 }, { open: 2, landed: 1, unreadable: 1 }, { open: 0, landed: 0, unreadable: 0 }]) {
-      expect(validatePersonRunsResultV1('items', page({ summary: summary({ by_decision: [{ ...counted, ...counts }] }) })).summary.by_decision[0]).toEqual({ ...counted, ...counts });
-    }
-    for (const [label, counts] of [
-      ['more landed and unreadable than open', { open: 3, landed: 2, unreadable: 2 }], ['a landed item with nothing open', { open: 0, landed: 1, unreadable: 0 }],
-      ['an unreadable item with nothing open', { open: 0, landed: 0, unreadable: 1 }],
-    ] as const) refused(() => validatePersonRunsResultV1('items', page({ summary: summary({ by_decision: [{ ...counted, ...counts }] }) })), label);
   });
 
   it('accepts the send, set_state and assign results', () => {
@@ -527,9 +511,7 @@ describe('runs API open-item results', () => {
     ['an unsent item Send included', withItem({ state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, send_included: true })],
     ['an unsent item Send dismissed', withItem({ state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, send_included: false })],
     ['a sent item without what Send did with it', withItem({ send_included: null })],
-    ['an unknown verdict', withItem({ check: { ...CHECK, verdict: 'drifted' } })],
-    ['a check that keeps a sentence', withItem({ check: { ...CHECK, line: 'ECHO-12 now says next week.' } })],
-    ['a check without who ran it', withItem({ check: without(CHECK, 'checked_by') })],
+    ['a retired sweep check', withItem({ check: null })],
     ['permissions with an extra key', withItem({ can: { set_state: true, assign: true, send: true } })],
     ['a permission that is not a boolean', withItem({ can: { set_state: 'yes', assign: true } })],
     ['a decision with a bad record id', withItem({ decision: { ...DECISION, record_sha256: 'sha256:abc' } })],
@@ -554,9 +536,9 @@ describe('runs API open-item results', () => {
   it.each([
     ['a home with an extra count', 'home', home({ total: 3 })],
     ['a home without its waiting count', 'home', without(home(), 'waiting')],
-    ['a negative landed count', 'home', home({ landed: -1 })],
+    ['a home with a retired landed count', 'home', home({ landed: 0 })],
     ['a fractional waiting count', 'home', home({ waiting: 0.5 })],
-    ['a bad last check time', 'home', home({ last_checked_at: 'yesterday' })],
+    ['a home with a retired last check time', 'home', home({ last_checked_at: null })],
     ['a send row with an extra key', 'home', home({ send: [sendRow({ card })] })],
     ['a send row without its decision', 'home', home({ send: [without(sendRow(), 'decision')] })],
     ['a send row with an unknown kind', 'home', home({ send: [sendRow({ kinds: ['issue'] })] })],
@@ -569,15 +551,13 @@ describe('runs API open-item results', () => {
     ['a summary with an extra count', 'items', page({ summary: summary({ total: 9 }) })],
     ['a negative summary count', 'items', page({ summary: summary({ open: -1 }) })],
     ['a summary count that is a string', 'items', page({ summary: summary({ decisions: '1' }) })],
-    ['a bad summary check time', 'items', page({ summary: summary({ last_checked_at: '' }) })],
+    ['a summary with a retired check time', 'items', page({ summary: summary({ last_checked_at: null }) })],
+    ['a summary with retired verdict counts', 'items', page({ summary: summary({ landed: 0, changed: 0, unreadable: 0 }) })],
     ['a decision count with an extra key', 'items', page({ summary: summary({ by_decision: [{ ...decisionCount, done: 0 }] }) })],
     ['a decision count with a bad record id', 'items', page({ summary: summary({ by_decision: [{ ...decisionCount, record_sha256: RUN }] }) })],
-    ['a decision count without its landed count', 'items', page({ summary: summary({ by_decision: [without(decisionCount, 'landed')] }) })],
-    ['a decision count without its unreadable count', 'items', page({ summary: summary({ by_decision: [without(decisionCount, 'unreadable')] }) })],
-    ['a negative decision landed count', 'items', page({ summary: summary({ by_decision: [{ ...decisionCount, landed: -1 }] }) })],
-    ['a fractional decision unreadable count', 'items', page({ summary: summary({ by_decision: [{ ...decisionCount, unreadable: 0.5 }] }) })],
-    ['a decision landed count that is a string', 'items', page({ summary: summary({ by_decision: [{ ...decisionCount, landed: '0' }] }) })],
-    ['a decision count with a changed count', 'items', page({ summary: summary({ by_decision: [{ ...decisionCount, changed: 0 }] }) })],
+    ['a decision count without its open count', 'items', page({ summary: summary({ by_decision: [without(decisionCount, 'open')] }) })],
+    ['a negative decision open count', 'items', page({ summary: summary({ by_decision: [{ ...decisionCount, open: -1 }] }) })],
+    ['a decision count with retired landed and unreadable counts', 'items', page({ summary: summary({ by_decision: [{ ...decisionCount, landed: 0, unreadable: 0 }] }) })],
     ['a stage with an extra key', 'items', page({ stages: [stage({ checked_at: LATER })] })],
     ['a stage in an unknown state', 'items', page({ stages: [stage({ state: 'queued' })] })],
     ['a failed stage without its reason', 'items', page({ stages: [stage({ state: 'failed' })] })],
@@ -585,8 +565,7 @@ describe('runs API open-item results', () => {
     ['a stage with a bad run id', 'items', page({ stages: [stage({ run_id: ITEM })] })],
     ['a stage that does not say whose run it is', 'items', page({ stages: [without(stage(), 'mine')] })],
     ['a stage whose own-run flag is not a boolean', 'items', page({ stages: [stage({ mine: 'yes' })] })],
-    ['a home that does not say whether a sweep is due', 'home', without(home(), 'sweep_due')],
-    ['a home whose sweep_due is not a boolean', 'home', home({ sweep_due: 'true' })],
+    ['a home that says whether a retired sweep is due', 'home', home({ sweep_due: false })],
     ['a send result with an extra count', 'send', { sent: 1, not_relevant: 0, skipped: 0 }],
     ['a negative sent count', 'send', { sent: -1, not_relevant: 0 }],
     ['a set_state result of unsent', 'set_state', { state: 'unsent' }],
@@ -605,10 +584,8 @@ describe('runs API: sweeps retired (SVC-2)', () => {
     for (const value of [{ run_id: RUN }, { state: 'nothing_to_check' }]) refused(() => validatePersonRunsResultV1('sweep' as keyof PersonRunsResultsV1, value), JSON.stringify(value));
   });
 
-  it('still reads a sweep run in a list, a stage\'s owner and a home that says a sweep is due, as an Authority rolled back sends them', () => {
-    expect(validatePersonRunsResultV1('list', { runs: [run(), run({ run_id: 'run_swp1', trigger: 'sweep', event_ref: 'sweep_mine' })] }).runs.map(entry => entry.trigger)).toEqual(['approved_record', 'sweep']);
+  it('reads whose run each stage is', () => {
     const page = { items: [], next_cursor: null, summary: summary(), stages: [stage(), stage({ mine: false, run_id: 'run_bbbb' })] };
     expect(validatePersonRunsResultV1('items', page).stages.map(entry => entry.mine)).toEqual([true, false]);
-    for (const sweep_due of [true, false]) expect(validatePersonRunsResultV1('home', { send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due }).sweep_due).toBe(sweep_due);
   });
 });

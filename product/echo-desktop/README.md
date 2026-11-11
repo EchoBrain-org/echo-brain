@@ -348,12 +348,8 @@ only you can read. An approved meeting and a project each show a follow-ups
 line counted by status ("Follow-ups · 1
 open · 4 not sent"), which opens that list and keeps what it last said while
 it is read again; a meeting's row in a project's feed says how many of its
-follow-ups are not closed ("4 follow-ups"). Home also
-re-checks your own open items by itself: when the Authority says they are
-due, Home asks for a sweep and starts it after any waiting impact check. A
-sweep makes no Home row and changes no item's status; it only records each
-item's latest verdict. A meeting's actions are never re-checked. Projects and
-archived projects live in the sidebar.
+follow-ups are not closed ("4 follow-ups"). Projects and archived projects
+live in the sidebar.
 
 A project's **Tools** (in its title bar, the line above its feed, or the
 project menu) is one sheet for every tool a project can read: a Jira project
