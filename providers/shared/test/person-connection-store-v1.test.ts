@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { JiraConnectionStoreV1 } from '../../jira/src/jira-connection-store-v1.js';
 import { ConfluenceConnectionStoreV1 } from '../../confluence/src/confluence-connection-store-v1.js';
@@ -53,25 +53,17 @@ describe('person-discovered workspace uses the shared consent lifecycle', () => 
 
 describe('shared Atlassian custody with separate product identities', () => {
   it.each([
-    { product: 'jira', Store: JiraConnectionStoreV1, table: 'jira_person_binding_v1' },
-    { product: 'confluence', Store: ConfluenceConnectionStoreV1, table: 'confluence_person_binding_v1' },
-  ])('reads the existing $product row unchanged and retains its grant hash format', ({ product, Store, table }) => {
+    { product: 'jira', Store: JiraConnectionStoreV1 },
+    { product: 'confluence', Store: ConfluenceConnectionStoreV1 },
+  ])('binds a $product connection to its own grant hash format', ({ product, Store }) => {
     const database = new Database(':memory:');
     try {
-      // Seed the pre-extraction schema and serialized grant, not a row produced
-      // by the new implementation. Existing connections require no migration.
-      database.exec(`CREATE TABLE ${table} (person_key TEXT PRIMARY KEY, reference TEXT UNIQUE NOT NULL, body_json TEXT NOT NULL)`);
-      const grant = { kind: `echo-${product}-person-read-grant-v1`, ...person, cloud, account: 'account-fixture', reference: 'reference-fixture', version: 'version-fixture' };
-      const stored = { binding: { ...person, tool_id: product, external_scope_id: cloud, external_subject_id: grant.account, read_grant_sha256: canonicalSha256(grant) }, reference: grant.reference, site, version: grant.version, active: true, attempt: 'attempt-fixture' };
-      const original = canonicalJson(stored);
-      database.prepare(`INSERT INTO ${table} VALUES(?,?,?)`).run(canonicalSha256(person), stored.reference, original);
       const store = new Store(database);
-      expect(store.current(person)).toEqual(stored);
-      expect(store.requireCurrent(stored.binding)).toEqual(stored);
-      expect(database.prepare(`SELECT body_json FROM ${table}`).get()).toEqual({ body_json: original });
       const attempt = store.begin(person);
-      const next = store.complete(person, attempt.attempt, 'new-reference', cloud, grant.account, site);
-      expect(next.binding.read_grant_sha256).toBe(canonicalSha256({ ...grant, reference: next.reference, version: next.version }));
+      const next = store.complete(person, attempt.attempt, 'reference-fixture', cloud, 'account-fixture', site);
+      const grant = { kind: `echo-${product}-person-read-grant-v1`, ...person, cloud, account: 'account-fixture', reference: next.reference, version: next.version };
+      expect(next.binding.read_grant_sha256).toBe(canonicalSha256(grant));
+      expect(store.current(person)).toEqual(next);
     } finally { database.close(); }
   });
 

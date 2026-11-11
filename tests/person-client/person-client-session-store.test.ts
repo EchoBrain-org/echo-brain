@@ -241,15 +241,15 @@ describe("Person session store", () => {
 });
 
 describe("Person session store recovery", () => {
-  // A store written by an older release: valid session, but a top-level key
-  // the current exact-key check does not accept.
-  const LEGACY_STORE = `${JSON.stringify({
+  // A store with a valid session but a top-level key the exact-key check does
+  // not accept.
+  const UNKNOWN_KEY_STORE = `${JSON.stringify({
     schema_version: 1,
     kind: "echo-person-client-session",
     authority_origin: "https://authority.example",
     authority_id: AUTHORITY_ID,
     session: SESSION,
-    legacy_device_id: "dev_1",
+    device_id: "dev_1",
   })}\n`;
 
   function plantStore(home: string, contents: string): PersonSessionStore {
@@ -260,7 +260,7 @@ describe("Person session store recovery", () => {
   }
 
   it.each([
-    ["a session written by an older release", LEGACY_STORE],
+    ["a session file with an unknown key", UNKNOWN_KEY_STORE],
     ["a truncated session file", '{"schema_version":1,"kind":"echo-per'],
   ])("reports %s as unavailable", (_name, contents) => {
     withHome((home) => {
@@ -271,7 +271,7 @@ describe("Person session store recovery", () => {
 
   it("keeps session file integrity failures loud", () => {
     withHome((home) => {
-      const store = plantStore(home, LEGACY_STORE);
+      const store = plantStore(home, UNKNOWN_KEY_STORE);
       chmodSync(store.paths.live, 0o644);
       let caught: unknown;
       try {
@@ -286,7 +286,7 @@ describe("Person session store recovery", () => {
 
   it("clears an unreadable store during logout instead of stranding it", () => {
     withHome((home) => {
-      const store = plantStore(home, LEGACY_STORE);
+      const store = plantStore(home, UNKNOWN_KEY_STORE);
       expect(() => store.claimLogout()).toThrow(
         PersonClientSessionUnavailableError,
       );
