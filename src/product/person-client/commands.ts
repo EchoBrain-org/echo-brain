@@ -125,10 +125,8 @@ const RULES: Readonly<
   "projects-member-remove": { accepts: ["request-id", "project-id", "membership-id"], requires: ["request-id", "project-id", "membership-id"] },
   "projects-associate": { accepts: ["request-id", "project-id", "context-id"], requires: ["request-id", "project-id", "context-id"] },
   "projects-dissociate": { accepts: ["request-id", "project-id", "context-id"], requires: ["request-id", "project-id", "context-id"] },
-  "projects-search-v2": { accepts: ["project-id", "query", "limit", "cursor"], requires: ["project-id", "query"] },
   "updates-submit-v3": { accepts: ["request-id", "title", "file", "audience", "audience-project-id", "association-project-ids-json", "audience-project-ids-json"], requires: ["request-id", "title", "file"] },
   "updates-status-v3": { accepts: ["request-id"], requires: ["request-id"] },
-  "updates-search-v3": { accepts: ["query", "limit"], requires: ["query"] },
   login: {
     accepts: ["invitation", "authority-url", "open-browser"],
   },
@@ -337,7 +335,7 @@ Lists or searches the documents you may read, whichever upload version saved the
 
 Streams a document's exact saved original, whichever upload version saved it, to a new file and verifies its length and SHA-256 before publishing it atomically.
 `,
-  projects: `usage: echo-brain person projects <list-v2|create|read-v2|rename|archive|unarchive|leave|members|directory|member-add|member-set|member-remove|associate|dissociate|search-v2> [options]
+  projects: `usage: echo-brain person projects <list-v2|create|read-v2|rename|archive|unarchive|leave|members|directory|member-add|member-set|member-remove|associate|dissociate> [options]
 
 Projects organize original context. Association does not change its audience. Browse a project with person list --project <project-id> and read each item with person open --ref. Use person ask --project for a strict project-scoped answer.
 `,
@@ -397,11 +395,7 @@ Associate one readable original with a project. Association does not change its 
 
 Remove the association without changing the original or its audience. Refresh person list --project; old upload receipts retain their initial association.
 `,
-  "projects-search-v2": `usage: echo-brain person projects search-v2 --project-id <project-id> --query <text> [--limit <1-10>] [--cursor <opaque-base64url>]
-
-Search project originals including V3 multi-project uploads. An empty query is invalid; use person list --project to browse.
-`,
-  updates: `usage: echo-brain person updates <submit-v3|status-v3|search-v3> [options]
+  updates: `usage: echo-brain person updates <submit-v3|status-v3> [options]
 
 Uploads preserve the original text. Only me is the default; Team explicitly shares it with current organization members. No Slack approval or decision extraction is required. Read a note with person open --ref note:<context-id>.
 `,
@@ -412,10 +406,6 @@ Saves one UTF-8 text original (at most 8 KiB) with independent initial associati
   "updates-status-v3": `usage: echo-brain person updates status-v3 --request-id <uuid>
 
 Shows the saved V3 receipt, selected audience union and immutable initial association set; its metadata is always ready. Later association changes do not alter this receipt.
-`,
-  "updates-search-v3": `usage: echo-brain person updates search-v3 --query <text> [--limit <1-10>]
-
-Find V3 original uploads you may read. Results preserve the exact selected audience union and current access checks.
 `,
   employee: `usage: echo-brain person employee <list|invite|reissue|revoke> [options]
 
@@ -650,12 +640,10 @@ const CONTEXT_COMMANDS: Readonly<Record<string, (values: Record<Option, string |
   'projects-member-remove': values => ['removeProjectMember', { ...projectChange(values, 'echo-project-member-remove-v1'), membership_id: requiredText(values, 'membership-id') }],
   'projects-associate': values => ['associateProjectContext', { ...projectChange(values, 'echo-project-context-associate-v1'), context_id: requiredText(values, 'context-id') }],
   'projects-dissociate': values => ['dissociateProjectContext', { ...projectChange(values, 'echo-project-context-dissociate-v1'), context_id: requiredText(values, 'context-id') }],
-  'projects-search-v2': values => ['searchProjectContextV2', { project_id: validateProjectIdV1(values['project-id']), query: requiredText(values, 'query'), ...contextPaging(values) }],
   'updates-submit-v3': values => ['submitUpdateV3', { schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: validatePersonUpdateRequestId(requiredText(values, 'request-id')),
     title: requiredText(values, 'title'), text: readUpdateFile(requiredText(values, 'file')),
     association_project_ids: canonicalProjectIdArray(values['association-project-ids-json'], '--association-project-ids-json'), audience: uploadAudienceV3(values) }],
   'updates-status-v3': values => ['updateStatusV3', requiredText(values, 'request-id')],
-  'updates-search-v3': values => ['searchUploadsV3', { query: requiredText(values, 'query'), ...contextPaging(values) }],
 };
 
 /**
@@ -952,7 +940,7 @@ export async function runPersonClientCli(
   const employeeAction =
     argv[0] === "employee" ? EMPLOYEE_ACTIONS[argv[1] as keyof typeof EMPLOYEE_ACTIONS] : undefined;
   const documentAction = argv[0] === 'documents' ? `documents-${argv[1] ?? ''}` : undefined;
-  const updateAction = argv[0] === 'updates' && ['submit-v3', 'status-v3', 'search-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
+  const updateAction = argv[0] === 'updates' && ['submit-v3', 'status-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
   const projectAction = argv[0] === 'projects' ? `projects-${argv[1] ?? ''}` : undefined;
   // `tools` alone lists tools; `tools <verb>` is a tool verb, refused unless it is one of TOOL_VERBS.
   const toolAction = argv[0] === 'tools' && argv[1] !== undefined && !argv[1].startsWith('-') ? `tools-${argv[1]}` : undefined;

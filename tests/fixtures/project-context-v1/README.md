@@ -46,17 +46,15 @@ encoding implementation.
 | `projects member-remove` | `POST /v1/person/projects/members/remove` | member-remove | `200` immutable mutation receipt |
 | `projects associate` | `POST /v1/person/projects/context/associate` | association | `200` immutable mutation receipt |
 | `projects dissociate` | `POST /v1/person/projects/context/dissociate` | dissociation | `200` immutable mutation receipt |
-| `projects search-v2` | `POST /v2/person/projects/context/search` | project search | `200` V2 project search page |
 | `updates submit-v3` | `POST /v3/person/updates` | V3 submit | `202` V3 receipt |
 | `updates status-v3` | `GET /v3/person/updates/{request_id}` | none | `200` V3 status |
-| none (`updates search`, retired 2026-11-08) | `POST /v2/person/updates/search` | V2 search | `200` V2 search result |
 
 The CLI retired the V1 project reads and the V2 note commands on 2026-09-30,
 and the Authority retired their routes on 2026-10-25
 ([ADR-0048](../../../docs/decisions/ADR-0048-retire-older-person-routes.md)).
 The CLI's `updates search`, the only search of notes stored as V2, was retired
-on 2026-11-08; its row keeps no `argv`, only the route, which the Authority
-serves for released desktops until a later release.
+on 2026-11-08, and on 2026-11-11 the Authority retired that route with the
+project search (`projects search-v2`) and the V3 note search (`updates search-v3`).
 `person list --project` browses a project and `person open --ref` reads one
 item; the project feed, the project context read and the V3 note read had no
 caller and were retired on 2026-10-31.
@@ -99,7 +97,6 @@ echo-brain person projects member-set --request-id <uuid> --project-id <project-
 echo-brain person projects member-remove --request-id <uuid> --project-id <project-id> --membership-id <membership-id>
 echo-brain person projects associate --request-id <uuid> --project-id <project-id> --context-id <context-id>
 echo-brain person projects dissociate --request-id <uuid> --project-id <project-id> --context-id <context-id>
-echo-brain person projects search-v2 --project-id <project-id> --query <text> [--limit <1-10>] [--cursor <opaque-base64url>]
 echo-brain person updates submit-v3 --request-id <uuid> --title <title> --file <utf8-text-file> [--association-project-ids-json <canonical-project-id-array>] [--audience <only-me|team|project|projects>] [--audience-project-id <project-id>] [--audience-project-ids-json <canonical-project-id-array>]
 ```
 

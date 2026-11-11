@@ -2,11 +2,9 @@ import {
   validateOrganizationDirectorySearchV1,
   validatePersonUpdateRequestId,
   validatePersonUpdateSubmitV3,
-  validatePersonUploadSearchV2,
   validateProjectContextAssociateV1,
   validateProjectContextBrowseV1,
   validateProjectContextDissociateV1,
-  validateProjectContextSearchV1,
   validateProjectCreateV1,
   validateProjectArchiveV1,
   validateProjectLeaveV1,
@@ -75,10 +73,7 @@ export function createProjectContextApplicationV1(dependencies: ProjectContextAp
     renameProject: write(validateProjectRenameV1, request => ({ operation: 'rename', request }), (t, s, request) => t.renameProject(s, request)),
     archiveProject: write(validateProjectArchiveV1, request => ({ operation: 'archive', request }), (t, s, request) => t.archiveProject(s, request)),
     leaveProject: write(validateProjectLeaveV1, request => ({ operation: 'leave', request }), (t, s, request) => t.leaveProject(s, request)),
-    searchV2: read(validateProjectContextSearchV1, request => ({ operation: 'search_v2', project_id: request.project_id }), (t, s, request) => t.searchV2(s, request)),
     submitUploadV3: write(validatePersonUpdateSubmitV3, request => ({ operation: 'upload_submit_v3', request }), (t, s, request) => t.submitUploadV3(s, request)),
     uploadStatusV3: read(validatePersonUpdateRequestId, request_id => ({ operation: 'upload_status_v3', request_id }), (t, s, requestId) => t.uploadStatusV3(s, requestId)),
-    searchUploads: read(validatePersonUploadSearchV2, () => ({ operation: 'upload_search' }), (t, s, request) => t.searchUploads(s, request)),
-    searchUploadsV3: read(validatePersonUploadSearchV2, () => ({ operation: 'upload_search_v3' }), (t, s, request) => t.searchUploadsV3(s, request)),
   });
 }

@@ -3,16 +3,11 @@ import type {
   PersonUpdateReceiptV3,
   PersonUpdateStatusResultV3,
   PersonUpdateSubmitV3,
-  PersonUploadSearchV2,
-  PersonUploadSearchResultV2,
-  PersonUploadSearchResultV3,
   OrganizationDirectorySearchV1,
   OrganizationDirectoryV1,
   ProjectContextAssociateV1,
   ProjectContextBrowseV1,
   ProjectContextDissociateV1,
-  ProjectContextSearchV1,
-  ProjectContextSearchResultV2,
   ProjectCreateReceiptV1,
   ProjectCreateV1,
   ProjectArchiveV1,
@@ -63,20 +58,14 @@ export interface ProjectContextApplicationV1 {
   renameProject(accessToken: string, request: unknown): ProjectSettingsReceiptV1;
   archiveProject(accessToken: string, request: unknown): ProjectSettingsReceiptV1;
   leaveProject(accessToken: string, request: unknown): ProjectSettingsReceiptV1;
-  searchV2(accessToken: string, request: unknown): ProjectContextSearchResultV2;
   submitUploadV3(accessToken: string, request: unknown): PersonUpdateReceiptV3;
   uploadStatusV3(accessToken: string, requestId: unknown): PersonUpdateStatusResultV3;
-  /** The notes stored as V2, which no V3 read returns. */
-  searchUploads(accessToken: string, request: unknown): PersonUploadSearchResultV2;
-  searchUploadsV3(accessToken: string, request: unknown): PersonUploadSearchResultV3;
 }
 
 /** `project_list` is captured for its grants (records, the workspace), never released by a route. */
 export type ProjectReadOperationV1 =
   | 'project_list' | 'project_list_v2' | 'project_read_v2' | 'members' | 'directory' | 'organization_directory'
-  | 'search_v2'
-  | 'upload_search'
-  | 'upload_status_v3' | 'upload_search_v3';
+  | 'upload_status_v3';
 
 export type ProjectMutationV1 =
   | { readonly operation: 'create'; readonly request: ProjectCreateV1 }
@@ -91,9 +80,8 @@ export type ProjectMutationV1 =
 
 /** Trusted application input. Never decoded from a Person's JSON or session. */
 export type ProjectAuthorizationScopeV1 =
-  | { readonly operation: 'project_list' | 'project_list_v2' | 'upload_search' }
-  | { readonly operation: 'upload_search_v3' }
-  | { readonly operation: 'project_read_v2' | 'members' | 'search_v2'; readonly project_id: ProjectIdV1 }
+  | { readonly operation: 'project_list' | 'project_list_v2' }
+  | { readonly operation: 'project_read_v2' | 'members'; readonly project_id: ProjectIdV1 }
   /** Directory authorization requires the current project's lead grant. */
   | { readonly operation: 'directory'; readonly project_id: ProjectIdV1 }
   /** Any active member of the caller's own organization; no project grant. */
@@ -130,9 +118,7 @@ export interface ProjectAuthorizationSnapshotV1 {
 
 export type ProjectReadResponseV1 =
   | ProjectListV2 | ProjectSummaryV2 | ProjectMembersV1 | ProjectDirectoryV1 | OrganizationDirectoryV1
-  | ProjectContextSearchResultV2
-  | PersonUploadSearchResultV2
-  | PersonUpdateStatusResultV3 | PersonUploadSearchResultV3;
+  | PersonUpdateStatusResultV3;
 
 /**
  * PC-01 implements these operations over a single SQLite snapshot. All reads
@@ -150,10 +136,7 @@ export interface ProjectContextReadTransactionV1 {
   searchDirectory(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectDirectorySearchV1): ProjectDirectoryV1;
   /** The snapshot person's own organization only; requires active membership. */
   searchOrganizationDirectory(snapshot: ProjectAuthorizationSnapshotV1, request: OrganizationDirectorySearchV1): OrganizationDirectoryV1;
-  searchV2(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextSearchV1): ProjectContextSearchResultV2;
   uploadStatusV3(snapshot: ProjectAuthorizationSnapshotV1, requestId: string): PersonUpdateStatusResultV3;
-  searchUploads(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUploadSearchV2): PersonUploadSearchResultV2;
-  searchUploadsV3(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUploadSearchV2): PersonUploadSearchResultV3;
   /**
    * Compare current session/person and project state, validate the response kind
    * against the admitted operation, and derive the digest/count from this exact

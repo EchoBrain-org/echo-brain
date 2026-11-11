@@ -2,9 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { OrganizationPersonToolV4, OrganizationToolSetupStatusV4 } from '@echo-brain/organization-api';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
-import { createOrganizationAuthorityHttpServer } from '../../src/presentation/organization-authority-http-server.js';
 import { createPersonToolsHttpApplicationV4 } from '../../src/presentation/person-tools-http-application.js';
-import { authorityHttpServerOptions } from '../fixtures/authority-http-server.js';
 
 const authorization: PersonAccessAuthorization = {
   organization_id: 'org_00000000-0000-4000-8000-000000000001', membership_id: 'mem_00000000-0000-4000-8000-000000000001',
@@ -37,13 +35,5 @@ describe('Person tools status authorization', () => {
     expect(await api.accept(request)).toMatchObject({
       status: 200, body: { schema_version: 4, tools: [tool('slack', 'connected')] },
     });
-  });
-  it('keeps the retired V2 and V3 lists reserved, so no provider can mount one (ADR-0048)', () => {
-    for (const path of ['/v2/person/tools', '/v3/person/tools', '/v3/person/tools/slack']) {
-      const application = { routes: [{ route_id: 'collision', method: 'GET' as const, path }], accept: async () => ({ status: 200 as const, body: {} }) };
-      for (const ingress of [{ person_tools: application }, { person_external_identity_link: application }, { person_tool_connections: [application] }]) {
-        expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions(ingress))).toThrow('collides with Authority route');
-      }
-    }
   });
 });

@@ -403,10 +403,10 @@ explicitly selected UTF-8 file unchanged, with
 an independent `--association-project-ids-json` set that does not change the
 audience. `status-v3` returns the durable receipt, whose search metadata is
 always `ready`: no per-note search hints are made since 2026-11-08.
-`search-v3` finds original uploads by title and text (the V2 `search` left
-the CLI on 2026-11-08), and `person open --ref note:<context-id>` reads one,
-under current membership and stored audience, without approval or a model
-dependency. Content/search
+`person list` finds saved notes and `person open --ref note:<context-id>`
+reads one, under current membership and stored audience, without approval or
+a model dependency; the note searches (`search` on 2026-11-08, `search-v3` and
+`projects search-v2` on 2026-11-11) left the CLI. Content
 releases revalidate the session and audit before returning. Unknown submissions
 require the same request ID and exact file, title, audience, and project
 coordinates on retry; no local queue or automatic upload exists. The V2

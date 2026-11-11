@@ -2136,25 +2136,20 @@ describe('Person updates CLI', () => {
       expect(network).not.toHaveBeenCalled();
     });
   });
-  it('uses an explicit Team selection and searches only validated upload responses', async () => {
+  it('uses an explicit Team selection', async () => {
     await withHome(async home => {
       await installFixtureSession(home);
       const file = join(home, 'memo.md'); writeFileSync(file, 'Client prefers a morning call.'); let output = ''; let errors = '';
       const calls: string[] = [];
       const network: typeof fetch = async (url, init) => {
         const path = new URL(String(url)).pathname; calls.push(path);
-        if (path.endsWith('/search')) {
-          expect(JSON.parse(String(init?.body))).toEqual({ query: 'client', limit: 3 });
-          return json({ schema_version: 3, kind: 'echo-person-upload-search-v3', results: [{ context_id: contextId, received_at: NOW, audience: { kind: 'team' }, title: 'Memo', excerpt: 'Client prefers a morning call.' }] });
-        }
         expect(JSON.parse(String(init?.body)).audience).toEqual({ kind: 'team' });
         return json({ ...receipt, audience: { kind: 'team' } }, 202);
       };
       const dependencies = { home_directory: home, now: () => NOW, fetch: network, stdout: { write: (value: string) => { output += value; } }, stderr: { write: (value: string) => { errors += value; } } };
-      expect(await runPersonClientCli(['updates', 'submit-v3', '--request-id', requestId, '--title', 'Memo', '--file', file, '--audience', 'team'], dependencies), errors).toBe(0); output = '';
-      expect(await runPersonClientCli(['updates', 'search-v3', '--query', 'client', '--limit', '3'], dependencies), errors).toBe(0);
-      expect(JSON.parse(output).results[0].context_id).toBe(contextId);
-      expect(calls).toEqual(['/v3/person/updates', '/v3/person/updates/search']);
+      expect(await runPersonClientCli(['updates', 'submit-v3', '--request-id', requestId, '--title', 'Memo', '--file', file, '--audience', 'team'], dependencies), errors).toBe(0);
+      expect(JSON.parse(output).audience).toEqual({ kind: 'team' });
+      expect(calls).toEqual(['/v3/person/updates']);
       expect(errors).toBe('');
     });
   });

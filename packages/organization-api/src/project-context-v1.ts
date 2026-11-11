@@ -139,8 +139,7 @@ export interface ProjectContextDissociateV1 extends Omit<ProjectContextAssociate
   readonly kind: 'echo-project-context-dissociate-v1';
 }
 export interface ProjectContextBrowseV1 { readonly project_id: ProjectIdV1; readonly limit?: number; readonly cursor?: string }
-export interface ProjectContextSearchV1 extends ProjectContextBrowseV1 { readonly query: string }
-/** Only me, the organization, or one project: a V2 note's stored audience, and every V3 audience but `projects`. */
+/** Only me, the organization, or one project: every V3 audience but `projects`. */
 export type ProjectContextAudienceV1 =
   | { readonly kind: 'only_me' }
   | { readonly kind: 'team' }
@@ -307,11 +306,8 @@ function association(value: unknown, kind: ProjectContextAssociateV1['kind'] | P
 }
 export function validateProjectContextAssociateV1(value: unknown): ProjectContextAssociateV1 { return association(value, 'echo-project-context-associate-v1', 'Project context association') as ProjectContextAssociateV1; }
 export function validateProjectContextDissociateV1(value: unknown): ProjectContextDissociateV1 { return association(value, 'echo-project-context-dissociate-v1', 'Project context dissociation') as ProjectContextDissociateV1; }
-function browse(value: unknown, search: boolean): ProjectContextBrowseV1 | ProjectContextSearchV1 {
-  const label = search ? 'Project context search' : 'Project context browse'; const record = snapshot(value, label);
-  assertExactKeys(record, ['project_id', ...(search ? ['query'] : []), ...(Object.hasOwn(record, 'limit') ? ['limit'] : []), ...(Object.hasOwn(record, 'cursor') ? ['cursor'] : [])], label);
-  const result = { project_id: project(record, label), ...optionalPaging(record, label) };
-  return search ? { ...result, query: validatePersonQueryText(record.query) } : result;
+export function validateProjectContextBrowseV1(value: unknown): ProjectContextBrowseV1 {
+  const label = 'Project context browse'; const record = snapshot(value, label);
+  assertExactKeys(record, ['project_id', ...(Object.hasOwn(record, 'limit') ? ['limit'] : []), ...(Object.hasOwn(record, 'cursor') ? ['cursor'] : [])], label);
+  return { project_id: project(record, label), ...optionalPaging(record, label) };
 }
-export function validateProjectContextBrowseV1(value: unknown): ProjectContextBrowseV1 { return browse(value, false) as ProjectContextBrowseV1; }
-export function validateProjectContextSearchV1(value: unknown): ProjectContextSearchV1 { return browse(value, true) as ProjectContextSearchV1; }

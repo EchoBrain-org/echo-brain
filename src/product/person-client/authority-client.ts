@@ -22,9 +22,9 @@ import {
   validatePersonProjectActivityV1, validatePersonRecordListV1, validatePersonRecordSearchRequestV2, validatePersonRecordSearchV2, validatePersonResearchEvalReadRequestV1,
   validatePersonResearchEvalReadResponseV1, validatePersonResearchEvalStartReceiptV1, validatePersonResearchEvalStartRequestV1, validatePersonRunsRequestV1,
   validatePersonRunsResultV1, validatePersonSourceEvidenceReadRequestV1, validatePersonSourceEvidenceV1, validatePersonUpdateReceiptV3, validatePersonUpdateRequestId,
-  validatePersonUpdateStatusResultV3, validatePersonUpdateSubmitV3, validatePersonUploadSearchResultV3,
-  validatePersonUploadSearchV3, validateProjectArchiveV1, validateProjectContextAssociateV1, validateProjectContextBrowseV1, validateProjectContextDissociateV1,
-  validateProjectContextSearchResultV2, validateProjectContextSearchV1, validateProjectCreateReceiptV1, validateProjectCreateV1, validateProjectDirectorySearchV1,
+  validatePersonUpdateStatusResultV3, validatePersonUpdateSubmitV3,
+  validateProjectArchiveV1, validateProjectContextAssociateV1, validateProjectContextBrowseV1, validateProjectContextDissociateV1,
+  validateProjectCreateReceiptV1, validateProjectCreateV1, validateProjectDirectorySearchV1,
   validateProjectDirectoryV1, validateProjectIdV1, validateProjectLeaveV1, validateProjectListV2, validateProjectMemberAddV1, validateProjectMemberRemoveV1,
   validateProjectMemberSetV1, validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectPageRequestV2, validateProjectRenameV1,
   validateProjectSettingsReceiptV1, validateProjectSummaryV2,
@@ -411,15 +411,11 @@ export const CONTEXT_ROUTES = Object.freeze({
     response: validateProjectMutationReceiptV1, matches: (result, request) => result.operation === 'associate' && result.context_id === request.context_id && applied(result, request) }),
   dissociateProjectContext: route({ request: validateProjectContextDissociateV1, path: () => `${PERSON_PROJECTS_PATH_V1}/context/dissociate`, mutation: 'change',
     response: validateProjectMutationReceiptV1, matches: (result, request) => result.operation === 'dissociate' && result.context_id === request.context_id && applied(result, request) }),
-  searchProjectContextV2: route({ request: validateProjectContextSearchV1, path: () => `${PERSON_PROJECTS_PATH_V2}/context/search`, response: validateProjectContextSearchResultV2,
-    matches: (result, request) => result.project_id === request.project_id && fits(result.items, request) }),
   submitUpdateV3: route({ request: validatePersonUpdateSubmitV3, path: () => PERSON_UPDATES_PATH_V3, status: 202, mutation: 'upload', response: validatePersonUpdateReceiptV3,
     matches: (result, request) => result.request_id === request.request_id &&
       canonicalJson(result.association_project_ids) === canonicalJson(request.association_project_ids) && canonicalJson(result.audience) === canonicalJson(request.audience) }),
   updateStatusV3: route({ request: validatePersonUpdateRequestId, path: requestId => `${PERSON_UPDATES_PATH_V3}/${requestId}`, get: true, response: validatePersonUpdateStatusResultV3,
     matches: (result, requestId) => result.request_id === requestId }),
-  searchUploadsV3: route({ request: validatePersonUploadSearchV3, path: () => `${PERSON_UPDATES_PATH_V3}/search`, response: validatePersonUploadSearchResultV3,
-    matches: (result, request) => fits(result.results, request) }),
 });
 export type ContextRouteName = keyof typeof CONTEXT_ROUTES;
 export type ContextReply<K extends ContextRouteName> = ReturnType<(typeof CONTEXT_ROUTES)[K]['response']>;

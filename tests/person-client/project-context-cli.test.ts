@@ -140,7 +140,6 @@ describe('frozen project context CLI contract', () => {
     ['projects-member-set', { membership_id: 'mem_44444444-4444-4444-8444-444444444444' }],
     ['projects-member-remove', { project_id: otherProject }],
     ['projects-associate', { context_id: `ctx_${'b'.repeat(64)}` }], ['projects-dissociate', { operation: 'associate' }],
-    ['projects-search-v2', { project_id: otherProject }],
     ['updates-submit-v3', { audience: { kind: 'team' } }], ['updates-submit-v3', { association_project_ids: [otherProject] }],
     ['updates-submit-v3', { audience: { kind: 'project', project_id: otherProject } }],
     ['updates-status-v3', { request_id: '00000000-0000-4000-8000-000000000009' }],
@@ -183,14 +182,12 @@ describe('frozen project context CLI contract', () => {
   });
 
   const invalidArgv = [
-    ['projects', 'search-v2', '--query', 'ship'], ['projects', 'search-v2', '--project-id', projectId, '--query', ''],
     ['projects', 'list-v2', '--limit', '0'], ['projects', 'list-v2', '--limit', '11'], ['projects', 'list-v2', '--limit', '1e0'],
     ['projects', 'list-v2', '--cursor', 'bad cursor'], ['projects', 'list-v2', '--cursor', 'AB'],
     ['projects', 'list-v2', '--limit', '1', '--limit=2'], ['projects', 'list-v2', '--status', 'deleted'],
     ['projects', 'read-v2', '--project-id', projectId, '--project-id', otherProject],
     ['projects', 'read-v2', '--project-id', '../../updates'],
     ['projects', 'ask', '--question', 'ship'], ['ask', '--question', 'ship', '--project-id', projectId],
-    ['updates', 'search-v3', '--query', 'ship', '--project-id', projectId],
     ['updates', 'status-v3', '--request-id', 'not-a-request-id'],
     [...upload.argv.filter((_, i) => i < upload.argv.indexOf('--audience')), '--audience-project-id', projectId],
     [...upload.argv.slice(0, upload.argv.indexOf('--audience-project-id'))],
@@ -215,31 +212,18 @@ describe('frozen project context CLI contract', () => {
   });
 
   it('accepts ordinary JSON object order but rejects duplicate escaped keys, nested extras, and duplicate item IDs', async () => {
-    const item = operation('projects-search-v2');
+    const item = operation('projects-members');
     expect((await run(item, async () => new Response(JSON.stringify(item.http.response, null, 2), { headers: { 'content-type': 'application/json' } }))).code).toBe(0);
     const rows = item.http.response.items as Record<string, unknown>[];
     const bad = [
-      JSON.stringify(item.http.response).replace('"schema_version":2', '"schema_version":1,"schema_\\u0076ersion":2'),
+      JSON.stringify(item.http.response).replace('"schema_version":1', '"schema_version":2,"schema_\\u0076ersion":1'),
       JSON.stringify({ ...item.http.response, items: [...rows, ...rows] }),
-      JSON.stringify({ ...item.http.response, items: rows.map(row => ({ ...row, audience: { kind: 'team', project_id: projectId } })) }),
+      JSON.stringify({ ...item.http.response, items: rows.map(row => ({ ...row, email: 'ari@example.test' })) }),
     ];
     for (const body of bad) {
       const result = await run(item, async () => new Response(body, { headers: { 'content-type': 'application/json' } }));
       expect(result.code).toBe(1); expect(result.stdout).toBe('');
     }
-  });
-
-  it('searches a projects-audience upload in a project without downcasting its audience', async () => {
-    const contextId = `ctx_${'c'.repeat(64)}`;
-    const response = { schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id: projectId, items: [{
-      context_id: contextId, received_at: now, title: 'SCOUT MRD', excerpt: 'Autonomous inspection requirements', audience: { kind: 'projects', project_ids: [projectId, otherProject] },
-    }], next_cursor: null };
-    const result = await run({ argv: ['projects', 'search-v2', '--project-id', projectId, '--query', 'inspection'] }, async (url, init) => {
-      expect(String(url)).toBe('https://authority.example/v2/person/projects/context/search');
-      expect(init?.method).toBe('POST'); expect(JSON.parse(String(init?.body))).toEqual({ project_id: projectId, query: 'inspection', limit: 10 });
-      return json(response);
-    });
-    expect(result.code, result.stderr).toBe(0); expect(JSON.parse(result.stdout)).toEqual(response);
   });
 
   it('prints the saved-only V3 note status an uploader gets after leaving a named project', async () => {
@@ -320,16 +304,17 @@ describe('frozen project context CLI contract', () => {
     expect(network).not.toHaveBeenCalled();
   });
 
-  it('has retired the V2 notes search command: refused before network use, with no help of its own', async () => {
+  it('has retired the note and project search commands: refused before network use, with no help of their own', async () => {
     const network = vi.fn();
-    for (const argv of [['updates', 'search', '--query', 'ship'], ['updates', 'search', '--help']]) {
+    for (const argv of [['updates', 'search', '--query', 'ship'], ['updates', 'search', '--help'], ['updates', 'search-v3', '--query', 'ship'],
+      ['updates', 'search-v3', '--help'], ['projects', 'search-v2', '--project-id', projectId, '--query', 'ship'], ['projects', 'search-v2', '--help']]) {
       const result = await run({ argv }, network);
       expect(result.code, argv.join(' ')).toBe(2); expect(result.stdout).toBe('');
     }
     expect(network).not.toHaveBeenCalled();
     const help = await run({ argv: ['updates', '--help'] }, network);
     expect(help.code).toBe(0);
-    expect(help.stdout).toContain('usage: echo-brain person updates <submit-v3|status-v3|search-v3> [options]');
+    expect(help.stdout).toContain('usage: echo-brain person updates <submit-v3|status-v3> [options]');
   });
 
   it.each(cliOperations)('$id maps exact argv to the frozen HTTP and success JSON', async operation => {
