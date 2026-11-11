@@ -309,8 +309,8 @@ function citedSource(citation: PersonAnswerCitationV8): AnswerSource {
 
 /**
  * What `person ask-check` printed (C1), as the page may see it: one state per
- * item asked, in their order; a ticket's marker never reaches the page. A
- * reply with another number of items, or anything else, is not its output.
+ * item asked, in their order. A reply with another number of items, or
+ * anything else, is not its output.
  */
 export function askCheckView(raw: unknown, asked: number): { items: AskCheckResult[] } {
   const check = validated(validatePersonAskCheckV1, raw);

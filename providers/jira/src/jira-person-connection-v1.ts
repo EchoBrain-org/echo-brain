@@ -10,8 +10,7 @@ import { createJiraPersonLiveContainerReaderV1 } from './jira-person-live-contai
 import { createJiraPersonLiveEvidenceReaderV1 } from './jira-person-live-evidence-reader-v1.js';
 import type { JiraNangoV1 } from './jira-nango-v1.js';
 import { verifyAtlassianConnectionV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
-import { jiraProjectMatches, parseJiraProject, readJiraAssigneeAccountsV1, readJiraTicketMarkersV1 } from './jira-payload-v1.js';
-export { jiraTicketMarkerV1 } from './jira-payload-v1.js';
+import { jiraProjectMatches, parseJiraProject, readJiraAssigneeAccountsV1, readJiraReadableTicketsV1 } from './jira-payload-v1.js';
 import { JIRA_ID, JIRA_PERSON_PROVIDER_V1, jiraFailure } from './jira-validation-v1.js';
 
 type JiraPersonAuthorizationV1 = PersonConnectionAuthorizationV1;
@@ -35,9 +34,9 @@ export function createJiraPersonConnectionV1(options: {
   const access = createPersonProjectMappingAccessV1(JIRA_PERSON_PROVIDER_V1, options);
   /** A bulk issue read with this person's own connection, of the distinct valid issue ids among `ticket_ids`; none reads nothing. */
   async function readTickets<T>(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal },
-    read: (transport: JiraCloudTransportV1, request: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }) => Promise<ReadonlyMap<string, T>>): Promise<ReadonlyMap<string, T>> {
+    read: (transport: JiraCloudTransportV1, request: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }) => Promise<T>, none: T): Promise<T> {
     const ticket_ids = [...new Set(input.ticket_ids)].filter(id => JIRA_ID.test(id));
-    if (ticket_ids.length === 0) return new Map();
+    if (ticket_ids.length === 0) return none;
     // This person's current connection, fenced on the same actor and grant before every request.
     const { person, requirePerson } = shared.actor(input.access_token);
     return read(createJiraCloudTransportV1(shared.open(person, requirePerson, input.signal).transport), { cloud_id: cloud, ticket_ids, signal: input.signal });
@@ -59,15 +58,14 @@ export function createJiraPersonConnectionV1(options: {
     }, input),
     /** Assignee account ids by ticket id, read in bulk with this person's own connection. */
     assigneeAccounts(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string>> {
-      return readTickets(input, readJiraAssigneeAccountsV1);
+      return readTickets<ReadonlyMap<string, string>>(input, readJiraAssigneeAccountsV1, new Map());
     },
     /**
-     * The Ask source check's tickets (Ask timeline v1, C1; ADR-0047): each ticket's marker by its id, read in bulk with this
-     * person's own connection, at most 100 ids in two calls. A ticket they cannot read now does not come back and is left out;
-     * one whose fields no marker can be made from is null.
+     * The Ask source check's tickets (Ask timeline v1, C1; ADR-0047): the ids of those this person can read now, read in bulk
+     * with their own connection, at most 100 ids in two calls.
      */
-    ticketMarkers(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string | null>> {
-      return readTickets(input, readJiraTicketMarkersV1);
+    readableTickets(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlySet<string>> {
+      return readTickets<ReadonlySet<string>>(input, readJiraReadableTicketsV1, new Set());
     },
     /** This person's Jira tickets as one request's audited live source; a project scope reads only its mapped Jira project. */
     source: (input: { readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonTicketCitationV1>; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceSourceV1<PersonTicketCitationV1> | undefined> => access.source({

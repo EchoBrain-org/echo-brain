@@ -160,16 +160,15 @@ describe('the timeline\'s rules', () => {
     expect(visibleTurns(threadOf(turns, inApollo))).toEqual([typed]);
   });
 
-  it('reads `changed`, as an Authority from before checks said only readability answers, as readable', () => {
-    // It lets go of a source a check found unreadable, as `same` does; one that cannot tell keeps it.
-    expect(unreadableAfter([1, 2], { 1: 'changed', 2: 'unknown' })).toEqual([2]);
-    // A fresh `changed` stands over the turn's kept unreadable flag.
-    expect(knownStates({ 1: 'changed' }, [1])).toEqual({ 1: 'changed' });
+  it('lets go of a source a check found unreadable once a check reads it, and keeps it while one cannot tell', () => {
+    expect(unreadableAfter([1, 2], { 1: 'same', 2: 'unknown' })).toEqual([2]);
+    // A fresh `same` stands over the turn's kept unreadable flag.
+    expect(knownStates({ 1: 'same' }, [1])).toEqual({ 1: 'same' });
   });
 });
 
 describe('what a check asks, and what it says of a turn', () => {
-  it('asks once per citation of a turn, newest turn first, with when it was asked and never a ticket\'s marker, at most 100 items a request', () => {
+  it('asks once per citation of a turn, newest turn first, with when it was asked and nothing else, at most 100 items a request', () => {
     const repeated = answerOf('Q?', [ticket('THERM-482', '20482'), ticket('THERM-482', '20482'), mara, page('31010')], [['A.', [0, 1]], ['B.', [2, 3]]]);
     const [older, newer] = [turn('Older?', 2 * DAY, status()), turn('Newer?', DAY, repeated)];
     const plan = checkPlan([newer!, older!]);
@@ -193,16 +192,16 @@ describe('what a check asks, and what it says of a turn', () => {
   it('turns the results into each turn\'s sources\' states', () => {
     const one = turn('One?', DAY, status());
     const plan = checkPlan([one]);
-    const found = checkedOf(plan, [[{ state: 'same' }, { state: 'changed' }, { state: 'unreadable' }]]);
-    expect(found).toEqual({ [one.id]: { 0: 'same', 1: 'changed', 2: 'unreadable' } });
+    const found = checkedOf(plan, [[{ state: 'same' }, { state: 'same' }, { state: 'unreadable' }]]);
+    expect(found).toEqual({ [one.id]: { 0: 'same', 1: 'same', 2: 'unreadable' } });
     // One result stands for every place of a citation the turn cites twice.
     expect(checkedOf({ requests: [{ items: [], places: [{ turn: 't', sources: [0, 1] }] }], turns: ['t'] }, [[{ state: 'unreadable' }]]))
       .toEqual({ t: { 0: 'unreadable', 1: 'unreadable' } });
   });
 
-  it('leaves out a sentence whose source you can no longer read, and nothing else: a changed source reads as the same', () => {
+  it('leaves out a sentence whose source you can no longer read, and nothing else', () => {
     const one = turn('One?', DAY, status());
-    const states = { 0: 'same', 1: 'changed', 2: 'unreadable' } as const;
+    const states = { 0: 'same', 1: 'same', 2: 'unreadable' } as const;
     const shows = showsOf(states);
     expect(one.answer.parts[0]!.statements.map(statement => shows(statement.citation_indexes))).toEqual([true, true, false]);
     // Unreadable wins: a sentence citing both is left out.
@@ -218,7 +217,7 @@ describe('what a check asks, and what it says of a turn', () => {
 describe('the earlier turn an Ask carries (C3)', () => {
   it('carries the full question, when it was asked, and the sentences you can still read with their citations, renumbered', () => {
     const one = turn('What is open on THERM?', HOUR, status());
-    const previous = previousOf(one, 'follow_up', { 0: 'same', 1: 'changed', 2: 'unreadable' }, 'Who owns it?', { kind: 'global' });
+    const previous = previousOf(one, 'follow_up', { 0: 'same', 1: 'same', 2: 'unreadable' }, 'Who owns it?', { kind: 'global' });
     expect(previous).toEqual({
       purpose: 'follow_up', question: 'What is open on THERM?', asked_at: one.asked_at,
       statements: [{ text: 'THERM-482, Sensor drift, is open.', citation_indexes: [0] }, { text: 'The DVT plan moved the retest to Oct 30.', citation_indexes: [1] }],
@@ -345,8 +344,8 @@ describe('Ask on the timeline', () => {
   it('checks the newest ten turns\' sources once when Ask opens, keeps that five minutes, and leaves out by it', async () => {
     const turns = Array.from({ length: 11 }, (_, at) => turn(`Turn ${at}?`, (11 - at) * DAY, status()));
     seed(...turns);
-    checks = items => ok({ items: items.map(item => (item.citation.kind === 'page' ? { state: 'changed' } : item.citation.kind === 'follow_up'
-      ? { state: 'unreadable' } : { state: 'same', marker: sha('m1') })) });
+    checks = items => ok({ items: items.map(item => (item.citation.kind === 'page' ? { state: 'same' } : item.citation.kind === 'follow_up'
+      ? { state: 'unreadable' } : { state: 'same' })) });
     const store = await startStore();
     await store.ask('What changed?');
     await flush();
@@ -355,8 +354,6 @@ describe('Ask on the timeline', () => {
     expect((asked!.items as unknown[]).length).toBe(30);
     expect((asked!.items as { asked_at: string }[])[0]!.asked_at).toBe(turns[10]!.asked_at);
     expect(Object.keys(store.getState().timeline.checks)).toHaveLength(10);
-    // A ticket's marker in what a check said is never kept: a turn keeps no baseline.
-    expect(kept().filter(each => Object.hasOwn(each, 'markers'))).toEqual([]);
     const thread = await view();
     // Past the newest three, earlier questions fold into one line: opened, every line shows. The latest is in full.
     store.toggleEarlier();
@@ -386,7 +383,7 @@ describe('Ask on the timeline', () => {
   it('leaves a source you can no longer read out of its turn\'s sources, the numbers of the page, its list and the pane agreeing', async () => {
     const one = turn('One?', 2 * DAY, status());
     // Out only when every citation of a place is unreadable; the rest keep their places among the answer's sources.
-    expect(turnGroups(one.answer, { 0: 'same', 1: 'changed', 2: 'unreadable' }).map(group => group.indexes)).toEqual([[0], [1]]);
+    expect(turnGroups(one.answer, { 0: 'same', 1: 'same', 2: 'unreadable' }).map(group => group.indexes)).toEqual([[0], [1]]);
     expect(turnGroups(one.answer, undefined)).toHaveLength(3);
     const twice = [ticket('THERM-482', '20482'), page('31010'), page('31010')];
     expect(turnGroups({ sources: twice }, { 1: 'unreadable', 2: 'same' }).map(group => group.indexes)).toEqual([[0], [1, 2]]);
@@ -562,7 +559,7 @@ describe('Ask on the timeline', () => {
     seed(one, two);
     let failing = false;
     checks = items => (failing ? fail('unavailable', { retryable: true }) : ok({ items: items.map(item => ({
-      state: item.citation.kind === 'page' ? 'changed' : item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) }));
+      state: item.citation.kind === 'page' ? 'same' : item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) }));
     const store = await startStore();
     store.pickSuggestion({ question: 'One?', turn: one.id });
     await flush();
@@ -659,7 +656,7 @@ describe('Ask on the timeline', () => {
 
   it('clears what a check said when it goes stale, so the page stops showing it then', async () => {
     seed(turn('One?', 2 * DAY, status()), turn('Two?', DAY, status()));
-    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'changed' : 'same' })) });
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'same' : 'same' })) });
     const store = await startStore();
     await store.ask('What changed?');
     await flush();
@@ -836,7 +833,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
   it('checks a turn past the newest ten once it is opened, and a follow-up of it waits for that check', async () => {
     const turns = Array.from({ length: 12 }, (_, at) => turn(`Turn ${at}?`, (12 - at) * DAY, status()));
     seed(...turns);
-    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'changed' : item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'same' : item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
     const store = await startStore();
     await store.ask('What changed?');
     await flush();
@@ -859,7 +856,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect(calls('ask.run')).toHaveLength(asked);
     expect(store.getState().ask?.asking?.question).toBe('who owns it?');
     // A changed source (as an Authority before checks said only readability answers) is as readable as one the same.
-    release(ok({ items: [{ state: 'same' }, { state: 'changed' }, { state: 'unreadable' }] }));
+    release(ok({ items: [{ state: 'same' }, { state: 'same' }, { state: 'unreadable' }] }));
     await following;
     expect((calls('ask.run').at(-1)!.previous as AskPrevious).statements.map(statement => statement.text))
       .toEqual(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
@@ -871,7 +868,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
   it('opens a suggestion past the newest ten checked first, in the one check Ask opening makes', async () => {
     const turns = Array.from({ length: 12 }, (_, at) => turn(`Turn ${at}?`, (12 - at) * DAY, status()));
     seed(...turns);
-    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'changed' : 'same' })) });
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'same' : 'same' })) });
     const store = await startStore();
     store.pickSuggestion({ question: 'Turn 0?', turn: turns[0]!.id });
     await flush();
@@ -947,7 +944,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
 
   it('asks a turn again with it, keeps the new answer at the end with what changed since, and the old one folds away (ADR-0049)', async () => {
     const one = turn('What is open on THERM?', 3 * DAY, status());
-    checks = items => ok({ items: items.map(item => (item.citation.kind === 'page' ? { state: 'changed' } : { state: 'same' })) });
+    checks = items => ok({ items: items.map(item => (item.citation.kind === 'page' ? { state: 'same' } : { state: 'same' })) });
     rpc.mockImplementation(rpcFor(held, {
       'ask.run': params => {
         const answer = answerOf(String(params.question), [ticket('THERM-482', '20482')], [['THERM-482 is in progress.', [0]]]);

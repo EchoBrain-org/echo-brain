@@ -16,7 +16,7 @@ const FOLLOW_UP = { kind: 'follow_up', item_id: 'itm_6b0f8a52-55a4-4f6e-9a39-6d3
 const REQUEST = { schema_version: 1, kind: 'echo-person-ask-check-request-v1', items: [
   { asked_at: '2026-10-20T09:00:00.000Z', citation: TICKET }, { asked_at: '2026-10-20T09:00:00.000Z', citation: FOLLOW_UP },
 ] } as const;
-const CHECK = { schema_version: 1, kind: 'echo-person-ask-check-v1', items: [{ state: 'same', marker: MARKER }, { state: 'changed' }] };
+const CHECK = { schema_version: 1, kind: 'echo-person-ask-check-v1', items: [{ state: 'same' }, { state: 'unreadable' }] };
 const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 
@@ -48,10 +48,10 @@ describe('person Ask source check client (ADR-0047)', () => {
 
   it('refuses an answer that is not the answer to its request', async () => {
     for (const answer of [
-      { ...CHECK, items: [{ state: 'same', marker: MARKER }] },
-      { ...CHECK, items: [{ state: 'same', marker: MARKER }, { state: 'changed', marker: MARKER }] },
-      { ...CHECK, items: [{ state: 'unreadable', marker: MARKER }, { state: 'changed' }] },
-      { ...CHECK, items: [{ state: 'same', marker: MARKER }, { state: 'changed', reason: 'reassigned' }] },
+      { ...CHECK, items: [{ state: 'same' }] },
+      { ...CHECK, items: [{ state: 'same', marker: MARKER }, { state: 'unreadable' }] },
+      { ...CHECK, items: [{ state: 'same' }, { state: 'changed' }] },
+      { ...CHECK, items: [{ state: 'same' }, { state: 'unreadable', reason: 'reassigned' }] },
     ]) {
       const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer));
       await expect(client(fetch).askCheck('bearer', REQUEST as never), JSON.stringify(answer)).rejects.toMatchObject({ name: 'PersonAuthorityClientError', code: 'invalid_response' });
@@ -63,7 +63,7 @@ describe('person Ask source check client (ADR-0047)', () => {
     for (const value of [
       { ...REQUEST, items: [] },
       { ...REQUEST, items: [{ asked_at: '2026-10-20T09:00:00.000Z', citation: { kind: 'project', project_id: 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' } }] },
-      { ...REQUEST, items: [{ asked_at: '2026-10-20T09:00:00.000Z', citation: FOLLOW_UP, marker: MARKER }] },
+      { ...REQUEST, items: [{ asked_at: '2026-10-20T09:00:00.000Z', citation: TICKET, marker: MARKER }] },
     ]) await expect(client(fetch).askCheck('bearer', value as never)).rejects.toThrow();
     expect(fetch).not.toHaveBeenCalled();
     // A hundred items pass the ordinary 16 KiB bound of other requests, within the check's own 64 KiB.

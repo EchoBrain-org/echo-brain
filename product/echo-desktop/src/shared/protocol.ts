@@ -405,14 +405,10 @@ export const TIMELINE_DAYS = 90;
  */
 export const MAX_TIMELINE_PUT_BYTES = 256 * 1024;
 
-/**
- * What a check says of one cited source (C1): readable by you (`same`, or
- * `changed` from an Authority before checks said only readability), no
- * longer readable, or not known now.
- */
+/** What a check says of one cited source (C1): readable by you (`same`), no longer readable, or not known now. */
 export type AskCheckState = PersonAskCheckStateV1;
-/** One source to check: when the turn that cited it was asked, and its evidence citation. The page sends no ticket marker. */
-export type AskCheckItem = Omit<PersonAskCheckRequestItemV1, 'marker'>;
+/** One source to check: when the turn that cited it was asked, and its evidence citation. */
+export type AskCheckItem = PersonAskCheckRequestItemV1;
 /** What the check said of one item, in the request's order. */
 export type AskCheckResult = Pick<PersonAskCheckItemV1, 'state'>;
 /** The most items one check asks about, and its body's bound (C1). */
