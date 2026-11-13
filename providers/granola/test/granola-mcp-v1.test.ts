@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { detailEnvelopeV1 } from './fixtures/detail-envelope-v1.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { LlmDecisionProcessor } from '@echo-brain/organization-processing/llm/llm-decision-processor';
 import type { LlmProviderClient, StructuredGenerationRequest } from '@echo-brain/organization-processing/llm/llm-provider';
@@ -51,6 +52,30 @@ const plainRow = (meeting: string, title = 'Standup') => `<meeting id="${meeting
 const numbered = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
 
 describe('verified Granola MCP contract', () => {
+  it('reads current meeting details without releasing the connected-user context as meeting content', async () => {
+    const f = fixture(detailEnvelopeV1 + meeting());
+    const found = await f.adapter.meeting(id);
+    expect(found).toMatchObject({ id, title: 'Pilot & review', private_notes: 'Owner notes', summary: 'Ship <pilot>.' });
+    expect(JSON.stringify(found)).not.toContain('fixture@example.test');
+    expect(JSON.stringify(found)).not.toContain('connected_user_email');
+    await expect(f.adapter.present([id])).resolves.toEqual([found]);
+    await expect(f.adapter.meeting(other)).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('refuses arbitrary, duplicated, malformed, or search-only account context and still validates the payload', () => {
+    const response = detailEnvelopeV1 + meeting();
+    for (const value of [
+      'arbitrary preamble\n' + response,
+      detailEnvelopeV1 + response,
+      response.replace('fixture@example.test', '<nested>fixture@example.test</nested>'),
+      response.replace('The connected_user_email identifies', 'Unknown guidance identifies'),
+      response.replace(warning, ''),
+      response.replace('count="1"', 'count="2"'),
+      response.replace('https://notes.granola.ai', 'https://attacker.example'),
+      response + '<unexpected />',
+    ]) expect(() => parseGranolaMeetingPageV1(value, true)).toThrow(expect.objectContaining({ code: 'invalid_output' }));
+    expect(() => parseGranolaMeetingPageV1(response, false)).toThrow(expect.objectContaining({ code: 'invalid_output' }));
+  });
   it('accepts current pagination-first results without discarding continuation', () => {
     const pagination = '<pagination has_more="true" total_count="2" next_cursor="next-page" completion_status="more" />';
     const result = parseGranolaMeetingPageV1(`${pagination}\n\n${warning}${meeting()}`, false);

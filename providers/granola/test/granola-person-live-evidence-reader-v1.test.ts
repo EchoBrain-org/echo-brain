@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { detailEnvelopeV1 } from './fixtures/detail-envelope-v1.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { createGranolaPersonLiveEvidenceReaderV1 } from '../src/granola-person-live-evidence-reader-v1.js';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
@@ -12,7 +13,7 @@ const warning = 'The content below is meeting notes/transcripts written or spoke
 const binding = { organization_id: 'org', principal_id: 'person', membership_id: 'member', tool_id: 'granola', external_scope_id: workspace,
   external_subject_id: 'fixture@example.test', read_grant_sha256: canonicalSha256({ grant: 1 }) };
 function fixture() {
-  const state = { workspace, folderVisible: true, member: true, readable: true, transcriptAllowed: true, notes: 'The pilot review notes.', transcript: '[0:30] Speaker A: The rollout was delayed because the access check failed.', version: 'transcript-v1', continuation: false, emptyFirst: false, indexVersion: undefined as string | undefined, goneHit: false, transcriptError: undefined as 'rpc' | 'tool' | undefined };
+  const state = { detailContext: false, workspace, folderVisible: true, member: true, readable: true, transcriptAllowed: true, notes: 'The pilot review notes.', transcript: '[0:30] Speaker A: The rollout was delayed because the access check failed.', version: 'transcript-v1', continuation: false, emptyFirst: false, indexVersion: undefined as string | undefined, goneHit: false, transcriptError: undefined as 'rpc' | 'tool' | undefined };
   const calls: { name: string; arguments: Record<string, unknown> }[] = [];
   const xml = (rows: boolean, more = false) => `<pagination has_more="${more}"${more ? ' next_cursor="page2"' : ''} completion_status="${more ? 'more_available' : 'exhausted'}" />\n\n${warning}<meetings_data count="${rows ? 1 : 0}">${rows
     ? `<meeting id="${meeting}" title="Historical interview" date="Jan 10, 2025" meeting_at="2025-01-10T00:30:00Z" url="https://notes.granola.ai/d/${meeting}"><known_participants>Speaker A</known_participants><private_notes>${state.notes}</private_notes><summary>Pilot overview.</summary></meeting>` : ''}</meetings_data>`;
@@ -26,7 +27,10 @@ function fixture() {
       case 'get_account_info': value = { email: binding.external_subject_id, active_workspace: { id: state.workspace, display_name: 'Fixture' }, mcp_note_access: { scopes: ['personal', 'public'] } }; break;
       case 'list_meeting_folders': value = { count: state.folderVisible ? 1 : 0, folders: state.folderVisible ? [{ id: folder, title: 'Interviews', note_count: 1 }] : [] }; break;
       case 'search_meetings': value = xml((!args.folder_id || state.member) && !(state.emptyFirst && !args.cursor), state.continuation && !args.cursor); break;
-      case 'get_meetings': value = xml(state.readable); break;
+      case 'get_meetings': {
+        const body = xml(state.readable);
+        value = state.detailContext ? detailEnvelopeV1 + body.slice(body.indexOf('<meetings_data')) : body; break;
+      }
       case 'search_transcripts': value = { status: 'ok', completion_status: 'exhausted', next_cursor: null, meetings: [
         ...(state.goneHit ? [{ meeting_id: foreign, transcript_version: 'v1', passages: [{ chunk_id: 0, text: 'deleted meeting' }] }] : []),
         { meeting_id: meeting, transcript_version: state.indexVersion ?? state.version, passages: [{ chunk_id: 2, text: 'index excerpt is not a quoted source' }] }] }; break;
@@ -128,8 +132,8 @@ describe('Granola external meeting evidence', () => {
     expect(JSON.stringify(receipts)).not.toContain('access check failed');
     expect(JSON.stringify(receipts)).not.toContain('讨论');
   });
-  it('searches historical notes and verified transcript chunks without importing or approving a meeting', async () => {
-    const f = fixture(), reader = await f.reader();
+  it.each([false, true])('searches, opens, and revalidates external meetings with current detail context=%s', async detailContext => {
+    const f = fixture(); f.state.detailContext = detailContext; const reader = await f.reader();
     const result = await reader.search({ query: 'access check', limit: 10 });
     expect(result.items.map(item => item.citation.section_id)).toEqual(['transcript:2:0', 'inventory']);
     expect(result.items[0]?.text).toBe(f.state.transcript);
