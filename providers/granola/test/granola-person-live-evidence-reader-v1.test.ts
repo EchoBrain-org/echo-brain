@@ -12,7 +12,7 @@ const warning = 'The content below is meeting notes/transcripts written or spoke
 const binding = { organization_id: 'org', principal_id: 'person', membership_id: 'member', tool_id: 'granola', external_scope_id: workspace,
   external_subject_id: 'fixture@example.test', read_grant_sha256: canonicalSha256({ grant: 1 }) };
 function fixture() {
-  const state = { workspace, folderVisible: true, member: true, readable: true, transcriptAllowed: true, notes: 'The pilot review notes.', transcript: '[0:30] Speaker A: The rollout was delayed because the access check failed.', version: 'transcript-v1', continuation: false, emptyFirst: false };
+  const state = { workspace, folderVisible: true, member: true, readable: true, transcriptAllowed: true, notes: 'The pilot review notes.', transcript: '[0:30] Speaker A: The rollout was delayed because the access check failed.', version: 'transcript-v1', continuation: false, emptyFirst: false, indexVersion: undefined as string | undefined, goneHit: false };
   const calls: { name: string; arguments: Record<string, unknown> }[] = [];
   const xml = (rows: boolean, more = false) => `<pagination has_more="${more}"${more ? ' next_cursor="page2"' : ''} completion_status="${more ? 'more_available' : 'exhausted'}" />\n\n${warning}<meetings_data count="${rows ? 1 : 0}">${rows
     ? `<meeting id="${meeting}" title="Historical interview" date="Jan 10, 2025" meeting_at="2025-01-10T00:30:00Z" url="https://notes.granola.ai/d/${meeting}"><known_participants>Speaker A</known_participants><private_notes>${state.notes}</private_notes><summary>Pilot overview.</summary></meeting>` : ''}</meetings_data>`;
@@ -25,7 +25,9 @@ function fixture() {
       case 'list_meeting_folders': value = { count: state.folderVisible ? 1 : 0, folders: state.folderVisible ? [{ id: folder, title: 'Interviews', note_count: 1 }] : [] }; break;
       case 'search_meetings': value = xml((!args.folder_id || state.member) && !(state.emptyFirst && !args.cursor), state.continuation && !args.cursor); break;
       case 'get_meetings': value = xml(state.readable); break;
-      case 'search_transcripts': value = { status: 'ok', completion_status: 'exhausted', next_cursor: null, meetings: [{ meeting_id: meeting, transcript_version: state.version, passages: [{ chunk_id: 2, text: 'index excerpt is not a quoted source' }] }] }; break;
+      case 'search_transcripts': value = { status: 'ok', completion_status: 'exhausted', next_cursor: null, meetings: [
+        ...(state.goneHit ? [{ meeting_id: foreign, transcript_version: 'v1', passages: [{ chunk_id: 0, text: 'deleted meeting' }] }] : []),
+        { meeting_id: meeting, transcript_version: state.indexVersion ?? state.version, passages: [{ chunk_id: 2, text: 'index excerpt is not a quoted source' }] }] }; break;
       case 'get_meeting_transcript': value = { id: meeting, status: args.transcript_version === state.version ? 'ok' : 'changed', transcript_version: state.version, chunks: [{ chunk_id: 2, transcript: state.transcript }] }; break;
       default: throw new Error(`Unexpected tool: ${name}`);
     }
@@ -74,6 +76,13 @@ describe('Granola external meeting evidence', () => {
     expect(result.items.map(item => item.citation.section_id)).toEqual(['inventory']);
     expect(result).toMatchObject({ truncated: true, notice: expect.stringContaining('accessible notes only') });
     expect(f.calls.filter(call => call.name === 'get_meeting_transcript')).toHaveLength(0);
+  });
+  it('skips a transcript hit whose meeting is gone or whose index lags the live transcript, keeping the rest', async () => {
+    const f = fixture(); f.state.goneHit = true; f.state.indexVersion = 'transcript-v0';
+    const reader = await f.reader(), result = await reader.search({ query: 'access', limit: 5 });
+    expect(result.items.map(item => item.citation.section_id)).toEqual(['inventory']);
+    expect(result.truncated).toBe(true);
+    await reader.revalidate({ citations: result.items.map(item => item.citation) });
   });
   it('releases long Unicode transcript sections through the audited evidence boundary and opens their continuation', async () => {
     const f = fixture(); f.state.transcript = '讨论。'.repeat(900) + ' access check failed. ' + '🙂'.repeat(900);

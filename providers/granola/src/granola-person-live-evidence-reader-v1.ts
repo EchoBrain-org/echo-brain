@@ -25,6 +25,13 @@ function dates(meeting: GranolaMeetingV1) {
   const occurred = meeting.meeting_at ?? meeting.created_at;
   return occurred === undefined ? {} : { occurred: new Date(occurred).toISOString() };
 }
+/** The transcript index lags the live notes: a hit whose meeting is gone or whose transcript moved on is skipped. */
+async function lagging<T>(read: Promise<T>): Promise<T | undefined> {
+  try { return await read; } catch (error) {
+    if (error instanceof AuthorityOperationError && (error.code === 'not_found' || error.code === 'stale_access_state')) return undefined;
+    throw error;
+  }
+}
 function size(limit: number) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 50) fail('invalid_request');
   return Math.min(limit, 20);
@@ -201,11 +208,13 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
         for (const match of page.meetings) {
           if (passages.length >= limit) { truncated = true; break; }
           scope(match.meeting_id, allowed);
-          const meeting = await api.meeting(match.meeting_id, input.signal);
+          const meeting = await lagging(api.meeting(match.meeting_id, input.signal));
+          if (meeting === undefined) { truncated = true; continue; }
           if (!matches(meeting, input)) continue;
           for (const passage of match.passages) {
             if (passages.length >= limit) { truncated = true; break; }
-            const chunk = await api.chunk(meeting.id, passage.chunk_id, match.version, input.signal);
+            const chunk = await lagging(api.chunk(meeting.id, passage.chunk_id, match.version, input.signal));
+            if (chunk === undefined) { truncated = true; continue; }
             const terms = input.query.toLowerCase().split(/\s+/u).filter(Boolean);
             const parts = sections(meeting, `transcript:${passage.chunk_id}`, chunk.text, chunk.version);
             const score = (item: Value) => terms.filter(term => item.text!.toLowerCase().includes(term)).length;
