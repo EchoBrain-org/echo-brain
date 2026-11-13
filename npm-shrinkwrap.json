@@ -6204,19 +6204,6 @@
         "npm": "10.9.4"
       }
     },
-    "providers/granola/client": {
-      "name": "@echo-brain/provider-granola-client",
-      "version": "0.0.0-dev.0",
-      "extraneous": true,
-      "license": "MIT",
-      "dependencies": {
-        "@echo-brain/organization-api": "0.0.0-dev.0"
-      },
-      "engines": {
-        "node": "22.22.1",
-        "npm": "10.9.4"
-      }
-    },
     "providers/jira": {
       "name": "@echo-brain/provider-jira",
       "version": "0.0.0-dev.0",
