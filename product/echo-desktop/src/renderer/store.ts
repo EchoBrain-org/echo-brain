@@ -2234,7 +2234,7 @@ export function projectToolFailureWords(settings: ProjectSettingsState, tool: Ma
   if (failure.code === 'conflict') return 'This setting changed. Reload it before editing.';
   if (setting.writeFailed) return 'The change could not be confirmed. Reload the setting before editing again.';
   if (setting.status === 'failed') return message(failure);
-  if (failure.code === 'not_found') return tool === 'jira' ? `No ${name} project with that key that you can see.` : `A space could not be read with your ${name} connection.`;
+  if (failure.code === 'not_found') return tool === 'jira' ? `No ${name} project with that key that you can see.` : `A ${tool === 'granola' ? 'folder' : 'space'} could not be read with your ${name} connection.`;
   if (failure.code === 'unauthorized' || failure.code === 'forbidden') return `${name} refused the change. Check your ${name} connection in Tools and try again.`;
   return message(failure);
 }

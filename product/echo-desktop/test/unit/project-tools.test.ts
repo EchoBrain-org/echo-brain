@@ -67,6 +67,21 @@ describe('a Tools save the tool refused', () => {
   });
 });
 
+describe('a Granola save the tool refused', () => {
+  it('says a folder, not a space, could not be read', async () => {
+    override('account.tools', () => ok({ tools: [{ tool_id: 'granola', name: 'Granola', status: 'linked' }] }));
+    override('projects.granolaRead', () => ok({ project_id: apollo.project_id, revision: null, mapping: null }));
+    override('projects.granolaFolders', () => ok({ items: [{ id: 'f1', name: 'Folder 1', key: 'f1' }], next_cursor: null }));
+    const store = await openTools();
+    store.toggleProjectConfluenceSpace('f1', 'granola');
+    held.hold('projects.granolaSet')(fail('not_found', { mutation_outcome: 'not_submitted', request_id: 'x' }));
+    await store.saveProjectTools();
+    await flush();
+    expect(store.getState().projectSettings?.granola).toMatchObject({ status: 'ready', selected: ['f1'], failure: { code: 'not_found' } });
+    expect(store.projectToolFailureWords(store.getState().projectSettings!, 'granola', 'Granola')).toBe('A folder could not be read with your Granola connection.');
+  });
+});
+
 describe('a mapped Confluence space this lead cannot see', () => {
   it('is listed as selected and can be unticked', async () => {
     spaces = ['1', '77'];
