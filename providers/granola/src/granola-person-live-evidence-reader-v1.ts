@@ -178,6 +178,7 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
       const allowed = await members(input.signal), ids = allowed === undefined ? undefined : [...allowed];
       const passages: Value[] = [];
       for (let offset = 0; ids === undefined ? offset === 0 : offset < ids.length; offset += 100) {
+        if (passages.length >= limit) { truncated = true; break; }
         let page;
         try { page = await api.searchTranscripts({ ...window, query: input.query, limit, ...(ids === undefined ? {} : { meeting_ids: ids.slice(offset, offset + 100) }), signal: input.signal }); }
         catch (error) {
@@ -187,6 +188,7 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
         }
         truncated ||= page.next_cursor !== null || page.incomplete;
         for (const match of page.meetings) {
+          if (passages.length >= limit) { truncated = true; break; }
           scope(match.meeting_id, allowed);
           const meeting = await api.meeting(match.meeting_id, input.signal);
           if (!matches(meeting, input)) continue;

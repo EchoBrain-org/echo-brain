@@ -34,6 +34,39 @@ function fixture() {
 }
 
 describe('Granola external meeting evidence', () => {
+  it('stops transcript reads when the answer is full across 1,000 mapped meetings, leaving budget for revalidation', async () => {
+    const key = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
+    const folder_ids = Array.from({ length: 20 }, (_, index) => key(2_000 + index));
+    const meetings = Array.from({ length: 1_000 }, (_, index) => key(index + 1));
+    const calls: string[] = [];
+    const xml = (ids: string[]) => `${warning}<meetings_data count="${ids.length}">${ids.map(id => `<meeting id="${id}" title="Historical interview" date="Jan 10, 2025" meeting_at="2025-01-10T00:30:00Z" url="https://notes.granola.ai/d/${id}"></meeting>`).join('')}</meetings_data>`;
+    const reader = await createGranolaPersonLiveEvidenceReaderV1({ folder_ids, transport: { binding, async fetch(_url, init) {
+      const request = JSON.parse(String(init.body)), { name, arguments: args } = request.params;
+      calls.push(name);
+      let value: unknown;
+      switch (name) {
+        case 'get_account_info': value = { email: binding.external_subject_id, active_workspace: { id: workspace, display_name: 'Fixture' }, mcp_note_access: { scopes: ['personal', 'public'] } }; break;
+        case 'list_meeting_folders': value = { count: folder_ids.length, folders: folder_ids.map(id => ({ id, title: 'Interviews', note_count: 50 })) }; break;
+        case 'search_meetings': {
+          const offset = folder_ids.indexOf(args.folder_id) * 50;
+          value = xml(args.keywords ? [] : meetings.slice(offset, offset + 50)); break;
+        }
+        case 'get_meetings': value = xml(args.meeting_ids); break;
+        case 'search_transcripts': value = { status: 'ok', completion_status: 'exhausted', next_cursor: null,
+          meetings: args.meeting_ids.slice(0, 20).map((meeting_id: string) => ({ meeting_id, transcript_version: 'v1', passages: [{ chunk_id: 0, text: 'Pilot access.' }] })) }; break;
+        case 'get_meeting_transcript': value = { id: args.meeting_id, status: 'ok', transcript_version: 'v1', chunks: [{ chunk_id: 0, transcript: 'Pilot access. '.repeat(1_000) }] }; break;
+        default: throw new Error(`Unexpected tool: ${name}`);
+      }
+      return Response.json({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }] } });
+    } } });
+    const result = await reader.search({ query: 'access', limit: 20 });
+    expect(result.items).toHaveLength(20);
+    expect(result.truncated).toBe(true);
+    expect(calls.filter(name => name === 'search_transcripts')).toHaveLength(1);
+    expect(calls.filter(name => name === 'get_meetings')).toHaveLength(1);
+    expect(calls.filter(name => name === 'get_meeting_transcript')).toHaveLength(1);
+    await reader.revalidate({ citations: result.items.map(item => item.citation) });
+  });
   it('reports notes-only coverage when the provider denies transcript search, without retrying transcript access', async () => {
     const f = fixture(); f.state.transcriptAllowed = false;
     const reader = await f.reader(), result = await reader.search({ query: 'pilot', limit: 5 });
