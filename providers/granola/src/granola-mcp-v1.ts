@@ -312,6 +312,14 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
       if (meetings.length !== keys.length || meetings.some(meeting => !keys.includes(meeting.id))) throw new AuthorityOperationError('not_found', MEETING_MISSING);
       return meetings;
     },
+    /** Up to 10 meetings in one call; any Granola no longer has or shows is left out rather than failing the others. */
+    async present(meetingIds: readonly string[], signal?: AbortSignal): Promise<readonly GranolaMeetingV1[]> {
+      const keys = array(meetingIds, 10).map(id);
+      if (keys.length === 0 || new Set(keys).size !== keys.length) failure('invalid_request');
+      const { meetings } = parseGranolaMeetingPageV1(await rpc.call('get_meetings', { meeting_ids: keys }, signal), true);
+      if (meetings.some(meeting => !keys.includes(meeting.id))) failure('invalid_output');
+      return meetings;
+    },
     async meeting(meetingId: string, signal?: AbortSignal): Promise<GranolaMeetingV1> {
       return (await this.details([meetingId], signal))[0]!;
     },

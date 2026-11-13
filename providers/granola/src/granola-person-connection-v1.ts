@@ -7,7 +7,7 @@ import type { PersonLiveEvidenceAuditV1 } from '@echo-brain/organization-authori
 import { createGranolaPersonLiveEvidenceReaderV1 } from './granola-person-live-evidence-reader-v1.js';
 import { createPersonConnectionLifecycleV1 } from '@echo-brain/provider-runtime/person-connection-lifecycle-v1';
 import type { ConnectedPersonV1 } from '@echo-brain/provider-runtime/person-connection-store-v1';
-import { createGranolaMcpV1, GRANOLA_PERSON_PROVIDER_V1 } from './granola-mcp-v1.js';
+import { createGranolaMcpV1, GRANOLA_ID_V1, GRANOLA_PERSON_PROVIDER_V1, granolaMeetingUnreadableV1, type GranolaMeetingV1 } from './granola-mcp-v1.js';
 import { granolaWatchWindowV1, type GranolaWatchV1 } from './granola-watch-source-v1.js';
 const fail: typeof GRANOLA_PERSON_PROVIDER_V1.failure = GRANOLA_PERSON_PROVIDER_V1.failure;
 
@@ -114,9 +114,22 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
     async pageVersions(input: { readonly access_token: string; readonly page_ids: readonly string[]; readonly signal?: AbortSignal }) {
       const { person, requirePerson } = shared.actor(input.access_token), session = await open(person, requirePerson, input.signal);
       const result = new Map<string, string>();
-      for (const page of [...new Set(input.page_ids)].slice(0, 100)) {
-        try { const meeting = await session.api.meeting(page, input.signal); result.set(page, meeting.updated_at ?? canonicalSha256(meeting)); }
-        catch (error) { if (!(error instanceof Error && 'code' in error && (error.code === 'not_found' || error.code === 'unauthorized'))) throw error; }
+      const gone = (error: unknown) => error instanceof Error && 'code' in error && (error.code === 'not_found' || error.code === 'unauthorized');
+      const read = (meeting: GranolaMeetingV1) => result.set(meeting.id, meeting.updated_at ?? canonicalSha256(meeting));
+      // A cited id that is no Granola id is simply not readable; it never fails the check.
+      const pages = [...new Set(input.page_ids)].slice(0, 100).filter(page => GRANOLA_ID_V1.test(page));
+      for (let at = 0; at < pages.length; at += 10) {
+        const batch = pages.slice(at, at + 10);
+        try { (await session.api.present(batch, input.signal)).forEach(read); }
+        catch (error) {
+          if (gone(error)) continue;
+          if (!granolaMeetingUnreadableV1(error)) throw error;
+          // One unusable meeting fails its batch's answer: read that batch one by one so it hides only itself.
+          for (const page of batch) {
+            try { read(await session.api.meeting(page, input.signal)); }
+            catch (inner) { if (!gone(inner) && !granolaMeetingUnreadableV1(inner)) throw inner; }
+          }
+        }
       }
       await session.verify(); return result;
     },

@@ -176,6 +176,14 @@ describe('verified Granola MCP contract', () => {
       expect(() => parseGranolaMeetingPageV1(value, true)).toThrow(expect.objectContaining({ code: 'invalid_output' }));
     }
   });
+  it('reads up to ten meetings at once, leaving out the ones Granola no longer gives, never one it was not asked for', async () => {
+    const f = fixture(meeting());
+    expect((await f.adapter.present([id, other])).map(row => row.id)).toEqual([id]);
+    expect(JSON.parse(f.fetch.mock.calls[0]![1].body as string).params).toEqual({ name: 'get_meetings', arguments: { meeting_ids: [id, other] } });
+    await expect(fixture('<meetings_data count="0"></meetings_data>').adapter.present([other])).resolves.toEqual([]);
+    await expect(fixture(meeting()).adapter.present([numbered(5), other])).rejects.toMatchObject({ code: 'invalid_output' });
+    await expect(fixture(meeting()).adapter.present(Array.from({ length: 11 }, (_, index) => numbered(index + 10)))).rejects.toThrow();
+  });
   it('uses the observed transcript JSON and keeps audio labels as verbatim text', async () => {
     const f = fixture(warning + JSON.stringify({ id, title: 'Fixture', created_at: '2026-10-05T20:00:00.000Z', transcript: 'Microphone: hello', recording_context: { recorder: { name: 'someone' } } }));
     expect(await f.adapter.transcript(id)).toEqual({ text: 'Microphone: hello', created_at: '2026-10-05T20:00:00.000Z' });
