@@ -47,6 +47,15 @@ const MAX_PARTICIPANTS = 16 * 1024;
 const MEETING_MISSING = 'Granola meeting not found';
 /** A Granola timestamp: ISO 8601 with an offset. */
 export const GRANOLA_TIMESTAMP_V1 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+// The current detail-only account guidance is an envelope, never meeting evidence or an authentication input.
+const DETAIL_CONTEXT = "The connected_user_email identifies the user you are answering for; the note creator may be someone else. Retrieve relevant get_agent_brief context when available if their role or work context matters. Before drafting, match each action to its explicit owner in the detailed evidence: a shared heading does not assign every action to every named person. If one person shares material with another, the sharing belongs to the sender, not the recipient. Raising an issue does not establish implementation ownership. Check every 'I', 'my' and 'you' claim against that mapping; leave unclear ownership unassigned. Resolve phrases like 'this week' relative to the meeting date. Describe historical assignments and targets as dated plans; use [confirm current status] in a draft when later progress is unknown, rather than calling work still in progress or complete.";
+function unwrapDetailContext(value: string): string {
+  const account = /^<connected_user_email>[^<>\r\n]{1,320}<\/connected_user_email>\s*/u.exec(value)?.[0];
+  if (account === undefined) return value;
+  const rest = value.slice(account.length), context = `${DETAIL_CONTEXT}\n\n`;
+  if (!rest.startsWith(context + WARNING)) failure('invalid_output');
+  return rest.slice(context.length);
+}
 const REQUESTED_RANGE = /^<requested_range(?:\s[^<>]*)?(?:\/>|>[^<>]*<\/requested_range>)/u;
 const PAGINATION = /^<pagination(?:\s[^<>]*)?(?:\/>|><\/pagination>)$/u;
 const xml = new XMLParser({ ignoreAttributes: false, parseTagValue: false, parseAttributeValue: false,
@@ -158,12 +167,14 @@ function keywords(query: string): readonly string[] {
 }
 
 /**
- * Authenticated October 2026 MCP output, deliberately separate from retired REST shapes: an optional `<requested_range>`
+ * Authenticated MCP output, deliberately separate from retired REST shapes: an optional `<requested_range>`
  * before Granola's warning line, the `<meetings_data>` element, whose `count` is this page's, and an optional `<pagination>`
- * element before or after it. Unknown attributes and elements, such as each meeting's `<folders>`, are ignored.
+ * element before or after it. Detail reads also accept the November 2026 account-context envelope.
+ * Unknown attributes and elements, such as each meeting's `<folders>`, are ignored.
  */
 export function parseGranolaMeetingPageV1(value: string, detail: boolean): GranolaMeetingPageV1 {
-  let raw = unwrap(value.replace(REQUESTED_RANGE, '').trimStart());
+  const response = value.replace(REQUESTED_RANGE, '').trimStart();
+  let raw = unwrap(detail ? unwrapDetailContext(response) : response).trimStart();
   // Current search/get responses put pagination before the warning. Consume only
   // that exact envelope; never strip arbitrary text or accept two page claims.
   const prefix = /^<pagination(?:\s[^<>]*)?(?:\/>|><\/pagination>)/u.exec(raw)?.[0];
