@@ -476,6 +476,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   }
   /** Changes applied, by request id: a resend of the same one gets the same receipt, anything else under it conflicts. */
   const jiraMappings = new Map<string, { revision: string | null; mapping: { cloud_id: string; project_id: string; project_key: string } | null }>();
+  const granolaMappings = new Map<string, { revision: string | null; mapping: { cloud_id: string; folder_ids: string[] } | null }>();
   const confluenceMappings = new Map<string, { revision: string | null; mapping: { cloud_id: string; space_ids: string[] } | null }>();
   const applied = new Map<string, { command: string; receipt: Record<string, unknown>; status: number }>();
   /** The organization's employees, as their owner lists them. */
@@ -1459,6 +1460,25 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (space_ids !== null && (!Array.isArray(space_ids) || space_ids.length < 1 || space_ids.length > 20 || !space_ids.every(id => typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id)))) return failure('invalid_request', 400);
       const value = { revision: randomUUID(), mapping: space_ids === null ? null : { cloud_id: CONFLUENCE_CLOUD, space_ids } };
       confluenceMappings.set(projectId, value);
+      return json({ schema_version: 1, project_id: projectId, ...value });
+    }
+    if (method === 'POST' && path === '/v1/person/tools/granola/folders/list') {
+      if (body?.schema_version !== 1 || (body?.cursor !== undefined && body?.cursor !== 'next-folders')) return failure('invalid_request', 400);
+      return json(body?.cursor === 'next-folders'
+        ? { schema_version: 1, items: [{ id: '00000000-0000-4000-8000-000000000013', key: 'ENG', name: 'Engineering' }], next_cursor: null }
+        : { schema_version: 1, items: [{ id: '00000000-0000-4000-8000-000000000011', key: 'interviews', name: 'User interviews' }, { id: '00000000-0000-4000-8000-000000000012', key: 'OPS', name: 'Operations' }], next_cursor: 'next-folders' });
+    }
+    if (method === 'POST' && (path === '/v1/person/tools/granola/project/read' || path === '/v1/person/tools/granola/project/set')) {
+      const projectId = String(body?.project_id); const role = roleOf(projectId, session.membership_id);
+      if (!role) return failure('not_found', 404);
+      const current = granolaMappings.get(projectId) ?? { revision: null, mapping: null };
+      if (path.endsWith('/read')) return json({ schema_version: 1, project_id: projectId, ...current });
+      if (role !== 'lead' || body?.schema_version !== 1 || typeof body?.request_id !== 'string') return failure('unauthorized', 401);
+      if (body?.expected_revision !== current.revision) return failure('conflict', 409);
+      const folder_ids = body?.folder_ids;
+      if (folder_ids !== null && (!Array.isArray(folder_ids) || folder_ids.length < 1 || folder_ids.length > 20 || !folder_ids.every(id => typeof id === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id)))) return failure('invalid_request', 400);
+      const value = { revision: randomUUID(), mapping: folder_ids === null ? null : { cloud_id: CONFLUENCE_CLOUD, folder_ids } };
+      granolaMappings.set(projectId, value);
       return json({ schema_version: 1, project_id: projectId, ...value });
     }
     if (method === 'POST' && path === '/v1/person/projects/archive') {

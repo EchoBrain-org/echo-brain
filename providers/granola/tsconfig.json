@@ -27,6 +27,9 @@
     },
     {
       "path": "../shared"
+    },
+    {
+      "path": "../../packages/organization-api"
     }
   ]
 }

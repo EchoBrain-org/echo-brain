@@ -163,7 +163,7 @@ async function authority(method: string, params: { project_id?: string; request?
     case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
     case 'open.ref': case 'ask.record': return unavailable;
     // A project's tools line: it reads nothing.
-    case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
+    case 'projects.jiraRead': case 'projects.confluenceRead': case 'projects.granolaRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
     case 'app.setUnresolved': case 'notice.show': case 'log.changes': return ok(null);
     // The timeline is empty, there are no project arrivals, and the source check is unavailable.
     case 'timeline.read': return ok({ turns: [] });

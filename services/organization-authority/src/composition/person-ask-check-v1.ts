@@ -133,7 +133,7 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
       for (const entry of [...entriesOf(items, 'ticket'), ...entriesOf(items, 'page')]) {
         const check = checkOf(entry.citation.kind, entry.citation.tool_id);
         if (check === undefined) continue;
-        if (entry.citation.external_scope_id !== check.external_scope_id) answers[entry.index] = UNREADABLE;
+        if (entry.citation.external_scope_id !== (typeof check.external_scope_id === 'function' ? check.external_scope_id(access_token) : check.external_scope_id)) answers[entry.index] = UNREADABLE;
         else if (check.kind === 'ticket') group(tickets, check, entry as Entry<PersonTicketCitationV1>);
         else group(pages, check, entry as Entry<PersonPageCitationV1>);
       }

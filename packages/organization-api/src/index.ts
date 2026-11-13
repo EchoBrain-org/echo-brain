@@ -72,3 +72,6 @@ export * from './person-runs-v1.js';
 export * from './person-records-v1.js';
 export * from './person-cited-record-v1.js';
 export * from './person-employees-v1.js';
+
+export * from './person-meeting-projects-v1.js';
+export { createPersonMeetingProjectVerbV1, PersonMeetingProjectClientV1 } from './person-meeting-project-client-v1.js';

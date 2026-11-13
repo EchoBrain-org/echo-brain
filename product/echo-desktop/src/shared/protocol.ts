@@ -611,6 +611,13 @@ export interface ProjectConfluenceMapping {
   mapping: { space_ids: readonly string[] } | null;
 }
 export interface ConfluenceSpacesPage { items: readonly ConfluenceSpace[]; next_cursor: string | null }
+export interface GranolaFolder { id: string; key: string; name: string }
+export interface ProjectGranolaMapping {
+  project_id: string;
+  revision: string | null;
+  mapping: { folder_ids: readonly string[] } | null;
+}
+export interface GranolaFoldersPage { items: readonly GranolaFolder[]; next_cursor: string | null }
 
 /**
  * What an open item says now, read live for you in this request and never
@@ -734,8 +741,11 @@ export interface HostMethods {
   'projects.jiraRead': { params: { expect: Expect; project_id: string }; result: ProjectJiraMapping };
   'projects.jiraSet': { params: { expect: Expect; project_id: string; request_id: string; expected_revision: string | null; jira_project: string | null }; result: ProjectJiraMapping };
   'projects.confluenceRead': { params: { expect: Expect; project_id: string }; result: ProjectConfluenceMapping };
+  'projects.granolaRead': { params: { expect: Expect; project_id: string }; result: ProjectGranolaMapping };
   'projects.confluenceSet': { params: { expect: Expect; project_id: string; request_id: string; expected_revision: string | null; space_ids: readonly string[] | null }; result: ProjectConfluenceMapping };
+  'projects.granolaSet': { params: { expect: Expect; project_id: string; request_id: string; expected_revision: string | null; folder_ids: readonly string[] | null }; result: ProjectGranolaMapping };
   'projects.confluenceSpaces': { params: { expect: Expect; cursor?: string }; result: ConfluenceSpacesPage };
+  'projects.granolaFolders': { params: { expect: Expect; cursor?: string }; result: GranolaFoldersPage };
   /** Connect or Reconnect: opens the tool's page in the browser and returns at once with the attempt. */
   'tools.connect': { params: { expect: Expect; tool_id: string }; result: ToolAttempt };
   /** Reads a started connection; a status read is what completes it. */
@@ -799,7 +809,7 @@ export const HOST_TIMEOUT_MS: Readonly<Record<HostMethodName, number>> = {
   'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000,
   'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
   'employees.reissue': 45_000, 'employees.revoke': 45_000,
-  'projects.jiraRead': 45_000, 'projects.jiraSet': 90_000, 'projects.confluenceRead': 45_000, 'projects.confluenceSet': 90_000, 'projects.confluenceSpaces': 45_000,
+  'projects.granolaRead': 45_000, 'projects.granolaSet': 90_000, 'projects.granolaFolders': 45_000, 'projects.jiraRead': 45_000, 'projects.jiraSet': 90_000, 'projects.confluenceRead': 45_000, 'projects.confluenceSet': 90_000, 'projects.confluenceSpaces': 45_000,
   'tools.meetings': 90_000, 'runs': 45_000, 'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
   'reviews': 90_000,
   // The timeline is this computer's own file; a check waits out the Authority's 15 s budget; activity is one read, as the change check.
@@ -812,7 +822,7 @@ export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
   'notes.submit', 'documents.upload', 'documents.retry', 'projects.change', 'projects.create', 'employees.invite', 'employees.reissue',
-  'employees.revoke', 'tools.meetings', 'runs', 'tools.disconnect', 'projects.jiraSet', 'projects.confluenceSet',
+  'employees.revoke', 'tools.meetings', 'runs', 'tools.disconnect', 'projects.jiraSet', 'projects.confluenceSet', 'projects.granolaSet',
   'reviews',
 ]);
 /** Operations of a write method that only read. */

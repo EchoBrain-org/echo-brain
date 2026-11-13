@@ -22,7 +22,7 @@ import { lost, pinRefusal, refreshStops } from './session.js';
 import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timelineTurn } from './timeline.js';
 import {
   abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, listView,
-  membersView, noteTitle, openItemsView, openItemView, openView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectView,
+  membersView, noteTitle, openItemsView, openItemView, openView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectGranolaMappingView, granolaFoldersView, projectPageView, projectView,
   projectActivityView, receiptView, recordRead, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
@@ -497,6 +497,23 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const { expect, cursor } = params as Params<'projects.confluenceSpaces'>;
       if (cursor !== undefined && (typeof cursor !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(cursor))) return code('invalid_request');
       return forAccount(method, expect, ['tools', 'project', '--tool=confluence', '--spaces', ...(cursor === undefined ? [] : [option('space-cursor', cursor)])], stdout => confluenceSpacesView(lastJson(stdout)));
+    }
+    case 'projects.granolaRead': {
+      const { expect, project_id } = params as Params<'projects.granolaRead'>;
+      if (!valid(validateProjectIdV1, project_id)) return code('invalid_request');
+      return forAccount(method, expect, ['tools', 'project', '--tool=granola', option('echo-project', project_id)], stdout => projectGranolaMappingView(lastJson(stdout), project_id));
+    }
+    case 'projects.granolaSet': {
+      const { expect, project_id, request_id, expected_revision, folder_ids } = params as Params<'projects.granolaSet'>;
+      if (!valid(validateProjectIdV1, project_id) || !valid(validatePersonUpdateRequestId, request_id) ||
+          (expected_revision !== null && !valid(validatePersonUpdateRequestId, expected_revision)) ||
+          (folder_ids !== null && (!Array.isArray(folder_ids) || folder_ids.length < 1 || folder_ids.length > 20 || !folder_ids.every(id => typeof id === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id)) || new Set(folder_ids).size !== folder_ids.length))) return code('invalid_request', true);
+      return forAccount(method, expect, ['tools', 'project', '--tool=granola', option('echo-project', project_id), option('mapping-request', request_id), option('mapping-revision', expected_revision ?? 'none'), ...(folder_ids === null ? ['--clear'] : [option('folder-ids', folder_ids.join(','))])], stdout => projectGranolaMappingView(lastJson(stdout), project_id), request_id);
+    }
+    case 'projects.granolaFolders': {
+      const { expect, cursor } = params as Params<'projects.granolaFolders'>;
+      if (cursor !== undefined && (typeof cursor !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(cursor))) return code('invalid_request');
+      return forAccount(method, expect, ['tools', 'project', '--tool=granola', '--folders', ...(cursor === undefined ? [] : [option('folder-cursor', cursor)])], stdout => granolaFoldersView(lastJson(stdout)));
     }
     case 'projects.read': {
       const { expect, project_id } = params as Params<'projects.read'>;

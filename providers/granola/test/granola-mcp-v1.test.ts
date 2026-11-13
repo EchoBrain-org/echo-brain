@@ -51,6 +51,19 @@ const plainRow = (meeting: string, title = 'Standup') => `<meeting id="${meeting
 const numbered = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
 
 describe('verified Granola MCP contract', () => {
+  it('accepts current pagination-first results without discarding continuation', () => {
+    const pagination = '<pagination has_more="true" total_count="2" next_cursor="next-page" completion_status="more" />';
+    const result = parseGranolaMeetingPageV1(`${pagination}\n\n${warning}${meeting()}`, false);
+    expect(result.meetings.map(row => row.id)).toEqual([id]);
+    expect(result.next_cursor).toBe('next-page');
+    expect(result.total_count).toBe(2);
+  });
+  it('rejects ambiguous duplicate pagination and material outside the meeting envelope', () => {
+    const pagination = '<pagination has_more="false" total_count="1" />';
+    for (const body of [pagination + '\n' + warning + meeting() + pagination, pagination + '\nnot a provider envelope\n' + meeting()]) {
+      expect(() => parseGranolaMeetingPageV1(body, false)).toThrow();
+    }
+  });
   it('accepts JSON identity and binds the active workspace, without inventing an immutable account ID', async () => {
     const { adapter } = fixture(JSON.stringify({ email: 'fixture@example.test', active_workspace: { id, display_name: 'Fixture' }, workspaces: [{ id: other }], mcp_note_access: { scopes: ['personal', 'public'] } }));
     expect(await adapter.account()).toEqual({ email: 'fixture@example.test', workspace_id: id, workspace_name: 'Fixture', scopes: ['personal', 'public'] });

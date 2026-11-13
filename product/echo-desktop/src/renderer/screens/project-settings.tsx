@@ -103,11 +103,12 @@ function ProjectMenu({ settings, anchor }: { settings: ProjectSettingsState; anc
 }
 
 /** The tool's name as the Authority lists it, until it is read. */
-const NAMES: Record<MappingTool, string> = { jira: 'Jira', confluence: 'Confluence' };
+const NAMES: Record<MappingTool, string> = { jira: 'Jira', confluence: 'Confluence', granola: 'Granola' };
 /** What each tool's setting holds. */
-const SCOPE: Record<MappingTool, string> = { jira: 'One project', confluence: 'Up to 20 spaces' };
+const SCOPE: Record<MappingTool, string> = { jira: 'One project', confluence: 'Up to 20 spaces', granola: 'Up to 20 folders' };
 /** What the project reads from each tool, as its row says it. */
 const READS: { readonly [Tool in MappingTool]: (reads: NonNullable<ProjectReads[Tool]>) => string } = {
+  granola: folders => `Searches ${folders} folder${folders === 1 ? '' : 's'}`,
   jira: key => `Reads ${key}`, confluence: spaces => `Reads ${spaces} space${spaces === 1 ? '' : 's'}`,
 };
 
@@ -180,43 +181,45 @@ function Picker({ settings, tool, name, onSave }: { settings: ProjectSettingsSta
       </label>
     );
   }
-  const confluence = settings.confluence!;
-  if (confluence.catalog !== 'read') return <div class="tool-body notice-line" role="status">Loading your {name} spaces…</div>;
+  const confluence = settings[tool]!;
+  const noun = tool === 'granola' ? 'folder' : 'space';
+  if (confluence.catalog !== 'read') return <div class="tool-body notice-line" role="status">Loading your {name} {noun}s…</div>;
   if (confluence.pickerFailure) {
     return (
       <div class="tool-body tool-trouble">
-        <span class="error" data-testid="project-confluence-picker-error">Could not load your spaces. {message(confluence.pickerFailure)}</span>
-        <button type="button" class="link-button" onClick={() => reloadProjectTool('confluence')}>Try again</button>
+        <span class="error" data-testid={`project-${tool}-picker-error`}>Could not load your {noun}s. {message(confluence.pickerFailure)}</span>
+        <button type="button" class="link-button" onClick={() => reloadProjectTool(tool)}>Try again</button>
       </div>
     );
   }
   const hidden = hiddenSpaces(confluence);
   return (
     <div class="tool-body tool-spaces">
-      <span class="select-label">Spaces</span>
-      <div class="check-list" data-testid="project-confluence-spaces">
+      {tool === 'granola' && <p class="notice-line">Search these folders live. Meetings stay in Granola. Extraction and approval are separate.</p>}
+      <span class="select-label">{tool === 'granola' ? 'Folders' : 'Spaces'}</span>
+      <div class="check-list" data-testid={`project-${tool}-${noun}s`}>
         {confluence.spaces.map(space => (
           <label key={space.id} class="check">
             <input type="checkbox" checked={confluence.selected.includes(space.id)} disabled={!editing || confluence.status !== 'ready'}
-              onChange={() => toggleProjectConfluenceSpace(space.id)} />
-            <span>{space.name} <span class="faint">({space.key})</span></span>
+              onChange={() => toggleProjectConfluenceSpace(space.id, tool)} />
+            <span>{space.name} {tool === 'confluence' && <span class="faint">({space.key})</span>}</span>
           </label>
         ))}
         {/* Read by the project, picked by another lead or on a page not read yet: it can still be unticked. */}
         {hidden.map(id => (
-          <label key={id} class="check" data-testid="project-confluence-hidden-space">
-            <input type="checkbox" checked disabled={!editing || confluence.status !== 'ready'} onChange={() => toggleProjectConfluenceSpace(id)} />
-            <span>A space you can’t see <span class="faint">({id})</span></span>
+          <label key={id} class="check" data-testid={`project-${tool}-hidden-${noun}`}>
+            <input type="checkbox" checked disabled={!editing || confluence.status !== 'ready'} onChange={() => toggleProjectConfluenceSpace(id, tool)} />
+            <span>A {noun} you can’t see <span class="faint">({id})</span></span>
           </label>
         ))}
-        {confluence.spaces.length === 0 && hidden.length === 0 && <span class="notice-line">You can’t see any spaces in {name}.</span>}
+        {confluence.spaces.length === 0 && hidden.length === 0 && <span class="notice-line">You can’t see any {noun}s in {name}.</span>}
       </div>
       {confluence.status === 'ready' && confluence.failure && (
-        <span class="error" data-testid="project-confluence-more-error">More spaces could not be read. {message(confluence.failure)}</span>
+        <span class="error" data-testid={`project-${tool}-more-error`}>More {noun}s could not be read. {message(confluence.failure)}</span>
       )}
       {confluence.next !== null && (
-        <button type="button" class="link-button tool-more" data-testid="project-confluence-more" disabled={confluence.loadingMore || !editing}
-          onClick={() => void moreProjectConfluenceSpaces()}>{confluence.loadingMore ? 'Loading…' : 'More spaces'}</button>
+        <button type="button" class="link-button tool-more" data-testid={`project-${tool}-more`} disabled={confluence.loadingMore || !editing}
+          onClick={() => void moreProjectConfluenceSpaces(tool)}>{confluence.loadingMore ? 'Loading…' : `More ${noun}s`}</button>
       )}
     </div>
   );

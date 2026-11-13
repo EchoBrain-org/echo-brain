@@ -20,6 +20,10 @@
     "./granola-watch-source-v1": {
       "types": "./dist/granola-watch-source-v1.d.ts",
       "import": "./dist/granola-watch-source-v1.js"
+    },
+    "./granola-person-connection-http-application-v1": {
+      "types": "./dist/granola-person-connection-http-application-v1.d.ts",
+      "import": "./dist/granola-person-connection-http-application-v1.js"
     }
   },
   "files": [
@@ -37,7 +41,8 @@
     "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
     "@echo-brain/organization-processing": "0.0.0-dev.0",
     "fast-xml-parser": "5.11.2",
-    "@echo-brain/provider-runtime": "0.0.0-dev.0"
+    "@echo-brain/provider-runtime": "0.0.0-dev.0",
+    "@echo-brain/organization-api": "0.0.0-dev.0"
   },
   "engines": {
     "node": "22.22.1",

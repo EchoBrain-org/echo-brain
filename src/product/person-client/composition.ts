@@ -1,7 +1,7 @@
-import { createPersonToolConnectionVerbsV1, PersonToolConnectionClientV1, personMeetingCommandV2, validatePersonMeetingRequestV2, type PersonToolProviderV1 } from '@echo-brain/organization-api';
+import { createPersonMeetingProjectVerbV1, createPersonToolConnectionVerbsV1, PersonToolConnectionClientV1, personMeetingCommandV2, validatePersonMeetingRequestV2, type PersonToolProviderV1 } from '@echo-brain/organization-api';
 function granolaTool(): PersonToolProviderV1 {
   const connection = createPersonToolConnectionVerbsV1('Granola', host => new PersonToolConnectionClientV1(host, 'Granola', 'granola'));
-  return { tool_id: 'granola', verbs: { ...connection, setup: connection.connect,
+  return { tool_id: 'granola', verbs: { project: createPersonMeetingProjectVerbV1('granola', 'Granola'), ...connection, setup: connection.connect,
     meetings: { description: 'Browse, import, watch and review meetings with a versioned JSON request.', options: { request: { type: 'string' } }, requires: ['request'],
       async run(context) {
         const request = validatePersonMeetingRequestV2(JSON.parse(String(context.values.request)));

@@ -10,7 +10,8 @@
     "providers/granola/src/granola-meeting-normalizer-v1.ts",
     "providers/granola/src/granola-mcp-v1.ts",
     "providers/granola/src/granola-person-connection-v1.ts",
-    "providers/granola/src/granola-watch-source-v1.ts"
+    "providers/granola/src/granola-watch-source-v1.ts",
+    "providers/granola/src/granola-person-connection-http-application-v1.ts"
   ],
   "owned_source_paths": [
     "providers/granola/src/**"
@@ -22,7 +23,8 @@
     "@echo-brain/federation-protocol",
     "@echo-brain/organization-authority-kernel",
     "@echo-brain/organization-processing",
-    "@echo-brain/provider-runtime"
+    "@echo-brain/provider-runtime",
+    "@echo-brain/organization-api"
   ],
   "allowed_external_packages": [
     "fast-xml-parser"
@@ -42,7 +44,8 @@
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-authority-kernel",
         "@echo-brain/organization-processing",
-        "@echo-brain/provider-runtime"
+        "@echo-brain/provider-runtime",
+        "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [
         "fast-xml-parser"

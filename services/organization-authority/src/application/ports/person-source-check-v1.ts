@@ -12,7 +12,7 @@ export interface PersonTicketCheckV1 {
   readonly kind: 'ticket';
   /** The tool and site its tickets belong to; a ticket cited on another site is not one this check reads. */
   readonly tool_id: string;
-  readonly external_scope_id: string;
+  readonly external_scope_id: string | ((access_token: string) => string | undefined);
   /** Each readable ticket's marker by its id, read in bulk: at most 100 ids, in two calls. Null for a ticket read whose fields no marker can be made from. */
   markers(input: PersonSourceCheckReadV1 & { readonly ticket_ids: readonly string[] }): Promise<ReadonlyMap<string, string | null>>;
 }
@@ -20,7 +20,7 @@ export interface PersonTicketCheckV1 {
 export interface PersonPageCheckV1 {
   readonly kind: 'page';
   readonly tool_id: string;
-  readonly external_scope_id: string;
+  readonly external_scope_id: string | ((access_token: string) => string | undefined);
   /** Each readable page's current version by its id, read by id: at most 100 ids, in two calls. */
   versions(input: PersonSourceCheckReadV1 & { readonly page_ids: readonly string[] }): Promise<ReadonlyMap<string, string>>;
 }

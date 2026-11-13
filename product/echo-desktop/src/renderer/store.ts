@@ -7,7 +7,7 @@ import { useEffect, useState } from 'preact/hooks';
 import type {
   AccountCommand, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
   ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Member, OpenItemsView, OpenItemView,
-  ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
+  ProjectChange, ProjectGranolaMapping, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
@@ -433,7 +433,7 @@ export interface ProjectToolSetting<Value> {
   writeFailed?: boolean;
 }
 export interface ProjectJiraSetting extends ProjectToolSetting<ProjectJiraMapping> { key: string }
-export interface ProjectConfluenceSetting extends ProjectToolSetting<ProjectConfluenceMapping> {
+export interface ProjectContainerSetting<Value> extends ProjectToolSetting<Value> {
   spaces: readonly ConfluenceSpace[];
   next: string | null;
   selected: readonly string[];
@@ -443,6 +443,9 @@ export interface ProjectConfluenceSetting extends ProjectToolSetting<ProjectConf
   /** The lead-only space catalog failed; the shared project mapping is still readable. */
   pickerFailure?: Failure;
 }
+
+export type ProjectConfluenceSetting = ProjectContainerSetting<ProjectConfluenceMapping>;
+export type ProjectGranolaSetting = ProjectContainerSetting<ProjectGranolaMapping>;
 
 /**
  * A project's Tools: your connection to each tool a project can read, and
@@ -472,11 +475,13 @@ export interface ProjectReads {
   jira?: string | null;
   /** How many Confluence spaces, or null when none. */
   confluence?: number | null;
+  granola?: number | null;
 }
 
 export interface ProjectSettingsState {
   jira?: ProjectJiraSetting;
   confluence?: ProjectConfluenceSetting;
+  granola?: ProjectGranolaSetting;
   tools?: ProjectToolsState;
   project: ProjectSummary;
   menu: boolean;
@@ -1476,7 +1481,7 @@ async function loadProjectReads(project_id: string): Promise<void> {
   if (!account) return;
   const mine = ++seq;
   set({ projectReads: { project_id, seq: mine } });
-  const settle = <Key extends 'available' | 'jira' | 'confluence'>(key: Key, value: ProjectReads[Key]) => {
+  const settle = <Key extends 'available' | 'jira' | 'confluence' | 'granola'>(key: Key, value: ProjectReads[Key]) => {
     const current = state.projectReads;
     // Save may already have confirmed this field while the initial read waited.
     if (current?.seq === mine && current[key] === undefined &&
@@ -1491,6 +1496,8 @@ async function loadProjectReads(project_id: string): Promise<void> {
       .then(result => { if (result.ok) settle('jira', jiraMapping.reads(result.value)); }),
     rpc('projects.confluenceRead', { expect: account, project_id })
       .then(result => { if (result.ok) settle('confluence', confluenceMapping.reads(result.value)); }),
+    rpc('projects.granolaRead', { expect: account, project_id })
+      .then(result => { if (result.ok) settle('granola', granolaMapping.reads(result.value)); }),
   ]);
 }
 
@@ -2033,7 +2040,7 @@ export function closeProjectSettings(): void {
 }
 
 /** The tools a project can read from, in the order its Tools sheet shows them. */
-export const PROJECT_MAPPING_TOOLS = ['jira', 'confluence'] as const;
+export const PROJECT_MAPPING_TOOLS = ['jira', 'confluence', 'granola'] as const;
 export type MappingTool = typeof PROJECT_MAPPING_TOOLS[number];
 type MappingSetting<Tool extends MappingTool> = NonNullable<ProjectSettingsState[Tool]>;
 type MappingValue<Tool extends MappingTool> = NonNullable<MappingSetting<Tool>['value']>;
@@ -2086,7 +2093,21 @@ const confluenceMapping: MappingAdapter<'confluence'> = {
     return setting.pickerFailure === undefined ? 'set' : 'invalid';
   },
 };
-const MAPPINGS: { readonly [Tool in MappingTool]: MappingAdapter<Tool> } = { jira: jiraMapping, confluence: confluenceMapping };
+const granolaMapping: MappingAdapter<'granola'> = {
+  reads: value => value.mapping ? value.mapping.folder_ids.length : null,
+  tool: 'granola', initial: seq => ({ seq, status: 'loading', spaces: [], next: null, selected: [], catalog: 'idle' }),
+  read: (expect, project_id) => rpc('projects.granolaRead', { expect, project_id }),
+  write: (expect, project_id, setting, remove, request_id) => rpc('projects.granolaSet', { expect, project_id, request_id,
+    expected_revision: setting.value!.revision, folder_ids: remove ? null : setting.selected }),
+  accepted: (setting, value) => ({ ...setting, status: 'ready', value, selected: value.mapping?.folder_ids ?? [] }),
+  change: (setting, value) => {
+    const current = value.mapping?.folder_ids ?? [];
+    if (current.length === setting.selected.length && current.every(id => setting.selected.includes(id))) return null;
+    if (setting.selected.length === 0) return current.length > 0 ? 'remove' : null;
+    return setting.pickerFailure === undefined ? 'set' : 'invalid';
+  },
+};
+const MAPPINGS: { readonly [Tool in MappingTool]: MappingAdapter<Tool> } = { jira: jiraMapping, confluence: confluenceMapping, granola: granolaMapping };
 
 /** Every reply belongs to this account and this opening of the project sheet. */
 function mappingAt<Tool extends MappingTool>(tool: Tool, account: Expect, opening: number) {
@@ -2130,12 +2151,14 @@ export function openProjectTools(project: ProjectSummary): void {
   const tools: ProjectToolsState = { seq: ++seq, items: null, saving: false };
   const jira = jiraMapping.initial(++seq);
   const confluence = confluenceMapping.initial(++seq);
+  const granola = granolaMapping.initial(++seq);
   set({ projectSettings: {
-    project, menu: false, menuOrigin: state.projectSettings?.menuOrigin ?? 'header', rename: null, confirm: null, write: null, tools, jira, confluence,
+    project, menu: false, menuOrigin: state.projectSettings?.menuOrigin ?? 'header', rename: null, confirm: null, write: null, tools, jira, confluence, granola,
   } });
   void loadProjectToolList(account, tools.seq);
   void readProjectMapping(jiraMapping, account, project.project_id, jira.seq);
   void readProjectMapping(confluenceMapping, account, project.project_id, confluence.seq);
+  void readProjectMapping(granolaMapping, account, project.project_id, granola.seq);
 }
 
 async function loadProjectToolList(account: Expect, opening: number): Promise<void> {
@@ -2146,6 +2169,7 @@ async function loadProjectToolList(account: Expect, opening: number): Promise<vo
   if (!result.ok) accountLost(result.failure);
   // Read or not, the spaces can be read now: without your connections the Authority checks on save.
   void readSpaces(account);
+  void readSpaces(account, 'granola');
 }
 
 async function readProjectMapping<Tool extends MappingTool>(adapter: MappingAdapter<Tool>, account: Expect, project_id: string, opening: number): Promise<void> {
@@ -2157,22 +2181,22 @@ async function readProjectMapping<Tool extends MappingTool>(adapter: MappingAdap
   if (!result.ok) { accountLost(result.failure); return; }
   // The line above the feed says what was read, even after a save it could not confirm.
   if (state.projectReads?.project_id === project_id) set({ projectReads: { ...state.projectReads, [adapter.tool]: adapter.reads(result.value) } });
-  if (adapter.tool === 'confluence') void readSpaces(account);
+  if (adapter.tool !== 'jira') void readSpaces(account, adapter.tool);
 }
 
 /** A lead picks from their own Confluence spaces: read once the mapping is, and once Confluence is connected. */
-async function readSpaces(account: Expect): Promise<void> {
+async function readSpaces(account: Expect, tool: 'confluence' | 'granola' = 'confluence'): Promise<void> {
   const settings = state.projectSettings;
-  const setting = settings?.confluence;
+  const setting = settings?.[tool];
   if (!settings?.tools || !setting || settings.project.role !== 'lead' || setting.status !== 'ready' || setting.catalog !== 'idle') return;
   // Your connection is still being read: its reply reads the spaces.
   if (settings.tools.items === null && settings.tools.failure === undefined) return;
-  if (!projectToolUsable(settings, 'confluence')) return;
-  setMapping(settings, 'confluence', { ...setting, catalog: 'loading', pickerFailure: undefined });
-  const spaces = await rpc('projects.confluenceSpaces', { expect: account });
-  const current = mappingAt('confluence', account, setting.seq);
+  if (!projectToolUsable(settings, tool)) return;
+  setMapping(settings, tool, { ...setting, catalog: 'loading', pickerFailure: undefined });
+  const spaces = await rpc(tool === 'granola' ? 'projects.granolaFolders' : 'projects.confluenceSpaces', { expect: account });
+  const current = mappingAt(tool, account, setting.seq);
   if (!current) return;
-  setMapping(current.settings, 'confluence', spaces.ok
+  setMapping(current.settings, tool, spaces.ok
     ? { ...current.setting, catalog: 'read', spaces: spaces.value.items, next: spaces.value.next_cursor }
     : { ...current.setting, catalog: 'read', pickerFailure: spaces.failure });
   if (!spaces.ok) accountLost(spaces.failure);
@@ -2237,15 +2261,17 @@ export function projectToolsSavable(settings: ProjectSettingsState): boolean {
 }
 
 /** What a project reads, as its tools line and Save's toast say it. */
-function readsOf(settings: ProjectSettingsState): Pick<ProjectReads, 'jira' | 'confluence'> {
+function readsOf(settings: ProjectSettingsState): Pick<ProjectReads, 'jira' | 'confluence' | 'granola'> {
   const jira = projectToolReads(settings, 'jira');
   const confluence = projectToolReads(settings, 'confluence');
-  return { ...(jira !== undefined ? { jira } : {}), ...(confluence !== undefined ? { confluence } : {}) };
+  const granola = projectToolReads(settings, 'granola');
+  return { ...(jira !== undefined ? { jira } : {}), ...(confluence !== undefined ? { confluence } : {}), ...(granola !== undefined ? { granola } : {}) };
 }
 
-export function readsWords(reads: Pick<ProjectReads, 'jira' | 'confluence'>): string[] {
+export function readsWords(reads: Pick<ProjectReads, 'jira' | 'confluence' | 'granola'>): string[] {
   return [
     reads.jira ? `Jira ${reads.jira}` : null,
+    reads.granola ? `${reads.granola} Granola folder${reads.granola === 1 ? '' : 's'}` : null,
     reads.confluence ? `${reads.confluence} Confluence space${reads.confluence === 1 ? '' : 's'}` : null,
   ].filter((part): part is string => part !== null);
 }
@@ -2290,8 +2316,8 @@ export async function saveProjectTools(): Promise<void> {
 }
 
 /** What Save did, and only that: "now reads Jira KAN", "no longer reads Confluence", or both. */
-function savedWords(name: string, done: readonly (readonly [MappingTool, ToolChange])[], reads: Pick<ProjectReads, 'jira' | 'confluence'>): string {
-  const names: Record<MappingTool, string> = { jira: 'Jira', confluence: 'Confluence' };
+function savedWords(name: string, done: readonly (readonly [MappingTool, ToolChange])[], reads: Pick<ProjectReads, 'jira' | 'confluence' | 'granola'>): string {
+  const names: Record<MappingTool, string> = { jira: 'Jira', confluence: 'Confluence', granola: 'Granola' };
   const set = done.filter(([, change]) => change === 'set').map(([tool]) => readsWords({ [tool]: reads[tool] })[0]!);
   const removed = done.filter(([, change]) => change === 'remove').map(([tool]) => names[tool]);
   const parts = [set.length > 0 ? `now reads ${set.join(' and ')}` : null, removed.length > 0 ? `no longer reads ${removed.join(' and ')}` : null];
@@ -2337,6 +2363,7 @@ export async function connectProjectTool(tool: ConnectedTool): Promise<void> {
   const items = current.tools.items?.map(item => item.tool_id === tool.tool_id ? { ...item, status: 'linked' as const } : item) ?? null;
   setProjectTools(current, { connect: undefined, connected: tool.tool_id, items });
   void readSpaces(account);
+  void readSpaces(account, 'granola');
 }
 
 /** Cancel, in the row: the attempt is cancelled, so a late approval in the browser binds nothing. */
@@ -2361,29 +2388,29 @@ export function clearProjectTool(tool: MappingTool): void {
   const settings = state.projectSettings;
   if (!settings?.tools || settings.tools.saving || settings.project.role !== 'lead') return;
   if (tool === 'jira' && settings.jira?.status === 'ready') setMapping(settings, 'jira', { ...settings.jira, key: '' });
-  if (tool === 'confluence' && settings.confluence?.status === 'ready') setMapping(settings, 'confluence', { ...settings.confluence, selected: [] });
+  if (tool !== 'jira') { const setting = settings[tool]; if (setting?.status === 'ready') setMapping(settings, tool, { ...setting, selected: [] }); }
 }
 
 /** Spaces the project reads that your own catalog does not show: another lead's, or on a page not read yet. */
-export function hiddenSpaces(setting: ProjectConfluenceSetting): string[] {
+export function hiddenSpaces(setting: Pick<ProjectConfluenceSetting, 'selected' | 'spaces'>): string[] {
   return setting.selected.filter(id => !setting.spaces.some(space => space.id === id));
 }
 
-export function toggleProjectConfluenceSpace(id: string): void {
-  const settings = state.projectSettings; const setting = settings?.confluence;
+export function toggleProjectConfluenceSpace(id: string, tool: 'confluence' | 'granola' = 'confluence'): void {
+  const settings = state.projectSettings; const setting = settings?.[tool];
   if (!settings || !setting || setting.status !== 'ready' || settings.project.role !== 'lead' ||
       (!setting.spaces.some(space => space.id === id) && !setting.selected.includes(id))) return;
   const selected = setting.selected.includes(id) ? setting.selected.filter(value => value !== id) : [...setting.selected, id];
-  if (selected.length <= 20) setMapping(settings, 'confluence', { ...setting, selected });
+  if (selected.length <= 20) setMapping(settings, tool, { ...setting, selected });
 }
-export async function moreProjectConfluenceSpaces(): Promise<void> {
-  const settings = state.projectSettings; const setting = settings?.confluence; const account = expect();
+export async function moreProjectConfluenceSpaces(tool: 'confluence' | 'granola' = 'confluence'): Promise<void> {
+  const settings = state.projectSettings; const setting = settings?.[tool]; const account = expect();
   if (!settings || !setting || !account || setting.status !== 'ready' || setting.next === null || setting.loadingMore) return;
-  setMapping(settings, 'confluence', { ...setting, loadingMore: true, failure: undefined });
-  const result = await rpc('projects.confluenceSpaces', { expect: account, cursor: setting.next });
-  const current = mappingAt('confluence', account, setting.seq);
+  setMapping(settings, tool, { ...setting, loadingMore: true, failure: undefined });
+  const result = await rpc(tool === 'granola' ? 'projects.granolaFolders' : 'projects.confluenceSpaces', { expect: account, cursor: setting.next });
+  const current = mappingAt(tool, account, setting.seq);
   if (!current) return;
-  setMapping(current.settings, 'confluence', result.ok
+  setMapping(current.settings, tool, result.ok
     ? { ...current.setting, spaces: appendPage(current.setting.spaces, result.value.items, space => space.id), next: result.value.next_cursor, loadingMore: false }
     : { ...current.setting, loadingMore: false, failure: result.failure });
   if (!result.ok) accountLost(result.failure);

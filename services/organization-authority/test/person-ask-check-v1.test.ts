@@ -307,6 +307,17 @@ describe('Ask source check: unreadable says nothing (ADR-0012)', () => {
 });
 
 describe('Ask source check: tickets and pages', () => {
+  it('resolves a personal meeting workspace for the caller and never checks another workspace through it', async () => {
+    const f = await world();
+    const versions = vi.fn(async () => new Map([['meeting', 'v1']]));
+    const personal: PersonPageCheckV1 = { kind: 'page', tool_id: 'granola', external_scope_id: token => token === 'ari' ? CLOUD : undefined, versions };
+    const { check } = askCheckOf(f, { live: [personal] });
+    const citation = { ...page('meeting'), tool_id: 'granola' };
+    expect(await check('ari', [item(citation), item({ ...citation, external_scope_id: 'other-workspace' })])).toEqual([SAME, UNREADABLE]);
+    expect(versions).toHaveBeenCalledTimes(1);
+    expect(await check('mina', [item(citation)])).toEqual([UNREADABLE]);
+    expect(versions).toHaveBeenCalledTimes(1);
+  });
   it('returns every readable ticket same with its current marker, whatever marker the request gave it', async () => {
     const f = await world();
     const now = canonicalSha256('ticket now');

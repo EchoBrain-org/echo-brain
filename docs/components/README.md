@@ -65,7 +65,7 @@ The shared implementation packages are `packages/organization-processing` and
 | Workspace | Scope |
 | --- | --- |
 | `providers/openrouter` | OpenRouter processing, generation and model vocabulary |
-| `providers/granola` | Person-bound Granola MCP connection, watched-meetings source (my meetings or one folder) and meeting normalizer |
+| `providers/granola` | Person-bound Granola MCP connection, live historical meeting search, independent project-folder mappings, opt-in extraction source and normalizer |
 | `providers/jira` | Person-bound Jira Nango connection store and HTTP application, and gated live reader; [authentication and support boundary](../../providers/jira/README.md) |
 | `providers/jira/client` | Jira connection wire contracts and shared Person tool commands; no server dependencies |
 | `providers/shared` | Reusable Nango personal connection lifecycle, local ownership state, HTTP routes, and bounded JSON transport; product grants and readers remain separate |
