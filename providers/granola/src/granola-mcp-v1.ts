@@ -140,6 +140,22 @@ function day(value: string): string {
 function liveDate(value: string): string {
   return GRANOLA_TIMESTAMP_V1.test(value) && Number.isFinite(Date.parse(value)) ? value : day(value);
 }
+/**
+ * A search's keywords: Granola takes at most 20 alternative entries of at most 100 characters each. A query that fits is
+ * one entry, unchanged; a longer one is its distinct words of three characters or more, longest first, or failing
+ * that, its first 100 characters.
+ */
+function keywords(query: string): readonly string[] {
+  const characters = [...query];
+  if (characters.length <= 100) return [query];
+  const words = new Map<string, string>();
+  for (const [word] of query.matchAll(/[\p{L}\p{N}]+/gu)) {
+    const kept = [...word].slice(0, 100).join('');
+    if ([...kept].length >= 3 && !words.has(kept.toLowerCase())) words.set(kept.toLowerCase(), kept);
+  }
+  const entries = [...words.values()].sort((left, right) => [...right].length - [...left].length).slice(0, 20);
+  return entries.length > 0 ? entries : [characters.slice(0, 100).join('')];
+}
 
 /**
  * Authenticated October 2026 MCP output, deliberately separate from retired REST shapes: an optional `<requested_range>`
@@ -251,7 +267,7 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
       if (from_date > to_date) failure('invalid_request');
       return parseGranolaMeetingPageV1(await rpc.call('search_meetings', { from_date, to_date, limit: input.limit,
         include_shared: true, max_participants: 10,
-        ...(input.query === undefined ? {} : { keywords: [string(input.query, 4096)] }),
+        ...(input.query === undefined ? {} : { keywords: keywords(string(input.query, 4096)) }),
         ...(input.folder_id === undefined ? {} : { folder_id: id(input.folder_id) }),
         ...(input.cursor === undefined ? {} : { cursor: string(input.cursor, 2048) }),
       }, input.signal), false);
@@ -260,7 +276,7 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
     async searchTranscripts(input: { readonly query: string; readonly meeting_ids?: readonly string[]; readonly from_date: string; readonly to_date: string; readonly limit: number; readonly cursor?: string; readonly signal?: AbortSignal }) {
       const selected = input.meeting_ids === undefined ? undefined : array(input.meeting_ids, 100).map(id);
       if (selected?.length === 0 || !Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 20) failure('invalid_request');
-      const value = json(await rpc.call('search_transcripts', { keywords: [string(input.query, 4096)],
+      const value = json(await rpc.call('search_transcripts', { keywords: keywords(string(input.query, 4096)),
         from_date: liveDate(input.from_date), to_date: liveDate(input.to_date), limit: input.limit,
         ...(selected === undefined ? {} : { meeting_ids: selected }), ...(input.cursor === undefined ? {} : { cursor: string(input.cursor, 2048) }),
       }, input.signal));
