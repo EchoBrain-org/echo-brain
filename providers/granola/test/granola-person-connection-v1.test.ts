@@ -11,16 +11,20 @@ const workspace = '00000000-0000-4000-8000-000000000001';
 const folder = '00000000-0000-4000-8000-0000000000f1';
 const window = { mode: 'folder', folder, from_date: '2026-10-17', to_date: '2026-10-25' } as const;
 /** A connected person's session whose Granola answers through `answer`, with every call recorded. */
-async function connected(db: Database.Database, answer: (name: string) => unknown, project?: { role: 'lead' | 'member'; revision: number }) {
+async function connected(db: Database.Database, answer: (name: string) => unknown, project?: { role: 'lead' | 'member'; revision: number; denied?: boolean }, who = person) {
+  const person = who;
   let tags: Readonly<Record<string, string>> = {};
   const calls: { name: string; arguments: Record<string, unknown> }[] = [];
   const store = new PersonConnectionStoreV1(db, GRANOLA_PERSON_PROVIDER_V1);
   const service = createGranolaPersonConnectionV1({ store,
     ...(project === undefined ? {} : { project_mappings: createGranolaProjectMappingStoreV1(db),
-      authorize_project: () => ({ role: project.role, authorization_sha256: canonicalSha256(project) }) }),
+      authorize_project: () => {
+        if (project.denied === true) GRANOLA_PERSON_PROVIDER_V1.failure('unauthorized');
+        return { role: project.role, authorization_sha256: canonicalSha256(project) };
+      } }),
     authenticate: () => ({ ...person, authorization_sha256: canonicalSha256(person) }),
     nango: { connect: async value => { tags = value; return { link: 'https://connect.nango.dev/fixture' }; },
-      find: async () => 'reference', connection: async () => ({ tags, access_token: 'fixture-only' }), disconnect: async () => {} },
+      find: async () => `reference-${who.principal_id}`, connection: async () => ({ tags, access_token: 'fixture-only' }), disconnect: async () => {} },
     fetch: vi.fn(async (_url, init) => {
       const request = JSON.parse(String(init?.body));
       calls.push(request.params);
@@ -68,6 +72,26 @@ describe('Granola verified account and meeting listings', () => {
       expect(await service.source({ access_token: 'session', audit })).toBeUndefined();
       const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
       expect(tables.some(table => /source_contents|approval|candidate|meeting_sources/.test(table.name))).toBe(false);
+    } finally { db.close(); }
+  });
+  it('gives a project member connected to another Granola workspace no Granola source, and reads nothing', async () => {
+    const db = new Database(':memory:');
+    try {
+      const project_id = 'prj_11111111-1111-4111-8111-111111111111', other = '00000000-0000-4000-8000-000000000002';
+      const lead = await connected(db, name => name === 'get_account_info' ? account() : name === 'list_meeting_folders' ? folders : empty, { role: 'lead', revision: 1 });
+      await lead.service.projectSet({ access_token: 'session', request: { schema_version: 1, project_id, expected_revision: null, request_id: '11111111-1111-4111-8111-111111111112', folder_ids: [folder] } });
+      const grant = { role: 'member' as 'lead' | 'member', revision: 1, denied: false };
+      const member = await connected(db, name => name === 'get_account_info' ? account('member@example.test', other) : name === 'list_meeting_folders' ? folders : empty,
+        grant, { ...person, principal_id: 'person-member', membership_id: 'member-member' });
+      const audit = { record: async () => canonicalSha256({ receipt: 1 }) };
+      member.calls.length = 0;
+      expect(await member.service.source({ access_token: 'session', project_id, audit })).toBeUndefined();
+      expect(member.calls).toEqual([]);
+      // Without a grant on the project, the member is still refused.
+      grant.denied = true;
+      await expect(member.service.source({ access_token: 'session', project_id, audit })).rejects.toMatchObject({ code: 'unauthorized' });
+      // The lead, in the mapped workspace, still reads it.
+      expect(await lead.service.source({ access_token: 'session', project_id, audit })).toBeDefined();
     } finally { db.close(); }
   });
   it('rejects folders outside the lead’s provider access and refuses stale saves before provider I/O', async () => {

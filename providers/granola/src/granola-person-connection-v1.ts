@@ -105,7 +105,8 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
     async source(input: { readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonPageCitationV1>; readonly signal?: AbortSignal }) {
       const scope_id = scopeId(input.access_token);
       if (scope_id === undefined) return undefined;
-      return access.source({ scope_id, validate: validatePersonMeetingProjectReadV1, lifecycle: shared, store: options.store,
+      // Each person has their own workspace: a project mapped in another one is no Granola source for this asker.
+      return access.source({ scope_id, other_site: 'none', validate: validatePersonMeetingProjectReadV1, lifecycle: shared, store: options.store,
         reader: ({ fetch: transport, signal }, mapping) => createGranolaPersonLiveEvidenceReaderV1({ transport, signal,
           ...(mapping === undefined ? {} : { folder_ids: mapping.folder_ids }) }),
       }, input);
