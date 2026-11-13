@@ -11,6 +11,11 @@ const fail: typeof GRANOLA_PERSON_PROVIDER_V1.failure = GRANOLA_PERSON_PROVIDER_
 // At most 2,400 UTF-8 bytes, including four-byte characters; the evidence contract allows 3 KiB.
 const SECTION = 600;
 const INDEX_NOTICE = 'Granola transcript search uses a live index that can lag. No matching passage does not prove a topic was never discussed.';
+const LEFT_OUT = 'Some Granola folders mapped to this project are not visible to your Granola account, so these results leave out their meetings.';
+function notice(...parts: readonly (string | false)[]): { notice?: string } {
+  const text = parts.filter(Boolean).join(' ');
+  return text === '' ? {} : { notice: text };
+}
 type Value = PersonLiveEvidenceValueV1<PersonPageCitationV1>;
 type Cursor = { selection: string; folder: number; cursor?: string };
 function metadata(meeting: GranolaMeetingV1) {
@@ -40,15 +45,20 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
     return options.transport.fetch(url, init);
   } });
   const issued = new Map<string, Value>(), handles = new Map<string, Value>(), cursors = new Map<string, Cursor>();
-  async function verify(signal?: AbortSignal) {
+  // Project members can see different Granola folders: the reader works over the mapped folders this asker sees.
+  let shown = folders;
+  async function verify(signal?: AbortSignal, initial = false) {
     const account = await api.account(signal);
     if (account.workspace_id !== binding.external_scope_id || account.email !== binding.external_subject_id) fail('stale_access_state');
     if (folders !== undefined) {
-      const accessible = new Set((await api.folders(signal)).map(folder => folder.id));
-      if (folders.some(id => !accessible.has(id))) fail('unauthorized');
+      const accessible = new Set((await api.folders(signal)).map(folder => folder.id)), before = shown!;
+      shown = folders.filter(id => accessible.has(id));
+      // Results read from a folder that has since gone out of sight are not released.
+      if (!initial && before.some(id => !accessible.has(id))) fail('unauthorized');
     }
   }
-  await verify(options.signal);
+  await verify(options.signal, true);
+  const leftOut = () => shown !== undefined && shown.length < folders!.length && LEFT_OUT;
   function remember(meeting: GranolaMeetingV1, section: string, version: string, text?: string): Value {
     const citation = validatePersonPageCitationV1({ kind: 'page', tool_id: 'granola', external_scope_id: binding.external_scope_id,
       page_id: meeting.id, section_id: section, version, permalink: meeting.url, text_sha256: sha256Digest(text ?? '') });
@@ -70,9 +80,9 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
   }
   /** Bound folder membership is re-read, including when reopening an old answer. It never comes from an import setting. */
   async function members(signal?: AbortSignal): Promise<ReadonlySet<string> | undefined> {
-    if (folders === undefined) return undefined;
+    if (shown === undefined) return undefined;
     const ids = new Set<string>();
-    for (const folder_id of folders) {
+    for (const folder_id of shown) {
       const seen = new Set<string>();
       for (let cursor: string | undefined;;) {
         const page = await api.search({ folder_id, from_date: '1970-01-01', to_date: now, limit: 100, ...(cursor === undefined ? {} : { cursor }), signal });
@@ -151,7 +161,8 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
     async list(input) {
       const limit = size(input.limit), window = range(input);
       if (input.container !== undefined && (!GRANOLA_ID_V1.test(input.container) || (folders !== undefined && !folders.includes(input.container)))) fail('invalid_request');
-      const selected = input.container === undefined ? folders ?? [undefined] : [input.container];
+      const selected = input.container === undefined ? shown ?? [undefined] : shown === undefined || shown.includes(input.container) ? [input.container] : [];
+      if (selected.length === 0) { await verify(input.signal); return { items: [], truncated: false, page_full: false, ...notice(LEFT_OUT) }; }
       const selection = canonicalSha256({ selected: selected.map(id => id ?? null), window, limit, date_field: input.date_field ?? null, time_zone: input.time_zone ?? null });
       const previous = input.cursor === undefined ? undefined : cursors.get(input.cursor);
       if (input.cursor !== undefined && (previous === undefined || previous.selection !== selection)) fail('invalid_request');
@@ -165,12 +176,12 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
       await verify(input.signal);
       return { items: page.meetings.filter(meeting => matches(meeting, input)).map(inventory), truncated: next_cursor !== undefined || page.incomplete === true,
         ...(next_cursor === undefined ? {} : { next_cursor }), page_full: page.meetings.length === limit,
-        ...(page.incomplete ? { notice: 'Granola could not finish this listing. Narrow the date range.' } : {}) };
+        ...notice(page.incomplete === true && 'Granola could not finish this listing. Narrow the date range.', leftOut()) };
     },
     async search(input) {
       const limit = size(input.limit), window = range(input), items: Value[] = [];
       let truncated = false, transcriptDenied = false;
-      for (const folder_id of folders ?? [undefined]) {
+      for (const folder_id of shown ?? [undefined]) {
         const page = await api.search({ ...window, query: input.query, limit, ...(folder_id === undefined ? {} : { folder_id }), signal: input.signal });
         items.push(...page.meetings.filter(meeting => matches(meeting, input)).map(inventory));
         truncated ||= page.next_cursor !== null || page.incomplete === true;
@@ -208,7 +219,7 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
       const unique = [...new Map([...passages, ...items].map(item => [canonicalSha256(item.citation), item])).values()];
       await verify(input.signal);
       return { items: unique.slice(0, limit), truncated: truncated || unique.length > limit,
-        notice: transcriptDenied ? 'Granola did not allow transcript search. These results cover accessible notes only; they cannot establish what was said in a transcript.' : INDEX_NOTICE };
+        ...notice(leftOut(), transcriptDenied ? 'Granola did not allow transcript search. These results cover accessible notes only; they cannot establish what was said in a transcript.' : INDEX_NOTICE) };
     },
     async open(input) {
       const item = handles.get(input.handle); if (item === undefined) fail('invalid_request');
