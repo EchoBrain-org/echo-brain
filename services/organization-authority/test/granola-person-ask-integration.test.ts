@@ -7,6 +7,7 @@ import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV8 } fro
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
 import { fakeConfluenceNangoV1 } from './fixtures/fake-confluence-v1.js';
+import { askReply } from './fixtures/ask-over-http.js';
 const CLOUD = '11111111-1111-4111-8111-111111111111';
 const FOLDER = '22222222-2222-4222-8222-222222222222';
 const MEETING = '33333333-3333-4333-8333-333333333333';
@@ -62,7 +63,7 @@ it('catalogs, connects, maps, cites, and disconnects historical Granola evidence
   let owner = '';
   const post = async (path: string, body: unknown) => {
     const response = await fetch(`${origin}${path}`, { method: 'POST', headers: { authorization: `Bearer ${owner}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    return { status: response.status, body: await response.json() as Record<string, unknown> };
+    return askReply(response);
   };
   const tools = async () => {
     const response = await fetch(`${origin}/v4/person/tools`, { headers: { authorization: `Bearer ${owner}` } });

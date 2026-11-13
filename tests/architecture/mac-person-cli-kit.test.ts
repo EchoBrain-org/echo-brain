@@ -75,20 +75,16 @@ describe.skipIf(!nativeMac)("macOS arm64 Person CLI kit", () => {
 
     const appSentinel = join(subject.home, "Applications/ECHO.app/sentinel");
     const sessionSentinel = join(subject.home, ".local/share/echo-brain/person/session.json");
-    const legacyWrapper = join(subject.home, ".local/share/echo/person/bin/echo-brain");
     mkdirSync(resolve(appSentinel, ".."), { recursive: true, mode: 0o700 });
     mkdirSync(resolve(sessionSentinel, ".."), { recursive: true, mode: 0o700 });
     writeFileSync(appSentinel, "native app remains untouched", { mode: 0o600 });
     writeFileSync(sessionSentinel, "existing Person session remains untouched", { mode: 0o600 });
-    mkdirSync(resolve(legacyWrapper, ".."), { recursive: true, mode: 0o700 });
-    writeFileSync(legacyWrapper, "legacy CLI remains untouched", { mode: 0o700 });
 
     const update = subject.run(2);
     expect(update.status, update.stderr).toBe(0);
     expect(execFileSync(wrapper, ["--version"], { encoding: "utf8" }).trim()).toBe("0.1.2");
     expect(readFileSync(appSentinel, "utf8")).toBe("native app remains untouched");
     expect(readFileSync(sessionSentinel, "utf8")).toBe("existing Person session remains untouched");
-    expect(readFileSync(legacyWrapper, "utf8")).toBe("legacy CLI remains untouched");
     expect(existsSync(join(subject.cliRoot, "releases/clean-v1-macos-1"))).toBe(true);
     expect(existsSync(join(subject.cliRoot, "releases/clean-v1-macos-2"))).toBe(true);
   });

@@ -110,9 +110,9 @@ function askCheckOf(f: World, overrides: Partial<CreatePersonAskCheckV1Options> 
 }
 const item = (citation: unknown, asked_at = '2026-10-08T09:00:00.000Z', marker?: string) => ({ asked_at, citation, ...(marker === undefined ? {} : { marker }) });
 
-/** A ticket tool whose markers are `markers` for every reader, or as `read` answers them. */
-function ticketTool(read: (input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }) => Promise<ReadonlyMap<string, string | null>>, tool_id = 'jira') {
-  return { kind: 'ticket' as const, tool_id, external_scope_id: CLOUD, markers: vi.fn(read) } satisfies PersonTicketCheckV1;
+/** A ticket tool whose readable tickets are as `read` answers them. */
+function ticketTool(read: (input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }) => Promise<ReadonlySet<string>>, tool_id = 'jira') {
+  return { kind: 'ticket' as const, tool_id, external_scope_id: CLOUD, readable: vi.fn(read) } satisfies PersonTicketCheckV1;
 }
 /** A page tool with these pages' versions. */
 function pageTool(pages: Readonly<Record<string, { readonly version: string }>>, fail: { versions?: unknown } = {}) {
@@ -266,12 +266,12 @@ describe('Ask source check: the database kinds', () => {
 
   it('refuses a person whose session or membership is gone, before any read', async () => {
     const f = await world();
-    const tickets = ticketTool(async () => new Map());
+    const tickets = ticketTool(async () => new Set());
     const { check } = askCheckOf(f, { live: [tickets] });
     await expect(check('stranger', [item(f.decisionCitation), item(ticket('10012'))])).rejects.toMatchObject({ code: 'unauthorized' });
     f.revoke('mina');
     await expect(check('mina', [item(ticket('10012'))])).rejects.toMatchObject({ code: 'unauthorized' });
-    expect(tickets.markers).not.toHaveBeenCalled();
+    expect(tickets.readable).not.toHaveBeenCalled();
   });
 });
 
@@ -279,7 +279,7 @@ describe('Ask source check: unreadable says nothing (ADR-0012)', () => {
   it('answers a hidden, a deleted and a never-existing source of every kind alike, with no marker', async () => {
     const f = await world();
     // The live tools read nothing for these: hidden and deleted tickets and pages simply do not come back.
-    const live = [ticketTool(async () => new Map()), pageTool({})];
+    const live = [ticketTool(async () => new Set()), pageTool({})];
     const { app, requestOf } = askCheckOf(f, { live });
     const unreadable = [
       item(f.decisionCitation), item({ ...f.decisionCitation, record_sha256: canonicalSha256('never') }),
@@ -296,12 +296,12 @@ describe('Ask source check: unreadable says nothing (ADR-0012)', () => {
 
   it('answers a ticket or page cited on another site unreadable without reading it', async () => {
     const f = await world();
-    const tickets = ticketTool(async () => new Map([['10012', canonicalSha256('marker')]]));
+    const tickets = ticketTool(async () => new Set(['10012']));
     const pages = pageTool({ 200: { version: '3' } });
     const { check } = askCheckOf(f, { live: [tickets, pages] });
     const elsewhere = '00000000-0000-4000-8000-0000000000e9';
     expect(await check('ari', [item({ ...ticket('10012'), external_scope_id: elsewhere }), item({ ...page('200'), external_scope_id: elsewhere })])).toEqual([UNREADABLE, UNREADABLE]);
-    expect(tickets.markers).not.toHaveBeenCalled();
+    expect(tickets.readable).not.toHaveBeenCalled();
     expect(pages.versions).not.toHaveBeenCalled();
   });
 });
@@ -318,17 +318,16 @@ describe('Ask source check: tickets and pages', () => {
     expect(await check('mina', [item(citation)])).toEqual([UNREADABLE]);
     expect(versions).toHaveBeenCalledTimes(1);
   });
-  it('returns every readable ticket same with its current marker, whatever marker the request gave it', async () => {
+  it('answers every readable ticket same, and one that does not come back unreadable', async () => {
     const f = await world();
-    const now = canonicalSha256('ticket now');
-    // 10099 does not come back; 10077 came back with fields no marker could be made from.
-    const tickets = ticketTool(async ({ ticket_ids }) => new Map(ticket_ids.filter(id => id !== '10099').map(id => [id, id === '10077' ? null : now])));
+    // 10099 does not come back.
+    const tickets = ticketTool(async ({ ticket_ids }) => new Set(ticket_ids.filter(id => id !== '10099')));
     const { check } = askCheckOf(f, { live: [tickets] });
-    expect(await check('ari', [item(ticket('10012')), item(ticket('10012'), undefined, now), item(ticket('10012'), undefined, canonicalSha256('ticket then')), item(ticket('10099'), undefined, now), item(ticket('10077'), undefined, now)]))
-      .toEqual([{ state: 'same', marker: now }, { state: 'same', marker: now }, { state: 'same', marker: now }, UNREADABLE, UNKNOWN]);
+    expect(await check('ari', [item(ticket('10012')), item(ticket('10012'), '2026-10-09T09:00:00.000Z'), item(ticket('10099')), item(ticket('10077'))]))
+      .toEqual([SAME, SAME, UNREADABLE, SAME]);
     // One read for the tool, of each ticket once, with the caller's own token.
-    expect(tickets.markers).toHaveBeenCalledTimes(1);
-    expect(tickets.markers.mock.calls[0]![0]).toMatchObject({ access_token: 'ari', ticket_ids: ['10012', '10099', '10077'] });
+    expect(tickets.readable).toHaveBeenCalledTimes(1);
+    expect(tickets.readable.mock.calls[0]![0]).toMatchObject({ access_token: 'ari', ticket_ids: ['10012', '10099', '10077'] });
   });
 
   it('answers a page same whenever its version comes back, whichever version or section it cited', async () => {
@@ -361,12 +360,12 @@ describe('Ask source check: tickets and pages', () => {
   it('reads one tool once for up to a hundred distinct sources, whatever else the request holds', async () => {
     const f = await world();
     const ids = Array.from({ length: 100 }, (_, index) => String(10_000 + index));
-    const tickets = ticketTool(async ({ ticket_ids }) => new Map(ticket_ids.map(id => [id, canonicalSha256(id)])));
+    const tickets = ticketTool(async ({ ticket_ids }) => new Set(ticket_ids));
     const { check } = askCheckOf(f, { live: [tickets] });
     const answers = await check('ari', ids.map(id => item(ticket(id))));
-    expect(answers).toEqual(ids.map(id => ({ state: 'same', marker: canonicalSha256(id) })));
-    expect(tickets.markers).toHaveBeenCalledTimes(1);
-    expect(tickets.markers.mock.calls[0]![0].ticket_ids).toEqual(ids);
+    expect(answers).toEqual(ids.map(() => SAME));
+    expect(tickets.readable).toHaveBeenCalledTimes(1);
+    expect(tickets.readable.mock.calls[0]![0].ticket_ids).toEqual(ids);
   });
 });
 
@@ -382,11 +381,11 @@ describe('Ask source check: deadline and cancellation', () => {
     expect(performance.now() - started).toBeLessThan(2_000);
     await vi.waitFor(() => expect(failures).toEqual([{ kind: 'person_ask_check_live_read', reason: 'tickets', code: 'deadline' }]));
     // A read that answers after the deadline changes nothing already answered.
-    let release: (value: ReadonlyMap<string, string>) => void = () => {};
+    let release: (value: ReadonlySet<string>) => void = () => {};
     const late = ticketTool(() => new Promise(resolve => { release = resolve; }));
     const second = askCheckOf(f, { live: [late], deadline_ms: 20 });
     expect(await second.check('ari', [item(ticket('10012'))])).toEqual([UNKNOWN]);
-    release(new Map([['10012', canonicalSha256('late')]]));
+    release(new Set(['10012']));
   });
 
   it('stops a request whose client went away, reporting nothing', async () => {
@@ -411,7 +410,7 @@ describe('Ask source check: cost', () => {
     const inTransaction: boolean[] = [];
     const traced = <T extends (...args: never[]) => unknown>(call: T): T => ((...args: Parameters<T>) => { inTransaction.push(f.db.inTransaction); return call(...args); }) as T;
     const repository = new SqliteProjectContextRepositoryV1(f.db);
-    const live = [ticketTool(async ({ ticket_ids }) => { inTransaction.push(f.db.inTransaction); return new Map(ticket_ids.map(id => [id, canonicalSha256(id)])); })];
+    const live = [ticketTool(async ({ ticket_ids }) => { inTransaction.push(f.db.inTransaction); return new Set(ticket_ids); })];
     const { check } = askCheckOf(f, {
       sessions: { authenticateAccess: traced(f.openItemsOptions.sessions.authenticateAccess) },
       projects: { personChangeView: traced(repository.personChangeView.bind(repository)) },
@@ -455,7 +454,7 @@ describe('Ask source check HTTP route', () => {
 
   it('authenticates like every Person read, validates the request and answers the exact shape', async () => {
     const f = await world();
-    const { app } = askCheckOf(f, { live: [ticketTool(async () => new Map([['10012', canonicalSha256('marker')]]))] });
+    const { app } = askCheckOf(f, { live: [ticketTool(async () => new Set(['10012']))] });
     const base = await origin(app);
     const body = { schema_version: 1, kind: PERSON_ASK_CHECK_REQUEST_KIND_V1, items: [item(f.decisionCitation), item(ticket('10012')), item(f.cited.private)] };
     const post = (authorization: string | null, value: unknown, path: string = PERSON_ASK_CHECK_PATH_V1) => fetch(`${base}${path}`, { method: 'POST',
@@ -469,12 +468,12 @@ describe('Ask source check HTTP route', () => {
     expect(response.headers.get('cache-control')).toBe('no-store');
     const answered = await response.json() as unknown;
     expect(validatePersonAskCheckV1(answered, validatePersonAskCheckRequestV1(body))).toEqual({ schema_version: 1, kind: 'echo-person-ask-check-v1',
-      items: [SAME, { state: 'same', marker: canonicalSha256('marker') }, UNREADABLE] });
-    // Kinds outside the check, a marker off a ticket, a bad shape, a query and a body over 64 KiB are invalid requests.
+      items: [SAME, SAME, UNREADABLE] });
+    // Kinds outside the check, a retired marker, a bad shape, a query and a body over 64 KiB are invalid requests.
     for (const invalid of [
       { ...body, items: [item({ kind: 'project', project_id: 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' })] },
       { ...body, items: [item({ kind: 'tool', tool_id: 'jira' })] },
-      { ...body, items: [item(f.decisionCitation, undefined, canonicalSha256('marker'))] },
+      { ...body, items: [item(ticket('10012'), undefined, canonicalSha256('marker'))] },
       { ...body, items: [] },
       { ...body, kind: 'echo-person-ask-check-v1' },
       'not json',

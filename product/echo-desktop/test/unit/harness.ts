@@ -17,7 +17,7 @@ export const ACCOUNT = { authority: 'https://fixture.invalid', membership_id: 'm
 const PROJECT_PAGE = 10;
 
 /** A follow-ups read's counts, with nothing counted. */
-export const EMPTY_SUMMARY: OpenItemsView['summary'] = { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] };
+export const EMPTY_SUMMARY: OpenItemsView['summary'] = { unsent: 0, open: 0, done: 0, not_relevant: 0, decisions: 0, by_decision: [] };
 
 /** A project, newest first by day: `project(1, 30)` was made on the 30th, `project(2, 29)` the day before. */
 export function project(n: number, day: number, extra: Partial<ProjectSummary> = {}): ProjectSummary {

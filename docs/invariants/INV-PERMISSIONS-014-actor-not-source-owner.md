@@ -13,8 +13,6 @@ reviewed_ref: 3aea847cca4fa44cfa1ab28dbf44b1b707590b8b
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Approval core decide() (frozen reviewer, active membership, project recheck) on desktop and Slack; Slack clicks checked against the identity link
-invariant_ids:
-  - INV-12
 ---
 
 # INV-PERMISSIONS-014: Approval authority is independent from source custody

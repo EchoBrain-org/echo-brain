@@ -483,9 +483,7 @@ export class PersonClient {
   /**
    * Every Ask, in Ask progress V3 (ADR-0039): each step event reaches
    * `onProgress` as it arrives, and may name a follow-up, a project, a
-   * person, a tool or a tool container; the answer carries its receipt only
-   * when the Authority streamed. A JSON answer comes back without progress or a
-   * receipt.
+   * person, a tool or a tool container; the answer carries its receipt.
    *
    * A step is passed on only while the account that asked is the signed-in
    * one. Another account stops the Ask at once. A step that arrives while no

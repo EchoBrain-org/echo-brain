@@ -411,3 +411,8 @@ is unchanged; a `checked` filter on follow-ups is refused.
 
 Update (2026-11-09): `/v7` no longer sends `x-echo-person-ask-route`
 ([ADR-0048](ADR-0048-retire-older-person-routes.md)).
+
+Update (2026-11-11): `/v7` streams every Ask in progress V3. It no longer
+reads `x-echo-ask-progress` or answers JSON for any other value; only a
+failure before the stream starts is JSON, and clients no longer send the
+header ([ADR-0039](ADR-0039-ask-progress-names-after-the-access-check.md)).

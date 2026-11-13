@@ -32,7 +32,7 @@ describe('open items: who sees what', () => {
     const { items } = await scope(f, 'mina', 'run');
     const ticket = items.find(entry => entry.kind === 'ticket')!;
     expect(ticket).toMatchObject({
-      run_id: f.runId, relation: 'needs_updating', expected: 'launch next week', state: 'unsent', waits_on: 'approver', sent_at: null, state_set_at: null, check: null,
+      run_id: f.runId, relation: 'needs_updating', expected: 'launch next week', state: 'unsent', waits_on: 'approver', sent_at: null, state_set_at: null,
       state_set_by: null, owner_set_at: null, owner_set_by: null, send_included: null,
       approver: { membership_id: f.membership('ari'), name: 'Ari', active: true },
       owner: { membership_id: f.membership('mina'), name: 'Mina Patel', active: true, match: 'jira_account' },
@@ -53,8 +53,8 @@ describe('open items: who sees what', () => {
     const first = await scope(f, 'ari', 'project');
     expect(first.items).toHaveLength(2);
     expect(first.next_cursor).toBeNull();
-    expect(first.summary).toEqual({ unsent: 2, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 1, last_checked_at: null,
-      by_decision: [{ record_sha256: f.record, unsent: 2, open: 0, landed: 0, unreadable: 0 }] });
+    expect(first.summary).toEqual({ unsent: 2, open: 0, done: 0, not_relevant: 0, decisions: 1,
+      by_decision: [{ record_sha256: f.record, unsent: 2, open: 0 }] });
     expect(first.stages).toEqual([{ record_sha256: f.record, run_id: f.runId, state: 'done', error_code: null, mine: true }]);
     // Page by page with a cursor: the same rows, in the same order.
     const ordered = [...first.items].map(entry => entry.item_id);
@@ -66,7 +66,7 @@ describe('open items: who sees what', () => {
     expect((await scope(f, 'ari', 'mine', cursor)).items.map(entry => entry.item_id)).toEqual(ordered.slice(1));
     await expect(scope(f, 'ari', 'mine', 'bm90LWEtY3Vyc29y')).rejects.toMatchObject({ code: 'invalid_request' });
     // Someone outside project A sees no row, no count and no stage.
-    expect(await scope(f, 'okafor', 'project')).toEqual({ items: [], next_cursor: null, summary: { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] }, stages: [] });
+    expect(await scope(f, 'okafor', 'project')).toEqual({ items: [], next_cursor: null, summary: { unsent: 0, open: 0, done: 0, not_relevant: 0, decisions: 0, by_decision: [] }, stages: [] });
     expect((await scope(f, 'okafor', 'run')).stages).toEqual([]);
   });
 
@@ -89,7 +89,7 @@ describe('open items: who sees what', () => {
     expect(second.next_cursor).toBeNull();
     expect([...first.items, ...second.items].map(entry => entry.item_id)).toEqual(f.items.forRun(f.runId).map(row => row.item_id));
     expect(second.summary).toEqual(first.summary);
-    expect(first.summary).toMatchObject({ unsent: 55, decisions: 1, by_decision: [{ record_sha256: f.record, unsent: 55, open: 0, landed: 0, unreadable: 0 }] });
+    expect(first.summary).toMatchObject({ unsent: 55, decisions: 1, by_decision: [{ record_sha256: f.record, unsent: 55, open: 0 }] });
   });
 
   it('shows a decision reader the impact stage before the check finishes', async () => {
@@ -276,8 +276,8 @@ describe('open items: counts and live reads', () => {
     expect(f.opened.length - opens).toBe(3);
     expect(f.bindDesk.mock.calls.length - binds).toBe(1);
     // The summary still counts the closed items.
-    expect(first.summary).toEqual({ unsent: 0, open: 3, done: 30, not_relevant: 30, landed: 0, changed: 0, unreadable: 0, decisions: 1, last_checked_at: null,
-      by_decision: [{ record_sha256: f.record, unsent: 0, open: 3, landed: 0, unreadable: 0 }] });
+    expect(first.summary).toEqual({ unsent: 0, open: 3, done: 30, not_relevant: 30, decisions: 1,
+      by_decision: [{ record_sha256: f.record, unsent: 0, open: 3 }] });
     // As a read of every state does, whose first page holds no open item at all.
     const all = await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', scope: 'project', id: f.projectA } });
     expect(all.items).toHaveLength(50);
@@ -677,7 +677,7 @@ describe('open items: Home', () => {
     const home = await f.app.home({ access_token: 'ari' });
     expect(home.send).toEqual([{ run_id: f.runId, decision: { approval_id: f.approvalId, record_sha256: f.record, title: 'Pilot planning', first_line: 'The pilot starts next week.',
       approved_at: '2026-10-07T09:00:00.000Z', project_ids: [f.projectA] }, items: 2, kinds: ['ticket', 'record'], owners: ['Mina Patel'], finished_at: f.runs.read(f.person, f.runId)!.updated_at }]);
-    expect(home).toMatchObject({ items: [], landed: 0, waiting: 0, last_checked_at: null });
+    expect(home).toMatchObject({ items: [], waiting: 0 });
     expect((await f.app.home({ access_token: 'mina' })).send).toEqual([]);
     const unsent = (await scope(f, 'ari', 'run')).items;
     await sendAll(f, unsent, 'c1', () => ({ include: true }));
@@ -755,7 +755,7 @@ describe('open items: Home', () => {
 
   it('makes no Send row, and binds no desk, when there is nothing to send', async () => {
     const f = await openItemsFixture();
-    expect(await f.app.home({ access_token: 'ari' })).toEqual({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
+    expect(await f.app.home({ access_token: 'ari' })).toEqual({ send: [], items: [], waiting: 0 });
     expect(f.bindDesk).not.toHaveBeenCalled();
   });
 
@@ -768,31 +768,30 @@ describe('open items: Home', () => {
     expect((await f.app.home({ access_token: 'rafael' })).items[0]).toMatchObject({ approver: { name: 'Ari', active: false }, owner: { name: 'Mina Patel', active: false }, can: { set_state: false, assign: true } });
   });
 
-  it('answers every retired check field as its constant and shows the approver no Review row, whatever checks sweeps left (SVC-2)', async () => {
+  it('shows no check a sweep left, and the approver no Review row for one (SVC-2)', async () => {
     const f = await sentFixture({ owner: 'mina' });
     // Last checks sweeps left before they were retired, on both items Ari sent Mina: the ticket landed, the action changed.
     f.check(f.ticket.item_id, 'landed');
     f.advance(60_000);
     f.check(f.action.item_id, 'changed', 'mina');
     expect(f.db.prepare('SELECT count(*) FROM authority_impact_items_v1 WHERE checked_verdict IS NOT NULL').pluck().get()).toBe(2);
-    const retired = { landed: 0, last_checked_at: null, sweep_due: false };
     // Nothing waits on Ari, so his Home has no row, not even for the item that changed; both wait on Mina.
     for (const request of [undefined, { schema_version: 1, operation: 'home', read: 'rows' } as const]) {
-      expect(await f.app.home({ access_token: 'ari', ...(request === undefined ? {} : { request }) })).toEqual({ send: [], items: [], waiting: 2, ...retired });
+      expect(await f.app.home({ access_token: 'ari', ...(request === undefined ? {} : { request }) })).toEqual({ send: [], items: [], waiting: 2 });
       const mina = await f.app.home({ access_token: 'mina', ...(request === undefined ? {} : { request }) });
       // Sent together: oldest first, as the store orders rows, whatever either check said.
       expect(mina.items.map(entry => entry.item_id)).toEqual([f.ticket.item_id, f.action.item_id].sort());
-      expect(mina.items.map(entry => entry.check)).toEqual([null, null]);
-      expect(mina).toMatchObject({ waiting: 0, ...retired });
+      for (const entry of mina.items) expect(entry).not.toHaveProperty('check');
+      expect(mina.waiting).toBe(0);
     }
-    expect(await f.app.home({ access_token: 'okafor' })).toEqual({ send: [], items: [], waiting: 0, ...retired });
+    expect(await f.app.home({ access_token: 'okafor' })).toEqual({ send: [], items: [], waiting: 0 });
     // A list, its summary, each decision's counts and one item say nothing of a check either.
     for (const read of [undefined, 'rows', 'counts'] as const) {
       const page = await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record, ...(read === undefined ? {} : { read }) } });
-      expect(page.items.every(entry => entry.check === null)).toBe(true);
-      expect(page.summary).toEqual({ unsent: 0, open: 2, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 1, last_checked_at: null,
-        by_decision: [{ record_sha256: f.record, unsent: 0, open: 2, landed: 0, unreadable: 0 }] });
+      for (const entry of page.items) expect(entry).not.toHaveProperty('check');
+      expect(page.summary).toEqual({ unsent: 0, open: 2, done: 0, not_relevant: 0, decisions: 1,
+        by_decision: [{ record_sha256: f.record, unsent: 0, open: 2 }] });
     }
-    expect((await f.app.item({ access_token: 'mina', request: { schema_version: 1, operation: 'item', item_id: f.action.item_id } })).item.check).toBeNull();
+    expect((await f.app.item({ access_token: 'mina', request: { schema_version: 1, operation: 'item', item_id: f.action.item_id } })).item).not.toHaveProperty('check');
   });
 });

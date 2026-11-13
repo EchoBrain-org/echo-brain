@@ -369,8 +369,8 @@ These checks do not cover the Electron binaries, `app.asar` or the rest of the
 bundle; see what
 [the feed gate proves](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md#consequences).
 
-Historical single-platform and two-artifact feeds remain readable by clients
-and auditable through publication status, but cannot be published again.
+Historical single-platform and two-artifact feeds remain readable by clients,
+but publication status refuses them and they cannot be published again.
 
 Choose a sequence at least the bootstrap minimum and strictly higher than the
 previously published sequence. `prepare` sets issuance to the time it runs.

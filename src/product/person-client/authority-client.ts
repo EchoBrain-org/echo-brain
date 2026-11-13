@@ -3,18 +3,17 @@ import { canonicalJson } from "@echo-brain/federation-protocol";
 import {
   MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH,
   ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, ORGANIZATION_API_PERSON_TOOLS_PATH_V4, PERSON_ANSWER_PATH_V7, PERSON_ASK_CHECK_LIMITS_V1, PERSON_ASK_CHECK_PATH_V1,
-  PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_HEADER_V1,
-  PERSON_ASK_PROGRESS_HEADER_VALUE_V3, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, PERSON_CHANGES_ROUTE_V1,
+  PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, PERSON_CHANGES_ROUTE_V1,
   PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, PERSON_EMPLOYEES_PATH_V1,
   PERSON_LIST_PATH_V1, PERSON_LIST_RESPONSE_MAX_BYTES_V1, PERSON_OPEN_PATH_V1, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, PERSON_PROJECTS_PATH_V1,
   PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_ACTIVITY_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_PROJECT_RENAME_PATH_V1, PERSON_RECORDS_PATH_V1,
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, PERSON_RESEARCH_EVAL_READ_PATH_V1, PERSON_RESEARCH_EVAL_START_PATH_V1, PERSON_RUNS_MAX_RESPONSE_BYTES_V1, PERSON_RUNS_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1,
   PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PersonQueryInputError, createPersonAskProgressDecoderV3,
-  isOrganizationApiValidationError, personRefKindV1, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, validateOrganizationApiError,
+  isOrganizationApiValidationError, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, validateOrganizationPersonToolsV4,
-  validatePersonAnswerRequestV3, validatePersonAnswerResponseV8, validatePersonAskCheckRequestV1, validatePersonAskCheckV1, validatePersonChangesV1,
+  validatePersonAnswerRequestV3, validatePersonAskCheckRequestV1, validatePersonAskCheckV1, validatePersonChangesV1,
   validatePersonDocumentAssociateV1, validatePersonDocumentAssociationReceiptV1,
   validatePersonDocumentDissociateV1, validatePersonDocumentIdV1, validatePersonDocumentMetadataV2, validatePersonDocumentSearchResultV2, validatePersonDocumentSearchV2,
   validatePersonDocumentStatusV2, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV2,
@@ -22,9 +21,9 @@ import {
   validatePersonProjectActivityV1, validatePersonRecordListV1, validatePersonRecordSearchRequestV2, validatePersonRecordSearchV2, validatePersonResearchEvalReadRequestV1,
   validatePersonResearchEvalReadResponseV1, validatePersonResearchEvalStartReceiptV1, validatePersonResearchEvalStartRequestV1, validatePersonRunsRequestV1,
   validatePersonRunsResultV1, validatePersonSourceEvidenceReadRequestV1, validatePersonSourceEvidenceV1, validatePersonUpdateReceiptV3, validatePersonUpdateRequestId,
-  validatePersonUpdateStatusResultV3, validatePersonUpdateSubmitV3, validatePersonUploadSearchResultV3,
-  validatePersonUploadSearchV3, validateProjectArchiveV1, validateProjectContextAssociateV1, validateProjectContextBrowseV1, validateProjectContextDissociateV1,
-  validateProjectContextSearchResultV2, validateProjectContextSearchV1, validateProjectCreateReceiptV1, validateProjectCreateV1, validateProjectDirectorySearchV1,
+  validatePersonUpdateStatusResultV3, validatePersonUpdateSubmitV3,
+  validateProjectArchiveV1, validateProjectContextAssociateV1, validateProjectContextBrowseV1, validateProjectContextDissociateV1,
+  validateProjectCreateReceiptV1, validateProjectCreateV1, validateProjectDirectorySearchV1,
   validateProjectDirectoryV1, validateProjectIdV1, validateProjectLeaveV1, validateProjectListV2, validateProjectMemberAddV1, validateProjectMemberRemoveV1,
   validateProjectMemberSetV1, validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectPageRequestV2, validateProjectRenameV1,
   validateProjectSettingsReceiptV1, validateProjectSummaryV2,
@@ -57,13 +56,10 @@ export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
 export type PersonListV1 = PersonListResponseV1;
 export type PersonOpenV1 = PersonOpenResponseV1;
 
-/**
- * A streamed Ask's answer (ADR-0039): the V8 answer, with its V3 receipt when
- * the Authority streamed, and no receipt when it answered in JSON.
- */
+/** A streamed Ask's answer (ADR-0039): the V8 answer, with its V3 receipt. */
 export interface PersonLiveAnswerV3 {
   readonly result: PersonAnswerV8;
-  readonly receipt?: PersonAskReceiptV3;
+  readonly receipt: PersonAskReceiptV3;
 }
 /**
  * Receives each step of a streamed Ask in progress V3, as it arrives,
@@ -207,7 +203,7 @@ function isJsonResponse(response: Response): boolean {
   return /^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(response.headers.get("content-type") ?? "");
 }
 
-/** `PERSON_ASK_PROGRESS_CONTENT_TYPE_V1`; any other reply to an opted-in Ask is read as today's JSON. */
+/** `PERSON_ASK_PROGRESS_CONTENT_TYPE_V1`; any other reply to an Ask is an error from before its stream started. */
 function isAskProgressStream(response: Response): boolean {
   return /^text\/event-stream(?:\s*;\s*charset=utf-8)?$/i.test(response.headers.get("content-type") ?? "");
 }
@@ -411,15 +407,11 @@ export const CONTEXT_ROUTES = Object.freeze({
     response: validateProjectMutationReceiptV1, matches: (result, request) => result.operation === 'associate' && result.context_id === request.context_id && applied(result, request) }),
   dissociateProjectContext: route({ request: validateProjectContextDissociateV1, path: () => `${PERSON_PROJECTS_PATH_V1}/context/dissociate`, mutation: 'change',
     response: validateProjectMutationReceiptV1, matches: (result, request) => result.operation === 'dissociate' && result.context_id === request.context_id && applied(result, request) }),
-  searchProjectContextV2: route({ request: validateProjectContextSearchV1, path: () => `${PERSON_PROJECTS_PATH_V2}/context/search`, response: validateProjectContextSearchResultV2,
-    matches: (result, request) => result.project_id === request.project_id && fits(result.items, request) }),
   submitUpdateV3: route({ request: validatePersonUpdateSubmitV3, path: () => PERSON_UPDATES_PATH_V3, status: 202, mutation: 'upload', response: validatePersonUpdateReceiptV3,
     matches: (result, request) => result.request_id === request.request_id &&
       canonicalJson(result.association_project_ids) === canonicalJson(request.association_project_ids) && canonicalJson(result.audience) === canonicalJson(request.audience) }),
   updateStatusV3: route({ request: validatePersonUpdateRequestId, path: requestId => `${PERSON_UPDATES_PATH_V3}/${requestId}`, get: true, response: validatePersonUpdateStatusResultV3,
     matches: (result, requestId) => result.request_id === requestId }),
-  searchUploadsV3: route({ request: validatePersonUploadSearchV3, path: () => `${PERSON_UPDATES_PATH_V3}/search`, response: validatePersonUploadSearchResultV3,
-    matches: (result, request) => fits(result.results, request) }),
 });
 export type ContextRouteName = keyof typeof CONTEXT_ROUTES;
 export type ContextReply<K extends ContextRouteName> = ReturnType<(typeof CONTEXT_ROUTES)[K]['response']>;
@@ -740,18 +732,17 @@ export class PersonAuthorityClient {
    * pages, follow-ups, and the asker's projects, people, tools and tool containers, and must echo the requested scope.
    * The request may carry the asker's previous turn (ADR-0047). Each step event reaches
    * `onProgress` as it arrives, and the answer comes back with the receipt the Authority built after its final check.
-   * An Authority that does not stream answers with the JSON answer, returned without a receipt, and an error inside
-   * the stream is the error its JSON response would have had. The ask timeout and the caller's signal bound the whole
-   * stream.
+   * Every Ask streams: a JSON reply is an error from before the stream started, and an error inside the stream is the
+   * error its JSON response would have had. The ask timeout and the caller's signal bound the whole stream.
    */
   async askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
     const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
     const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, previous), validate_request: validatePersonAnswerRequestV3,
-      access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json`, [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 } }, deadline);
+      access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json` } }, deadline);
     if (!isAskProgressStream(response)) {
-      const value = await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
-      return Object.freeze({ result: inAskScope(validateSuccess(value, response.status, validatePersonAnswerResponseV8), scope, previous) });
+      await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
+      throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority answered the Ask without its stream");
     }
     const terminal = await readAskProgressStream(response, deadline, onProgress);
     if (terminal.type === 'error') {
@@ -809,14 +800,13 @@ export class PersonAuthorityClient {
     return response;
   }
 
-  /** Opens one ref under the caller's current access; a meeting's detail belongs to its first page only. */
+  /** Opens one note, imported meeting or document under the caller's current access; a meeting is read as its record. */
   async open(accessToken: string, value: PersonOpenRequestV1, signal?: AbortSignal): Promise<PersonOpenV1> {
     const request = validatePersonOpenRequestV1(value);
     const response = await this.json({ path: PERSON_OPEN_PATH_V1, body: request,
       validate_request: validatePersonOpenRequestV1, validate_response: validatePersonOpenResponseV1,
       access_token: accessToken, maximum_response_bytes: PERSON_OPEN_RESPONSE_MAX_BYTES_V1, timeout_ms: DEFAULT_TIMEOUT_MS, signal });
-    if (response.ref !== request.ref ||
-      (personRefKindV1(request.ref) === 'meeting' && ('meeting' in response) !== (request.cursor === undefined))) {
+    if (response.ref !== request.ref) {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different open coordinates');
     }
     return response;

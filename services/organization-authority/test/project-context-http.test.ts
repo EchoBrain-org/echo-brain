@@ -27,9 +27,7 @@ const operations: Record<string, Operation> = {
   'projects-member-add': 'addMember',
   'projects-member-set': 'setMember', 'projects-member-remove': 'removeMember',
   'projects-associate': 'associateContext', 'projects-dissociate': 'dissociateContext',
-  'projects-search-v2': 'searchV2',
   'updates-submit-v3': 'submitUploadV3', 'updates-status-v3': 'uploadStatusV3',
-  'updates-search-v2': 'searchUploads',
 };
 const fixture = (id: string) => fixtures.find(row => row.id === id)!;
 const calls: { operation: Operation; args: unknown[] }[] = [];
@@ -118,9 +116,7 @@ describe('frozen project/V2 HTTP transport', () => {
     expect((await fetch(`${origin}/v2/person/projects`, { headers })).status).toBe(200);
     expect(calls.map(call => call.args[1])).toEqual([{ limit: 10, status: 'active' }]);
     expect((await send(origin, { ...fixture('projects-directory'), http: { ...fixture('projects-directory').http, body: { project_id: fixture('projects-directory').http.body!.project_id } } })).status).toBe(200);
-    for (const id of ['projects-search-v2', 'updates-search-v2']) {
-      await failure(await send(origin, fixture(id), { body: JSON.stringify({ ...fixture(id).http.body, query: '' }) }));
-    }
+    await failure(await send(origin, fixture('projects-directory'), { body: JSON.stringify({ ...fixture('projects-directory').http.body, query: '' }) }));
     expect(calls.map(call => call.operation)).toEqual(['listProjectsV2', 'searchDirectory']);
   });
 
@@ -204,7 +200,9 @@ describe('frozen project/V2 HTTP transport', () => {
       `/v3/person/updates/content/ctx_${'a'.repeat(64)}`]) {
       await failure(await fetch(origin + path, { headers }), 404, 'not_found');
     }
-    for (const path of ['/v1/person/projects/context/feed', '/v1/person/projects/context/search', '/v2/person/projects/context/feed', '/v2/person/updates']) {
+    // So are the note and project searches retired on 2026-11-11.
+    for (const path of ['/v1/person/projects/context/feed', '/v1/person/projects/context/search', '/v2/person/projects/context/feed', '/v2/person/updates',
+      '/v2/person/projects/context/search', '/v2/person/updates/search', '/v3/person/updates/search']) {
       await failure(await fetch(origin + path, { method: 'POST', headers, body: '{}' }), 404, 'not_found');
     }
     expect(calls).toEqual([]);
@@ -236,16 +234,16 @@ describe('frozen project/V2 HTTP transport', () => {
   });
 
   it('rejects invalid application output', async () => {
-    const row = fixture('projects-search-v2');
+    const row = fixture('projects-members');
     const [item] = row.http.response.items as Record<string, unknown>[];
-    for (const output of [{ ...row.http.response, hidden_count: 1 }, { ...row.http.response, items: [{ ...item, excerpt: 'x'.repeat(PROJECT_CONTEXT_RESPONSE_MAX_BYTES) }] }, { ...row.http.response, kind: 'echo-project-context-feed-v2' }]) {
-      const bad = await start(fake({ searchV2: () => output as never }));
+    for (const output of [{ ...row.http.response, hidden_count: 1 }, { ...row.http.response, items: [{ ...item, display_name: 'x'.repeat(PROJECT_CONTEXT_RESPONSE_MAX_BYTES) }] }, { ...row.http.response, kind: 'echo-project-directory-v1' }]) {
+      const bad = await start(fake({ listMembers: () => output as never }));
       await failure(await send(bad, row), 502, 'invalid_output');
     }
   });
 
-  it('reserves project and V2 route families against every provider ingress', () => {
-    for (const path of ['/v1/person/projects', fixture('projects-read-v2').http.path, '/v2/person/updates', '/v2/person/updates/search', '/v3/person/updates', '/v1/person/directory', '/v1/person/directory/next']) {
+  it('reserves the project, note and directory route families against every provider ingress', () => {
+    for (const path of ['/v1/person/projects', fixture('projects-read-v2').http.path, '/v3/person/updates', '/v3/person/updates/search', '/v1/person/directory', '/v1/person/directory/next']) {
       const application = { routes: [{ route_id: 'collision', method: 'POST' as const, path }], accept: async () => ({ status: 200 as const, body: {} }) };
       for (const ingress of [{ person_tool_connections: [application] }, { person_external_identity_link: application }, { person_tools: application }]) {
         expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions(ingress))).toThrow('collides with Authority route');

@@ -88,12 +88,6 @@ test('Home loads when returning from a browser sign-in that completed in the bac
   await expect(page.getByTestId('home-clear')).toHaveText('Nothing needs you');
 });
 
-test('a session left under a refresh claim by the weekly expiry shows sign-in at once, and signing in works', async () => {
-  run = await launch('expired-claim');
-  await expect(run.page.getByTestId('signed-out')).toBeVisible({ timeout: 2500 });
-  await signIn(run.page);
-});
-
 test('an expired access token is refreshed once, before the calls that need it', async () => {
   run = await launch('refresh-ok');
   const { page } = run;

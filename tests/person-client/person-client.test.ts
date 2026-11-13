@@ -27,6 +27,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { EmployeeMutationError, PersonClient } from "../../src/product/person-client/client.js";
 import type { PersonClientCliDependencies } from "../../src/product/person-client/commands.js";
 import { PersonSessionStore } from "../../src/product/person-client/session-store.js";
+import { askStream } from "./ask-stream.js";
 
 function fixtureId(prefix: string, suffix: number): string {
   return `${prefix}_00000000-0000-4000-8000-${String(suffix).padStart(12, "0")}`;
@@ -809,7 +810,7 @@ describe("Person client", () => {
       schema_version: 1, kind: "echo-person-source-evidence-v1", scope: { kind: "global" },
       citation: { ...SOURCE_CITATION, label: "Prior account source" }, text: "Prior account proof.",
     }],
-  ] as const)("does not return %s after the local account changes while its response is pending", async (_name, call, body) => {
+  ] as const)("does not return %s after the local account changes while its response is pending", async (name, call, body) => {
     await withHome(async home => {
       let resolveResponse: ((response: Response) => void) | undefined;
       const pendingResponse = new Promise<Response>(resolve => { resolveResponse = resolve; });
@@ -820,7 +821,7 @@ describe("Person client", () => {
         ...ROTATED_SESSION,
         membership_id: fixtureId("mem", 2), principal_id: fixtureId("prn", 2), session_family_id: fixtureId("psf", 2),
       });
-      resolveResponse?.(json(body));
+      resolveResponse?.(name === "an Ask answer" ? askStream(body) : json(body));
       await expect(result).rejects.toThrow("current account");
     });
   });
@@ -830,7 +831,7 @@ describe("Person client", () => {
       let asks = 0;
       const client = await signedInClient(home, async () => {
         asks += 1;
-        return json(v8Answer({ text: "Bounded answer.", citations: [RECORD_CITATION] }));
+        return askStream(v8Answer({ text: "Bounded answer.", citations: [RECORD_CITATION] }));
       });
       const question = (count: number) =>
         Array.from({ length: count }, (_, index) => `term${index}`).join(" ");
@@ -845,12 +846,11 @@ describe("Person client", () => {
 
   it.each(["ask", "search"])("rejects retired global metadata in a %s response", async (mode) => {
     await withHome(async (home) => {
-      const client = await signedInClient(home, async () => json({ ...(mode === "ask"
-        ? v8Answer()
-        : { schema_version: 2, kind: "echo-clean-person-record-search-v2", items: [] }),
-      generation_id: `sha256:${"a".repeat(64)}`, record_head: { position: 9, record_sha256: `sha256:${"b".repeat(64)}` } }));
+      const retired = { generation_id: `sha256:${"a".repeat(64)}`, record_head: { position: 9, record_sha256: `sha256:${"b".repeat(64)}` } };
+      const client = await signedInClient(home, async () => mode === "ask" ? askStream({ ...v8Answer(), ...retired })
+        : json({ schema_version: 2, kind: "echo-clean-person-record-search-v2", items: [], ...retired }));
       await expect(mode === "ask" ? client.askWithLiveSources("pricing") : client.records(undefined, "pricing")).rejects.toThrow(
-        mode === "ask" ? "malformed response" : "response is invalid",
+        mode === "ask" ? "malformed progress stream" : "response is invalid",
       );
     });
   });
@@ -860,13 +860,13 @@ describe("Person client", () => {
       let asks = 0;
       const client = await signedInClient(home, async () => {
         asks += 1;
-        return json(v8Answer({ text: "Use simple pricing.", citations: [{ ...RECORD_CITATION, citation: { ...RECORD_CITATION.citation, unexpected: true } }] }));
+        return askStream(v8Answer({ text: "Use simple pricing.", citations: [{ ...RECORD_CITATION, citation: { ...RECORD_CITATION.citation, unexpected: true } }] }));
       });
 
       await expect(client.askWithLiveSources(" pricing")).rejects.toMatchObject({ code: "query_whitespace" });
       expect(asks).toBe(0);
       await expect(client.askWithLiveSources("pricing")).rejects.toThrow(
-          "malformed response",
+          "malformed progress stream",
       );
       expect(asks).toBe(1);
     });
@@ -978,7 +978,7 @@ describe("Person client", () => {
         expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
         calls.push(path);
         if (path === "/v1/person/records") return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [] });
-        if (path === "/v7/person/ask") return json(v8Answer());
+        if (path === "/v7/person/ask") return askStream(v8Answer());
         expect(path).toBe("/v4/person/tools");
         if (tools === "failure") return new Response("provider raw body", { status: 503 });
         return json({ schema_version: 4, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools });
@@ -2044,43 +2044,6 @@ describe("Person client", () => {
   });
 });
 
-describe("Person client status recovery", () => {
-  it("reports signed-out status for a session written by an older release", async () => {
-    await withHome(async (home) => {
-      const store = new PersonSessionStore(home);
-      mkdirSync(store.paths.directory, { recursive: true, mode: 0o700 });
-      writeFileSync(
-        store.paths.live,
-        `${JSON.stringify({
-          schema_version: 1,
-          kind: "echo-person-client-session",
-          authority_origin: "https://authority.example",
-          authority_id: ORGANIZATION_IDS.authority,
-          session: SESSION,
-          legacy_device_id: "dev_1",
-        })}\n`,
-        { mode: 0o600 },
-      );
-
-      const result = await runCli(["status"], {
-        home_directory: home,
-        fetch: async () => {
-          throw new Error("status must not contact the Authority");
-        },
-      });
-
-      expect(result.code).toBe(0);
-      expect(result.stderr).toBe("");
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        signed_in: false,
-        display_name: null,
-        connected_authority: null,
-      });
-    });
-  });
-});
-
-
 describe('Person updates CLI', () => {
   const requestId = '00000000-0000-4000-8000-000000000001';
   const contextId = `ctx_${'a'.repeat(64)}`;
@@ -2136,25 +2099,20 @@ describe('Person updates CLI', () => {
       expect(network).not.toHaveBeenCalled();
     });
   });
-  it('uses an explicit Team selection and searches only validated upload responses', async () => {
+  it('uses an explicit Team selection', async () => {
     await withHome(async home => {
       await installFixtureSession(home);
       const file = join(home, 'memo.md'); writeFileSync(file, 'Client prefers a morning call.'); let output = ''; let errors = '';
       const calls: string[] = [];
       const network: typeof fetch = async (url, init) => {
         const path = new URL(String(url)).pathname; calls.push(path);
-        if (path.endsWith('/search')) {
-          expect(JSON.parse(String(init?.body))).toEqual({ query: 'client', limit: 3 });
-          return json({ schema_version: 3, kind: 'echo-person-upload-search-v3', results: [{ context_id: contextId, received_at: NOW, audience: { kind: 'team' }, title: 'Memo', excerpt: 'Client prefers a morning call.' }] });
-        }
         expect(JSON.parse(String(init?.body)).audience).toEqual({ kind: 'team' });
         return json({ ...receipt, audience: { kind: 'team' } }, 202);
       };
       const dependencies = { home_directory: home, now: () => NOW, fetch: network, stdout: { write: (value: string) => { output += value; } }, stderr: { write: (value: string) => { errors += value; } } };
-      expect(await runPersonClientCli(['updates', 'submit-v3', '--request-id', requestId, '--title', 'Memo', '--file', file, '--audience', 'team'], dependencies), errors).toBe(0); output = '';
-      expect(await runPersonClientCli(['updates', 'search-v3', '--query', 'client', '--limit', '3'], dependencies), errors).toBe(0);
-      expect(JSON.parse(output).results[0].context_id).toBe(contextId);
-      expect(calls).toEqual(['/v3/person/updates', '/v3/person/updates/search']);
+      expect(await runPersonClientCli(['updates', 'submit-v3', '--request-id', requestId, '--title', 'Memo', '--file', file, '--audience', 'team'], dependencies), errors).toBe(0);
+      expect(JSON.parse(output).audience).toEqual({ kind: 'team' });
+      expect(calls).toEqual(['/v3/person/updates']);
       expect(errors).toBe('');
     });
   });

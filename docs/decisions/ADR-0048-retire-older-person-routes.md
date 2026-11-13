@@ -164,6 +164,27 @@ command, their only caller: staging traces live in LangSmith. The path answers
 the ordinary 404 and stays reserved against provider adapters, and an Ask or a
 run `start` that still sends a `capture_id` gets `invalid_request`.
 
+Update (2026-11-11): the founder chose to cut old apps off in one go, so the
+note and project searches are retired: `POST /v2/person/updates/search` (the
+last V2 notes route), `POST /v3/person/updates/search` and
+`POST /v2/person/projects/context/search` answer the ordinary 404, and the CLI's
+`person updates search-v3` and `person projects search-v2` are gone. No current
+client calls them: the desktop's bar has only asked since 2026-11-08, and
+`person list` and `person open --ref` read notes. Released desktops search on
+every pause and lose that search until they update, which every seat does right
+after this release. The Authority's TypeScript no longer reads a V2 note: its
+custody check, its one-association rule and its source admission are gone, and
+every note reader selects V3 rows only. A V2 row the V16 table could still
+hold, even one whose source was admitted earlier, is simply absent: no project
+read, the text inbox, the person list and open, Ask retrieval and project
+activity find it, source admission refuses it, and other notes read as before.
+The V16 baseline keeps the V2 columns and checks until the V17 reset. The retired paths that only stayed reserved against provider adapters
+(V1 and V2 notes, V1 documents, the V2 and V3 tools lists, the capability
+read, the evidence desk's open and search, and the diagnostic captures) are no
+longer reserved; the families the Authority still serves stay reserved, and
+so do the staging research evaluation's start and read, even where they are
+not composed.
+
 ## Migration, rollback, and evidence
 
 - **Release order:** the Authority first, then the clients, the order the Ask

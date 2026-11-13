@@ -48,11 +48,7 @@ const reads: ReadonlyArray<{
   { name: 'roster', run: (app, s) => app.listMembers('person', { project_id: s.project.project_id }) },
   { name: 'directory', run: (app, s) => app.searchDirectory('person', { project_id: s.project.project_id, query: 'member' }) },
   { name: 'organization directory', run: app => app.searchOrganizationDirectory('person', { query: 'member' }) },
-  { name: 'project search', run: (app, s) => app.searchV2('person', { project_id: s.project.project_id, query: 'needle' }) },
   { name: 'upload status', run: (app, s) => app.uploadStatusV3('person', s.upload.request_id) },
-  { name: 'upload search', run: app => app.searchUploadsV3('person', { query: 'needle' }) },
-  // The notes stored as V2 have only their search left (ADR-0048); this V3 note is not one of them.
-  { name: 'V2 upload search', run: app => app.searchUploads('person', { query: 'needle' }) },
 ];
 
 function audits(database: Database.Database): number {
@@ -107,23 +103,21 @@ describe('project application final release boundary', () => {
         }),
       },
     });
-    const response = application.searchV2('person', { project_id: state.project.project_id, query: 'needle' });
+    const response = application.listMembers('person', { project_id: state.project.project_id });
     expect(response).toBe(audited);
     expect(Object.isFrozen(response.items)).toBe(true);
     expect(Object.isFrozen(response.items[0])).toBe(true);
     expect(state.database.inTransaction).toBe(false);
   });
 
-  it('releases nothing when audit persistence fails and keeps the original readable afterward', () => {
+  it('releases nothing when audit persistence fails and reads normally afterward', () => {
     const state = fixture();
     state.database.exec(`CREATE TRIGGER fixture_reject_audit BEFORE INSERT ON authority_project_read_audit_v1
       BEGIN SELECT RAISE(ABORT, 'fixture audit failure'); END`);
-    expect(() => state.application.searchUploadsV3('person', { query: 'needle' })).toThrow('fixture audit failure');
+    expect(() => state.application.uploadStatusV3('person', state.upload.request_id)).toThrow('fixture audit failure');
     expect(audits(state.database)).toBe(0);
     state.database.exec('DROP TRIGGER fixture_reject_audit');
-    expect(state.application.searchUploadsV3('person', { query: 'needle' }).results).toEqual([
-      expect.objectContaining({ context_id: state.upload.context_id, excerpt: 'Immutable original needle.' }),
-    ]);
+    expect(state.application.uploadStatusV3('person', state.upload.request_id)).toMatchObject({ context_id: state.upload.context_id, status: 'stored' });
   });
 
   it('releases nothing when COMMIT fails after a successful audit append', () => {
@@ -135,7 +129,7 @@ describe('project application final release boundary', () => {
       CREATE TRIGGER fixture_fail_commit AFTER INSERT ON authority_project_read_audit_v1
       BEGIN INSERT INTO fixture_commit_child(parent_id) VALUES (1); END;
     `);
-    expect(() => state.application.searchUploadsV3('person', { query: 'needle' })).toThrow('FOREIGN KEY constraint failed');
+    expect(() => state.application.uploadStatusV3('person', state.upload.request_id)).toThrow('FOREIGN KEY constraint failed');
     expect(state.database.inTransaction).toBe(false);
     expect(audits(state.database)).toBe(0);
     expect(state.database.prepare('SELECT count(*) AS n FROM fixture_commit_child').get()).toEqual({ n: 0 });
@@ -153,7 +147,7 @@ describe('project application final release boundary', () => {
         return authorization(MEMBER);
       },
     });
-    expect(() => application.searchV2('person', { project_id: state.project.project_id, query: 'needle' }))
+    expect(() => application.listMembers('person', { project_id: state.project.project_id }))
       .toThrow(expect.objectContaining({ code: 'not_found' }));
     expect(calls).toBe(2);
     expect(audits(state.database)).toBe(0);
@@ -171,7 +165,7 @@ describe('project application final release boundary', () => {
     const state = fixture();
     const authenticate = vi.fn(() => authorization(OWNER, changes)).mockImplementationOnce(() => authorization());
     const application = createProjectContextApplicationV1({ authenticate, repository: state.repository });
-    expect(() => application.searchUploadsV3('person', { query: 'needle' }))
+    expect(() => application.listProjectsV2('person', {}))
       .toThrow(expect.objectContaining({ code: 'stale_access_state' }));
     expect(audits(state.database)).toBe(0);
   });

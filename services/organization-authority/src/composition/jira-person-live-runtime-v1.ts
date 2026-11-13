@@ -21,7 +21,7 @@ export interface OpenedJiraPersonLiveRuntimeV1 {
   readonly connection_http: ProviderHttpApplicationV1;
   /** Assignee accounts for matching impact owners, read with the caller's own connection. */
   readonly owners: TicketOwnerAccountsV1;
-  /** The Ask source check's ticket markers (ADR-0047), read with the caller's own connection. */
+  /** The Ask source check's ticket reads (ADR-0047), with the caller's own connection. */
   readonly checks: PersonTicketCheckV1;
   tools(access_token: string): Promise<readonly OrganizationPersonToolV4[]>;
   close(): void;
@@ -44,7 +44,7 @@ export function openJiraPersonLiveRuntimeV1(options: PersonToolLiveOpenOptionsV1
     });
     // A failed read rejects, so the check answers its tickets unknown.
     const checks: PersonTicketCheckV1 = Object.freeze({ kind: 'ticket', tool_id: 'jira', external_scope_id: cloud_id,
-      markers: (input: Parameters<PersonTicketCheckV1['markers']>[0]) => application.ticketMarkers(input) });
+      readable: (input: Parameters<PersonTicketCheckV1['readable']>[0]) => application.readableTickets(input) });
     return { application, connection_http: createJiraPersonConnectionHttpApplicationV1(application), owners, checks };
   } });
 }

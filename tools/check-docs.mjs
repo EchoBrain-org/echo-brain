@@ -51,18 +51,6 @@ const ID_PATTERNS = new Map([
   ["qualification", /^QUAL-\d{8}-\d{6}-\d{3}$/],
   ["evidence-index", /^EVID-INDEX-\d{3}$/],
 ]);
-const LEGACY_INVARIANTS = new Set([
-  ...Array.from(
-    { length: 12 },
-    (_, index) => `INV-${String(index + 1).padStart(2, "0")}`,
-  ),
-  "INV-11A",
-  "INV-11B",
-  ...Array.from(
-    { length: 8 },
-    (_, index) => `AD-${String(index + 1).padStart(2, "0")}`,
-  ),
-]);
 const RELATIONS = new Map([
   ["component_ids", new Set(["component"])],
   ["invariant_ids", new Set(["invariant"])],
@@ -626,7 +614,6 @@ function validateQualification(
 function validateRelations(record, recordsById, errors) {
   for (const [field, kinds] of RELATIONS)
     for (const id of relationValues(record, field)) {
-      if (field === "invariant_ids" && LEGACY_INVARIANTS.has(id)) continue;
       const target = recordsById.get(id);
       if (!target || !kinds.has(target.metadata.kind))
         errors.push(`${record.path}: ${field} has unresolved id ${id}`);

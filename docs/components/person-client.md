@@ -115,16 +115,16 @@ prints it as `session_ended`, so an app restarted meanwhile still knows why.
 pending approval work, and that invariant's diagnostic clause has no current
 enforcement point.
 
-The `person updates` commands submit, inspect and search original text
-uploads, and `person open --ref note:<context-id>` reads one.
+The `person updates` commands submit and inspect original text uploads, and
+`person open --ref note:<context-id>` reads one.
 `submit-v3 --audience only-me|team|project|projects` selects access at upload
 (`project` requires `--audience-project-id`, `projects` requires
 `--audience-project-ids-json`); `status-v3` reports the saved receipt. Only me
 is the default. No Slack approval, provider code, background upload, or local
-queue is required. Search and exact reads return only authorized originals;
-submit-v3/status-v3 remain content-free. Search matches a note's title and
-text; the V2 `updates search` and the per-note search hints were retired on
-2026-11-08. The carrier does not settle the final context shape. See the
+queue is required. Exact reads return only authorized originals;
+submit-v3/status-v3 remain content-free. The V2 `updates search` and the
+per-note search hints were retired on 2026-11-08, and `updates search-v3` and
+`projects search-v2` on 2026-11-11. The carrier does not settle the final context shape. See the
 [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md).
 
 The ADRs that specify Ask, and how the Authority composes it, are in

@@ -307,10 +307,12 @@ to inspect the hold; a successful HTTP response alone does not prove that its
 output passed grounding or became an approval candidate.
 
 Do not place or infer meeting/provider content, identifiers, credentials,
-prompts, raw errors, or stack traces from these fields. The legacy
-`echo-clean-live-worker-failed-v1` event remains only for the host's
-worker-failure metric and alarm. It is not part of new lifecycle diagnosis,
-and this slice does not add alarms, a status API, correlation, or close #87.
+prompts, raw errors, or stack traces from these fields. The content-free
+`echo-clean-live-worker-failed-v1` event marks every worker failure, including
+those outside a lifecycle phase (a source poll, a personal meeting lane,
+retiring an old search generation), and is what the host's worker-failure
+metric and alarm count. This slice does not add alarms, a status API,
+correlation, or close #87.
 
 #### Watch the record-search ceiling
 
@@ -821,8 +823,8 @@ do not add separate live-source spans. Older releases have no Jira fields;
 their absence is not evidence that Jira was skipped or returned no data.
 Requests that fail before the Ask loop starts have no ticket summary counters.
 
-A streamed `/v7/person/ask` (`x-echo-ask-progress: 3`, ADR-0042), the only
-Ask route since ADR-0047 retired `/v3` to `/v6`, always answers HTTP `200`
+A `/v7/person/ask` (ADR-0042), the only Ask route since ADR-0047 retired
+`/v3` to `/v6`, streams every Ask since 2026-11-11 and always answers HTTP `200`
 once its stream starts; a later failure is its terminal `error` event. Its terminal `http_request` span records that event's status
 as `http_status`, the status the JSON route would have returned, so a filter
 on `http_status` finds streamed failures as it finds JSON ones. A streamed

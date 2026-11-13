@@ -4,7 +4,7 @@
 import * as organizationApi from '@echo-brain/organization-api';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const AUTHORITY = 'https://authority.example';
@@ -55,20 +55,14 @@ interface Contract {
   validatePersonOpenResponseV1(value: unknown): unknown;
   validatePersonAnswerRequestV3(value: unknown): { question: string; project_id?: string };
   /** The Ask timeline's reads (ADR-0047): the source check's request and answer, and what arrived in your projects. */
-  validatePersonAskCheckRequestV1(value: unknown): { items: { citation: Record<string, unknown>; marker?: string }[] };
+  validatePersonAskCheckRequestV1(value: unknown): { items: { citation: Record<string, unknown> }[] };
   validatePersonAskCheckV1(value: unknown): unknown;
   validatePersonProjectActivityV1(value: unknown): unknown;
   validatePersonRunsRequestV1(value: unknown): RunsRequest;
   validatePersonRunsResultV1(operation: string, value: unknown): unknown;
   /** Personal review requests never select a provider. */
   validatePersonReviewRequestV1(value: unknown): unknown;
-  /** Ask progress (ADR-0039): the header an Ask opts in with. */
-  PERSON_ASK_PROGRESS_HEADER_V1: string;
-  /**
-   * Ask progress V3 on `/v7` (research tool contract v1): its header value, and one event, which may name a project, a
-   * person, a tool or a tool's container, as its frame.
-   */
-  PERSON_ASK_PROGRESS_HEADER_VALUE_V3: string;
+  /** Ask progress V3 on `/v7` (research tool contract v1): one event, which may name a project, a person, a tool or a tool's container, as its frame. */
   formatPersonAskProgressEventV3(event: unknown): string;
 }
 const api = organizationApi as unknown as Contract;
@@ -314,15 +308,9 @@ function timelineAnswer(question: string, scope: Record<string, unknown>, previo
     cites(citations, 'Confirm the trace is still open.', [2])]);
 }
 
-/**
- * Readability only: the follow-up is no longer readable, everything else is. A readable ticket still carries a marker, as
- * the Authority keeps sending one for a release (SVC-13) and released clients refuse a readable ticket without it.
- */
+/** Readability only: the follow-up is no longer readable, everything else is. */
 function timelineCheck(items: readonly { citation: Record<string, unknown> }[]): Record<string, unknown> {
-  return { schema_version: 1, kind: 'echo-person-ask-check-v1', items: items.map(({ citation }) => {
-    if (citation.kind === 'ticket') return { state: 'same', marker: digestOf(`marker:${String(citation.ticket_id)}`) };
-    return { state: citation.kind === 'follow_up' ? 'unreadable' : 'same' };
-  }) };
+  return { schema_version: 1, kind: 'echo-person-ask-check-v1', items: items.map(({ citation }) => ({ state: citation.kind === 'follow_up' ? 'unreadable' : 'same' })) };
 }
 
 /** Project activity (C2): every project you are in, with its newest arrival from someone else, or null. */
@@ -370,7 +358,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   if (mode.startsWith('granola')) desktop.people.push(...[MINA, RAFAEL, OKAFOR].map(person => ({ membership_id: person.membership_id, display_name: person.name })));
 
   const store = new SessionStore(realpathSync(home)) as Store;
-  const expired = mode === 'expired-claim';
   const clock = mode.startsWith('refresh-') ? LATER : mode === 'weekly-passed' ? WEEK_LATER : NOW;
   const session = {
     organization_id: 'org_00000000-0000-4000-8000-000000000001',
@@ -385,17 +372,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   };
   if (!existsSync(store.paths.live) && !mode.startsWith('signed-out')) {
     store.install(AUTHORITY, 'oau_00000000-0000-4000-8000-000000000001', {
-      // A week-old session: every deadline already passed, consistently.
-      ...session, ...(expired ? {
-        access_expires_at: '2026-09-20T12:00:00.000Z', refresh_expires_at: '2026-09-21T00:00:00.000Z',
-        hard_reauthentication_at: '2026-09-21T00:00:00.000Z',
-      } : {}),
+      ...session,
     });
-    if (expired) {
-      // What an older client's weekly expiry left behind: the session set aside under a claim.
-      renameSync(store.paths.live, store.paths.refreshing);
-      writeFileSync(store.paths.refresh_claim, '00000000-0000-4000-8000-000000000099\n', { mode: 0o600 });
-    }
   }
   // The organization as it is now: its projects, who is in each, and what is filed in it.
   const projects = mode === 'no-projects' ? [] : structuredClone(desktop.projects);
@@ -709,6 +687,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       thermTicket('ECHO-7', 'Jira launch', '10007'),
     ];
   };
+  /** Every Ask streams (ADR-0039): an answer at once, with nothing looked through. */
+  const answered = (response: unknown): Response => new Response(api.formatPersonAskProgressEventV3({ type: 'answer', response, receipt: { looked_through: 0, elapsed_ms: 0, rows: [] } }),
+    { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' } });
   /**
    * A streamed Ask: research progress, then its answer and receipt once the test writes `release-ask`. A client that stops
    * the request first ends the research, and `ask-stopped` holds the question it stopped.
@@ -921,8 +902,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       relation: item.relation, expected: item.expected, approver: { ...item.approver, active: true }, owner: { ...item.owner, active: true },
       waits_on: item.state === 'unsent' ? 'approver' : 'owner', state: item.state, created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at,
       state_set_by: person(item.state_set_by), owner_set_at: item.owner_set_at, owner_set_by: person(item.owner_set_by),
-      // `check` is retired with sweeps: null, as the Authority sends it until V17.
-      send_included: item.send_included, check: null,
+      send_included: item.send_included,
       can: { set_state: item.state !== 'unsent' && involved(item), assign: item.state === 'unsent' ? item.approver.membership_id === ARI.membership_id : involved(item) },
       reach,
     };
@@ -997,9 +977,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const metadata = new Headers(init?.headers).get('x-echo-document-metadata');
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown>
       : metadata ? JSON.parse(Buffer.from(metadata, 'base64url').toString('utf8')) as Record<string, unknown> : undefined;
-    // An Ask that asked for its progress says so (ADR-0039).
-    const progress = new Headers(init?.headers).get('x-echo-ask-progress');
-    appendFileSync(join(home, 'calls.jsonl'), `${JSON.stringify({ method, path: url.pathname, query: url.search, body, ...(progress === null ? {} : { progress }) })}\n`);
+    appendFileSync(join(home, 'calls.jsonl'), `${JSON.stringify({ method, path: url.pathname, query: url.search, body })}\n`);
     if (url.origin !== AUTHORITY) throw new Error('Unexpected authority');
     const path = url.pathname;
     // Kim signs in on this computer while the request named in `switch-on` is on its way; it is still answered.
@@ -1053,6 +1031,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return body?.operation === 'reviews' ? json({ reviews: [] }) : failure('not_found', 404);
       }
     }
+    // Reviews are only the reviews route's: the meetings route knows no review operation.
+    if (method === 'POST' && path === '/v1/person/meetings' && ['reviews', 'review_open', 'review'].includes(String(body?.operation))) return failure('invalid_request', 400);
     if ((method === 'POST' && path === '/v1/person/meetings' && mode.startsWith('granola')) || reviewsRequest) {
       const meetingId = '00000000-0000-4000-8000-000000000010';
       const folderId = '00000000-0000-4000-8000-000000000011';
@@ -1176,8 +1156,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         }
         // Home: the Send row while Ari's check has items not sent, and the open items that wait on
         // Ari; then how many of the open items Ari sent wait on others. Rows only: no live read.
-        // `landed`, `last_checked_at` and `sweep_due` are retired with sweeps: 0, null and false, as
-        // the Authority sends them until V17.
         case 'home': {
           const unsent = shown.filter(item => item.run_id === runId && item.state === 'unsent');
           const send = run?.state === 'done' && unsent.length > 0 ? [{
@@ -1190,8 +1168,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           const theirs = shown.filter(item => item.state === 'open' && involved(item));
           return result('home', {
             send, items: theirs.filter(mineAsOwner).sort((a, b) => since(b).localeCompare(since(a))).slice(0, 20).map(item => itemView(item, live)),
-            landed: 0, waiting: theirs.filter(item => item.approver.membership_id === ARI.membership_id && !mineAsOwner(item)).length,
-            last_checked_at: null, sweep_due: false,
+            waiting: theirs.filter(item => item.approver.membership_id === ARI.membership_id && !mineAsOwner(item)).length,
           });
         }
         case 'items': {
@@ -1227,12 +1204,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           const counts = request.read === 'counts';
           const paged = counts ? [] : listed.slice(from, from + size);
           const next = !counts && from + size < listed.length ? pageCursor(pageKey, from + size) : null;
-          // The verdict counts and `last_checked_at` are retired with sweeps: 0 and null, as the Authority sends them until V17.
           return result('items', { items: paged.map(item => itemView(item, live)), next_cursor: next, stages, summary: {
             unsent: count('unsent'), open: count('open'), done: count('done'), not_relevant: count('not_relevant'),
-            landed: 0, changed: 0, unreadable: 0, decisions: records.length, last_checked_at: null, by_decision: records.map(record => {
+            decisions: records.length, by_decision: records.map(record => {
               const of = items.filter(item => item.decision.record_sha256 === record);
-              return { record_sha256: record, unsent: count('unsent', of), open: count('open', of), landed: 0, unreadable: 0 };
+              return { record_sha256: record, unsent: count('unsent', of), open: count('open', of) };
             }),
           } });
         }
@@ -1710,39 +1686,36 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const question = request.question;
       const answer = { ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8' };
       // The Ask timeline's answers, by the earlier turn the Ask carries; every other mode's take one and answer as if none came.
-      if (mode === 'ask-timeline-unreadable') return json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
-      // A client requesting progress gets the Ask's steps, then its answer and receipt.
-      const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
-      if (mode === 'ask-progress' && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V3) {
-        return progressStream(question, scope, init?.signal ?? undefined);
-      }
+      if (mode === 'ask-timeline-unreadable') return answered(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
+      // `ask-progress` streams the Ask's steps, then its answer and receipt; every other mode streams its answer alone.
+      if (mode === 'ask-progress') return progressStream(question, scope, init?.signal ?? undefined);
       // `ask-completion` answers what it can and says, typed, that it cannot make changes.
       if (mode === 'ask-completion') {
         const [original] = desktop.answer.parts as Record<string, unknown>[];
-        return json({ ...answer, scope, outcome: 'partial', citations: desktop.answer.citations,
+        return answered({ ...answer, scope, outcome: 'partial', citations: desktop.answer.citations,
           parts: [{ question, status: 'partial', statements: original!.statements, blocks: original!.blocks,
             gap: 'The list did not reach the end. Unchecked entries and sentences did not fit.', gap_details: { unsupported_action: true } }],
         });
       }
       // `ask-ticket` answers from one Jira ticket read live.
       if (mode === 'ask-ticket') {
-        return json({ ...answer, scope, outcome: 'answered', citations: [thermTicket('ECHO-7', 'Jira launch', '10007')],
+        return answered({ ...answer, scope, outcome: 'answered', citations: [thermTicket('ECHO-7', 'Jira launch', '10007')],
           parts: [{ question, status: 'answered', statements: [{ text: 'ECHO-7 is titled Jira launch.', citation_indexes: [0], private: true }], blocks: [{ kind: 'text', statements: [0] }] }] });
       }
       // `ask-blocks` answers THERM's question in every block of answer layout v2 (ADR-0051).
-      if (mode === 'ask-blocks') return json(blocksAnswer(question, scope));
+      if (mode === 'ask-blocks') return answered(blocksAnswer(question, scope));
       if (mode === 'ask-scroll') {
         const statements = question === 'Quick status' ? [{ text: 'The release remains scheduled for Friday, and the team has confirmed the owner and the remaining checks.', citation_indexes: [0], private: false }] : Array.from({ length: 12 }, (_, index) => ({
           text: `${question} Item ${index + 1}: The team reviewed the supplier report, the manufacturing checklist, and the latest test results. The next review will compare those results with the release requirements before confirming the schedule and assigning the remaining follow-ups.`,
           citation_indexes: [0], private: false,
         }));
-        return json({ ...answer, scope, citations: THERM_BLOCK_CITATIONS.slice(0, 1), parts: [{ question, status: 'answered', statements,
+        return answered({ ...answer, scope, citations: THERM_BLOCK_CITATIONS.slice(0, 1), parts: [{ question, status: 'answered', statements,
           blocks: [{ kind: 'text', statements: statements.map((_, index) => index) }],
         }] });
       }
       // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
       const [part] = desktop.answer.parts as Record<string, unknown>[];
-      return json({ ...answer, scope, parts: [{ ...part, question }] });
+      return answered({ ...answer, scope, parts: [{ ...part, question }] });
     }
     if (method === 'POST' && path === '/v2/person/ask/source') {
       const citation = body?.citation as Record<string, unknown>;

@@ -55,11 +55,8 @@ it. Every item is one cited sentence that keeps its sources' numbers, faint
 footnote digits with no box that brighten with the sentence under the pointer,
 and lights on its own. A table shows its caption only when it opens the
 answer, ISO dates as "Oct 14" and only your own late row's due date in the
-signal colour, and scrolls in its own box when the window is narrow. A
-timeline turn an older desktop saved without blocks, plain or with answer
-layout v1 (ADR-0045, retired), loads with an untitled text block a sentence,
-so each still reads as its own paragraph, and is saved so. Every answer's
-sources start as one quiet closed line under it ("4 sources") that a click
+signal colour, and scrolls in its own box when the window is narrow. Every
+answer's sources start as one quiet closed line under it ("4 sources") that a click
 opens, and a source's number opens that source beside the answer. A lock shows
 only on a source's row, for what ECHO keeps for you alone, never for a live
 tool's item.
@@ -348,12 +345,8 @@ only you can read. An approved meeting and a project each show a follow-ups
 line counted by status ("Follow-ups · 1
 open · 4 not sent"), which opens that list and keeps what it last said while
 it is read again; a meeting's row in a project's feed says how many of its
-follow-ups are not closed ("4 follow-ups"). Home also
-re-checks your own open items by itself: when the Authority says they are
-due, Home asks for a sweep and starts it after any waiting impact check. A
-sweep makes no Home row and changes no item's status; it only records each
-item's latest verdict. A meeting's actions are never re-checked. Projects and
-archived projects live in the sidebar.
+follow-ups are not closed ("4 follow-ups"). Projects and archived projects
+live in the sidebar.
 
 A project's **Tools** (in its title bar, the line above its feed, or the
 project menu) is one sheet for every tool a project can read: a Jira project

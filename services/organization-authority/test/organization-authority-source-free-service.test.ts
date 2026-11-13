@@ -76,9 +76,8 @@ it('runs submit/status from the exact packed Person CLI without an admitted meet
     expect(JSON.parse(output)).toMatchObject({ kind: 'echo-person-update-receipt-v3', state: 'received', request_id: requestId }); output = '';
     expect(await runPersonClientCli(['updates', 'status-v3', '--request-id', requestId], dependencies), errors).toBe(0);
     expect(JSON.parse(output)).toMatchObject({ kind: 'echo-person-update-status-v3', status: 'stored', request_id: requestId });
-    expect(output).not.toContain('We agreed'); output = '';
-    expect(await runPersonClientCli(['updates', 'search-v3', '--query', 'release'], dependencies), errors).toBe(0);
-    const found = JSON.parse(output).results[0]; expect(found.title).toBe('Release'); output = '';
+    expect(output).not.toContain('We agreed');
+    const found = JSON.parse(output) as { context_id: string }; output = '';
     expect(await runPersonClientCli(['open', '--ref', `note:${found.context_id}`], dependencies), errors).toBe(0);
     expect(JSON.parse(output).result.text).toBe('We agreed to ship the release.\n'); expect(errors).toBe('');
   } finally { await runtime.close(); }

@@ -18,11 +18,6 @@ const impactRun = (state: PersonRunV1['state'], id = '20', event = recordApprova
   run_id: `run_00000000-0000-4000-8000-0000000000${id}`, trigger: 'approved_record', event_ref: event, state,
   error_code: state === 'failed' ? 'research_failed' : null, created_at: '2026-10-08T10:00:00.000Z', updated_at: '2026-10-08T10:05:00.000Z',
 });
-/** A sweep, as an older Authority may still list one: the desktop starts none and makes no row of one. */
-const sweepRun = (state: PersonRunV1['state']): PersonRunV1 => ({
-  run_id: 'run_00000000-0000-4000-8000-000000000050', trigger: 'sweep', event_ref: 'sweep_00000000-0000-4000-8000-000000000050', state,
-  error_code: state === 'failed' ? 'research_failed' : null, created_at: '2026-10-08T12:00:00.000Z', updated_at: '2026-10-08T12:00:00.000Z',
-});
 /** A meeting's review; approved, its one record. */
 const meeting = (id: string, status: PersonMeetingReviewV2['status']): PersonMeetingReviewV2 => ({
   approval_id: `apr_${id.repeat(64)}`, title: `Meeting ${id}`, project_ids: [], status, decided_on: status === 'pending' ? null : 'desktop',
@@ -40,7 +35,7 @@ const item = (id: string): OpenItemView => ({
   item_id: `itm_0000000${id}`, run_id: impactRun('done').run_id, kind: 'ticket', decision, relation: 'conflicts', expected: 'launch next week',
   approver: person('Mina Patel'), owner: { ...person('Fixture'), match: 'jira_account' }, waits_on: 'owner', state: 'open',
   created_at: '2026-10-08T10:05:00.000Z', sent_at: '2026-10-08T11:00:00.000Z', state_set_at: '2026-10-08T11:00:00.000Z', state_set_by: person('Mina Patel'),
-  owner_set_at: null, owner_set_by: null, send_included: true, check: null, can: { set_state: true, assign: true }, reach: 'no_access',
+  owner_set_at: null, owner_set_by: null, send_included: true, can: { set_state: true, assign: true }, reach: 'no_access',
 });
 /** An item of Ari's own check not sent yet: Ari ("member") approved it, so Ari may send it and pick its owner. */
 const unsent = (id: string, run_id = impactRun('done').run_id): OpenItemView => ({
@@ -48,7 +43,7 @@ const unsent = (id: string, run_id = impactRun('done').run_id): OpenItemView => 
   send_included: null, waits_on: 'approver', can: { set_state: false, assign: true },
 });
 const sendRow = (): HomeView['send'][number] => ({ run_id: impactRun('done').run_id, decision, items: 2, kinds: ['ticket'], owners: ['Mina Patel'], finished_at: '2026-10-08T10:05:00.000Z' });
-const emptyHome = (): HomeView => ({ send: [], items: [], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
+const emptyHome = (): HomeView => ({ send: [], items: [], waiting: 0 });
 /** A row as a rows-only read answers it: nothing read live. */
 const rowOnly = (entry: OpenItemView): OpenItemView => {
   const { current: _current, ...rest } = entry;
@@ -376,15 +371,6 @@ describe('Home rows', () => {
     expect(rows.map(row => row.kind)).toEqual(['approve', 'failed']);
   });
 
-  it('makes no Home row of a sweep an older Authority may still list, going or failed', async () => {
-    const { needRows } = await import('../../src/renderer/store.js');
-    const approved = meeting('b', 'approved');
-    // Even a sweep naming an approval does not stand for its impact check.
-    for (const state of ['pending', 'running', 'failed'] as const) {
-      expect(needRows([approved], [{ ...sweepRun(state), event_ref: approved.records[0]!.approval_id }], null)).toEqual([]);
-    }
-  });
-
   it('matches a meeting\'s checks through its records: one row, failed when any check did not finish, else checking while any goes', async () => {
     const { needRows } = await import('../../src/renderer/store.js');
     const records = [{ approval_id: 'apr_' + '1'.repeat(64), project_ids: ['prj_11111111-1111-4111-8111-111111111111'] }, { approval_id: 'apr_' + '2'.repeat(64), project_ids: [] }];
@@ -399,10 +385,9 @@ describe('Home rows', () => {
     expect(needRows([{ ...meeting('d', 'publishing') }], [], null)).toMatchObject([{ kind: 'checking', review: { status: 'publishing' } }]);
   });
 
-  it('makes every item that waits on you an Update row, in the order Home read them, whatever check an older Authority still sends', async () => {
+  it('makes every item that waits on you an Update row, in the order Home read them', async () => {
     const { needRows } = await import('../../src/renderer/store.js');
-    const checked = (id: string, verdict: 'changed' | 'landed'): OpenItemView => ({ ...item(id), check: { verdict, checked_at: '2026-10-08T12:00:00.000Z', checked_by: 'Mina Patel' } });
-    const open: HomeView = { ...emptyHome(), items: [item('1'), checked('2', 'changed'), item('3'), checked('4', 'landed')] };
+    const open: HomeView = { ...emptyHome(), items: [item('1'), item('2'), item('3'), item('4')] };
     expect(needRows([], [], open).map(row => [row.kind, 'item' in row ? row.item.item_id : null])).toEqual([
       ['update', 'itm_00000001'], ['update', 'itm_00000002'], ['update', 'itm_00000003'], ['update', 'itm_00000004'],
     ]);
@@ -1462,7 +1447,7 @@ describe('A meeting\'s follow-ups line', () => {
   it('learns from a meeting\'s check whether Try again is yours, reading no runs list', async () => {
     fx.listed = false;
     fx.page = { items: [], next_cursor: null, stages: [{ record_sha256: record, run_id: impactRun('done').run_id, state: 'done', error_code: null, mine: true }],
-      summary: { ...EMPTY_SUMMARY, unsent: 2, decisions: 1, by_decision: [{ record_sha256: record, unsent: 2, open: 0, landed: 0, unreadable: 0 }] } };
+      summary: { ...EMPTY_SUMMARY, unsent: 2, decisions: 1, by_decision: [{ record_sha256: record, unsent: 2, open: 0 }] } };
     const store = await start();
     await store.openProject(project);
     const lists = requests('list').length;
@@ -1543,8 +1528,7 @@ describe('Rows first, then what each says now', () => {
 
   it('shows Home\'s rows at once from their rows read, then fills what each says now from the live read', async () => {
     fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    // An older Authority may still say a sweep is due: Home reads it as nothing.
-    fx.home = { ...emptyHome(), items: [opened('1'), { ...item('2'), kind: 'action', expected: 'Send the revised quote', reach: 'not_read' }], waiting: 1, sweep_due: true };
+    fx.home = { ...emptyHome(), items: [opened('1'), { ...item('2'), kind: 'action', expected: 'Send the revised quote', reach: 'not_read' }], waiting: 1 };
     fx.hold.live = true;
     const store = await start();
     // The live read still on its way: the rows show, by ECHO's own fields, and Home is loaded; only the live part waits.
@@ -1562,7 +1546,6 @@ describe('Rows first, then what each says now', () => {
     await flush();
     expect(store.getState().home).toMatchObject({ reading: false });
     expect(homeItems(store)[0]).toMatchObject({ reach: 'opened', current: { says_now: 'Says 1' } });
-    expect(operations()).not.toContain('sweep');
   });
 
   it('keeps Home\'s rows when its live read fails, saying ECHO couldn\'t read them just now, and shows no error', async () => {

@@ -143,8 +143,6 @@ afterEach(() => {
   for (const name of [
     "ECHO_STAGING_JOURNEY_TELEMETRY_V1",
     "ECHO_STAGING_SYNTHETIC_MEETINGS_DIR",
-    "ECHO_AGENTIC_ASK_V1",
-    "ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT",
     "ECHO_BUILD_NUMBER",
     "ECHO_SOURCE_SHA",
     "ECHO_STAGING_JIRA_ASK_V1",
@@ -397,41 +395,6 @@ describe("admitted runtime CLI events", () => {
       expect(runtimeState.confluence_person_live).toBeUndefined();
     } finally { process.emit("SIGTERM"); await running; }
     expect(await running, errors.join("")).toBe(0);
-  });
-
-  it("serves agentic Ask whatever the retired switches say, and refuses a switched-on small-scope shortcut", async () => {
-    for (const input of [
-      { agentic: undefined, shortcut: undefined },
-      { agentic: "false", shortcut: "false" },
-      { agentic: "true", shortcut: undefined },
-      { agentic: "true", shortcut: "false" },
-      { agentic: undefined, shortcut: "false" },
-    ]) {
-      if (input.agentic === undefined) delete process.env.ECHO_AGENTIC_ASK_V1;
-      else process.env.ECHO_AGENTIC_ASK_V1 = input.agentic;
-      if (input.shortcut === undefined) {
-        delete process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT;
-      } else {
-        process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT = input.shortcut;
-      }
-      const running = start({ stderr: () => undefined });
-      await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
-      // ECHO_AGENTIC_ASK_V1 is retired (ADR-0022) and the shortcut removed: release records still write both.
-      expect(runtimeState.config_keys).not.toContain("agentic_ask_v1_small_scope_shortcut");
-      process.emit("SIGTERM");
-      await expect(running).resolves.toBe(0);
-      runtimeState.worker_error = undefined;
-    }
-    // A release record that still switches the shortcut on is refused before the runtime opens.
-    for (const agentic of [undefined, "true"]) {
-      if (agentic === undefined) delete process.env.ECHO_AGENTIC_ASK_V1;
-      else process.env.ECHO_AGENTIC_ASK_V1 = agentic;
-      process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT = "true";
-      const errors: string[] = [];
-      expect(await start({ stderr: (value: string) => { errors.push(value); } })).toBe(1);
-      expect(runtimeState.worker_error).toBeUndefined();
-      expect(errors.join("")).toContain("echo-clean-live-startup-failed-v1");
-    }
   });
 
   it("closes telemetry only after the authority runtime has finished", async () => {

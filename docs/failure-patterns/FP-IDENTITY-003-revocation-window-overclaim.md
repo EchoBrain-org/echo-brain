@@ -17,8 +17,6 @@ severity: high
 first_observed: 2026-08-12
 invariant_ids:
   - INV-IDENTITY-003
-  - INV-05
-  - INV-06
 failure_pattern_ids:
   - FP-IDENTITY-002
 evidence_ids:

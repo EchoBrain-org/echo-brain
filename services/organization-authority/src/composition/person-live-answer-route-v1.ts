@@ -112,10 +112,13 @@ function workspaceFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Para
 }
 
 /**
- * Ask's route, `/v7`: one authenticated request pipeline for the V8 answer (research tool contract v1), plain or
- * streamed. The routes of the V5 to V7 answers, `/v4` to `/v6`, were retired.
+ * Ask's route, `/v7`: one authenticated request pipeline for the V8 answer (research tool contract v1). HTTP always
+ * streams (`askWithProgress`); `ask` runs the same pipeline without progress for in-process callers (the
+ * authority-core eval and the route's tests). The routes of the V5 to V7 answers, `/v4` to `/v6`, were retired.
  */
-export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRouteOptionsV1): PersonAnswerV7HttpApplication {
+export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRouteOptionsV1): PersonAnswerV7HttpApplication & {
+  ask(input: PersonAnswerHttpInputV1): Promise<PersonAnswerResponseV8>;
+} {
   type Input = PersonAnswerHttpInputV1;
   type Progress = { readonly on_start: () => void; readonly on_progress: AgenticAskProgressSinkV3 };
   /** A streamed Ask (ADR-0039) also reports when it starts and what it does; every other request is unchanged. */

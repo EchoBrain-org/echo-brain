@@ -90,8 +90,6 @@ describe("Person client help", () => {
     expect(listHelp).toContain("usage: echo-brain person list (--project <project-id> | --only-me) [--cursor <next_cursor>]");
     expect(listHelp).toContain("Give exactly one scope.");
     expect(listHelp).toContain("--only-me lists everything only you can read, filed in a project or not");
-    // The retired scopes are not offered: no --mine, and no list of everything.
-    expect(listHelp).not.toContain("--mine");
   });
 
   it("refuses an unknown command, group command or tool verb, and its help, before any session or network use", async () => {

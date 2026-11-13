@@ -275,7 +275,7 @@ export function recordRead(value: unknown): RecordRead | null {
  * answer looked through, from the receipt the Authority built from what
  * passed its final check (its searches and reads never reach the page). It
  * is the last line `person ask --progress` printed, in every scope: the
- * answer on `/v7`, with its receipt when the Authority streamed it (ADR-0039,
+ * answer on `/v7`, with the receipt of its stream (ADR-0039,
  * ADR-0040, research tool contract v1). An answer to an Ask that carried `previous`
  * (ADR-0047) also says the full question it answers, Ask again's "since" (its
  * citations among the answer's), or, asking which one (`clarify`), the
@@ -286,8 +286,7 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
   const { result, receipt } = validated(validatePersonAskProgressResultLineV3, raw);
   const { direct, parts, outcome } = result;
   const sources = result.citations.map(citedSource);
-  return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
-    ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through } }),
+  return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome, receipt: { looked_through: receipt.looked_through },
     ...(result.question === undefined ? {} : { question: result.question }),
     ...(result.since === undefined ? {} : { since: result.since.statements }),
     ...(result.choices === undefined ? {} : { choices: result.choices }) };
@@ -309,8 +308,8 @@ function citedSource(citation: PersonAnswerCitationV8): AnswerSource {
 
 /**
  * What `person ask-check` printed (C1), as the page may see it: one state per
- * item asked, in their order; a ticket's marker never reaches the page. A
- * reply with another number of items, or anything else, is not its output.
+ * item asked, in their order. A reply with another number of items, or
+ * anything else, is not its output.
  */
 export function askCheckView(raw: unknown, asked: number): { items: AskCheckResult[] } {
   const check = validated(validatePersonAskCheckV1, raw);
@@ -399,19 +398,13 @@ export function openItemView(item: PersonOpenItemV1): OpenItemView {
     } }),
     relation: item.relation, expected: item.expected, approver: item.approver, owner: item.owner, waits_on: item.waits_on, state: item.state,
     created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at, state_set_by: item.state_set_by, owner_set_at: item.owner_set_at,
-    owner_set_by: item.owner_set_by, send_included: item.send_included, check: item.check, can: item.can, reach: item.reach,
+    owner_set_by: item.owner_set_by, send_included: item.send_included, can: item.can, reach: item.reach,
   };
 }
 
-/**
- * Home's part of the runs: Send rows, the items that wait on this viewer, and how many of the rest wait on others. `landed`,
- * `last_checked_at` and `sweep_due` are retired (the Authority sends 0, null and false until V17) and cross unread.
- */
+/** Home's part of the runs: Send rows, the items that wait on this viewer, and how many of the rest wait on others. */
 export function homeView(result: PersonRunsResultsV1['home']): HomeView {
-  return {
-    send: result.send, items: result.items.map(openItemView), landed: result.landed, waiting: result.waiting, last_checked_at: result.last_checked_at,
-    sweep_due: result.sweep_due,
-  };
+  return { send: result.send, items: result.items.map(openItemView), waiting: result.waiting };
 }
 
 /** A page of a scope's open items, with the scope's summary and each decision's check. */

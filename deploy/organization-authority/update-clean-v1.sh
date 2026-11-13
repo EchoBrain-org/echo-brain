@@ -241,10 +241,10 @@ names = {
     'ECHO_CLEAN_RELEASE_SOURCE_SHA': source_sha,
     'ECHO_CLEAN_RUNTIME_PROFILE_SHA256': profile_sha,
     'ECHO_CLEAN_RUNTIME_PROFILE_VERSION': profile_version,
-    # Retired Ask switches: the Authority ignores the first (ADR-0022) and
-    # Compose defaults both to false, so neither is written or carried
-    # forward. An older record's true shortcut is still written so the
-    # Authority keeps refusing to start with it. Do not accept arbitrary names.
+    # Retired Ask switches: the Authority ignores both (ADR-0022) and Compose
+    # defaults both to false, so neither is carried forward. An older record's
+    # true shortcut is still written, which the Authority now ignores too.
+    # Do not accept arbitrary names.
     'ECHO_AGENTIC_ASK_V1': None,
     'ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT': 'true' if small_scope_shortcut == 'true' else None,
 }
@@ -683,15 +683,12 @@ try:
     status = json.loads(raw)
     if len(raw) > 16384 or not isinstance(status, dict):
         raise ValueError()
-    # V1 is a read-only release-health contract needed when rolling back to an
-    # accepted older image. It does not re-enable organization Granola setup.
-    versions = {1: "echo-clean-founder-setup-status-v1", 2: "echo-organization-authority-setup-status-v2"}
     version = status.get("schema_version")
-    if type(version) is not int or versions.get(version) != status.get("kind"):
+    if type(version) is not int or version != 2 or status.get("kind") != "echo-organization-authority-setup-status-v2":
         raise ValueError()
     if status.get("runtime_status") == "ready_to_start":
         print("ready")
-    elif version == 2 and all(status.get(key) is True for key in (
+    elif all(status.get(key) is True for key in (
         "setup_plan_present", "genesis_published", "credentials_ready",
         "invitation_file_present", "founder_oidc_bound",
     )) and status.get("founder_invitation_valid") is False and \

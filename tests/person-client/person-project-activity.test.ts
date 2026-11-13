@@ -51,13 +51,10 @@ describe('person project activity client (Ask timeline v1, C2)', () => {
       .rejects.toMatchObject({ name: 'PersonAuthorityClientError', code: 'invalid_response' });
   });
 
-  it('keeps the code the Authority sent, a 404 included, since every Authority serves the read (ADR-0048)', async () => {
-    const missing = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'not_found', message: 'request failed' } }, 404));
-    await expect(new PersonAuthorityClient({ authority_origin: 'https://authority.example.test', fetch: missing }).projectActivity('bearer'))
-      .rejects.toMatchObject({ name: 'PersonAuthorityClientError', code: 'not_found', status: 404 });
+  it('keeps the code the Authority sent', async () => {
     const signedOut = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'unauthorized', message: 'request failed' } }, 401));
     await expect(new PersonAuthorityClient({ authority_origin: 'https://authority.example.test', fetch: signedOut }).projectActivity('bearer'))
-      .rejects.toMatchObject({ code: 'unauthorized', status: 401 });
+      .rejects.toMatchObject({ name: 'PersonAuthorityClientError', code: 'unauthorized', status: 401 });
   });
 
   it('prints the project activity as the last stdout line from the project-activity command', async () => {
@@ -71,11 +68,11 @@ describe('person project activity client (Ask timeline v1, C2)', () => {
   });
 
   it('fails the project-activity command with the code the Authority sent, as other commands report their codes', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'not_found', message: 'request failed' } }, 404));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'unavailable', message: 'request failed' } }, 503));
     const { output, run } = cli(sessionHome(), fetch);
     expect(await run(['project-activity'])).toBe(1);
     expect(output.stdout).toBe('');
-    expect(lastLine(output.stderr)).toMatchObject({ ok: false, action: 'project-activity', code: 'not_found', status: 404 });
+    expect(lastLine(output.stderr)).toMatchObject({ ok: false, action: 'project-activity', code: 'unavailable', status: 503 });
   });
 
   it('takes no options and needs a signed-in session before any request', async () => {

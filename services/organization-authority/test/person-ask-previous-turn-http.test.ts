@@ -1,14 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PERSON_ANSWER_PATH_V7, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8,
-  type PersonAnswerPreviousV1,
+  PERSON_ANSWER_PATH_V7, createPersonAskProgressDecoderV3, type PersonAnswerPreviousV1,
 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { createPersonLiveAnswerRouteV1 } from '../src/composition/person-live-answer-route-v1.js';
 import { SqlitePersonImportedMeetingsV1 } from '../src/adapters/persistence/sqlite/person-imported-meetings-v1.js';
 import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
-import { askClient, auditBodies, closeAskServers, decodeAll, liveAskOptions, myOpenTasksPlanner, serveAsk } from './fixtures/ask-over-http.js';
+import { askClient, auditBodies, closeAskServers, decodeAll, liveAskOptions, myOpenTasksPlanner, serveAsk, streamedAnswer } from './fixtures/ask-over-http.js';
 import { CLOUD, sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 /**
@@ -58,7 +57,7 @@ function fromOpened(text = 'ECHO-12 ships on Oct 30.'): StructuredGenerationPort
   } };
 }
 const v7 = (f: OpenItemsFixtureV1, model: StructuredGenerationPort) => serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(liveAskOptions(f, model)) });
-const ask = askClient({ path: PERSON_ANSWER_PATH_V7, progress: PERSON_ASK_PROGRESS_HEADER_VALUE_V3, question: QUESTION });
+const ask = askClient({ path: PERSON_ANSWER_PATH_V7, question: QUESTION });
 const body = (previous: unknown = PREVIOUS, question = QUESTION) => ({ schema_version: 3, question, previous });
 
 describe('the previous turn on /v7 (ADR-0047)', () => {
@@ -77,9 +76,7 @@ describe('the previous turn on /v7 (ADR-0047)', () => {
       const research = fromOpened('The imported notes discuss the pilot rollout.');
       const resolved = 'What are the details in the pilot notes?';
       const { model } = withResolver([{ resolution: 'resolved', question: resolved, about: [1] }], research);
-      const response = await ask(await v7(f, model), { token: 'ari', progress: null, body: body(previous, 'what are the details?') });
-      expect(response.status).toBe(200);
-      const answer = validatePersonAnswerResponseV8(await response.json());
+      const answer = await streamedAnswer(await ask(await v7(f, model), { token: 'ari', body: body(previous, 'what are the details?') }));
       expect(answer.outcome).toBe('answered');
       expect(research.steps[0]).toMatchObject({ opened: [expect.objectContaining({ kind: 'imported_meeting', provenance: { kind: 'source_revision' } })] });
       expect(JSON.parse(research.writer[0]!.user_prompt)).toMatchObject({ evidence: [expect.objectContaining({ kind: 'imported_meeting', provenance: { kind: 'source_revision' } })] });
@@ -92,9 +89,7 @@ describe('the previous turn on /v7 (ADR-0047)', () => {
     const f = await sentFixture();
     const research = fromOpened();
     const { model, resolver } = withResolver([{ resolution: 'resolved', question: RESOLVED, about: [1] }], research);
-    const response = await ask(await v7(f, model), { progress: null, body: body() });
-    expect(response.status).toBe(200);
-    const answer = validatePersonAnswerResponseV8(await response.json());
+    const answer = await streamedAnswer(await ask(await v7(f, model), { body: body() }));
     expect(answer).toMatchObject({ outcome: 'answered', question: RESOLVED, parts: [{ question: RESOLVED }] });
     expect(resolver).toHaveLength(1);
     // The ticket was opened through the asker's own Jira connection before research's first step, which saw the full question.
@@ -124,10 +119,10 @@ describe('the previous turn on /v7 (ADR-0047)', () => {
     const tasks = myOpenTasksPlanner();
     const { model, resolver } = withResolver([{ resolution: 'same' }], tasks.model);
     const base = await v7(f, model);
-    const followed = validatePersonAnswerResponseV8(await (await ask(base, { progress: null, body: body(PREVIOUS, 'What are my open tasks?') })).json());
+    const followed = await streamedAnswer(await ask(base, { body: body(PREVIOUS, 'What are my open tasks?') }));
     expect(followed).toMatchObject({ outcome: 'answered', question: 'What are my open tasks?' });
     tasks.reset();
-    const plain = validatePersonAnswerResponseV8(await (await ask(base, { progress: null, body: { schema_version: 3, question: 'What are my open tasks?' } })).json());
+    const plain = await streamedAnswer(await ask(base, { body: { schema_version: 3, question: 'What are my open tasks?' } }));
     expect(plain).not.toHaveProperty('question');
     expect(plain.parts).toEqual(followed.parts);
     expect(resolver).toHaveLength(1);
@@ -139,7 +134,7 @@ describe('the previous turn on /v7 (ADR-0047)', () => {
     const base = await v7(f, { generate });
     // An Ask again of another question than the earlier one is not an Ask again.
     for (const previous of [{ ...PREVIOUS, purpose: 'guess' }, { ...PREVIOUS, statements: [{ text: 'x'.repeat(401), citation_indexes: [] }] }, { ...PREVIOUS, extra: true }, { ...PREVIOUS, purpose: 'ask_again' }]) {
-      const response = await ask(base, { progress: null, body: body(previous) });
+      const response = await ask(base, { body: body(previous) });
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toMatchObject({ error: { code: 'invalid_request' } });
     }
@@ -150,12 +145,12 @@ describe('the previous turn on /v7 (ADR-0047)', () => {
 describe('the previous turn at the HTTP boundary (ADR-0047)', () => {
   it('reaches the Ask as sent, and never on a retired route', async () => {
     const asked: unknown[] = [];
-    const application = { ask: vi.fn(async (input: { readonly request: unknown }) => { asked.push(input.request); throw new Error('this test only reads the boundary'); }), askWithProgress: vi.fn() };
+    const application = { askWithProgress: vi.fn(async (input: { readonly request: unknown }) => { asked.push(input.request); throw new Error('this test only reads the boundary'); }) };
     const base = await serveAsk({ person_answer_v7: application as never });
     const post = (path: string, request: unknown) => fetch(`${base}${path}`, { method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer mina' }, body: JSON.stringify(request) });
     for (const path of ['/v3/person/ask', '/v4/person/ask', '/v5/person/ask', '/v6/person/ask']) expect([path, (await post(path, body())).status]).toEqual([path, 404]);
-    expect(application.ask).not.toHaveBeenCalled();
+    expect(application.askWithProgress).not.toHaveBeenCalled();
     await post(PERSON_ANSWER_PATH_V7, body());
     expect(asked).toEqual([body()]);
   });

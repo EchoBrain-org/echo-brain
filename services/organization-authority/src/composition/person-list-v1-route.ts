@@ -61,8 +61,7 @@ type Ordered = { readonly kind: PersonListSourceV1 | "imported_meeting"; readonl
 type Joined = ReturnType<PersonListDirectoryPortV1["joinedProjects"]>;
 type Opened =
   | Extract<ReturnType<PersonOriginalItemsPortV1["open"]>, { readonly kind: "note" | "imported_meeting" }>
-  | Extract<ReturnType<PersonOriginalItemsPortV1["open"]>, { readonly kind: "document" }>
-  | (ReturnType<PersonMeetingItemsPortV1["openMeeting"]> & { readonly kind: "meeting" });
+  | Extract<ReturnType<PersonOriginalItemsPortV1["open"]>, { readonly kind: "document" }>;
 
 interface CreatePersonListRouteV1Options {
   readonly organization_id: string;
@@ -267,26 +266,14 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
   function openStore(access_token: string, ref: PersonItemRefV1, position: PersonOpenPositionV1 | undefined): Opened {
     const kind = personRefKindV1(ref);
     const id = personRefIdV1(ref);
-    switch (kind) {
-      case "imported_meeting":
-      case "note":
-      case "document": {
-        const opened = options.originals.open({
-          access_token,
-          ref: kind === "imported_meeting" ? { kind, id: id as `cap_${string}` } : kind === "note" ? { kind, id: id as `ctx_${string}` } : { kind, id: id as `doc_${string}` },
-          ...(position?.kind === "imported_meeting" ? { from_ordinal: position.offset } : position?.kind === "document" ? { from_ordinal: position.from_ordinal } : {}),
-        });
-        if (opened.kind !== kind) invalidOutput();
-        return opened;
-      }
-      case "meeting":
-        return {
-          kind, ...options.meetings.openMeeting({
-            access_token, record_sha256: id as `sha256:${string}`,
-            ...(position?.kind === "meeting" ? { from: { atom_order: position.atom_order, part: position.part } } : {}),
-          }),
-        };
-    }
+    if (kind === "meeting") invalidRequest();
+    const opened = options.originals.open({
+      access_token,
+      ref: kind === "imported_meeting" ? { kind, id: id as `cap_${string}` } : kind === "note" ? { kind, id: id as `ctx_${string}` } : { kind, id: id as `doc_${string}` },
+      ...(position?.kind === "imported_meeting" ? { from_ordinal: position.offset } : position?.kind === "document" ? { from_ordinal: position.from_ordinal } : {}),
+    });
+    if (opened.kind !== kind) invalidOutput();
+    return opened;
   }
 
   function openResponse(opened: Opened, ref: PersonItemRefV1, binding: PersonOpenCursorBindingV1, joined: Joined): unknown {
@@ -301,11 +288,6 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
           ...base, item: projectRow(opened.row, joined), filename: opened.filename,
           chunks: opened.chunks.map((chunk) => ({ anchor: { kind: chunk.anchor_kind, start: chunk.anchor_start }, text: chunk.text })),
           next_cursor: opened.next_ordinal === null ? null : encodePersonOpenCursorV1(binding, { kind: "document", from_ordinal: opened.next_ordinal }),
-        };
-      case "meeting":
-        return {
-          ...base, item: projectRow(opened.row, joined), ...(opened.meeting === undefined ? {} : { meeting: opened.meeting }), atoms: opened.atoms,
-          next_cursor: opened.next === null ? null : encodePersonOpenCursorV1(binding, { kind: "meeting", atom_order: opened.next.atom_order, part: opened.next.part }),
         };
     }
   }
@@ -326,8 +308,9 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
       const { access_token } = input;
       const actor = authenticate(access_token);
       const ref = input.request.ref;
+      // The request contract refuses a meeting ref too: a listed meeting is read as its record (2026-11-11).
       try {
-        personRefKindV1(ref);
+        if (personRefKindV1(ref) === "meeting") invalidRequest();
       } catch {
         invalidRequest();
       }
@@ -351,8 +334,7 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
       }
       let current: PersonAccessAuthorization;
       try {
-        if (opened.kind === "imported_meeting" || opened.kind === "note" || opened.kind === "document") options.originals.revalidate({ access_token, release: opened.release });
-        if (opened.kind === "meeting") options.meetings.revalidateMeetingRelease({ access_token, release: opened.release });
+        options.originals.revalidate({ access_token, release: opened.release });
         current = authenticate(access_token);
         if (!samePersonReleaseAuthorizationV1(actor, current) || options.directory.joinedProjects(current).grants_sha256 !== joined.grants_sha256) notFound();
       } catch (error) {

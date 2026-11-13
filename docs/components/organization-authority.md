@@ -174,18 +174,18 @@ its complete compatible state generation as one qualification boundary.
 ## Original Person upload custody
 
 Authority retains authenticated original text notes and document files with
-their selected audience and an immutable receipt. Upload-specific read/search verifies the
-current reader, enforces that audience, and audits before release. No model
+their selected audience and an immutable receipt. Upload-specific reads verify the
+current reader, enforce that audience, and audit before release. No model
 reads a note when it is saved: the per-note search hints were retired on
-2026-11-08, and note search matches a note's title and text. The V1 upload
+2026-11-08. No route searches notes any more; Ask's retrieval matches a note's
+title and text. The V1 upload
 route is retired; V1 originals already retained keep their Only me/Team
-visibility and remain citable by Ask. The V2 note write, status and content
-routes and every V1 document route are retired too
-([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)): the V2
-search route `POST /v2/person/updates/search` is still served for released
-desktops (the client's `updates search` left on 2026-11-08, and the route goes
-in a later release), and documents uploaded as V1 are read through the V2
-document routes. Uploads remain in
+visibility and remain citable by Ask. Every V2 note route and every V1 document
+route are retired too
+([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)), as are the
+note searches `POST /v3/person/updates/search` and
+`POST /v2/person/projects/context/search` (2026-11-11); documents uploaded as V1
+are read through the V2 document routes. Uploads remain in
 protected Authority custody/backups; they are not appended as approved decision
 records. See the [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md)
 for provisional transport limits and indefinite retention.

@@ -83,7 +83,7 @@ attributes no speaker. Custody, extraction and review stay in the Authority. The
 records its limits and live qualification.
 
 Jira's server-only bulk ticket reads (the impact check's assignee lookup and
-the Ask source check's ticket markers; Jira context capture is disabled) derive
+the Ask source check's ticket readability; Jira context capture is disabled) derive
 their transport and current-grant fences from an authenticated Person
 connection. Meeting processing, approval, revision custody and shared
 connectors remain provider-neutral.
