@@ -39,7 +39,7 @@ function fixture() {
 }
 
 describe('Granola external meeting evidence', () => {
-  it('stops transcript reads when the answer is full across 1,000 mapped meetings, leaving budget for revalidation', async () => {
+  async function mapped() {
     const key = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
     const folder_ids = Array.from({ length: 20 }, (_, index) => key(2_000 + index));
     const meetings = Array.from({ length: 1_000 }, (_, index) => key(index + 1));
@@ -64,6 +64,10 @@ describe('Granola external meeting evidence', () => {
       }
       return Response.json({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }] } });
     } } });
+    return { reader, calls };
+  }
+  it('stops transcript reads when the answer is full across 1,000 mapped meetings, leaving budget for revalidation', async () => {
+    const { reader, calls } = await mapped();
     const result = await reader.search({ query: 'access', limit: 20 });
     expect(result.items).toHaveLength(20);
     expect(result.truncated).toBe(true);
@@ -71,6 +75,20 @@ describe('Granola external meeting evidence', () => {
     expect(calls.filter(name => name === 'get_meetings')).toHaveLength(1);
     expect(calls.filter(name => name === 'get_meeting_transcript')).toHaveLength(1);
     await reader.revalidate({ citations: result.items.map(item => item.citation) });
+  });
+  it('reads folder membership once per reader and each meeting and chunk once per revalidation', async () => {
+    const { reader, calls } = await mapped();
+    const first = await reader.search({ query: 'access', limit: 20 }), second = await reader.search({ query: 'pilot', limit: 20 });
+    const opened = await reader.open({ handle: first.items[0]!.handle, limit: 20 });
+    const before = calls.length;
+    await reader.revalidate({ citations: [...first.items, ...second.items, ...opened.items].map(item => item.citation) });
+    expect(calls.slice(before).filter(name => name === 'get_meetings')).toHaveLength(1);
+    expect(calls.slice(before).filter(name => name === 'get_meeting_transcript')).toHaveLength(1);
+    expect(calls.slice(before).filter(name => name === 'search_meetings')).toHaveLength(20);
+    expect(calls.length).toBeLessThanOrEqual(110);
+    const settled = calls.length;
+    await reader.revalidate({ citations: [] });
+    expect(calls.slice(settled)).toEqual(['get_account_info', 'list_meeting_folders']);
   });
   it('reports notes-only coverage when the provider denies transcript search, without retrying transcript access', async () => {
     const f = fixture(); f.state.transcriptAllowed = false;

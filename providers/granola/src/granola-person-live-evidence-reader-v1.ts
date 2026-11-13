@@ -85,9 +85,15 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
       || parsed.permalink !== `https://notes.granola.ai/d/${parsed.page_id}` || !/^(?:inventory|(?:notes|summary):(?:0|[1-9]\d{0,5})|transcript:(?:0|[1-9]\d{0,5}):(?:0|[1-9]\d{0,5}))$/.test(parsed.section_id)) fail('invalid_request');
     return parsed;
   }
-  /** Bound folder membership is re-read, including when reopening an old answer. It never comes from an import setting. */
-  async function members(signal?: AbortSignal): Promise<ReadonlySet<string> | undefined> {
+  let membership: { readonly key: string; readonly ids: ReadonlySet<string> } | undefined;
+  /**
+   * Bound folder membership never comes from an import setting. It is read once per reader for search and open, and
+   * re-read by every revalidation, the release fence, including when reopening an old answer.
+   */
+  async function members(signal?: AbortSignal, fresh = false): Promise<ReadonlySet<string> | undefined> {
     if (shown === undefined) return undefined;
+    const key = shown.join();
+    if (!fresh && membership?.key === key) return membership.ids;
     const ids = new Set<string>();
     for (const folder_id of shown) {
       const seen = new Set<string>();
@@ -101,19 +107,25 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
         seen.add(page.next_cursor); cursor = page.next_cursor;
       }
     }
+    membership = { key, ids };
     return ids;
   }
   function scope(meeting: string, allowed: ReadonlySet<string> | undefined) {
     if (allowed !== undefined && !allowed.has(meeting)) fail('unauthorized');
   }
-  async function section(ref: PersonPageCitationV1, allowed: ReadonlySet<string> | undefined, signal?: AbortSignal): Promise<Value> {
+  /** `reads` holds one revalidation's provider reads, so many sections of one meeting or chunk cost one read each. */
+  async function section(ref: PersonPageCitationV1, allowed: ReadonlySet<string> | undefined, reads: Map<string, Promise<unknown>>, signal?: AbortSignal): Promise<Value> {
+    const once = <T>(key: string, read: () => Promise<T>) => {
+      if (!reads.has(key)) reads.set(key, read());
+      return reads.get(key) as Promise<T>;
+    };
     scope(ref.page_id, allowed);
-    const meeting = await api.meeting(ref.page_id, signal);
+    const meeting = await once(`meeting:${ref.page_id}`, () => api.meeting(ref.page_id, signal));
     if (ref.section_id === 'inventory') return inventory(meeting);
     const [kind, raw, part] = ref.section_id.split(':'), offset = Number(kind === 'transcript' ? part : raw);
     if (offset % SECTION !== 0) fail('invalid_request');
     if (kind === 'transcript') {
-      const chunk = await api.chunk(meeting.id, Number(raw), ref.version, signal);
+      const chunk = await once(JSON.stringify([meeting.id, Number(raw), ref.version]), () => api.chunk(meeting.id, Number(raw), ref.version, signal));
       if (offset >= [...chunk.text].length) fail('not_found');
       return remember(meeting, ref.section_id, chunk.version, [...chunk.text].slice(offset, offset + SECTION).join(''));
     }
@@ -238,11 +250,11 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
     },
     async openCitation(input) { return open(citation(input.citation), input.limit, input.signal); },
     async revalidate(input) {
-      const allowed = await members(input.signal);
+      const allowed = input.citations.length === 0 ? undefined : await members(input.signal, true), reads = new Map<string, Promise<unknown>>();
       for (const value of input.citations) {
         const ref = citation(value), original = issued.get(canonicalSha256(ref));
         if (original === undefined) fail('invalid_request');
-        const current = await section(ref, allowed, input.signal);
+        const current = await section(ref, allowed, reads, input.signal);
         if (canonicalSha256(current.citation) !== canonicalSha256(ref) || current.label !== original.label) fail('stale_access_state');
       }
       await verify(input.signal);
