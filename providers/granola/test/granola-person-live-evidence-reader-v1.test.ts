@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { createGranolaPersonLiveEvidenceReaderV1 } from '../src/granola-person-live-evidence-reader-v1.js';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
@@ -192,6 +192,16 @@ describe('Granola external meeting evidence', () => {
     expect((await reader.list({ since: '2025-01-09', until: '2025-01-09', time_zone: 'America/Los_Angeles', limit: 5 })).items).toHaveLength(1);
     expect((await reader.list({ since: '2025-01-10', until: '2025-01-10', time_zone: 'America/Los_Angeles', limit: 5 })).items).toHaveLength(0);
     await expect(reader.list({ date_field: 'updated', since: '2025-01-01', limit: 5 })).rejects.toMatchObject({ code: 'invalid_request' });
+  });
+  it('never sends a date range that reaches past now', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-13T10:00:00.000Z'));
+    try {
+      const f = fixture(), reader = await f.reader();
+      await reader.search({ query: 'access', until: '2026-11-12', limit: 5 });
+      await reader.list({ until: '2026-11-10', limit: 5 });
+      expect(f.calls.filter(call => call.name === 'search_meetings').map(call => call.arguments.to_date)).toEqual(['2026-11-13T10:00:00.000Z', '2026-11-11']);
+      expect(f.calls.find(call => call.name === 'search_transcripts')?.arguments.to_date).toBe('2026-11-13T10:00:00.000Z');
+    } finally { vi.useRealTimers(); }
   });
   it('rejects forged handles, foreign workspace citations and arbitrary URLs before provider reads', async () => {
     const f = fixture(), reader = await f.reader(), result = await reader.search({ query: 'access', limit: 5 });

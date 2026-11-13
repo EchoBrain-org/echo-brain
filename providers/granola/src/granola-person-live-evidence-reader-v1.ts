@@ -137,7 +137,9 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
     validateEvidenceDateFilterV1(input, ['occurred', 'any']);
     // Fetch a wider UTC window, then apply the exact requested timezone locally.
     const shift = (day: string, delta: number) => new Date(Date.parse(`${day}T12:00:00Z`) + delta * 86_400_000).toISOString().slice(0, 10);
-    return { from_date: input.since === undefined ? '1970-01-01' : shift(input.since, -1), to_date: input.until === undefined ? now : [now, shift(input.until, 1)].sort()[0]! };
+    // Granola reads a bare date as that whole day, so a bare end date of today or later would reach past now.
+    const until = input.until === undefined ? undefined : shift(input.until, 1);
+    return { from_date: input.since === undefined ? '1970-01-01' : shift(input.since, -1), to_date: until === undefined || until >= now.slice(0, 10) ? now : until };
   }
   const matches = (meeting: GranolaMeetingV1, input: EvidenceDateFilterV1) => matchesEvidenceDateV1(dates(meeting), input, 'occurred');
   function sections(meeting: GranolaMeetingV1, kind: string, text: string, version: string, start = 0): Value[] {
