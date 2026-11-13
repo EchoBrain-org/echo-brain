@@ -11,6 +11,7 @@ created_at: 2026-08-13
 reviewed_at: 2026-09-27
 reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
+  - ADR-0052
   - ADR-0051
   - ADR-0048
   - ADR-0049
@@ -166,3 +167,8 @@ status/cancel commands. Consent URLs and Nango locators are not printed. Their
 routes remain unavailable without the matching optional live runtime; shipping
 the command fragments does not enable either reader or capture tickets or
 pages. See [the Jira flow](../../providers/jira/README.md).
+
+Historical Granola search and project-folder mappings are independent of
+opt-in extraction and review; see
+[ADR-0052](../decisions/ADR-0052-external-meeting-search.md) for the custody,
+permission, pagination and compatibility boundaries.

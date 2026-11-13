@@ -127,14 +127,14 @@ test('Granola imports my meetings automatically with no folder, suggests a proje
   await page.getByTestId('sidebar-tools').click();
   await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
   const meetings = page.getByRole('region', { name: 'Personal meetings' });
-  const automatic = meetings.getByRole('group', { name: 'Automatic import' });
+  const automatic = meetings.getByRole('group', { name: 'Automatic extraction' });
   const save = meetings.getByRole('button', { name: 'Save', exact: true });
   const apollo = 'prj_11111111-1111-4111-8111-111111111111', beacon = 'prj_44444444-4444-4444-8444-444444444444';
   // Imported meetings are private by default, so the sheet says nothing about who reads them.
   await expect(meetings).toContainText('I allow ECHO to retain');
   await expect(meetings).not.toContainText('Project members can read');
   await expect(meetings).not.toContainText('stay private');
-  await automatic.getByLabel('Import').selectOption({ label: 'My meetings' });
+  await automatic.getByLabel('Extract').selectOption({ label: 'My meetings' });
   await expect(automatic.getByLabel('Folder', { exact: true })).toHaveCount(0);
   await expect(automatic.getByLabel('Suggest')).toHaveValue('');
   // Consent comes first.
@@ -146,7 +146,7 @@ test('Granola imports my meetings automatically with no folder, suggests a proje
   await expect(watch).toHaveText(/^PreparingStop$/);
   await expect(meetings.getByRole('status')).toHaveText('Saved.');
   // The controls show the watch that runs; Save is back only once they differ from it.
-  await expect(automatic.getByLabel('Import')).toHaveValue('mine');
+  await expect(automatic.getByLabel('Extract')).toHaveValue('mine');
   await expect(automatic.getByLabel('Suggest')).toHaveValue(apollo);
   await expect(save).toHaveCount(0);
   await meetings.getByRole('button', { name: 'Refresh', exact: true }).click();
@@ -164,19 +164,19 @@ test('Granola imports my meetings automatically with no folder, suggests a proje
   ]);
   await watch.getByRole('button', { name: 'Stop' }).click();
   await expect(watch).toHaveCount(0);
-  await expect(automatic.getByLabel('Import')).toHaveValue('off');
+  await expect(automatic.getByLabel('Extract')).toHaveValue('off');
   expect(run.calls().filter(call => call.body?.operation === 'watch').at(-1)?.body).toMatchObject({ watch: 'off', folder_id: null, project_id: null });
   // The next watch starts with no suggestion, as a first one does.
-  await automatic.getByLabel('Import').selectOption({ label: 'My meetings' });
+  await automatic.getByLabel('Extract').selectOption({ label: 'My meetings' });
   await expect(automatic.getByLabel('Suggest')).toHaveValue('');
-  const add = meetings.getByRole('group', { name: 'Add one meeting' });
+  const add = meetings.getByRole('group', { name: 'Extract from one meeting' });
   await add.getByLabel('From').selectOption({ label: 'ECHO (1)' });
   await expect.poll(() => run.calls().filter(call => call.body?.operation === 'browse').map(call => call.body?.folder_id))
     .toEqual([null, '00000000-0000-4000-8000-000000000011']);
   await add.getByLabel('Suggest').selectOption({ label: 'Apollo' });
   await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
   await expect(meetings.getByRole('article', { name: 'Pilot planning' })).toContainText('Suggests Apollo');
-  await meetings.getByRole('button', { name: 'Add to ECHO', exact: true }).click();
-  await expect(meetings.getByRole('status')).toHaveText('Added.');
+  await meetings.getByRole('button', { name: 'Extract for review', exact: true }).click();
+  await expect(meetings.getByRole('status')).toHaveText('Queued for extraction and review.');
   expect(run.calls().find(call => call.body?.operation === 'import')?.body).toMatchObject({ retain: true, project_id: apollo });
 });

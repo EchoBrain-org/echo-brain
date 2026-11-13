@@ -11,6 +11,7 @@ created_at: 2026-08-13
 reviewed_at: 2026-10-30
 reviewed_ref: aa92138e4a7d8386b2ff51a95c7d2f82e86236be
 decision_ids:
+  - ADR-0052
   - ADR-0003
   - ADR-0004
   - ADR-0006
@@ -117,3 +118,8 @@ The prior live-evaluation ledger has been converted into the linked sanitized
 [failure-pattern records](../failure-patterns/README.md) and the
 [provider adapter matrix](../qualification/adapter-matrix-v1.md). Raw provider
 payloads and private receipt locators were not copied.
+
+Historical Granola search and project-folder mappings are independent of
+opt-in extraction and review; see
+[ADR-0052](../decisions/ADR-0052-external-meeting-search.md) for the custody,
+permission, pagination and compatibility boundaries.

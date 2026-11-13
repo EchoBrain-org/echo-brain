@@ -53,13 +53,14 @@ describe('project tool-read replies', () => {
 
   it('ignores the earlier opening while the later one still has its fields unknown', async () => {
     const store = await startStore();
-    const first = ['account.tools', 'projects.jiraRead', 'projects.confluenceRead'].map(method => held.hold(method));
+    const first = ['account.tools', 'projects.jiraRead', 'projects.confluenceRead', 'projects.granolaRead'].map(method => held.hold(method));
     await store.openProject(apollo);
-    const second = ['account.tools', 'projects.jiraRead', 'projects.confluenceRead'].map(method => held.hold(method));
+    const second = ['account.tools', 'projects.jiraRead', 'projects.confluenceRead', 'projects.granolaRead'].map(method => held.hold(method));
     await store.openProject(apollo);
     first[0]!(ok({ tools: [] }));
     first[1]!(ok({ revision: 'r', mapping: { project_key: 'OLD' } }));
     first[2]!(ok({ revision: 'r', mapping: { space_ids: ['9'] } }));
+    first[3]!(ok({ revision: 'r', mapping: { folder_ids: ['old'] } }));
     await flush();
     expect(store.getState().projectReads).toEqual({ project_id: apollo.project_id, seq: expect.any(Number) });
     second[1]!(ok({ revision: 'r', mapping: { project_key: 'NEW' } }));
@@ -67,6 +68,7 @@ describe('project tool-read replies', () => {
     expect(store.getState().projectReads).toMatchObject({ jira: 'NEW' });
     second[0]!(ok({ tools: [] }));
     second[2]!(ok({ revision: 'r', mapping: null }));
+    second[3]!(ok({ revision: 'r', mapping: null }));
   });
 
   it('forgets project reads when the account changes and drops the old replies', async () => {

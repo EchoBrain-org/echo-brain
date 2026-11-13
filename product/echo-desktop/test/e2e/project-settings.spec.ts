@@ -7,6 +7,28 @@ test.afterEach(async () => { await run?.close(); });
 const APOLLO = 'prj_11111111-1111-4111-8111-111111111111';
 const BEACON = 'prj_44444444-4444-4444-8444-444444444444';
 
+test('a lead maps Granola history for project search without enabling extraction or importing meetings', async () => {
+  run = await launch('granola-preparing');
+  const { page } = run;
+  await openApolloSetting(page, 'tools-item');
+  const row = page.getByTestId('project-granola');
+  await expect(row).toContainText('Meetings stay in Granola');
+  await expect(page.getByTestId('project-granola-folders')).toContainText('User interviews');
+  await row.getByLabel('User interviews', { exact: true }).check();
+  await page.getByTestId('project-tools-save').click();
+  await expect(page.getByTestId('toast')).toHaveText('Apollo now reads 1 Granola folder');
+  expect(run.calls().find(call => call.path === '/v1/person/tools/granola/project/set')?.body).toMatchObject({
+    schema_version: 1, project_id: APOLLO, expected_revision: null, folder_ids: ['00000000-0000-4000-8000-000000000011'],
+  });
+  expect(run.calls().filter(call => ['import', 'watch', 'review'].includes(String(call.body?.operation)))).toEqual([]);
+  await page.getByTestId('project-tools-change').click();
+  await expect(page.getByTestId('project-granola-current')).toHaveText('Searches 1 folder');
+  await row.getByRole('button', { name: 'Stop reading' }).click();
+  await page.getByTestId('project-tools-save').click();
+  await expect(page.getByTestId('toast')).toHaveText('Apollo no longer reads Granola');
+  expect(run.calls().filter(call => call.path === '/v1/person/tools/granola/project/set').at(-1)?.body?.folder_ids).toBeNull();
+});
+
 const settingCalls = () => run.calls().filter(call => call.path === '/v1/person/projects/rename' || call.path === '/v1/person/projects/archive' || call.path === '/v1/person/projects/leave');
 
 /** Opens Apollo and its settings menu, then the menu's item if one is named. */

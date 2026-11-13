@@ -90,17 +90,19 @@ export function createPersonProjectMappingAccessV1<T extends ScopedProjectMappin
    * The project-scoped live read rule, once for every provider. Without a
    * project: undefined (global scope). An unmapped project: null, and the
    * caller reads nothing; it never falls back to the person's global
-   * results. A mapping for another site is refused. `current` re-checks the
-   * project grant and that the saved mapping has not changed.
+   * results. A mapping for another site is refused, or with `other_site:
+   * 'none'` read as unmapped. `current` re-checks the project grant and that
+   * the saved mapping has not changed.
    */
-  function projectScope(token: string, organizationId: string, projectId: string | undefined, scopeId: string, validate: (request: unknown) => { readonly project_id: string }) {
+  function projectScope(token: string, organizationId: string, projectId: string | undefined, scopeId: string, validate: (request: unknown) => { readonly project_id: string },
+    otherSite: PersonLiveSourceToolV1['other_site'] = 'refuse') {
     if (projectId === undefined) return undefined;
     const project = mappingInput(() => validate({ schema_version: 1, project_id: projectId })).project_id;
     const access = projectAccess(token, project);
     const mapped = access.store.read(organizationId, project);
     const mapping = mapped.mapping;
     if (mapping === null) return null;
-    if (mapping.cloud_id !== scopeId) failure('unauthorized');
+    if (mapping.cloud_id !== scopeId) return otherSite === 'none' ? null : failure('unauthorized');
     return { mapping: mapping as NonNullable<T['mapping']>, current: () => {
       access.current();
       if (access.store.read(organizationId, project).revision !== mapped.revision) failure('stale_access_state');
@@ -202,7 +204,7 @@ export function createPersonProjectMappingAccessV1<T extends ScopedProjectMappin
   }, input: PersonLiveSourceInputV1<C>, containers?: (mapping: NonNullable<T['mapping']>) => readonly string[]): Promise<PersonLiveEvidenceSourceV1<C> | undefined> {
     const { actor, tags, authenticated } = tool.lifecycle;
     const { person, requirePerson } = actor(input.access_token);
-    const scope = projectScope(input.access_token, person.organization_id, input.project_id, tool.scope_id, tool.validate);
+    const scope = projectScope(input.access_token, person.organization_id, input.project_id, tool.scope_id, tool.validate, tool.other_site);
     if (scope === null) return undefined;
     const stored = tool.store.current(person);
     if (stored === undefined || !stored.active) return undefined;
@@ -243,6 +245,11 @@ type Lifecycle = ReturnType<typeof createPersonConnectionLifecycleV1>;
 /** What a live source reads: the provider site (cloud) the connection reads, the project read validator, the lifecycle and store. */
 export interface PersonLiveSourceToolV1 {
   readonly scope_id: string; readonly validate: (request: unknown) => { readonly project_id: string };
+  /**
+   * A project mapped on another site than `scope_id`: 'refuse' (the default) where the site is one configured for the
+   * Authority, so a mismatch is misconfiguration; 'none' where each person has their own site, so it is no source for them.
+   */
+  readonly other_site?: 'refuse' | 'none';
   readonly lifecycle: Pick<Lifecycle, 'actor' | 'tags' | 'authenticated'>;
   readonly store: Pick<PersonConnectionStoreV1, 'current' | 'requireCurrent'>;
 }

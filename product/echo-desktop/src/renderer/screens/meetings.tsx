@@ -31,7 +31,7 @@ function Select({ label, value, disabled, onChange, children }: {
 
 /**
  * Granola: what ECHO imports by itself (nothing, the meetings you captured, or one folder), and any meeting you add by
- * hand. Browsing never saves meeting content; only Add to ECHO and automatic import do, with your consent given once.
+ * hand. Browsing never saves meeting content; only Extract for review and automatic import do, with your consent given once.
  * Imported meetings stay yours until you approve items from them: a suggested project only pre-ticks where they go.
  */
 export function Meetings({ toolId }: { toolId: string }) {
@@ -41,7 +41,7 @@ export function Meetings({ toolId }: { toolId: string }) {
   const [home, setHome] = useState<PersonMeetingHomeV2 | null>(null);
   const [meetings, setMeetings] = useState<PersonMeetingResultsV2['browse']['meetings']>([]);
   const [preview, setPreview] = useState<PersonMeetingResultsV2['open'] | null>(null);
-  // Automatic import: what it watches, its folder, and the project it suggests.
+  // Automatic extraction: what it watches, its folder, and the project it suggests.
   const [mode, setMode] = useState<PersonMeetingWatchV2>('off'), [watchFolder, setWatchFolder] = useState(''), [suggest, setSuggest] = useState('');
   // One meeting by hand: from your recent meetings ('') or a folder, and the project it suggests.
   const [from, setFrom] = useState(''), [project, setProject] = useState('');
@@ -103,23 +103,26 @@ export function Meetings({ toolId }: { toolId: string }) {
 
   return <section class="personal-meetings" aria-label="Personal meetings" aria-busy={busy}>
     <div class="meetings-sub">
-      <span class="notice-line">{home === null ? (busy ? '' : 'Granola could not be reached.') : home.connected ? `${home.email} · ${home.workspace}` : 'Reconnect Granola to browse and import meetings.'}</span>
+      <span class="notice-line">{home === null ? (busy ? '' : 'Granola could not be reached.') : home.connected ? `${home.email} · ${home.workspace}` : 'Reconnect Granola to search meetings.'}</span>
       {busy ? <span class="asking"><i /><i /><i /><span>Working…</span></span>
         : <button type="button" class="link-button" onClick={() => void run(refresh)}>Refresh</button>}
     </div>
     {notice && <div class="meetings-status" role="status">{notice}</div>}
 
-    {/* Automatic import, or one meeting by hand. Consent is given once, for both. */}
+    {/* Automatic extraction, or one meeting by hand. Consent is given once, for both. */}
     {home?.connected && <>
-      <div class="section-label">Automatic import</div>
+      <div class="section-label">Live meeting search</div>
+      <p class="notice-line" data-testid="meeting-search-ready">Ask can search your accessible Granola history now. Meetings stay in Granola. To search a folder within a project, select it in the project’s Tools settings.</p>
+      <div class="section-label">Automatic extraction</div>
+      <p class="notice-line">Optional: extract decisions, actions and rationale from new meetings for your review. Historical search does not require extraction or approval.</p>
       {watch && <div class="watch-row" data-testid="meeting-watch">
         <span class="item-icon" aria-hidden="true"><Calendar /></span>
         <span class="lines"><span class="name">{watchState}</span></span>
         <button type="button" class="link-button" disabled={busy} onClick={stopWatch}>Stop</button>
       </div>}
       {/* With a watch active these show it, and Save updates it; Stop is how it ends. */}
-      <div class="meeting-controls thirds" role="group" aria-label="Automatic import">
-        <Select label="Import" value={mode} disabled={busy} onChange={value => setMode(value as PersonMeetingWatchV2)}>
+      <div class="meeting-controls thirds" role="group" aria-label="Automatic extraction">
+        <Select label="Extract" value={mode} disabled={busy} onChange={value => setMode(value as PersonMeetingWatchV2)}>
           {!watch && <option value="off">Off</option>}<option value="mine">My meetings</option><option value="folder">One folder</option>
         </Select>
         {mode === 'folder' && <Select label="Folder" value={watchFolder} disabled={busy} onChange={setWatchFolder}>
@@ -129,17 +132,17 @@ export function Meetings({ toolId }: { toolId: string }) {
       </div>
       {home.sources.map(s => <div key={s.source_key} class="source-notes">
         {s.error && <div class="error">{s.error}</div>}
-        {s.pending_imports.map(id => <div key={id} class="notice-line">Import queued
+        {s.pending_imports.map(id => <div key={id} class="notice-line">Extraction queued
           <button type="button" class="link-button" disabled={busy} onClick={() => void run(async () => { await command({ operation: 'cancel_import', source_key: s.source_key, meeting_id: id }); await refresh(); })}>Cancel</button></div>)}
       </div>)}
       <label class="check consent"><input type="checkbox" checked={retain} disabled={busy} onChange={e => setRetain(e.currentTarget.checked)} />
-        <span>I allow ECHO to retain notes and transcripts from these meetings and process them.</span></label>
+        <span>I allow ECHO to retain a processing copy of notes and transcripts for extraction and review. Only approved decisions, actions and rationale are published to my chosen projects.</span></label>
       {unsaved && <div class="choices start">
         <button type="button" class="plain-button small" disabled={busy || !retain || (mode === 'folder' && !watchFolder)} onClick={saveWatch}>Save</button>
       </div>}
 
-      <div class="section-label">Add one meeting</div>
-      <div class="meeting-controls" role="group" aria-label="Add one meeting">
+      <div class="section-label">Extract from one meeting</div>
+      <div class="meeting-controls" role="group" aria-label="Extract from one meeting">
         <Select label="From" value={from} disabled={busy} onChange={value => { setFrom(value); void run(() => browse(value)); }}>
           <option value="">Recent meetings</option>{home.folders.map(f => <option key={f.id} value={f.id}>{f.title} ({f.count})</option>)}
         </Select>
@@ -163,12 +166,12 @@ export function Meetings({ toolId }: { toolId: string }) {
         <div class="meeting-card-head"><h3>{preview.title}</h3></div>
         {preview.notes && <div class="passage selectable"><Passage text={preview.notes} label="" /></div>}
         {preview.summary && <div class="passage selectable"><Passage text={preview.summary} label="" /></div>}
-        {preview.truncated && <div class="notice-line">Preview shortened. Add to ECHO keeps the full meeting.</div>}
+        {preview.truncated && <div class="notice-line">Preview shortened. Extraction uses a retained processing copy of the meeting.</div>}
         <div class="choices start">
           <button type="button" class="primary-button small" disabled={busy || !retain} onClick={() => void run(async () => {
             await command({ operation: 'import', meeting_id: preview.id, project_id: project || null, retain: true }); await refresh();
-            if (alive.current) { setPreview(null); setNotice('Added.'); void loadHome(); }
-          })}>Add to ECHO</button>
+            if (alive.current) { setPreview(null); setNotice('Queued for extraction and review.'); void loadHome(); }
+          })}>Extract for review</button>
           <span class="notice-line">{[project ? `Suggests ${projectName(project)}` : '', retain ? '' : 'Allow retention above first'].filter(part => part !== '').join(' · ')}</span>
         </div>
       </article>}

@@ -51,6 +51,19 @@ const plainRow = (meeting: string, title = 'Standup') => `<meeting id="${meeting
 const numbered = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
 
 describe('verified Granola MCP contract', () => {
+  it('accepts current pagination-first results without discarding continuation', () => {
+    const pagination = '<pagination has_more="true" total_count="2" next_cursor="next-page" completion_status="more" />';
+    const result = parseGranolaMeetingPageV1(`${pagination}\n\n${warning}${meeting()}`, false);
+    expect(result.meetings.map(row => row.id)).toEqual([id]);
+    expect(result.next_cursor).toBe('next-page');
+    expect(result.total_count).toBe(2);
+  });
+  it('rejects ambiguous duplicate pagination and material outside the meeting envelope', () => {
+    const pagination = '<pagination has_more="false" total_count="1" />';
+    for (const body of [pagination + '\n' + warning + meeting() + pagination, pagination + '\nnot a provider envelope\n' + meeting()]) {
+      expect(() => parseGranolaMeetingPageV1(body, false)).toThrow();
+    }
+  });
   it('accepts JSON identity and binds the active workspace, without inventing an immutable account ID', async () => {
     const { adapter } = fixture(JSON.stringify({ email: 'fixture@example.test', active_workspace: { id, display_name: 'Fixture' }, workspaces: [{ id: other }], mcp_note_access: { scopes: ['personal', 'public'] } }));
     expect(await adapter.account()).toEqual({ email: 'fixture@example.test', workspace_id: id, workspace_name: 'Fixture', scopes: ['personal', 'public'] });
@@ -162,6 +175,46 @@ describe('verified Granola MCP contract', () => {
     for (const value of [meeting().replace('count="1"', 'count="2"'), meeting().replace('https://notes.granola.ai', 'https://attacker.example'), '<!DOCTYPE meetings_data>' + meeting(), JSON.stringify({ count: 1, total_in_range: 1, meetings: [] })]) {
       expect(() => parseGranolaMeetingPageV1(value, true)).toThrow(expect.objectContaining({ code: 'invalid_output' }));
     }
+  });
+  it('reads up to ten meetings at once, leaving out the ones Granola no longer gives, never one it was not asked for', async () => {
+    const f = fixture(meeting());
+    expect((await f.adapter.present([id, other])).map(row => row.id)).toEqual([id]);
+    expect(JSON.parse(f.fetch.mock.calls[0]![1].body as string).params).toEqual({ name: 'get_meetings', arguments: { meeting_ids: [id, other] } });
+    await expect(fixture('<meetings_data count="0"></meetings_data>').adapter.present([other])).resolves.toEqual([]);
+    await expect(fixture(meeting()).adapter.present([numbered(5), other])).rejects.toMatchObject({ code: 'invalid_output' });
+    await expect(fixture(meeting()).adapter.present(Array.from({ length: 11 }, (_, index) => numbered(index + 10)))).rejects.toThrow();
+  });
+  it('sends a query of at most 100 characters as one keyword, and a longer one as its distinct words, longest first', async () => {
+    const found = JSON.stringify({ status: 'ok', completion_status: 'exhausted', meetings: [], next_cursor: null });
+    const range = { from_date: '2026-10-01', to_date: '2026-10-31' };
+    const short = 'pump test plan review decisions';
+    const long = 'What did the team decide about the pump test plan review, and who owns the follow up on the supplier contract renewal before the October deadline?';
+    expect(long.length).toBeGreaterThan(100);
+    const { adapter, calls } = scripted(found, '<meetings_data count="0"></meetings_data>', found, '<meetings_data count="0"></meetings_data>');
+    await adapter.searchTranscripts({ query: short, ...range, limit: 20 });
+    await adapter.search({ query: short, ...range, limit: 20 });
+    await adapter.searchTranscripts({ query: long, ...range, limit: 20 });
+    await adapter.search({ query: long, ...range, limit: 20 });
+    const keywords = calls().map(call => call.arguments.keywords as string[]);
+    expect(keywords.slice(0, 2)).toEqual([[short], [short]]);
+    expect(keywords[2]).toEqual(['supplier', 'contract', 'deadline', 'renewal', 'October', 'decide', 'review', 'follow', 'before', 'about',
+      'What', 'team', 'pump', 'test', 'plan', 'owns', 'did', 'the', 'and', 'who']);
+    expect(keywords[3]).toEqual(keywords[2]);
+    // At most 20 entries: the longest words.
+    const many = Array.from({ length: 30 }, (_, index) => `w${'o'.repeat(index % 10)}rd${index}`).join(' '), capped = scripted(found);
+    await capped.adapter.searchTranscripts({ query: many, ...range, limit: 20 });
+    const sent = capped.calls()[0].arguments.keywords as string[];
+    expect(sent).toHaveLength(20);
+    expect(Math.min(...sent.map(entry => entry.length))).toBeGreaterThanOrEqual(Math.max(...many.split(' ').filter(word => !sent.includes(word)).map(word => word.length)));
+    // Nothing of three characters or more: the query's first 100 characters.
+    const tiny = 'a b c '.repeat(30);
+    const next = scripted(found);
+    await next.adapter.searchTranscripts({ query: tiny, ...range, limit: 20 });
+    expect(next.calls()[0].arguments.keywords).toEqual([tiny.slice(0, 100)]);
+    // A single word over 100 characters is cut to 100.
+    const word = 'x'.repeat(150), cut = scripted(found);
+    await cut.adapter.searchTranscripts({ query: word, ...range, limit: 20 });
+    expect(cut.calls()[0].arguments.keywords).toEqual(['x'.repeat(100)]);
   });
   it('uses the observed transcript JSON and keeps audio labels as verbatim text', async () => {
     const f = fixture(warning + JSON.stringify({ id, title: 'Fixture', created_at: '2026-10-05T20:00:00.000Z', transcript: 'Microphone: hello', recording_context: { recorder: { name: 'someone' } } }));

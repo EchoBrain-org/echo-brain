@@ -106,6 +106,7 @@ export interface OrganizationAuthorityServiceConfig extends Omit<
 }
 
 export interface OrganizationAuthorityServiceDependencies {
+  readonly granola_person_live_seams?: Parameters<typeof openGranolaPersonMeetingProviderV1>[0]['seams'];
   /** Passed straight to the Authority API runtime, for example a local OIDC fake. */
   readonly api?: Partial<OrganizationAuthorityApiRuntimeDependencies>;
   readonly jira_person_live_seams?: JiraPersonLiveRuntimeSeamsV1;
@@ -299,6 +300,7 @@ export async function openOrganizationAuthorityService(
           sessions,
           resources,
           nango_authorization: () => nango.secret_key,
+          ...(dependencies.granola_person_live_seams === undefined ? {} : { seams: dependencies.granola_person_live_seams }),
         });
         granola = openedGranola;
         meetings = openPersonMeetingRuntimeV1({
@@ -385,6 +387,7 @@ export async function openOrganizationAuthorityService(
               signal,
             });
         return {
+          live_connectors: [...existing?.live_connectors ?? [], openedGranola.live_connector],
           applications: [
             ...(existing?.applications ?? []),
             ...meetings.applications,

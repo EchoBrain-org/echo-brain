@@ -11,6 +11,7 @@ created_at: 2026-08-13
 reviewed_at: 2026-09-27
 reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
+  - ADR-0052
   - ADR-0051
   - ADR-0048
   - ADR-0049
@@ -218,3 +219,8 @@ the list-only Only me scope of
 served outside the answer-model gate. Their enforcement and audits are in the
 [served-path table](permissions.md#served-paths), and their command contract
 under [Agents](../architecture/person-client-architecture.md#agents).
+
+Historical Granola search and project-folder mappings are independent of
+opt-in extraction and review; see
+[ADR-0052](../decisions/ADR-0052-external-meeting-search.md) for the custody,
+permission, pagination and compatibility boundaries.

@@ -25,7 +25,7 @@ export interface GranolaMeetingV1 {
   readonly known_participants: string; readonly private_notes?: string; readonly summary?: string;
 }
 /** One list_meetings page, newest first, with Granola's cursor while more follow. */
-export interface GranolaMeetingPageV1 { readonly meetings: readonly GranolaMeetingV1[]; readonly next_cursor: string | null; readonly total_count: number | null }
+export interface GranolaMeetingPageV1 { readonly meetings: readonly GranolaMeetingV1[]; readonly next_cursor: string | null; readonly total_count: number | null; readonly incomplete?: true }
 /** What a listing reads: the meetings the person captured, or one folder's. */
 type GranolaMeetingFilterV1 = { readonly captured_by_me: true } | { readonly folder_id: string };
 type GranolaMeetingRangeV1 = GranolaMeetingFilterV1 & { readonly from_date: string; readonly to_date: string; readonly signal?: AbortSignal };
@@ -137,15 +137,39 @@ function day(value: string): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value) failure('invalid_request');
   return value;
 }
+function liveDate(value: string): string {
+  return GRANOLA_TIMESTAMP_V1.test(value) && Number.isFinite(Date.parse(value)) ? value : day(value);
+}
+/**
+ * A search's keywords: Granola takes at most 20 alternative entries of at most 100 characters each. A query that fits is
+ * one entry, unchanged; a longer one is its distinct words of three characters or more, longest first, or failing
+ * that, its first 100 characters.
+ */
+function keywords(query: string): readonly string[] {
+  const characters = [...query];
+  if (characters.length <= 100) return [query];
+  const words = new Map<string, string>();
+  for (const [word] of query.matchAll(/[\p{L}\p{N}]+/gu)) {
+    const kept = [...word].slice(0, 100).join('');
+    if ([...kept].length >= 3 && !words.has(kept.toLowerCase())) words.set(kept.toLowerCase(), kept);
+  }
+  const entries = [...words.values()].sort((left, right) => [...right].length - [...left].length).slice(0, 20);
+  return entries.length > 0 ? entries : [characters.slice(0, 100).join('')];
+}
 
 /**
  * Authenticated October 2026 MCP output, deliberately separate from retired REST shapes: an optional `<requested_range>`
  * before Granola's warning line, the `<meetings_data>` element, whose `count` is this page's, and an optional `<pagination>`
- * element after it. Unknown attributes and elements, such as each meeting's `<folders>`, are ignored.
+ * element before or after it. Unknown attributes and elements, such as each meeting's `<folders>`, are ignored.
  */
 export function parseGranolaMeetingPageV1(value: string, detail: boolean): GranolaMeetingPageV1 {
   let raw = unwrap(value.replace(REQUESTED_RANGE, '').trimStart());
+  // Current search/get responses put pagination before the warning. Consume only
+  // that exact envelope; never strip arbitrary text or accept two page claims.
+  const prefix = /^<pagination(?:\s[^<>]*)?(?:\/>|><\/pagination>)/u.exec(raw)?.[0];
+  if (prefix !== undefined) raw = unwrap(raw.slice(prefix.length).trimStart());
   if (raw.startsWith('{')) {
+    if (prefix !== undefined) failure('invalid_output');
     const empty = json(raw);
     if (empty.count !== 0 || empty.total_in_range !== 0 || array(empty.meetings, 0).length !== 0) failure('invalid_output');
     return Object.freeze({ meetings: Object.freeze([]), next_cursor: null, total_count: 0 });
@@ -153,6 +177,7 @@ export function parseGranolaMeetingPageV1(value: string, detail: boolean): Grano
   raw = raw.trimEnd();
   const at = raw.lastIndexOf('<pagination');
   const tail = at > 0 && PAGINATION.test(raw.slice(at)) ? raw.slice(at) : undefined;
+  if (prefix !== undefined && tail !== undefined) failure('invalid_output');
   if (tail !== undefined) raw = raw.slice(0, at).trimEnd();
   // No custom entities, declarations or other trailing material can alter the document shape.
   if (!(/^<meetings_data(?:\s[^<>]*)?\/>$/u.test(raw) || (/^<meetings_data[\s>]/u.test(raw) && raw.endsWith('</meetings_data>'))) || /<!|<\?/u.test(raw)) failure('invalid_output');
@@ -174,16 +199,18 @@ export function parseGranolaMeetingPageV1(value: string, detail: boolean): Grano
     });
   });
   if (String(items.length) !== envelope['@_count'] || new Set(items.map(item => item.id)).size !== items.length) failure('invalid_output');
-  let next_cursor: string | null = null, total_count: number | null = null;
-  if (tail !== undefined) {
+  let next_cursor: string | null = null, total_count: number | null = null, incomplete = false;
+  const pagination = prefix ?? tail;
+  if (pagination !== undefined) {
     let page: Record<string, unknown>;
-    try { page = record(record(xml.parse(tail)).pagination); } catch { failure('invalid_output'); }
+    try { page = record(record(xml.parse(pagination)).pagination); } catch { failure('invalid_output'); }
     const more = flag(page['@_has_more']);
     if (more === undefined) failure('invalid_output');
     total_count = whole(page['@_total_count']); whole(page['@_remaining_count']);
     if (more) next_cursor = string(page['@_next_cursor'], 2048);
+    incomplete = page['@_completion_status'] === 'incomplete';
   }
-  return Object.freeze({ meetings: Object.freeze(items), next_cursor, total_count });
+  return Object.freeze({ meetings: Object.freeze(items), next_cursor, total_count, ...(incomplete ? { incomplete: true as const } : {}) });
 }
 
 /** Browsing returns data only; custody and approval remain Authority responsibilities. */
@@ -233,6 +260,47 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
       return Object.freeze(folders.slice(0, MAX_FOLDERS));
     },
     page,
+    /** Live discovery has no seven-day watch window and includes every note this personal grant can read. */
+    async search(input: { readonly query?: string; readonly folder_id?: string; readonly from_date: string; readonly to_date: string; readonly limit: number; readonly cursor?: string; readonly signal?: AbortSignal }): Promise<GranolaMeetingPageV1> {
+      if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100) failure('invalid_request');
+      const from_date = liveDate(input.from_date), to_date = liveDate(input.to_date);
+      if (from_date > to_date) failure('invalid_request');
+      return parseGranolaMeetingPageV1(await rpc.call('search_meetings', { from_date, to_date, limit: input.limit,
+        include_shared: true, max_participants: 10,
+        ...(input.query === undefined ? {} : { keywords: keywords(string(input.query, 4096)) }),
+        ...(input.folder_id === undefined ? {} : { folder_id: id(input.folder_id) }),
+        ...(input.cursor === undefined ? {} : { cursor: string(input.cursor, 2048) }),
+      }, input.signal), false);
+    },
+    /** Literal passage search; the provider's index can lag, so an empty result is not proof of absence. */
+    async searchTranscripts(input: { readonly query: string; readonly meeting_ids?: readonly string[]; readonly from_date: string; readonly to_date: string; readonly limit: number; readonly cursor?: string; readonly signal?: AbortSignal }) {
+      const selected = input.meeting_ids === undefined ? undefined : array(input.meeting_ids, 100).map(id);
+      if (selected?.length === 0 || !Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 20) failure('invalid_request');
+      const value = json(await rpc.call('search_transcripts', { keywords: keywords(string(input.query, 4096)),
+        from_date: liveDate(input.from_date), to_date: liveDate(input.to_date), limit: input.limit,
+        ...(selected === undefined ? {} : { meeting_ids: selected }), ...(input.cursor === undefined ? {} : { cursor: string(input.cursor, 2048) }),
+      }, input.signal));
+      if (value.status !== 'ok' || !['exhausted', 'more_available', 'incomplete'].includes(String(value.completion_status))) failure('invalid_output');
+      return Object.freeze({ meetings: Object.freeze(array(value.meetings, 20).map(raw => {
+        const meeting = record(raw), meeting_id = id(meeting.meeting_id);
+        if (selected !== undefined && !selected.includes(meeting_id)) failure('invalid_output');
+        return Object.freeze({ meeting_id, version: string(meeting.transcript_version, 256),
+          passages: Object.freeze(array(meeting.passages, 100).map(raw => { const passage = record(raw);
+            return Object.freeze({ chunk_id: count(passage.chunk_id, 100_000), text: text(passage.text, 40_000) });
+          })),
+        });
+      })), next_cursor: value.next_cursor === null ? null : string(value.next_cursor, 2048), incomplete: value.completion_status === 'incomplete' });
+    },
+    /** Re-read the exact finalized transcript chunk rather than retaining a transcript archive. */
+    async chunk(meetingId: string, chunkId: number, version: string, signal?: AbortSignal) {
+      const key = id(meetingId);
+      const value = json(await rpc.call('get_meeting_transcript', { meeting_id: key, chunk_ids: [count(chunkId, 100_000)], transcript_version: string(version, 256) }, signal));
+      if (value.id !== key) failure('invalid_output');
+      if (value.status !== 'ok' || value.transcript_version !== version) failure('stale_access_state');
+      const chunks = array(value.chunks, 1).map(record);
+      if (chunks.length !== 1 || chunks[0]!.chunk_id !== chunkId) failure('not_found');
+      return Object.freeze({ text: text(chunks[0]!.transcript, 40_000), version });
+    },
     /**
      * Every meeting of a custom range, newest first, following Granola's cursor. More than 200 fails closed with its own
      * code, so a watch never sees part of its window as all of it, and the window's size is never mistaken for an outage.
@@ -258,6 +326,14 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
       if (keys.length === 0 || new Set(keys).size !== keys.length) failure('invalid_request');
       const { meetings } = parseGranolaMeetingPageV1(await rpc.call('get_meetings', { meeting_ids: keys }, signal), true);
       if (meetings.length !== keys.length || meetings.some(meeting => !keys.includes(meeting.id))) throw new AuthorityOperationError('not_found', MEETING_MISSING);
+      return meetings;
+    },
+    /** Up to 10 meetings in one call; any Granola no longer has or shows is left out rather than failing the others. */
+    async present(meetingIds: readonly string[], signal?: AbortSignal): Promise<readonly GranolaMeetingV1[]> {
+      const keys = array(meetingIds, 10).map(id);
+      if (keys.length === 0 || new Set(keys).size !== keys.length) failure('invalid_request');
+      const { meetings } = parseGranolaMeetingPageV1(await rpc.call('get_meetings', { meeting_ids: keys }, signal), true);
+      if (meetings.some(meeting => !keys.includes(meeting.id))) failure('invalid_output');
       return meetings;
     },
     async meeting(meetingId: string, signal?: AbortSignal): Promise<GranolaMeetingV1> {

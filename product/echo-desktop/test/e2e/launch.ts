@@ -226,11 +226,11 @@ export async function addMeeting(page: Page): Promise<void> {
   // is already the next day in UTC.
   await expect(meetings.getByRole('button', { name: 'Pilot planning', exact: true })).toContainText('Oct 6');
   await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
-  const add = meetings.getByRole('button', { name: 'Add to ECHO', exact: true });
+  const add = meetings.getByRole('button', { name: 'Extract for review', exact: true });
   await expect(add).toBeDisabled();
   await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
   await add.click();
-  await expect(meetings.getByRole('status')).toHaveText('Added.');
+  await expect(meetings.getByRole('status')).toHaveText('Queued for extraction and review.');
   await page.keyboard.press('Escape');
   await page.getByTestId('sidebar-home').click();
 }

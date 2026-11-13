@@ -6,7 +6,7 @@
 import type {
   Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskScope, AskStep, Audience, ConnectedTools,
   CreatedProject, DocumentSummary, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, MemberPage, Opened,
-  ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordPolicy, RecordRead,
+  ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectGranolaMapping, GranolaFoldersPage, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordPolicy, RecordRead,
   RecordSection, SourceEvidence, SourceRef, ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
 import {
@@ -603,5 +603,18 @@ export function projectConfluenceMappingView(raw: unknown, projectId: string): P
 export function confluenceSpacesView(raw: unknown): ConfluenceSpacesPage {
   const value = object(unwrap(raw)); if (value.schema_version !== 1 || !Array.isArray(value.items) || value.items.length > 20 || (value.next_cursor !== null && (typeof value.next_cursor !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(value.next_cursor)))) throw new ViewError();
   const items = value.items.map(raw => { const item = object(raw); if (!/^[1-9][0-9]{0,19}$/.test(text(item.id))) throw new ViewError(); return { id: item.id as string, key: text(item.key), name: text(item.name) }; });
+  if (new Set(items.map(item => item.id)).size !== items.length) throw new ViewError(); return { items, next_cursor: value.next_cursor as string | null };
+}
+
+export function projectGranolaMappingView(raw: unknown, projectId: string): ProjectGranolaMapping {
+  const value = object(unwrap(raw));
+  if (value.schema_version !== 1 || value.project_id !== projectId || (value.revision !== null && !REVISION.test(text(value.revision)))) throw new ViewError();
+  const mapping = value.mapping === null ? null : object(value.mapping);
+  if (mapping !== null && (value.revision === null || !Array.isArray(mapping.folder_ids) || mapping.folder_ids.length < 1 || mapping.folder_ids.length > 20 || !mapping.folder_ids.every(id => typeof id === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id)))) throw new ViewError();
+  return { project_id: projectId, revision: value.revision as string | null, mapping: mapping === null ? null : { folder_ids: [...(mapping.folder_ids as string[])] } };
+}
+export function granolaFoldersView(raw: unknown): GranolaFoldersPage {
+  const value = object(unwrap(raw)); if (value.schema_version !== 1 || !Array.isArray(value.items) || value.items.length > 20 || (value.next_cursor !== null && (typeof value.next_cursor !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(value.next_cursor)))) throw new ViewError();
+  const items = value.items.map(raw => { const item = object(raw); if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(text(item.id))) throw new ViewError(); return { id: item.id as string, key: text(item.key), name: text(item.name) }; });
   if (new Set(items.map(item => item.id)).size !== items.length) throw new ViewError(); return { items, next_cursor: value.next_cursor as string | null };
 }

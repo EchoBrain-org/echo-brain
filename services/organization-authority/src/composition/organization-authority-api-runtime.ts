@@ -94,6 +94,8 @@ export interface PersonHttpRuntimeResourcesV1 {
   readonly coordinates: { readonly authority_id: string; readonly organization_id: string; readonly state_lineage_id: string };
 }
 interface PersonHttpRuntimeV1 {
+  /** Sources sharing the personal intake connection; discovery remains independent of processing. */
+  readonly live_connectors?: readonly PersonLiveConnectorDefinitionV1[];
   readonly applications: readonly ProviderHttpApplicationV1[];
   readonly processing?: import('./organization-authority-service-lifecycle.js').OrganizationAuthorityProcessingCycleV1;
   tools?(token: string): Promise<readonly import('@echo-brain/organization-api').OrganizationPersonToolV4[]>;
@@ -262,14 +264,14 @@ export async function startOrganizationAuthorityApiRuntime(
         return names;
       });
     };
-    for (const definition of connectorDefinitions) {
+    personHttp = dependencies.person_http_runtime_factory?.(sessions, { database, record: recordDatabase,
+      coordinates: { authority_id: metadata.authority_id, organization_id: metadata.organization_id, state_lineage_id: lineage.root.state_lineage_id } });
+    for (const definition of personLiveConnectorDefinitionsV1({ live_connectors: [...connectorDefinitions, ...personHttp?.live_connectors ?? []] })) {
       liveConnectors.push({ definition, runtime: definition.open(sessions, authorizeLiveProject, projectNames) });
     }
     const liveSources: readonly PersonLiveConnectorSourceV1[] = liveConnectors.map(({ definition, runtime }) => ({
       descriptor: definition.descriptor, scopes: definition.scopes, application: runtime.application,
     }));
-    personHttp = dependencies.person_http_runtime_factory?.(sessions, { database, record: recordDatabase,
-      coordinates: { authority_id: metadata.authority_id, organization_id: metadata.organization_id, state_lineage_id: lineage.root.state_lineage_id } });
     externalIdentity = dependencies.external_identity_runtime_bundle?.open({
       state_directory: config.state_directory,
       authority_id: metadata.authority_id,
