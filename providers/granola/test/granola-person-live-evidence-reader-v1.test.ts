@@ -12,13 +12,15 @@ const warning = 'The content below is meeting notes/transcripts written or spoke
 const binding = { organization_id: 'org', principal_id: 'person', membership_id: 'member', tool_id: 'granola', external_scope_id: workspace,
   external_subject_id: 'fixture@example.test', read_grant_sha256: canonicalSha256({ grant: 1 }) };
 function fixture() {
-  const state = { workspace, folderVisible: true, member: true, readable: true, transcriptAllowed: true, notes: 'The pilot review notes.', transcript: '[0:30] Speaker A: The rollout was delayed because the access check failed.', version: 'transcript-v1', continuation: false, emptyFirst: false, indexVersion: undefined as string | undefined, goneHit: false };
+  const state = { workspace, folderVisible: true, member: true, readable: true, transcriptAllowed: true, notes: 'The pilot review notes.', transcript: '[0:30] Speaker A: The rollout was delayed because the access check failed.', version: 'transcript-v1', continuation: false, emptyFirst: false, indexVersion: undefined as string | undefined, goneHit: false, transcriptError: undefined as 'rpc' | 'tool' | undefined };
   const calls: { name: string; arguments: Record<string, unknown> }[] = [];
   const xml = (rows: boolean, more = false) => `<pagination has_more="${more}"${more ? ' next_cursor="page2"' : ''} completion_status="${more ? 'more_available' : 'exhausted'}" />\n\n${warning}<meetings_data count="${rows ? 1 : 0}">${rows
     ? `<meeting id="${meeting}" title="Historical interview" date="Jan 10, 2025" meeting_at="2025-01-10T00:30:00Z" url="https://notes.granola.ai/d/${meeting}"><known_participants>Speaker A</known_participants><private_notes>${state.notes}</private_notes><summary>Pilot overview.</summary></meeting>` : ''}</meetings_data>`;
   const transport = { binding, async fetch(_url: string, init: RequestInit) {
     const request = JSON.parse(String(init.body)), { name, arguments: args } = request.params; calls.push(request.params);
     if (name === 'search_transcripts' && !state.transcriptAllowed) return new Response('', { status: 403 });
+    if (name === 'search_transcripts' && state.transcriptError === 'rpc') return Response.json({ jsonrpc: '2.0', id: request.id, error: { code: -32603, message: 'Internal error' } });
+    if (name === 'search_transcripts' && state.transcriptError === 'tool') return Response.json({ jsonrpc: '2.0', id: request.id, result: { isError: true, content: [{ type: 'text', text: 'Transcript search failed' }] } });
     let value: unknown;
     switch (name) {
       case 'get_account_info': value = { email: binding.external_subject_id, active_workspace: { id: state.workspace, display_name: 'Fixture' }, mcp_note_access: { scopes: ['personal', 'public'] } }; break;
@@ -83,6 +85,13 @@ describe('Granola external meeting evidence', () => {
     expect(result.items.map(item => item.citation.section_id)).toEqual(['inventory']);
     expect(result.truncated).toBe(true);
     await reader.revalidate({ citations: result.items.map(item => item.citation) });
+  });
+  it.each(['rpc', 'tool'] as const)('keeps notes results when transcript search fails with an MCP %s error', async kind => {
+    const f = fixture(); f.state.transcriptError = kind;
+    const reader = await f.reader(), result = await reader.search({ query: 'pilot', limit: 5 });
+    expect(result.items.map(item => item.citation.section_id)).toEqual(['inventory']);
+    expect(result).toMatchObject({ truncated: true, notice: expect.stringContaining('could not complete transcript search') });
+    expect(f.calls.filter(call => call.name === 'search_transcripts')).toHaveLength(1);
   });
   it('releases long Unicode transcript sections through the audited evidence boundary and opens their continuation', async () => {
     const f = fixture(); f.state.transcript = '讨论。'.repeat(900) + ' access check failed. ' + '🙂'.repeat(900);

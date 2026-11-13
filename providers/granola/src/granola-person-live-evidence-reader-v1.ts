@@ -187,7 +187,7 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
     },
     async search(input) {
       const limit = size(input.limit), window = range(input), items: Value[] = [];
-      let truncated = false, transcriptDenied = false;
+      let truncated = false, transcriptLost: 'unauthorized' | 'unavailable' | undefined;
       for (const folder_id of shown ?? [undefined]) {
         const page = await api.search({ ...window, query: input.query, limit, ...(folder_id === undefined ? {} : { folder_id }), signal: input.signal });
         items.push(...page.meetings.filter(meeting => matches(meeting, input)).map(inventory));
@@ -200,9 +200,10 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
         let page;
         try { page = await api.searchTranscripts({ ...window, query: input.query, limit, ...(ids === undefined ? {} : { meeting_ids: ids.slice(offset, offset + 100) }), signal: input.signal }); }
         catch (error) {
-          // Notes and transcripts can have different provider permissions. A denied transcript search is never retried through another tool.
-          if (!(error instanceof AuthorityOperationError) || error.code !== 'unauthorized') throw error;
-          transcriptDenied = true; truncated = true; break;
+          // Notes and transcripts can have different provider permissions, and Granola reports a failed tool call as an
+          // MCP error, not an HTTP status. Either way the notes results stand; transcript search is never retried through another tool.
+          if (!(error instanceof AuthorityOperationError) || !['unauthorized', 'unavailable', 'rate_limited'].includes(error.code)) throw error;
+          transcriptLost = error.code === 'unauthorized' ? 'unauthorized' : 'unavailable'; truncated = true; break;
         }
         truncated ||= page.next_cursor !== null || page.incomplete;
         for (const match of page.meetings) {
@@ -228,7 +229,8 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
       const unique = [...new Map([...passages, ...items].map(item => [canonicalSha256(item.citation), item])).values()];
       await verify(input.signal);
       return { items: unique.slice(0, limit), truncated: truncated || unique.length > limit,
-        ...notice(leftOut(), transcriptDenied ? 'Granola did not allow transcript search. These results cover accessible notes only; they cannot establish what was said in a transcript.' : INDEX_NOTICE) };
+        ...notice(leftOut(), transcriptLost === 'unauthorized' ? 'Granola did not allow transcript search. These results cover accessible notes only; they cannot establish what was said in a transcript.'
+          : transcriptLost === 'unavailable' ? 'Granola could not complete transcript search. These results cover notes only; they cannot establish what was said in a transcript.' : INDEX_NOTICE) };
     },
     async open(input) {
       const item = handles.get(input.handle); if (item === undefined) fail('invalid_request');
