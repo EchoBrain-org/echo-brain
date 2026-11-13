@@ -7,7 +7,7 @@ import { useEffect, useState } from 'preact/hooks';
 import type {
   AccountCommand, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
   ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Member, OpenItemsView, OpenItemView,
-  ProjectChange, ProjectGranolaMapping, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
+  ProjectChange, ProjectGranolaMapping, ProjectConfluenceMapping, ConfluenceSpace, GranolaFolder, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
@@ -434,10 +434,10 @@ export interface ProjectToolSetting<Value> {
 }
 export interface ProjectJiraSetting extends ProjectToolSetting<ProjectJiraMapping> { key: string }
 export interface ProjectContainerSetting<Value> extends ProjectToolSetting<Value> {
-  spaces: readonly ConfluenceSpace[];
+  spaces: readonly (ConfluenceSpace | GranolaFolder)[];
   next: string | null;
   selected: readonly string[];
-  /** A lead's own spaces to pick from: read once the mapping is, and Confluence is connected. */
+  /** A lead's own spaces or folders to pick from: read once the mapping is, and the tool is connected. */
   catalog: 'idle' | 'loading' | 'read';
   loadingMore?: boolean;
   /** The lead-only space catalog failed; the shared project mapping is still readable. */
@@ -2079,34 +2079,32 @@ const jiraMapping: MappingAdapter<'jira'> = {
     return /^[A-Z][A-Z0-9_]{0,63}$/.test(key) ? 'set' : 'invalid';
   },
 };
-const confluenceMapping: MappingAdapter<'confluence'> = {
-  reads: value => value.mapping ? value.mapping.space_ids.length : null,
-  tool: 'confluence', initial: seq => ({ seq, status: 'loading', spaces: [], next: null, selected: [], catalog: 'idle' }),
-  read: (expect, project_id) => rpc('projects.confluenceRead', { expect, project_id }),
-  write: (expect, project_id, setting, remove, request_id) => rpc('projects.confluenceSet', { expect, project_id, request_id,
-    expected_revision: setting.value!.revision, space_ids: remove ? null : setting.selected }),
-  accepted: (setting, value) => ({ ...setting, status: 'ready', value, selected: value.mapping?.space_ids ?? [] }),
-  change: (setting, value) => {
-    const current = value.mapping?.space_ids ?? [];
-    if (current.length === setting.selected.length && current.every(id => setting.selected.includes(id))) return null;
-    if (setting.selected.length === 0) return current.length > 0 ? 'remove' : null;
-    return setting.pickerFailure === undefined ? 'set' : 'invalid';
-  },
-};
-const granolaMapping: MappingAdapter<'granola'> = {
-  reads: value => value.mapping ? value.mapping.folder_ids.length : null,
-  tool: 'granola', initial: seq => ({ seq, status: 'loading', spaces: [], next: null, selected: [], catalog: 'idle' }),
-  read: (expect, project_id) => rpc('projects.granolaRead', { expect, project_id }),
-  write: (expect, project_id, setting, remove, request_id) => rpc('projects.granolaSet', { expect, project_id, request_id,
-    expected_revision: setting.value!.revision, folder_ids: remove ? null : setting.selected }),
-  accepted: (setting, value) => ({ ...setting, status: 'ready', value, selected: value.mapping?.folder_ids ?? [] }),
-  change: (setting, value) => {
-    const current = value.mapping?.folder_ids ?? [];
-    if (current.length === setting.selected.length && current.every(id => setting.selected.includes(id))) return null;
-    if (setting.selected.length === 0) return current.length > 0 ? 'remove' : null;
-    return setting.pickerFailure === undefined ? 'set' : 'invalid';
-  },
-};
+/** The tools a lead picks a project's containers from: Confluence spaces, Granola folders. */
+type PickTool = Exclude<MappingTool, 'jira'>;
+/** A picked-containers setting: the ids it reads, and how it is read and written. */
+function pickMapping<Tool extends PickTool>(tool: Tool, picked: (value: MappingValue<Tool>) => readonly string[] | undefined,
+  read: MappingAdapter<Tool>['read'],
+  write: (expect: Expect, project_id: string, request_id: string, expected_revision: string | null, ids: readonly string[] | null) => Promise<Result<MappingValue<Tool>>>): MappingAdapter<Tool> {
+  return {
+    reads: value => picked(value)?.length ?? null,
+    tool, initial: seq => ({ seq, status: 'loading', spaces: [], next: null, selected: [], catalog: 'idle' }),
+    read,
+    write: (expect, project_id, setting, remove, request_id) => write(expect, project_id, request_id, setting.value!.revision, remove ? null : setting.selected),
+    accepted: (setting, value) => ({ ...setting, status: 'ready', value, selected: picked(value) ?? [] }),
+    change: (setting, value) => {
+      const current = picked(value) ?? [];
+      if (current.length === setting.selected.length && current.every(id => setting.selected.includes(id))) return null;
+      if (setting.selected.length === 0) return current.length > 0 ? 'remove' : null;
+      return setting.pickerFailure === undefined ? 'set' : 'invalid';
+    },
+  };
+}
+const confluenceMapping = pickMapping('confluence', value => value.mapping?.space_ids,
+  (expect, project_id) => rpc('projects.confluenceRead', { expect, project_id }),
+  (expect, project_id, request_id, expected_revision, space_ids) => rpc('projects.confluenceSet', { expect, project_id, request_id, expected_revision, space_ids }));
+const granolaMapping = pickMapping('granola', value => value.mapping?.folder_ids,
+  (expect, project_id) => rpc('projects.granolaRead', { expect, project_id }),
+  (expect, project_id, request_id, expected_revision, folder_ids) => rpc('projects.granolaSet', { expect, project_id, request_id, expected_revision, folder_ids }));
 const MAPPINGS: { readonly [Tool in MappingTool]: MappingAdapter<Tool> } = { jira: jiraMapping, confluence: confluenceMapping, granola: granolaMapping };
 
 /** Every reply belongs to this account and this opening of the project sheet. */
@@ -2167,9 +2165,9 @@ async function loadProjectToolList(account: Expect, opening: number): Promise<vo
   if (!settings) return;
   setProjectTools(settings, result.ok ? { items: result.value.tools, failure: undefined } : { failure: result.failure });
   if (!result.ok) accountLost(result.failure);
-  // Read or not, the spaces can be read now: without your connections the Authority checks on save.
-  void readSpaces(account);
-  void readSpaces(account, 'granola');
+  // Read or not, the spaces and folders can be read now: without your connections the Authority checks on save.
+  void readPicks(account, 'confluence');
+  void readPicks(account, 'granola');
 }
 
 async function readProjectMapping<Tool extends MappingTool>(adapter: MappingAdapter<Tool>, account: Expect, project_id: string, opening: number): Promise<void> {
@@ -2181,11 +2179,11 @@ async function readProjectMapping<Tool extends MappingTool>(adapter: MappingAdap
   if (!result.ok) { accountLost(result.failure); return; }
   // The line above the feed says what was read, even after a save it could not confirm.
   if (state.projectReads?.project_id === project_id) set({ projectReads: { ...state.projectReads, [adapter.tool]: adapter.reads(result.value) } });
-  if (adapter.tool !== 'jira') void readSpaces(account, adapter.tool);
+  if (adapter.tool !== 'jira') void readPicks(account, adapter.tool);
 }
 
-/** A lead picks from their own Confluence spaces: read once the mapping is, and once Confluence is connected. */
-async function readSpaces(account: Expect, tool: 'confluence' | 'granola' = 'confluence'): Promise<void> {
+/** A lead picks from their own spaces or folders: read once the mapping is, and once the tool is connected. */
+async function readPicks(account: Expect, tool: PickTool): Promise<void> {
   const settings = state.projectSettings;
   const setting = settings?.[tool];
   if (!settings?.tools || !setting || settings.project.role !== 'lead' || setting.status !== 'ready' || setting.catalog !== 'idle') return;
@@ -2362,8 +2360,8 @@ export async function connectProjectTool(tool: ConnectedTool): Promise<void> {
   if (done === 'cancelled') { setProjectTools(current, { connect: undefined }); return; }
   const items = current.tools.items?.map(item => item.tool_id === tool.tool_id ? { ...item, status: 'linked' as const } : item) ?? null;
   setProjectTools(current, { connect: undefined, connected: tool.tool_id, items });
-  void readSpaces(account);
-  void readSpaces(account, 'granola');
+  void readPicks(account, 'confluence');
+  void readPicks(account, 'granola');
 }
 
 /** Cancel, in the row: the attempt is cancelled, so a late approval in the browser binds nothing. */
@@ -2391,19 +2389,19 @@ export function clearProjectTool(tool: MappingTool): void {
   if (tool !== 'jira') { const setting = settings[tool]; if (setting?.status === 'ready') setMapping(settings, tool, { ...setting, selected: [] }); }
 }
 
-/** Spaces the project reads that your own catalog does not show: another lead's, or on a page not read yet. */
-export function hiddenSpaces(setting: Pick<ProjectConfluenceSetting, 'selected' | 'spaces'>): string[] {
+/** Spaces or folders the project reads that your own catalog does not show: another lead's, or on a page not read yet. */
+export function hiddenPicks(setting: Pick<ProjectContainerSetting<unknown>, 'selected' | 'spaces'>): string[] {
   return setting.selected.filter(id => !setting.spaces.some(space => space.id === id));
 }
 
-export function toggleProjectConfluenceSpace(id: string, tool: 'confluence' | 'granola' = 'confluence'): void {
+export function toggleProjectPick(id: string, tool: PickTool): void {
   const settings = state.projectSettings; const setting = settings?.[tool];
   if (!settings || !setting || setting.status !== 'ready' || settings.project.role !== 'lead' ||
       (!setting.spaces.some(space => space.id === id) && !setting.selected.includes(id))) return;
   const selected = setting.selected.includes(id) ? setting.selected.filter(value => value !== id) : [...setting.selected, id];
   if (selected.length <= 20) setMapping(settings, tool, { ...setting, selected });
 }
-export async function moreProjectConfluenceSpaces(tool: 'confluence' | 'granola' = 'confluence'): Promise<void> {
+export async function moreProjectPicks(tool: PickTool): Promise<void> {
   const settings = state.projectSettings; const setting = settings?.[tool]; const account = expect();
   if (!settings || !setting || !account || setting.status !== 'ready' || setting.next === null || setting.loadingMore) return;
   setMapping(settings, tool, { ...setting, loadingMore: true, failure: undefined });

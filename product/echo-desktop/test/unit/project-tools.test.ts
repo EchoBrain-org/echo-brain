@@ -73,7 +73,7 @@ describe('a Granola save the tool refused', () => {
     override('projects.granolaRead', () => ok({ project_id: apollo.project_id, revision: null, mapping: null }));
     override('projects.granolaFolders', () => ok({ items: [{ id: 'f1', name: 'Folder 1', key: 'f1' }], next_cursor: null }));
     const store = await openTools();
-    store.toggleProjectConfluenceSpace('f1', 'granola');
+    store.toggleProjectPick('f1', 'granola');
     held.hold('projects.granolaSet')(fail('not_found', { mutation_outcome: 'not_submitted', request_id: 'x' }));
     await store.saveProjectTools();
     await flush();
@@ -88,8 +88,8 @@ describe('a mapped Confluence space this lead cannot see', () => {
     const store = await openTools();
     const confluence = store.getState().projectSettings!.confluence!;
     expect(confluence.spaces.map(space => space.id)).toEqual(['1', '2']);
-    expect(store.hiddenSpaces(confluence)).toEqual(['77']);
-    store.toggleProjectConfluenceSpace('77');
+    expect(store.hiddenPicks(confluence)).toEqual(['77']);
+    store.toggleProjectPick('77', 'confluence');
     expect(store.getState().projectSettings!.confluence!.selected).toEqual(['1']);
     await store.saveProjectTools();
     await flush();
@@ -113,7 +113,7 @@ describe('what Save says', () => {
     jira = 'KAN';
     const store = await openTools();
     store.clearProjectTool('jira');
-    store.toggleProjectConfluenceSpace('2');
+    store.toggleProjectPick('2', 'confluence');
     await store.saveProjectTools();
     await flush();
     expect(store.getState().toast).toBe('Apollo now reads 1 Confluence space and no longer reads Jira');
@@ -181,7 +181,7 @@ describe('the project Tools sheet', () => {
     await vi.advanceTimersByTimeAsync(4000); await connecting; await flush();
     expect(store.getState().projectSettings?.tools?.connected).toBe('confluence');
     expect(calls('projects.confluenceSpaces')).toHaveLength(1);
-    store.toggleProjectConfluenceSpace('1'); await store.saveProjectTools();
+    store.toggleProjectPick('1', 'confluence'); await store.saveProjectTools();
     expect(store.getState().toast).toBe('Apollo now reads 1 Confluence space');
     expect(store.readsWords(store.getState().projectReads!)).toEqual(['1 Confluence space']);
     expect(rpc.mock.calls.map(([method]) => method).filter(method => ['tools.connect', 'tools.status', 'projects.confluenceSpaces'].includes(method)))
@@ -240,7 +240,7 @@ describe('the project Tools sheet', () => {
   });
 
   it('a stale change keeps Tools up and Reload reads it without resending', async () => {
-    const store = await openTools(); store.toggleProjectConfluenceSpace('1');
+    const store = await openTools(); store.toggleProjectPick('1', 'confluence');
     held.hold('projects.confluenceSet')(fail('conflict', { mutation_outcome: 'not_submitted' }));
     await store.saveProjectTools();
     expect(store.getState().projectSettings?.confluence).toMatchObject({ status: 'failed', writeFailed: true });
