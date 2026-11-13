@@ -12,7 +12,7 @@ const person = { membership_id: 'mem_00000000-0000-4000-8000-000000000001', name
 const item = (patch: Partial<OpenItemView> = {}): OpenItemView => ({
   item_id: 'itm_00000001', run_id: 'run_00000001', kind: 'ticket', relation: 'conflicts', expected: 'launch next week', approver: person,
   owner: { ...person, match: 'jira_account' }, waits_on: 'owner', state: 'open', created_at: '2026-10-07T10:05:00.000Z', sent_at: '2026-10-07T11:00:00.000Z',
-  state_set_at: '2026-10-07T11:00:00.000Z', state_set_by: person, owner_set_at: null, owner_set_by: null, send_included: true, check: null,
+  state_set_at: '2026-10-07T11:00:00.000Z', state_set_by: person, owner_set_at: null, owner_set_by: null, send_included: true,
   can: { set_state: true, assign: true }, reach: patch.current ? 'opened' : 'no_access', ...patch,
 });
 const ticket = { kind: 'ticket' as const, tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink: 'https://example.atlassian.net/browse/ECHO-12' };
@@ -238,10 +238,8 @@ describe('a follow-ups row and its owner line (One place to look v1, K)', () => 
     expect(followUpAge(open(0.2, { created_at: daysAgo(0.2), state: 'not_relevant' }), now)).toEqual({ days: 0, words: 'Made today' });
   });
 
-  it('says on hover what its marks leave out: what it is, its meeting, where it stands with whom; never what a check found', () => {
-    // An older Authority may still send a check: the hover says nothing of it.
-    const landed = { verdict: 'landed' as const, checked_at: daysAgo(0.1), checked_by: 'Mina Patel' };
-    expect(followUpHover(open(4, { decision: pilot, check: landed }), ME.membership_id, now)).toBe('Jira ticket · from Pilot planning · Sent to Mina 4 days ago');
+  it('says on hover what its marks leave out: what it is, its meeting, where it stands with whom', () => {
+    expect(followUpHover(open(4, { decision: pilot }), ME.membership_id, now)).toBe('Jira ticket · from Pilot planning · Sent to Mina 4 days ago');
     expect(followUpHover(open(0.5, { owner: { ...ME, match: 'name' } }), ME.membership_id, now)).toBe('Jira ticket · Sent to you today');
     // Handed on since it was sent: whose it is now, not who it was sent to.
     expect(followUpHover(open(4, { owner: { ...RAFAEL, match: 'reassigned' }, owner_set_at: daysAgo(1), owner_set_by: person }), ME.membership_id, now))

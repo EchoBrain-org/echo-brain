@@ -2,8 +2,6 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import {
   PERSON_ASK_PROGRESS_CONTENT_TYPE_V1,
-  PERSON_ASK_PROGRESS_HEADER_V1,
-  PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
   PERSON_ASK_PROGRESS_HEARTBEAT_V1,
   PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1,
   PERSON_ASK_PROGRESS_NAMED_MAX_V1,
@@ -44,9 +42,9 @@ const decidedReceipt = () => ({ looked_through: 3, elapsed_ms: 48_000, rows: [{ 
 const asEvent = (value: unknown) => value as PersonAskProgressEventV3;
 
 describe('Ask progress V3 wire contract (/v7, ADR-0039, research tool contract v1)', () => {
-  it('pins the opt-in header, its value, the media type and the heartbeat', () => {
-    expect({ header: PERSON_ASK_PROGRESS_HEADER_V1, value: PERSON_ASK_PROGRESS_HEADER_VALUE_V3, content_type: PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, heartbeat: PERSON_ASK_PROGRESS_HEARTBEAT_V1 })
-      .toEqual({ header: 'x-echo-ask-progress', value: '3', content_type: 'text/event-stream', heartbeat: ': keep-alive\n\n' });
+  it('pins the media type and the heartbeat', () => {
+    expect({ content_type: PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, heartbeat: PERSON_ASK_PROGRESS_HEARTBEAT_V1 })
+      .toEqual({ content_type: 'text/event-stream', heartbeat: ': keep-alive\n\n' });
   });
 
   it('accepts each step event exactly and freezes it', () => {
@@ -247,11 +245,11 @@ describe('person ask --progress lines', () => {
     expect(() => validatePersonAskProgressLineV3({ ok: true, result: v8() })).toThrow();
   });
 
-  it('ends with the V8 answer, with its receipt when the Authority streamed it', () => {
+  it('ends with the V8 answer and its receipt, which every Ask streams', () => {
     expect(validatePersonAskProgressResultLineV3({ ok: true, result: v8(), receipt: receipt() })).toEqual({ ok: true, result: v8(), receipt: receipt() });
-    expect(validatePersonAskProgressResultLineV3({ ok: true, result: v8() })).toEqual({ ok: true, result: v8() });
+    expect(() => validatePersonAskProgressResultLineV3({ ok: true, result: v8() })).toThrow('unexpected shape');
     for (const version of [5, 6, 7]) {
-      expect(() => validatePersonAskProgressResultLineV3({ ok: true, result: { ...decided(), schema_version: version, kind: `echo-clean-person-answer-v${version}` } })).toThrow('Ask response is invalid');
+      expect(() => validatePersonAskProgressResultLineV3({ ok: true, result: { ...decided(), schema_version: version, kind: `echo-clean-person-answer-v${version}` }, receipt: receipt() })).toThrow('Ask response is invalid');
     }
     expect(() => validatePersonAskProgressResultLineV3({ ok: true, result: v8(), receipt: { ...receipt(), looked_through: 1 } })).toThrow('less than the items');
     expect(() => validatePersonAskProgressResultLineV3({ ok: true, result: v8(), receipt: receipt(), progress: {} })).toThrow('unexpected shape');

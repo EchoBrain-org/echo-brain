@@ -279,35 +279,6 @@ describe("Authority local harness", () => {
     expect(() => realpathSync(trap.calls)).toThrow();
   });
 
-  it("still stops a state stored before Nango, giving Compose the variable it parses", () => {
-    const root = temporaryRoot();
-    const { nango: _nango, ...tuple } = externalTuple(nangoKeyFile(root));
-    const state = completeOwnedState(root, tuple as ReturnType<typeof externalTuple>);
-    const generated = generatedDirectory(state);
-    // The overlay a pre-Nango harness wrote: no command override and one state mount.
-    const overlay = localOverlay({ state, ports: tuple.ports, localSource: tuple.source_revision, nango: undefined });
-    expect(overlay).not.toContain("command:");
-    expect(overlay).not.toContain("nango");
-    expect(overlay).toContain(`    volumes: !override\n      - "${state}:/echo-clean"\n    ports: !override`);
-    for (const [name, bytes] of [
-      ["compose.local.yaml", overlay],
-      ["local-input.json", `${JSON.stringify(tuple)}\n`],
-    ] as const) {
-      writeFileSync(join(generated, name), bytes, { mode: 0o600 });
-      currentOwnership(join(generated, name), 0o600);
-    }
-    const trap = dockerTrap(root);
-    const result = runTool(["down", "--state-dir", state], trap.path, {
-      ECHO_LOCAL_NANGO_SECRET_KEY_FILE: "",
-      ECHO_LOCAL_NANGO_INTEGRATION: "",
-    });
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(trap.calls, "utf8")).toMatch(
-      /^integration=\S+ compose --project-name \S+ --file \S+compose\.clean-v1\.yaml --file \S+compose\.local\.yaml down --volumes --remove-orphans$/m,
-    );
-  });
-
   it("refuses a generated overlay symlink before Docker", () => {
     const root = temporaryRoot();
     const tuple = externalTuple(nangoKeyFile(root));

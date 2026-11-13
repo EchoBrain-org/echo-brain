@@ -24,7 +24,7 @@ import type { PersonReadableDecisionProjectsV1 } from './person-record-search-ro
 /**
  * The Ask source check (Ask timeline v1, C1; ADR-0047): `POST /v1/person/ask/check` takes the sources old answers cited and
  * answers, for each, only whether the caller can read it now: `same` when they can, `unreadable` when they cannot, `unknown`
- * when its tool cannot tell; never `changed`. Readability goes through the policy of the read each source stands for, and
+ * when its tool cannot tell. Readability goes through the policy of the read each source stands for, and
  * `unreadable` never says whether a source is hidden, deleted or never existed (ADR-0012). The answer carries no label,
  * text, count or id.
  *
@@ -32,8 +32,7 @@ import type { PersonReadableDecisionProjectsV1 } from './person-record-search-ro
  *   generation.
  * - `source_revision`: the cited revision through the originals ACL under global access (`checkSourceRevisions`).
  * - `follow_up`: the open item through the open-items policy (`see_row`), as `runs` `item` reads it.
- * - `ticket`: read in bulk through the caller's own connection to its tool. A readable ticket still carries its current
- *   marker, since every released client refuses one without it; a request's marker is accepted and ignored.
+ * - `ticket`: read in bulk through the caller's own connection to its tool; no ticket field is read.
  * - `page`: its version read by id through the caller's own connection; no page body is read.
  *
  * The database kinds are read in one Authority read transaction: no `BEGIN IMMEDIATE`, no audit row, nothing written, since
@@ -148,13 +147,8 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
         // Each tool reads each distinct id once, in request order: a request's at most 100 items keep it to its two metadata
         // calls of 50 ids.
         const readTickets = async (check: PersonTicketCheckV1, entries: readonly Entry<PersonTicketCitationV1>[]): Promise<void> => {
-          const markers = await check.markers({ access_token, ticket_ids: [...new Set(entries.map(({ citation }) => citation.ticket_id))], signal });
-          for (const { index, citation } of entries) {
-            const marker = markers.get(citation.ticket_id);
-            // A readable ticket carries its current marker, which released clients require on it. A ticket read with no marker
-            // is readable, but nothing is known of it.
-            answers[index] = marker === undefined ? UNREADABLE : marker === null ? UNKNOWN : Object.freeze({ state: 'same', marker });
-          }
+          const readable = await check.readable({ access_token, ticket_ids: [...new Set(entries.map(({ citation }) => citation.ticket_id))], signal });
+          for (const { index, citation } of entries) answers[index] = readable.has(citation.ticket_id) ? SAME : UNREADABLE;
         };
         const readPages = async (check: PersonPageCheckV1, entries: readonly Entry<PersonPageCitationV1>[]): Promise<void> => {
           const versions = await check.versions({ access_token, page_ids: [...new Set(entries.map(({ citation }) => citation.page_id))], signal });

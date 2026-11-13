@@ -7,11 +7,11 @@ import { asEnumerableRecord as object, assertExactKeys, assertToolId, fail, vali
 /**
  * Ask progress V3 (ADR-0039, ADR-0042): while an Ask runs, `POST /v7/person/ask`
  * streams what ECHO is doing as server-sent events, then the released V8
- * answer with a receipt. A client opts in with one request header; without
- * it, the route answers with its JSON. V1 (the V6 answer on `/v5`) and V2
- * (the V7 answer on `/v6`) were retired with those routes. V3 keeps their
- * header, framing, heartbeat, stages, bounds and terminal error unchanged,
- * which is why those keep their V1 names.
+ * answer with a receipt. Every Ask streams: since 2026-11-11 there is no
+ * opt-in header and no JSON answer, and only an error before the stream
+ * starts is JSON. V1 (the V6 answer on `/v5`) and V2 (the V7 answer on `/v6`)
+ * were retired with those routes. V3 keeps their framing, heartbeat, stages,
+ * bounds and terminal error unchanged, which is why those keep their V1 names.
  *
  * Framing: each event is exactly one `data: <JSON>` line followed by a blank
  * line, with no `event`, `id` or `retry` fields. A comment heartbeat keeps
@@ -30,11 +30,7 @@ import { asEnumerableRecord as object, assertExactKeys, assertToolId, fail, vali
  * was shown, rows included (ADR-0043).
  */
 
-/** The opt-in request header. */
-export const PERSON_ASK_PROGRESS_HEADER_V1 = 'x-echo-ask-progress';
-/** The header's value that asks `/v7/person/ask` for this stream. */
-export const PERSON_ASK_PROGRESS_HEADER_VALUE_V3 = '3';
-/** The streamed response's media type; a JSON response means the Authority did not stream. */
+/** The streamed response's media type; a JSON response is an error from before the stream started. */
 export const PERSON_ASK_PROGRESS_CONTENT_TYPE_V1 = 'text/event-stream';
 /** How often the Authority writes the heartbeat comment while nothing else is sent. */
 export const PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1 = 10_000;
@@ -175,11 +171,11 @@ export interface PersonAskProgressLineV3 {
   readonly ok: true;
   readonly progress: PersonAskProgressStepEventV3;
 }
-/** The final line: the answer, with its receipt when the Authority streamed. */
+/** The final line: the answer, with its stream's receipt. */
 export interface PersonAskProgressResultLineV3 {
   readonly ok: true;
   readonly result: PersonAnswerResponseV8;
-  readonly receipt?: PersonAskReceiptV3;
+  readonly receipt: PersonAskReceiptV3;
 }
 
 const STAGES: readonly string[] = ['searching', 'reading', 'checking_access', 'writing'];
@@ -349,8 +345,7 @@ export function validatePersonAskProgressLineV3(value: unknown): PersonAskProgre
 
 export function validatePersonAskProgressResultLineV3(value: unknown): PersonAskProgressResultLineV3 {
   const input = object(value, 'Ask result line');
-  assertExactKeys(input, ['ok', 'result', ...(Object.hasOwn(input, 'receipt') ? ['receipt'] : [])], 'Ask result line');
+  assertExactKeys(input, ['ok', 'result', 'receipt'], 'Ask result line');
   if (input.ok !== true) fail('Ask result line is invalid');
-  const result = validatePersonAnswerResponseV8(input.result);
-  return Object.freeze({ ok: true, result, ...(Object.hasOwn(input, 'receipt') ? { receipt: validatePersonAskReceiptV3(input.receipt) } : {}) });
+  return Object.freeze({ ok: true, result: validatePersonAnswerResponseV8(input.result), receipt: validatePersonAskReceiptV3(input.receipt) });
 }

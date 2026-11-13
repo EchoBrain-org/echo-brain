@@ -16,7 +16,6 @@ severity: high
 first_observed: 2026-08-12
 invariant_ids:
   - INV-ADAPTERS-004
-  - INV-08
 failure_pattern_ids:
   - FP-ADAPTERS-003
 evidence_ids:

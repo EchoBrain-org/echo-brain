@@ -35,9 +35,6 @@ it('owns lifecycle, project mapping, and permission-filtered space picker routes
     PERSON_CONFLUENCE_CONNECT_PATH_V1, PERSON_CONFLUENCE_STATUS_PATH_V1, PERSON_CONFLUENCE_CANCEL_PATH_V1, PERSON_CONFLUENCE_DISCONNECT_PATH_V1,
     PERSON_CONFLUENCE_PROJECT_READ_PATH_V1, PERSON_CONFLUENCE_PROJECT_SET_PATH_V1, PERSON_CONFLUENCE_SPACES_LIST_PATH_V1,
   ]));
-  // The retired project-list route is neither mounted nor answered.
-  expect(f.application.routes.map(route => route.path)).not.toContain('/v1/person/tools/confluence/project/list');
-  await expect(f.application.accept(request('confluence-project-list', '/v1/person/tools/confluence/project/list', { schema_version: 1 }))).rejects.toMatchObject({ code: 'not_found' });
   await expect(f.application.accept(request('confluence-connect', PERSON_CONFLUENCE_CONNECT_PATH_V1, { schema_version: 1 }))).resolves.toMatchObject({ status: 201, body: { attempt } });
   await expect(f.application.accept(request('confluence-status', PERSON_CONFLUENCE_STATUS_PATH_V1, { schema_version: 1, attempt }))).resolves.toMatchObject({ status: 200, body: { status: 'pending' } });
   await expect(f.application.accept(request('confluence-cancel', PERSON_CONFLUENCE_CANCEL_PATH_V1, { schema_version: 1, attempt }))).resolves.toMatchObject({ status: 200, body: { status: 'cancelled' } });

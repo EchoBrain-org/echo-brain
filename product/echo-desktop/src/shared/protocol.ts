@@ -347,8 +347,8 @@ export interface Answer {
   readonly parts: readonly AnswerPart[];
   /** `clarify`: a follow-up could mean more than one thing, and `choices` asks which; Ask never guesses (ADR-0047). */
   readonly outcome: 'answered' | 'partial' | 'not_found' | 'clarify';
-  /** Only from an Authority that streamed the Ask: what it looked through. */
-  readonly receipt?: AskReceipt;
+  /** What the Ask looked through, from its stream's receipt. The saved turn (TimelineAnswer) never keeps it. */
+  readonly receipt: AskReceipt;
   /** Only for an Ask that carried `previous`: the full question the answer answers ("Who owns THERM-482?"). */
   readonly question?: string;
   /** Only for Ask again: what is different now, each cited; empty when nothing material changed. */
@@ -405,14 +405,10 @@ export const TIMELINE_DAYS = 90;
  */
 export const MAX_TIMELINE_PUT_BYTES = 256 * 1024;
 
-/**
- * What a check says of one cited source (C1): readable by you (`same`, or
- * `changed` from an Authority before checks said only readability), no
- * longer readable, or not known now.
- */
+/** What a check says of one cited source (C1): readable by you (`same`), no longer readable, or not known now. */
 export type AskCheckState = PersonAskCheckStateV1;
-/** One source to check: when the turn that cited it was asked, and its evidence citation. The page sends no ticket marker. */
-export type AskCheckItem = Omit<PersonAskCheckRequestItemV1, 'marker'>;
+/** One source to check: when the turn that cited it was asked, and its evidence citation. */
+export type AskCheckItem = PersonAskCheckRequestItemV1;
 /** What the check said of one item, in the request's order. */
 export type AskCheckResult = Pick<PersonAskCheckItemV1, 'state'>;
 /** The most items one check asks about, and its body's bound (C1). */
@@ -817,7 +813,7 @@ export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
 ]);
 /** Operations of a write method that only read. */
 const READ_OPERATIONS: Readonly<Record<string, ReadonlySet<string>>> = {
-  'tools.meetings': new Set<PersonMeetingRequestV2['operation']>(['home', 'reviews', 'browse', 'open', 'review_open']),
+  'tools.meetings': new Set<PersonMeetingRequestV2['operation']>(['home', 'browse', 'open']),
   reviews: new Set<PersonReviewRequestV1['operation']>(['reviews', 'review_open']),
   runs: new Set<PersonRunsRequestV1['operation']>(['list', 'home', 'items', 'item']),
 };

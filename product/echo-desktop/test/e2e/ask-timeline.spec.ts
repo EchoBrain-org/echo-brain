@@ -98,7 +98,7 @@ test('a line opens as its heading, with what you can no longer read left out', a
   await expect(opened).not.toContainText('Confirm the trace');
   await expect(opened.getByTestId('sources-toggle')).toHaveText(/^2 sources$/u);
   await expect(opened.getByTestId('citation')).toHaveText(['1', '2']);
-  // The checks say what you can read, and nothing of a ticket: no label, and no marker, though the Authority answers with one.
+  // The checks say what you can read, and nothing of a ticket: no label, and no marker.
   const checks = run.calls().filter(call => call.path === '/v1/person/ask/check');
   expect(checks.length).toBeGreaterThan(0);
   expect(JSON.stringify(checks.map(call => call.body))).not.toContain('Sensor drift');

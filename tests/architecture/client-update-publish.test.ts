@@ -3,6 +3,7 @@ import { generateKeyPairSync, sign } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { requireReleaseTargets } from '../../tools/client-update-feed.mjs';
 import { isAbsentClientUpdateHead, executeClientUpdatePublish, planClientUpdatePublish, statusClientUpdatePublish, executeClientUpdateReplacement, planClientUpdateReplacement, statusClientUpdateReplacement } from '../../tools/client-update-publish.mjs';
 import { parseUpdateConfig, parseUpdateManifest, updateDigest, type ClientUpdateConfig, type ClientUpdateManifest } from '../../src/product/person-client/client-update-contract.js';
 
@@ -139,6 +140,8 @@ function fixture(options: { expiresAt?: number; previousExpiresAt?: number; prev
   const dependencies: ClientUpdatePublicationDependencies = { verifyServer: () => undefined, aws, fetch, runtime: () => SOURCE, readTemplate: () => TEMPLATE, now: () => state.now, validatePrepared: options => {
     state.validationOptions.push(options);
     if (!options.allowExpired && Date.parse(manifest.expires_at) <= state.now) throw new Error('expired_metadata');
+    // As the real validator does, every prepared feed carries all four release targets.
+    requireReleaseTargets(manifest);
     return { config, manifest, feedBytes };
   } };
   const plan = () => planClientUpdatePublish({ hostingReceipt, prepared, authorization, output: receipt }, dependencies);
@@ -150,35 +153,6 @@ function fixture(options: { expiresAt?: number; previousExpiresAt?: number; prev
   const sizes = [...artifacts.map(artifact => artifact.bytes.length), feedBytes.length];
   const keyOf = (name: Artifact) => artifacts.find(artifact => artifact.name === name)!.key;
   return { directory, prepared, authorization, hostingReceipt, hosting, receipt, config, manifest, feedBytes, previousFeedBytes, previousManifest, privateKey, payload, artifactKey, artifactKeys, keyOf, sizes, metadata, objects, calls, timeouts, events, state, dependencies, plan, execute, status, replacePlan, replaceExecute, replaceStatus };
-}
-
-// Historical receipts were allowed to contain a single platform. Construct the
-// old on-disk contract directly: current planning must never mint these again.
-function historicalReceipt(f: ReturnType<typeof fixture>, replacement: boolean, attempted: 'none' | 'artifact' | 'all') {
-  const inputs = [...f.manifest.artifacts.map(artifact => ({ key: `artifacts/${artifact.sha256}.zip`, sha256: artifact.sha256, bytes: artifact.bytes,
-    content_type: 'application/zip', cache_control: 'public, max-age=31536000, immutable' })),
-  { key: 'feed.json', sha256: updateDigest(f.feedBytes), bytes: f.feedBytes.length, content_type: 'application/json', cache_control: 'no-store' }];
-  const predecessorMetadata = f.objects.get('feed.json')?.metadata;
-  const objects = inputs.map((input, index) => {
-    const wasAttempted = attempted === 'all' || (attempted === 'artifact' && input.key !== 'feed.json');
-    if (wasAttempted) {
-      const bytes = readFileSync(join(f.prepared, input.key));
-      f.objects.set(input.key, { bytes, metadata: f.metadata(bytes, input.content_type, input.cache_control, index + 10) });
-    }
-    return { ...input, ...(replacement ? { reused: false } : {}), attempted: wasAttempted, succeeded: false, verified: false, version_id: null };
-  });
-  const common = {
-    schema_version: 1, kind: replacement ? 'echo-client-update-feed-replacement-v1' : 'echo-client-update-first-publication-v1',
-    operation_id: '11111111-1111-4111-8111-111111111111', source_sha: SOURCE, state: attempted === 'none' ? 'planned' : 'unconfirmed',
-    hosting_receipt: f.hostingReceipt, prepared: f.prepared, authorization: f.authorization,
-    hosting: { receipt_sha256: updateDigest(readFileSync(f.hostingReceipt)), stack_id: STACK_ID, template_sha256: updateDigest(TEMPLATE), bucket: BUCKET, feed_url: FEED },
-    hashes: { ...Object.fromEntries(['bootstrap-config.json', 'manifest.json', 'release.json', 'feed.json'].map(name => [name, updateDigest(readFileSync(join(f.prepared, name)))])), authorization: updateDigest(readFileSync(f.authorization)) },
-    release_id: f.manifest.release_id,
-  };
-  save(f.receipt, replacement ? { ...common, artifacts: objects.slice(0, -1), feed: objects.at(-1),
-    predecessor: { key: 'feed.json', sha256: updateDigest(f.previousFeedBytes!), bytes: f.previousFeedBytes!.length,
-      version_id: predecessorMetadata!.VersionId, etag: predecessorMetadata!.ETag, channel: f.previousManifest!.channel, sequence: f.previousManifest!.sequence } }
-    : { ...common, objects });
 }
 
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -549,59 +523,17 @@ describe('bounded conditional S3 feed replacement', () => {
 
 
 describe.each([{ label: 'first-publication', replacement: false }, { label: 'replacement', replacement: true }])('paired release enforcement for $label receipts', ({ replacement }) => {
-  it('refuses new writes from an old two-CLI-kit receipt, while status still inspects it', async () => {
-    const targets: Artifact[] = ['macos-kit', 'linux-kit'];
-    const f = fixture({ targets, ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
-    historicalReceipt(f, replacement, 'none');
-    const status = replacement ? f.replaceStatus : f.status;
-    const execute = replacement ? f.replaceExecute : f.execute;
-    expect(await status()).toMatchObject({ state: 'planned', object_count: targets.length + 1 });
-    await expect(execute()).rejects.toThrow('all_release_targets_required');
-    expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
-  });
-
-  it('reconciles a historical single-platform artifact attempt without allowing the remaining feed write', async () => {
-    const f = fixture({ targets: ['macos-kit'], ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
-    historicalReceipt(f, replacement, 'artifact');
-    const status = replacement ? f.replaceStatus : f.status;
-    const execute = replacement ? f.replaceExecute : f.execute;
-    expect(await status()).toMatchObject({ state: 'publishing', verified_objects: 1 });
-    await expect(execute()).rejects.toThrow('all_release_targets_required');
-    expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
-  });
-
-  // Its recorded application/zip content types still bind, or status could not succeed.
-  it('reconciles a historical two-CLI-kit final attempt without writing again', async () => {
-    const f = fixture({ targets: ['macos-kit', 'linux-kit'], ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
-    historicalReceipt(f, replacement, 'all');
-    const status = replacement ? f.replaceStatus : f.status;
-    const execute = replacement ? f.replaceExecute : f.execute;
-    expect(await status()).toMatchObject({ state: 'succeeded', verified_objects: 3 });
-    expect(await execute()).toMatchObject({ state: 'succeeded', verified_objects: 3 });
-    expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
-  });
-
-  it('rechecks the exact release targets immediately before the next artifact write', async () => {
-    const f = fixture({ ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
-    await (replacement ? f.replacePlan() : f.plan());
-    const fetch = f.dependencies.fetch!;
-    f.dependencies.fetch = async (input, init) => {
-      const response = await fetch(input, init);
-      if (String(input).endsWith(f.artifactKey)) f.manifest.artifacts[1].architecture = 'arm64';
-      return response;
-    };
-    expect(await (replacement ? f.replaceExecute() : f.execute())).toMatchObject({ state: 'unconfirmed', verified_objects: 1 });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(1);
-    expect(f.objects.has(f.artifactKeys[1])).toBe(false);
-  });
-
-  it('applies the target guard again after final sealed-input revalidation', async () => {
+  it('stops the feed write when final sealed-input revalidation fails the target check', async () => {
     const f = fixture({ ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
     await (replacement ? f.replacePlan() : f.plan());
     const validatePrepared = f.dependencies.validatePrepared!;
     f.dependencies.validatePrepared = options => {
       const result = validatePrepared(options);
-      if (f.objects.has(f.artifactKeys[1])) return { ...result, manifest: { ...result.manifest, artifacts: result.manifest.artifacts.map(artifact => ({ ...artifact, architecture: 'arm64' as const })) } };
+      if (f.objects.has(f.artifactKeys[1])) {
+        const manifest = { ...result.manifest, artifacts: result.manifest.artifacts.map(artifact => ({ ...artifact, architecture: 'arm64' as const })) };
+        requireReleaseTargets(manifest);
+        return { ...result, manifest };
+      }
       return result;
     };
     expect(await (replacement ? f.replaceExecute() : f.execute())).toMatchObject({ state: 'unconfirmed', verified_objects: 4 });

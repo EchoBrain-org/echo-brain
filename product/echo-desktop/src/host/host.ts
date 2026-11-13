@@ -6,7 +6,7 @@ import {
 // The person host: an Electron utility process that runs the TypeScript person
 // client in-process. It is the only process that reads the session or holds a
 // token; what it posts back is a token-free view model or a failure code.
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -201,20 +201,11 @@ async function readStatus(): Promise<AppStatus | null> {
 
 /**
  * While another process (the terminal CLI) refreshes, the session file is set
- * aside and the client reads as signed out. A claim whose session is past its
- * weekly deadline is left over from an older client's expiry: that one is
- * signed out at once.
+ * aside and the client reads as signed out.
  */
 async function refreshRunningElsewhere(): Promise<boolean> {
-  const { paths, now } = await modules;
-  if (!existsSync(paths.refresh_claim) || !existsSync(paths.refreshing)) return false;
-  try {
-    const stored = JSON.parse(readFileSync(paths.refreshing, 'utf8')) as { session?: { hard_reauthentication_at?: unknown } };
-    const deadline = Date.parse(String(stored.session?.hard_reauthentication_at));
-    return Number.isFinite(deadline) && now() < deadline;
-  } catch {
-    return false;
-  }
+  const { paths } = await modules;
+  return existsSync(paths.refresh_claim) && existsSync(paths.refreshing);
 }
 
 /** Waits at most 3 s on another process's refresh: well inside app.status's 5 s. */

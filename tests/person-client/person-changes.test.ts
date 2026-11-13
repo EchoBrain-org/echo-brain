@@ -43,13 +43,10 @@ describe('person change check client (ADR-0036)', () => {
     expect(init).toMatchObject({ method: 'GET', headers: { authorization: 'Bearer bearer' } });
   });
 
-  it('keeps the code the Authority sent, a 404 included, since every Authority serves the check (ADR-0048)', async () => {
-    const missing = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'not_found', message: 'request failed' } }, 404));
-    await expect(new PersonAuthorityClient({ authority_origin: 'https://authority.example.test', fetch: missing }).changes('bearer'))
-      .rejects.toMatchObject({ name: 'PersonAuthorityClientError', code: 'not_found', status: 404 });
+  it('keeps the code the Authority sent', async () => {
     const signedOut = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'unauthorized', message: 'request failed' } }, 401));
     await expect(new PersonAuthorityClient({ authority_origin: 'https://authority.example.test', fetch: signedOut }).changes('bearer'))
-      .rejects.toMatchObject({ code: 'unauthorized', status: 401 });
+      .rejects.toMatchObject({ name: 'PersonAuthorityClientError', code: 'unauthorized', status: 401 });
   });
 
   it('prints the change check as the last stdout line from the changes command', async () => {
@@ -63,11 +60,11 @@ describe('person change check client (ADR-0036)', () => {
   });
 
   it('fails the changes command with the code the Authority sent, as other commands report their codes', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'not_found', message: 'request failed' } }, 404));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'unavailable', message: 'request failed' } }, 503));
     const { output, run } = cli(sessionHome(), fetch);
     expect(await run(['changes'])).toBe(1);
     expect(output.stdout).toBe('');
-    expect(lastLine(output.stderr)).toMatchObject({ ok: false, action: 'changes', code: 'not_found', status: 404 });
+    expect(lastLine(output.stderr)).toMatchObject({ ok: false, action: 'changes', code: 'unavailable', status: 503 });
   });
 
   it('takes no options and needs a signed-in session before any request', async () => {

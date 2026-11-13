@@ -2,7 +2,7 @@ import { object, text, timestamp, requestBound, responseBound } from './person-u
 import { type ProjectIdV1 } from './project-context-v1.js';
 import { validateAssociationProjectIdsV1, validatePersonUploadAudienceV3, type PersonUploadAudienceV3 as UploadAudienceV3 } from './person-upload-audience-v3.js';
 import { assertExactKeys, fail } from './validation.js';
-import { PERSON_UPDATE_TEXT_MAX_BYTES, PERSON_UPDATE_TITLE_MAX_BYTES, validatePersonUpdateRequestId, validatePersonUploadContextId, validatePersonUploadSearchV1, type PersonUploadMetadataStateV1, type PersonUploadSearchV1 } from './person-updates.js';
+import { PERSON_UPDATE_TEXT_MAX_BYTES, PERSON_UPDATE_TITLE_MAX_BYTES, validatePersonUpdateRequestId, validatePersonUploadContextId, type PersonUploadMetadataStateV1 } from './person-updates.js';
 
 export const PERSON_UPDATES_PATH_V3 = '/v3/person/updates';
 export interface PersonUpdateSubmitV3 {
@@ -16,8 +16,6 @@ export type PersonUpdateStatusV3 = Omit<PersonUpdateReceiptV3, 'kind' | 'state'>
 /** Own account-scoped proof once the uploader no longer holds every named project; it carries no project coordinates (ADR-0023). */
 export interface PersonUpdateSavedV3 { readonly schema_version: 3; readonly kind: 'echo-person-update-saved-v3'; readonly request_id: string; readonly context_id: string; readonly received_at: string; readonly status: 'stored'; }
 export type PersonUpdateStatusResultV3 = PersonUpdateStatusV3 | PersonUpdateSavedV3;
-export type PersonUploadSearchV3 = PersonUploadSearchV1;
-export interface PersonUploadSearchResultV3 { readonly schema_version: 3; readonly kind: 'echo-person-upload-search-v3'; readonly results: readonly { readonly context_id: string; readonly received_at: string; readonly audience: UploadAudienceV3; readonly title: string; readonly excerpt: string }[]; }
 
 function coordinates(record: Record<string, unknown>): { readonly association_project_ids: readonly ProjectIdV1[]; readonly audience: UploadAudienceV3 } { return { association_project_ids: validateAssociationProjectIdsV1(record.association_project_ids), audience: validatePersonUploadAudienceV3(record.audience) }; }
 export function validatePersonUpdateSubmitV3(value: unknown): PersonUpdateSubmitV3 {
@@ -46,10 +44,4 @@ export function validatePersonUpdateSavedV3(value: unknown): PersonUpdateSavedV3
 }
 export function validatePersonUpdateStatusResultV3(value: unknown): PersonUpdateStatusResultV3 {
   return object(value, 'Person update status').kind === 'echo-person-update-saved-v3' ? validatePersonUpdateSavedV3(value) : validatePersonUpdateStatusV3(value);
-}
-export function validatePersonUploadSearchV3(value: unknown): PersonUploadSearchV3 { return validatePersonUploadSearchV1(value); }
-export function validatePersonUploadSearchResultV3(value: unknown): PersonUploadSearchResultV3 {
-  const record = object(value, 'Person upload results'); assertExactKeys(record, ['schema_version','kind','results'], 'Person upload results'); if (record.schema_version !== 3 || record.kind !== 'echo-person-upload-search-v3' || !Array.isArray(record.results) || record.results.length > 10) fail('Person upload results are invalid');
-  const seen = new Set<string>(); const results = record.results.map(entry => { const item = object(entry, 'Person upload result'); assertExactKeys(item, ['context_id','received_at','audience','title','excerpt'], 'Person upload result'); const context_id = validatePersonUploadContextId(item.context_id); if (seen.has(context_id)) fail('Person upload results contain duplicate IDs'); seen.add(context_id); timestamp(item.received_at); text(item.title, 'Person upload result title', PERSON_UPDATE_TITLE_MAX_BYTES, false); text(item.excerpt, 'Person upload result excerpt', 1200, true); if ([...(item.excerpt as string)].length > 300) fail('Person upload result excerpt is invalid'); return Object.freeze({ context_id, received_at: item.received_at as string, audience: validatePersonUploadAudienceV3(item.audience), title: item.title as string, excerpt: item.excerpt as string }); });
-  const response = Object.freeze({ schema_version: 3 as const, kind: 'echo-person-upload-search-v3' as const, results: Object.freeze(results) }); responseBound(response, 'Person upload results'); return response;
 }

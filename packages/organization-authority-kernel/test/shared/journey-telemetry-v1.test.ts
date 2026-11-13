@@ -95,14 +95,15 @@ describe("journey telemetry v1", () => {
       workflow: "core_runtime",
       stage: "core_operation",
       event: "succeeded",
-      outcome: null,
-      retrieval: null,
-      llm_usage: null,
       diagnostic: {
         phase: "research_run",
         counts: { citation_count: 2 },
       },
     });
+    expect(Object.keys(event).sort()).toEqual([
+      "build_number", "diagnostic", "elapsed_ms", "environment", "event", "failure_class", "journey_id", "kind",
+      "observed_at", "release_sha", "retryable", "schema_version", "sequence", "stage", "workflow",
+    ]);
     expect(Object.isFrozen(event)).toBe(true);
     expect(Object.isFrozen(event.diagnostic)).toBe(true);
     const encoded = JSON.stringify(event);

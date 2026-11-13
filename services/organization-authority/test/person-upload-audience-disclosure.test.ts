@@ -89,29 +89,9 @@ describe("released upload audiences name only the reader's current projects", ()
   it("keeps a projects audience when the reader shares two or more of its projects", () => {
     const f = fixture();
     const saved = f.uploadV2("owner", [SHARED, OWNER_ONLY, SHARED_TOO]);
-    const note = f.submitV3("owner", [SHARED, OWNER_ONLY, SHARED_TOO]);
     const visible: PersonUploadAudienceV3 = { kind: "projects", project_ids: [SHARED, SHARED_TOO] };
     expect(f.documents.readV2("member", saved.document_id).audience).toEqual(visible);
-    const uploads = f.updates.searchUploadsV3("member", { query: "interface" });
-    expect(uploads.results).toEqual([expect.objectContaining({ context_id: note.context_id, audience: visible })]);
     expect(released(f.documents.readV2("member", saved.document_id))).not.toContain(OWNER_ONLY);
-    expect(released(uploads)).not.toContain(OWNER_ONLY);
-  });
-
-  it.each([
-    { reader: "member", uploader: "owner", audience: [SHARED, OWNER_ONLY], hidden: OWNER_ONLY },
-    { reader: "owner", uploader: "member", audience: [SHARED, MEMBER_ONLY], hidden: MEMBER_ONLY },
-  ])("collapses a note's audience on every read the $reader can make", ({ reader, uploader, audience, hidden }) => {
-    const f = fixture();
-    const note = f.submitV3(uploader, audience);
-    const own: PersonUploadAudienceV3 = { kind: "project", project_id: SHARED };
-    const search = f.updates.searchV2(reader, { project_id: SHARED, query: "interface" });
-    const uploads = f.updates.searchUploadsV3(reader, { query: "interface" });
-    expect(search.items.map(item => [item.context_id, item.audience])).toEqual([[note.context_id, own]]);
-    expect(uploads.results.map(item => [item.context_id, item.audience])).toEqual([[note.context_id, own]]);
-    for (const value of [search, uploads]) expect(released(value)).not.toContain(hidden);
-
-    expect(f.updates.searchUploadsV3(uploader, { query: "interface" }).results.map(item => item.audience)).toEqual([{ kind: "projects", project_ids: audience }]);
   });
 });
 
@@ -168,8 +148,8 @@ describe("a note's V3 status applies the document receipt-visibility check", () 
   });
 });
 
-describe("the served V3 note routes release only the reader's view", () => {
-  it("serves a collapsed audience to a non-member and a saved-only status to a departed uploader", async () => {
+describe("the served V3 note status releases only the uploader's view", () => {
+  it("serves a saved-only status to a departed uploader", async () => {
     const f = fixture();
     const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ project_context: f.updates }));
     servers.push(server); server.listen(0, "127.0.0.1"); await once(server, "listening");
@@ -179,19 +159,7 @@ describe("the served V3 note routes release only the reader's view", () => {
       expect(response.status).toBe(200);
       return await response.json() as Record<string, unknown>;
     };
-    const post = async (path: string, body: unknown, token: string) => {
-      const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
-        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body),
-      });
-      expect(response.status).toBe(200);
-      return await response.json() as Record<string, unknown>;
-    };
     const note = f.submitV3("owner", [SHARED, OWNER_ONLY]);
-    const uploads = await post("/v3/person/updates/search", { query: "interface" }, "member");
-    expect(uploads.results).toEqual([expect.objectContaining({ context_id: note.context_id, audience: { kind: "project", project_id: SHARED } })]);
-    expect(released(uploads)).not.toContain(OWNER_ONLY);
-    const found = await post("/v2/person/projects/context/search", { project_id: SHARED, query: "interface" }, "member");
-    expect(found.items).toEqual([expect.objectContaining({ context_id: note.context_id, audience: { kind: "project", project_id: SHARED } })]);
 
     expect(await get(`/v3/person/updates/${note.request_id}`, "owner")).toMatchObject({ kind: "echo-person-update-status-v3", audience: { kind: "projects", project_ids: [SHARED, OWNER_ONLY] } });
     f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?")

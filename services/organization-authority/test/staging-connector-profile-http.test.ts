@@ -14,6 +14,7 @@ import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV8 } fro
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
 import { FIXTURE_CLOUD, configuration, connectSlackAndLinkOwner, port, prepare, privateFile, providerSeams, signInOwner } from './fixtures/staging-connector-profile-fixture-v1.js';
+import { askReply } from './fixtures/ask-over-http.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.unstubAllGlobals(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -66,8 +67,7 @@ it('keeps staging Jira connections in the state directory and reuses each Person
   let owner = '';
   let jiraAttempt = '';
   const post = async (path: string, body: unknown, token = owner) => {
-    const response = await fetch(`http://127.0.0.1:${runtime.address.port}${path}`, { method: 'POST', headers: { ...(token === '' ? {} : { authorization: `Bearer ${token}` }), 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    return { status: response.status, body: await response.json() as Record<string, unknown> };
+    return askReply(await fetch(`http://127.0.0.1:${runtime.address.port}${path}`, { method: 'POST', headers: { ...(token === '' ? {} : { authorization: `Bearer ${token}` }), 'content-type': 'application/json' }, body: JSON.stringify(body) }));
   };
   try {
     owner = await signInOwner(`http://127.0.0.1:${runtime.address.port}`, seams, manifest.invitation_path);

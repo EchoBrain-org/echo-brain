@@ -85,18 +85,19 @@ New editor uploads use `/v3/person/updates`; new file uploads use
 20 project IDs. The new `projects` audience contains a canonical `project_ids`
 array of one to 20 IDs. Existing only-me, organization and single-project
 audiences retain their meaning. Stored notes and documents from earlier
-request versions stay readable; the V2 note write and every V1 document route
-are retired ([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)).
+request versions stay readable, except V2 notes, which no current Authority
+holds; every V2 note route and every V1 document route are retired
+([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)).
 
-The CLI exposes `person updates submit-v3|status-v3|search-v3` and
+The CLI exposes `person updates submit-v3|status-v3` and
 `person documents upload-v2|status-v2|search-v2|download-v2`, and
 `person open --ref` reads a note's text or a document's extracted text.
-`person list --project <project-id>` browses a project's content,
-`person projects search-v2` searches it and `person open --ref` opens one row
+`person list --project <project-id>` browses a project's content and
+`person open --ref` opens one row
 ([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)). The
-desktop app's project page lists and opens its content the same way, but no
-longer searches it: since 2026-11-08 its bar only asks. Note search matches a
-note's title and text. New
+desktop app's project page lists and opens its content the same way; since
+2026-11-08 its bar only asks, and the note and project searches were retired
+on 2026-11-11. New
 admission commands accept `--association-project-ids-json`; a projects
 audience also uses `--audience-project-ids-json`. Document retry selects the
 retained snapshot's version automatically. In the desktop app, only **Save**

@@ -22,6 +22,7 @@ import { CONFLUENCE_TEXT, crossSourceLiveFixture, JIRA_TEXT } from './cross-sour
 import { seedCrossSourceRecords } from './cross-source-record-fixture.js';
 import { authorization } from './project-context-sqlite.js';
 import { FIXTURE_CONFLUENCE_CLOUD_V1 } from './fake-confluence-v1.js';
+import { askReply } from './ask-over-http.js';
 import { FIXTURE_JIRA_CLOUD_V1 } from './fake-jira-v1.js';
 
 /**
@@ -131,8 +132,7 @@ export async function allSourceAskFixture(owned: string[], options: { readonly n
   const session = await f.signIn(origin);
   const token = session.access_token;
   const post = async (path: string, body: unknown, bearer = token) => {
-    const response = await fetch(`${origin}${path}`, { method: 'POST', headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    return { status: response.status, body: await response.json() as Record<string, unknown> };
+    return askReply(await fetch(`${origin}${path}`, { method: 'POST', headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' }, body: JSON.stringify(body) }));
   };
   for (const [tool, nango] of [['jira', live.jira], ['confluence', live.confluence]] as const) {
     const connect = await post(`/v1/person/tools/${tool}/connect`, { schema_version: 1 });

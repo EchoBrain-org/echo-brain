@@ -973,14 +973,14 @@ PY
 }
 
 staging_connector_rehearsal_matches_prepared_tuple() {
-  python3 - "$ENV_FILE" "$SETUP_FILE" "$STAGING_CONNECTOR_REHEARSAL_PROFILE_PATH" "$DATA_DIR/staging-connector-rehearsal-v1" "$ACTIVE_RUNTIME_PROFILE_FILE" <<'PY'
+  python3 - "$ENV_FILE" "$SETUP_FILE" "$STAGING_CONNECTOR_REHEARSAL_PROFILE_PATH" "$ACTIVE_RUNTIME_PROFILE_FILE" <<'PY'
 import hashlib
 import json
 import pathlib
 import stat
 import sys
 
-environment, setup, profile_path, sidecar, runtime_profile = map(pathlib.Path, sys.argv[1:])
+environment, setup, profile_path, runtime_profile = map(pathlib.Path, sys.argv[1:])
 expected_path = '/echo-clean/private/staging-connector-rehearsal.json'
 
 def rows(path, key):
@@ -992,7 +992,7 @@ if len(profile_rows) > 1:
     raise SystemExit(1)
 setup_digests = rows(setup, 'staging_connector_rehearsal_profile_sha256')
 if profile_rows in ([], ['']):
-    if setup_digests or profile_path.exists() or profile_path.is_symlink() or sidecar.exists() or sidecar.is_symlink():
+    if setup_digests or profile_path.exists() or profile_path.is_symlink():
         raise SystemExit(1)
     raise SystemExit(0)
 selected = profile_rows[0]

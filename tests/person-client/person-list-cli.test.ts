@@ -5,6 +5,7 @@ import { canonicalJson } from '@echo-brain/federation-protocol';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
+import { askStream } from './ask-stream.js';
 
 const now = '2026-09-29T20:01:00.000Z';
 const projectId = 'prj_11111111-1111-4111-8111-111111111111';
@@ -13,8 +14,6 @@ const record = 'c'.repeat(64);
 const NOTE = `note:ctx_${'a'.repeat(64)}`;
 const DOCUMENT = `document:doc_${'b'.repeat(64)}`;
 const MEETING = `meeting:sha256:${record}`;
-/** The retired transcript ref (ADR-0046). */
-const TRANSCRIPT = `transcript:sha256:${record}`;
 const CURSOR = 'AnR3-page_2';
 
 /** One signed-in home shared by every run: list, open and ask keep no local state. */
@@ -70,18 +69,11 @@ const noteRow = { ref: NOTE, kind: 'note', title: 'Pricing notes', added_at: '20
 const meetingRow = { ref: MEETING, kind: 'meeting', title: 'Pricing review', added_at: '2026-09-21T18:00:00.000Z', visibility: 'team', projects: [{ project_id: projectId, name: 'Apollo' }], meeting_date: '2026-09-21' };
 /** Only me: a note filed in Apollo and a meeting kept for the caller alone. */
 const onlyMeRows = [{ ...noteRow, projects: [{ project_id: projectId, name: 'Apollo' }] }, { ...meetingRow, visibility: 'only_me', projects: [] }];
-/** The retired global page's header: no list page carries it now. */
-const retiredHeader = { me: { display_name: 'Maya Chen', membership_type: 'employee' }, connected: [{ tool: 'slack', status: 'linked' }], projects: [project], projects_more: false };
 
 function page(scope: unknown, header: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) {
   return { schema_version: 1, kind: 'echo-person-list-v1', scope, ...header, items: [noteRow, meetingRow], next_cursor: null, ...extra };
 }
 
-function meetingOpen(extra: Record<string, unknown> = {}) {
-  return { schema_version: 1, kind: 'echo-person-open-v1', ref: MEETING, item: meetingRow,
-    atoms: [{ kind: 'decision', text: 'Annual plans first.', status: 'decided' }], next_cursor: null, ...extra };
-}
-const meetingDetail = { all_day: false, participants: ['Ari', 'Maya Chen'], participants_more: false, approved_by: 'Ari' };
 
 /** Answers every list or open call with one response and records what was sent. */
 function network(response: () => Response) {
@@ -111,18 +103,12 @@ describe('person list CLI', () => {
     }
   });
 
-  it('refuses a missing scope, a scope pair, the retired --mine or an unsupported list flag before the network', async () => {
+  it('refuses a missing scope, a scope pair or an unsupported list flag before the network', async () => {
     const cases = [
-      // No scope was the retired global list.
       ['list'],
       ['list', '--cursor', CURSOR],
-      ['list', '--mine'],
-      ['list', '--project', projectId, '--mine'],
-      ['list', '--mine', '--only-me'],
       ['list', '--only-me', '--project', projectId],
       ['list', '--only-me=true'],
-      ['ask', '--question', 'What did I decide?', '--mine'],
-      ['ask', '--question', 'What did I decide?', '--project', projectId, '--mine'],
       ['ask', '--question', 'What did I decide?', '--only-me'],
       ['list', '--only-me', '--kind', 'note'],
       ['list', '--only-me', '--limit', '10'],
@@ -152,10 +138,6 @@ describe('person list CLI', () => {
       const combined = await run(argv, vi.fn<typeof globalThis.fetch>());
       expect(JSON.parse(combined.stderr)).toEqual({ ok: false, error });
     }
-    // --mine is no option of any command now.
-    for (const argv of [['list', '--mine'], ['ask', '--question', 'What did I decide?', '--mine']]) {
-      expect(JSON.parse((await run(argv, vi.fn<typeof globalThis.fetch>())).stderr).error).toContain("'--mine'");
-    }
   });
 
   it('rejects list pages whose scope or header does not belong to the request', async () => {
@@ -164,12 +146,6 @@ describe('person list CLI', () => {
       [['list', '--project', projectId, '--cursor', CURSOR], page({ kind: 'project', project_id: projectId }, { project })],
       [['list', '--project', projectId], page({ kind: 'project', project_id: projectId })],
       [['list', '--project', projectId], page({ kind: 'only_me' })],
-      // The retired global and mine pages, and the global page's header, belong to no request.
-      [['list', '--project', projectId], page({ kind: 'global' }, retiredHeader)],
-      [['list', '--project', projectId], page({ kind: 'project', project_id: projectId }, { project, ...retiredHeader })],
-      [['list', '--only-me'], page({ kind: 'mine' })],
-      [['list', '--only-me'], page({ kind: 'global' })],
-      [['list', '--only-me'], page({ kind: 'only_me' }, retiredHeader)],
       [['list', '--only-me'], page({ kind: 'only_me' }, { project })],
       [['list', '--only-me'], page({ kind: 'only_me', project_id: projectId })],
     ];
@@ -205,8 +181,6 @@ describe('person open CLI', () => {
     const cases: readonly [string[], Record<string, unknown>, unknown][] = [
       [['open', '--ref', NOTE], { schema_version: 1, ref: NOTE },
         { schema_version: 1, kind: 'echo-person-open-v1', ref: NOTE, item: noteRow, text: 'Annual plans first.\n', next_cursor: null }],
-      [['open', '--ref', MEETING], { schema_version: 1, ref: MEETING }, meetingOpen({ meeting: meetingDetail, next_cursor: CURSOR })],
-      [['open', '--ref', MEETING, '--cursor', CURSOR], { schema_version: 1, ref: MEETING, cursor: CURSOR }, meetingOpen()],
     ];
     for (const [argv, body, response] of cases) {
       const { fetch, sent } = network(() => json(response));
@@ -231,14 +205,14 @@ describe('person open CLI', () => {
       ['open', '--cursor', CURSOR],
       ['open', '--ref', `note:ctx_${'A'.repeat(64)}`],
       ['open', '--ref', `meeting:${record}`],
+      // A listed meeting is read with person records --record-sha256 --brief, never opened (2026-11-11).
+      ['open', '--ref', MEETING],
       ['open', '--ref', `record:sha256:${record}`],
       ['open', '--ref', `sha256:${record}`],
-      ['open', '--ref', TRANSCRIPT],
       ['open', '--ref', DOCUMENT, '--cursor', 'bad cursor'],
       ['open', '--ref', DOCUMENT, '--cursor', 'A'.repeat(513)],
       ['open', '--ref', NOTE, '--cursor', CURSOR],
       ['open', '--ref', NOTE, '--project', projectId],
-      ['open', '--ref', NOTE, '--mine'],
     ];
     for (const argv of cases) {
       const { fetch } = network(() => { throw new Error('network must not be used'); });
@@ -249,12 +223,10 @@ describe('person open CLI', () => {
     }
   });
 
-  it('rejects an open response for another ref or with meeting detail on the wrong page', async () => {
+  it('rejects an open response for another ref', async () => {
     const cases: readonly [string[], unknown][] = [
-      [['open', '--ref', MEETING], meetingOpen({ ref: `meeting:sha256:${'d'.repeat(64)}`, item: { ...meetingRow, ref: `meeting:sha256:${'d'.repeat(64)}` }, meeting: meetingDetail })],
       [['open', '--ref', NOTE], { schema_version: 1, kind: 'echo-person-open-v1', ref: `note:ctx_${'e'.repeat(64)}`, item: { ...noteRow, ref: `note:ctx_${'e'.repeat(64)}` }, text: 'Other.', next_cursor: null }],
-      [['open', '--ref', MEETING, '--cursor', CURSOR], meetingOpen({ meeting: meetingDetail })],
-      [['open', '--ref', MEETING], meetingOpen()],
+      [['open', '--ref', NOTE], { schema_version: 1, kind: 'echo-person-open-v1', ref: MEETING, item: meetingRow, atoms: [], next_cursor: null }],
     ];
     for (const [argv, response] of cases) {
       const result = await run(argv, network(() => json(response)).fetch);
@@ -288,7 +260,7 @@ describe('person ask in a project', () => {
   }
 
   it('sends the project on the newest route and returns citations that carry refs', async () => {
-    const { fetch, sent } = network(() => json(answer({ kind: 'project', project_id: projectId })));
+    const { fetch, sent } = network(() => askStream(answer({ kind: 'project', project_id: projectId })));
     const result = await run(['ask', '--question', 'What did I decide?', '--project', projectId], fetch);
     expect(result.code, result.stderr).toBe(0);
     expect(sent.map(({ path, body }) => ({ path, body }))).toEqual([{ path: '/v7/person/ask', body: canonicalJson({ schema_version: 3, question: 'What did I decide?', project_id: projectId }) }]);
@@ -296,7 +268,7 @@ describe('person ask in a project', () => {
   });
 
   it('fails when the Authority answers under another scope', async () => {
-    const result = await run(['ask', '--question', 'What did I decide?', '--project', projectId], network(() => json(answer({ kind: 'global' }))).fetch);
+    const result = await run(['ask', '--question', 'What did I decide?', '--project', projectId], network(() => askStream(answer({ kind: 'global' }))).fetch);
     expect(result.code).toBe(1);
     expect(result.stdout).toBe('');
     expect(JSON.parse(result.stderr)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_response', status: 200 });

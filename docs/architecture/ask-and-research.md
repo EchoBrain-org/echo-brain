@@ -31,9 +31,11 @@ flowchart LR
 - **One route:** `POST /v7/person/ask`, answering the V8 answer shape. Older
   answer routes return 404
   ([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)).
-- **Request headers:** `x-echo-ask-progress: 3` streams progress as server-sent
-  events ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md));
-  `x-echo-client-now` and `x-echo-time-zone` anchor dates. Every answer is
+- **Streaming:** every Ask streams its progress as server-sent events
+  ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md));
+  only a failure before the stream starts is JSON. The opt-in header and the
+  plain JSON answer were retired on 2026-11-11.
+- **Request headers:** `x-echo-client-now` and `x-echo-time-zone` anchor dates. Every answer is
   arranged by the writer from a catalog of seven blocks and released in them
   ([ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md)); no header asks
   for it, and `x-echo-answer-layout`, which older clients send, is not read. A follow-up carries

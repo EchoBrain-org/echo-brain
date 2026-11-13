@@ -23,12 +23,7 @@ const PERSON_LIST_ROW_PROJECTS_MAX_V1 = 20;
 export const PERSON_LIST_TEXT_MAX_BYTES_V1 = 200;
 export const PERSON_LIST_RESPONSE_MAX_BYTES_V1 = 320 * 1024;
 export const PERSON_OPEN_RESPONSE_MAX_BYTES_V1 = 64 * 1024;
-export const PERSON_OPEN_ATOMS_MAX_V1 = 25;
-/** Server page budget for the canonical JSON of one page's atoms array. */
-export const PERSON_OPEN_ATOMS_BUDGET_BYTES_V1 = 32 * 1024;
-export const PERSON_OPEN_ATOM_PART_MAX_BYTES_V1 = 3 * 1024;
 const PERSON_OPEN_DOCUMENT_CHUNKS_MAX_V1 = 8;
-export const PERSON_OPEN_PARTICIPANTS_MAX_V1 = 32;
 export const PERSON_LIST_NOTICE_MEETINGS_UNAVAILABLE_V1 = 'meetings_unavailable';
 
 export type PersonItemKindV1 = 'imported_meeting' | 'note' | 'document' | 'meeting';
@@ -37,6 +32,8 @@ export type PersonNoteRefV1 = `note:ctx_${string}`;
 export type PersonDocumentRefV1 = `document:doc_${string}`;
 export type PersonMeetingRefV1 = `meeting:sha256:${string}`;
 export type PersonItemRefV1 = PersonImportedMeetingRefV1 | PersonNoteRefV1 | PersonDocumentRefV1 | PersonMeetingRefV1;
+/** What open reads. A listed meeting is read as its record (`GET /v1/person/records`); open of a meeting was retired on 2026-11-11. */
+export type PersonOpenRefV1 = Exclude<PersonItemRefV1, PersonMeetingRefV1>;
 export type PersonListVisibilityV1 = 'only_me' | 'team' | 'project';
 export type PersonListNoticeV1 = 'meetings_unavailable';
 /**
@@ -103,33 +100,13 @@ export interface PersonListResponseV1 {
 
 export interface PersonOpenRequestV1 {
   readonly schema_version: 1;
-  readonly ref: PersonItemRefV1;
+  readonly ref: PersonOpenRefV1;
   /** Never with a note ref. */
   readonly cursor?: string;
 }
 export interface PersonOpenDocumentChunkV1 {
   readonly anchor: { readonly kind: 'page' | 'paragraph'; readonly start: number };
   readonly text: string;
-}
-export interface PersonOpenMeetingDetailV1 {
-  readonly started_at?: string;
-  readonly ended_at?: string;
-  readonly timezone?: string;
-  readonly all_day: boolean;
-  /** Display names only. */
-  readonly participants: readonly string[];
-  readonly participants_more: boolean;
-  /** The final approver's current directory display name. */
-  readonly approved_by?: string;
-}
-/** An atom longer than one part is split, never dropped; its parts concatenate to the approved text. */
-export interface PersonOpenMeetingAtomV1 {
-  readonly kind: 'decision' | 'action' | 'rationale';
-  readonly text: string;
-  readonly status?: 'proposed' | 'decided' | 'unresolved';
-  readonly owner?: string;
-  readonly due_at?: string;
-  readonly part?: { readonly index: number; readonly count: number };
 }
 interface PersonOpenBaseV1 { readonly schema_version: 1; readonly kind: 'echo-person-open-v1'; readonly next_cursor: string | null }
 export interface PersonOpenImportedMeetingV1 extends PersonOpenBaseV1 { readonly ref: PersonImportedMeetingRefV1; readonly item: PersonListImportedMeetingRowV1; readonly text: string }
@@ -146,14 +123,7 @@ export interface PersonOpenDocumentV1 extends PersonOpenBaseV1 {
   /** Empty while extracting or when the document has no text. */
   readonly chunks: readonly PersonOpenDocumentChunkV1[];
 }
-export interface PersonOpenMeetingV1 extends PersonOpenBaseV1 {
-  readonly ref: PersonMeetingRefV1;
-  readonly item: PersonListMeetingRowV1;
-  /** Present iff the request had no cursor. */
-  readonly meeting?: PersonOpenMeetingDetailV1;
-  readonly atoms: readonly PersonOpenMeetingAtomV1[];
-}
-export type PersonOpenResponseV1 = PersonOpenImportedMeetingV1 | PersonOpenNoteV1 | PersonOpenDocumentV1 | PersonOpenMeetingV1;
+export type PersonOpenResponseV1 = PersonOpenImportedMeetingV1 | PersonOpenNoteV1 | PersonOpenDocumentV1;
 
 const IMPORTED_REF = /^imported_meeting:cap_[0-9a-f]{64}$/;
 const NOTE_REF = /^note:ctx_[0-9a-f]{64}$/;
@@ -161,7 +131,6 @@ const DOCUMENT_REF = /^document:doc_[0-9a-f]{64}$/;
 const MEETING_REF = /^meeting:sha256:[0-9a-f]{64}$/;
 const CURSOR = /^[A-Za-z0-9_-]{1,512}$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
-const TIMEZONE = /^[A-Za-z0-9_+\-/]{1,64}$/;
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 const LINE_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 /** Project names and upload filenames may hold interior line and paragraph separators (project-context-v1.ts, person-documents-v1.ts). */
@@ -175,8 +144,6 @@ const MEDIA_TYPES: readonly string[] = Object.keys({
 const EXTRACTION_STATES: readonly string[] = Object.keys({
   extracting: true, ready: true, partial: true, no_text: true, encrypted: true, malformed: true, limit_exceeded: true, timed_out: true, unsupported: true, unavailable: true,
 } satisfies Record<PersonDocumentExtractionStateV1, true>);
-const ATOM_KINDS: readonly string[] = ['decision', 'action', 'rationale'];
-const DECISION_STATUSES: readonly string[] = ['proposed', 'decided', 'unresolved'];
 
 function optionalKeys(input: Record<string, unknown>, keys: readonly string[]): string[] {
   return keys.filter((key) => Object.hasOwn(input, key));
@@ -340,11 +307,17 @@ export function validatePersonListResponseV1(value: unknown): PersonListResponse
   }, PERSON_LIST_RESPONSE_MAX_BYTES_V1, 'Person list response');
 }
 
+function openRef(value: unknown, label: string): PersonOpenRefV1 {
+  const ref = validatePersonItemRefV1(value, label);
+  if (personRefKindV1(ref) === 'meeting') fail(`${label} is invalid`);
+  return ref as PersonOpenRefV1;
+}
+
 export function validatePersonOpenRequestV1(value: unknown): PersonOpenRequestV1 {
   const input = object(value, 'Person open request');
   assertExactKeys(input, ['schema_version', 'ref', ...optionalKeys(input, ['cursor'])], 'Person open request');
   if (input.schema_version !== 1) fail('Person open request schema_version is unsupported');
-  const ref = validatePersonItemRefV1(input.ref, 'Person open request ref');
+  const ref = openRef(input.ref, 'Person open request ref');
   if (Object.hasOwn(input, 'cursor') && personRefKindV1(ref) === 'note') fail('Person open request cursor is invalid');
   return Object.freeze({ schema_version: 1 as const, ref, ...(Object.hasOwn(input, 'cursor') ? { cursor: cursor(input.cursor, 'Person open request cursor') } : {}) });
 }
@@ -386,76 +359,11 @@ function chunk(value: unknown): PersonOpenDocumentChunkV1 {
   return Object.freeze({ anchor: Object.freeze({ kind: anchor.kind, start: anchor.start as number }), text: input.text });
 }
 
-function meetingTime(value: unknown, label: string): asserts value is string {
-  line(value, label, 64);
-  if (!Number.isFinite(Date.parse(value))) fail(`${label} is invalid`);
-}
-
-function meetingDetail(value: unknown): PersonOpenMeetingDetailV1 {
-  const input = object(value, 'Person open meeting');
-  const optional = optionalKeys(input, ['started_at', 'ended_at', 'timezone', 'approved_by']);
-  assertExactKeys(input, ['all_day', 'participants', 'participants_more', ...optional], 'Person open meeting');
-  if (Object.hasOwn(input, 'started_at')) meetingTime(input.started_at, 'Person open meeting started_at');
-  if (Object.hasOwn(input, 'ended_at')) meetingTime(input.ended_at, 'Person open meeting ended_at');
-  if (Object.hasOwn(input, 'timezone') && (typeof input.timezone !== 'string' || !TIMEZONE.test(input.timezone))) fail('Person open meeting timezone is invalid');
-  if (typeof input.all_day !== 'boolean' || typeof input.participants_more !== 'boolean') fail('Person open meeting is invalid');
-  if (!Array.isArray(input.participants) || input.participants.length > PERSON_OPEN_PARTICIPANTS_MAX_V1) fail('Person open meeting participants is invalid');
-  const participants = input.participants.map((participant) => {
-    line(participant, 'Person open meeting participant', PERSON_LIST_TEXT_MAX_BYTES_V1);
-    return participant;
-  });
-  if (new Set(participants).size !== participants.length) fail('Person open meeting participants contains duplicates');
-  if (Object.hasOwn(input, 'approved_by')) line(input.approved_by, 'Person open meeting approved_by', PERSON_LIST_TEXT_MAX_BYTES_V1);
-  return Object.freeze({
-    ...(Object.hasOwn(input, 'started_at') ? { started_at: input.started_at as string } : {}),
-    ...(Object.hasOwn(input, 'ended_at') ? { ended_at: input.ended_at as string } : {}),
-    ...(Object.hasOwn(input, 'timezone') ? { timezone: input.timezone as string } : {}),
-    all_day: input.all_day, participants: Object.freeze(participants), participants_more: input.participants_more,
-    ...(Object.hasOwn(input, 'approved_by') ? { approved_by: input.approved_by as string } : {}),
-  });
-}
-
-function atom(value: unknown): PersonOpenMeetingAtomV1 {
-  const input = object(value, 'Person open meeting atom');
-  const optional = optionalKeys(input, ['status', 'owner', 'due_at', 'part']);
-  assertExactKeys(input, ['kind', 'text', ...optional], 'Person open meeting atom');
-  if (!ATOM_KINDS.includes(input.kind as string)) fail('Person open meeting atom kind is invalid');
-  body(input.text, 'Person open meeting atom text', PERSON_OPEN_ATOM_PART_MAX_BYTES_V1);
-  if (Object.hasOwn(input, 'status') && (input.kind !== 'decision' || !DECISION_STATUSES.includes(input.status as string))) fail('Person open meeting atom status is invalid');
-  if (Object.hasOwn(input, 'owner')) {
-    if (input.kind !== 'action') fail('Person open meeting atom owner is invalid');
-    line(input.owner, 'Person open meeting atom owner', 512);
-  }
-  if (Object.hasOwn(input, 'due_at')) {
-    if (input.kind !== 'action') fail('Person open meeting atom due_at is invalid');
-    line(input.due_at, 'Person open meeting atom due_at', 128);
-  }
-  let part: PersonOpenMeetingAtomV1['part'];
-  if (Object.hasOwn(input, 'part')) {
-    const raw = object(input.part, 'Person open meeting atom part');
-    assertExactKeys(raw, ['index', 'count'], 'Person open meeting atom part');
-    if (!Number.isSafeInteger(raw.count) || (raw.count as number) < 2 || !Number.isSafeInteger(raw.index) || (raw.index as number) < 1 || (raw.index as number) > (raw.count as number)) {
-      fail('Person open meeting atom part is invalid');
-    }
-    part = Object.freeze({ index: raw.index as number, count: raw.count as number });
-    if (part.index > 1 && optional.some((key) => key !== 'part')) fail('Person open meeting atom attributes belong to its first part');
-  }
-  return Object.freeze({
-    kind: input.kind as PersonOpenMeetingAtomV1['kind'], text: input.text,
-    ...(Object.hasOwn(input, 'status') ? { status: input.status as PersonOpenMeetingAtomV1['status'] } : {}),
-    ...(Object.hasOwn(input, 'owner') ? { owner: input.owner as string } : {}),
-    ...(Object.hasOwn(input, 'due_at') ? { due_at: input.due_at as string } : {}),
-    ...(part === undefined ? {} : { part }),
-  });
-}
-
 export function validatePersonOpenResponseV1(value: unknown): PersonOpenResponseV1 {
   const input = object(value, 'Person open response');
-  const ref = validatePersonItemRefV1(input.ref, 'Person open response ref');
-  const kind = personRefKindV1(ref);
-  const keys = kind === 'note' || kind === 'imported_meeting' ? ['item', 'text']
-    : kind === 'document' ? ['item', 'filename', 'chunks']
-    : ['item', 'atoms', ...optionalKeys(input, ['meeting'])];
+  const ref = openRef(input.ref, 'Person open response ref');
+  const kind = personRefKindV1(ref) as Exclude<PersonItemKindV1, 'meeting'>;
+  const keys = kind === 'document' ? ['item', 'filename', 'chunks'] : ['item', 'text'];
   assertExactKeys(input, ['schema_version', 'kind', 'ref', 'next_cursor', ...keys], 'Person open response');
   if (input.schema_version !== 1 || input.kind !== 'echo-person-open-v1') fail('Person open response is invalid');
   const next_cursor = input.next_cursor === null ? null : cursor(input.next_cursor, 'Person open response next_cursor');
@@ -480,17 +388,6 @@ export function validatePersonOpenResponseV1(value: unknown): PersonOpenResponse
       if (!Array.isArray(input.chunks) || input.chunks.length > PERSON_OPEN_DOCUMENT_CHUNKS_MAX_V1) fail('Person open document chunks is invalid');
       return bounded<PersonOpenDocumentV1>({
         ...base, ref: ref as PersonDocumentRefV1, item, filename: input.filename, chunks: Object.freeze(input.chunks.map(chunk)), next_cursor,
-      }, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, 'Person open response');
-    }
-    case 'meeting': {
-      const item = openItem(input.item, ref as PersonMeetingRefV1) as PersonListMeetingRowV1;
-      const meeting = Object.hasOwn(input, 'meeting') ? meetingDetail(input.meeting) : undefined;
-      if (!Array.isArray(input.atoms) || input.atoms.length > PERSON_OPEN_ATOMS_MAX_V1) fail('Person open meeting atoms is invalid');
-      const atoms = input.atoms.map(atom);
-      // A cursor page always carries at least one part; only a zero-signal record's first page is empty.
-      if (atoms.length === 0 && (meeting === undefined || next_cursor !== null)) fail('Person open meeting atoms is invalid');
-      return bounded<PersonOpenMeetingV1>({
-        ...base, ref: ref as PersonMeetingRefV1, item, ...(meeting === undefined ? {} : { meeting }), atoms: Object.freeze(atoms), next_cursor,
       }, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, 'Person open response');
     }
   }

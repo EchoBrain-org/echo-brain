@@ -726,9 +726,8 @@ fields are checked for the relationships and input formats enforced by
 `onboard-clean-v1.sh`; they cannot be independently bound to the release record
 because that record intentionally does not contain organization contact or host
 configuration. It refuses a recovery point with a selected staging connector
-rehearsal: a non-empty `ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE`,
-`private/staging-connector-rehearsal.json`, or `staging-connector-rehearsal-v1/`
-under `clean-data/`. Such a restore is unsupported; see the
+rehearsal: a non-empty `ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE` or
+`private/staging-connector-rehearsal.json` under `clean-data/`. Such a restore is unsupported; see the
 [staging connector rehearsal](../../deploy/organization-authority/README.md#optional-staging-connector-rehearsal)
 recovery rules. It also checks
 primary SQLite integrity, published retrieval SQLite integrity, state lineage,

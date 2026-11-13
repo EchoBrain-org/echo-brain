@@ -41,14 +41,6 @@ import {
  * `owner_set_at` and `state_set_at`). Notification discovery pages through
  * `items` separately so Home's twenty-row display limit does not hide
  * assignments.
- *
- * Sweeps, which rechecked open items, are retired (SVC-2): `sweep` is no
- * longer an operation. The fields that carried their results are still sent,
- * as constants, so released clients keep validating: an item's `check` is
- * null; `home` answers `landed` 0, `last_checked_at` null and `sweep_due`
- * false; a summary's `landed`, `changed` and `unreadable` are 0 and its
- * `last_checked_at` null, and each decision's `landed` and `unreadable` are
- * 0. They go with the V17 reset.
  */
 export const PERSON_RUNS_PATH_V1 = '/v1/person/runs';
 
@@ -106,16 +98,13 @@ export type PersonRunsRequestV1 =
 
 export interface PersonRunV1 {
   readonly run_id: string;
-  /** Always `approved_record`; `sweep` stays allowed for one release, so a list from an Authority rolled back still reads. */
-  readonly trigger: 'approved_record' | 'sweep';
+  readonly trigger: 'approved_record';
   readonly event_ref: string;
   readonly state: PersonRunStateV1; readonly error_code: PersonRunErrorCodeV1 | null;
   readonly created_at: string; readonly updated_at: string;
 }
 
 export type PersonOpenItemStateV1 = 'unsent' | 'open' | 'done' | 'not_relevant';
-/** A retired sweep's verdict (SVC-2): no item carries one now; removed with the V17 reset. */
-export type PersonOpenItemVerdictV1 = 'landed' | 'still_open' | 'changed' | 'unreadable';
 /**
  * What an item is: an action the approved meeting decided (`action`, follow-ups thread v1), or an existing item the impact
  * check found the meeting affects: a Jira ticket, a page, another ECHO record or an ECHO document.
@@ -165,8 +154,6 @@ export interface PersonOpenItemV1 {
    * false when Send dismissed it. A later state change leaves it as Send set it.
    */
   readonly send_included: boolean | null;
-  /** Retired with sweeps (SVC-2): always null. */
-  readonly check: { readonly verdict: PersonOpenItemVerdictV1; readonly checked_at: string; readonly checked_by: string } | null;
   readonly can: { readonly set_state: boolean; readonly assign: boolean };
   /** `current` comes exactly with `opened`. */
   readonly reach: PersonOpenItemReachV1;
@@ -180,15 +167,11 @@ export interface PersonHomeSendV1 {
 }
 export interface PersonOpenItemsSummaryV1 {
   readonly unsent: number; readonly open: number; readonly done: number; readonly not_relevant: number; readonly decisions: number;
-  /** Retired with sweeps (SVC-2): always 0, 0, 0 and null. */
-  readonly landed: number; readonly changed: number; readonly unreadable: number; readonly last_checked_at: string | null;
   readonly by_decision: readonly PersonOpenItemsDecisionCountV1[];
 }
 /** One decision's items in a summary. */
 export interface PersonOpenItemsDecisionCountV1 {
   readonly record_sha256: string; readonly unsent: number; readonly open: number;
-  /** Retired with sweeps (SVC-2): always 0 (a client still checks `landed + unreadable <= open`). */
-  readonly landed: number; readonly unreadable: number;
 }
 export interface PersonImpactStageV1 {
   readonly record_sha256: string; readonly run_id: string;
@@ -218,9 +201,7 @@ export interface PersonRunsResultsV1 {
   home: { readonly send: readonly PersonHomeSendV1[];
           /** At most twenty: newest handoffs first. */
           readonly items: readonly PersonOpenItemV1[];
-          readonly waiting: number;
-          /** Retired with sweeps (SVC-2): always 0, null and false. */
-          readonly landed: number; readonly last_checked_at: string | null; readonly sweep_due: boolean };
+          readonly waiting: number };
   items: { readonly items: readonly PersonOpenItemV1[]; readonly next_cursor: string | null;
            readonly summary: PersonOpenItemsSummaryV1; readonly stages: readonly PersonImpactStageV1[] };
   item: { readonly item: PersonOpenItemV1 };
@@ -249,8 +230,6 @@ const RUN_ID = /^run_[A-Za-z0-9-]{4,60}$/;
 const COMMAND_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const CURSOR = /^[A-Za-z0-9_-]{1,256}$/;
 const STATES: readonly string[] = ['pending', 'running', 'done', 'failed'];
-/** `sweep` for one release only (`PersonRunV1.trigger`). */
-const TRIGGERS: readonly string[] = ['approved_record', 'sweep'];
 const ERROR_CODES: readonly string[] = ['no_access', 'unavailable', 'timed_out', 'research_failed'];
 const REQUEST_KEYS: Readonly<Record<PersonRunsRequestV1['operation'], readonly string[]>> = Object.freeze({
   list: [], home: [], start: ['run_id'], next: [], retry: ['run_id'], view: ['run_id'], items: ['scope'], item: ['item_id'],
@@ -259,7 +238,7 @@ const REQUEST_KEYS: Readonly<Record<PersonRunsRequestV1['operation'], readonly s
 /** Each result's keys. */
 const RESULT_KEYS: Readonly<Record<keyof PersonRunsResultsV1, readonly string[]>> = Object.freeze({
   list: ['runs'], start: ['state'], next: ['state'], retry: ['state'], view: ['card', 'checked_at', 'hidden'],
-  home: ['send', 'items', 'landed', 'waiting', 'last_checked_at', 'sweep_due'], items: ['items', 'next_cursor', 'summary', 'stages'],
+  home: ['send', 'items', 'waiting'], items: ['items', 'next_cursor', 'summary', 'stages'],
   item: ['item'], send: ['sent', 'not_relevant'], set_state: ['state'], assign: ['owner'],
 });
 const START_STATES: readonly string[] = ['pending', 'running', 'busy', 'done', 'failed'];
@@ -268,8 +247,6 @@ const NEXT_STATES: readonly string[] = ['idle', 'pending', 'running', 'busy'];
 const SCOPES = ['mine', 'involved', 'run', 'record', 'project'] as const;
 const SET_STATES = ['open', 'done', 'not_relevant'] as const;
 const ITEM_STATES = ['unsent', ...SET_STATES] as const;
-/** A retired sweep's verdicts: a client still reads a `check` an Authority rolled back sends. */
-const VERDICTS = ['landed', 'still_open', 'changed', 'unreadable'] as const;
 const KINDS = ['action', 'ticket', 'page', 'record', 'document'] as const;
 const OWNER_MATCHES = ['jira_account', 'name', 'picked', 'approver', 'reassigned'] as const;
 const RELATIONS = ['conflicts', 'needs_updating'] as const;
@@ -421,13 +398,13 @@ function run(value: unknown): PersonRunV1 {
   const entry = asEnumerableRecord(value, 'Run');
   assertExactKeys(entry, ['run_id', 'trigger', 'event_ref', 'state', 'error_code', 'created_at', 'updated_at'], 'Run');
   runId(entry.run_id, 'Run id');
-  if (typeof entry.trigger !== 'string' || !TRIGGERS.includes(entry.trigger)) fail('Run trigger is invalid');
+  if (entry.trigger !== 'approved_record') fail('Run trigger is invalid');
   assertString(entry.event_ref, 'Run event ref', 128);
   runState(entry, 'Run');
   assertTimestamp(entry.created_at, 'Run created_at');
   assertTimestamp(entry.updated_at, 'Run updated_at');
   return Object.freeze({
-    run_id: entry.run_id as string, trigger: entry.trigger as PersonRunV1['trigger'], event_ref: entry.event_ref as string, state: entry.state as PersonRunStateV1,
+    run_id: entry.run_id as string, trigger: 'approved_record', event_ref: entry.event_ref as string, state: entry.state as PersonRunStateV1,
     error_code: entry.error_code as PersonRunErrorCodeV1 | null, created_at: entry.created_at as string, updated_at: entry.updated_at as string,
   });
 }
@@ -476,14 +453,6 @@ function current(value: unknown): PersonOpenItemCurrentV1 {
   });
 }
 
-function check(value: unknown): PersonOpenItemV1['check'] {
-  if (value === null) return null;
-  const entry = asEnumerableRecord(value, 'Open item check');
-  assertExactKeys(entry, ['verdict', 'checked_at', 'checked_by'], 'Open item check');
-  assertTimestamp(entry.checked_at, 'Open item checked_at');
-  return Object.freeze({ verdict: oneOf(entry.verdict, VERDICTS, 'Open item check verdict'), checked_at: entry.checked_at as string, checked_by: line(entry.checked_by, 'Open item checked_by', LIMITS.name_chars) });
-}
-
 function can(value: unknown): PersonOpenItemV1['can'] {
   const entry = asEnumerableRecord(value, 'Open item permission set');
   assertExactKeys(entry, ['set_state', 'assign'], 'Open item permission set');
@@ -496,7 +465,7 @@ function openItem(value: unknown): PersonOpenItemV1 {
   // What a viewer may not see is left out, never sent empty.
   const parts = ['decision', 'current'].filter(key => Object.hasOwn(entry, key));
   assertExactKeys(entry, ['item_id', 'run_id', 'kind', 'relation', 'expected', 'approver', 'owner', 'waits_on', 'state', 'created_at', 'sent_at', 'state_set_at',
-    'state_set_by', 'owner_set_at', 'owner_set_by', 'send_included', 'check', 'can', 'reach', ...parts], 'Open item');
+    'state_set_by', 'owner_set_at', 'owner_set_by', 'send_included', 'can', 'reach', ...parts], 'Open item');
   assertTimestamp(entry.created_at, 'Open item created_at');
   const reach = oneOf(entry.reach, REACHES, 'Open item reach');
   // What the item says now comes exactly with a read that opened it.
@@ -522,7 +491,7 @@ function openItem(value: unknown): PersonOpenItemV1 {
     waits_on: oneOf(entry.waits_on, WAITS_ON, 'Open item waits_on'), state,
     created_at: entry.created_at as string, sent_at: timestampOrNull(entry.sent_at, 'Open item sent_at'), state_set_at,
     state_set_by, owner_set_at, owner_set_by, send_included: entry.send_included,
-    check: check(entry.check), can: can(entry.can), reach,
+    can: can(entry.can), reach,
   });
 }
 
@@ -542,23 +511,17 @@ function sendRow(value: unknown): PersonHomeSendV1 {
 
 function summary(value: unknown): PersonOpenItemsSummaryV1 {
   const entry = asEnumerableRecord(value, 'Open items summary');
-  assertExactKeys(entry, ['unsent', 'open', 'done', 'not_relevant', 'landed', 'changed', 'unreadable', 'decisions', 'last_checked_at', 'by_decision'], 'Open items summary');
+  assertExactKeys(entry, ['unsent', 'open', 'done', 'not_relevant', 'decisions', 'by_decision'], 'Open items summary');
   const total = (key: string) => count(entry[key], `Open items summary ${key} count`);
   return Object.freeze({
-    unsent: total('unsent'), open: total('open'), done: total('done'), not_relevant: total('not_relevant'),
-    landed: total('landed'), changed: total('changed'), unreadable: total('unreadable'),
-    decisions: total('decisions'), last_checked_at: timestampOrNull(entry.last_checked_at, 'Open items summary last_checked_at'),
+    unsent: total('unsent'), open: total('open'), done: total('done'), not_relevant: total('not_relevant'), decisions: total('decisions'),
     by_decision: Object.freeze(list(entry.by_decision, 'Open items summary decision list', SCOPE_DECISIONS_MAX).map(raw => {
       const row = asEnumerableRecord(raw, 'Open items decision count');
-      assertExactKeys(row, ['record_sha256', 'unsent', 'open', 'landed', 'unreadable'], 'Open items decision count');
-      const decided: PersonOpenItemsDecisionCountV1 = {
+      assertExactKeys(row, ['record_sha256', 'unsent', 'open'], 'Open items decision count');
+      return Object.freeze({
         record_sha256: recordId(row.record_sha256, 'Open items decision count record'),
         unsent: count(row.unsent, 'Open items decision unsent count'), open: count(row.open, 'Open items decision open count'),
-        landed: count(row.landed, 'Open items decision landed count'), unreadable: count(row.unreadable, 'Open items decision unreadable count'),
-      };
-      // Both are last checks of open items: together never more than the open ones.
-      if (decided.landed + decided.unreadable > decided.open) fail('Open items decision count is inconsistent');
-      return Object.freeze(decided);
+      });
     })),
   });
 }
@@ -603,12 +566,10 @@ export function validatePersonRunsResultV1<K extends keyof PersonRunsResultsV1>(
       return checked({ card, checked_at: result.checked_at, hidden: result.hidden });
     }
     case 'home':
-      if (typeof result.sweep_due !== 'boolean') fail('Home sweep_due is invalid');
       return checked({
         send: Object.freeze(list(result.send, 'Home send row list', PERSON_HOME_ROWS_V1).map(sendRow)),
         items: Object.freeze(list(result.items, 'Home item list', PERSON_HOME_ROWS_V1).map(openItem)),
-        landed: count(result.landed, 'Home landed count'), waiting: count(result.waiting, 'Home waiting count'),
-        last_checked_at: timestampOrNull(result.last_checked_at, 'Home last_checked_at'), sweep_due: result.sweep_due,
+        waiting: count(result.waiting, 'Home waiting count'),
       });
     case 'items':
       return checked({

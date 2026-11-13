@@ -123,8 +123,6 @@ describe('the change check in desktop.log', () => {
   it.each([
     ['nothing', null], ['no area', { moved: [] }], ['an area not known', { moved: ['sha256:abc'] }], ['an area twice', { moved: ['projects', 'projects'] }],
     ['a digest beside it', { moved: ['projects'], projects: 'sha256:abc' }],
-    // An older desktop logged a missing change check; every Authority has one (ADR-0048).
-    ['the retired unsupported line', { unsupported: true }],
   ])('refuses %s', (_name, params) => {
     expect(changesLogLine(params)).toBeNull();
   });

@@ -25,11 +25,11 @@ function seedActor(db:Database.Database) {
   db.prepare("INSERT INTO authority_memberships(membership_id,organization_id,principal_id,membership_type,status,provisioned_at) VALUES (?,?,?,?,'active',?)").run(actor.membership_id,actor.organization_id,actor.principal_id,actor.membership_type,at);
   return actor;
 }
-/** One retained V2 note with no project, as the V2 route stores it; `payload` overrides its request hash. */
+/** One retained V3 note with no project, as the V3 submit stores it; `payload` overrides its request hash. */
 function insertNote(db:Database.Database,actor:ReturnType<typeof seedActor>,note:{request_id:string;title:string;text:string;audience:'only_me'|'team'},received_at=at,payload?:string):string {
-  const request={schema_version:2,kind:'echo-person-update-submit-v2',request_id:note.request_id,title:note.title,text:note.text,audience:{kind:note.audience},project_id:null};
-  const id=`ctx_${canonicalSha256({schema_version:2,kind:'echo-person-update-source-v2',organization_id:actor.organization_id,membership_id:actor.membership_id,request_id:note.request_id}).slice(7)}`;
-  db.prepare("INSERT INTO authority_person_updates_v2 VALUES (?,?,?,?,?,2,?,?,?,?,?,NULL,'[]','[]',NULL,?)").run(actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,note.request_id,id,payload??canonicalSha256(request),note.title,note.text,note.audience,received_at);
+  const request={schema_version:3,kind:'echo-person-update-submit-v3',request_id:note.request_id,title:note.title,text:note.text,association_project_ids:[],audience:{kind:note.audience}};
+  const id=`ctx_${canonicalSha256({schema_version:3,kind:'echo-person-update-source-v3',organization_id:actor.organization_id,membership_id:actor.membership_id,request_id:note.request_id}).slice(7)}`;
+  db.prepare("INSERT INTO authority_person_updates_v2 VALUES (?,?,?,?,?,3,?,?,?,?,?,NULL,'[]','[]',NULL,?)").run(actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,note.request_id,id,payload??canonicalSha256(request),note.title,note.text,note.audience,received_at);
   return id;
 }
 const personStore=(db:Database.Database)=>new SqliteSourceAdmissionStoreV1(db,(source,scope)=>assertPersonSourceAdmissionV1(db,source,scope));
@@ -66,10 +66,10 @@ describe('durable common source admission',()=>{
     const actor=seedActor(db);
     const project='prj_11111111-1111-4111-8111-111111111111';
     db.prepare('INSERT INTO authority_projects_v1(project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type) VALUES (?,?,?,?,?,?,?)').run(project,actor.organization_id,'SCOUT',at,actor.principal_id,actor.membership_id,actor.membership_type);
-    const two={schema_version:2,kind:'echo-person-update-submit-v2',request_id:'22222222-2222-4222-8222-222222222222',title:'Project note',text:'software interface',audience:{kind:'project',project_id:project},project_id:project};
-    const twoId=`ctx_${canonicalSha256({schema_version:2,kind:'echo-person-update-source-v2',organization_id:actor.organization_id,membership_id:actor.membership_id,request_id:two.request_id}).slice(7)}`;
+    const two={schema_version:3,kind:'echo-person-update-submit-v3',request_id:'22222222-2222-4222-8222-222222222222',title:'Project note',text:'software interface',association_project_ids:[project],audience:{kind:'project',project_id:project}};
+    const twoId=`ctx_${canonicalSha256({schema_version:3,kind:'echo-person-update-source-v3',organization_id:actor.organization_id,membership_id:actor.membership_id,request_id:two.request_id}).slice(7)}`;
     insertNote(db,actor,{request_id:'11111111-1111-4111-8111-111111111111',title:'Team note',text:'hardware handoff',audience:'team'});
-    db.prepare('INSERT INTO authority_person_updates_v2 VALUES (?,?,?,?,?,2,?,?,?,?,?,?,?,?,?,?)').run(actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,two.request_id,twoId,canonicalSha256(two),two.title,two.text,two.audience.kind,project,JSON.stringify([project]),JSON.stringify([project]),project,at);
+    db.prepare('INSERT INTO authority_person_updates_v2 VALUES (?,?,?,?,?,3,?,?,?,?,?,?,?,?,NULL,?)').run(actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,two.request_id,twoId,canonicalSha256(two),two.title,two.text,two.audience.kind,project,JSON.stringify([project]),JSON.stringify([project]),at);
     db.prepare('INSERT INTO authority_person_update_audience_projects_v1 VALUES (?,?,?)').run(twoId,project,actor.organization_id);
     db.prepare("UPDATE authority_memberships SET status='revoked',revoked_at=?,revocation_reason='fixture' WHERE membership_id=?").run(at,actor.membership_id);
     const texts=new SqlitePersonTextSourceInboxV1(db);
@@ -83,6 +83,28 @@ describe('durable common source admission',()=>{
     ]);
     expect(db.prepare('SELECT content_json FROM authority_source_contents_v1').pluck().all().join(' ')).toContain('software interface');
   });
+  it('refuses a note whose retained payload digest no longer binds its request',()=>{
+    const {db}=fixture();
+    const actor=seedActor(db);
+    const id=insertNote(db,actor,{request_id:'11111111-1111-4111-8111-111111111111',title:'Team note',text:'hardware handoff',audience:'team'});
+    const pulled=new SqlitePersonTextSourceInboxV1(db).next()!;
+    expect(()=>db.transaction(()=>assertPersonSourceAdmissionV1(db,pulled.source,pulled.scope))()).not.toThrow();
+    db.exec('DROP TRIGGER authority_person_updates_v2_immutable');
+    db.prepare('UPDATE authority_person_updates_v2 SET payload_sha256=? WHERE context_id=?').run(`sha256:${'0'.repeat(64)}`,id);
+    expect(()=>db.transaction(()=>assertPersonSourceAdmissionV1(db,pulled.source,pulled.scope))()).toThrow('Person text V3 custody integrity failed');
+  });
+  it('refuses a retired V2 note envelope, even over a V2 row (ADR-0048)',()=>{
+    const {db}=fixture();
+    const actor=seedActor(db);
+    const id=insertNote(db,actor,{request_id:'11111111-1111-4111-8111-111111111111',title:'Team note',text:'hardware handoff',audience:'team'});
+    const pulled=new SqlitePersonTextSourceInboxV1(db).next()!;
+    db.exec('DROP TRIGGER authority_person_updates_v2_immutable');
+    db.prepare('UPDATE authority_person_updates_v2 SET request_version=2 WHERE context_id=?').run(id);
+    const v2={...pulled.source,content:{...pulled.source.content,original_api_version:2}} as unknown as typeof pulled.source;
+    expect(()=>db.transaction(()=>assertPersonSourceAdmissionV1(db,v2,pulled.scope))()).toThrow('Person text source version is invalid');
+    // The inbox selects no V2 row at all.
+    expect(new SqlitePersonTextSourceInboxV1(db).next()).toBeUndefined();
+  });
   it('durably skips a malformed retained text row and admits the next shared note without retaining corrupt content',async()=>{
     const {db}=fixture();
     const store=personStore(db);
@@ -93,11 +115,11 @@ describe('durable common source admission',()=>{
     const worker=new PersonDocumentProcessingV1({sourceAdmission:store,claimExtraction:()=>undefined,completeExtraction:()=>{throw new Error('text must not use file completion');}},async()=>{throw new Error('text must not use decoder');},new SqlitePersonTextSourceInboxV1(db,()=>at),{on_failure:event=>observed.push(event)});
     expect(await worker.runOnce(new AbortController().signal)).toBe('admitted');
     expect(observed).toEqual([{stage:'text_source_admission',error_code:'invalid_retained_text'}]);
-    expect(db.prepare('SELECT api_version,context_id,disposition,recorded_at FROM authority_person_text_source_failures_v1').all()).toEqual([{api_version:2,context_id:poisonId,disposition:'invalid_retained_text',recorded_at:at}]);
+    expect(db.prepare('SELECT api_version,context_id,disposition,recorded_at FROM authority_person_text_source_failures_v1').all()).toEqual([{api_version:3,context_id:poisonId,disposition:'invalid_retained_text',recorded_at:at}]);
     expect(db.prepare('SELECT content_json FROM authority_source_contents_v1').pluck().all().join(' ')).toContain('valid shared body');
     expect(db.prepare('SELECT content_json FROM authority_source_contents_v1').pluck().all().join(' ')).not.toContain('poison body');
     expect(()=>db.prepare("INSERT INTO authority_person_text_source_failures_v1 VALUES ('org_fixture',2,'ctx_missing','invalid_retained_text',?)").run(at)).toThrow('must bind');
-    expect(()=>db.prepare("INSERT INTO authority_person_text_source_failures_v1 VALUES ('org_fixture',3,?,'invalid_retained_text',?)").run(poisonId,at)).toThrow('must bind');
+    expect(()=>db.prepare("INSERT INTO authority_person_text_source_failures_v1 VALUES ('org_fixture',2,?,'invalid_retained_text',?)").run(poisonId,at)).toThrow('must bind');
     expect(()=>db.prepare("UPDATE authority_person_text_source_failures_v1 SET disposition='invalid_retained_text'").run()).toThrow('immutable');
     expect(()=>db.prepare('DELETE FROM authority_person_text_source_failures_v1').run()).toThrow('denied');
   });

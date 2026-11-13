@@ -142,3 +142,8 @@ as [ADR-0048](ADR-0048-retire-older-person-routes.md)'s retired routes do.
 Update (2026-10-31): the repository's git tags were deleted, including
 `ask-v2-final`. The last commit with the V1 and V2 Ask is `2aa0072` on `main`,
 as PR #236 records. A rollback would release that commit instead of the tag.
+
+Update (2026-11-11): the Authority no longer looks at `ECHO_AGENTIC_ASK_V1` or
+`ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT`. A runtime environment that still sets
+either starts as one that does not, and a shortcut set to `true` is no longer
+refused. The release tooling still writes both lines until its own clean-up.

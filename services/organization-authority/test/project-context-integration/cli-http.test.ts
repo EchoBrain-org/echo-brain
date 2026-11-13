@@ -7,6 +7,7 @@ import type { PersonUpdateReceiptV3, ProjectCreateReceiptV1 } from '@echo-brain/
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { runPersonClientCli } from '../../../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../../../src/product/person-client/session-store.js';
+import { SqlitePersonOriginalItemsV1 } from '../../src/adapters/persistence/sqlite/person-original-items-v1.js';
 import { createProjectContextApplicationV1 } from '../../src/application/project-context-application-v1.js';
 import { createOrganizationAuthorityHttpServer } from '../../src/presentation/organization-authority-http-server.js';
 import { authorization, PROJECT_CONTEXT_NOW, revokeMembership } from '../fixtures/project-context-sqlite.js';
@@ -104,8 +105,10 @@ function uploadArgv(project: string, audience: string, audienceProject?: string)
   return ['updates', 'submit-v3', '--request-id', requestId, '--title', 'Synthetic PC06', '--file', file, '--audience', audience,
     '--association-project-ids-json', JSON.stringify([project]), ...(audienceProject ? ['--audience-project-id', audienceProject] : [])];
 }
-async function search(person: Person) {
-  return (await ok(person, ['updates', 'search-v3', '--query', 'meridian'])).results as { context_id: string; audience: unknown }[];
+/** Whether `person` may open the note now, as `person open --ref note:<id>` and Ask read it. */
+function readable(person: Person, contextId: string): boolean {
+  const items = new SqlitePersonOriginalItemsV1(h.database, { authenticateAccess: () => authorization(PEOPLE[person]) }, PEOPLE[person].organization_id);
+  try { items.open({ access_token: 'fixture', ref: { kind: 'note', id: contextId as `ctx_${string}` } }); return true; } catch { return false; }
 }
 
 describe('PC-06 real CLI -> loopback HTTP -> application -> V16, fixture authentication/model', () => {
@@ -117,17 +120,12 @@ describe('PC-06 real CLI -> loopback HTTP -> application -> V16, fixture authent
     const team = await ok<PersonUpdateReceiptV3>('alice', uploadArgv(alpha, 'team'));
     const cross = await ok<PersonUpdateReceiptV3>('alice', uploadArgv(beta, 'project', alpha));
     expect(cross).toMatchObject({ association_project_ids: [beta], audience: { kind: 'project', project_id: alpha } });
-    expect((await ok('bob', ['projects', 'search-v2', '--project-id', alpha, '--query', 'meridian'])).items.map((item: { context_id: string }) => item.context_id)).toEqual([team.context_id]);
-    expect((await ok('carol', ['projects', 'search-v2', '--project-id', beta, '--query', 'meridian'])).items).toEqual([]);
-    // Bob reads the cross-project note through its audience, never the private one; Carol and Dana see only Team.
-    const bobs = await search('bob');
-    expect(bobs.map(row => row.context_id).sort()).toEqual([team.context_id, cross.context_id].sort());
-    expect(bobs.find(row => row.context_id === cross.context_id)).toMatchObject({ audience: cross.audience });
-    expect(bobs.some(row => row.context_id === privateNote.context_id)).toBe(false);
-    for (const person of ['carol', 'dana'] as const) expect((await search(person)).map(row => row.context_id)).toEqual([team.context_id]);
-    const cursor = (await ok('alice', ['projects', 'search-v2', '--project-id', alpha, '--query', 'meridian', '--limit', '1'])).next_cursor;
+    // Bob reads the cross-project note through its audience, never the private one; Carol and Dana read only Team.
+    expect([privateNote, team, cross].map(note => readable('bob', note.context_id))).toEqual([false, true, true]);
+    for (const person of ['carol', 'dana'] as const) expect([privateNote, team, cross].map(note => readable(person, note.context_id))).toEqual([false, true, false]);
+    const cursor = (await ok('alice', ['projects', 'members', '--project-id', alpha, '--limit', '1'])).next_cursor;
     expect(cursor).toEqual(expect.any(String));
-    const misuse = await cli('alice', ['projects', 'search-v2', '--project-id', beta, '--query', 'meridian', '--limit', '1', '--cursor', cursor]);
+    const misuse = await cli('alice', ['projects', 'members', '--project-id', beta, '--limit', '1', '--cursor', cursor]);
     expect(JSON.parse(misuse.stderr)).toMatchObject({ code: 'invalid_request' });
     const before = requests.length;
     const ask = await cli('alice', ['projects', 'ask', '--project-id', alpha, '--question', 'meridian']);
@@ -157,23 +155,19 @@ describe('PC-06 real CLI -> loopback HTTP -> application -> V16, fixture authent
     expect(h.database.prepare('SELECT count(*) AS n FROM authority_person_updates_v2').get()).toEqual({ n: 1 });
   });
 
-  it('finds an original by its own text through the CLI with no model, also after its uploader leaves its project and organization', async () => {
+  it('keeps an original readable to its project through the CLI with no model, also after its uploader leaves its project and organization', async () => {
     const alpha = await create('Synthetic Alpha'); await member(alpha, 'bob', 'lead');
     const receipt = await ok<PersonUpdateReceiptV3>('alice', uploadArgv(alpha, 'project', alpha));
-    const original = await search('bob');
-    expect(original.map(row => row.context_id)).toEqual([receipt.context_id]);
-    expect((await ok('bob', ['projects', 'search-v2', '--project-id', alpha, '--query', 'meridian'])).items).toHaveLength(1);
+    expect(readable('bob', receipt.context_id)).toBe(true);
     // No search metadata is made: the status says ready at once.
     expect((await ok('alice', ['updates', 'status-v3', '--request-id', receipt.request_id])).metadata).toBe('ready');
     await ok('bob', ['projects', 'member-remove', '--request-id', h.requestId(), '--project-id', alpha, '--membership-id', PEOPLE.alice.membership_id]);
-    // Alice has left the note's project, so her status is the saved-only proof with no metadata (ADR-0023); Bob still finds it.
+    // Alice has left the note's project, so her status is the saved-only proof with no metadata (ADR-0023); Bob still reads it.
     expect(await ok('alice', ['updates', 'status-v3', '--request-id', receipt.request_id])).toMatchObject({ kind: 'echo-person-update-saved-v3', context_id: receipt.context_id });
-    expect(await search('bob')).toEqual(original);
-    expect((await ok('bob', ['projects', 'search-v2', '--project-id', alpha, '--query', 'meridian'])).items).toHaveLength(1);
-    // Alice leaves the organization as well: Bob, who may still read the note, still finds it.
+    expect(readable('bob', receipt.context_id)).toBe(true);
+    // Alice leaves the organization as well: Bob still reads it.
     revokeMembership(h.database, PEOPLE.alice);
-    expect(await search('bob')).toEqual(original);
-    expect((await ok('bob', ['projects', 'search-v2', '--project-id', alpha, '--query', 'meridian'])).items).toHaveLength(1);
+    expect(readable('bob', receipt.context_id)).toBe(true);
   });
 
   it('returns explicit unsupported-route failures without falling back to V1 or team sharing', async () => {

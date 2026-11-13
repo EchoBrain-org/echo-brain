@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonRunsResultV1, type PersonOpenItemV1, type PersonOpenItemVerdictV1, type PersonRunsRequestV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
+import { validatePersonRunsResultV1, type PersonOpenItemV1, type PersonRunsRequestV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { expect, vi } from 'vitest';
@@ -283,7 +283,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
      * Leaves a last check on an item by raw SQL, stamped now, as a sweep of `by` that finished before sweeps were retired
      * (SVC-2) left one: V16 state no code writes any more.
      */
-    check(itemId: string, verdict: PersonOpenItemVerdictV1, by: FixturePerson = 'ari') {
+    check(itemId: string, verdict: 'landed' | 'still_open' | 'changed' | 'unreadable', by: FixturePerson = 'ari') {
       const sweep = `run_${randomUUID()}`;
       const at = now.toISOString();
       db.prepare(`INSERT INTO authority_trigger_runs_v1 (run_id, trigger, event_ref, organization_id, principal_id, membership_id, scope_kind, state, attempts,

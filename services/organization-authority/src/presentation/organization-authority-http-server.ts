@@ -1,13 +1,10 @@
 import {
   PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1,
 } from "@echo-brain/organization-api";
-import {
-  PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
-  type PersonAskProgressErrorStatusV1,
-} from "@echo-brain/organization-api";
+import type { PersonAskProgressErrorStatusV1 } from "@echo-brain/organization-api";
 import { startPersonAskProgressStreamV1, type PersonAskProgressStreamV1 } from "./person-ask-progress-stream-v1.js";
 import {
-  PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
+  PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
   validateProjectCreateV1, validateProjectCreateReceiptV1,
   validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1, validateProjectSettingsReceiptV1,
   validateProjectListV2, validateProjectPageRequestV2, validateProjectSummaryV2,
@@ -17,18 +14,14 @@ import {
   validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1,
   validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectMutationReceiptV1,
   validateProjectContextAssociateV1, validateProjectContextDissociateV1,
-  validateProjectContextSearchV1, validateProjectContextSearchResultV2,
   validatePersonUpdateRequestId,
-  validatePersonUploadSearchV2, validatePersonUploadSearchResultV2,
   validatePersonUpdateSubmitV3, validatePersonUpdateReceiptV3, validatePersonUpdateStatusResultV3,
-  validatePersonUploadSearchV3, validatePersonUploadSearchResultV3,
 } from '@echo-brain/organization-api';
 import type { ProjectContextApplicationV1 } from '../application/ports/project-context-v1.js';
 import type { PersonDocumentApplicationV1 } from '../application/ports/document-v1.js';
 import type { PersonDocumentUploadStagingV1 } from '../application/ports/document-upload-staging-v1.js';
 import { createPersonDocumentsHttpHandlerV1, uniqueMemberJsonV1 } from './person-documents-http-route-v1.js';
-import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2 } from '@echo-brain/organization-api';
-import { PERSON_UPDATES_PATH_V1, MAX_ORGANIZATION_API_BODY_BYTES } from '@echo-brain/organization-api';
+import { PERSON_DOCUMENTS_PATH_V2, MAX_ORGANIZATION_API_BODY_BYTES } from '@echo-brain/organization-api';
 import { PERSON_EMPLOYEES_PATH_V1, PERSON_RECORDS_PATH_V1, validatePersonRecordSearchRequestV2 } from "@echo-brain/organization-api";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { Buffer } from "node:buffer";
@@ -113,6 +106,9 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_RECORDS_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V7}`,
   `POST ${PERSON_ASK_CHECK_PATH_V1}`,
+  // Composed only on staging, but reserved everywhere so no adapter can shadow them.
+  `POST ${PERSON_RESEARCH_EVAL_START_PATH_V1}`,
+  `POST ${PERSON_RESEARCH_EVAL_READ_PATH_V1}`,
   `GET ${PERSON_CHANGES_ROUTE_V1}`,
   `GET ${PERSON_PROJECT_ACTIVITY_PATH_V1}`,
   `POST ${PERSON_SOURCE_EVIDENCE_PATH_V1}`,
@@ -188,12 +184,9 @@ function providerIngressRoutes(
       ) throw new Error("invalid provider ingress route");
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
-      // These Person families stay reserved, their retired paths too (V1 notes; V1 documents and the V2 and V3 tools lists,
-      // ADR-0048; the capability read, the evidence desk's open and search, and the one-use diagnostic captures), so no
-      // adapter can mount one.
+      // The Person families the Authority serves stay reserved as a whole, so no adapter can mount a path under one.
       if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) ||
-        [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2,
-          '/v2/person/tools', '/v3/person/tools', '/v3/person/capabilities', '/v3/person/evidence/open', '/v3/person/evidence/search', '/v1/person/diagnostics']
+        [PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V2]
           .some(path => route.path === path || route.path.startsWith(`${path}/`))) {
         throw new Error(`provider ingress route collides with Authority route: ${key}`);
       }
@@ -472,21 +465,18 @@ function askOptions(request: IncomingMessage): { readonly time_context?: PersonA
   return time_context === undefined ? {} : { time_context };
 }
 
-/** Ask and list reads check the bearer and install cancellation before reading any body bytes. */
+/** List and other cancellable reads check the bearer and install cancellation before reading any body bytes. */
 function personCancellablePost<Application, Request>(
   application: Application,
   validate: (value: unknown) => Request,
-  read: (application: Application, input: {
-    readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly signal: AbortSignal;
-  }) => Promise<unknown>,
-  ask = false,
+  read: (application: Application, input: { readonly access_token: string; readonly request: Request; readonly signal: AbortSignal }) => Promise<unknown>,
 ): PersonPostHandler {
   return async (request, response) => {
     const access_token = accessToken(request.headers.authorization);
     const disconnect = disconnectSignal(request, response);
     try {
       const requestBody = await personBody(request, validate);
-      json(response, 200, await read(application, { access_token, request: requestBody, ...(ask ? askOptions(request) : {}), signal: disconnect.signal }));
+      json(response, 200, await read(application, { access_token, request: requestBody, signal: disconnect.signal }));
     } finally { disconnect.dispose(); }
   };
 }
@@ -500,17 +490,15 @@ const streamedFailureStatus = new WeakMap<ServerResponse, number>();
 
 /**
  * `POST /v7/person/ask`, the V8 answer (research tool contract v1): the only
- * Ask route, since `/v3` to `/v6` were retired. A client that sends the
- * progress header value `3` gets the same Ask as server-sent events in Ask
- * progress V3 (ADR-0039), once the request authenticated and validated; before
- * that, and for any other value, the response is the JSON V8 answer. The
- * request may carry the asker's previous turn (ADR-0047), streamed or not. A
- * disconnect still cancels the Ask, and nothing more is written.
+ * Ask route, since `/v3` to `/v6` were retired. Every Ask streams as
+ * server-sent events in Ask progress V3 (ADR-0039) once the request
+ * authenticated and validated; before that, a failure is the JSON error. The
+ * plain JSON answer and the opt-in header were retired on 2026-11-11. The
+ * request may carry the asker's previous turn (ADR-0047). A disconnect still
+ * cancels the Ask, and nothing more is written.
  */
 function personAskV7Post(application: PersonAnswerV7HttpApplication): PersonPostHandler {
-  const plain = personCancellablePost(application, validatePersonAnswerRequestV3, (served, input) => served.ask(input), true);
   return async (request, response) => {
-    if (application.askWithProgress === undefined || request.headers[PERSON_ASK_PROGRESS_HEADER_V1] !== PERSON_ASK_PROGRESS_HEADER_VALUE_V3) { await plain(request, response); return; }
     const access_token = accessToken(request.headers.authorization);
     const disconnect = disconnectSignal(request, response);
     let stream: PersonAskProgressStreamV1 | undefined;
@@ -659,11 +647,7 @@ const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   [`${PERSON_PROJECTS_PATH_V1}/members/remove`, { operation: 'removeMember', request: validateProjectMemberRemoveV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/associate`, { operation: 'associateContext', request: validateProjectContextAssociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/dissociate`, { operation: 'dissociateContext', request: validateProjectContextDissociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
-  [`${PERSON_PROJECTS_PATH_V2}/context/search`, { operation: 'searchV2', request: validateProjectContextSearchV1, response: validateProjectContextSearchResultV2, status: 200 }],
-  // The one V2 notes route: the notes stored as V2, which no V3 read returns (ADR-0048).
-  [`${PERSON_UPDATES_PATH_V2}/search`, { operation: 'searchUploads', request: validatePersonUploadSearchV2, response: validatePersonUploadSearchResultV2, status: 200 }],
   [PERSON_UPDATES_PATH_V3, { operation: 'submitUploadV3', request: validatePersonUpdateSubmitV3, response: validatePersonUpdateReceiptV3, status: 202 }],
-  [`${PERSON_UPDATES_PATH_V3}/search`, { operation: 'searchUploadsV3', request: validatePersonUploadSearchV3, response: validatePersonUploadSearchResultV3, status: 200 }],
 ]);
 
 /** Route selection returns a synchronous release callback after all input I/O. */

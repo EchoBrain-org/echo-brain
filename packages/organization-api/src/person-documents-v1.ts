@@ -4,8 +4,6 @@ import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import { validateAssociationProjectIdsV1, validatePersonUploadAudienceV3, type PersonUploadAudienceV3 } from './person-upload-audience-v3.js';
 import { fail } from './validation.js';
 
-/** Retired route (ADR-0048). The Authority keeps it reserved against provider adapters. */
-export const PERSON_DOCUMENTS_PATH_V1 = '/v1/person/documents';
 export const PERSON_DOCUMENTS_PATH_V2 = '/v2/person/documents';
 export const PERSON_DOCUMENT_MAX_ORIGINAL_BYTES = 25 * 1024 * 1024;
 /** Wall-clock bound for an original document upload or download. */

@@ -49,8 +49,7 @@ export function artifactKey(artifact, code = 'publisher_adapter_unavailable') {
   return `artifacts/${artifact.sha256}.${target.extension}`;
 }
 
-// Every new release moves the CLI kits and both desktop apps together.
-// Historical feed validation deliberately does not apply this requirement.
+// Every release moves the CLI kits and both desktop apps together.
 export function requireReleaseTargets(manifest) {
   const artifacts = manifest?.artifacts;
   if (!Array.isArray(artifacts) || artifacts.length !== RELEASE_TARGETS.length ||
@@ -79,9 +78,7 @@ function validateKit(archive, target, manifest, release, config, directory) {
         m.runtime?.node_sha256 !== updateDigest(read(join(kit, 'node'), UPDATE_ARTIFACT_LIMIT)) ||
         m.person_client_artifact_sha256 !== updateDigest(client) ||
         m.build_identity_sha256 !== updateDigest(read(join(kit, 'build-identity.v1.json')))) fail('kit_identity_mismatch');
-    // Older kits without a bootstrap stay auditable. A rollback, as a new
-    // write, can only target a release that carries all four targets.
-    if (target.platform === 'linux' && Object.hasOwn(m, 'update_bootstrap')) {
+    if (target.platform === 'linux') {
       const bootstrap = parseUpdateConfig(m.update_bootstrap);
       if (!bootstrap.automatic || canonicalJson(bootstrap) !== canonicalJson(config)) fail('kit_bootstrap_mismatch');
     }
@@ -344,6 +341,7 @@ export function inspectPreparedClientUpdateFeed({ prepared, now = Date.now(), al
 export function validatePreparedClientUpdateFeed({ prepared, authorizationPath, now = Date.now(), allowExpired = false }) {
   const validated = inspectPreparedClientUpdateFeed({ prepared, now, allowExpired });
   const { manifest, release } = validated;
+  requireReleaseTargets(manifest);
   const approval = json(authorizationPath);
   if (approval.kind !== 'echo-staging-release-founder-authorization-v1' ||
       approval.release_sha256 !== manifest.release_sha256 ||
@@ -363,7 +361,6 @@ export function validateSealedClientUpdateFeed({ prepared, authorizationPath, no
 
 function sealClientUpdateFeed({ prepared, signaturePath, authorizationPath, now = Date.now() }) {
   const { config, manifest, payload } = validatePreparedClientUpdateFeed({ prepared, authorizationPath, now });
-  requireReleaseTargets(manifest);
   const signature = read(signaturePath, 64);
   if (signature.length !== 64) fail('invalid_signature');
   const envelope = { payload: payload.toString('base64'), signature: signature.toString('base64') };

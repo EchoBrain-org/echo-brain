@@ -11,6 +11,7 @@ import { allSourceAskFixture, crossSourceAuthorityFixture, DOCUMENT_TEXT, PRIVAT
 import { CONFLUENCE_TEXT, JIRA_TEXT } from './fixtures/cross-source-live-fixture.js';
 import { FIXTURE_CONFLUENCE_CLOUD_V1, FIXTURE_CONFLUENCE_SITE_V1 } from './fixtures/fake-confluence-v1.js';
 import { FIXTURE_JIRA_CLOUD_V1, FIXTURE_JIRA_SITE_V1 } from './fixtures/fake-jira-v1.js';
+import { streamedAnswer } from './fixtures/ask-over-http.js';
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })));
@@ -51,8 +52,7 @@ it('registers two page connectors through one lifecycle, catalog, HTTP and Ask p
     }
     expect(calls.every(call => call.source.mock.calls.length === 0)).toBe(true);
     const answer = await fetch(`${origin}/v7/person/ask`, { method: 'POST', headers, body: JSON.stringify({ schema_version: 3, question: 'What changed?' }) });
-    expect(answer.status).toBe(200);
-    expect(await answer.json()).toMatchObject({ schema_version: 8 });
+    expect(await streamedAnswer(answer)).toMatchObject({ schema_version: 8 });
     for (const call of calls) expect(call.source).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ access_token: token }));
   } finally { await runtime.close(); }
   for (const call of calls) expect(call.close).toHaveBeenCalledTimes(1);
@@ -99,8 +99,7 @@ it('binds a tool\'s containers for Ask, naming only the asker\'s projects (resea
     expect(names[0]!(token, [project_id, 'prj_00000000-0000-4000-8000-0000000000ff'])).toEqual(new Map([[project_id, 'Atlas']]));
 
     const v7 = await fetch(`${origin}/v7/person/ask`, { method: 'POST', headers, body: JSON.stringify({ schema_version: 3, question: 'What changed?' }) });
-    expect(v7.status).toBe(200);
-    expect(await v7.json()).toMatchObject({ schema_version: 8 });
+    expect(await streamedAnswer(v7)).toMatchObject({ schema_version: 8 });
     expect(prompts[0]!.source_catalog!.map(entry => entry.source)).toEqual(expect.arrayContaining([JIRA_LIVE_CONNECTOR_V1.descriptor.selector, 'jira_projects', 'projects', 'people', 'tools']));
     // Research listed the asker's project: its row names its members, and its Jira project is the jira_projects source's.
     expect(JSON.stringify(prompts[1])).toContain('Atlas');
@@ -127,8 +126,7 @@ describe('one runtime without live connectors', () => {
     const response = await fetch(`${origin}/v7/person/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ schema_version: 3, question: 'What changed?' }),
     });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ schema_version: 8, scope: { kind: 'global' }, citations: [] });
+    expect(await streamedAnswer(response)).toMatchObject({ schema_version: 8, scope: { kind: 'global' }, citations: [] });
     expect(generate).toHaveBeenCalled();
     const [prompt] = generate.mock.calls[0] as unknown as [{ readonly user_prompt: string }];
     const catalog = (JSON.parse(prompt.user_prompt) as { source_catalog?: { source: string }[] }).source_catalog?.map(entry => entry.source) ?? [];

@@ -179,14 +179,12 @@ describe('document CLI custody and bounded transport', () => {
     expect((await run(f.home, ['documents', 'pending'], offline)).result).toMatchObject({ ok: true, result: { snapshots: [] } });
   });
 
-  it('lists a snapshot an older client retained from a V1 upload as unreadable, never resends it, and abandons it', async () => {
+  it('lists a retained snapshot whose manifest is damaged as unreadable, never resends it, and abandons it', async () => {
     const f = setup();
     await run(f.home, uploadArgs(f.file), async (_url, init) => { await consume(init); throw new Error('lost'); });
-    // Only older clients wrote V1 snapshots, so rewrite this retained request's manifest as one. The V1 upload route is
-    // retired (ADR-0048): nothing can resend it.
-    const legacy = { schema_version: 1, kind: 'echo-person-document-upload-v1', request_id: requestId, filename: 'SCOUT.md', title: 'SCOUT PRD',
-      content_length: f.bytes.length, sha256: f.upload.sha256, audience: { kind: 'only_me' }, project_id: projectId };
-    writeFileSync(join(snapshotDir(f.home), requestId, 'metadata.json'), canonicalJson({ metadata: legacy }), { mode: 0o600 });
+    // A manifest that is not one an upload writes.
+    const damaged = { request_id: requestId, filename: 'SCOUT.md', sha256: f.upload.sha256 };
+    writeFileSync(join(snapshotDir(f.home), requestId, 'metadata.json'), canonicalJson({ metadata: damaged }), { mode: 0o600 });
     const offline = vi.fn();
     expect((await run(f.home, ['documents', 'pending'], offline)).result).toMatchObject({ ok: true, result: { snapshots: [{ request_id: requestId, local_state: 'unreadable' }] } });
     const retry = await run(f.home, ['documents', 'retry', '--request-id', requestId], offline);

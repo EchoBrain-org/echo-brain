@@ -12,8 +12,6 @@ reviewed_ref: fd762a45e8745eebf27f346317e97038be69de44
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Shared LLM decision processor
-invariant_ids:
-  - INV-08
 failure_pattern_ids:
   - FP-ADAPTERS-004
 ---

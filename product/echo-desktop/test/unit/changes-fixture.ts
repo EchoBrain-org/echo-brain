@@ -29,7 +29,7 @@ export function followUp(n: number, extra: Partial<OpenItemView> = {}): OpenItem
     item_id: id(n), run_id: 'run_00000000-0000-4000-8000-000000000001', kind: 'action', decision, relation: 'needs_updating', expected: `Action ${n}`,
     approver: MINA, owner: { ...ME, match: 'name' }, waits_on: 'owner', state: 'open', created_at: '2026-10-14T09:05:00.000Z',
     sent_at: at(n), state_set_at: at(n), state_set_by: MINA, owner_set_at: null, owner_set_by: null,
-    send_included: true, check: null, can: { set_state: true, assign: true }, reach: 'not_read', ...extra,
+    send_included: true, can: { set_state: true, assign: true }, reach: 'not_read', ...extra,
   };
 }
 
@@ -97,7 +97,7 @@ export const fixture: Record<string, Handler> = {
     }
     if (request.operation === 'home') {
       const items = authority.items.filter(item => item.state === 'open' && item.owner.membership_id === ME.membership_id).slice(0, 20);
-      return ok({ send: [], items, landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
+      return ok({ send: [], items, waiting: 0 });
     }
     if (request.operation === 'list') return ok({ runs: [] });
     if (request.operation === 'items') return ok({ items: [], next_cursor: null, stages: [], summary: EMPTY_SUMMARY });

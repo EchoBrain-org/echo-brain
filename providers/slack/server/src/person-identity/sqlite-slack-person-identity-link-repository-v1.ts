@@ -14,11 +14,11 @@ import { sameTool, SlackPersonIdentityLinkWorkflowV1, type SlackPersonIdentityLi
 const CHALLENGE_LIFETIME_MS = 15 * 60 * 1000;
 const DELIVERY_ADMISSION_COOLDOWN_MS = 60 * 1000;
 
-/** Avoid loading the legacy integration repository for its error class. */
+/** A link that conflicts with what is stored: the workflows answer it as a conflict. */
 class PersonSlackIdentityLinkConflictError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "OrganizationIntegrationConflictError";
+    this.name = "PersonSlackIdentityLinkConflictError";
   }
 }
 

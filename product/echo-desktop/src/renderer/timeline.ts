@@ -38,20 +38,20 @@ export function freshStates(check: TurnCheck | undefined, now: number): TurnChec
 export function knownStates(fresh: TurnChecks | undefined, unreadable: readonly number[] | undefined): TurnChecks | undefined {
   if (unreadable === undefined || unreadable.length === 0) return fresh;
   const known: Record<number, AskCheckState> = { ...fresh };
-  for (const at of unreadable) if (known[at] !== 'same' && known[at] !== 'changed') known[at] = 'unreadable';
+  for (const at of unreadable) if (known[at] !== 'same') known[at] = 'unreadable';
   return known;
 }
 
 /**
  * The sources a turn keeps as unreadable after a check that said `states` of
- * them: those it found unreadable join, those it found readable (the same or
- * changed) leave, and those it could not tell of stay as they were.
+ * them: those it found unreadable join, those it found readable leave, and
+ * those it could not tell of stay as they were.
  */
 export function unreadableAfter(kept: readonly number[] | undefined, states: TurnChecks): number[] {
   const next = new Set(kept ?? []);
   for (const [at, said] of Object.entries(states)) {
     if (said === 'unreadable') next.add(Number(at));
-    else if (said === 'same' || said === 'changed') next.delete(Number(at));
+    else if (said === 'same') next.delete(Number(at));
   }
   return [...next].sort((left, right) => left - right);
 }
@@ -251,13 +251,13 @@ export function answeredNow(turn: TimelineTurn): TurnChecks {
  * them, renumbered in the order first cited. A sentence goes only when what
  * is known now (`known`: what a check said in the last five minutes, or a new
  * turn's own answer) has each source it cites that a check asks about
- * readable, the same or changed; with nothing known (null), none goes, only
+ * readable; with nothing known (null), none goes, only
  * the question (C5). Sentences go from the end until the request, asking
  * `question` in `scope`, fits the Ask body's 16 KiB.
  */
 export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope): AskPrevious {
   const sources = turn.answer.sources;
-  const read = (at: number) => sources[at] === undefined || checkOf(sources[at]) === undefined || known?.[at] === 'same' || known?.[at] === 'changed';
+  const read = (at: number) => sources[at] === undefined || checkOf(sources[at]) === undefined || known?.[at] === 'same';
   const readable = known === null ? [] : [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
     .filter((statement): statement is AnswerStatement => statement !== undefined && statement.text.trim() !== '' && statement.citation_indexes.every(read));
   const build = (chosen: readonly AnswerStatement[]): AskPrevious => {

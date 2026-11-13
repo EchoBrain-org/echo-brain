@@ -17,7 +17,6 @@ severity: high
 first_observed: 2026-08-12
 invariant_ids:
   - INV-PERMISSIONS-013
-  - INV-12
 evidence_ids:
   - EVID-JOB-AB-LEDGER-001
 implementation_refs:
