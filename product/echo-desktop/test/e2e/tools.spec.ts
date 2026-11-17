@@ -7,6 +7,22 @@ test.afterEach(async () => { await run?.close(); });
 const toolCalls = () => run.calls().filter(call => call.path.startsWith('/v1/person/tools/jira/') || call.path.startsWith('/v1/person/tools/confluence/') || call.path.includes('/slack/disconnect'))
   .map(call => call.path.replace('/v1/person/tools/jira/', 'jira ').replace('/v1/person/tools/confluence/', 'confluence ').replace('/v2/person/external-identities/slack/', 'slack '));
 
+test('Granola can stop a watch and cancel a queued import during a provider outage', async () => {
+  run = await launch('granola-offline');
+  const { page } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
+  const meetings = page.getByRole('region', { name: 'Personal meetings' });
+  await expect(meetings.getByText('Granola is unavailable.', { exact: false })).toBeVisible();
+  const cancel = meetings.getByRole('button', { name: 'Cancel', exact: true });
+  await cancel.click();
+  await expect(cancel).toHaveCount(0);
+  const stop = meetings.getByRole('button', { name: 'Stop', exact: true });
+  await stop.click();
+  await expect(stop).toHaveCount(0);
+  expect(run.calls().some(call => call.body?.operation === 'browse')).toBe(false);
+});
+
 test('Granola shows browse failures instead of an empty folder, and Refresh retries the selected folder', async () => {
   run = await launch('granola-browse-failure');
   const { page } = run;

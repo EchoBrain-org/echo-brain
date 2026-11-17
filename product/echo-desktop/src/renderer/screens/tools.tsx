@@ -30,7 +30,7 @@ function ToolRow({ tool }: { tool: ConnectedTool }) {
         <span class="name">{tool.name}</span>
         <span class="state" data-testid="tool-state">{TOOL_STATES[tool.status]}</span>
       </span>
-      {(tool.status === 'linked' || tool.tool_id === 'granola') && (
+      {(tool.status === 'linked' || (tool.tool_id === 'granola' && tool.status !== 'unavailable')) && (
         <button type="button" class="plain-button" data-testid="tool-manage" onClick={() => manageTool(tool)}>Manage</button>
       )}
       {(tool.status === 'unlinked' || tool.status === 'revoked') && (
