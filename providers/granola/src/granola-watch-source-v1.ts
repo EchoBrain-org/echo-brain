@@ -3,7 +3,7 @@ import type { AdapterOperationContext, MeetingDocument, MeetingSourceAdapter } f
 import type { AdmittedMeetingSourceCursorPolicyV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1';
 import type { GranolaPersonConnectionV1 } from './granola-person-connection-v1.js';
 import { GRANOLA_ID_V1, GRANOLA_PERSON_PROVIDER_V1, GRANOLA_TIMESTAMP_V1, granolaMcpMeetingContentV1, granolaMeetingUnreadableV1, granolaTranscriptPendingV1 } from './granola-mcp-v1.js';
-import { normalizeGranolaMeetingV1 } from './granola-meeting-normalizer-v1.js';
+import { granolaLegacyWatchRevisionV1, normalizeGranolaMeetingV1 } from './granola-meeting-normalizer-v1.js';
 
 /** What a personal Granola source watches: nothing, the meetings its person captured, or one folder. */
 type GranolaWatchModeV1 = 'off' | 'mine' | 'folder';
@@ -15,10 +15,11 @@ export interface GranolaCheckpointV1 {
   readonly since: string | null;
   /**
    * Each meeting of the window by id: its `updated_at` as a UTC instant, or its content revision when Granola gives none
-   * (UNREADABLE while that content cannot be read).
+   * (UNREADABLE for an unresolved historical baseline).
    */
   readonly seen: Readonly<Record<string, string>>;
   readonly manual: readonly string[];
+  readonly retry_after?: Readonly<Record<string, string>>;
 }
 const prefix = 'granola-watch-v1:';
 /** The Authority's cursor column holds 65,536 characters; a full window and queue use far less. */
@@ -31,10 +32,9 @@ const DAY_MS = 86_400_000;
 /** Unreadable meetings one pull passes over before it stops; the next pull goes on from there. */
 const MAX_PASSED_OVER = 5;
 const MARK = /^sha256:[a-f0-9]{64}$/;
-/** The mark of a meeting without `updated_at` whose content cannot be read: never a real revision, so a readable one imports. */
+/** An unreadable historical baseline has no known revision against which to prove an edit. */
 const UNREADABLE = `sha256:${'0'.repeat(64)}`;
-/** A meeting whose transcript Granola is still processing: neither seen nor passed over, so a later pull reads it again. */
-const PENDING = Symbol('transcript pending');
+const RETRY_MS = 10 * 60_000;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const isInstant = (value: unknown): value is string => typeof value === 'string' && INSTANT.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 /** A Granola time as a UTC instant, so a changed time zone is no edit; undefined when it is missing or unreadable. */
@@ -48,7 +48,7 @@ export function readGranolaCheckpointV1(cursor: string): GranolaCheckpointV1 {
   let value: unknown;
   try { value = JSON.parse(cursor.slice(prefix.length)); } catch { fail(); }
   const row = GRANOLA_PERSON_PROVIDER_V1.record(value);
-  if (Object.keys(row).sort().join(',') !== 'baseline,folder,manual,mode,seen,since' || !['off', 'mine', 'folder'].includes(row.mode as string) || typeof row.baseline !== 'boolean'
+  if (!['baseline,folder,manual,mode,seen,since', 'baseline,folder,manual,mode,retry_after,seen,since'].includes(Object.keys(row).sort().join(',')) || !['off', 'mine', 'folder'].includes(row.mode as string) || typeof row.baseline !== 'boolean'
     || (row.mode === 'folder' ? typeof row.folder !== 'string' || !GRANOLA_ID_V1.test(row.folder) : row.folder !== null) || (row.mode === 'off' && row.baseline)
     || (row.since !== null && !isInstant(row.since))) fail();
   const manual = GRANOLA_PERSON_PROVIDER_V1.array(row.manual, 50);
@@ -56,6 +56,10 @@ export function readGranolaCheckpointV1(cursor: string): GranolaCheckpointV1 {
   const seen = Object.entries(GRANOLA_PERSON_PROVIDER_V1.record(row.seen));
   if (seen.length > MAX_SEEN || seen.some(([key, mark]) => !GRANOLA_ID_V1.test(key) || !(isInstant(mark) || (typeof mark === 'string' && MARK.test(mark))))
     || (!row.baseline && seen.length !== 0)) fail();
+  if (row.retry_after !== undefined) {
+    const retry = Object.entries(GRANOLA_PERSON_PROVIDER_V1.record(row.retry_after));
+    if (retry.length > MAX_SEEN + 50 || retry.some(([key, time]) => !GRANOLA_ID_V1.test(key) || !isInstant(time))) fail();
+  }
   return row as unknown as GranolaCheckpointV1;
 }
 export function writeGranolaCheckpointV1(checkpoint: GranolaCheckpointV1): string { const cursor = prefix + canonicalJson(checkpoint); readGranolaCheckpointV1(cursor); return cursor; }
@@ -68,7 +72,17 @@ export function granolaWatchInitialCursorV1(watch: GranolaWatchV1 = { watch: 'of
  */
 export const GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 = Object.freeze({
   read: readGranolaCheckpointV1, write: writeGranolaCheckpointV1, initial: () => granolaWatchInitialCursorV1(),
-  watch: (checkpoint: GranolaCheckpointV1, watch: GranolaWatchV1, at: string): GranolaCheckpointV1 => ({ ...checkpoint, mode: watch.watch, folder: watch.folder_id, baseline: false, since: at, seen: {} }),
+  watch: (checkpoint: GranolaCheckpointV1, watch: GranolaWatchV1, at: string): GranolaCheckpointV1 => ({ mode: watch.watch, folder: watch.folder_id, baseline: false, since: at, seen: {}, manual: checkpoint.manual }),
+  forgetCancelled(checkpoint: GranolaCheckpointV1, cancelled: readonly string[]): GranolaCheckpointV1 {
+    const { retry_after, ...rest } = checkpoint;
+    const retry = Object.fromEntries(Object.entries(retry_after ?? {}).filter(([id]) => !cancelled.includes(id)));
+    return { ...rest, ...(Object.keys(retry).length === 0 ? {} : { retry_after: retry }) };
+  },
+  acquisitionStatus(checkpoint: GranolaCheckpointV1): string | null {
+    const ids = Object.keys(checkpoint.retry_after ?? {});
+    if (ids.length === 0) return null;
+    return ids.length === 1 ? `Waiting to retry meeting ${ids[0]}.` : `Waiting to retry ${ids.length} meetings, including ${ids[0]}.`;
+  },
   ready: (checkpoint: GranolaCheckpointV1): boolean => checkpoint.baseline,
 });
 const day = (time: number) => new Date(time).toISOString().slice(0, 10);
@@ -107,7 +121,7 @@ export class GranolaWatchSourceV1 implements MeetingSourceAdapter {
     if (this.fence === undefined) throw new Error('Granola observation has not been authorized');
     this.fence();
   }
-  async pull(request: Parameters<MeetingSourceAdapter['pull']>[0], operation?: AdapterOperationContext) {
+  async pull(request: Parameters<MeetingSourceAdapter['pull']>[0], operation?: AdapterOperationContext): ReturnType<MeetingSourceAdapter['pull']> {
     this.requireMapping();
     const checkpoint = readGranolaCheckpointV1(request.cursor ?? granolaWatchInitialCursorV1(this.watch));
     if (checkpoint.mode !== this.watch.watch || checkpoint.folder !== this.watch.folder_id) GRANOLA_PERSON_PROVIDER_V1.failure('stale_access_state');
@@ -115,18 +129,40 @@ export class GranolaWatchSourceV1 implements MeetingSourceAdapter {
     if (session.identity.adapter_id !== this.identity.adapter_id || session.identity.version !== this.identity.version ||
         (session.identity.instance_id !== this.identity.instance_id && !this.identity.instance_id.startsWith(session.identity.instance_id + '-'))) GRANOLA_PERSON_PROVIDER_V1.failure('stale_access_state');
     this.fence = session.current;
-    const manual = checkpoint.manual[0];
-    if (manual !== undefined) {
-      // A queued import is never passed over: a failed read is not deletion evidence (ADR-0030), and its person can cancel it.
-      const meeting = await this.read(session, manual, operation);
-      await session.verify(); this.requireCurrent();
-      return { meetings: [meeting], next_cursor: writeGranolaCheckpointV1({ ...checkpoint, manual: checkpoint.manual.slice(1) }) };
-    }
-    if (checkpoint.mode === 'off') return { meetings: [] };
     const now = this.now();
+    const { retry_after, ...previous } = checkpoint;
+    const retry: Record<string, string> = { ...retry_after };
+    let failed = 0;
+    const readEligible = async (id: string, previousMark?: string) => {
+      if (failed >= MAX_PASSED_OVER || Date.parse(retry[id] ?? '') > now) return undefined;
+      const read = await this.attempt(session, id, operation, previousMark);
+      if (read === undefined) {
+        retry[id] = new Date(now + RETRY_MS).toISOString();
+        failed++;
+      } else delete retry[id];
+      return read;
+    };
+    const finish = async (state: GranolaCheckpointV1, meeting?: MeetingDocument) => {
+      await session.verify(); this.requireCurrent();
+      return { meetings: meeting === undefined ? [] : [meeting], next_cursor: writeGranolaCheckpointV1({
+        ...state, ...(Object.keys(retry).length === 0 ? {} : { retry_after: retry }),
+      }) };
+    };
+    const priority = (id: string) => retry[id] === undefined ? 0 : Date.parse(retry[id]!);
+    for (const id of [...checkpoint.manual].sort((a, b) => priority(a) - priority(b))) {
+      if (checkpoint.mode !== 'off' && failed >= MAX_PASSED_OVER - 1) break;
+      const meeting = await readEligible(id);
+      if (meeting !== undefined) return finish({ ...previous, manual: checkpoint.manual.filter(other => other !== id) }, meeting.document);
+    }
+    if (checkpoint.mode === 'off') {
+      for (const id of Object.keys(retry)) if (!checkpoint.manual.includes(id)) delete retry[id];
+      return checkpoint.manual.length || retry_after ? finish(previous) : { meetings: [] };
+    }
     // Granola lists newest first; the oldest goes first.
     const listed = [...await session.window({ mode: checkpoint.mode, folder: checkpoint.folder, ...granolaWatchWindowV1(now) })].reverse();
     this.requireCurrent();
+    const eligible = new Set([...checkpoint.manual, ...listed.map(meeting => meeting.id)]);
+    for (const id of Object.keys(retry)) if (!eligible.has(id)) delete retry[id];
     const seen: Record<string, string> = {};
     let selected: MeetingDocument | undefined;
     if (!checkpoint.baseline) {
@@ -135,49 +171,53 @@ export class GranolaWatchSourceV1 implements MeetingSourceAdapter {
       const since = checkpoint.since === null ? Number.POSITIVE_INFINITY : Date.parse(checkpoint.since);
       for (const meeting of listed) {
         const at = instant(meeting.updated_at);
-        if (at === undefined) { const read = await this.attempt(session, meeting.id, operation); seen[meeting.id] = read === undefined || read === PENDING ? UNREADABLE : read.provenance.canonical_revision; }
+        if (at === undefined) {
+          const created = instant(meeting.created_at);
+          if (created !== undefined && Date.parse(created) >= since) continue;
+          const read = await readEligible(meeting.id);
+          seen[meeting.id] = read?.document.provenance.canonical_revision ?? UNREADABLE;
+        }
         else if (Date.parse(at) < since) seen[meeting.id] = at;
       }
     } else {
       // A meeting that left the window, or the folder, is forgotten; one that comes back is new again.
       for (const meeting of listed) { const mark = checkpoint.seen[meeting.id]; if (mark !== undefined) seen[meeting.id] = mark; }
-      let passedOver = 0;
-      for (const meeting of listed) {
-        if (passedOver === MAX_PASSED_OVER) break;
+
+      for (const meeting of listed.sort((a, b) => priority(a.id) - priority(b.id))) {
+        if (failed >= MAX_PASSED_OVER) break;
+        if (checkpoint.manual.includes(meeting.id)) continue;
         const at = instant(meeting.updated_at);
         if (at !== undefined && (seen[meeting.id] === at || Date.parse(at) > now - SETTLE_MS)) continue;
         // Without a readable updated_at, only the content tells an edit apart; such a meeting counts as settled.
-        const read = await this.attempt(session, meeting.id, operation);
-        if (read === PENDING) continue;
-        const mark = at ?? read?.provenance.canonical_revision ?? UNREADABLE;
-        if (seen[meeting.id] === mark) continue;
-        // An unreadable meeting is recorded too: at its listed updated_at, so only a later edit tries it again; without
-        // one, as UNREADABLE, which a later pass replaces once its content reads.
+        const read = await readEligible(meeting.id, seen[meeting.id]);
+        if (read === undefined) continue;
+        const mark = at ?? read.document.provenance.canonical_revision;
+        const previousMark = seen[meeting.id];
         seen[meeting.id] = mark;
-        if (read === undefined) { passedOver++; continue; }
-        selected = read; break;
+        // An unreadable historical baseline becomes known without acquiring that history.
+        // A provider timestamp proving a later edit still qualifies for intake.
+        if (read.unchanged || previousMark === read.document.provenance.canonical_revision || previousMark === mark || (previousMark === UNREADABLE &&
+          (at === undefined || checkpoint.since === null || at < checkpoint.since))) continue;
+        selected = read.document; break;
       }
     }
-    await session.verify(); this.requireCurrent();
-    return { meetings: selected === undefined ? [] : [selected],
-      next_cursor: writeGranolaCheckpointV1({ mode: checkpoint.mode, folder: checkpoint.folder, baseline: true, since: checkpoint.since, seen, manual: [] }) };
+    return finish({ ...previous, baseline: true, seen }, selected);
   }
-  /**
-   * The meeting; undefined when Granola's answer for it can never be read; PENDING while its transcript is still processing.
-   * An outage or changed access still fails the pull.
-   */
-  private async attempt(session: GranolaWatchReadSessionV1, meetingId: string, operation?: AdapterOperationContext): Promise<MeetingDocument | undefined | typeof PENDING> {
-    try { return await this.read(session, meetingId, operation); }
-    catch (error) {
-      if (granolaTranscriptPendingV1(error)) return PENDING;
-      if (granolaMeetingUnreadableV1(error)) return undefined;
+  /** Only a meeting-specific acquisition failure can be deferred. Revocation and service outages fail the pull. */
+  private async attempt(session: GranolaWatchReadSessionV1, id: string, operation?: AdapterOperationContext, previousMark?: string) {
+    try {
+      this.requireCurrent(); operation?.signal.throwIfAborted();
+      const detail = await session.api.meeting(id, operation?.signal);
+      const transcript = await session.api.transcript(id, operation?.signal);
+      const input = granolaMcpMeetingContentV1(detail, transcript);
+      const document = normalizeGranolaMeetingV1(input, this.identity, new Date(this.now()).toISOString());
+      // Older cursors compare the old projection once. Upgrading the mapper cannot count as an edit by the person.
+      const unchanged = previousMark !== undefined && previousMark !== document.provenance.canonical_revision && previousMark !== UNREADABLE &&
+        MARK.test(previousMark) && previousMark === granolaLegacyWatchRevisionV1(input);
+      return { document, unchanged };
+    } catch (error) {
+      if (granolaTranscriptPendingV1(error) || granolaMeetingUnreadableV1(error)) return undefined;
       throw error;
     }
-  }
-  private async read(session: GranolaWatchReadSessionV1, meetingId: string, operation?: AdapterOperationContext): Promise<MeetingDocument> {
-    this.requireCurrent(); operation?.signal.throwIfAborted();
-    const detail = await session.api.meeting(meetingId, operation?.signal);
-    const transcript = await session.api.transcript(meetingId, operation?.signal);
-    return normalizeGranolaMeetingV1(granolaMcpMeetingContentV1(detail, transcript), this.identity, new Date(this.now()).toISOString());
   }
 }

@@ -68,12 +68,14 @@ describe('verified Granola MCP contract', () => {
       'arbitrary preamble\n' + response,
       detailEnvelopeV1 + response,
       response.replace('fixture@example.test', '<nested>fixture@example.test</nested>'),
-      response.replace('The connected_user_email identifies', 'Unknown guidance identifies'),
+      response.replace('The connected_user_email identifies', '<unrecognized/>'),
       response.replace(warning, ''),
       response.replace('count="1"', 'count="2"'),
       response.replace('https://notes.granola.ai', 'https://attacker.example'),
       response + '<unexpected />',
     ]) expect(() => parseGranolaMeetingPageV1(value, true)).toThrow(expect.objectContaining({ code: 'invalid_output' }));
+    const changed = response.replace('The connected_user_email identifies', 'Revised provider guidance identifies');
+    expect(parseGranolaMeetingPageV1(changed, true)).toEqual(parseGranolaMeetingPageV1(response, true));
     expect(() => parseGranolaMeetingPageV1(response, false)).toThrow(expect.objectContaining({ code: 'invalid_output' }));
   });
   it('accepts current pagination-first results without discarding continuation', () => {
@@ -286,6 +288,11 @@ describe('one meeting\'s large or unnormalized fields never fail its read', () =
     expect(normalized.participants).toHaveLength(people);
     expect(normalized.participants.at(-1)).toMatchObject({ display_name: `Person ${people - 1}`, identities: [{ kind: 'email', value: `person${people - 1}@example.test` }] });
   });
+  it('normalizes transcript instants with offsets and refuses a nonadvancing offset', async () => {
+    const page = (fields: Record<string, unknown>) => warning + JSON.stringify({ id, created_at: '2026-08-29T22:14:34.163-07:00', transcript: 'Hello', ...fields });
+    expect(await fixture(page({})).adapter.transcript(id)).toEqual({ text: 'Hello', created_at: '2026-08-30T05:14:34.163Z' });
+    await expect(fixture(page({ truncated: true, next_offset: 0 })).adapter.transcript(id)).rejects.toMatchObject({ code: 'invalid_output' });
+  });
   it('reads a long transcript page by page from next_offset, joining turns, and continues a turn split across pages', async () => {
     const page = (fields: Record<string, unknown>) => warning + JSON.stringify({ id, title: 'Fixture', created_at: '2026-10-05T20:00:00.000Z', ...fields });
     const f = scripted(page({ transcript: 'Microphone: one.', truncated: true, next_offset: 16 }), page({ transcript: 'System audio: two, and', truncated: true, next_offset: 38, ends_mid_utterance: true }),
@@ -293,6 +300,12 @@ describe('one meeting\'s large or unnormalized fields never fail its read', () =
     expect(await f.adapter.transcript(id)).toEqual({ text: 'Microphone: one.\n\nSystem audio: two, and three.', created_at: '2026-10-05T20:00:00.000Z' });
     expect(f.calls().map(call => call.arguments)).toEqual([
       { meeting_id: id, max_chars: 80_000 }, { meeting_id: id, max_chars: 80_000, offset: 16 }, { meeting_id: id, max_chars: 80_000, offset: 38 }]);
+  });
+  it('reports an unfinished transcript after eight advancing pages and rejects mixed transcript versions', async () => {
+    const page = (offset: number, version: string) => JSON.stringify({ id, created_at: '2026-10-05T20:00:00Z',
+      transcript: 'excerpt', transcript_version: version, truncated: true, next_offset: offset });
+    expect(await scripted(...Array.from({ length: 8 }, (_, i) => page(i + 1, 'v1'))).adapter.transcript(id)).toMatchObject({ truncated: true });
+    await expect(scripted(page(1, 'v1'), page(2, 'v2')).adapter.transcript(id)).rejects.toMatchObject({ code: 'invalid_output' });
   });
   it('reads no transcript as none when Granola says so, as pending while it processes, and refuses an unexplained null', async () => {
     const answer = (fields: Record<string, unknown>) => fixture(warning + JSON.stringify({ id, title: 'Fixture', transcript: null, ...fields })).adapter.transcript(id);
@@ -308,7 +321,9 @@ describe('one meeting\'s large or unnormalized fields never fail its read', () =
     const transcript = (text: string) => fixture(warning + JSON.stringify({ id, title: 'Fixture', created_at: '2026-10-05T20:00:00.000Z', transcript: text })).adapter.transcript(id);
     const turns = Array.from({ length: 300 }, (_, index) => `${index % 2 === 0 ? 'Microphone' : 'System audio'}: ${'We go over the plan once more. '.repeat(30)}Turn ${index}.`);
     expect(Buffer.byteLength(turns.join('\n\n'), 'utf8')).toBeGreaterThan(256 * 1024);
-    const { text } = (await transcript(turns.join('\n\n')))!;
+    const captured = (await transcript(turns.join('\n\n')))!;
+    expect(captured.truncated).toBe(true);
+    const { text } = captured;
     const head = text.split('\n\n');
     expect(head).toEqual(turns.slice(0, head.length));
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(256 * 1024);
@@ -397,6 +412,9 @@ describe('Granola list contract, as observed live', () => {
   it('refuses incomplete searches, cursor cycles and unbounded empty continuation instead of completing a watch baseline', async () => {
     const input = { from_date: '2026-10-17', to_date: '2026-10-25', folder_id: PUMP };
     await expect(scripted(listPage([], '<pagination has_more="false" completion_status="incomplete" />')).adapter.meetings(input))
+      .rejects.toMatchObject({ code: 'unavailable' });
+    await expect(scripted(LIVE_PAGE, listPage([])).adapter.meetings(input)).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(scripted(listPage([weeklyRow], '<pagination has_more="false" total_count="2" />')).adapter.meetings(input))
       .rejects.toMatchObject({ code: 'unavailable' });
     const cycle = scripted(...['a', 'b', 'a'].map(cursor => listPage([], `<pagination has_more="true" next_cursor="${cursor}" />`)));
     await expect(cycle.adapter.meetings(input)).rejects.toMatchObject({ code: 'invalid_output' });

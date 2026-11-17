@@ -21,6 +21,15 @@ function digests(value: GranolaMeetingV1, text: Transcript, observedAt?: string)
 }
 
 describe('Granola meeting normalization of MCP content', () => {
+  it('keeps structured meeting time, distinct same-name identities and incomplete transcript coverage', () => {
+    const note = { ...meeting, date: 'Local time', meeting_at: '2026-10-05T14:00:00+02:00',
+      known_participants: 'Alex <alex@a.test>, Alex <alex@b.test>' };
+    const result = normalize(note, { ...transcript, truncated: true });
+    expect(result.time?.scheduled_start_at).toBe('2026-10-05T12:00:00.000Z');
+    expect(result.participants.map(person => person.id)).toEqual(['email:alex@a.test', 'email:alex@b.test']);
+    expect(result.capture).toMatchObject({ state: 'partial', warnings: expect.arrayContaining([expect.stringContaining('shortened')]) });
+    expect(result.provenance.canonical_revision).not.toBe(normalize(note).provenance.canonical_revision);
+  });
   it('maps an MCP meeting to its exact document and revision', () => {
     const state = (kind: string, value: string) => ({ kind, state: value });
     expect(normalize()).toEqual({

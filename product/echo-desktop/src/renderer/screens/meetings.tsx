@@ -109,7 +109,7 @@ export function Meetings({ toolId }: { toolId: string }) {
 
   return <section class="personal-meetings" aria-label="Personal meetings" aria-busy={busy}>
     <div class="meetings-sub">
-      <span class="notice-line">{home === null ? (busy ? '' : 'Granola could not be reached.') : home.connected ? `${home.email} · ${home.workspace}` : 'Reconnect Granola to search meetings.'}</span>
+      <span class="notice-line">{home === null ? (busy ? '' : 'Granola could not be reached.') : home.connected ? `${home.email} · ${home.workspace}` : 'Granola is unavailable. Refresh or reconnect to search meetings.'}</span>
       {busy ? <span class="asking"><i /><i /><i /><span>Working…</span></span>
         : <button type="button" class="link-button" onClick={() => void run(() => refresh(true))}>Refresh</button>}
     </div>
@@ -119,13 +119,20 @@ export function Meetings({ toolId }: { toolId: string }) {
     {home?.connected && <>
       <div class="section-label">Live meeting search</div>
       <p class="notice-line" data-testid="meeting-search-ready">Ask can search your accessible Granola history now. Meetings stay in Granola. To search a folder within a project, select it in the project’s Tools settings.</p>
-      <div class="section-label">Automatic extraction</div>
-      <p class="notice-line">Optional: extract decisions, actions and rationale from new meetings for your review. Historical search does not require extraction or approval.</p>
+    </>}
+    {(home?.connected || watch) && <div class="section-label">Automatic extraction</div>}
       {watch && <div class="watch-row" data-testid="meeting-watch">
         <span class="item-icon" aria-hidden="true"><Calendar /></span>
         <span class="lines"><span class="name">{watchState}</span></span>
         <button type="button" class="link-button" disabled={busy} onClick={stopWatch}>Stop</button>
       </div>}
+      {home?.sources.map(s => <div key={s.source_key} class="source-notes">
+        {s.error && <div class="error">{s.error}</div>}
+        {s.pending_imports.map(id => <div key={id} class="notice-line">Extraction queued · {id}
+          <button type="button" class="link-button" disabled={busy} onClick={() => void run(async () => { await command({ operation: 'cancel_import', source_key: s.source_key, meeting_id: id }); await refresh(); })}>Cancel</button></div>)}
+      </div>)}
+    {home?.connected && <>
+      <p class="notice-line">Extract decisions, actions and rationale from new meetings for your review.</p>
       {/* With a watch active these show it, and Save updates it; Stop is how it ends. */}
       <div class="meeting-controls thirds" role="group" aria-label="Automatic extraction">
         <Select label="Extract" value={mode} disabled={busy} onChange={value => setMode(value as PersonMeetingWatchV2)}>
@@ -136,11 +143,6 @@ export function Meetings({ toolId }: { toolId: string }) {
         </Select>}
         {mode !== 'off' && <><Select label="Suggest" value={suggest} disabled={busy} onChange={setSuggest}><option value="">None</option>{suggestOptions}</Select>{moreProjects}</>}
       </div>
-      {home.sources.map(s => <div key={s.source_key} class="source-notes">
-        {s.error && <div class="error">{s.error}</div>}
-        {s.pending_imports.map(id => <div key={id} class="notice-line">Extraction queued
-          <button type="button" class="link-button" disabled={busy} onClick={() => void run(async () => { await command({ operation: 'cancel_import', source_key: s.source_key, meeting_id: id }); await refresh(); })}>Cancel</button></div>)}
-      </div>)}
       <label class="check consent"><input type="checkbox" checked={retain} disabled={busy} onChange={e => setRetain(e.currentTarget.checked)} />
         <span>I allow ECHO to retain a processing copy of notes and transcripts for extraction and review. Only approved decisions, actions and rationale are published to my chosen projects.</span></label>
       {unsaved && <div class="choices start">

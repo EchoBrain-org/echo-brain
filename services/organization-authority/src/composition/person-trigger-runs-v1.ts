@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { RESTRICTED_REVIEWER_PERSON_POLICY_ID } from '@echo-brain/organization-protocol';
-import { PERSON_IMPACT_CARD_LIMITS_V1, PERSON_RUN_MEETING_ACTIONS_MAX_V1, PERSON_RUNS_LIST_LIMIT_V1, validatePersonImpactCardV1, type PersonImpactCardV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
+import { PERSON_IMPACT_CARD_LIMITS_V1, PERSON_RUNS_LIST_LIMIT_V1, validatePersonImpactCardV1, type PersonImpactCardV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { impactCardLineV1, impactItemKeyV1, refreshImpactCardV1, storableImpactCardV1, type FreshImpactItemV1, type StoredImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
@@ -73,9 +73,7 @@ type ItemCandidateV1 = Omit<ImpactItemDraftV1, 'owner_membership_id' | 'owner_ma
  * details. Then one per action the approved meeting decided, in brief
  * order: it needs doing, its expected line is the action's own text on one
  * line of at most 120 characters, and its owner name is the one the approver
- * confirmed. An action with no printable text makes none and takes no place
- * under the cap: at most `PERSON_RUN_MEETING_ACTIONS_MAX_V1` actions with a
- * line, the first ones (the rest stay in the record only).
+ * confirmed. Every approved action with printable text makes a draft.
  */
 function itemCandidates(record_sha256: Sha256Digest, siblings: readonly Sha256Digest[], card: PersonImpactCardV1, stored: StoredImpactCardV1,
   actions: readonly PersonRecordActionV1[]): readonly ItemCandidateV1[] {
@@ -104,12 +102,14 @@ function itemCandidates(record_sha256: Sha256Digest, siblings: readonly Sha256Di
   const decided = actions
     .map(action => ({ action, expected: impactCardLineV1(action.text, PERSON_IMPACT_CARD_LIMITS_V1.expected_chars) }))
     .filter(({ expected }) => expected !== '')
-    .slice(0, PERSON_RUN_MEETING_ACTIONS_MAX_V1)
     .flatMap(({ action, expected }): ItemCandidateV1[] => {
       const pointer = Object.freeze({ kind: 'meeting_action', record_sha256, signal_id: action.signal_id });
       const item_key = fresh(pointer);
       if (item_key === undefined) return [];
-      return [{ item_key, pointer, relation: 'needs_updating', expected, ...(action.owner === null ? {} : { owner_name: action.owner }) }];
+      // The expected line is the existing, recipient-visible contract. Reserve room for the entire approved deadline.
+      const deadline = action.due_at ? ` · Due ${action.due_at}` : '';
+      const line = deadline === '' ? expected : impactCardLineV1(action.text, PERSON_IMPACT_CARD_LIMITS_V1.expected_chars - deadline.length) + deadline;
+      return [{ item_key, pointer, relation: 'needs_updating', expected: line, ...(action.owner === null ? {} : { owner_name: action.owner }) }];
     });
   return [...affected, ...decided];
 }
@@ -147,13 +147,24 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     // A record shared beyond its approver: what only the approver may see (Only-me records, private notes, documents and
     // unapproved meetings) never enters the research either, so no model-written line can carry it to the audience.
     const shared = anchor.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID;
-    const run = await research(scope, { records: siblings, sources: source === undefined ? [] : [source], ...(shared ? { private: true } : {}) });
-    const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;
-    const event = definition.parseEvent({ record: anchor });
-    const output = await run.renderWithResearch({ trigger: definition.name, brief: definition.brief(event, scope), renderer: definition.renderer!, trigger_input: event, signal });
-    const card = validatePersonImpactCardV1(output.rendered);
-    const outsideLabels = output.research.items
-      .filter(item => (item.citation as { readonly kind?: unknown }).kind !== 'approved_record' && (item.citation as { readonly kind?: unknown }).kind !== 'source_revision').map(item => item.title);
+    let card: PersonImpactCardV1;
+    let outsideLabels: string[] = [];
+    try {
+      const run = await research(scope, { records: siblings, sources: source === undefined ? [] : [source], ...(shared ? { private: true } : {}) });
+      const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;
+      const event = definition.parseEvent({ record: anchor });
+      const output = await run.renderWithResearch({ trigger: definition.name, brief: definition.brief(event, scope), renderer: definition.renderer!, trigger_input: event, signal });
+      card = validatePersonImpactCardV1(output.rendered);
+      outsideLabels = output.research.items
+        .filter(item => (item.citation as { readonly kind?: unknown }).kind !== 'approved_record' && (item.citation as { readonly kind?: unknown }).kind !== 'source_revision').map(item => item.title);
+    } catch (error) {
+      signal.throwIfAborted();
+      if (!actions.some(action => impactCardLineV1(action.text, PERSON_IMPACT_CARD_LIMITS_V1.expected_chars) !== '') ||
+          error instanceof PersonRecordSearchIndexLagV1 ||
+          (error instanceof AuthorityOperationError && !['unavailable', 'invalid_output', 'quota_exceeded'].includes(error.code))) throw error;
+      // Research adds external impact. The approved action itself already has an authorized source.
+      card = validatePersonImpactCardV1({ status: 'not_assessed', decided: [], affected: [], unconfirmed: [], people: [], citations: [] });
+    }
     const value = storableImpactCardV1(card, outsideLabels);
     // Nor do its siblings come back as follow-ups (the receipt that names them was written before the run was queued).
     const candidates = itemCandidates(record_sha256, siblings, card, value, actions);
@@ -165,6 +176,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     });
     // A cancelled assignee read matches no one; its fallbacks are never stored as the run's owners.
     signal.throwIfAborted();
+    options.records.recordAnchor({ access_token: token, record_sha256 });
     const drafts: ImpactItemDraftV1[] = candidates.map(({ owner_name: _name, ...candidate }, index) => ({ ...candidate, ...owners[index]! }));
     // The items are written in the transaction that stores the card, so a run is never done without them.
     return { result: value, ...(drafts.length === 0 ? {} : { writes: (transaction: Database.Database) => options.items.insertForRun(transaction, row, drafts) }) };

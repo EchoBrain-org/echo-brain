@@ -30,6 +30,8 @@ export interface PersonalMeetingCheckpointCodecV1 {
   watch(value: PersonalMeetingCheckpointV1, watch: PersonalMeetingWatchV1, at: string): PersonalMeetingCheckpointV1;
   /** Whether automatic import is active, not still preparing. */
   ready(value: PersonalMeetingCheckpointV1): boolean;
+  forgetCancelled?(value: PersonalMeetingCheckpointV1, cancelled: readonly string[]): PersonalMeetingCheckpointV1;
+  acquisitionStatus?(value: PersonalMeetingCheckpointV1): string | null;
 }
 const OFF: PersonalMeetingWatchV1 = Object.freeze({ watch: 'off', folder_id: null });
 function denied(): never { throw new AuthorityOperationError('unauthorized', 'Personal meeting access is unavailable'); }
@@ -160,7 +162,8 @@ export class SqlitePersonMeetingIntakeV1 {
     this.db.transaction(() => {
       current(); this.currentPerson(setting);
       const checkpoint = this.checkpoint(setting.source_key);
-      this.write(setting.source_key, { ...checkpoint, manual: checkpoint.manual.filter(id => id !== meetingId) });
+      const kept = this.cursor.forgetCancelled?.(checkpoint, [meetingId]) ?? checkpoint;
+      this.write(setting.source_key, { ...kept, manual: checkpoint.manual.filter(id => id !== meetingId) });
       this.db.prepare('DELETE FROM authority_person_meeting_pending_suggestions_v1 WHERE source_key=? AND external_id=?').run(setting.source_key, meetingId);
       this.db.prepare('DELETE FROM authority_live_source_held_extractions_v1 WHERE source_key=? AND external_id=?').run(setting.source_key, meetingId);
       current();
@@ -223,8 +226,10 @@ export class SqlitePersonMeetingIntakeV1 {
   rebase(transition: { readonly expected_cursor: string; readonly next_cursor: string; readonly current_cursor: string }): string | undefined {
     const pulled = this.cursor.read(transition.expected_cursor), next = this.cursor.read(transition.next_cursor), now = this.cursor.read(transition.current_cursor);
     const consumed = pulled.manual.filter(id => !next.manual.includes(id));
-    if (this.cursor.write({ ...pulled, manual: [] }) !== this.cursor.write({ ...now, manual: [] }) || consumed.some(id => !now.manual.includes(id))) return undefined;
-    return this.cursor.write({ ...next, manual: now.manual.filter(id => !consumed.includes(id)) });
+    const cancelled = pulled.manual.filter(id => !now.manual.includes(id));
+    const clean = (value: PersonalMeetingCheckpointV1) => this.cursor.forgetCancelled?.(value, cancelled) ?? value;
+    if (this.cursor.write({ ...clean(pulled), manual: [] }) !== this.cursor.write({ ...now, manual: [] }) || consumed.some(id => !now.manual.includes(id))) return undefined;
+    return this.cursor.write({ ...clean(next), manual: now.manual.filter(id => !consumed.includes(id)) });
   }
   private isMember(person: MeetingIntakePersonV1, projectId: string): boolean {
     try { this.currentPerson(person, projectId); return true; }

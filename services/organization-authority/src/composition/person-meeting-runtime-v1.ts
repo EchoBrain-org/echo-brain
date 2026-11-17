@@ -257,7 +257,7 @@ export function createPersonMeetingRuntimeV1(options: {
       // A pull that left its queue where it was never re-pulls at once: an automatic retry, or a head in flight elsewhere
       // (another process, or a crash's unexpired lease), waits a minute; anything else (a lost compare-and-swap) about
       // one former cycle.
-      const floor = retry || outcome.cursor_advanced ? 0 : outcome.kind === 'in_flight' || outcome.kind === 'retry_scheduled' ? 60_000 : 30_000;
+      const floor = retry || (outcome.cursor_advanced && !outcome.kind.startsWith('empty')) ? 0 : outcome.kind === 'in_flight' || outcome.kind === 'retry_scheduled' ? 60_000 : 30_000;
       observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() + (queued || outcome.kind === 'retry_scheduled' ? floor : 300_000) });
     } catch (error) {
       signal.throwIfAborted();
@@ -456,13 +456,17 @@ export function createPersonMeetingRuntimeV1(options: {
           catch (error) { current(); if (input.operation !== 'home') throw error; }
         }
         if (input.operation === 'home') {
-          const folders = session === null ? [] : await session.folders();
+          let folders: PersonMeetingResultsV2['home']['folders'] = [];
+          if (session !== null) {
+            try { folders = await session.folders(); }
+            catch { current(); request.signal?.throwIfAborted(); session = null; }
+          }
           return { connected: session !== null, email: session?.email ?? null, workspace: session?.workspace ?? null, folders, settings_sha256: settings(person),
             sources: intake.list(person).filter(s => s.source_adapter_id === provider.cursor.policy.source_adapter_id).map(s => {
               const owner = ownerOf(s.source_adapter_id), checkpoint = owner.intake.checkpoint(s.source_key);
               return { source_key: s.source_key, watch: s.watch, folder_id: s.folder_id, project_id: s.suggested_project_id,
                 baseline: owner.provider.cursor.ready(checkpoint), pending_imports: checkpoint.manual,
-                checked_at: observed.get(s.source_key)?.checked_at ?? null, error: sourceError(s.source_key) };
+                checked_at: observed.get(s.source_key)?.checked_at ?? null, error: sourceError(s.source_key) ?? owner.provider.cursor.acquisitionStatus?.(checkpoint) ?? null };
             }) };
         }
         if (!session) throw new AuthorityOperationError('unauthorized', 'Connect your meeting account first');

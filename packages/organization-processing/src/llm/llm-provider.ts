@@ -95,13 +95,14 @@ export function optionalPositiveInteger(value: unknown): number | undefined {
     : undefined;
 }
 
-function statusTaxonomy(status: number): {
+function statusTaxonomy(provider: string, status: number): {
   code: AdapterErrorCode;
   retryable: boolean;
 } {
   if (status === 401 || status === 403) {
     return { code: 'unauthorized', retryable: false };
   }
+  if (provider === 'OpenRouter' && status === 402) return { code: 'temporarily_unavailable', retryable: true };
   if (status === 429) return { code: 'rate_limited', retryable: true };
   if (status === 408) return { code: 'timeout', retryable: true };
   if (status >= 500) {
@@ -114,9 +115,9 @@ function statusTaxonomy(status: number): {
 class ProviderStatusError extends AdapterError {
   constructor(provider: string, readonly http_status: number, unbilled = false) {
     super(
-      statusTaxonomy(http_status).code,
+      statusTaxonomy(provider, http_status).code,
       `${provider} rejected the request with status ${http_status}`,
-      statusTaxonomy(http_status).retryable,
+      statusTaxonomy(provider, http_status).retryable,
       { unbilled },
     );
   }

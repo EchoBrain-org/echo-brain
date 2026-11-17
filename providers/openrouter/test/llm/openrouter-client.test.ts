@@ -200,7 +200,7 @@ describe('OpenRouter provider client', () => {
     },
   );
 
-  it.each([[429, true], [503, true], [400, false], [401, false]])(
+  it.each([[402, true], [429, true], [503, true], [400, false], [401, false]])(
     'declares a %i refusal unbilled: %s',
     async (status, unbilled) => {
       const refusal = new OpenRouterClient({
@@ -208,7 +208,7 @@ describe('OpenRouter provider client', () => {
         credentialResolver: () => 'openrouter-secret',
         fetchImpl: async () => new Response('{}', { status }),
       }).generateStructured(generationRequest);
-      await expect(refusal).rejects.toMatchObject({ http_status: status, unbilled });
+      await expect(refusal).rejects.toMatchObject({ http_status: status, unbilled, ...(status === 402 ? { code: 'temporarily_unavailable', retryable: true } : {}) });
     },
   );
 

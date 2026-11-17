@@ -23,7 +23,9 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeRootV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { PersonMeetingOperationV2, PersonMeetingResultsV2, PersonOpenRefV1, PersonReviewOperationV1, PersonReviewResultsV1 } from '@echo-brain/organization-api';
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
-import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_WATCH_CURSOR_POLICY_V1, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 } from '@echo-brain/provider-granola/granola-watch-source-v1';
+import { createGranolaMcpV1 } from '@echo-brain/provider-granola/granola-mcp-v1';
+import { GRANOLA_MEETING_NORMALIZER_VERSION_V1 } from '@echo-brain/provider-granola/granola-meeting-normalizer-v1';
+import { GranolaWatchSourceV1, readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_WATCH_CURSOR_POLICY_V1, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 } from '@echo-brain/provider-granola/granola-watch-source-v1';
 import { SqliteExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
 import { AdapterError } from '@echo-brain/organization-processing/core/contracts/adapter';
 import { providerStatusError } from '@echo-brain/organization-processing/llm/llm-provider';
@@ -210,6 +212,34 @@ function toolIsSynthetic(meeting: MeetingDocument) { return meeting.provenance.s
 const heldError = (external: string, stage = 'unknown', next = 'An operator can authorize one more attempt.') =>
   `Meeting ${external} is held after extraction attempt 1 failed at ${stage}. Later meetings continue. ${next}`;
 describe('personal meeting intake uses the shared processing path', () => {
+  it('takes a selected Granola note through real transcript parsing, custody, extraction and private review', async () => {
+    const f = await fixture();
+    const base = f.fakeProvider('granola', GRANOLA_WATCH_CURSOR_POLICY_V1.source_adapter_id);
+    const granola: PersonMeetingProviderV1 = { ...base, normalizer_version: GRANOLA_MEETING_NORMALIZER_VERSION_V1,
+      source(setting, current) {
+        const identity = { kind: 'meeting-source' as const, adapter_id: setting.source_adapter_id, instance_id: setting.source_adapter_instance_id, version: setting.source_adapter_version };
+        const api = createGranolaMcpV1({ binding: { ...f.person, tool_id: 'granola', external_scope_id: folder,
+          external_subject_id: 'fixture@example.test', read_grant_sha256: canonicalSha256('fixture grant') },
+          async fetch(_url, init) {
+            const request = JSON.parse(init.body as string);
+            const detail = `<meetings_data count="1"><meeting id="${id}" title="Pilot plan" date="Oct 2, 2026 8:08 PM PDT" url="https://notes.granola.ai/d/${id}"><summary>Send the pilot plan.</summary></meeting></meetings_data>`;
+            const transcript = JSON.stringify({ id, created_at: '2026-08-29T22:14:34.163-07:00', transcript: 'Send the pilot plan.' });
+            expect(['get_meetings', 'get_meeting_transcript']).toContain(request.params.name);
+            return Response.json({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: request.params.name === 'get_meetings' ? detail : transcript }] } });
+          } });
+        return new GranolaWatchSourceV1(identity, setting, async () => ({ identity, api, current, verify: async () => current(), window: async () => [] }), current);
+      },
+    };
+    const runtime = f.create([granola], { processor: llmProcessor(JSON.stringify({ signals: [extractedItem('action', 'Send the pilot plan.', ['T1'])] })) });
+    try {
+      const { pending, opened } = await f.pendingReview(runtime);
+      expect(opened.items).toMatchObject([{ kind: 'action', text: 'Send the pilot plan.' }]);
+      expect((await f.reviewCall(runtime, { operation: 'reviews' }, 'other')).reviews).toEqual([]);
+      await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+      await f.processUntilIdle(runtime);
+      expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews.map(row => row.approval_id)).toEqual([pending!.approval_id]);
+    } finally { runtime.close(); f.db.close(); }
+  });
   it.each([false, true])('observes one extraction by attempt and opaque meeting id, keeps its payloads out of operational metadata, and joins its approval or holds it (failed=%s)', async failed => {
     const f = await fixture(), events: CoreRuntimeObservationV1[] = [];
     const observation = { observer: (event: CoreRuntimeObservationV1) => { events.push(event); } };

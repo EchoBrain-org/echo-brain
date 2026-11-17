@@ -882,6 +882,19 @@ describe('Follow-up lists and item pages', () => {
     expect(store.followUpShown()).toBeNull();
   });
 
+  it('sends a large approved meeting in bounded batches with distinct commands', async () => {
+    const ids = Array.from({ length: 45 }, (_, i) => String(i + 1));
+    fx.page = listPage(ids.map(id => unsent(id)));
+    const store = await start();
+    await store.openYourFollowUps();
+    for (const row of list(store).items) store.tickFollowUp(row.item_id);
+    fx.page = listPage(ids.map(id => item(id)));
+    await store.sendTicked(true);
+    const sent = requests('send');
+    expect(sent.map(request => (request.items as unknown[]).length)).toEqual([40, 5]);
+    expect(new Set(sent.map(request => request.command_id)).size).toBe(2);
+  });
+
   it('sends only the ticked rows, one send per check with a command of its own, and stays on the list, read again', async () => {
     fx.page = listPage([unsent('1'), unsent('2'), unsent('3', other)]);
     const store = await start();

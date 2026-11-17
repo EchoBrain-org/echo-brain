@@ -88,8 +88,8 @@ export class OpenRouterClient implements LlmProviderClient {
       throw new AdapterError('temporarily_unavailable', 'OpenRouter is unreachable', true);
     }
     annotateCoreRuntimeV1({ counts: { http_status: response.status } });
-    // OpenRouter bills no non-2xx reply; a 429 or 5xx refusal is the transient, unbilled kind.
-    if (!response.ok) throw providerStatusError('OpenRouter', response.status, response.status === 429 || response.status >= 500);
+    // OpenRouter bills no non-2xx reply; a billing, rate-limit or 5xx refusal is the transient, unbilled kind.
+    if (!response.ok) throw providerStatusError('OpenRouter', response.status, response.status === 402 || response.status === 429 || response.status >= 500);
     try {
       const body = await response.text();
       const payload: unknown = observeCoreRuntimeSyncV1("model_parse", () => JSON.parse(body) as unknown);

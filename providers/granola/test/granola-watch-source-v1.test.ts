@@ -150,11 +150,12 @@ describe('Granola watch over a rolling window, through the shared source cursor'
       const pulled = await source.pull({ cursor: baseline.next_cursor });
       expect(ids(pulled)).toEqual([b]);
       expect(f.reads).toEqual([c, b]);
-      expect(readGranolaCheckpointV1(pulled.next_cursor!).seen).toEqual({ [b]: ago(20), [c]: ago(30) });
-      // Recorded at that version: it is not read again until Granola lists an edit.
+      expect(readGranolaCheckpointV1(pulled.next_cursor!).seen).toEqual({ [b]: ago(20) });
+      expect(readGranolaCheckpointV1(pulled.next_cursor!).retry_after).toEqual({ [c]: ago(-10) });
+      // Restarting during the cooldown skips the failed read. The same version can recover.
       expect(await source.pull({ cursor: pulled.next_cursor })).toEqual({ meetings: [], next_cursor: pulled.next_cursor });
       expect(f.reads).toEqual([c, b]);
-      f.readable(c); f.list(f.row(b, ago(20)), f.row(c, ago(15)));
+      f.readable(c); f.later(10);
       expect(ids(await source.pull({ cursor: pulled.next_cursor }))).toEqual([c]);
     }
   });
@@ -179,20 +180,23 @@ describe('Granola watch over a rolling window, through the shared source cursor'
     const first = await source.pull({ cursor: baseline.next_cursor });
     expect(first.meetings).toEqual([]);
     expect(f.reads).toEqual(meetings.slice(0, 5));
-    expect(Object.keys(readGranolaCheckpointV1(first.next_cursor!).seen)).toEqual(meetings.slice(0, 5));
+    expect(Object.keys(readGranolaCheckpointV1(first.next_cursor!).retry_after!)).toEqual(meetings.slice(0, 5));
     const second = await source.pull({ cursor: first.next_cursor });
     expect(ids(second)).toEqual([meetings[6]]);
     expect(f.reads).toEqual(meetings);
   });
-  it('records a meeting without updated_at that cannot be read, reads it each pull, and imports it once it reads', async () => {
+  it('baselines the first readable version of an unavailable historical meeting and imports its later edit', async () => {
     const f = fixture(), source = f.source();
     f.list(f.row(d)); f.fail(d, await granolaFailure('<meetings_data count="2"></meetings_data>'));
     const baseline = await source.pull({});
     expect(readGranolaCheckpointV1(baseline.next_cursor!).seen).toEqual({ [d]: `sha256:${'0'.repeat(64)}` });
     expect(await source.pull({ cursor: baseline.next_cursor })).toEqual({ meetings: [], next_cursor: baseline.next_cursor });
-    expect(f.reads).toEqual([d, d]);
-    f.readable(d);
-    expect(ids(await source.pull({ cursor: baseline.next_cursor }))).toEqual([d]);
+    expect(f.reads).toEqual([d]);
+    f.readable(d); f.later(10);
+    const recovered = await source.pull({ cursor: baseline.next_cursor });
+    expect(ids(recovered)).toEqual([]);
+    f.edit(d, 'A later edit.');
+    expect(ids(await source.pull({ cursor: recovered.next_cursor }))).toEqual([d]);
   });
   it('leaves a meeting whose transcript Granola is still processing for a later pull, without passing it over', async () => {
     const f = fixture(), source = f.source();
@@ -223,7 +227,37 @@ describe('Granola watch over a rolling window, through the shared source cursor'
   it('keeps a queued import that cannot be read queued: a failed read is not deletion evidence', async () => {
     const f = fixture(), off = f.source({ watch: 'off', folder_id: null }), unusable = await granolaFailure('<meetings_data count="2"></meetings_data>');
     f.fail(d, unusable);
-    await expect(off.pull({ cursor: writeGranolaCheckpointV1({ mode: 'off', folder: null, baseline: false, since: null, seen: {}, manual: [d, a] }) })).rejects.toBe(unusable);
+    const first = await off.pull({ cursor: writeGranolaCheckpointV1({ mode: 'off', folder: null, baseline: false, since: null, seen: {}, manual: [d, a] }) });
+    expect(ids(first)).toEqual([a]);
+    expect(readGranolaCheckpointV1(first.next_cursor!).manual).toEqual([d]);
+    f.readable(d); f.later(10);
+    const second = await f.source({ watch: 'off', folder_id: null }).pull({ cursor: first.next_cursor });
+    expect(ids(second)).toEqual([d]);
+    expect(readGranolaCheckpointV1(second.next_cursor!).manual).toEqual([]);
+  });
+  it('adopts a newly supplied updated_at for unchanged content without re-importing its history', async () => {
+    const f = fixture(), source = f.source();
+    f.list(f.row(a));
+    const baseline = await source.pull({});
+    f.list(f.row(a, ago(60)));
+    const migrated = await source.pull({ cursor: baseline.next_cursor });
+    expect(ids(migrated)).toEqual([]);
+    expect(readGranolaCheckpointV1(migrated.next_cursor!).seen[a]).toEqual(ago(60));
+  });
+  it('advances the watch past a failed manual import and preserves a new meeting with only created_at', async () => {
+    const f = fixture(), source = f.source();
+    const saved = GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1.watch(readGranolaCheckpointV1(granolaWatchInitialCursorV1()), MINE, ago(30));
+    f.list({ ...f.row(b), created_at: ago(20) }, f.row(a, ago(40)));
+    f.fail(d, await granolaFailure('<meetings_data count="2"></meetings_data>'));
+    const baseline = await source.pull({ cursor: writeGranolaCheckpointV1({ ...saved, manual: [d] }) });
+    expect(ids(baseline)).toEqual([]);
+    const healthy = await f.source().pull({ cursor: baseline.next_cursor });
+    expect(ids(healthy)).toEqual([b]);
+    expect(readGranolaCheckpointV1(healthy.next_cursor!).manual).toEqual([d]);
+    f.readable(d); f.later(10);
+    const recovered = await f.source().pull({ cursor: healthy.next_cursor });
+    expect(ids(recovered)).toEqual([d]);
+    expect(ids(await source.pull({ cursor: recovered.next_cursor }))).toEqual([]);
   });
   it('records on its first pass only what is older than the watch change, so a meeting finished since is imported', async () => {
     const f = fixture(), source = f.source();

@@ -54,6 +54,7 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
       async recent(folderId: string | null) {
         if (folderId !== null && !(await api.folders(signal)).some(folder => folder.id === folderId)) fail('not_found');
         const meetings: GranolaMeetingV1[] = [], seen = new Set<string>(), cursors = new Set<string>();
+        let total: number | null = null;
         const range = { from_date: '1970-01-01', to_date: new Date().toISOString(),
           ...(folderId === null ? { captured_by_me: true as const } : { folder_id: folderId }), signal };
         for (let cursor: string | undefined; ;) {
@@ -64,6 +65,11 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
             seen.add(meeting.id);
             if (folderId !== null || meeting.captured_by_me === true) meetings.push(meeting);
           }
+          if (page.total_count !== null) {
+            if (total !== null && total !== page.total_count) fail('unavailable');
+            total = page.total_count;
+          }
+          if (total !== null && (seen.size > total || (page.next_cursor === null && seen.size !== total))) fail('unavailable');
           if (meetings.length >= 50 || page.next_cursor === null) break;
           if (cursors.has(page.next_cursor)) fail('invalid_output');
           if (cursors.size >= 10) fail('unavailable');
