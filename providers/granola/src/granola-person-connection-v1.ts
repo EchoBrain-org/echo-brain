@@ -42,7 +42,9 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
     /** Every meeting of a watch's window: the ones the person captured, or one folder's. Past 200 it fails closed. */
     async function windowed(input: { readonly mode: 'mine' | 'folder'; readonly folder: string | null; readonly from_date: string; readonly to_date: string }) {
       if ((input.mode === 'folder') !== (input.folder !== null)) fail('invalid_request');
-      const meetings = await api.meetings({ from_date: input.from_date, to_date: input.to_date,
+      // Search includes upcoming calendar events for future ranges. Intake reads recorded notes only.
+      const now = new Date().toISOString();
+      const meetings = await api.meetings({ from_date: input.from_date, to_date: input.to_date >= now.slice(0, 10) ? now : input.to_date,
         ...(input.folder === null ? { captured_by_me: true as const } : { folder_id: input.folder }), signal });
       await verify();
       return meetings;
@@ -51,10 +53,24 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
       /** The newest meetings, at most 50: the ones the person captured, or one of their listed folders'. */
       async recent(folderId: string | null) {
         if (folderId !== null && !(await api.folders(signal)).some(folder => folder.id === folderId)) fail('not_found');
-        const { meetings } = await api.page({ from_date: '1970-01-01', to_date: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10), limit: 50,
-          ...(folderId === null ? { captured_by_me: true as const } : { folder_id: folderId }), signal });
+        const meetings: GranolaMeetingV1[] = [], seen = new Set<string>(), cursors = new Set<string>();
+        const range = { from_date: '1970-01-01', to_date: new Date().toISOString(),
+          ...(folderId === null ? { captured_by_me: true as const } : { folder_id: folderId }), signal };
+        for (let cursor: string | undefined; ;) {
+          const page = await api.page({ ...range, limit: 50 - meetings.length, ...(cursor === undefined ? {} : { cursor }) });
+          if (page.incomplete) fail('unavailable');
+          for (const meeting of page.meetings) {
+            if (seen.has(meeting.id)) fail('invalid_output');
+            seen.add(meeting.id);
+            if (folderId !== null || meeting.captured_by_me === true) meetings.push(meeting);
+          }
+          if (meetings.length >= 50 || page.next_cursor === null) break;
+          if (cursors.has(page.next_cursor)) fail('invalid_output');
+          if (cursors.size >= 10) fail('unavailable');
+          cursors.add(page.next_cursor); cursor = page.next_cursor;
+        }
         await verify();
-        return meetings;
+        return meetings.slice(0, 50);
       },
       /**
        * A watch checked at Save with the listing its worker uses: a folder the person no longer lists, or a window over

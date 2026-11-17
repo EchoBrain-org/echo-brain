@@ -355,21 +355,21 @@ describe('Granola list contract, as observed live', () => {
     expect(() => parseGranolaMeetingPageV1(value, false)).toThrow(expect.objectContaining({ code: 'invalid_output' }));
   });
   it('lists a window page by page with the live arguments, for my meetings or one folder', async () => {
-    const last = listPage([plainRow(numbered(3)), plainRow(numbered(4))], '<pagination has_more="false" total_count="4" remaining_count="0" />');
+    const last = listPage([plainRow(numbered(3)), plainRow(numbered(4))].map(row => row.replace('<meeting ', '<meeting captured_by_me="true" ')), '<pagination has_more="false" total_count="4" remaining_count="0" />');
     const mine = scripted(LIVE_PAGE, last);
     expect((await mine.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', captured_by_me: true })).map(meeting => meeting.id))
       .toEqual([REVIEW, WEEKLY, numbered(3), numbered(4)]);
-    const range = { time_range: 'custom', from_date: '2026-10-17', to_date: '2026-10-25', limit: 200, max_participants: 50 };
+    const range = { from_date: '2026-10-17', to_date: '2026-10-25', limit: 100, max_participants: 50 };
     expect(mine.calls()).toEqual([
-      { name: 'list_meetings', arguments: { ...range, involvement: { captured_by_me: true } } },
-      { name: 'list_meetings', arguments: { ...range, cursor: 'eyJ2ZXJzaW9uIjoxfQ', involvement: { captured_by_me: true } } },
+      { name: 'search_meetings', arguments: { ...range, attended_only: true, include_shared: false } },
+      { name: 'search_meetings', arguments: { ...range, cursor: 'eyJ2ZXJzaW9uIjoxfQ', attended_only: true, include_shared: false } },
     ]);
     const folder = scripted(listPage([weeklyRow]));
     expect(await folder.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', folder_id: PUMP })).toHaveLength(1);
-    expect(folder.calls()).toEqual([{ name: 'list_meetings', arguments: { ...range, folder_id: PUMP } }]);
+    expect(folder.calls()).toEqual([{ name: 'search_meetings', arguments: { ...range, folder_id: PUMP, include_shared: true } }]);
     const browse = scripted(listPage([weeklyRow], '<pagination has_more="true" total_count="9" remaining_count="8" next_cursor="next" />'));
     expect((await browse.adapter.page({ from_date: '1970-01-01', to_date: '2026-10-25', captured_by_me: true, limit: 50 })).next_cursor).toBe('next');
-    expect(browse.calls()).toEqual([{ name: 'list_meetings', arguments: { ...range, from_date: '1970-01-01', limit: 50, involvement: { captured_by_me: true } } }]);
+    expect(browse.calls()).toEqual([{ name: 'search_meetings', arguments: { ...range, from_date: '1970-01-01', limit: 50, attended_only: true, include_shared: false } }]);
     for (const filter of [{}, { captured_by_me: true, folder_id: PUMP }]) {
       await expect(scripted().adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', ...filter } as never)).rejects.toMatchObject({ code: 'invalid_request' });
     }
@@ -382,10 +382,26 @@ describe('Granola list contract, as observed live', () => {
     const rows = (from: number) => Array.from({ length: 150 }, (_, index) => plainRow(numbered(from + index)));
     const paged = scripted(listPage(rows(0), '<pagination has_more="true" next_cursor="second" />'), listPage(rows(150)));
     await expect(paged.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', folder_id: PUMP })).rejects.toMatchObject(full);
-    const stuck = scripted(listPage([], '<pagination has_more="true" next_cursor="again" />'));
+    const stuck = scripted(...Array.from({ length: 2 }, () => listPage([], '<pagination has_more="true" next_cursor="again" />')));
     await expect(stuck.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', captured_by_me: true })).rejects.toMatchObject({ code: 'invalid_output' });
     const repeated = scripted(listPage([reviewRow], '<pagination has_more="true" next_cursor="again" />'), listPage([weeklyRow], '<pagination has_more="true" next_cursor="again" />'));
     await expect(repeated.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', captured_by_me: true })).rejects.toMatchObject({ code: 'invalid_output' });
+  });
+  it('continues empty search pages and keeps only captured meetings for a personal watch', async () => {
+    const rows = [reviewRow, weeklyRow.replace('captured_by_me="true"', 'captured_by_me="false"'), plainRow(numbered(3))];
+    const pages = () => [listPage([], '<pagination has_more="true" next_cursor="second" />'), listPage(rows)];
+    const range = { from_date: '2026-10-17', to_date: '2026-10-25' };
+    expect((await scripted(...pages()).adapter.meetings({ ...range, captured_by_me: true })).map(row => row.id)).toEqual([REVIEW]);
+    expect((await scripted(...pages()).adapter.meetings({ ...range, folder_id: PUMP })).map(row => row.id)).toEqual([REVIEW, WEEKLY, numbered(3)]);
+  });
+  it('refuses incomplete searches, cursor cycles and unbounded empty continuation instead of completing a watch baseline', async () => {
+    const input = { from_date: '2026-10-17', to_date: '2026-10-25', folder_id: PUMP };
+    await expect(scripted(listPage([], '<pagination has_more="false" completion_status="incomplete" />')).adapter.meetings(input))
+      .rejects.toMatchObject({ code: 'unavailable' });
+    const cycle = scripted(...['a', 'b', 'a'].map(cursor => listPage([], `<pagination has_more="true" next_cursor="${cursor}" />`)));
+    await expect(cycle.adapter.meetings(input)).rejects.toMatchObject({ code: 'invalid_output' });
+    const endless = scripted(...Array.from({ length: 11 }, (_, index) => listPage([], `<pagination has_more="true" next_cursor="page-${index}" />`)));
+    await expect(endless.adapter.meetings(input)).rejects.toMatchObject({ code: 'unavailable' });
   });
   it('pages folders by offset, up to 200, and ignores the fields it does not read', async () => {
     const folders = (from: number, length: number) => Array.from({ length }, (_, index) => ({ id: numbered(from + index), title: `Folder ${from + index}`, description: null, note_count: 3,

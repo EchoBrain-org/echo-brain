@@ -24,7 +24,7 @@ export interface GranolaMeetingV1 {
   readonly meeting_at?: string; readonly created_at?: string; readonly updated_at?: string; readonly captured_by_me?: boolean;
   readonly known_participants: string; readonly private_notes?: string; readonly summary?: string;
 }
-/** One list_meetings page, newest first, with Granola's cursor while more follow. */
+/** One meeting discovery page, newest first, with Granola's cursor while more follow. */
 export interface GranolaMeetingPageV1 { readonly meetings: readonly GranolaMeetingV1[]; readonly next_cursor: string | null; readonly total_count: number | null; readonly incomplete?: true }
 /** What a listing reads: the meetings the person captured, or one folder's. */
 type GranolaMeetingFilterV1 = { readonly captured_by_me: true } | { readonly folder_id: string };
@@ -229,14 +229,15 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
   const rpc = createPersonProviderMcpTransportV1(GRANOLA_PERSON_PROVIDER_V1, authenticated, 'https://mcp.granola.ai/mcp');
   /** One page of a custom range, newest first. */
   async function page(input: GranolaMeetingRangeV1 & { readonly limit: number; readonly cursor?: string }): Promise<GranolaMeetingPageV1> {
-    const from_date = day(input.from_date), to_date = day(input.to_date);
+    const from_date = day(input.from_date), to_date = liveDate(input.to_date);
     const { captured_by_me: mine, folder_id: folder } = input as { readonly captured_by_me?: unknown; readonly folder_id?: unknown };
     // Exactly one filter: a listing never reads every meeting the person can access.
     if (from_date > to_date || !Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > MAX_LISTED
       || (mine === undefined) === (folder === undefined) || (mine !== undefined && mine !== true)) failure('invalid_request');
-    return parseGranolaMeetingPageV1(await rpc.call('list_meetings', { time_range: 'custom', from_date, to_date, limit: input.limit,
+    return parseGranolaMeetingPageV1(await rpc.call('search_meetings', { from_date, to_date, limit: Math.min(input.limit, 100),
       max_participants: MAX_LISTED_PARTICIPANTS, ...(input.cursor === undefined ? {} : { cursor: string(input.cursor, 2048) }),
-      ...(mine === true ? { involvement: { captured_by_me: true } } : { folder_id: id(folder) }),
+      // Attendance is broader than capture. Callers keep only captured_by_me rows for a personal listing.
+      ...(mine === true ? { attended_only: true, include_shared: false } : { folder_id: id(folder), include_shared: true }),
     }, input.signal), false);
   }
   return Object.freeze({
@@ -318,19 +319,23 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
      */
     async meetings(input: GranolaMeetingRangeV1): Promise<readonly GranolaMeetingV1[]> {
       const listed: GranolaMeetingV1[] = [];
+      const cursors = new Set<string>();
       for (let cursor: string | undefined; ;) {
         const next = await page({ ...input, limit: MAX_LISTED, ...(cursor === undefined ? {} : { cursor }) });
+        if (next.incomplete) failure('unavailable');
         listed.push(...next.meetings);
         if (listed.length > MAX_LISTED || (next.total_count ?? 0) > MAX_LISTED) {
           throw new AuthorityOperationError('quota_exceeded', 'Granola lists more than 200 meetings to watch');
         }
         if (next.next_cursor === null) break;
-        // A page that promises more must move on.
-        if (next.meetings.length === 0 || next.next_cursor === cursor) failure('invalid_output');
+        // Search can return empty pages with continuation. Bound those too, and reject cursor cycles.
+        if (cursors.has(next.next_cursor)) failure('invalid_output');
+        if (cursors.size >= 10) failure('unavailable');
+        cursors.add(next.next_cursor);
         cursor = next.next_cursor;
       }
       if (new Set(listed.map(meeting => meeting.id)).size !== listed.length) failure('invalid_output');
-      return Object.freeze(listed);
+      return Object.freeze('captured_by_me' in input ? listed.filter(meeting => meeting.captured_by_me === true) : listed);
     },
     async details(meetingIds: readonly string[], signal?: AbortSignal): Promise<readonly GranolaMeetingV1[]> {
       const keys = array(meetingIds, 10).map(id);

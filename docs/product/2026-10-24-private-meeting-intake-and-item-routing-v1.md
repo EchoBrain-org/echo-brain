@@ -22,6 +22,14 @@ records the original intake and routing design; its hand-in sections are histori
 
 ## Goal
 
+Implementation update, 2026-11-17: manual browsing and automatic watch discovery
+use Granola `search_meetings`, with pages capped at 100 and bounded continuation
+through empty pages. Personal discovery additionally requires each result's
+`captured_by_me` flag; attendance alone never authorizes automatic intake.
+Incomplete searches fail without advancing the watch baseline. A failed manual
+listing shows an error, and Refresh retries the currently selected folder.
+The seven-day watch and explicit historical-import rules below are unchanged.
+
 Meetings enter ECHO automatically and stay private. Sharing is a choice made
 per item: each decision or action goes to its own project, to several, to the
 reviewer alone, or nowhere. A meeting source only delivers meetings; it never

@@ -7,6 +7,28 @@ test.afterEach(async () => { await run?.close(); });
 const toolCalls = () => run.calls().filter(call => call.path.startsWith('/v1/person/tools/jira/') || call.path.startsWith('/v1/person/tools/confluence/') || call.path.includes('/slack/disconnect'))
   .map(call => call.path.replace('/v1/person/tools/jira/', 'jira ').replace('/v1/person/tools/confluence/', 'confluence ').replace('/v2/person/external-identities/slack/', 'slack '));
 
+test('Granola shows browse failures instead of an empty folder, and Refresh retries the selected folder', async () => {
+  run = await launch('granola-browse-failure');
+  const { page } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
+  const meetings = page.getByRole('region', { name: 'Personal meetings' });
+  await expect(meetings.getByText('Could not load meetings. Try Refresh.')).toBeVisible();
+  await expect(meetings.getByText('No meetings.', { exact: true })).toHaveCount(0);
+  const from = meetings.getByRole('group', { name: 'Extract from one meeting' }).getByLabel('From');
+  await from.selectOption({ label: 'ECHO (1)' });
+  await expect(meetings.getByText('Could not load meetings. Try Refresh.')).toBeVisible();
+  await expect(meetings.getByText('No meetings.', { exact: true })).toHaveCount(0);
+  await meetings.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(meetings.getByRole('button', { name: 'Pilot planning', exact: true })).toBeVisible();
+  await expect(meetings.getByText('Could not load meetings. Try Refresh.')).toHaveCount(0);
+  const reads = run.calls().filter(call => call.body?.operation === 'browse');
+  expect(reads).toHaveLength(3);
+  expect(reads[0]!.body?.folder_id).toBeNull();
+  expect(reads[1]!.body?.folder_id).toBeTruthy();
+  expect(reads[2]!.body?.folder_id).toBe(reads[1]!.body?.folder_id);
+});
+
 test('Connect waits on the browser, reads the attempt until it completes, and lists the tool as connected', async () => {
   run = await launch();
   const { page } = run;
@@ -172,7 +194,7 @@ test('Granola imports my meetings automatically with no folder, suggests a proje
   const add = meetings.getByRole('group', { name: 'Extract from one meeting' });
   await add.getByLabel('From').selectOption({ label: 'ECHO (1)' });
   await expect.poll(() => run.calls().filter(call => call.body?.operation === 'browse').map(call => call.body?.folder_id))
-    .toEqual([null, '00000000-0000-4000-8000-000000000011']);
+    .toEqual([null, null, '00000000-0000-4000-8000-000000000011']);
   await add.getByLabel('Suggest').selectOption({ label: 'Apollo' });
   await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
   await expect(meetings.getByRole('article', { name: 'Pilot planning' })).toContainText('Suggests Apollo');

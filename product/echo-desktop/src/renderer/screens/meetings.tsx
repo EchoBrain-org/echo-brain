@@ -40,6 +40,7 @@ export function Meetings({ toolId }: { toolId: string }) {
   const alive = useRef(true);
   const [home, setHome] = useState<PersonMeetingHomeV2 | null>(null);
   const [meetings, setMeetings] = useState<PersonMeetingResultsV2['browse']['meetings']>([]);
+  const [browseState, setBrowseState] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle');
   const [preview, setPreview] = useState<PersonMeetingResultsV2['open'] | null>(null);
   // Automatic extraction: what it watches, its folder, and the project it suggests.
   const [mode, setMode] = useState<PersonMeetingWatchV2>('off'), [watchFolder, setWatchFolder] = useState(''), [suggest, setSuggest] = useState('');
@@ -57,16 +58,21 @@ export function Meetings({ toolId }: { toolId: string }) {
   }
   /** Your recent meetings, or one folder's, newest first. */
   async function browse(folder: string) {
-    setMeetings([]); setPreview(null);
-    const result = await command({ operation: 'browse', folder_id: folder || null });
-    if (alive.current) setMeetings(result.meetings);
+    setMeetings([]); setPreview(null); setBrowseState('loading');
+    try {
+      const result = await command({ operation: 'browse', folder_id: folder || null });
+      if (alive.current) { setMeetings(result.meetings); setBrowseState('ready'); }
+    } catch (error) {
+      if (alive.current) setBrowseState('failed');
+      throw error;
+    }
   }
   async function refresh(initialize = false) {
     const next = await command({ operation: 'home' }).catch((error: unknown) => { setHome(null); throw error; });
     if (!alive.current) return;
     setHome(next); show(next.sources.find(s => s.watch !== 'off'));
     if (initialize && next.connected) {
-      try { await browse(''); } catch { /* the list can be read again */ }
+      try { await browse(from); } catch { /* the list shows its error and Refresh retries it */ }
     }
   }
   async function run(work: () => Promise<void>) {
@@ -105,7 +111,7 @@ export function Meetings({ toolId }: { toolId: string }) {
     <div class="meetings-sub">
       <span class="notice-line">{home === null ? (busy ? '' : 'Granola could not be reached.') : home.connected ? `${home.email} · ${home.workspace}` : 'Reconnect Granola to search meetings.'}</span>
       {busy ? <span class="asking"><i /><i /><i /><span>Working…</span></span>
-        : <button type="button" class="link-button" onClick={() => void run(refresh)}>Refresh</button>}
+        : <button type="button" class="link-button" onClick={() => void run(() => refresh(true))}>Refresh</button>}
     </div>
     {notice && <div class="meetings-status" role="status">{notice}</div>}
 
@@ -149,7 +155,8 @@ export function Meetings({ toolId }: { toolId: string }) {
         <Select label="Suggest" value={project} disabled={busy} onChange={setProject}><option value="">None</option>{projectOptions}</Select>
         {moreProjects}
       </div>
-      {!busy && meetings.length === 0 && <div class="notice-line">No meetings.</div>}
+      {!busy && browseState === 'failed' && <div class="error" role="alert">Could not load meetings. Try Refresh.</div>}
+      {!busy && browseState === 'ready' && meetings.length === 0 && <div class="notice-line">No meetings.</div>}
       <div class="meeting-list">
         {meetings.map(m => {
           const open = preview?.id === m.id;
