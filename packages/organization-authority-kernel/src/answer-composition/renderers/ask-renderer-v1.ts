@@ -105,6 +105,13 @@ const FOLLOW_UP_NOT_FOUND_GAP = "I couldn't find anything more about it in the s
 function draftedGap(count: number): string {
   return count === 1 ? "I drafted a follow-up for you to review and send." : `I drafted ${count} follow-ups for you to review and send.`;
 }
+/** How many words in a row, shared with an outside item's text or title, make a drafted task a copy of it (ADR-0053). */
+const COPIED_RUN_WORDS = 6;
+/** Each run of COPIED_RUN_WORDS words of `text`: its words are its letters and digits, NFC and case-folded, so punctuation and spacing hide no copy. */
+function wordRuns(text: string): readonly string[] {
+  const words = text.normalize("NFC").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  return words.length < COPIED_RUN_WORDS ? [] : words.slice(0, words.length - COPIED_RUN_WORDS + 1).map((_, at) => words.slice(at, at + COPIED_RUN_WORDS).join(" "));
+}
 /** The items a drafted follow-up may be about: a ticket, a page, an ECHO record or an ECHO document (ADR-0053). */
 const FOLLOW_UP_ABOUT_KINDS: ReadonlySet<string> = new Set(["ticket", "page", "approved_record", "source_revision"]);
 /**
@@ -486,10 +493,21 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const { request_id: requestId } = options.follow_ups;
         const screen = outsideLabelScreenV1(bundle.items.filter(entry => !ECHO_CITATION_KINDS.has(entry.item.citation.kind))
           .flatMap(entry => [entry.item.label, agenticEvidenceLabelV1(entry.item, timeZone), ...(entry.item.list_label === undefined ? [] : [entry.item.list_label])]));
+        // Text copied from an outside item: any run of COPIED_RUN_WORDS words its text or title holds, unless the person's
+        // question or the text or title of one of ECHO's own items holds that run too.
+        const outside = bundle.items.filter(entry => !ECHO_CITATION_KINDS.has(entry.item.citation.kind));
+        const echoOwn = bundle.items.filter(entry => ECHO_CITATION_KINDS.has(entry.item.citation.kind));
+        const runsOf = (values: readonly (string | undefined)[]) => new Set(values.flatMap(value => value === undefined ? [] : wordRuns(value)));
+        const allowed = runsOf([askedQuestion, ...echoOwn.flatMap(entry => [entry.item.text, entry.item.label])]);
+        const copied = new Set([...runsOf(outside.flatMap(entry => [entry.item.text, entry.item.label, entry.item.list_label]))].filter(run => !allowed.has(run)));
         const kept: AskFollowUpDraftV1[] = [];
         const seen = new Set<string>();
         for (const draft of given) {
           const line = cleanModelLine(draft.task, FOLLOW_UP_TASK_CHARS);
+          // A sentence copied from an outside item's text is never stored, in any spelling or punctuation (ADR-0032).
+          if (wordRuns(line).some(run => copied.has(run))) {
+            observeCoreModelCorrectionV1("follow_up_task_screened"); observeCoreModelCorrectionV1("follow_up_dropped"); continue;
+          }
           const screened = screen.names(line);
           if (screened) observeCoreModelCorrectionV1("follow_up_task_screened");
           const task = screened ? screen.scrub(line, FOLLOW_UP_TASK_CHARS) : line;
@@ -505,7 +523,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             : citationOfAgenticEvidenceItemV8(aboutEntry.item, timeZone).citation as unknown as Readonly<Record<string, unknown>>;
           const about = pointer !== undefined && impactItemKeyV1(pointer) !== undefined ? pointer : undefined;
           if (draft.about !== undefined && about === undefined) observeCoreModelCorrectionV1("follow_up_link_dropped");
-          const key = JSON.stringify([folded(task), folded(owner)]);
+          // A repeat says the same task to the same owner, on the same day, about the same item.
+          const key = JSON.stringify([folded(task), folded(owner), due ?? null, about === undefined ? null : impactItemKeyV1(about)]);
           if (seen.has(key)) { observeCoreModelCorrectionV1("writer_repeat_dropped"); continue; }
           seen.add(key);
           kept.push(Object.freeze({

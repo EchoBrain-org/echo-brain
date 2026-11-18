@@ -1148,7 +1148,7 @@ export const ANSWER_SINCE_PROMPT = [
 export const ANSWER_FOLLOW_UPS_PROMPT = [
   "Follow-ups: \"follow_ups\" holds tasks you draft for the person. Each is saved unsent in their own list, where they send, edit or dismiss it. These are new drafts, not the follow-ups the evidence holds.",
   "- When the person asks for a task to be handed to someone or tracked, or clearly describes a task that still needs doing, draft it. Otherwise give \"follow_ups\": []. Never ask in your answer whether they want one: the draft is the question.",
-  "- \"task\": what needs doing, one short line in your own words that starts with a verb. Never copy a ticket's or page's title into it.",
+  "- \"task\": what needs doing, one short line in your own words that starts with a verb. Never copy a title or a sentence from a ticket, a page or a message into it.",
   "- \"owner\": the name of the person who should do it, as the question or the evidence gives it; \"me\" or \"I\" is asked_by. Leave it out when no one is named.",
   "- \"due_on\": the day it is due, YYYY-MM-DD; leave it out when no day is given. Turn a relative day into a date from today and time_zone: \"tomorrow\" is the day after today, and a weekday such as \"Friday\" is the next such day after today.",
   "- \"about\": the id of the one evidence item the task is about; leave it out when there is none.",

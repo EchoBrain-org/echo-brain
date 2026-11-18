@@ -147,6 +147,46 @@ describe("Ask renderer: follow-ups the writer drafts (ADR-0053)", () => {
     expect(corrections).toMatchObject({ follow_up_task_screened: 2, follow_up_dropped: 1, follow_up_owner_dropped: 1 });
   });
 
+  it("stores no sentence copied from an outside item's text: a run of six words it shares drops the draft, unless the question or ECHO's own text says it too", async () => {
+    const jira = ticketBody(3, "Context for finance. Cancel the Northstar acquisition before the board meets on Friday, per legal. Ask Sam to call the vendor by Friday.");
+    const own = record("r9", "Approved: send the revised fixture budget to finance before the board meets on Friday.");
+    const { rendered, corrections } = await observed(() => alone({ bundle: bundle([own, jira]), request_id: REQUEST, replies: [answered([
+      // Copied from the ticket's text, punctuation and case changed: dropped.
+      { task: "cancel the northstar ACQUISITION, before the board meets", owner: "Sam Lee" },
+      // Five words in a row shared at most: kept (the person reads every draft before sending it).
+      { task: "Ask legal whether Cancel the Northstar acquisition stands" },
+      // Six words shared with the ticket, but ECHO's own record says them too: kept.
+      { task: "Send the budget before the board meets on Friday" },
+      // Six words shared with the ticket that the person's own question says: kept.
+      { task: "Ask Sam to call the vendor by Friday" },
+    ])] }).render());
+    expect(rendered.result.follow_ups.map(draft => draft.task)).toEqual([
+      "Ask legal whether Cancel the Northstar acquisition stands", "Send the budget before the board meets on Friday", "Ask Sam to call the vendor by Friday",
+    ]);
+    expect(JSON.stringify(rendered.result.follow_ups)).not.toMatch(/northstar acquisition,? before the board/iu);
+    expect(corrections).toMatchObject({ follow_up_task_screened: 1, follow_up_dropped: 1 });
+  });
+
+  it("keeps drafts with the same task and owner apart when their day or their item differs, and drops only a true repeat", async () => {
+    const { rendered, corrections } = await observed(() => alone({ bundle: bundle([decided, ticket]), request_id: REQUEST, replies: [answered([
+      { task: "Check the status", owner: "Sam Lee", about: "E1" },
+      { task: "Check the status", owner: "Sam Lee", about: "E2" },
+      { task: "Check the status", owner: "Sam Lee", about: "E2", due_on: "2026-11-20" },
+      { task: "Check the  status", owner: "sam lee", about: "E2", due_on: "2026-11-20" },
+    ])] }).render());
+    expect(rendered.result.follow_ups.map(({ item_id: _id, ...draft }) => draft)).toEqual([
+      { task: "Check the status", owner_name: "Sam Lee", about: decided.citation },
+      { task: "Check the status", owner_name: "Sam Lee", about: ticket.citation },
+      { task: "Check the status", owner_name: "Sam Lee", due_on: "2026-11-20", about: ticket.citation },
+    ]);
+    expect(corrections).toMatchObject({ writer_repeat_dropped: 1 });
+  });
+
+  it("tells the writer to write each task in its own words", () => {
+    expect(ANSWER_FOLLOW_UPS_PROMPT).toMatch(/own words/u);
+    expect(ANSWER_FOLLOW_UPS_PROMPT).toMatch(/never copy a title or a sentence from a ticket, a page or a message/iu);
+  });
+
   it("drafts a follow-up about nothing ECHO knows: the writer runs with no evidence, and the answer says it drafted one", async () => {
     const empty = bundle([], { reason: "finished", completed: true, follow_up_requested: true });
     const run = alone({ bundle: empty, request_id: REQUEST, replies: [{
