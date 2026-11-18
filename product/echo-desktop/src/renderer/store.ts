@@ -6453,12 +6453,36 @@ async function sendRun(run_id: string, items: readonly { item_id: string; includ
 
 /**
  * One send of a follow-up from a chat on its own (ADR-0053): a fresh command for each click, which a click whose outcome was
- * unknown keeps (`kept`), so Send again replays it and nothing goes twice.
+ * unknown keeps (`kept`), so Send again replays it and nothing goes twice. A send names the owner its button showed
+ * (`item`, as shown), so it goes to whom you saw even when another window changed the owner since; a dismissal names none.
  */
-async function sendItem(item_id: string, include: boolean, kept: SendCommand | null | undefined): Promise<Attempt & { command: SendCommand }> {
-  const key = JSON.stringify({ item_id, include });
+async function sendItem(item: OpenItemView, include: boolean, kept: SendCommand | null | undefined): Promise<Attempt & { command: SendCommand }> {
+  const owner = include ? item.owner.membership_id : undefined;
+  const key = JSON.stringify({ item_id: item.item_id, include, owner: owner ?? null });
   const command = { command: kept?.key === key ? kept.command : crypto.randomUUID(), key };
-  return { ...(await attempt({ schema_version: 1, operation: 'send_item', item_id, command_id: command.command, include })), command };
+  return { ...(await attempt({ schema_version: 1, operation: 'send_item', item_id: item.item_id, command_id: command.command, include,
+    ...(owner === undefined ? {} : { owner_membership_id: owner }) })), command };
+}
+
+/**
+ * Whether a follow-up read again shows a send (`include`) or a dismissal as done: sent, it is open or done and Send included
+ * it; dismissed, it is dismissed and Send did not. Any other state is something else that happened, never this.
+ */
+function landedAs(include: boolean): (item: OpenItemView) => boolean {
+  return item => (include ? (item.state === 'open' || item.state === 'done') && item.send_included === true
+    : item.state === 'not_relevant' && item.send_included === false);
+}
+
+/**
+ * What a send or a dismissal whose reply was lost says when the item, read again, shows something else happened
+ * meanwhile: "Not sent: it was dismissed meanwhile", "Not dismissed: it was sent to Pat meanwhile".
+ */
+function meanwhileWords(item: OpenItemView, include: boolean, me: string | null): string {
+  const what = include ? 'Not sent' : 'Not dismissed';
+  if (item.state === 'not_relevant') return `${what}: it was dismissed meanwhile`;
+  if (item.state === 'done') return `${what}: it is done now`;
+  if (item.state === 'open' && item.send_included === true) return `${what}: it was sent to ${item.owner.membership_id === me ? 'you' : firstName(item.owner.name)} meanwhile`;
+  return `${what}: it is ${item.state === 'open' ? 'open' : 'not sent'} now`;
 }
 
 /** Where a row is sent from: its check (run), all its ticked rows in one send; or, from a chat, on its own. */
@@ -6494,7 +6518,7 @@ export async function sendTicked(include: boolean): Promise<void> {
     if (!viewOf('list', list.seq) || !sameAccount(account)) break;
     const rows = ticked.filter(item => sendBatch(item) === batch);
     const run_id = rows[0]!.run_id;
-    const sent = run_id === null ? await sendItem(rows[0]!.item_id, include, sends[batch])
+    const sent = run_id === null ? await sendItem(rows[0]!, include, sends[batch])
       : await sendRun(run_id, rows.map(item => ({ item_id: item.item_id, include })), sends[batch]);
     if (sent.unknown) sends[batch] = sent.command; else delete sends[batch];
     tried.push({ batch, ...(sent.failure ? { failure: sent.failure } : {}) });
@@ -6516,16 +6540,22 @@ export async function sendTicked(include: boolean): Promise<void> {
   const unread = triedRows.filter(item => unknown(item) && !fresh.has(item.item_id));
   for (const read of await Promise.all(unread.map(item => readOne(account, item.item_id)))) if ('item' in read) fresh.set(read.item.item_id, read.item);
   if (!viewOf('list', list.seq) || !sameAccount(account)) return;
-  // What went: every row of a send that was answered, and of one whose outcome was unknown, each row read again as no longer Not sent.
-  const went = triedRows.filter(item => failedOf(item) === undefined || (unknown(item) && fresh.has(item.item_id) && fresh.get(item.item_id)!.state !== 'unsent'));
-  for (const batch of Object.keys(sends)) if (went.some(item => sendBatch(item) === batch)) delete sends[batch];
+  // What went: every row of a send that was answered, and of one whose outcome was unknown, each row read again as sent (or
+  // dismissed) by it. One read again as something else happened meanwhile did not go, and has nothing to replay.
+  const went = triedRows.filter(item => failedOf(item) === undefined || (unknown(item) && fresh.has(item.item_id) && landedAs(include)(fresh.get(item.item_id)!)));
+  const elsewhere = triedRows.filter(item => !went.includes(item) && unknown(item) && fresh.has(item.item_id) && fresh.get(item.item_id)!.state !== 'unsent');
+  for (const batch of Object.keys(sends)) if ([...went, ...elsewhere].some(item => sendBatch(item) === batch)) delete sends[batch];
   if (went.length > 0 || Object.keys(sends).some(batch => tried.some(entry => entry.batch === batch))) changedFrom(list.seq);
   const failure = tried.find(entry => entry.failure)?.failure;
   const done = went.length === 0 ? null : sentWords(went.map(item => (fresh.get(item.item_id) ?? item).owner), account.membership_id, include);
-  const left = ticked.length - went.length;
+  const other = elsewhere.length === 0 ? null
+    : elsewhere.length === 1 ? meanwhileWords(fresh.get(elsewhere[0]!.item_id)!, include, account.membership_id) : `${elsewhere.length} changed meanwhile`;
+  const left = ticked.length - went.length - elsewhere.length;
   // A send whose outcome was unknown, its rows read again still Not sent, did not go.
-  const missed = failure !== undefined && outcomeUnknown(failure, false) && triedRows.every(item => went.includes(item) || fresh.get(item.item_id)?.state === 'unsent');
-  const said: Said = left === 0 ? { words: done! } : done !== null ? { words: `${done} · ${left} not ${include ? 'sent' : 'dismissed'}, try again`, error: true }
+  const missed = failure !== undefined && outcomeUnknown(failure, false) && triedRows.every(item => went.includes(item) || elsewhere.includes(item) || fresh.get(item.item_id)?.state === 'unsent');
+  const rest = left === 0 ? null : `${left} not ${include ? 'sent' : 'dismissed'}, try again`;
+  const said: Said = other === null && left === 0 ? { words: done! }
+    : done !== null || other !== null ? { words: [done, other, rest].filter((part): part is string => part !== null).join(' · '), error: true }
     : missed ? { words: notSent(include), error: true } : changeFailed(failure ?? { code: 'failed', retryable: true });
   setView({ ...viewOf('list', list.seq)!, busy: false, sends, said });
 }
@@ -6675,14 +6705,21 @@ export async function sendFollowUp(include: boolean): Promise<void> {
   const kept: { send: SendCommand | null } = { send: null };
   const { went, unknown } = await changeItem(page, item.item_id, async () => {
     // A follow-up from a chat (ADR-0053) goes on its own; any other in a send of its check listing it alone.
-    const sent = item.run_id === null ? await sendItem(item.item_id, include, page.send) : await sendRun(item.run_id, [{ item_id: item.item_id, include }], page.send);
+    const sent = item.run_id === null ? await sendItem(item, include, page.send) : await sendRun(item.run_id, [{ item_id: item.item_id, include }], page.send);
     kept.send = sent.unknown ? sent.command : null;
     return sent;
-  }, () => rereadItem(page.seq), fresh => fresh.state !== 'unsent', { words: sentWords([item.owner], expect()?.membership_id ?? null, include) },
+  }, () => rereadItem(page.seq), landedAs(include), { words: sentWords([item.owner], expect()?.membership_id ?? null, include) },
   shown => ({ ...shown, state: include ? 'open' : 'not_relevant', send_included: include }));
-  // Its command is kept while it may have gone, so Send again replays it; read again still not sent, it did not go.
+  // Its command is kept while it may have gone, so Send again replays it; read again still not sent, it did not go; read again
+  // as something else that happened meanwhile, it says what, and keeps nothing to replay. Gone, it names the owner read again.
   const current = viewOf('item', page.seq);
-  if (current) setView({ ...current, send: went ? null : kept.send, ...(kept.send && !went && !unknown ? { said: { words: notSent(include), error: true as const } } : {}) });
+  if (!current) return;
+  const me = expect()?.membership_id ?? null;
+  const elsewhere = !went && kept.send !== null && current.item !== null && current.item.state !== 'unsent' ? current.item : null;
+  setView({ ...current, send: went || elsewhere ? null : kept.send,
+    ...(went && current.item && current.said && !current.said.error ? { said: { words: sentWords([current.item.owner], me, include) } } : {}),
+    ...(elsewhere ? { said: { words: meanwhileWords(elsewhere, include, me), error: true as const } }
+      : kept.send && !went && !unknown ? { said: { words: notSent(include), error: true as const } } : {}) });
 }
 
 /**
@@ -7005,7 +7042,8 @@ async function changeAskCard(item_id: string, write: () => Promise<Attempt>, lan
   patch: (item: OpenItemView) => OpenItemView): Promise<{ went: boolean; unknown: boolean }> {
   const account = expect();
   const card = state.askCards.cards[item_id];
-  if (!account || !card?.item || card.busy || state.concealed) return { went: false, unknown: false };
+  // A card whose last read failed is a stale copy: nothing acts on it until a read succeeds.
+  if (!account || !card?.item || card.busy || card.failure || state.concealed) return { went: false, unknown: false };
   const mine = askCardsSeq;
   const ours = () => mine === askCardsSeq && sameAccount(account);
   pickerSeq += 1;
@@ -7021,7 +7059,8 @@ async function changeAskCard(item_id: string, write: () => Promise<Attempt>, lan
   const went = !failure || (unknown && settled && landed(read.item));
   const gone = !settled && read.failure.code === 'not_found';
   const said: Said = went ? done : unknown && settled ? { words: message({ code: 'not_saved', retryable: true }), error: true } : changeFailed(failure!);
-  setAskCard(item_id, { busy: false, said, ...(settled ? { item: read.item } : {}), ...(gone ? { gone: true } : {}) });
+  // What it says now is the read's: one that failed leaves the card stale, and it says so until a read succeeds.
+  setAskCard(item_id, { busy: false, said, ...(settled ? { item: read.item, failure: undefined } : gone ? { gone: true } : { failure: read.failure }) });
   if (!failure || unknown) void loadHome(false);
   return { went, unknown: unknown && !went && !settled };
 }
@@ -7036,20 +7075,29 @@ export async function sendAskCard(item_id: string, include: boolean): Promise<vo
   if (!card || !item || card.busy || !(include ? sendable(item) : dismissable(item))) return;
   const kept: { send: SendCommand | null } = { send: null };
   const { went, unknown } = await changeAskCard(item_id, async () => {
-    const sent = await sendItem(item_id, include, card.send);
+    const sent = await sendItem(item, include, card.send);
     kept.send = sent.unknown ? sent.command : null;
     return sent;
-  }, fresh => fresh.state !== 'unsent', { words: sentWords([item.owner], expect()?.membership_id ?? null, include) },
+  }, landedAs(include), { words: sentWords([item.owner], expect()?.membership_id ?? null, include) },
   shown => ({ ...shown, state: include ? 'open' : 'not_relevant', send_included: include, can: { ...shown.can, send: false, edit: include && shown.can.edit } }));
-  if (state.askCards.cards[item_id]) {
-    setAskCard(item_id, { send: went ? null : kept.send, ...(kept.send && !went && !unknown ? { said: { words: notSent(include), error: true as const } } : {}) });
-  }
+  const current = state.askCards.cards[item_id];
+  if (!current) return;
+  // Gone, it names the owner ECHO reports, read again; never the name the button remembered. One read again as something
+  // else that happened meanwhile says what, and keeps nothing to replay.
+  const me = expect()?.membership_id ?? null;
+  const fresh = current.failure ? null : current.item;
+  const elsewhere = !went && kept.send !== null && fresh !== null && fresh.state !== 'unsent' ? fresh : null;
+  setAskCard(item_id, { send: went || elsewhere ? null : kept.send,
+    ...(went ? { said: fresh ? { words: sentWords([fresh.owner], me, include) } : { words: include ? 'Sent' : 'Dismissed' } } : {}),
+    ...(elsewhere ? { said: { words: meanwhileWords(elsewhere, include, me), error: true as const } }
+      : kept.send && !went && !unknown ? { said: { words: notSent(include), error: true as const } } : {}) });
 }
 
 /** Save, on a card's edit: its line, its due date or both change at once (`edit`). Answers whether it went. */
 export async function editAskCard(item_id: string, edit: ItemEdit): Promise<boolean> {
-  const item = state.askCards.cards[item_id]?.item;
-  if (!item || !item.can.edit) return false;
+  const card = state.askCards.cards[item_id];
+  const item = card?.item;
+  if (!item || !item.can.edit || card.failure) return false;
   const changes = editOf(item, edit);
   if (changes === null) return true;
   const { went } = await changeAskCard(item_id, () => attempt({ schema_version: 1, operation: 'edit', item_id, ...changes }), edited(changes),
@@ -7059,7 +7107,7 @@ export async function editAskCard(item_id: string, edit: ItemEdit): Promise<bool
 
 /** A card's owner chip: its people picker opens with you first, then the organization's first people; or closes. */
 function toggleAskPicker(item_id: string): void {
-  if (state.askCards.cards[item_id]?.busy) return;
+  if (state.askCards.cards[item_id]?.busy || state.askCards.cards[item_id]?.failure) return;
   pickerSeq += 1;
   if (state.askCards.picker?.item_id === item_id) { setAskCards({ picker: null }); return; }
   setAskCards({ picker: { item_id, query: '', results: [], loading: true } });

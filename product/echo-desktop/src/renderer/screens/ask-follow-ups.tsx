@@ -47,6 +47,8 @@ function Card({ state, item_id, card }: { state: State; item_id: string; card: A
   const now = Date.now();
   const title = itemTitle(item);
   const picker = state.askCards.picker?.item_id === item_id ? state.askCards.picker : null;
+  // Its last read failed: what shows may be out of date, so nothing acts on it until a read succeeds.
+  const stale = card.failure !== undefined;
   const line = ['From this chat', standing(item, me), item.state === 'unsent' || item.state === 'open' ? dueOnWords(item.due_on, now) : null]
     .filter((part): part is string => part !== null).join(' · ');
   return (
@@ -56,11 +58,16 @@ function Card({ state, item_id, card }: { state: State; item_id: string; card: A
         <button type="button" class="follow-up-open" data-testid="ask-follow-up-title" title="Open this follow-up" onClick={() => void openFollowUp(item_id, item)}>
           <span class="follow-up-title">{title}</span>
         </button>
-        <Owner state={state} busy={card.busy} picking={picker !== null} item={item} name={title} flat />
+        <Owner state={state} busy={card.busy || stale} picking={picker !== null} item={item} name={title} flat />
       </div>
       {picker && <OwnerPicker state={state} picker={picker} item={item} />}
       <div class="ask-follow-up-line" data-testid="ask-follow-up-line">{line}</div>
-      {editing ? <EditFollowUp item={item} busy={card.busy} save={edit => editAskCard(item_id, edit)} close={() => setEditing(false)} /> : (
+      {stale ? (
+        <div class="ask-follow-up-stale error" data-testid="ask-follow-up-stale" role="status">
+          Couldn't refresh this follow-up. {message(card.failure!)}
+          <button type="button" class="link-button" disabled={card.loading} onClick={() => void readAskCards([item_id])}>Try again</button>
+        </div>
+      ) : editing ? <EditFollowUp item={item} busy={card.busy} save={edit => editAskCard(item_id, edit)} close={() => setEditing(false)} /> : (
         <div class="ask-follow-up-actions">
           {sendable(item) && (
             <button type="button" class="primary-button small" data-testid="ask-follow-up-send" disabled={card.busy} onClick={() => void sendAskCard(item_id, true)}>

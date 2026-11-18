@@ -22,9 +22,12 @@ const owned = (n = 1) => draft(n, { owner: { ...MINA, active: true, match: 'pick
 
 type Runs = { operation: string } & Record<string, unknown>;
 let items: Map<string, OpenItemView>;
+/** Per item: what another window does to it as a send reaches the Authority, which then loses its reply. */
+let lost: Map<string, (item: OpenItemView) => OpenItemView>;
 storeLifecycle(new Date('2026-11-18T12:00:00'));
 beforeEach(() => {
   items = new Map();
+  lost = new Map();
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(new Held(), {
     runs: params => {
@@ -35,6 +38,8 @@ beforeEach(() => {
         case 'items': return ok({ items: [...items.values()], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] });
         case 'send': return ok({ sent: 1, not_relevant: 0 });
         case 'send_item': {
+          const elsewhere = lost.get(item!.item_id);
+          if (elsewhere) { items.set(item!.item_id, elsewhere(item!)); return fail('timeout', { retryable: true, mutation_outcome: 'unknown' }); }
           const state = request.include ? 'open' : 'not_relevant';
           items.set(item!.item_id, { ...item!, state, sent_at: '2026-11-18T12:00:00.000Z', state_set_at: '2026-11-18T12:00:00.000Z', state_set_by: me,
             send_included: request.include as boolean, can: { ...item!.can, send: false } });
@@ -152,5 +157,44 @@ describe('a follow-up from a chat on its page', () => {
     await flush();
     expect(sent('send_item')).toMatchObject([{ item_id: 'itm_chat-0001', include: false }]);
     expect((store.followUpShown() as ItemPage).item!.state).toBe('not_relevant');
+  });
+});
+
+describe('review fixes on a list and a page: a lost reply is settled by what happened', () => {
+  const dismissedElsewhere = (item: OpenItemView): OpenItemView => ({ ...item, state: 'not_relevant', sent_at: '2026-11-18T12:00:00.000Z',
+    state_set_at: '2026-11-18T12:00:00.000Z', send_included: false, can: { ...item.can, send: false } });
+
+  it('on its page, a Send whose reply was lost and that another window dismissed says so, never Sent', async () => {
+    const store = await startStore();
+    items.set('itm_chat-0001', owned(1));
+    await store.openFollowUp('itm_chat-0001', owned(1));
+    await flush();
+    lost.set('itm_chat-0001', dismissedElsewhere);
+    await store.sendFollowUp(true);
+    await flush();
+    const page = store.followUpShown() as ItemPage;
+    expect(sent('send_item')).toMatchObject([{ item_id: 'itm_chat-0001', include: true, owner_membership_id: MINA.membership_id }]);
+    expect(page.said).toEqual({ words: 'Not sent: it was dismissed meanwhile', error: true });
+    expect(page.send).toBeNull();
+  });
+
+  it('Send N says what went and what another window did meanwhile, and names the owner on every send', async () => {
+    const store = await startStore();
+    for (const item of [owned(1), owned(2)]) items.set(item.item_id, item);
+    lost.set('itm_chat-0002', dismissedElsewhere);
+    const list: FollowUpList = {
+      kind: 'list', seq: 1, scope: 'involved', title: null, loading: false, items: [...items.values()], live: {}, reading: false,
+      reads: [{ parts: ['active'], pages: [{ cursor: null, ids: [...items.keys()] }], next: null }], summary: { ...EMPTY_SUMMARY, unsent: 2 }, stage: null,
+      ticks: { 'itm_chat-0001': true, 'itm_chat-0002': true }, sends: {}, expanded: {}, busy: false, said: null, picker: null, stale: false,
+    };
+    store.getState().followUps = { route: store.getState().route, views: [list], changed: false };
+    // The first goes; the second's reply is lost.
+    await store.sendTicked(true);
+    await flush();
+    expect(sent('send_item').map(request => request.owner_membership_id)).toEqual([MINA.membership_id, MINA.membership_id]);
+    const said = (store.followUpShown() as FollowUpList).said!;
+    expect(said.words).toBe('Sent to Mina · Not sent: it was dismissed meanwhile');
+    expect(said.words).not.toMatch(/Sent 2/u);
+    expect((store.followUpShown() as FollowUpList).sends).toEqual({});
   });
 });
