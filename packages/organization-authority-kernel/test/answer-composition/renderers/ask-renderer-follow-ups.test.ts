@@ -22,7 +22,11 @@ import { EMPTY_BUNDLE, record, scriptedGate, writerReply } from "../fixtures/age
  */
 const REQUEST = "ask_6b0f8a52-55a4-4f6e-9a39-000000000001";
 
-function alone(input: { readonly bundle: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly request_id?: string; readonly earlier?: boolean }) {
+function alone(input: {
+  readonly bundle: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly request_id?: string; readonly earlier?: boolean;
+  /** The question the writer answers (a follow-up's, as its resolver rewrote it), and what the person typed, when that differs. */
+  readonly question?: string; readonly typed?: string;
+}) {
   const trace: string[] = [];
   const { gate, inputs } = scriptedGate(input.replies, input.bundle.budget, trace);
   const renderer = createAskRendererV1({
@@ -32,7 +36,7 @@ function alone(input: { readonly bundle: AgenticEvidenceBundleV1; readonly repli
     ...(input.earlier === true ? { answers: "What was decided?", earlier: { asked_on: "2026-11-10", statements: [{ text: "Earlier.", sources: ["Meeting r1"] }] } } : {}),
   });
   const render = () => renderer.render({
-    bundle: input.bundle, trigger_input: { question: "What was decided? Ask Sam to call the vendor by Friday." }, gate, remaining: () => 30_000, signal: new AbortController().signal,
+    bundle: input.bundle, trigger_input: { question: input.question ?? "What was decided? Ask Sam to call the vendor by Friday.", ...(input.typed === undefined ? {} : { typed_question: input.typed }) }, gate, remaining: () => 30_000, signal: new AbortController().signal,
     prompt_budget: (system, output = AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer) => agenticAskContextBudgetBytesV1(undefined, system, output),
   });
   return { render, inputs, trace };
@@ -165,6 +169,35 @@ describe("Ask renderer: follow-ups the writer drafts (ADR-0053)", () => {
     ]);
     expect(JSON.stringify(rendered.result.follow_ups)).not.toMatch(/northstar acquisition,? before the board/iu);
     expect(corrections).toMatchObject({ follow_up_task_screened: 1, follow_up_dropped: 1 });
+  });
+
+  it("exempts only what the person typed, never a question the follow-up resolver rewrote with words from an outside item", async () => {
+    const jira = ticketBody(4, "The heater controller overshoots during the 45 degree soak and trips the fixture.");
+    const draft = { task: "Fix why the heater controller overshoots during the soak", owner: "Sam" };
+    const rewritten = "Assign the task the heater controller overshoots during the 45 degree soak to Sam";
+    const run = (typed: string | undefined) => observed(() => alone({ bundle: bundle([decided, jira]), request_id: REQUEST, replies: [answered([draft])],
+      question: rewritten, ...(typed === undefined ? {} : { typed }) }).render());
+    const resolved = await run("assign that task to Sam");
+    expect(resolved.rendered.result.follow_ups).toEqual([]);
+    expect(resolved.corrections).toMatchObject({ follow_up_dropped: 1 });
+    // A question the person typed themselves still exempts the words they typed.
+    const typed = await run(undefined);
+    expect(typed.rendered.result.follow_ups.map(value => value.task)).toEqual([draft.task]);
+  });
+
+  it("counts each character of a script written without spaces as a word, so a copied Chinese or Japanese sentence is dropped", async () => {
+    const zh = ticketBody(5, "供应商必须在周五之前重新报价测试夹具，否则项目会延期。");
+    const ja = ticketBody(6, "金曜日までに試験治具の見積もりを再提出してください。");
+    const { rendered, corrections } = await observed(() => alone({ bundle: bundle([decided, zh, ja]), request_id: REQUEST, replies: [answered([
+      // Copied, punctuation changed: dropped.
+      { task: "供应商必须在周五之前重新报价测试夹具" },
+      { task: "試験治具の見積もりを再提出" },
+      // The person's own words about the same thing: kept.
+      { task: "联系供应商确认新报价" },
+      { task: "見積もりの件でベンダーに電話する" },
+    ])] }).render());
+    expect(rendered.result.follow_ups.map(value => value.task)).toEqual(["联系供应商确认新报价", "見積もりの件でベンダーに電話する"]);
+    expect(corrections).toMatchObject({ follow_up_dropped: 2 });
   });
 
   it("keeps drafts with the same task and owner apart when their day or their item differs, and drops only a true repeat", async () => {
