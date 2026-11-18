@@ -19,7 +19,9 @@ export interface OpenItemFactsV1 {
    * dismissed hands it to its owner, who must be able to see what waits on
    * them). False while the item is `unsent`, and for an item Send dismissed
    * that stays `not_relevant`. Send closes those but still sets their
-   * `sent_at`, so `sent_at` alone does not answer this.
+   * `sent_at`, so `sent_at` alone does not answer this. For a follow-up from
+   * a chat it is exactly whether Send included it: a dismissed draft never
+   * reaches its owner, whatever its state.
    */
   readonly sent_to_owner: boolean;
   /**
@@ -66,13 +68,16 @@ export function openItemAccessV1(facts: OpenItemFactsV1): OpenItemAccessV1 {
   const waits_on = !unsent && facts.owner_active ? 'owner' as const : facts.approver_active ? 'approver' as const : 'leads' as const;
   if (facts.from_chat) {
     // A follow-up from a chat: its creator (`approver`) and, once it reached them, its owner; no decision, no project, no lead.
+    // `sent_to_owner` is exactly whether Send included it, so a draft its creator dismissed is final: it never reached its
+    // owner, nobody closes, reopens or hands it on, and it stays its creator's alone.
+    const dismissed = !unsent && !facts.sent_to_owner;
     const see_row = approver || (owner && facts.sent_to_owner);
     return Object.freeze({
       see_row, see_decision: false,
       see_outside: see_row && facts.opens_item === true,
-      set_state: see_row && !unsent && (approver || owner),
-      assign: see_row && (unsent ? approver : approver || owner),
-      edit: approver && !closed,
+      set_state: see_row && !unsent && !dismissed && (approver || owner),
+      assign: see_row && !dismissed && (unsent ? approver : approver || owner),
+      edit: approver && !closed && !dismissed,
       send: approver && unsent,
       waits_on,
       waits_on_viewer: see_row && !closed && (waits_on === 'owner' ? owner : waits_on === 'approver' ? approver : false),

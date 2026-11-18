@@ -156,6 +156,17 @@ export const FOLLOW_UPS_KEY_PAST_READS_V1 = 'This request has read as many follo
 /** Private visibilities first: an answer statement citing any of them is private. */
 const NARROWEST: readonly EvidenceDeskVisibilityV1[] = ['only_me', 'approver_only', 'project', 'projects', 'team'];
 
+/** How a follow-up from a chat nobody owns yet names its owner (ADR-0053). */
+export const FOLLOW_UP_NO_OWNER_V1 = 'No owner yet';
+/** A follow-up from a chat that nobody owns yet: its creator was kept for want of a match, and it is still unsent. */
+function unowned(row: Pick<ImpactItemRowV1, 'run_id' | 'state' | 'owner_match'>): boolean {
+  return row.run_id === null && row.state === 'unsent' && row.owner_match === 'approver';
+}
+/** Its owner as a follow-up names them: their display name, or none yet. */
+function ownerName(people: Context['people'], row: Pick<ImpactItemRowV1, 'run_id' | 'state' | 'owner_match' | 'owner_membership_id'>): string {
+  return unowned(row) ? FOLLOW_UP_NO_OWNER_V1 : openItemNameV1(people, row.owner_membership_id);
+}
+
 const stale = (): never => { throw new AuthorityOperationError('stale_access_state', 'A follow-up is no longer available to this person'); };
 
 /**
@@ -364,7 +375,9 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
     const access = openItemAccessV1(read === undefined ? facts : { ...facts, opens_item: opened !== undefined });
     if (!access.see_row) return undefined;
     const live = opened !== undefined && access.see_outside && openItemCurrentV1(opened) !== undefined ? opened : undefined;
-    const due = live === undefined ? '' : openItemCurrentV1(live)?.due_at ?? '';
+    // A follow-up from a chat has its own due date (ADR-0053), never that of the item it is about; a run's item shows its tool's.
+    const chat = row.run_id === null;
+    const due = chat ? row.due_on ?? '' : live === undefined ? '' : openItemCurrentV1(live)?.due_at ?? '';
     const liveTitle = live === undefined ? '' : impactCardLineV1(live.label, LIMITS.title_chars);
     const expected = impactCardLineV1(row.expected, LIMITS.expected_chars);
     const decision = decisionPart(entry);
@@ -373,10 +386,10 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       const title = (withLive ? liveTitle : '') || expected || DEFAULT_TITLE;
       const decided = decision?.first_line === null || decision?.first_line === undefined ? '' : impactCardLineV1(decision.first_line, LIMITS.first_line_chars);
       return validatePersonFollowUpEvidenceV1({
-        item_id: row.item_id, kind: openItemKindV1(row.pointer), title, owner: openItemNameV1(context.people, row.owner_membership_id), status: row.state,
+        item_id: row.item_id, kind: openItemKindV1(row.pointer), title, owner: ownerName(context.people, row), status: row.state,
         // ECHO's own dates, which the runs API shows whoever sees the row.
         created_at: row.created_at, ...(row.sent_at === null ? {} : { sent_at: row.sent_at }), ...(row.owner_set_at === null ? {} : { reassigned_at: row.owner_set_at }),
-        ...(withLive && liveTitle !== '' && due !== '' ? { due_at: due } : {}),
+        ...(due !== '' && (chat || (withLive && liveTitle !== '')) ? { due_at: due } : {}),
         ...(withDecision && decision !== undefined ? { decision: {
           title: impactCardLineV1(decision.title, LIMITS.decision_title_chars) || 'Approved meeting',
           ...(decided === '' ? {} : { first_line: decided }), ref: `meeting:${row.record_sha256}`,
@@ -452,7 +465,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       const candidates = context.assessed.flatMap(entry => {
         if (!inWindow(entry.row, window)) return [];
         const decision = decisionPart(entry);
-        const held = [decision?.title, decision?.first_line, entry.row.expected, openItemNameV1(context.people, entry.row.owner_membership_id)];
+        const held = [decision?.title, decision?.first_line, entry.row.expected, ...(unowned(entry.row) ? [] : [openItemNameV1(context.people, entry.row.owner_membership_id)])];
         const words = evidenceWordsV1(held);
         const written = keysOf(held);
         // A key-shaped word ECHO holds as written ("EVT-2") is one of its words; the key's parts alone are not.
@@ -508,7 +521,8 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       // Filters apply before anything is released or read live.
       const status = input.status;
       const selected = context.assessed.filter(({ row }) => (status === undefined || followUpInStatusV1(row.state, status)) &&
-        (owner === undefined || (asker ? row.owner_membership_id === viewer.membership : followUpOwnerMatchesV1(openItemNameV1(context.people, row.owner_membership_id), owner))));
+        // One nobody owns yet is nobody's, its creator's included.
+        (owner === undefined || (!unowned(row) && (asker ? row.owner_membership_id === viewer.membership : followUpOwnerMatchesV1(openItemNameV1(context.people, row.owner_membership_id), owner)))));
       const matching = selected.filter(({ row }) => inWindow(row, window)).sort((left, right) => newestFirst(left.row, right.row));
       const following = after === undefined ? matching : matching.filter(({ row }) => newestFirst(after, row) < 0);
       const page = following.slice(0, size);

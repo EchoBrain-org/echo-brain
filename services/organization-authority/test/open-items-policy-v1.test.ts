@@ -80,8 +80,12 @@ const chatTable = [
   ['creator of a done follow-up', { viewer: 'mem_ari', sent_to_owner: true, state: 'done' },
     { see_row: true, set_state: true, assign: true, edit: false, send: false, waits_on_viewer: false }],
   ['owner of a done follow-up', { viewer: 'mem_mina', sent_to_owner: true, state: 'done' }, { see_row: true, set_state: true, edit: false }],
-  ['creator of a dismissed follow-up', { viewer: 'mem_ari', state: 'not_relevant' }, { see_row: true, set_state: true, edit: false, send: false }],
+  ['creator of a dismissed follow-up', { viewer: 'mem_ari', state: 'not_relevant' }, { see_row: true, set_state: false, assign: false, edit: false, send: false, waits_on_viewer: false }],
   ['owner of a dismissed follow-up', { viewer: 'mem_mina', state: 'not_relevant' }, { see_row: false, set_state: false, assign: false }],
+  // A dismissed draft never reached its owner, whatever its state says later: it stays its creator's, and final.
+  ['owner of a dismissed follow-up marked done', { viewer: 'mem_mina', state: 'done' }, { see_row: false, see_outside: false, set_state: false, assign: false, waits_on_viewer: false }],
+  ['creator of a dismissed follow-up marked done', { viewer: 'mem_ari', state: 'done' }, { see_row: true, set_state: false, assign: false, edit: false, send: false }],
+  ['creator of a dismissed follow-up reopened', { viewer: 'mem_ari', state: 'open' }, { see_row: true, set_state: false, assign: false, edit: false, send: false, waits_on_viewer: false }],
   ['creator after the owner left', { viewer: 'mem_ari', sent_to_owner: true, owner_active: false }, { waits_on: 'approver', waits_on_viewer: true }],
   ['anyone after both left', { sent_to_owner: true, owner_active: false, approver_active: false, leads_decision_project: true }, { see_row: false, waits_on: 'leads', waits_on_viewer: false }],
 ] as const;

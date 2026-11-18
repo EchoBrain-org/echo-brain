@@ -348,7 +348,8 @@ export function assessOpenItemsV1<D extends DecisionProjects = PersonReadableDec
       viewer: viewer.membership, approver: row.approver.membership_id, owner: row.owner_membership_id,
       approver_active: people.get(row.approver.membership_id)?.active === true, owner_active: people.get(row.owner_membership_id)?.active === true,
       // Sent, and Send included it, or it was reopened since: an open item waits on an owner who must be able to see it (R54).
-      sent_to_owner: row.sent_at !== null && (row.send_included === true || row.state === 'open' || row.state === 'done'), state: row.state,
+      // A follow-up from a chat reaches its owner only when Send included it: a dismissed draft is final (ADR-0053).
+      sent_to_owner: row.sent_at !== null && (row.send_included === true || (!fromChat(row) && (row.state === 'open' || row.state === 'done'))), state: row.state,
       reads_decision: row.record_sha256 !== null && decisions.has(row.record_sha256), leads_decision_project: leadsDecision(row.record_sha256),
       from_chat: fromChat(row),
     });
@@ -542,7 +543,9 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
     if (!entry.access[right]) {
       // An unsent item is its approver's to send first; only they may pick its owner before Send (F2). Whoever could act on it once
       // sent hears that; anyone else gets not_found.
-      if (row.state === 'unsent' && openItemAccessV1({ ...entry.facts, state: 'open' })[right]) throw new AuthorityOperationError('invalid_request', 'Send it first');
+      if (row.state === 'unsent' && openItemAccessV1({ ...entry.facts, state: 'open', sent_to_owner: true })[right]) throw new AuthorityOperationError('invalid_request', 'Send it first');
+      // A follow-up from a chat its creator dismissed is final (ADR-0053): they still see it, and hear why nothing moves it.
+      if (fromChat(row) && row.send_included === false) throw new AuthorityOperationError('conflict', 'The follow-up was dismissed');
       throw notFound();
     }
     return row;
@@ -556,8 +559,9 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const viewer = viewerOf(input.access_token, input.signal);
       const actor = { organization_id: viewer.organization, principal_id: viewer.principal, membership_id: viewer.membership };
       // A follow-up from a chat is sent on its own, from the caller's drafts, never from a run's Send row.
-      const unsent = options.items.involving(viewer.organization, viewer.membership, { states: ['unsent'], limit: INVOLVING_MAX })
-        .filter(row => approvedBy(row, viewer) && !fromChat(row));
+      // Only rows with a run are read, so no number of chat drafts naming the caller pushes a meeting's rows out of the window.
+      const unsent = options.items.involving(viewer.organization, viewer.membership, { states: ['unsent'], limit: INVOLVING_MAX, from_run: true })
+        .filter(row => approvedBy(row, viewer));
       const open = new Map<string, ImpactItemRowV1>();
       // Leads take an item when its approver and owner have both left.
       for (const row of [...options.items.involving(viewer.organization, viewer.membership, { states: ['open'], limit: INVOLVING_MAX }), ...options.items.orphaned(viewer.organization, { limit: INVOLVING_MAX })]) {
@@ -772,7 +776,11 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       // A retry of a committed send is answered before anything is checked again.
       const replay = row.send_command_id === request.command_id;
       if (!replay && !entry.access.send) throw changed();
-      if (!replay && request.owner_membership_id !== undefined) activeMember(viewer, request.owner_membership_id);
+      // Sent, it goes to the owner picked here, else its current one: either must be an active member. One nobody owns yet is
+      // refused below.
+      if (!replay && request.include && (request.owner_membership_id !== undefined || row.owner_match !== 'approver')) {
+        activeMember(viewer, request.owner_membership_id ?? row.owner_membership_id);
+      }
       const result = options.items.sendItem({ item_id: row.item_id, by: viewer.membership, command_id: request.command_id, include: request.include,
         ...(request.owner_membership_id === undefined ? {} : { owner_membership_id: request.owner_membership_id }) });
       switch (result.kind) {

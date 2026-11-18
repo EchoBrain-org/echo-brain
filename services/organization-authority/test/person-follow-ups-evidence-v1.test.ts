@@ -637,6 +637,31 @@ describe('follow-ups from a chat as Ask evidence (ADR-0053)', () => {
     for (const name of ['rafael', 'okafor'] as const) expect((await search(askDesk(f, name).desk, 'vendor contract')).items).toEqual([]);
   });
 
+  it("states a chat card's own owner and due date: none while nobody owns it, never its linked item's", async () => {
+    const f = await sentFixture();
+    const sinks = createAskFollowUpSinksV1({ items: f.items, people: f.directory });
+    const ticket = { kind: 'ticket', tool_id: 'jira', external_scope_id: CLOUD, ticket_id: '10012', permalink: 'https://echo-fixture.atlassian.net/browse/ECHO-12' };
+    const [unowned, linked, linkedDue] = [0, 1, 2].map(ordinal => askFollowUpItemIdV1('ask-owner-due', ordinal));
+    sinks(f.openItemsOptions.sessions.authenticateAccess({ access_token: 'ari' })).save([
+      { item_id: unowned!, task: 'Book the pilot room', due_on: '2026-10-24' },
+      { item_id: linked!, task: 'Chase the contract ticket', owner_name: 'Mina Patel', about: ticket },
+      { item_id: linkedDue!, task: 'Close the contract ticket', owner_name: 'Mina Patel', about: ticket, due_on: '2026-11-06' },
+    ]);
+    const { desk } = askDesk(f, 'ari');
+    const found = await list(desk);
+    const byId = (id: string) => found.items.find(item => item.id === `follow_up_${id}`)!;
+    expect(byId(unowned!).attributes).toEqual({ owner: 'No owner yet', status: 'not sent yet', due_at: '2026-10-24' });
+    // The ticket it is about is due Oct 30; the card itself has no due date, or its own.
+    expect(byId(linked!).attributes).toEqual({ owner: 'Mina Patel', status: 'not sent yet' });
+    expect(byId(linkedDue!).attributes).toEqual({ owner: 'Mina Patel', status: 'not sent yet', due_at: '2026-11-06' });
+    // Nobody owns it: it is no one's, Ari's included.
+    expect((await list(desk, { owner: 'me' })).items.map(item => item.id)).not.toContain(`follow_up_${unowned!}`);
+    expect((await list(desk, { owner: 'Ari' })).items.map(item => item.id)).not.toContain(`follow_up_${unowned!}`);
+    expect((await search(desk, 'ari')).items.map(item => item.id)).not.toContain(`follow_up_${unowned!}`);
+    // A run item keeps its tool's due date.
+    expect(found.items.find(item => item.id === `follow_up_${f.ticket.item_id}`)?.attributes).toMatchObject({ due_at: '2026-10-30' });
+  });
+
   it('is never found in a project scope, and leaves a global release when it is handed on', async () => {
     const { f, id, sendIt } = await drafted();
     await sendIt();

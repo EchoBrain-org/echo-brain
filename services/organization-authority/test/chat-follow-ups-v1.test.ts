@@ -190,7 +190,7 @@ describe('follow-ups from a chat: Send, edit, close and hand on', () => {
     const [id] = f.draft('ari', [SEND_THE_PLAN]);
     await expect(f.sendItem('ari', id!, false, { command_id: 'dismiss-1' })).resolves.toEqual({ state: 'not_relevant' });
     await expect(f.item('mina', id!)).rejects.toMatchObject({ code: 'not_found' });
-    expect(await f.item('ari', id!)).toMatchObject({ state: 'not_relevant', send_included: false, can: { set_state: true, edit: false, send: false } });
+    expect(await f.item('ari', id!)).toMatchObject({ state: 'not_relevant', send_included: false, can: { set_state: false, assign: false, edit: false, send: false } });
     // The same command again answers what it did; another one, or the other choice under it, is a conflict.
     await expect(f.sendItem('ari', id!, false, { command_id: 'dismiss-1' })).resolves.toEqual({ state: 'not_relevant' });
     await expect(f.sendItem('ari', id!, true, { command_id: 'dismiss-1' })).rejects.toMatchObject({ code: 'conflict' });
@@ -240,5 +240,56 @@ describe('follow-ups from a chat: Send, edit, close and hand on', () => {
     expect(await f.item('okafor', id!)).toMatchObject({ owner: { match: 'reassigned' }, can: { set_state: true, assign: true, edit: false, send: false } });
     await expect(setState(f, 'okafor', id!, 'done')).resolves.toEqual({ state: 'done' });
     expect(await f.item('ari', id!)).toMatchObject({ state: 'done', state_set_by: { membership_id: f.membership('okafor') }, can: { edit: false } });
+  });
+});
+
+describe('follow-ups from a chat: review fixes', () => {
+  it('keeps a dismissed draft final and its creator\'s alone: never closed, reopened or handed on, never shown to its owner', async () => {
+    const f = await chatFollowUpsFixture();
+    const [id] = f.draft('ari', [SEND_THE_PLAN]);
+    await f.sendItem('ari', id!, false);
+    expect(await f.item('ari', id!)).toMatchObject({ state: 'not_relevant', send_included: false, can: { set_state: false, assign: false, edit: false, send: false } });
+    for (const state of ['done', 'open'] as const) await expect(setState(f, 'ari', id!, state)).rejects.toMatchObject({ code: 'conflict' });
+    await expect(assign(f, 'ari', id!, 'rafael')).rejects.toMatchObject({ code: 'conflict' });
+    expect(f.items.read(id!)).toMatchObject({ state: 'not_relevant', owner_membership_id: f.membership('mina'), state_set_by: f.membership('ari') });
+    // Even a row the store moved on is never its owner's: it was never sent to them.
+    f.items.setState(id!, 'done', f.membership('ari'));
+    await expect(f.item('mina', id!)).rejects.toMatchObject({ code: 'not_found' });
+    expect((await f.mine('mina')).items).toEqual([]);
+    expect((await f.app.home({ access_token: 'mina' })).items).toEqual([]);
+    await expect(setState(f, 'mina', id!, 'open')).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('still lets an approver reopen a run item Send dismissed, handing it to its owner', async () => {
+    const f = await chatFollowUpsFixture();
+    await f.finishImpactRun();
+    const ticket = (await f.runItems()).items.find(entry => entry.kind === 'ticket')!;
+    await f.app.send({ access_token: 'ari', request: { schema_version: 1, operation: 'send', run_id: f.runId, command_id: 'send-1', items: [{ item_id: ticket.item_id, include: false }] } });
+    await expect(setState(f, 'ari', ticket.item_id, 'open')).resolves.toEqual({ state: 'open' });
+    expect(await f.item('mina', ticket.item_id)).toMatchObject({ state: 'open', send_included: false });
+  });
+
+  it("builds Home's Send rows from run items only, however many chat drafts name the caller", async () => {
+    const f = await chatFollowUpsFixture();
+    // Mina's answer drafted more follow-ups for Ari than Home reads at once; Ari cannot see any of them.
+    f.draft('mina', Array.from({ length: 1001 }, (_, index) => ({ task: `Task ${String(index)}`, owner_name: 'Ari' })));
+    f.advance(1_000);
+    await f.finishImpactRun();
+    const home = await f.app.home({ access_token: 'ari' });
+    expect(home.send.map(row => row.run_id)).toEqual([f.runId]);
+    expect(home.drafts).toEqual([]);
+    expect((await f.app.home({ access_token: 'mina' })).drafts).toHaveLength(PERSON_HOME_ROWS_V1);
+  });
+
+  it('refuses to send a follow-up to an owner who is no longer a member', async () => {
+    const f = await chatFollowUpsFixture();
+    const [id] = f.draft('ari', [{ task: 'Book the pilot room', owner_name: 'Rafael Moreno' }]);
+    f.revoke('rafael');
+    await expect(f.sendItem('ari', id!, true)).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(f.items.read(id!)!.state).toBe('unsent');
+    // Dismissing needs no owner; picking an active one sends it.
+    await expect(f.sendItem('ari', id!, true, { owner: 'mina' })).resolves.toEqual({ state: 'open' });
+    const [other] = f.draft('ari', [{ task: 'Another', owner_name: 'Rafael Moreno' }]);
+    await expect(f.sendItem('ari', other!, false)).resolves.toEqual({ state: 'not_relevant' });
   });
 });

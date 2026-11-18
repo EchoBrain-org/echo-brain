@@ -242,16 +242,16 @@ export class SqliteImpactItemsV1 {
   /**
    * Items this member approved or owns, oldest first; with `handed_on`, also the items they last handed on (`owner_set_by`;
    * desktop refresh and notifications v1, ADR-0036). No index covers `owner_set_by` yet, so that part scans the organization's
-   * items. `after` is the last row of the previous page.
+   * items. With `from_run`, only items an impact run found (Home's Send rows; ADR-0053). `after` is the last row of the previous page.
    */
-  involving(organizationId: string, membershipId: string, options: { readonly states: readonly ImpactItemStateV1[]; readonly limit: number; readonly handed_on?: boolean; readonly after?: After }): readonly ImpactItemRowV1[] {
+  involving(organizationId: string, membershipId: string, options: { readonly states: readonly ImpactItemStateV1[]; readonly limit: number; readonly handed_on?: boolean; readonly from_run?: boolean; readonly after?: After }): readonly ImpactItemRowV1[] {
     const limit = limitOf(options.limit);
     if (options.states.length === 0 || limit === 0) return [];
     const handedOn = options.handed_on === true;
     const after = afterRow(options.after);
     return (this.database.prepare(`${selectItems}
       WHERE item.organization_id=? AND (item.approver_membership_id=? OR item.owner_membership_id=?${handedOn ? ' OR item.owner_set_by=?' : ''})
-        AND item.state IN (SELECT value FROM json_each(?)) ${after.clause}
+        AND item.state IN (SELECT value FROM json_each(?))${options.from_run === true ? ' AND item.run_id IS NOT NULL' : ''} ${after.clause}
       ${ORDER} LIMIT ?`).all(organizationId, membershipId, membershipId, ...(handedOn ? [membershipId] : []), JSON.stringify([...new Set(options.states)]), ...after.params, limit) as StoredItemV1[]).map(publicItem);
   }
 
