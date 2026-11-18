@@ -54,9 +54,9 @@ const OWNER = { membership_id: MINA, name: 'Mina Patel', active: true, match: 'j
 const OWNER_PERSON = { membership_id: MINA, name: 'Mina Patel', active: true };
 /** An item the viewer opened carries what it says now; any other says why it does not. */
 const openItem = (overrides: Record<string, unknown>) => ({
-  item_id: ITEM, run_id: RUN, kind: 'ticket', relation: 'conflicts', expected: 'launch next week', approver: APPROVER, owner: OWNER,
+  item_id: ITEM, run_id: RUN, kind: 'ticket', relation: 'conflicts', expected: 'launch next week', due_on: null, approver: APPROVER, owner: OWNER,
   waits_on: 'owner', state: 'open', created_at: NOW, sent_at: LATER, state_set_at: LATER, state_set_by: APPROVER, owner_set_at: null, owner_set_by: null, send_included: true,
-  can: { set_state: true, assign: true },
+  can: { set_state: true, assign: true, edit: false, send: false },
   reach: Object.hasOwn(overrides, 'current') ? 'opened' : 'no_access',
   ...overrides,
 });
@@ -266,7 +266,7 @@ describe('runs API open items', () => {
     expect(validatePersonRunsResultV1('item', { item: seen }).item.current?.says_now).toBe(CURRENT.says_now);
     expect(validatePersonRunsResultV1('item', { item: openItem({}) }).item).not.toHaveProperty('current');
     expect(() => validatePersonRunsResultV1('item', { item: { ...seen, pointer: {} } })).toThrow();      // no extra key ever
-    expect(() => validatePersonRunsResultV1('home', { send: [], items: Array.from({ length: 21 }, () => seen), waiting: 0 })).toThrow();
+    expect(() => validatePersonRunsResultV1('home', { send: [], items: Array.from({ length: 21 }, () => seen), waiting: 0, drafts: [] })).toThrow();
   });
   it('accepts read counts on items only and never with a cursor, and requires reach', () => {
     // Counts and stages only: a line that shows how many items there are opens none of them.
@@ -405,7 +405,13 @@ describe('runs API open-item requests', () => {
 describe('runs API open-item results', () => {
   const seen = openItem({ decision: DECISION, current: CURRENT });
   const withItem = (fields: Record<string, unknown>) => ({ item: { ...seen, ...fields } });
-  const home = (fields: Record<string, unknown> = {}) => ({ send: [sendRow()], items: [seen], waiting: 0, ...fields });
+  const home = (fields: Record<string, unknown> = {}) => ({ send: [sendRow()], items: [seen], waiting: 0, drafts: [], ...fields });
+  /** A follow-up a chat answer drafted (ADR-0053), as its creator sees it before sending: no run, no decision. */
+  const draft = (fields: Record<string, unknown> = {}) => openItem({
+    run_id: null, kind: 'action', relation: 'needs_updating', expected: 'Update the pricing page for the new tiers', due_on: '2026-11-20', state: 'unsent',
+    sent_at: null, state_set_at: null, state_set_by: null, send_included: null, waits_on: 'approver', owner: { ...OWNER, match: 'name' },
+    can: { set_state: false, assign: true, edit: true, send: true }, reach: 'not_read', ...fields,
+  });
   const page = (fields: Record<string, unknown> = {}) => ({ items: [seen], next_cursor: null, summary: summary(), stages: [stage()], ...fields });
 
   it('returns a fresh item, frozen with all its parts', () => {
@@ -416,7 +422,7 @@ describe('runs API open-item results', () => {
 
   it('accepts an unsent item that was never assessed or checked and waits on the leads', () => {
     const orphan = openItem({
-      relation: null, expected: null, state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, send_included: null, waits_on: 'leads', can: { set_state: false, assign: true },
+      relation: null, expected: null, state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, send_included: null, waits_on: 'leads', can: { set_state: false, assign: true, edit: false, send: false },
       approver: { ...APPROVER, active: false }, owner: { ...APPROVER, active: false, match: 'approver' },
     });
     expect(validatePersonRunsResultV1('item', { item: orphan }).item).toEqual(orphan);
@@ -443,15 +449,79 @@ describe('runs API open-item results', () => {
       state_set_by: null, send_included: null, owner: { ...OWNER, match: 'name' } });
     expect(validatePersonRunsResultV1('item', { item: action }).item.kind).toBe('action');
     const kinds = ['action', 'ticket', 'page', 'record', 'document'];
-    expect(validatePersonRunsResultV1('home', { send: [sendRow({ kinds, items: 40, owners: Array.from({ length: 40 }, (_, at) => `Owner ${at}`) })], items: [], waiting: 0 })
+    expect(validatePersonRunsResultV1('home', { send: [sendRow({ kinds, items: 40, owners: Array.from({ length: 40 }, (_, at) => `Owner ${at}`) })], items: [], waiting: 0, drafts: [] })
       .send[0]!.kinds).toEqual(kinds);
-    refused(() => validatePersonRunsResultV1('home', { send: [sendRow({ owners: Array.from({ length: 41 }, (_, at) => `Owner ${at}`) })], items: [], waiting: 0 }), 'one owner too many');
+    refused(() => validatePersonRunsResultV1('home', { send: [sendRow({ owners: Array.from({ length: 41 }, (_, at) => `Owner ${at}`) })], items: [], waiting: 0, drafts: [] }), 'one owner too many');
+  });
+
+  it('carries a follow-up from a chat: no run, no decision, a due date, and its creator may edit and send it', () => {
+    const item = validatePersonRunsResultV1('item', { item: draft() }).item;
+    expect(item).toEqual(draft());
+    expect(item.run_id).toBeNull();
+    expect(item.due_on).toBe('2026-11-20');
+    expect(item.can).toEqual({ set_state: false, assign: true, edit: true, send: true });
+    // Its owner sees it once sent, and may not edit or send it.
+    const sent = draft({ state: 'open', sent_at: LATER, state_set_at: LATER, state_set_by: APPROVER, send_included: true, waits_on: 'owner', can: { set_state: true, assign: true, edit: false, send: false } });
+    expect(validatePersonRunsResultV1('item', { item: sent }).item.state).toBe('open');
+    // It may be about one item read live, like any other row.
+    expect(validatePersonRunsResultV1('item', { item: draft({ kind: 'ticket', current: CURRENT, reach: 'opened' }) }).item.current?.says_now).toBe(CURRENT.says_now);
+    // A day is optional.
+    expect(validatePersonRunsResultV1('item', { item: draft({ due_on: null }) }).item.due_on).toBeNull();
+    // Home lists the caller's unsent ones.
+    expect(validatePersonRunsResultV1('home', home({ drafts: Array.from({ length: 20 }, () => draft()) })).drafts).toHaveLength(20);
+    for (const [name, value] of [
+      ['a decision on a follow-up from a chat', { item: draft({ decision: DECISION }) }],
+      ['a due date that is not a calendar day', { item: draft({ due_on: '2026-02-30' }) }],
+      ['a due date with a time', { item: draft({ due_on: '2026-11-20T00:00:00.000Z' }) }],
+      ['a run\'s item that may be edited', { item: openItem({ can: { set_state: true, assign: true, edit: true, send: false } }) }],
+      ['a run\'s item that may be sent alone', { item: openItem({ can: { set_state: true, assign: true, edit: false, send: true } }) }],
+      ['a run\'s item with a due date', { item: openItem({ due_on: '2026-11-20' }) }],
+      ['a sent follow-up that may be sent again', { item: draft({ state: 'open', sent_at: LATER, state_set_at: LATER, state_set_by: APPROVER, send_included: true }) }],
+      ['a closed follow-up that may be edited', { item: draft({ state: 'done', sent_at: LATER, state_set_at: LATER, state_set_by: APPROVER, send_included: true, can: { set_state: true, assign: true, edit: true, send: false } }) }],
+    ] as const) refused(() => validatePersonRunsResultV1('item', value), name);
+    refused(() => validatePersonRunsResultV1('home', home({ drafts: [seen] })), 'a run\'s item among the drafts');
+    refused(() => validatePersonRunsResultV1('home', home({ drafts: [draft({ state: 'open', sent_at: LATER, state_set_at: LATER, state_set_by: APPROVER, send_included: true, can: { set_state: true, assign: true, edit: true, send: false } })] })), 'a sent follow-up among the drafts');
+    refused(() => validatePersonRunsResultV1('home', home({ drafts: Array.from({ length: 21 }, () => draft()) })), 'one draft too many');
+    refused(() => validatePersonRunsResultV1('home', { send: [], items: [], waiting: 0 }), 'a home without its drafts');
+  });
+
+  it('sends or dismisses one follow-up from a chat, and edits its text and due date', () => {
+    const sendItem = (fields: Record<string, unknown> = {}) => ({ schema_version: 1, operation: 'send_item', item_id: ITEM, command_id: 'c1', include: true, ...fields });
+    expect(validatePersonRunsRequestV1(sendItem())).toEqual(sendItem());
+    expect(validatePersonRunsRequestV1(sendItem({ owner_membership_id: MINA }))).toEqual(sendItem({ owner_membership_id: MINA }));
+    expect(validatePersonRunsRequestV1(sendItem({ include: false }))).toEqual(sendItem({ include: false }));
+    for (const [name, value] of [
+      ['a dismissal that picks an owner', sendItem({ include: false, owner_membership_id: MINA })],
+      ['a send without a command id', { schema_version: 1, operation: 'send_item', item_id: ITEM, include: true }],
+      ['a send with a run id', sendItem({ run_id: RUN })],
+      ['a send whose include is not a boolean', sendItem({ include: 'yes' })],
+      ['a send with a bad item id', sendItem({ item_id: RUN })],
+    ] as const) refused(() => validatePersonRunsRequestV1(value), name);
+    expect(validatePersonRunsResultV1('send_item', { state: 'open' })).toEqual({ state: 'open' });
+    expect(validatePersonRunsResultV1('send_item', { state: 'not_relevant' })).toEqual({ state: 'not_relevant' });
+    refused(() => validatePersonRunsResultV1('send_item', { state: 'done' }), 'a send that closes the item');
+
+    const edit = (fields: Record<string, unknown>) => ({ schema_version: 1, operation: 'edit', item_id: ITEM, ...fields });
+    expect(validatePersonRunsRequestV1(edit({ expected: 'Call the vendor' }))).toEqual(edit({ expected: 'Call the vendor' }));
+    expect(validatePersonRunsRequestV1(edit({ due_on: '2026-11-20' }))).toEqual(edit({ due_on: '2026-11-20' }));
+    expect(validatePersonRunsRequestV1(edit({ due_on: null }))).toEqual(edit({ due_on: null }));
+    expect(validatePersonRunsRequestV1(edit({ expected: 'Call the vendor', due_on: null }))).toEqual(edit({ expected: 'Call the vendor', due_on: null }));
+    for (const [name, value] of [
+      ['an edit that changes nothing', edit({})],
+      ['an edit with empty text', edit({ expected: '' })],
+      ['an edit with text over 120 characters', edit({ expected: 'e'.repeat(121) })],
+      ['an edit with two lines', edit({ expected: 'Call\nthe vendor' })],
+      ['an edit with a day that does not exist', edit({ due_on: '2026-02-30' })],
+      ['an edit that names an owner', edit({ expected: 'Call the vendor', owner_membership_id: MINA })],
+    ] as const) refused(() => validatePersonRunsRequestV1(value), name);
+    expect(validatePersonRunsResultV1('edit', { expected: 'Call the vendor', due_on: null })).toEqual({ expected: 'Call the vendor', due_on: null });
+    refused(() => validatePersonRunsResultV1('edit', { expected: 'Call the vendor' }), 'an edit result without its due date');
   });
 
   it('accepts a home and an items page up to their bounds', () => {
     const fullHome = home({ send: Array.from({ length: 20 }, () => sendRow()), items: Array.from({ length: 20 }, () => seen) });
     expect(validatePersonRunsResultV1('home', fullHome)).toEqual(fullHome);
-    const empty = { send: [], items: [], waiting: 0 };
+    const empty = { send: [], items: [], waiting: 0, drafts: [] };
     expect(validatePersonRunsResultV1('home', empty)).toEqual(empty);
     refused(() => validatePersonRunsResultV1('home', home({ send: Array.from({ length: 21 }, () => sendRow()) })), 'one send row too many');
     const fullPage = page({
@@ -512,8 +582,9 @@ describe('runs API open-item results', () => {
     ['an unsent item Send dismissed', withItem({ state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, send_included: false })],
     ['a sent item without what Send did with it', withItem({ send_included: null })],
     ['a retired sweep check', withItem({ check: null })],
-    ['permissions with an extra key', withItem({ can: { set_state: true, assign: true, send: true } })],
-    ['a permission that is not a boolean', withItem({ can: { set_state: 'yes', assign: true } })],
+    ['permissions with an extra key', withItem({ can: { set_state: true, assign: true, edit: false, send: false, approve: true } })],
+    ['permissions without the edit and send flags', withItem({ can: { set_state: true, assign: true } })],
+    ['a permission that is not a boolean', withItem({ can: { set_state: 'yes', assign: true, edit: false, send: false } })],
     ['a decision with a bad record id', withItem({ decision: { ...DECISION, record_sha256: 'sha256:abc' } })],
     ['a decision title over 200 characters', withItem({ decision: { ...DECISION, title: 'T'.repeat(201) } })],
     ['a decision first line over 300 characters', withItem({ decision: { ...DECISION, first_line: 'f'.repeat(301) } })],

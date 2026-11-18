@@ -85,7 +85,15 @@ export interface PersonAnswerResponseV8 {
   readonly since?: PersonAnswerSinceV1;
   /** Only with outcome `clarify` (ADR-0047): one full question for each thing the follow-up could mean. */
   readonly choices?: readonly PersonAnswerChoiceV1[];
+  /**
+   * Only on an answer whose writer drafted follow-ups (ADR-0053): their open-item ids, in the writer's order. Each is saved
+   * with the answer, unsent, in the asker's own list; a client reads it with the runs `item` operation. Never with `clarify`.
+   */
+  readonly follow_ups?: readonly string[];
 }
+
+/** The most follow-ups one answer drafts. */
+export const PERSON_ANSWER_FOLLOW_UPS_MAX_V1 = 10;
 
 /** A workspace ref, exactly: `project:` and a project id, or `tool:` and a tool id. */
 export function validatePersonWorkspaceRefV1(value: unknown, label = 'Workspace ref'): PersonWorkspaceRefV1 {

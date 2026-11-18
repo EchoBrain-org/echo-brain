@@ -4,7 +4,7 @@ import { PERSON_IMPACT_CARD_LIMITS_V1, validatePersonImpactCardV1, type PersonIm
 import { PERSON_UPLOAD_PROJECT_SET_MAX } from './person-upload-audience-v3.js';
 import { validateProjectIdV1 } from './project-context-v1.js';
 import {
-  asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertString, assertTimestamp, assertUnique as unique, boundedLine as line, boundedList as list, fail, oneOf,
+  asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertString, assertTimestamp, assertUnique as unique, boundedLine as line, boundedList as list, fail, isCalendarDay, oneOf,
   openItemId as itemId, utf8ByteLength,
 } from './validation.js';
 
@@ -41,6 +41,13 @@ import {
  * `owner_set_at` and `state_set_at`). Notification discovery pages through
  * `items` separately so Home's twenty-row display limit does not hide
  * assignments.
+ *
+ * A follow-up may also come from a chat answer (ADR-0053): the Ask writer drafts
+ * it and the Authority saves it with the answer, `unsent`, in the asker's own
+ * list. It has no run and no decision (`run_id` is null). Only its creator
+ * sees it until it is sent, then its owner does too. Its creator may change
+ * its text and due date (`edit`) and sends or dismisses it on its own
+ * (`send_item`). `home` lists the caller's unsent ones as `drafts`.
  */
 export const PERSON_RUNS_PATH_V1 = '/v1/person/runs';
 
@@ -94,7 +101,19 @@ export type PersonRunsRequestV1 =
    * (`reassigned`). Its current owner again writes nothing, except the approver taking on an item ECHO gave them for want of
    * a match (`approver`): that is stored as their choice (`picked`, or `reassigned` once sent).
    */
-  | { readonly schema_version: 1; readonly operation: 'assign'; readonly item_id: string; readonly owner_membership_id: string };
+  | { readonly schema_version: 1; readonly operation: 'assign'; readonly item_id: string; readonly owner_membership_id: string }
+  /**
+   * Sends or dismisses one unsent follow-up that came from a chat (ADR-0053); only its creator may. `include: true` sends it to
+   * its owner (`open`), with an optional owner pick; it answers `invalid_request` while nobody owns it. `include: false`
+   * dismisses it (`not_relevant`). A `command_id` already used on the item answers its first result again.
+   */
+  | { readonly schema_version: 1; readonly operation: 'send_item'; readonly item_id: string; readonly command_id: string; readonly include: boolean;
+      readonly owner_membership_id?: string }
+  /**
+   * Changes the text, the due date or both of a follow-up that came from a chat (ADR-0053); only its creator may, and only
+   * until it is closed. `expected` is its one line; `due_on` is a calendar day, or null to clear it. At least one is given.
+   */
+  | { readonly schema_version: 1; readonly operation: 'edit'; readonly item_id: string; readonly expected?: string; readonly due_on?: string | null };
 
 export interface PersonRunV1 {
   readonly run_id: string;
@@ -135,11 +154,17 @@ export interface PersonOpenItemCurrentV1 {
   readonly assignee?: string; readonly status?: string; readonly due_at?: string;
 }
 export interface PersonOpenItemV1 {
-  readonly item_id: string; readonly run_id: string; readonly kind: PersonOpenItemKindV1;
+  readonly item_id: string;
+  /** The impact run that found it, or null for a follow-up that came from a chat (ADR-0053): it has no run and no decision. */
+  readonly run_id: string | null;
+  readonly kind: PersonOpenItemKindV1;
   readonly decision?: PersonOpenItemDecisionV1;
   readonly current?: PersonOpenItemCurrentV1;
   readonly relation: 'conflicts' | 'needs_updating' | null;
   readonly expected: string | null;
+  /** ECHO's own due date for it, a calendar day, or null. Only a follow-up from a chat has one. */
+  readonly due_on: string | null;
+  /** Who approved the decision; for a follow-up from a chat, who created it. */
   readonly approver: PersonOpenItemPersonV1;
   readonly owner: PersonOpenItemPersonV1 & { readonly match: PersonOpenItemOwnerMatchV1 };
   readonly waits_on: 'owner' | 'approver' | 'leads';
@@ -154,7 +179,11 @@ export interface PersonOpenItemV1 {
    * false when Send dismissed it. A later state change leaves it as Send set it.
    */
   readonly send_included: boolean | null;
-  readonly can: { readonly set_state: boolean; readonly assign: boolean };
+  /**
+   * `edit`: the caller may change its text and due date. `send`: the caller may send or dismiss it on its own (`send_item`).
+   * Both are only ever true on a follow-up from a chat, for its creator.
+   */
+  readonly can: { readonly set_state: boolean; readonly assign: boolean; readonly edit: boolean; readonly send: boolean };
   /** `current` comes exactly with `opened`. */
   readonly reach: PersonOpenItemReachV1;
 }
@@ -201,13 +230,17 @@ export interface PersonRunsResultsV1 {
   home: { readonly send: readonly PersonHomeSendV1[];
           /** At most twenty: newest handoffs first. */
           readonly items: readonly PersonOpenItemV1[];
-          readonly waiting: number };
+          readonly waiting: number;
+          /** The caller's unsent follow-ups that came from a chat, newest first; at most twenty. */
+          readonly drafts: readonly PersonOpenItemV1[] };
   items: { readonly items: readonly PersonOpenItemV1[]; readonly next_cursor: string | null;
            readonly summary: PersonOpenItemsSummaryV1; readonly stages: readonly PersonImpactStageV1[] };
   item: { readonly item: PersonOpenItemV1 };
   send: { readonly sent: number; readonly not_relevant: number };
   set_state: { readonly state: 'open' | 'done' | 'not_relevant' };
   assign: { readonly owner: PersonOpenItemPersonV1 };
+  send_item: { readonly state: 'open' | 'not_relevant' };
+  edit: { readonly expected: string; readonly due_on: string | null };
 }
 
 /** A card, or a page of open items with their citations, is far below 1 MiB. */
@@ -234,12 +267,13 @@ const ERROR_CODES: readonly string[] = ['no_access', 'unavailable', 'timed_out',
 const REQUEST_KEYS: Readonly<Record<PersonRunsRequestV1['operation'], readonly string[]>> = Object.freeze({
   list: [], home: [], start: ['run_id'], next: [], retry: ['run_id'], view: ['run_id'], items: ['scope'], item: ['item_id'],
   send: ['run_id', 'command_id', 'items'], set_state: ['item_id', 'state'], assign: ['item_id', 'owner_membership_id'],
+  send_item: ['item_id', 'command_id', 'include'], edit: ['item_id'],
 });
 /** Each result's keys. */
 const RESULT_KEYS: Readonly<Record<keyof PersonRunsResultsV1, readonly string[]>> = Object.freeze({
   list: ['runs'], start: ['state'], next: ['state'], retry: ['state'], view: ['card', 'checked_at', 'hidden'],
-  home: ['send', 'items', 'waiting'], items: ['items', 'next_cursor', 'summary', 'stages'],
-  item: ['item'], send: ['sent', 'not_relevant'], set_state: ['state'], assign: ['owner'],
+  home: ['send', 'items', 'waiting', 'drafts'], items: ['items', 'next_cursor', 'summary', 'stages'],
+  item: ['item'], send: ['sent', 'not_relevant'], set_state: ['state'], assign: ['owner'], send_item: ['state'], edit: ['expected', 'due_on'],
 });
 const START_STATES: readonly string[] = ['pending', 'running', 'busy', 'done', 'failed'];
 const NEXT_STATES: readonly string[] = ['idle', 'pending', 'running', 'busy'];
@@ -294,6 +328,13 @@ function timestampOrNull(value: unknown, label: string): string | null {
   return value;
 }
 
+/** ECHO's own due date: a calendar day, or null for none. */
+function dueOn(value: unknown, label: string): string | null {
+  if (value === null) return null;
+  if (!isCalendarDay(value)) fail(`${label} is invalid`);
+  return value;
+}
+
 function scopeId(scope: 'run' | 'record' | 'project', value: unknown): string {
   const label = 'Runs request scope id';
   if (scope === 'run') return runId(value, label);
@@ -330,7 +371,8 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
   const kind = operation as PersonRunsRequestV1['operation'];
   // `items` may leave out its scope id and its cursor, and may ask for items in some states only; `home`, `items` and `item` may
   // say how much to read.
-  const optional = (kind === 'items' ? ['id', 'cursor', 'read', 'states', 'changed_since'] : kind === 'home' || kind === 'item' ? ['read'] : [])
+  const optional = (kind === 'items' ? ['id', 'cursor', 'read', 'states', 'changed_since'] : kind === 'home' || kind === 'item' ? ['read']
+    : kind === 'send_item' ? ['owner_membership_id'] : kind === 'edit' ? ['expected', 'due_on'] : [])
     .filter(key => Object.hasOwn(request, key));
   assertExactKeys(request, ['schema_version', 'operation', ...REQUEST_KEYS[kind], ...optional], 'Runs request');
   if (request.schema_version !== 1) fail('Runs request version is invalid');
@@ -378,6 +420,27 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
       });
     case 'set_state':
       return Object.freeze({ schema_version: 1 as const, operation: kind, item_id: itemId(request.item_id, 'Runs request item id'), state: oneOf(request.state, SET_STATES, 'Runs request state') });
+    case 'send_item': {
+      const picked = Object.hasOwn(request, 'owner_membership_id');
+      if (typeof request.include !== 'boolean') fail('Runs request send include is invalid');
+      // Only a sent item goes to an owner.
+      if (picked && !request.include) fail('Runs request send owner needs a sent item');
+      return Object.freeze({
+        schema_version: 1 as const, operation: kind, item_id: itemId(request.item_id, 'Runs request item id'),
+        command_id: matching(request.command_id, COMMAND_ID, 'Runs request command id'), include: request.include,
+        ...(picked ? { owner_membership_id: membershipId(request.owner_membership_id, 'Runs request send owner') } : {}),
+      });
+    }
+    case 'edit': {
+      const text = Object.hasOwn(request, 'expected');
+      const due = Object.hasOwn(request, 'due_on');
+      if (!text && !due) fail('Runs request edit changes nothing');
+      return Object.freeze({
+        schema_version: 1 as const, operation: kind, item_id: itemId(request.item_id, 'Runs request item id'),
+        ...(text ? { expected: line(request.expected, 'Runs request edit text', EXPECTED_CHARS) } : {}),
+        ...(due ? { due_on: dueOn(request.due_on, 'Runs request edit due date') } : {}),
+      });
+    }
     default:
       // assign
       return Object.freeze({
@@ -455,16 +518,16 @@ function current(value: unknown): PersonOpenItemCurrentV1 {
 
 function can(value: unknown): PersonOpenItemV1['can'] {
   const entry = asEnumerableRecord(value, 'Open item permission set');
-  assertExactKeys(entry, ['set_state', 'assign'], 'Open item permission set');
-  if (typeof entry.set_state !== 'boolean' || typeof entry.assign !== 'boolean') fail('Open item permission set is invalid');
-  return Object.freeze({ set_state: entry.set_state, assign: entry.assign });
+  assertExactKeys(entry, ['set_state', 'assign', 'edit', 'send'], 'Open item permission set');
+  if (typeof entry.set_state !== 'boolean' || typeof entry.assign !== 'boolean' || typeof entry.edit !== 'boolean' || typeof entry.send !== 'boolean') fail('Open item permission set is invalid');
+  return Object.freeze({ set_state: entry.set_state, assign: entry.assign, edit: entry.edit, send: entry.send });
 }
 
 function openItem(value: unknown): PersonOpenItemV1 {
   const entry = asEnumerableRecord(value, 'Open item');
   // What a viewer may not see is left out, never sent empty.
   const parts = ['decision', 'current'].filter(key => Object.hasOwn(entry, key));
-  assertExactKeys(entry, ['item_id', 'run_id', 'kind', 'relation', 'expected', 'approver', 'owner', 'waits_on', 'state', 'created_at', 'sent_at', 'state_set_at',
+  assertExactKeys(entry, ['item_id', 'run_id', 'kind', 'relation', 'expected', 'due_on', 'approver', 'owner', 'waits_on', 'state', 'created_at', 'sent_at', 'state_set_at',
     'state_set_by', 'owner_set_at', 'owner_set_by', 'send_included', 'can', 'reach', ...parts], 'Open item');
   assertTimestamp(entry.created_at, 'Open item created_at');
   const reach = oneOf(entry.reach, REACHES, 'Open item reach');
@@ -481,17 +544,25 @@ function openItem(value: unknown): PersonOpenItemV1 {
   if (entry.send_included !== null && typeof entry.send_included !== 'boolean') fail('Open item send_included is invalid');
   // Send sets it, exactly as the item leaves unsent; nothing sets it before.
   if ((state === 'unsent') !== (entry.send_included === null)) fail('Open item send_included does not match its state');
+  // A follow-up from a chat has no run and no decision (ADR-0053); only one of those may be edited, sent on its own or be due.
+  const run_id = entry.run_id === null ? null : runId(entry.run_id, 'Open item run id');
+  const permissions = can(entry.can);
+  const due_on = dueOn(entry.due_on, 'Open item due date');
+  if (run_id === null && Object.hasOwn(entry, 'decision')) fail('Open item from a chat names a decision');
+  if (run_id !== null && (permissions.edit || permissions.send || due_on !== null)) fail('Open item from a run cannot be edited, sent alone or be due');
+  if (permissions.send && state !== 'unsent') fail('Open item send permission does not match its state');
+  if (permissions.edit && (state === 'done' || state === 'not_relevant')) fail('Open item edit permission does not match its state');
   return Object.freeze({
-    item_id: itemId(entry.item_id, 'Open item id'), run_id: runId(entry.run_id, 'Open item run id'), kind: oneOf(entry.kind, KINDS, 'Open item kind'),
+    item_id: itemId(entry.item_id, 'Open item id'), run_id, kind: oneOf(entry.kind, KINDS, 'Open item kind'),
     ...(Object.hasOwn(entry, 'decision') ? { decision: decision(entry.decision) } : {}),
     ...(Object.hasOwn(entry, 'current') ? { current: current(entry.current) } : {}),
     relation: entry.relation === null ? null : oneOf(entry.relation, RELATIONS, 'Open item relation'),
-    expected: entry.expected === null ? null : line(entry.expected, 'Open item expected', EXPECTED_CHARS),
+    expected: entry.expected === null ? null : line(entry.expected, 'Open item expected', EXPECTED_CHARS), due_on,
     approver: person(entry.approver, 'Open item approver'), owner: owner(entry.owner),
     waits_on: oneOf(entry.waits_on, WAITS_ON, 'Open item waits_on'), state,
     created_at: entry.created_at as string, sent_at: timestampOrNull(entry.sent_at, 'Open item sent_at'), state_set_at,
     state_set_by, owner_set_at, owner_set_by, send_included: entry.send_included,
-    can: can(entry.can), reach,
+    can: permissions, reach,
   });
 }
 
@@ -570,6 +641,11 @@ export function validatePersonRunsResultV1<K extends keyof PersonRunsResultsV1>(
         send: Object.freeze(list(result.send, 'Home send row list', PERSON_HOME_ROWS_V1).map(sendRow)),
         items: Object.freeze(list(result.items, 'Home item list', PERSON_HOME_ROWS_V1).map(openItem)),
         waiting: count(result.waiting, 'Home waiting count'),
+        drafts: Object.freeze(list(result.drafts, 'Home draft list', PERSON_HOME_ROWS_V1).map(raw => {
+          const draft = openItem(raw);
+          if (draft.run_id !== null || draft.state !== 'unsent') fail('Home draft is not an unsent follow-up from a chat');
+          return draft;
+        })),
       });
     case 'items':
       return checked({
@@ -583,6 +659,10 @@ export function validatePersonRunsResultV1<K extends keyof PersonRunsResultsV1>(
       return checked({ sent: count(result.sent, 'Send sent count'), not_relevant: count(result.not_relevant, 'Send not-relevant count') });
     case 'set_state':
       return checked({ state: oneOf(result.state, SET_STATES, 'Set state result') });
+    case 'send_item':
+      return checked({ state: oneOf(result.state, ['open', 'not_relevant'] as const, 'Send item result') });
+    case 'edit':
+      return checked({ expected: line(result.expected, 'Edited text', EXPECTED_CHARS), due_on: dueOn(result.due_on, 'Edited due date') });
     default:
       // assign
       return checked({ owner: person(result.owner, 'Assigned owner') });

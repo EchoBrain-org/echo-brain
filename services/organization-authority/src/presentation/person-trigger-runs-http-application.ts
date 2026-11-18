@@ -17,5 +17,9 @@ export interface PersonTriggerRunsHttpApplicationV1 {
   send(input: Input<'send'>): Promise<PersonRunsResultsV1['send']>;
   set_state(input: Input<'set_state'>): Promise<PersonRunsResultsV1['set_state']>;
   assign(input: Input<'assign'>): Promise<PersonRunsResultsV1['assign']>;
+  /** Sends or dismisses one unsent follow-up that came from a chat (ADR-0053). */
+  send_item(input: Input<'send_item'>): Promise<PersonRunsResultsV1['send_item']>;
+  /** Changes the text or due date of a follow-up that came from a chat (ADR-0053). */
+  edit(input: Input<'edit'>): Promise<PersonRunsResultsV1['edit']>;
   close(): void;
 }

@@ -719,6 +719,8 @@ export function createOrganizationAuthorityHttpServer(
         case 'send': return application.send({ ...common, request });
         case 'set_state': return application.set_state({ ...common, request });
         case 'assign': return application.assign({ ...common, request });
+        case 'send_item': return application.send_item({ ...common, request });
+        case 'edit': return application.edit({ ...common, request });
         default: {
           // Every operation the API knows is served: one added to the API does not compile here until it is.
           const unserved: never = request;

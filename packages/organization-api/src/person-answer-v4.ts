@@ -1,7 +1,7 @@
 import { validatePersonTicketCitationV1 } from './person-ticket-citation-v1.js';
 import { validatePersonPageCitationV1 } from './person-page-citation-v1.js';
 import {
-  PERSON_ANSWER_OUTCOMES_V8, validatePersonWorkspaceRefV1, type PersonAnswerCitationV8, type PersonAnswerEvidenceCitationV8, type PersonAnswerOpenRefV8, type PersonAnswerResponseV8,
+  PERSON_ANSWER_FOLLOW_UPS_MAX_V1, PERSON_ANSWER_OUTCOMES_V8, validatePersonWorkspaceRefV1, type PersonAnswerCitationV8, type PersonAnswerEvidenceCitationV8, type PersonAnswerOpenRefV8, type PersonAnswerResponseV8,
   type PersonAnswerCitationV6, type PersonEvidenceKindV5,
 } from './person-answer-v8.js';
 import { validatePersonFollowUpCitationV1, validatePersonFollowUpRefV1 } from './person-follow-up-evidence-v1.js';
@@ -33,10 +33,12 @@ import {
   assertExactKeys,
   assertTimestamp,
   boundedLine,
+  assertUnique,
   boundedList,
   fail,
   MAX_ORGANIZATION_API_BODY_BYTES,
   oneOf,
+  openItemId,
   utf8ByteLength,
 } from './validation.js';
 
@@ -395,13 +397,22 @@ export function validatePersonAnswerCitationV6(value: unknown): PersonAnswerCita
  * when it has one.
  */
 export function validatePersonAnswerCitationV8(value: unknown): PersonAnswerCitationV8 { return answerCitation(value, 8); }
+/** The ids of the follow-ups an answer drafted, in the writer's order: at least one, each once. */
+function answerFollowUps(value: unknown): readonly string[] {
+  const ids = boundedList(value, 'Ask response follow-up list', PERSON_ANSWER_FOLLOW_UPS_MAX_V1, 1).map(id => openItemId(id, 'Ask response follow-up id'));
+  assertUnique(ids, 'Ask response follow-up list');
+  return Object.freeze(ids);
+}
+
 /** The Ask answer, `/v7`'s (research tool contract v1): the only one, since the V4 to V7 answers were retired with their routes. */
 export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResponseV8 {
   const input = object(value, 'Ask response');
   // Only an answer to a request that carried the previous turn (ADR-0047) names its question, says what is different
   // since, or offers choices.
   const previous = ['question', 'since', 'choices'].filter(key => Object.hasOwn(input, key));
-  assertExactKeys(input, ['schema_version', 'kind', 'scope', 'outcome', 'citations', 'parts', ...(Object.hasOwn(input, 'direct') ? ['direct'] : []), ...(Object.hasOwn(input, 'notice') ? ['notice'] : []), ...previous], 'Ask response');
+  // Only an answer whose writer drafted follow-ups (ADR-0053) lists them, so an answer with none keeps its earlier shape.
+  const drafted = Object.hasOwn(input, 'follow_ups');
+  assertExactKeys(input, ['schema_version', 'kind', 'scope', 'outcome', 'citations', 'parts', ...(Object.hasOwn(input, 'direct') ? ['direct'] : []), ...(Object.hasOwn(input, 'notice') ? ['notice'] : []), ...previous, ...(drafted ? ['follow_ups'] : [])], 'Ask response');
   // A clarify outcome (ADR-0047) asks which one instead of answering: no part and no citation.
   const clarify = input.outcome === 'clarify';
   // An answer has no count of citations of its own (ADR-0051): its bytes bound it.
@@ -418,7 +429,10 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
     ...(previous.includes('question') ? { question: fullQuestion(input.question, 'Ask response question') } : {}),
     ...(previous.includes('since') ? { since: answerSince(input.since, citations) } : {}),
     ...(previous.includes('choices') ? { choices: answerChoices(input.choices) } : {}),
+    ...(drafted ? { follow_ups: answerFollowUps(input.follow_ups) } : {}),
   };
+  // A clarify outcome only asks which one: it drafts nothing.
+  if (clarify && drafted) fail('Clarify outcome is inconsistent');
   for (const item of result.parts) {
     if (item.status === 'answered' && (item.statements.length === 0 || item.gap !== undefined || item.gap_details !== undefined || item.records !== undefined)) fail('Answered part is inconsistent');
     if (item.status === 'partial' && (item.statements.length === 0 || item.records !== undefined)) fail('Partial part is inconsistent');

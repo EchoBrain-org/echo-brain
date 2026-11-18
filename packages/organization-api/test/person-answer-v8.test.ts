@@ -35,6 +35,20 @@ describe('Workspace answer V8 (research tool contract v1)', () => {
     expect(() => validatePersonAnswerResponseV8({ ...value, outcome: 'not_found' })).toThrow();
   });
 
+  it('lists the follow-ups its writer drafted, and keeps its earlier shape when there are none (ADR-0053)', () => {
+    const first = 'itm_0f6c1a2e3b4d4c5e8f90123456789abc';
+    const second = 'itm_1f6c1a2e3b4d4c5e8f90123456789abc';
+    expect(validatePersonAnswerResponseV8({ ...response(), follow_ups: [first, second] }).follow_ups).toEqual([first, second]);
+    expect(validatePersonAnswerResponseV8(response())).not.toHaveProperty('follow_ups');
+    // An answer that found nothing may still draft what the person asked for.
+    const nothing = { ...response([]), outcome: 'not_found', parts: [{ question: 'Ask Sam to call the vendor.', status: 'not_found', statements: [], gap: 'I couldn\'t find this in the sources you can access.' }] };
+    expect(validatePersonAnswerResponseV8({ ...nothing, follow_ups: [first] }).follow_ups).toEqual([first]);
+    for (const follow_ups of [[], [first, first], ['run_0f6c1a2e-3b4d'], [1], 'itm_abcd', Array.from({ length: 11 }, (_, at) => `itm_${String(at).padStart(8, '0')}`)]) {
+      expect(() => validatePersonAnswerResponseV8({ ...response(), follow_ups })).toThrow();
+    }
+    expect(validatePersonAnswerResponseV8({ ...response(), follow_ups: Array.from({ length: 10 }, (_, at) => `itm_${String(at).padStart(8, '0')}`) }).follow_ups).toHaveLength(10);
+  });
+
   it('refuses every retired answer version', () => {
     for (const version of [4, 5, 6, 7]) {
       expect(() => validatePersonAnswerResponseV8({ ...response(), schema_version: version, kind: `echo-clean-person-answer-v${version}` })).toThrow('Ask response is invalid');

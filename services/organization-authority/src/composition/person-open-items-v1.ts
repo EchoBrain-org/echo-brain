@@ -85,7 +85,7 @@ export interface OpenItemsLiveFailureV1 {
   readonly reason: 'bind' | 'open' | 'fence' | 'first_line';
   readonly code: string;
 }
-type PersonOpenItemsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'home' | 'items' | 'item' | 'send' | 'set_state' | 'assign'>;
+type PersonOpenItemsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'home' | 'items' | 'item' | 'send' | 'set_state' | 'assign' | 'send_item' | 'edit'>;
 
 /** The signed-in person an open-items read is for. */
 export interface OpenItemViewerV1 { readonly token: string; readonly authorization: PersonAccessAuthorization; readonly organization: string; readonly principal: string; readonly membership: string }
@@ -491,7 +491,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         item_id: row.item_id, run_id: row.run_id, kind: openItemKindV1(row.pointer),
         ...(decision === undefined ? {} : { decision }),
         ...(current === undefined ? {} : { current }),
-        relation: row.relation, expected: row.expected,
+        // TODO(ADR-0053): a follow-up from a chat carries its own due date.
+        relation: row.relation, expected: row.expected, due_on: null,
         approver: personOf(context.people, row.approver.membership_id),
         owner: Object.freeze({ ...personOf(context.people, row.owner_membership_id), match: row.owner_match }),
         waits_on: access.waits_on, state: row.state,
@@ -500,7 +501,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         state_set_by: row.state_set_by === null ? null : personOf(context.people, row.state_set_by),
         owner_set_at: row.owner_set_at, owner_set_by: row.owner_set_by === null ? null : personOf(context.people, row.owner_set_by),
         send_included: row.send_included,
-        can: Object.freeze({ set_state: access.set_state, assign: access.assign }),
+        // TODO(ADR-0053): the creator of a follow-up from a chat may edit it and send it on its own.
+        can: Object.freeze({ set_state: access.set_state, assign: access.assign, edit: false, send: false }),
         reach,
       }, unshowable);
     }));
@@ -571,6 +573,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         send: send.slice(0, PERSON_HOME_ROWS_V1), items: await present(viewer, context, shown, { signal: input.signal, live: !rowsOnly }),
         // The open items the caller approved that wait on someone else, counted with no live read.
         waiting: visible.filter(entry => approvedBy(entry.row, viewer) && !entry.access.waits_on_viewer).length,
+        // TODO(ADR-0053): the caller's unsent follow-ups from a chat.
+        drafts: Object.freeze([]),
       });
     },
 
@@ -716,6 +720,17 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       if (updated === undefined) throw notFound();
       const owner = updated.owner_membership_id;
       return checked('assign', { owner: personOf(options.people.people(viewer.organization, [owner]), owner) });
+    },
+
+    // TODO(ADR-0053): sending one follow-up from a chat, and editing it, are not built yet.
+    async send_item(input: Parameters<PersonOpenItemsApplicationV1['send_item']>[0]) {
+      viewerOf(input.access_token, input.signal);
+      throw notFound();
+    },
+
+    async edit(input: Parameters<PersonOpenItemsApplicationV1['edit']>[0]) {
+      viewerOf(input.access_token, input.signal);
+      throw notFound();
     },
   });
 }
