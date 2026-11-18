@@ -16,11 +16,31 @@ export interface ImpactItemDraftV1 {
   readonly owner_membership_id: string;
   readonly owner_match: 'jira_account' | 'name' | 'approver';
 }
+/**
+ * A follow-up an Ask answer drafted (ADR-0053), as its asker's sink saves it: no run and no record. Its id is fixed by the
+ * request, so saving it twice writes it once.
+ */
+export interface ImpactChatItemDraftV1 {
+  readonly item_id: string;
+  readonly item_key: Sha256Digest;
+  /** Its own `chat_action` pointer, or the stored pointer of the one item it is about. */
+  readonly pointer: Readonly<Record<string, unknown>>;
+  /** Its one line, at most 120 characters. */
+  readonly expected: string;
+  readonly due_on: string | null;
+  readonly owner_membership_id: string;
+  /** `approver`: nobody owns it yet, so it stays with its creator. */
+  readonly owner_match: 'name' | 'approver';
+}
 export interface ImpactItemRowV1 {
-  readonly item_id: string; readonly run_id: string; readonly item_key: Sha256Digest; readonly pointer: Readonly<Record<string, unknown>>;
-  readonly record_sha256: Sha256Digest; readonly organization_id: string;
+  /** `run_id` is the impact run that found it; null, with `record_sha256`, for a follow-up from a chat (ADR-0053). */
+  readonly item_id: string; readonly run_id: string | null; readonly item_key: Sha256Digest; readonly pointer: Readonly<Record<string, unknown>>;
+  readonly record_sha256: Sha256Digest | null; readonly organization_id: string;
+  /** Who approved the decision; for a follow-up from a chat, who created it. */
   readonly approver: { readonly principal_id: string; readonly membership_id: string };
   readonly relation: 'conflicts' | 'needs_updating' | null; readonly expected: string | null;
+  /** A calendar day; only a follow-up from a chat has one. */
+  readonly due_on: string | null;
   readonly owner_membership_id: string; readonly owner_match: ImpactOwnerMatchV1;
   /** Who last picked or reassigned the owner, and when; both null while the owner is the one the impact run matched. */
   readonly owner_set_by: string | null; readonly owner_set_at: string | null;
@@ -31,20 +51,27 @@ export interface ImpactItemRowV1 {
   readonly created_at: string; readonly updated_at: string;
 }
 export interface ImpactSendChoiceV1 { readonly item_id: string; readonly include: boolean; readonly owner_membership_id?: string }
+/**
+ * What sending one follow-up from a chat did: `sent` or `replayed` with its state; `stale` when it is no longer unsent (or the
+ * command id was used on it for the other choice); `unowned` when it would be sent while nobody owns it; `missing` when no
+ * follow-up from a chat has this id.
+ */
+export type ImpactSendItemResultV1 = { readonly kind: 'sent' | 'replayed'; readonly state: 'open' | 'not_relevant' } | { readonly kind: 'stale' | 'unowned' | 'missing' };
 /** What a committed send command answers when it is asked again: its own counts, or `stale` when it is asked for other items. */
 type ImpactSendReplayV1 = { readonly kind: 'replayed'; readonly sent: number; readonly not_relevant: number } | { readonly kind: 'stale' };
 
 interface StoredItemV1 {
-  readonly item_id: string; readonly run_id: string; readonly item_key: Sha256Digest; readonly pointer_json: string;
-  readonly record_sha256: Sha256Digest; readonly organization_id: string; readonly approver_principal_id: string; readonly approver_membership_id: string;
-  readonly relation: ImpactItemRowV1['relation']; readonly expected: string | null; readonly owner_membership_id: string; readonly owner_match: ImpactOwnerMatchV1;
+  readonly item_id: string; readonly run_id: string | null; readonly item_key: Sha256Digest; readonly pointer_json: string;
+  readonly record_sha256: Sha256Digest | null; readonly organization_id: string; readonly approver_principal_id: string; readonly approver_membership_id: string;
+  readonly relation: ImpactItemRowV1['relation']; readonly expected: string | null; readonly due_on: string | null;
+  readonly owner_membership_id: string; readonly owner_match: ImpactOwnerMatchV1;
   readonly owner_set_by: string | null; readonly owner_set_at: string | null;
   readonly state: ImpactItemStateV1; readonly state_set_by: string | null; readonly state_set_at: string | null;
   readonly sent_at: string | null; readonly send_command_id: string | null; readonly send_included: 0 | 1 | null;
   readonly created_at: string; readonly updated_at: string;
 }
 const ITEM_COLUMNS = `item.item_id, item.run_id, item.item_key, item.pointer_json, item.record_sha256, item.organization_id,
-  item.approver_principal_id, item.approver_membership_id, item.relation, item.expected, item.owner_membership_id, item.owner_match,
+  item.approver_principal_id, item.approver_membership_id, item.relation, item.expected, item.due_on, item.owner_membership_id, item.owner_match,
   item.owner_set_by, item.owner_set_at, item.state, item.state_set_by, item.state_set_at, item.sent_at, item.send_command_id, item.send_included,
   item.created_at, item.updated_at`;
 const selectItems = `SELECT ${ITEM_COLUMNS}
@@ -69,7 +96,7 @@ function publicItem(value: StoredItemV1): ImpactItemRowV1 {
     item_id: value.item_id, run_id: value.run_id, item_key: value.item_key, pointer: frozen(JSON.parse(value.pointer_json) as Record<string, unknown>),
     record_sha256: value.record_sha256, organization_id: value.organization_id,
     approver: Object.freeze({ principal_id: value.approver_principal_id, membership_id: value.approver_membership_id }),
-    relation: value.relation, expected: value.expected, owner_membership_id: value.owner_membership_id, owner_match: value.owner_match,
+    relation: value.relation, expected: value.expected, due_on: value.due_on, owner_membership_id: value.owner_membership_id, owner_match: value.owner_match,
     owner_set_by: value.owner_set_by, owner_set_at: value.owner_set_at, state: value.state, state_set_by: value.state_set_by, state_set_at: value.state_set_at, sent_at: value.sent_at, send_command_id: value.send_command_id,
     send_included: value.send_included === null ? null : value.send_included === 1,
     created_at: value.created_at, updated_at: value.updated_at,
@@ -116,6 +143,38 @@ export class SqliteImpactItemsV1 {
         run.actor.organization_id, run.actor.principal_id, run.actor.membership_id,
         draft.relation, draft.expected, draft.owner_membership_id, draft.owner_match, timestamp, timestamp);
     }
+  }
+
+  /**
+   * Saves the follow-ups one Ask answer drafted (ADR-0053) as `creator`'s own unsent items, all or none: an immediate
+   * transaction of its own, or a savepoint inside the caller's. A draft whose id already exists is left untouched, so saving
+   * one answer twice writes each follow-up once.
+   */
+  insertForAsk(creator: { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string }, drafts: readonly ImpactChatItemDraftV1[]): void {
+    if (drafts.length === 0) return;
+    const save = this.database.transaction(() => {
+      const timestamp = this.timestamp();
+      const insert = this.database.prepare(`INSERT INTO authority_impact_items_v1
+        (item_id, run_id, item_key, pointer_json, record_sha256, organization_id, approver_principal_id, approver_membership_id,
+         relation, expected, due_on, owner_membership_id, owner_match, state, created_at, updated_at)
+        VALUES (?, NULL, ?, ?, NULL, ?, ?, ?, 'needs_updating', ?, ?, ?, ?, 'unsent', ?, ?)
+        ON CONFLICT (item_id) DO NOTHING`);
+      for (const draft of drafts) {
+        insert.run(draft.item_id, draft.item_key, canonicalJson(draft.pointer), creator.organization_id, creator.principal_id, creator.membership_id,
+          draft.expected, draft.due_on, draft.owner_membership_id, draft.owner_match, timestamp, timestamp);
+      }
+    });
+    if (this.database.inTransaction) save();
+    else save.immediate();
+  }
+
+  /** This member's unsent follow-ups from a chat (ADR-0053), newest first (then by item id), at most `limit`. Not fenced. */
+  chatDrafts(organizationId: string, membershipId: string, options: { readonly limit: number }): readonly ImpactItemRowV1[] {
+    const limit = limitOf(options.limit);
+    if (limit === 0) return [];
+    return (this.database.prepare(`${selectItems}
+      WHERE item.organization_id=? AND item.approver_membership_id=? AND item.state='unsent' AND item.run_id IS NULL
+      ORDER BY item.created_at DESC, item.item_id LIMIT ?`).all(organizationId, membershipId, limit) as StoredItemV1[]).map(publicItem);
   }
 
   /** Not fenced. */
@@ -278,6 +337,57 @@ export class SqliteImpactItemsV1 {
         if (choice.include) sent++;
       }
       return Object.freeze({ kind: 'sent' as const, sent, not_relevant: input.choices.length - sent });
+    });
+  }
+
+  /**
+   * Sends or dismisses one unsent follow-up from a chat on its own (ADR-0053), in one immediate transaction. A `command_id`
+   * already used on the item answers what it did, whatever changed since, when it is asked the same choice; the other choice
+   * under it is `stale`. Included → open, with the picked owner (`owner_match = picked`) when one is given and changes it;
+   * `unowned` while nobody owns it (its creator kept for want of a match) and none is picked. Excluded → not_relevant
+   * (dismissed). Freezes send_included and sets sent_at, send_command_id and state_set_by/at = `by`.
+   */
+  sendItem(input: { readonly item_id: string; readonly by: string; readonly command_id: string; readonly include: boolean; readonly owner_membership_id?: string }): ImpactSendItemResultV1 {
+    return this.immediate((): ImpactSendItemResultV1 => {
+      const item = this.database.prepare(`SELECT item_id, owner_membership_id, owner_match, state, send_command_id, send_included
+        FROM authority_impact_items_v1 WHERE item_id=? AND run_id IS NULL`).get(input.item_id) as
+        Pick<StoredItemV1, 'item_id' | 'owner_membership_id' | 'owner_match' | 'state' | 'send_command_id' | 'send_included'> | undefined;
+      if (item === undefined) return Object.freeze({ kind: 'missing' as const });
+      if (item.send_command_id === input.command_id) {
+        return (item.send_included === 1) === input.include
+          ? Object.freeze({ kind: 'replayed' as const, state: input.include ? 'open' as const : 'not_relevant' as const })
+          : Object.freeze({ kind: 'stale' as const });
+      }
+      if (item.state !== 'unsent') return Object.freeze({ kind: 'stale' as const });
+      const owner = input.include ? input.owner_membership_id : undefined;
+      if (input.include && owner === undefined && item.owner_match === 'approver') return Object.freeze({ kind: 'unowned' as const });
+      const timestamp = this.timestamp();
+      if (owner !== undefined && ownerPickChanges(item, owner)) {
+        this.database.prepare(`UPDATE authority_impact_items_v1 SET owner_membership_id=?, owner_match='picked', owner_set_by=?, owner_set_at=?, updated_at=?
+          WHERE item_id=? AND state='unsent'`).run(owner, input.by, timestamp, timestamp, item.item_id);
+      }
+      const state = input.include ? 'open' as const : 'not_relevant' as const;
+      const changes = this.database.prepare(`UPDATE authority_impact_items_v1 SET state=?, sent_at=?, send_command_id=?, send_included=?, state_set_by=?, state_set_at=?, updated_at=?
+        WHERE item_id=? AND state='unsent'`).run(state, timestamp, input.command_id, input.include ? 1 : 0, input.by, timestamp, timestamp, item.item_id).changes;
+      if (changes !== 1) throw new Error('Open item send lost its item');
+      return Object.freeze({ kind: 'sent' as const, state });
+    });
+  }
+
+  /**
+   * Changes the line, the due date or both of a follow-up from a chat (ADR-0053) that is not closed; a field left out keeps
+   * its value, and a change that changes nothing writes nothing. Undefined when there is no such follow-up, or it is closed.
+   */
+  edit(itemId: string, change: { readonly expected?: string; readonly due_on?: string | null }): ImpactItemRowV1 | undefined {
+    return this.immediate(() => {
+      const item = this.read(itemId);
+      if (item === undefined || item.run_id !== null || item.state === 'done' || item.state === 'not_relevant') return undefined;
+      const expected = change.expected ?? item.expected;
+      const due_on = change.due_on === undefined ? item.due_on : change.due_on;
+      if (expected === item.expected && due_on === item.due_on) return item;
+      const changes = this.database.prepare(`UPDATE authority_impact_items_v1 SET expected=?, due_on=?, updated_at=?
+        WHERE item_id=? AND run_id IS NULL AND state IN ('unsent', 'open')`).run(expected, due_on, this.timestamp(), itemId).changes;
+      return changes === 1 ? this.read(itemId) : undefined;
     });
   }
 

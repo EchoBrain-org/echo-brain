@@ -73,7 +73,7 @@ open items, were retired on 2026-11-08
 ([ADR-0033](../decisions/ADR-0033-shared-open-items.md), amended): a person
 closes a follow-up, and `sweep` is refused. For released clients, `home`,
 `items` and `item` still send the fields that carried sweep results, as
-constants, until the V17 reset.
+constants, until a later baseline.
 
 ## Where it shows
 

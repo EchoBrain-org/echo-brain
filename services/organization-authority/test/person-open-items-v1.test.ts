@@ -537,8 +537,8 @@ describe('open items: send, update, reassign', () => {
     const f = await openItemsFixture(); await f.finishImpactRun();
     const unsent = (await scope(f, 'ari', 'run')).items;
     const ticket = unsent.find(entry => entry.kind === 'ticket')!;          // Mina's, matched by her Jira account
-    expect(ticket.can).toEqual({ set_state: false, assign: true });
-    expect(unsent.find(entry => entry.kind === 'record')!.can).toEqual({ set_state: false, assign: true });
+    expect(ticket.can).toEqual({ set_state: false, assign: true, edit: false, send: false });
+    expect(unsent.find(entry => entry.kind === 'record')!.can).toEqual({ set_state: false, assign: true, edit: false, send: false });
     f.advance(5_000);
     await expect(assign(f, 'ari', ticket.item_id, 'rafael')).resolves.toEqual({ owner: { membership_id: f.membership('rafael'), name: 'Rafael Moreno', active: true } });
     // The Send row names the picked owner; the item still waits on its approver, and nobody but readers sees it.
@@ -755,7 +755,7 @@ describe('open items: Home', () => {
 
   it('makes no Send row, and binds no desk, when there is nothing to send', async () => {
     const f = await openItemsFixture();
-    expect(await f.app.home({ access_token: 'ari' })).toEqual({ send: [], items: [], waiting: 0 });
+    expect(await f.app.home({ access_token: 'ari' })).toEqual({ send: [], items: [], waiting: 0, drafts: [] });
     expect(f.bindDesk).not.toHaveBeenCalled();
   });
 
@@ -777,14 +777,14 @@ describe('open items: Home', () => {
     expect(f.db.prepare('SELECT count(*) FROM authority_impact_items_v1 WHERE checked_verdict IS NOT NULL').pluck().get()).toBe(2);
     // Nothing waits on Ari, so his Home has no row, not even for the item that changed; both wait on Mina.
     for (const request of [undefined, { schema_version: 1, operation: 'home', read: 'rows' } as const]) {
-      expect(await f.app.home({ access_token: 'ari', ...(request === undefined ? {} : { request }) })).toEqual({ send: [], items: [], waiting: 2 });
+      expect(await f.app.home({ access_token: 'ari', ...(request === undefined ? {} : { request }) })).toEqual({ send: [], items: [], waiting: 2, drafts: [] });
       const mina = await f.app.home({ access_token: 'mina', ...(request === undefined ? {} : { request }) });
       // Sent together: oldest first, as the store orders rows, whatever either check said.
       expect(mina.items.map(entry => entry.item_id)).toEqual([f.ticket.item_id, f.action.item_id].sort());
       for (const entry of mina.items) expect(entry).not.toHaveProperty('check');
       expect(mina.waiting).toBe(0);
     }
-    expect(await f.app.home({ access_token: 'okafor' })).toEqual({ send: [], items: [], waiting: 0 });
+    expect(await f.app.home({ access_token: 'okafor' })).toEqual({ send: [], items: [], waiting: 0, drafts: [] });
     // A list, its summary, each decision's counts and one item say nothing of a check either.
     for (const read of [undefined, 'rows', 'counts'] as const) {
       const page = await f.app.items({ access_token: 'ari', request: { schema_version: 1, operation: 'items', scope: 'record', id: f.record, ...(read === undefined ? {} : { read }) } });

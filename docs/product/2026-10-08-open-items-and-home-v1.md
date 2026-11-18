@@ -23,7 +23,7 @@ replaces them. ECHO no longer re-checks open items: the hourly re-check, Check
 now, every shown result (an item's last check, "matches now", Review rows) and
 the sweep evaluation cases are gone. Follow-ups close only by a person: Mark
 done, Dismiss or Reopen. Section 6 now says what was retired, and what
-remains of the wire until the V17 reset. In the same lean-down the Authority
+remains of the wire until a later baseline. In the same lean-down the Authority
 took over starting impact checks: the approver's desktop checks in and the
 Authority starts the oldest queued one
 ([runs store and impact card v1](2026-10-07-runs-store-and-impact-card-v1.md)).
@@ -115,7 +115,7 @@ run per person, a frozen `done` row, no deletes.
 
 Since sweeps were retired (section 6), no code writes, lists, reads or starts
 a `sweep` run; the sweep columns and checks stay in the baseline, unused,
-until the V17 reset.
+until a later baseline.
 
 ### Open items (`authority_impact_items_v1`, new)
 
@@ -147,7 +147,7 @@ A check keeps only its verdict. ECHO's sentence about what an item says now
 summarizes outside text, which no stored row keeps (ADR-0032); a view shows the
 item's current details from a live read instead. Since sweeps were retired
 (section 6), nothing writes or reads the four `checked_*` columns; they stay in
-the baseline until the V17 reset.
+the baseline until a later baseline.
 
 Indexes: `(organization_id, owner_membership_id, state)`,
 `(organization_id, approver_membership_id, state)`, `(record_sha256)`.
@@ -317,7 +317,7 @@ changed-first order), Ask's view of the last check
 ([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)) and the
 research-loop evaluation's sweep cases. Follow-ups close only by a person:
 Mark done, Dismiss or Reopen. Released desktops and CLIs validate exact keys,
-so until the V17 reset the runs API keeps its shape and sends the retired
+so until a later baseline the runs API keeps its shape and sends the retired
 fields as constants: `home` answers `sweep_due` false, `landed` 0 and
 `last_checked_at` null; an item's `check` is null; a summary's `landed`,
 `changed` and `unreadable` are 0, as are each decision's `landed` and

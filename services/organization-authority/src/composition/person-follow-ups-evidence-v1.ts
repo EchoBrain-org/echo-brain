@@ -36,7 +36,7 @@ import {
   observeEventV1,
   openItemCurrentV1,
   openItemDecisionPartsV1,
-  openItemIsMeetingActionV1,
+  openItemIsOwnActionV1,
   openItemKindV1,
   openItemLiveReadV1,
   openItemNameV1,
@@ -291,7 +291,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
    * request's bound. A read a cancelled call left unfinished is tried again.
    */
   const liveRead = async (row: ImpactItemRowV1, signal?: AbortSignal): Promise<LiveRead | undefined> => {
-    if (openItemIsMeetingActionV1(row)) return undefined;
+    if (openItemIsOwnActionV1(row)) return undefined;
     for (let attempt = 0; ; attempt += 1) {
       let read = reads.get(row.item_key);
       if (read === undefined) {
@@ -368,7 +368,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
     const liveTitle = live === undefined ? '' : impactCardLineV1(live.label, LIMITS.title_chars);
     const expected = impactCardLineV1(row.expected, LIMITS.expected_chars);
     const decision = decisionPart(entry);
-    const readable = decision === undefined ? undefined : context.decisions.get(row.record_sha256);
+    const readable = decision === undefined || row.record_sha256 === null ? undefined : context.decisions.get(row.record_sha256);
     const evidence = (withLive: boolean, withDecision: boolean): PersonFollowUpEvidenceV1 => {
       const title = (withLive ? liveTitle : '') || expected || DEFAULT_TITLE;
       const decided = decision?.first_line === null || decision?.first_line === undefined ? '' : impactCardLineV1(decision.first_line, LIMITS.first_line_chars);
@@ -407,7 +407,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       readonly untested?: EvidenceDeskUncheckedV1 | undefined; readonly links: boolean; readonly signal?: AbortSignal | undefined;
     }): Promise<EvidenceDeskResultV2> => {
     const shaped = entries.flatMap(entry => { const value = shape(view, entry); return value === undefined ? [] : [value]; });
-    const decided = links ? [...new Set(shaped.flatMap(value => (value.decision ? [value.record] : [])))] : [];
+    const decided = links ? [...new Set(shaped.flatMap(value => (value.decision && value.record !== null ? [value.record] : [])))] : [];
     const decisions = new Map(await Promise.all(decided.map(async record => [record, await decisionRead(record, signal)] as const)));
     signal?.throwIfAborted();
     const receipt = options.audit.record({ operation, items: shaped.map(({ evidence, visibility }) => ({ item_id: evidence.item_id, released_fields_sha256: canonicalSha256({ evidence, visibility }) })) });
@@ -416,7 +416,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       const id = `follow_up_${evidence.item_id}`;
       issued.set(id, evidence.item_id);
       ledger.record(evidence.item_id, previous => ({ decision: decision || previous?.decision === true }));
-      const decisionItems = decision ? decisions.get(record)?.items ?? [] : [];
+      const decisionItems = decision && record !== null ? decisions.get(record)?.items ?? [] : [];
       const followed = links ? follows : undefined;
       for (const item of [...decisionItems, ...(followed === undefined ? [] : [followed])]) linked.set(item.id, item);
       const named = { ...(decisionItems.length === 0 ? {} : { decision: Object.freeze(decisionItems.map(item => item.id)) }), ...(followed === undefined ? {} : { follows: Object.freeze([followed.id]) }) };
@@ -525,7 +525,8 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       if (itemId === undefined) return notFound();
       current(input.signal);
       const row = sources.items.read(itemId);
-      if (row === undefined || (scope.kind === 'project' && !projectRecords(scope.project_id).has(row.record_sha256))) return notFound();
+      // A follow-up from a chat has no decision, so no project holds it: a project's Ask never finds it.
+      if (row === undefined || (scope.kind === 'project' && (row.record_sha256 === null || !projectRecords(scope.project_id).has(row.record_sha256)))) return notFound();
       const context = assessOpenItemsV1(sources, viewer, [row]);
       const entry = context.assessed[0];
       if (entry === undefined || !entry.access.see_row) return notFound();
@@ -546,7 +547,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       for (const { row, access } of context.assessed) {
         // The row still shown, its decision still shown wherever a release carried it, and still in the Ask's project.
         // A state or owner changed meanwhile is not an access change.
-        if (!access.see_row || (ledger.get(row.item_id)!.decision && !access.see_decision) || (inProject !== undefined && !inProject.has(row.record_sha256))) stale();
+        if (!access.see_row || (ledger.get(row.item_id)!.decision && !access.see_decision) || (inProject !== undefined && (row.record_sha256 === null || !inProject.has(row.record_sha256)))) stale();
       }
       input.signal?.throwIfAborted();
       due.checked();

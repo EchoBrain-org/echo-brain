@@ -36,6 +36,12 @@ export interface OpenItemFactsV1 {
   readonly leads_decision_project: boolean;
   /** The viewer opened the item in its tool in this request; absent when no open was tried. */
   readonly opens_item?: boolean;
+  /**
+   * A follow-up from a chat (ADR-0053): no run and no decision stand behind it, and `approver` is the person who created it.
+   * Its creator always sees it; its owner sees it once it reached them; nobody else ever does. It has no project, so no lead
+   * acts on it, and `reads_decision` and `leads_decision_project` are false.
+   */
+  readonly from_chat: boolean;
 }
 export interface OpenItemAccessV1 {
   readonly see_row: boolean;
@@ -44,6 +50,10 @@ export interface OpenItemAccessV1 {
   readonly see_outside: boolean;
   readonly set_state: boolean;
   readonly assign: boolean;
+  /** Change its one line and its due date: only a follow-up from a chat, by its creator, until it is closed. */
+  readonly edit: boolean;
+  /** Send or dismiss it on its own: only a follow-up from a chat, by its creator, while it is unsent. */
+  readonly send: boolean;
   /** Who the item waits on now: the owner, else the approver, else the decision's project leads; an unsent item, its approver, else the leads. */
   readonly waits_on: 'owner' | 'approver' | 'leads';
   readonly waits_on_viewer: boolean;
@@ -51,10 +61,24 @@ export interface OpenItemAccessV1 {
 export function openItemAccessV1(facts: OpenItemFactsV1): OpenItemAccessV1 {
   const owner = facts.viewer === facts.owner;
   const approver = facts.viewer === facts.approver;
-  const see_row = facts.reads_decision || (owner && facts.sent_to_owner);
   const unsent = facts.state === 'unsent';
   const closed = facts.state === 'done' || facts.state === 'not_relevant';
   const waits_on = !unsent && facts.owner_active ? 'owner' as const : facts.approver_active ? 'approver' as const : 'leads' as const;
+  if (facts.from_chat) {
+    // A follow-up from a chat: its creator (`approver`) and, once it reached them, its owner; no decision, no project, no lead.
+    const see_row = approver || (owner && facts.sent_to_owner);
+    return Object.freeze({
+      see_row, see_decision: false,
+      see_outside: see_row && facts.opens_item === true,
+      set_state: see_row && !unsent && (approver || owner),
+      assign: see_row && (unsent ? approver : approver || owner),
+      edit: approver && !closed,
+      send: approver && unsent,
+      waits_on,
+      waits_on_viewer: see_row && !closed && (waits_on === 'owner' ? owner : waits_on === 'approver' ? approver : false),
+    });
+  }
+  const see_row = facts.reads_decision || (owner && facts.sent_to_owner);
   return Object.freeze({
     see_row,
     // An owner who cannot read the decision sees who sent the item, never the decision itself.
@@ -63,6 +87,8 @@ export function openItemAccessV1(facts: OpenItemFactsV1): OpenItemAccessV1 {
     set_state: see_row && !unsent && (approver || owner),
     // Before Send only the approver picks an owner, while they see the row: exactly when the send policy lets them send it.
     assign: see_row && (unsent ? approver : approver || owner || facts.leads_decision_project),
+    // An item from a run keeps its decision's line, and is sent with its run.
+    edit: false, send: false,
     waits_on,
     waits_on_viewer: see_row && !closed && (waits_on === 'owner' ? owner : waits_on === 'approver' ? approver : facts.leads_decision_project),
   });

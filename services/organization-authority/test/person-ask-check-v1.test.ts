@@ -9,6 +9,7 @@ import {
   validatePersonAskCheckV1,
   type PersonAskCheckItemV1,
 } from '@echo-brain/organization-api';
+import { askFollowUpItemIdV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { meetingSourceEnvelopeV1 } from '@echo-brain/organization-processing/core';
 import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
@@ -20,6 +21,7 @@ import { SqliteSourceAdmissionStoreV1 } from '../src/adapters/persistence/sqlite
 import { createPersonDocumentApplicationV1 } from '../src/application/document-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import type { PersonPageCheckV1, PersonTicketCheckV1 } from '../src/application/ports/person-source-check-v1.js';
+import { createAskFollowUpSinksV1 } from '../src/composition/ask-follow-up-sink-v1.js';
 import { createPersonAskCheckV1, type CreatePersonAskCheckV1Options, type PersonAskCheckLiveFailureV1 } from '../src/composition/person-ask-check-v1.js';
 import { PersonDocumentProcessingV1 } from '../src/composition/person-document-processing-v1.js';
 import { createPersonSourceEvidenceRouteV1 } from '../src/composition/person-source-evidence-route.js';
@@ -227,6 +229,21 @@ describe('Ask source check: the database kinds', () => {
     expect(await check('rafael', [item(followUp(f.ticket.item_id), before)])).toEqual([SAME]);
     // Okafor, who cannot read the decision, sees no row: hidden and never-made follow-ups read the same.
     expect(await check('okafor', [item(followUp(f.ticket.item_id), before), item(followUp('itm_00000000-never-made'), before)])).toEqual([UNREADABLE, UNREADABLE]);
+  });
+
+  it('answers a follow-up from a chat the same to its creator, and to its owner only once it is sent (ADR-0053)', async () => {
+    const f = await world();
+    const { check } = askCheckOf(f);
+    const id = askFollowUpItemIdV1('ask-check', 0);
+    createAskFollowUpSinksV1({ items: f.items, people: f.directory })(f.openItemsOptions.sessions.authenticateAccess({ access_token: 'ari' }))
+      .save([{ item_id: id, task: 'Draft the vendor contract', owner_name: 'Mina Patel' }]);
+    const cited = item({ kind: 'follow_up', item_id: id });
+    expect(await check('ari', [cited])).toEqual([SAME]);
+    expect(await check('mina', [cited])).toEqual([UNREADABLE]);
+    await f.openItemsApp.send_item({ access_token: 'ari', request: { schema_version: 1, operation: 'send_item', item_id: id, command_id: 'send-chat', include: true } });
+    expect(await check('mina', [cited])).toEqual([SAME]);
+    // A decision reader who is neither its creator nor its owner never reads it.
+    expect(await check('rafael', [cited])).toEqual([UNREADABLE]);
   });
 
   it('reads each cited revision once however many turns cited it, and no newer revision, answering each turn alike', async () => {

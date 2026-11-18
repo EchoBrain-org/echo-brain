@@ -51,6 +51,12 @@ import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
  * outage is never shown as lost access.
  *
  * Sweeps are retired (SVC-2): a check a sweep left on a row is never shown.
+ *
+ * A follow-up from a chat (ADR-0053) has no run and no decision. Its creator
+ * sees it in Home's `drafts` while it is unsent, may change its line and due
+ * date (`edit`) and sends or dismisses it alone (`send_item`); its owner sees
+ * it once it is sent. It is in `mine` and `involved` under the same policy,
+ * never in a run, record or project scope, and is never counted as a decision.
  */
 interface CreatePersonOpenItemsV1Options extends OpenItemSourcesV1 {
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
@@ -171,19 +177,33 @@ function invalidOutput(): never {
   throw new AuthorityOperationError('invalid_output', 'open items response is invalid');
 }
 
-/** What an item is, from its stored pointer: the approved meeting's own action, or the tool an affected item lives in. */
+/**
+ * What an item is, from its stored pointer: the approved meeting's own action, a follow-up from a chat that is about no other
+ * item (ADR-0053), or the tool an affected item lives in.
+ */
 export function openItemKindV1(pointer: Pointer): PersonOpenItemKindV1 {
   switch (pointer.kind) {
-    case 'meeting_action': return 'action';
+    case 'meeting_action': case 'chat_action': return 'action';
     case 'ticket': case 'page': return pointer.kind;
     case 'approved_record': return 'record';
     case 'source_revision': return 'document';
     default: return invalidOutput();
   }
 }
-/** The approved meeting's own action: ECHO data only, its line stored on the item, so no desk opens it. It is closed by hand. */
-function meetingAction(row: Pick<ImpactItemRowV1, 'pointer'>): boolean {
-  return row.pointer.kind === 'meeting_action';
+/**
+ * The approved meeting's own action, or a follow-up from a chat that is about no other item: ECHO data only, its line stored on
+ * the item, so no desk opens it. It is closed by hand.
+ */
+function ownAction(row: Pick<ImpactItemRowV1, 'pointer'>): boolean {
+  return row.pointer.kind === 'meeting_action' || row.pointer.kind === 'chat_action';
+}
+/** A follow-up from a chat (ADR-0053): no run and no decision stand behind it. */
+function fromChat(row: Pick<ImpactItemRowV1, 'run_id'>): boolean {
+  return row.run_id === null;
+}
+/** The decisions these rows name; a follow-up from a chat names none. */
+function recordsOf(rows: readonly Pick<ImpactItemRowV1, 'record_sha256'>[]): Sha256Digest[] {
+  return [...new Set(rows.flatMap(row => (row.record_sha256 === null ? [] : [row.record_sha256])))];
 }
 
 /** Code point order, as SQLite's binary collation and canonical ISO times order. */
@@ -234,7 +254,7 @@ function currentOf(item: DeskItem): PersonOpenItemCurrentV1 | undefined {
   return Object.freeze({ citation, says_now, ...(assignee === '' ? {} : { assignee }), ...(status === '' ? {} : { status }), ...(due_at === '' ? {} : { due_at }) });
 }
 
-export { currentOf as openItemCurrentV1, meetingAction as openItemIsMeetingActionV1, nameOf as openItemNameV1 };
+export { currentOf as openItemCurrentV1, ownAction as openItemIsOwnActionV1, nameOf as openItemNameV1, recordsOf as openItemRecordsV1 };
 
 /** The API's own result check on everything this service answers. */
 function checked<K extends keyof PersonRunsResultsV1>(operation: K, value: unknown): PersonRunsResultsV1[K] {
@@ -309,13 +329,14 @@ function approvedBy(row: ImpactItemRowV1, viewer: Viewer): boolean {
 export function assessOpenItemsV1<D extends DecisionProjects = PersonReadableDecisionV1>(sources: { readonly records: OpenItemDecisionsReaderV1<D>; readonly people: OpenItemSourcesV1['people'] },
   viewer: Viewer, found: readonly ImpactItemRowV1[], scopeRecords: readonly Sha256Digest[] = []): OpenItemsContextV1<D> {
   const rows = found.filter(row => row.organization_id === viewer.organization);
-  const records = [...new Set([...rows.map(row => row.record_sha256), ...scopeRecords])];
+  const records = [...new Set([...recordsOf(rows), ...scopeRecords])];
   const decisions = records.length === 0 ? new Map<Sha256Digest, D>() : sources.records.readableDecisions({ access_token: viewer.token, record_sha256s: records });
   // Everyone a row names: its approver and owner, and who set its state and its owner last.
   const people = sources.people.people(viewer.organization, [...new Set(rows.flatMap(row => [row.approver.membership_id, row.owner_membership_id,
     ...[row.state_set_by, row.owner_set_by].filter((id): id is string => typeof id === 'string')]))]);
   const leads = new Map<Sha256Digest, boolean>();
-  const leadsDecision = (record: Sha256Digest): boolean => {
+  const leadsDecision = (record: Sha256Digest | null): boolean => {
+    if (record === null) return false;
     if (!leads.has(record)) {
       const decision = decisions.get(record);
       leads.set(record, decision !== undefined && sources.people.leadsAny(viewer.membership, decision.project_ids));
@@ -328,7 +349,8 @@ export function assessOpenItemsV1<D extends DecisionProjects = PersonReadableDec
       approver_active: people.get(row.approver.membership_id)?.active === true, owner_active: people.get(row.owner_membership_id)?.active === true,
       // Sent, and Send included it, or it was reopened since: an open item waits on an owner who must be able to see it (R54).
       sent_to_owner: row.sent_at !== null && (row.send_included === true || row.state === 'open' || row.state === 'done'), state: row.state,
-      reads_decision: decisions.has(row.record_sha256), leads_decision_project: leadsDecision(row.record_sha256),
+      reads_decision: row.record_sha256 !== null && decisions.has(row.record_sha256), leads_decision_project: leadsDecision(row.record_sha256),
+      from_chat: fromChat(row),
     });
     return Object.freeze({ row, facts, access: openItemAccessV1(facts) });
   });
@@ -365,6 +387,8 @@ function decisionOf(decision: PersonReadableDecisionV1, first_line: string | nul
 export function openItemDecisionPartsV1(sources: Pick<OpenItemSourcesV1, 'runs' | 'on_live_failure'>, context: Pick<Context, 'decisions'>): (entry: Assessed) => PersonOpenItemDecisionV1 | undefined {
   const firstLine = firstDecidedLines(sources);
   return ({ row, access }) => {
+    // A follow-up from a chat has no decision.
+    if (row.record_sha256 === null || row.run_id === null) return undefined;
     const decision = access.see_decision ? context.decisions.get(row.record_sha256) : undefined;
     return decision === undefined ? undefined : decisionOf(decision, firstLine(row.run_id));
   };
@@ -441,8 +465,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
    */
   const openLive = async (viewer: Viewer, rows: readonly ImpactItemRowV1[], signal?: AbortSignal): Promise<ReadonlyMap<Sha256Digest, LiveRead>> => {
     const targets = new Map<Sha256Digest, Pointer>();
-    // A meeting action is never read live: it stays not_read.
-    for (const row of rows) if (targets.size < LIVE_OPENS_MAX && !targets.has(row.item_key) && !meetingAction(row)) targets.set(row.item_key, row.pointer);
+    // A meeting action, or a follow-up from a chat about no other item, is never read live: it stays not_read.
+    for (const row of rows) if (targets.size < LIVE_OPENS_MAX && !targets.has(row.item_key) && !ownAction(row)) targets.set(row.item_key, row.pointer);
     if (targets.size === 0) return new Map();
     const withSignal = signal === undefined ? {} : { signal };
     /** The whole request could not be read: every item tried is unavailable. A cancelled request is not an outage. */
@@ -488,11 +512,12 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         : !access.see_outside ? 'no_access' : current === undefined ? 'unavailable' : 'opened';
       const decision = decisionPart(entry);
       return checkedItem({
+        // A follow-up from a chat has no run (ADR-0053).
         item_id: row.item_id, run_id: row.run_id, kind: openItemKindV1(row.pointer),
         ...(decision === undefined ? {} : { decision }),
         ...(current === undefined ? {} : { current }),
-        // TODO(ADR-0053): a follow-up from a chat carries its own due date.
-        relation: row.relation, expected: row.expected, due_on: null,
+        // A follow-up from a chat carries its own due date (ADR-0053); an item from a run has none.
+        relation: row.relation, expected: row.expected, due_on: row.due_on,
         approver: personOf(context.people, row.approver.membership_id),
         owner: Object.freeze({ ...personOf(context.people, row.owner_membership_id), match: row.owner_match }),
         waits_on: access.waits_on, state: row.state,
@@ -501,8 +526,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         state_set_by: row.state_set_by === null ? null : personOf(context.people, row.state_set_by),
         owner_set_at: row.owner_set_at, owner_set_by: row.owner_set_by === null ? null : personOf(context.people, row.owner_set_by),
         send_included: row.send_included,
-        // TODO(ADR-0053): the creator of a follow-up from a chat may edit it and send it on its own.
-        can: Object.freeze({ set_state: access.set_state, assign: access.assign, edit: false, send: false }),
+        // The creator of a follow-up from a chat may edit it, and send it on its own (ADR-0053).
+        can: Object.freeze({ set_state: access.set_state, assign: access.assign, edit: access.edit, send: access.send }),
         reach,
       }, unshowable);
     }));
@@ -530,18 +555,22 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
     async home(input: Parameters<PersonOpenItemsApplicationV1['home']>[0]) {
       const viewer = viewerOf(input.access_token, input.signal);
       const actor = { organization_id: viewer.organization, principal_id: viewer.principal, membership_id: viewer.membership };
-      const unsent = options.items.involving(viewer.organization, viewer.membership, { states: ['unsent'], limit: INVOLVING_MAX }).filter(row => approvedBy(row, viewer));
+      // A follow-up from a chat is sent on its own, from the caller's drafts, never from a run's Send row.
+      const unsent = options.items.involving(viewer.organization, viewer.membership, { states: ['unsent'], limit: INVOLVING_MAX })
+        .filter(row => approvedBy(row, viewer) && !fromChat(row));
       const open = new Map<string, ImpactItemRowV1>();
       // Leads take an item when its approver and owner have both left.
       for (const row of [...options.items.involving(viewer.organization, viewer.membership, { states: ['open'], limit: INVOLVING_MAX }), ...options.items.orphaned(viewer.organization, { limit: INVOLVING_MAX })]) {
         if (row.state === 'open') open.set(row.item_id, row);
       }
-      const context = assess(viewer, [...unsent, ...open.values()]);
+      // Drafts: the caller's own unsent follow-ups from a chat, newest first (ADR-0053).
+      const drafts = options.items.chatDrafts(viewer.organization, viewer.membership, { limit: PERSON_HOME_ROWS_V1 }).filter(row => approvedBy(row, viewer));
+      const context = assess(viewer, [...unsent, ...open.values(), ...drafts]);
       const firstLine = firstDecidedLines(options);
 
       // Send: the caller's own finished impact runs with an unsent item, which the send policy lets them send.
       const byRun = new Map<string, ImpactItemRowV1[]>();
-      for (const row of unsent) byRun.set(row.run_id, [...(byRun.get(row.run_id) ?? []), row]);
+      for (const row of unsent) if (row.run_id !== null) byRun.set(row.run_id, [...(byRun.get(row.run_id) ?? []), row]);
       const send: PersonHomeSendV1[] = [];
       for (const [runId, rows] of byRun) {
         const run = options.runs.read(actor, runId);
@@ -568,13 +597,16 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const shown = visible.filter(entry => entry.access.waits_on_viewer)
         .sort((left, right) => ascending(waitingSince(right.row), waitingSince(left.row)) || oldestFirst(left.row, right.row))
         .slice(0, PERSON_HOME_ROWS_V1);
+      const draftIds = new Set(drafts.map(row => row.item_id));
+      const drafted = context.assessed.filter(entry => draftIds.has(entry.row.item_id) && entry.row.state === 'unsent' && entry.access.see_row && entry.access.send);
+      // One desk for both lists: the handoffs, then the drafts.
+      const presented = await present(viewer, context, [...shown, ...drafted], { signal: input.signal, live: !rowsOnly });
       return checked('home', {
         // Rows only: the same rows with no live read, so a background check costs no Jira or Confluence call.
-        send: send.slice(0, PERSON_HOME_ROWS_V1), items: await present(viewer, context, shown, { signal: input.signal, live: !rowsOnly }),
+        send: send.slice(0, PERSON_HOME_ROWS_V1), items: presented.slice(0, shown.length),
         // The open items the caller approved that wait on someone else, counted with no live read.
         waiting: visible.filter(entry => approvedBy(entry.row, viewer) && !entry.access.waits_on_viewer).length,
-        // TODO(ADR-0053): the caller's unsent follow-ups from a chat.
-        drafts: Object.freeze([]),
+        drafts: presented.slice(shown.length),
       });
     },
 
@@ -624,7 +656,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       // its decision part.
       const byDecision = new Map<Sha256Digest, { unsent: number; open: number; latest: string }>();
       for (const { row, access } of visible) {
-        if (!access.see_decision) continue;
+        // A follow-up from a chat has no decision to count it under.
+        if (!access.see_decision || row.record_sha256 === null) continue;
         const counts = byDecision.get(row.record_sha256) ?? { unsent: 0, open: 0, latest: row.created_at };
         if (row.state === 'unsent') counts.unsent += 1;
         if (row.state === 'open') counts.open += 1;
@@ -634,7 +667,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const summary: PersonOpenItemsSummaryV1 = {
         unsent: visible.filter(entry => entry.row.state === 'unsent').length, open: open.length,
         done: visible.filter(entry => entry.row.state === 'done').length, not_relevant: visible.filter(entry => entry.row.state === 'not_relevant').length,
-        decisions: new Set(visible.map(entry => entry.row.record_sha256)).size,
+        decisions: recordsOf(visible.map(entry => entry.row)).length,
         // Most recent decisions first, when a scope holds more than the API carries.
         by_decision: [...byDecision].sort(([leftRecord, left], [rightRecord, right]) => ascending(right.latest, left.latest) || ascending(leftRecord, rightRecord))
           .slice(0, SCOPE_DECISIONS_MAX).map(([record_sha256, { latest: _latest, ...counts }]) => ({ record_sha256, ...counts })),
@@ -642,7 +675,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
 
       // Each decision's impact check stage, for the decisions in scope the policy shows the viewer: a project lists the records they read now.
       const listed = new Set(projectRecords ?? []);
-      const stageRecords = (projectRecords ?? [...new Set([...scopeRecords, ...visible.map(entry => entry.row.record_sha256)])])
+      const stageRecords = (projectRecords ?? [...new Set([...scopeRecords, ...recordsOf(visible.map(entry => entry.row))])])
         .filter(record => openItemDecisionAccessV1({ reads_decision: listed.has(record) || context.decisions.has(record) }).see_decision);
       const latestRun = new Map<Sha256Digest, TriggerRunRowV1>();
       for (const run of options.runs.impactRunsFor(stageRecords)) latestRun.set(run.record_sha256, run);
@@ -722,15 +755,49 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       return checked('assign', { owner: personOf(options.people.people(viewer.organization, [owner]), owner) });
     },
 
-    // TODO(ADR-0053): sending one follow-up from a chat, and editing it, are not built yet.
+    /**
+     * Sends or dismisses one follow-up from a chat (ADR-0053); only its creator may. A command already sent answers what it
+     * did, whatever changed since; anything else on an item no longer unsent is a conflict. Sending needs an owner: picked here,
+     * or matched when it was saved.
+     */
     async send_item(input: Parameters<PersonOpenItemsApplicationV1['send_item']>[0]) {
-      viewerOf(input.access_token, input.signal);
-      throw notFound();
+      const viewer = viewerOf(input.access_token, input.signal);
+      const { request } = input;
+      const changed = () => new AuthorityOperationError('conflict', 'The follow-up changed. Open it again.');
+      const row = options.items.read(request.item_id);
+      if (row === undefined || !fromChat(row)) throw notFound();
+      const entry = assess(viewer, [row]).assessed[0];
+      // Its creator alone sends it: anyone else, its owner included, is told nothing more than that it is not there.
+      if (entry === undefined || !entry.access.see_row || !approvedBy(row, viewer)) throw notFound();
+      // A retry of a committed send is answered before anything is checked again.
+      const replay = row.send_command_id === request.command_id;
+      if (!replay && !entry.access.send) throw changed();
+      if (!replay && request.owner_membership_id !== undefined) activeMember(viewer, request.owner_membership_id);
+      const result = options.items.sendItem({ item_id: row.item_id, by: viewer.membership, command_id: request.command_id, include: request.include,
+        ...(request.owner_membership_id === undefined ? {} : { owner_membership_id: request.owner_membership_id }) });
+      switch (result.kind) {
+        case 'sent': case 'replayed': return checked('send_item', { state: result.state });
+        case 'unowned': throw new AuthorityOperationError('invalid_request', 'Pick an owner before sending it');
+        case 'missing': throw notFound();
+        default: throw changed();
+      }
     },
 
+    /** Changes the line, the due date or both of a follow-up from a chat (ADR-0053); only its creator may, until it is closed. */
     async edit(input: Parameters<PersonOpenItemsApplicationV1['edit']>[0]) {
-      viewerOf(input.access_token, input.signal);
-      throw notFound();
+      const viewer = viewerOf(input.access_token, input.signal);
+      const { request } = input;
+      const row = options.items.read(request.item_id);
+      if (row === undefined || !fromChat(row)) throw notFound();
+      const entry = assess(viewer, [row]).assessed[0];
+      if (entry === undefined || !entry.access.see_row || !approvedBy(row, viewer)) throw notFound();
+      const closed = () => new AuthorityOperationError('conflict', 'The follow-up is closed. Reopen it to change it.');
+      if (!entry.access.edit) throw closed();
+      const updated = options.items.edit(row.item_id, {
+        ...(request.expected === undefined ? {} : { expected: request.expected }), ...(request.due_on === undefined ? {} : { due_on: request.due_on }),
+      });
+      if (updated === undefined) throw closed();
+      return checked('edit', { expected: updated.expected, due_on: updated.due_on });
     },
   });
 }

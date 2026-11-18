@@ -27,7 +27,7 @@ const post = (base: string, body: unknown, authorization: string | null = 'Beare
 
 describe('person runs HTTP transport', () => {
   it('reserves the route, requires a bearer, and dispatches a validated list', async () => {
-    const app = { list: vi.fn(async () => ({ runs: [] })), start: vi.fn(), next: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
+    const app = { list: vi.fn(async () => ({ runs: [] })), start: vi.fn(), next: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), send_item: vi.fn(), edit: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
     const base = await origin(app);
     expect((await post(base, { schema_version: 1, operation: 'list' }, null)).status).toBe(401);
     const response = await post(base, { schema_version: 1, operation: 'list' });
@@ -38,7 +38,7 @@ describe('person runs HTTP transport', () => {
 
   it('dispatches a check-in (next) to its method with the validated request', async () => {
     const next = vi.fn(async () => ({ state: 'running' as const }));
-    const app = { list: vi.fn(), start: vi.fn(), next, retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
+    const app = { list: vi.fn(), start: vi.fn(), next, retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), send_item: vi.fn(), edit: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
     const base = await origin(app);
     const request = { schema_version: 1, operation: 'next' };
     expect((await post(base, request, null)).status).toBe(401);
@@ -68,7 +68,7 @@ describe('person runs HTTP transport', () => {
   });
 
   it('refuses a sweep of any scope with 400 before any method: sweeps are retired (SVC-2)', async () => {
-    const methods = { list: vi.fn(), start: vi.fn(), next: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn() };
+    const methods = { list: vi.fn(), start: vi.fn(), next: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), send_item: vi.fn(), edit: vi.fn() };
     const base = await origin({ ...methods, close() {} } satisfies PersonTriggerRunsHttpApplicationV1);
     // The requests a released desktop's Check now and auto-sweep sent.
     for (const fields of [{ scope: 'mine' }, { scope: 'record', id: RECORD }, { scope: 'project', id: PROJECT }]) {
@@ -80,7 +80,7 @@ describe('person runs HTTP transport', () => {
   });
 
   it('dispatches a start with its run id alone, and refuses a capture id with 400 before any method: diagnostic captures are retired (SVC-9)', async () => {
-    const methods = { list: vi.fn(), start: vi.fn(async () => ({ state: 'running' as const })), next: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn() };
+    const methods = { list: vi.fn(), start: vi.fn(async () => ({ state: 'running' as const })), next: vi.fn(), retry: vi.fn(), view: vi.fn(), home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), send_item: vi.fn(), edit: vi.fn() };
     const base = await origin({ ...methods, close() {} } satisfies PersonTriggerRunsHttpApplicationV1);
     const start = { schema_version: 1, operation: 'start', run_id: RUN };
     const response = await post(base, start);
