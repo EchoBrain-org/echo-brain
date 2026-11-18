@@ -38,6 +38,12 @@ test('a draft under the answer is edited, given an owner and sent, and then read
   await expect(card.getByTestId('ask-follow-up-title')).toHaveText('Update the pricing page for the Pro tier');
   await expect(card.getByTestId('ask-follow-up-line')).toHaveText(/^From this chat · No owner yet · (Was due|Due) Nov 27$/u);
 
+  // Escape closes the people picker first, and leaves Ask open.
+  await card.getByRole('button', { name: /^Pick owner/u }).click();
+  await expect(page.getByTestId('owner-picker')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('owner-picker')).toHaveCount(0);
+  await expect(card).toBeVisible();
   await card.getByRole('button', { name: /^Pick owner/u }).click();
   await page.getByTestId('owner-picker').getByRole('option', { name: 'Maya Chen', exact: true }).click();
   await expect(card.getByTestId('ask-follow-up-said')).toHaveText('Owner changed to Maya');
