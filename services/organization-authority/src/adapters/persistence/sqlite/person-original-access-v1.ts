@@ -54,7 +54,7 @@ export function personUnknownScopeV1(scope: never): never {
 }
 
 /**
- * Every retained V3 note with its custody columns. A retired V2 row the V16 table could still hold is not found
+ * Every retained V3 note with its custody columns. A retired V2 row the V17 table could still hold is not found
  * (ADR-0048). The table checks received_at only as parseable time at insert, so it is normalized to canonical
  * milliseconds here.
  */

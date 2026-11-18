@@ -68,9 +68,9 @@ function seededWithSources(): Database.Database {
   return database;
 }
 
-describe("Authority baseline V16", () => {
+describe("Authority baseline V17", () => {
   it("is fresh-only and stamps the Authority application id", () => {
-    expect(authorityBaselineSha256()).toBe("sha256:1a073ab8605995d5a832ed6f51443dd051eb34082e7549633e6df1d2e33dc7f2");
+    expect(authorityBaselineSha256()).toBe("sha256:e1231272776dcb256bfcec832c62cf4da96d277df246b098abb665d94f92c3f4");
     const database = seeded();
     expect(() => applyAuthorityBaseline(database)).toThrow("completely empty");
     expect(database.pragma("application_id", { simple: true })).toBe(AUTHORITY_BASELINE_APPLICATION_ID_V1);
@@ -79,17 +79,111 @@ describe("Authority baseline V16", () => {
     expect(database.pragma("foreign_key_check")).toEqual([]);
   });
 
-  it("stamps user_version 16 on a fresh database", () => {
+  it("stamps user_version 17 on a fresh database", () => {
     const database = new Database(":memory:");
     databases.push(database);
     applyAuthorityBaseline(database);
-    expect(database.pragma("user_version", { simple: true })).toBe(16);
-    expect(AUTHORITY_BASELINE_SCHEMA_VERSION).toBe(16);
+    expect(database.pragma("user_version", { simple: true })).toBe(17);
+    expect(AUTHORITY_BASELINE_SCHEMA_VERSION).toBe(17);
   });
 
   it("does not install storage for the removed pasted-meeting input", () => {
     const database = seeded();
     expect(database.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'authority_person_hand_in_meetings_%'").all()).toEqual([]);
+  });
+
+  describe("follow-ups from a chat (ADR-0053)", () => {
+    const ITEM = "itm_0123456789abcdef0123456789abcdef";
+    const OTHER_PRINCIPAL = "prn_22222222-2222-4222-8222-222222222222";
+    const OTHER = "mem_22222222-2222-4222-8222-222222222222";
+    const columns = ["item_id", "run_id", "item_key", "pointer_json", "record_sha256", "organization_id", "approver_principal_id", "approver_membership_id",
+      "relation", "expected", "due_on", "owner_membership_id", "owner_match", "state", "created_at", "updated_at"] as const;
+    type Row = Partial<Record<(typeof columns)[number] | "state_set_by" | "state_set_at" | "owner_set_by" | "owner_set_at", unknown>>;
+    function chatRow(overrides: Row = {}): Row {
+      return {
+        item_id: ITEM, run_id: null, item_key: SHA, pointer_json: JSON.stringify({ kind: "chat_action", id: ITEM }), record_sha256: null,
+        organization_id: ORG, approver_principal_id: PRINCIPAL, approver_membership_id: MEMBERSHIP, relation: "needs_updating",
+        expected: "Send the vendor the plan", due_on: "2026-12-01", owner_membership_id: MEMBERSHIP, owner_match: "approver",
+        state: "unsent", created_at: NOW, updated_at: NOW, ...overrides,
+      };
+    }
+    function insert(database: Database.Database, row: Row): void {
+      const keys = Object.keys(row);
+      database.prepare(`INSERT INTO authority_impact_items_v1 (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`).run(...Object.values(row));
+    }
+    function withMember(): Database.Database {
+      const database = seeded();
+      database.prepare("INSERT INTO authority_principals VALUES (?, ?, 'Owner', ?)").run(OTHER_PRINCIPAL, ORG, NOW);
+      database.prepare("INSERT INTO authority_memberships(membership_id, organization_id, principal_id, membership_type, status, provisioned_at, employee_email, employee_email_sha256) VALUES (?, ?, ?, 'employee', 'active', ?, 'owner@example.test', ?)").run(OTHER, ORG, OTHER_PRINCIPAL, NOW, `sha256:${"e".repeat(64)}`);
+      return database;
+    }
+
+    it("makes the run, the record and the due date optional columns", () => {
+      const database = seeded();
+      const info = database.prepare("PRAGMA table_info(authority_impact_items_v1)").all() as { name: string; notnull: number }[];
+      const column = (name: string) => info.find(entry => entry.name === name);
+      expect(column("run_id")?.notnull).toBe(0);
+      expect(column("record_sha256")?.notnull).toBe(0);
+      expect(column("due_on")).toMatchObject({ notnull: 0 });
+    });
+
+    it("stores an unsent follow-up with its creator, owned by its creator or by a member matched by name", () => {
+      const database = withMember();
+      insert(database, chatRow());
+      const ticket = "itm_ticket0123456789abcdef0123456789ab";
+      insert(database, chatRow({ item_id: ticket, item_key: `sha256:${"d".repeat(64)}`, due_on: null, owner_membership_id: OTHER, owner_match: "name",
+        pointer_json: JSON.stringify({ kind: "ticket", tool_id: "jira", external_scope_id: "site", ticket_id: "10012" }) }));
+      expect(database.prepare("SELECT item_id, run_id, record_sha256, due_on FROM authority_impact_items_v1 ORDER BY item_id").all())
+        .toEqual([{ item_id: ITEM, run_id: null, record_sha256: null, due_on: "2026-12-01" }, { item_id: ticket, run_id: null, record_sha256: null, due_on: null }]);
+      // The primary key is the idempotency key: the same follow-up twice is refused, never a second row.
+      expect(() => insert(database, chatRow())).toThrow(/UNIQUE|PRIMARY KEY/u);
+    });
+
+    it("refuses a follow-up that is not a whole, unsent, needs-updating line with its own run and record both absent", () => {
+      const database = withMember();
+      expect(() => insert(database, chatRow({ record_sha256: SHA }))).toThrow(/CHECK/u);
+      expect(() => insert(database, chatRow({ relation: "conflicts" }))).toThrow(/CHECK/u);
+      expect(() => insert(database, chatRow({ relation: null, expected: null }))).toThrow(/CHECK/u);
+      expect(() => insert(database, chatRow({ expected: null }))).toThrow(/CHECK/u);
+      expect(() => insert(database, chatRow({ expected: "x".repeat(121) }))).toThrow(/CHECK/u);
+      for (const due_on of ["2026-02-30", "2026-1-01", "tomorrow", "2026-12-01T00:00:00Z", ""]) expect(() => insert(database, chatRow({ due_on }))).toThrow(/CHECK/u);
+      expect(() => insert(database, chatRow({ state: "open" }))).toThrow(/CHECK|starts unsent/u);
+      expect(() => insert(database, chatRow({ state: "unsent", state_set_by: MEMBERSHIP, state_set_at: NOW }))).toThrow("starts unsent with its creator");
+      expect(() => insert(database, chatRow({ owner_match: "picked" }))).toThrow("starts unsent with its creator");
+      expect(() => insert(database, chatRow({ owner_match: "jira_account" }))).toThrow("starts unsent with its creator");
+      // Nobody owns it yet: it stays with its creator.
+      expect(() => insert(database, chatRow({ owner_membership_id: OTHER, owner_match: "approver" }))).toThrow("starts unsent with its creator");
+      for (const pointer of [{ kind: "meeting_action", record_sha256: SHA, signal_id: "a" }, { kind: "chat_action", id: "itm_another000000" }, { id: ITEM }, { kind: "tool_container" }]) {
+        expect(() => insert(database, chatRow({ pointer_json: JSON.stringify(pointer) }))).toThrow("starts unsent with its creator");
+      }
+      // Its creator is a member of the organization, as their own principal.
+      expect(() => insert(database, chatRow({ approver_principal_id: OTHER_PRINCIPAL }))).toThrow("starts unsent with its creator");
+      expect(database.prepare("SELECT count(*) FROM authority_impact_items_v1").pluck().get()).toBe(0);
+    });
+
+    it("lets a follow-up's line and due date change until it is closed, and nothing else of who or what it is", () => {
+      const database = withMember();
+      insert(database, chatRow());
+      const update = (set: string, ...values: unknown[]) => database.prepare(`UPDATE authority_impact_items_v1 SET ${set} WHERE item_id = ?`).run(...values, ITEM);
+      update("expected = ?, due_on = ?", "Send the vendor the final plan", null);
+      update("due_on = ?", "2027-01-15");
+      expect(database.prepare("SELECT expected, due_on FROM authority_impact_items_v1").get()).toEqual({ expected: "Send the vendor the final plan", due_on: "2027-01-15" });
+      expect(() => update("due_on = ?", "2027-02-30")).toThrow(/CHECK/u);
+      expect(() => update("expected = NULL")).toThrow(/CHECK/u);
+      // It never gains a run or a record, nor changes what it points at, who made it or its relation.
+      expect(() => update("record_sha256 = ?", SHA)).toThrow(/CHECK|immutable/u);
+      expect(() => update("pointer_json = ?", JSON.stringify({ kind: "chat_action", id: "itm_another000000" }))).toThrow("identity is immutable");
+      expect(() => update("approver_membership_id = ?, approver_principal_id = ?", OTHER, OTHER_PRINCIPAL)).toThrow("identity is immutable");
+      expect(() => update("relation = 'conflicts'")).toThrow(/CHECK|immutable/u);
+      // Sent, it can still change; closed, it cannot.
+      update("owner_membership_id = ?, owner_match = 'picked', owner_set_by = ?, owner_set_at = ?", OTHER, MEMBERSHIP, NOW);
+      update("state = 'open', sent_at = ?, send_command_id = 'send-1', send_included = 1, state_set_by = ?, state_set_at = ?", NOW, MEMBERSHIP, NOW);
+      update("expected = ?", "Send the vendor the signed plan");
+      update("state = 'done', state_set_by = ?, state_set_at = ?", OTHER, NOW);
+      expect(() => update("expected = ?", "Too late")).toThrow("identity is immutable");
+      expect(() => update("due_on = NULL")).toThrow("identity is immutable");
+      expect(() => database.prepare("DELETE FROM authority_impact_items_v1").run()).toThrow("deletion is denied");
+    });
   });
 
   it("refuses a nonempty database without mutating it", () => {

@@ -377,10 +377,10 @@ describe("state-lineage pre-open guard", () => {
     refuses(manifestDrift, "schema_version_mismatch", /schema version is not exactly 1/);
   });
 
-  it("refuses retired V15 Authority state without changing any state file", () => {
+  it("refuses retired V16 Authority state without changing any state file", () => {
     const root = replaced("authority.sqlite", "authority", {
-      userVersion: 15,
-      manifestBody: { ...databaseManifestBody("authority"), database_schema_version: 15 },
+      userVersion: 16,
+      manifestBody: { ...databaseManifestBody("authority"), database_schema_version: 16 },
     });
     const expected = expectation(root);
     const paths = [join(root, STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME),
@@ -390,7 +390,7 @@ describe("state-lineage pre-open guard", () => {
     expectRefusal(() => verifyStateLineageBeforeOpen({ ...expected, expected_schemas: {
       ...expected.expected_schemas,
       authority: { database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION, schema_sha256: authorityBaselineSha256() },
-    } }), "schema_version_mismatch", /schema version is not exactly 16/);
+    } }), "schema_version_mismatch", /schema version is not exactly 17/);
     expect(paths.map(path => readFileSync(path))).toEqual(before);
   });
 

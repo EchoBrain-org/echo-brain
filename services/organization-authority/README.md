@@ -458,13 +458,18 @@ directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the Authority runtime.
 
-Current state uses six byte-pinned baselines, one per role: Authority V16,
+Current state uses six byte-pinned baselines, one per role: Authority V17,
 control-plane V4, record-log V6, retrieval facts V3, retrieval lexical V2 and
 retrieval content V2. The V2 root binds exactly these six roles. Per-database manifests remain V1; schema versions and digests identify
 each role's current baseline. Each baseline applies only to a completely empty
 database. Old roots, retired databases, and mismatched schemas refuse before
-writable opening. Authority V16 removes the unused manual meeting-intake
-table and its triggers. V15 state cannot be upgraded in place; use the
+writable opening. Authority V16 removed the unused manual meeting-intake
+table and its triggers. Authority V17 lets an open item come from a chat answer
+(ADR-0053): `authority_impact_items_v1` makes `run_id` and `record_sha256`
+nullable together, adds an optional `due_on` calendar day that only such a
+row carries, and lets its creator change its one line and due date until it
+is closed; a row from an impact run keeps its V16 rules. V16 state cannot be
+upgraded in place; use the
 [authorized fresh-state setup](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state)
 under the operator playbook.
 
