@@ -6568,9 +6568,10 @@ export async function sendTicked(include: boolean): Promise<void> {
   if (went.length > 0 || elsewhere.length > 0 || Object.keys(sends).some(batch => tried.some(entry => entry.batch === batch))) changedFrom(list.seq);
   const failure = tried.find(entry => entry.failure)?.failure;
   // A confirmed send went to the owner its row showed and named; one settled by a read again, to the owner that read shows.
-  const sentTo = went.map(item => (failedOf(item) === undefined ? item : fresh.get(item.item_id) ?? item).owner);
+  // A meeting's send names no owner: it is said from the read again, as it always was.
+  const sentTo = went.map(item => (failedOf(item) === undefined && item.run_id === null ? item : fresh.get(item.item_id) ?? item).owner);
   // What became of what went since, said once: the one, or how many.
-  const since = went.flatMap(item => { const read = fresh.get(item.item_id); const words = read ? sinceWords(read, include) : null; return words === null ? [] : [words]; });
+  const since = went.flatMap(item => { const read = item.run_id === null ? fresh.get(item.item_id) : undefined; const words = read ? sinceWords(read, include) : null; return words === null ? [] : [words]; });
   const done = went.length === 0 ? null : since.length === 0 ? sentWords(sentTo, account.membership_id, include)
     : since.length === 1 ? `${sentWords(sentTo, account.membership_id, include)}. ${since[0]}` : `${sentWords(sentTo, account.membership_id, include)} · ${since.length} changed since`;
   const other = elsewhere.length === 0 ? null
@@ -6624,7 +6625,7 @@ async function readItem(mine: number): Promise<void> {
     if (!current || !sameAccount(account)) return;
     if ('failure' in read) {
       const outage = current.item !== null && !ACCESS_LOST.includes(read.failure.code) && !ACCOUNT_GONE.includes(read.failure.code);
-      setView({ ...current, loading: false, failure: read.failure, ...(live ? {} : { read: false }),
+      setView({ ...current, loading: false, failure: read.failure, ...(live ? {} : { read: false, ...(current.item?.run_id === null ? { picker: null } : {}) }),
         ...(outage ? { live: { [current.item_id]: UNREAD, ...current.live } } : {}) });
       return;
     }
@@ -6646,7 +6647,11 @@ async function rereadItem(mine: number): Promise<OneRead | null> {
   const current = viewOf('item', mine);
   if (!current || !sameAccount(account)) return null;
   // A read again that fails leaves a copy not read since: nothing acts on a follow-up from a chat until a read succeeds.
-  setView('item' in read ? { ...current, item: read.item, read: true } : { ...current, read: false });
+  // A follow-up from a chat (ADR-0053) then says why, with Try again (gone, it says so itself), and an owner picker open on it
+  // closes; a meeting's keeps what it did before.
+  const chat = current.item?.run_id === null;
+  setView('item' in read ? { ...current, item: read.item, read: true, ...(chat ? { failure: undefined } : {}) }
+    : { ...current, read: false, ...(chat && read.failure.code !== 'not_found' ? { failure: read.failure, picker: null } : {}) });
   return read;
 }
 
@@ -6744,9 +6749,11 @@ export async function sendFollowUp(include: boolean): Promise<void> {
   const fresh = current.read === true ? current.item : null;
   const elsewhere = !went && kept.send !== null && fresh !== null && fresh.state !== 'unsent' ? fresh : null;
   // Confirmed, it went to the owner it named; settled by a read again, to the owner that read shows. Then what became of it since.
-  const to = confirmed ? item.owner : fresh?.owner ?? item.owner;
+  // A meeting's send names no owner: it is said from the read again, as it always was, and nothing more.
+  const chat = item.run_id === null;
+  const to = confirmed && chat ? item.owner : fresh?.owner ?? item.owner;
   setView({ ...current, send: went || elsewhere ? null : kept.send,
-    ...(went && current.said && !current.said.error ? { said: { words: landedWords(sentWords([to], me, include), fresh, include) } } : {}),
+    ...(went && current.said && !current.said.error ? { said: { words: chat ? landedWords(sentWords([to], me, include), fresh, include) : sentWords([to], me, include) } } : {}),
     ...(elsewhere ? { said: { words: meanwhileWords(elsewhere, include, me), error: true as const } }
       : kept.send && !went && !unknown ? { said: { words: notSent(include), error: true as const } } : {}) });
 }
@@ -6759,7 +6766,7 @@ export async function sendFollowUp(include: boolean): Promise<void> {
 export async function setFollowUpState(to: 'open' | 'done' | 'not_relevant'): Promise<void> {
   const page = shownView('item');
   const item = page?.item;
-  if (!page || !item || page.busy || !item.can.set_state || item.state === 'unsent' || state.concealed) return;
+  if (!page || !item || page.busy || !item.can.set_state || item.state === 'unsent' || !pageActs(page) || state.concealed) return;
   const said: Said = to === 'done' ? { words: 'Done', undo: true } : to === 'not_relevant' ? { words: 'Dismissed', undo: true }
     : { words: reopenSends(item, expect()?.membership_id ?? null) ? sentWords([item.owner], null) : 'Reopened' };
   await changeItem(page, item.item_id, () => attempt({ schema_version: 1, operation: 'set_state', item_id: item.item_id, state: to }), () => rereadItem(page.seq),

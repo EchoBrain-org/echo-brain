@@ -500,7 +500,8 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
             <Owner state={state} busy={page.busy} picking={page.picker !== null} item={pageActs(page) ? item : { ...item, can: { ...item.can, assign: false } }} name={itemTitle(item)} />
             {page.picker && <OwnerPicker state={state} picker={page.picker} item={item} />}
             <div class="card-rule" />
-            <SaidLine said={page.said} testid="follow-up-said" line={said} />
+            {/* Undo is an action: on a follow-up from a chat, only from a copy read since (ADR-0053). */}
+            <SaidLine said={page.said && !pageActs(page) ? { ...page.said, undo: undefined } : page.said} testid="follow-up-said" line={said} />
             <Actions state={state} page={page} item={item} />
             {page.busy && <span class="asking card-busy"><i /><i /><i /></span>}
           </section>
