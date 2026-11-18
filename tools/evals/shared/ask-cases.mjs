@@ -103,12 +103,14 @@ export function scriptedModel(caseDefinition, writer, refusal) {
 
 /**
  * Ask over a desk of `items` (caseItems), as the kernel runs it: asked at `askedAt` by the cases document's asker, in its
- * time zone and on its today, with `model`.
+ * time zone and on its today, with `model`. With `followUps` (`{ request_id, sink }`), the request saves the follow-ups
+ * its writer drafts (ADR-0053) through `sink`, as a request bound to the asker's list does.
  */
-export function caseAsk(items, document, askedAt, model, generation) {
+export function caseAsk(items, document, askedAt, model, generation, followUps) {
   return createAgenticAskV5({
     desk: caseDesk(items, askedAt), model, generation, audit: { append: () => undefined },
     asker: { display_name: document.asker }, time_context: { now: askedAt, time_zone: document.time_zone },
     today: () => document.today, wall_ms: () => Date.parse(askedAt),
+    ...(followUps === undefined ? {} : { follow_ups: followUps }),
   });
 }

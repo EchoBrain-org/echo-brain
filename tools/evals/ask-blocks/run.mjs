@@ -16,6 +16,7 @@ import { caseAsk, caseItems, deskItem as releasedItem, scriptedModel } from "../
 import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, generationMetadata, importedModules, json, observedGeneration, outputDirectory, pooled, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
 import { CASES_FILE, CASE_COUNT, TRIALS, decideGate, evidenceOf, gradeTrial, loadCases, readReleased, summarize } from "./grade.mjs";
 import { CASES_FILE as WORDING_CASES_FILE, GROUPS, gradeTrial as gradeWording, loadCases as loadWordingCases, summarizeRules } from "./wording.mjs";
+import { CASES_FILE as FOLLOW_UPS_CASES_FILE, CASE_IDS as FOLLOW_UP_CASE_IDS, gradeTrial as gradeFollowUps, loadCases as loadFollowUpCases, summarize as summarizeFollowUps } from "./follow-ups.mjs";
 
 export { researchStep } from "../shared/ask-cases.mjs";
 
@@ -41,6 +42,13 @@ export const CASE_SETS = Object.freeze({
     grade: (caseDefinition, { response }) => gradeWording(caseDefinition, response),
     summarize: (trials, complete) => { const summary = summarizeRules(trials); return Object.freeze({ ...summary, wording_ships: complete && summary.wording_ships }); },
     decide: (summary, complete) => Object.freeze({ complete, passes: complete ? summary.wording_ships : null, rules: summary.rules }) }),
+  // The follow-up cases (ADR-0053): the request saves the follow-ups its writer drafts, so the writer is told to draft
+  // them; a trial is graded on what the release saved. Like the wording cases they keep no prompt or raw reply.
+  follow_ups: Object.freeze({ file: FOLLOW_UPS_CASES_FILE, count: FOLLOW_UP_CASE_IDS.length, load: loadFollowUpCases, fixture: "follow-ups",
+    askedAt: (document) => document.asked_at, timeoutMs: 60_000, maxTimeoutMs: 85_000, traces: false, exitsOnFailure: true, drafts: true,
+    grade: (caseDefinition, { response, drafts }) => gradeFollowUps(caseDefinition, response, drafts),
+    summarize: (trials) => summarizeFollowUps(trials),
+    decide: (summary, complete) => Object.freeze({ complete, passes: complete ? summary.passes : null, drafted_on_ordinary_question: summary.drafted_on_ordinary_question }) }),
 });
 /** A trial makes at most two writer calls: its reply and the kernel's one repair or retry. */
 const maxModelCalls = (set) => set.count * TRIALS * 2;
@@ -52,7 +60,8 @@ export function help() {
     "  node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory [options]",
     "",
     "Options:",
-    `  --case-set SET      main (default: the ${CASE_SETS.main.count} block cases, rules 1 to 5) or wording (the ${CASE_SETS.wording.count} wording cases, its three rules).`,
+    `  --case-set SET      main (default: the ${CASE_SETS.main.count} block cases, rules 1 to 5), wording (the ${CASE_SETS.wording.count} wording cases, its three rules)`,
+    `                      or follow_ups (the ${CASE_SETS.follow_ups.count} follow-up cases: what the writer drafts, ADR-0053).`,
     "  --cases id,id       Select cases of the set (default: all).",
     `  --trials N          Trials per case, 1 through ${TRIALS} (default: ${TRIALS}).`,
     "  --concurrency N     Model calls at once, 1 through 6 (default: 4).",
@@ -80,7 +89,7 @@ export function parseArgs(argv) {
   if (readFlags(argv, options, {
     "--credential-file": (value) => { options.credentialFile = value; },
     "--out": (value) => { options.out = value; },
-    "--case-set": (value) => { if (!Object.hasOwn(CASE_SETS, value)) throw new Error("--case-set must be main or wording"); options.caseSet = value; },
+    "--case-set": (value) => { if (!Object.hasOwn(CASE_SETS, value)) throw new Error("--case-set must be main, wording or follow_ups"); options.caseSet = value; },
     "--cases": (value) => { options.caseIds = list(value); },
     "--trials": (value) => { options.trials = Number(value); },
     "--concurrency": (value) => { options.concurrency = Number(value); },
@@ -104,7 +113,7 @@ export function parseArgs(argv) {
  * and every module the evaluation loads (its own, the kernel's writer, checks and shared modules, the answer contract and
  * the writer routes), found by following its imports.
  */
-const codeFiles = () => Object.freeze(["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/wording-cases.json", "tools/evals/ask-blocks/README.md",
+const codeFiles = () => Object.freeze(["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/wording-cases.json", "tools/evals/ask-blocks/follow-ups-cases.json", "tools/evals/ask-blocks/README.md",
   ...importedModules(ROOT, ["tools/evals/ask-blocks/run.mjs"])]);
 
 /** One block case item as the desk releases it, with this evaluation's ids and fixtures (shared/ask-cases.mjs). */
@@ -168,8 +177,11 @@ export async function runTrial(set, caseDefinition, trial, prompts, evidence, do
   }, "the gate runs only research and the Ask writer");
   let response = null;
   let error;
+  // A follow-up trial's request saves what its writer drafts (ADR-0053): the release hands the checked drafts to this sink.
+  const drafts = [];
+  const followUps = set.drafts === true ? { request_id: `ask_eval-${caseDefinition.id}-${trial}`, sink: { save: (saved) => { drafts.push(...saved); } } } : undefined;
   try {
-    response = await caseAsk(items, document, set.askedAt(document), model, generation).answer({ question: caseDefinition.question, signal: AbortSignal.timeout(options.timeoutMs) });
+    response = await caseAsk(items, document, set.askedAt(document), model, generation, followUps).answer({ question: caseDefinition.question, signal: AbortSignal.timeout(options.timeoutMs) });
   } catch (caught) {
     error = safeError(caught);
   }
@@ -180,7 +192,7 @@ export async function runTrial(set, caseDefinition, trial, prompts, evidence, do
     entry.valid = last && read?.valid === true;
     if (set.traces && last && entry.error === undefined && read !== null && !read.valid) entry.problems = read.problems;
   }
-  const grade = set.grade(caseDefinition, { read, response, evidence });
+  const grade = set.grade(caseDefinition, { read, response, evidence, drafts });
   const kept = set.traces ? { attempts, read, response }
     : { outcome: response?.outcome ?? null, gaps: Object.freeze((response?.parts ?? []).flatMap((part) => (part.gap === undefined ? [] : [part.gap]))), attempts };
   return Object.freeze({ case_id: caseDefinition.id, ...(caseDefinition.group === undefined ? {} : { group: caseDefinition.group }), trial, ...kept,
@@ -214,6 +226,7 @@ export async function run(options, dependencies = {}) {
         progress(`${JSON.stringify(set.traces
           ? { kind: "echo-ask-blocks-evaluation-progress-v1", case_id: result.case_id, catalog: "built", trial, valid: result.grade.valid, grounded: result.grade.grounded,
             nothing_lost: result.grade.nothing_lost, fit: result.grade.fit, attempts: result.attempts.length }
+          : set.drafts === true ? { kind: "echo-ask-follow-ups-evaluation-progress-v1", case_id: result.case_id, trial, outcome: result.outcome, checks: result.grade.checks }
           : { kind: "echo-ask-wording-evaluation-progress-v1", case_id: result.case_id, trial, outcome: result.outcome, rules: result.grade.rules })}\n`);
         return result;
       });
@@ -270,7 +283,10 @@ if (invokedDirectly) {
     else {
       const { reportPath, report } = await run(options);
       const s = report.summary;
-      process.stdout.write(`${JSON.stringify(report.case_set === "wording"
+      process.stdout.write(`${JSON.stringify(report.case_set === "follow_ups"
+        ? { report_path: reportPath, route: report.model.route, complete: report.complete, passed: `${s.passed}/${s.trials}`, decision: report.decision,
+          checks: Object.fromEntries(Object.entries(s.checks).map(([name, check]) => [name, `${check.passed}/${check.trials}`])) }
+        : report.case_set === "wording"
         ? { report_path: reportPath, route: report.model.route, complete: report.complete, wording_ships: s.wording_ships,
           rules: Object.fromEntries(Object.entries(s.rules).map(([name, rule]) => [name, `${rule.passed_trials}/${rule.trials}`])), measures: s.measures }
         : { report_path: reportPath, route: report.model.route, complete: report.complete, summary: { valid: `${s.valid}/${s.trials}`, grounded: `${s.grounded}/${s.trials}`,
