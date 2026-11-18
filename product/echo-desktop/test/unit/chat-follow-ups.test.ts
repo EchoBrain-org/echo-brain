@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
 import type { OpenItemView } from '../../src/shared/protocol.js';
-import { followUp, MINA } from './changes-fixture.js';
+import { followUp, MINA, RAFAEL } from './changes-fixture.js';
 import { ACCOUNT, byTestId, click, elements, EMPTY_SUMMARY, fail, flush, Held, ok, plainHooks, render, rpcFor, startStore, storeLifecycle, text } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -25,20 +25,34 @@ let items: Map<string, OpenItemView>;
 let held: Held;
 /** Per item: what another window does to it as a send reaches the Authority, which then loses its reply. */
 let lost: Map<string, (item: OpenItemView) => OpenItemView>;
+/** Reads of one item fail while set, as an outage would. */
+let failItem: boolean;
 storeLifecycle(new Date('2026-11-18T12:00:00'));
 beforeEach(() => {
   items = new Map();
   held = new Held();
   lost = new Map();
+  failItem = false;
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
     runs: params => {
       const request = params.request as Runs;
       const item = items.get(request.item_id as string);
       switch (request.operation) {
-        case 'item': return item ? ok(item) : fail('not_found');
+        case 'item': return failItem ? fail('timeout', { retryable: true }) : item ? ok(item) : fail('not_found');
         case 'items': return ok({ items: [...items.values()], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] });
-        case 'send': return ok({ sent: 1, not_relevant: 0 });
+        case 'send': {
+          for (const entry of request.items as { item_id: string; include: boolean }[]) {
+            const row = items.get(entry.item_id)!;
+            items.set(row.item_id, { ...row, state: entry.include ? 'open' : 'not_relevant', sent_at: '2026-11-18T12:00:00.000Z', state_set_at: '2026-11-18T12:00:00.000Z',
+              state_set_by: me, send_included: entry.include });
+          }
+          return ok({ sent: 1, not_relevant: 0 });
+        }
+        case 'set_state': {
+          items.set(item!.item_id, { ...item!, state: request.state as OpenItemView['state'], state_set_at: '2026-11-18T12:10:00.000Z', state_set_by: me });
+          return ok({ state: request.state });
+        }
         case 'send_item': {
           const elsewhere = lost.get(item!.item_id);
           if (elsewhere) { items.set(item!.item_id, elsewhere(item!)); return fail('timeout', { retryable: true, mutation_outcome: 'unknown' }); }
@@ -283,5 +297,85 @@ describe('second review on a list and a page', () => {
     const buttons = elements(tree).filter(node => node.type === 'button').map(text);
     expect(buttons).toContain('Try again');
     for (const label of ['Send to Mina', 'Dismiss', 'Edit']) expect(buttons).not.toContain(label);
+  });
+});
+
+describe('third review: meeting wording, and nothing acts from a copy not read since', () => {
+  /** A meeting's follow-up not sent yet, yours to send, as Sam's (Mina's) when the page read it. */
+  const meeting = (owner = MINA): OpenItemView => followUp(1, { approver: me, owner: { ...owner, match: 'name' }, state: 'unsent', sent_at: null, state_set_at: null,
+    state_set_by: null, send_included: null, waits_on: 'approver', can: { set_state: false, assign: true, edit: false, send: false } });
+  /** Your chat follow-up, sent to Mina and open. */
+  const sentChat = (): OpenItemView => ({ ...owned(1), state: 'open', sent_at: '2026-11-18T11:00:00.000Z', state_set_at: '2026-11-18T11:00:00.000Z', state_set_by: me,
+    send_included: true, waits_on: 'owner', can: { set_state: true, assign: true, edit: true, send: false } });
+  async function page(item: OpenItemView) {
+    const store = await startStore();
+    items.set(item.item_id, item);
+    await store.openFollowUp(item.item_id, item);
+    await flush();
+    const { FollowUp } = await import('../../src/renderer/screens/follow-ups.js');
+    return { store, shown: () => render(FollowUp({ state: store.getState(), page: store.followUpShown() as ItemPage })) };
+  }
+
+  it('a meeting\'s send, which names no owner, words its confirmation from the read again, on its page and in Send N', async () => {
+    const { store } = await page(meeting(MINA));
+    // Handed to Rafael after the page read it, before Send.
+    items.set(followUp(1).item_id, meeting(RAFAEL));
+    await store.sendFollowUp(true);
+    await flush();
+    expect(sent('send')[0]!).not.toHaveProperty('owner_membership_id');
+    expect((store.followUpShown() as ItemPage).said).toEqual({ words: 'Sent to Rafael' });
+
+    const listed = await startStore();
+    items.clear();
+    items.set(followUp(1).item_id, meeting(RAFAEL));
+    const list: FollowUpList = {
+      kind: 'list', seq: 1, scope: 'involved', title: null, loading: false, items: [meeting(MINA)], live: {}, reading: false,
+      reads: [{ parts: ['active'], pages: [{ cursor: null, ids: [followUp(1).item_id] }], next: null }], summary: { ...EMPTY_SUMMARY, unsent: 1 }, stage: null,
+      ticks: { [followUp(1).item_id]: true }, sends: {}, expanded: {}, busy: false, said: null, picker: null, stale: false,
+    };
+    listed.getState().followUps = { route: listed.getState().route, views: [list], changed: false };
+    await listed.sendTicked(true);
+    await flush();
+    expect((listed.followUpShown() as FollowUpList).said).toEqual({ words: 'Sent to Rafael' });
+  });
+
+  it('closes an open owner picker when a read of a follow-up from a chat fails', async () => {
+    const { store } = await page(owned(1));
+    store.toggleOwnerPicker('itm_chat-0001');
+    await flush();
+    expect((store.followUpShown() as ItemPage).picker).not.toBeNull();
+    failItem = true;
+    store.retryFollowUp();
+    await flush();
+    expect((store.followUpShown() as ItemPage).failure).toBeDefined();
+    expect((store.followUpShown() as ItemPage).picker).toBeNull();
+  });
+
+  it('offers Undo on a follow-up from a chat only after a successful read', async () => {
+    const { store, shown } = await page(sentChat());
+    failItem = true;
+    await store.setFollowUpState('not_relevant');
+    await flush();
+    expect((store.followUpShown() as ItemPage).said).toMatchObject({ words: 'Dismissed' });
+    expect(elements(shown()).filter(node => node.type === 'button').map(text)).not.toContain('Undo');
+    const before = sent('set_state').length;
+    await store.undoFollowUp();
+    await flush();
+    expect(sent('set_state')).toHaveLength(before);
+  });
+
+  it('an edit that went but whose read again failed says so, with Try again', async () => {
+    const { store, shown } = await page(owned(1));
+    failItem = true;
+    expect(await store.editFollowUp({ expected: 'Chat task 1, revised' })).toBe(true);
+    await flush();
+    const now = store.followUpShown() as ItemPage;
+    expect(now.said).toEqual({ words: 'Saved' });
+    expect(now.failure).toMatchObject({ code: 'timeout' });
+    expect(elements(shown()).filter(node => node.type === 'button').map(text)).toContain('Try again');
+    failItem = false;
+    store.retryFollowUp();
+    await flush();
+    expect(byTestId(shown(), 'follow-up-edit')).toHaveLength(1);
   });
 });
