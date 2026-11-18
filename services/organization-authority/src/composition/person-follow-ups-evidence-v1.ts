@@ -158,12 +158,13 @@ const NARROWEST: readonly EvidenceDeskVisibilityV1[] = ['only_me', 'approver_onl
 
 /** How a follow-up from a chat nobody owns yet names its owner (ADR-0053). */
 export const FOLLOW_UP_NO_OWNER_V1 = 'No owner yet';
-/** A follow-up from a chat that nobody owns yet: its creator was kept for want of a match, and it is still unsent. */
-function unowned(row: Pick<ImpactItemRowV1, 'run_id' | 'state' | 'owner_match'>): boolean {
-  return row.run_id === null && row.state === 'unsent' && row.owner_match === 'approver';
+/** A follow-up from a chat that never reached an owner: its creator was kept for want of a match, and it was never sent to anyone. */
+function unowned(row: Pick<ImpactItemRowV1, 'run_id' | 'owner_match' | 'send_included'>): boolean {
+  // Never sent to anyone, with no owner chosen: whatever its state (a dismissed draft included), it has no owner.
+  return row.run_id === null && row.owner_match === 'approver' && row.send_included !== true;
 }
 /** Its owner as a follow-up names them: their display name, or none yet. */
-function ownerName(people: Context['people'], row: Pick<ImpactItemRowV1, 'run_id' | 'state' | 'owner_match' | 'owner_membership_id'>): string {
+function ownerName(people: Context['people'], row: Pick<ImpactItemRowV1, 'run_id' | 'owner_match' | 'send_included' | 'owner_membership_id'>): string {
   return unowned(row) ? FOLLOW_UP_NO_OWNER_V1 : openItemNameV1(people, row.owner_membership_id);
 }
 

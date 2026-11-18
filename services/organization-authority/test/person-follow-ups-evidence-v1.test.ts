@@ -662,6 +662,26 @@ describe('follow-ups from a chat as Ask evidence (ADR-0053)', () => {
     expect(found.items.find(item => item.id === `follow_up_${f.ticket.item_id}`)?.attributes).toMatchObject({ due_at: '2026-10-30' });
   });
 
+  it('names no owner for a chat card that never reached one, whatever its state', async () => {
+    const f = await sentFixture();
+    const sinks = createAskFollowUpSinksV1({ items: f.items, people: f.directory });
+    const id = askFollowUpItemIdV1('ask-dismissed-unowned', 0);
+    sinks(f.openItemsOptions.sessions.authenticateAccess({ access_token: 'ari' })).save([{ item_id: id, task: 'Book the pilot room' }]);
+    // Dismissed without anyone ever being picked: its creator is still not its owner.
+    await f.openItemsApp.send_item({ access_token: 'ari', request: { schema_version: 1, operation: 'send_item', item_id: id, command_id: 'dismiss', include: false } });
+    const { desk } = askDesk(f, 'ari');
+    const card = (await list(desk)).items.find(item => item.id === `follow_up_${id}`)!;
+    expect(card.attributes).toMatchObject({ owner: 'No owner yet', status: 'not relevant' });
+    expect((await list(desk, { owner: 'me' })).items.map(item => item.id)).not.toContain(`follow_up_${id}`);
+    expect((await list(desk, { owner: 'Ari' })).items.map(item => item.id)).not.toContain(`follow_up_${id}`);
+    expect((await search(desk, 'ari')).items.map(item => item.id)).not.toContain(`follow_up_${id}`);
+    // Sent to an owner Ari picked, it is that owner's.
+    const sent = askFollowUpItemIdV1('ask-dismissed-unowned', 1);
+    sinks(f.openItemsOptions.sessions.authenticateAccess({ access_token: 'ari' })).save([{ item_id: sent, task: 'Book the pilot hall' }]);
+    await f.openItemsApp.send_item({ access_token: 'ari', request: { schema_version: 1, operation: 'send_item', item_id: sent, command_id: 'send', include: true, owner_membership_id: f.membership('ari') } });
+    expect((await list(askDesk(f, 'ari').desk, { owner: 'me' })).items.map(item => item.id)).toContain(`follow_up_${sent}`);
+  });
+
   it('is never found in a project scope, and leaves a global release when it is handed on', async () => {
     const { f, id, sendIt } = await drafted();
     await sendIt();
