@@ -23,7 +23,7 @@ import { ProgressBar } from './progress-bar.js';
 // Follow-ups from a chat (ADR-0053).
 import { useState } from 'preact/hooks';
 import { dueOnWords, FROM_CHAT } from '../needs.js';
-import { dismissable, editFollowUp } from '../store.js';
+import { dismissable, editFollowUp, pageActs } from '../store.js';
 import { EditFollowUp } from './edit-follow-up.js';
 
 /** A person, as a chip: their initials in their color, and their first name. */
@@ -399,6 +399,8 @@ function Edit({ page, item }: { page: ItemPage; item: OpenItemView }) {
 function Actions({ state, page, item }: { state: State; page: ItemPage; item: OpenItemView }) {
   const me = state.status?.account?.membership_id ?? null;
   const frozen = page.busy;
+  // A follow-up from a chat (ADR-0053) offers nothing from a copy not read since: only once the page's own read succeeded.
+  if (!pageActs(page)) return null;
   if (sendable(item)) {
     return <>
       <button type="button" class="primary-button" disabled={frozen} onClick={() => void sendFollowUp(true)}>{sendLabel(item, me)}</button>
@@ -476,7 +478,7 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
                 : item.run_id === null ? FROM_CHAT : `Sent by ${item.approver.membership_id === me ? 'you' : item.approver.name}`}
               {due && <span data-testid="follow-up-due"> · {due}</span>}
             </div>
-            {item.can.edit && <Edit page={page} item={item} />}
+            {item.can.edit && pageActs(page) && <Edit page={page} item={item} />}
           </header>
           {item.kind !== 'action' && <Why state={state} item={item} reading={reading} />}
           <section class="card-section" aria-labelledby="follow-up-history">
@@ -495,7 +497,7 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
         <aside class="card-rail" aria-label="Owner and next step">
           <section class="card-panel" aria-labelledby="follow-up-owner">
             <div id="follow-up-owner" class="section-label">Owner</div>
-            <Owner state={state} busy={page.busy} picking={page.picker !== null} item={item} name={itemTitle(item)} />
+            <Owner state={state} busy={page.busy} picking={page.picker !== null} item={pageActs(page) ? item : { ...item, can: { ...item.can, assign: false } }} name={itemTitle(item)} />
             {page.picker && <OwnerPicker state={state} picker={page.picker} item={item} />}
             <div class="card-rule" />
             <SaidLine said={page.said} testid="follow-up-said" line={said} />

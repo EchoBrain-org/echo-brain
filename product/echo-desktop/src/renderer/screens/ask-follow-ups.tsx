@@ -10,7 +10,10 @@ import { Owner, OwnerPicker, StateMark } from './follow-ups.js';
 function standing(item: OpenItemView, me: string | null): string {
   switch (item.state) {
     case 'unsent': return ownerUnmatched(item) ? 'No owner yet' : `For ${item.owner.membership_id === me ? 'you' : ownerWords(item, me)}`;
-    case 'open': return item.owner.membership_id === me ? 'Kept for you' : `Sent to ${ownerWords(item, me)}`;
+    // Handed on since it was sent: who has it now.
+    case 'open': return item.owner.membership_id === me ? 'Kept for you'
+      : item.owner_set_at !== null && item.sent_at !== null && Date.parse(item.owner_set_at) > Date.parse(item.sent_at) ? `With ${ownerWords(item, me)}`
+        : `Sent to ${ownerWords(item, me)}`;
     case 'done': return 'Done';
     default: return 'Dismissed';
   }
