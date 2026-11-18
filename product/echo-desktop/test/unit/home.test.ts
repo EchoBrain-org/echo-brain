@@ -35,15 +35,15 @@ const item = (id: string): OpenItemView => ({
   item_id: `itm_0000000${id}`, run_id: impactRun('done').run_id, kind: 'ticket', decision, relation: 'conflicts', expected: 'launch next week',
   approver: person('Mina Patel'), owner: { ...person('Fixture'), match: 'jira_account' }, waits_on: 'owner', state: 'open',
   created_at: '2026-10-08T10:05:00.000Z', sent_at: '2026-10-08T11:00:00.000Z', state_set_at: '2026-10-08T11:00:00.000Z', state_set_by: person('Mina Patel'),
-  owner_set_at: null, owner_set_by: null, send_included: true, can: { set_state: true, assign: true }, reach: 'no_access',
+  owner_set_at: null, owner_set_by: null, send_included: true, due_on: null, can: { set_state: true, assign: true, edit: false, send: false }, reach: 'no_access',
 });
 /** An item of Ari's own check not sent yet: Ari ("member") approved it, so Ari may send it and pick its owner. */
 const unsent = (id: string, run_id = impactRun('done').run_id): OpenItemView => ({
   ...item(id), run_id, approver: { membership_id: 'member', name: 'Fixture', active: true }, state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null,
-  send_included: null, waits_on: 'approver', can: { set_state: false, assign: true },
+  send_included: null, waits_on: 'approver', due_on: null, can: { set_state: false, assign: true, edit: false, send: false },
 });
 const sendRow = (): HomeView['send'][number] => ({ run_id: impactRun('done').run_id, decision, items: 2, kinds: ['ticket'], owners: ['Mina Patel'], finished_at: '2026-10-08T10:05:00.000Z' });
-const emptyHome = (): HomeView => ({ send: [], items: [], waiting: 0 });
+const emptyHome = (): HomeView => ({ send: [], items: [], waiting: 0, drafts: [] });
 /** A row as a rows-only read answers it: nothing read live. */
 const rowOnly = (entry: OpenItemView): OpenItemView => {
   const { current: _current, ...rest } = entry;
@@ -872,7 +872,7 @@ describe('Follow-up lists and item pages', () => {
   beforeEach(() => { fx.listed = false; });
 
   it('ticks every Not sent row you may send on a meeting\'s first read', async () => {
-    fx.page = listPage([unsent('1'), unsent('2'), { ...unsent('3'), can: { set_state: false, assign: false } }, item('4')]);
+    fx.page = listPage([unsent('1'), unsent('2'), { ...unsent('3'), due_on: null, can: { set_state: false, assign: false, edit: false, send: false } }, item('4')]);
     const store = await meetingList();
     expect(list(store)).toMatchObject({ kind: 'list', scope: 'record', id: record, title: 'Pilot planning', loading: false });
     expect(list(store).ticks).toEqual({ itm_00000001: true, itm_00000002: true });
@@ -984,7 +984,7 @@ describe('Follow-up lists and item pages', () => {
     expect(store.followUpShown()).toMatchObject({ kind: 'item', item_id: 'itm_00000001', item: null, loading: true });
     await opening;
     expect(store.followUpShown()).toMatchObject({ item: { state: 'unsent' } });
-    fx.readItem = { ...unsent('1'), state: 'not_relevant', sent_at: '2026-10-08T12:00:00.000Z', state_set_at: '2026-10-08T12:00:00.000Z', send_included: false, can: { set_state: true, assign: true } };
+    fx.readItem = { ...unsent('1'), state: 'not_relevant', sent_at: '2026-10-08T12:00:00.000Z', state_set_at: '2026-10-08T12:00:00.000Z', send_included: false, due_on: null, can: { set_state: true, assign: true, edit: false, send: false } };
     await store.sendFollowUp(false);
     expect(requests('send')).toEqual([expect.objectContaining({ run_id: impactRun('done').run_id, items: [{ item_id: 'itm_00000001', include: false }] })]);
     // A dismissal before sending is never undone (F6).

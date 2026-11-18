@@ -5,6 +5,7 @@ import {
   itemLine, itemNames, itemTitle, liveFacts, markWords, meetingSuffix, monthDay, ownerAndStatus, ownerKey, ownerLine, ownerRows,
   ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
 } from '../../src/renderer/needs.js';
+import { draftLine, dueOnWords, FROM_CHAT } from '../../src/renderer/needs.js';
 import { EMPTY_SUMMARY as summary } from './harness.js';
 
 const person = { membership_id: 'mem_00000000-0000-4000-8000-000000000001', name: 'Mina Patel', active: true };
@@ -13,7 +14,7 @@ const item = (patch: Partial<OpenItemView> = {}): OpenItemView => ({
   item_id: 'itm_00000001', run_id: 'run_00000001', kind: 'ticket', relation: 'conflicts', expected: 'launch next week', approver: person,
   owner: { ...person, match: 'jira_account' }, waits_on: 'owner', state: 'open', created_at: '2026-10-07T10:05:00.000Z', sent_at: '2026-10-07T11:00:00.000Z',
   state_set_at: '2026-10-07T11:00:00.000Z', state_set_by: person, owner_set_at: null, owner_set_by: null, send_included: true,
-  can: { set_state: true, assign: true }, reach: patch.current ? 'opened' : 'no_access', ...patch,
+  due_on: null, can: { set_state: true, assign: true, edit: false, send: false }, reach: patch.current ? 'opened' : 'no_access', ...patch,
 });
 const ticket = { kind: 'ticket' as const, tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink: 'https://example.atlassian.net/browse/ECHO-12' };
 const OKAFOR = { membership_id: 'mem_00000000-0000-4000-8000-000000000003', name: 'S. Okafor', active: true };
@@ -383,5 +384,57 @@ describe('a follow-up\'s history (F4)', () => {
       .toEqual(['10:05 Found', '10:30 Owner set to Rafael Moreno by you', '11:00 Sent to Rafael Moreno by you']);
     const reassigned = item({ approver: ari, state_set_by: ari, owner: { ...rafael, match: 'reassigned' }, owner_set_at: '2026-10-07T12:00:00.000Z', owner_set_by: person });
     expect(words(reassigned)).toEqual(['10:05 Found', '11:00 Sent by you', '12:00 Owner set to Rafael Moreno by Mina Patel']);
+  });
+});
+
+describe('a follow-up from a chat (ADR-0053)', () => {
+  const ari = { membership_id: 'mem_00000000-0000-4000-8000-000000000002', name: 'Ari', active: true };
+  const sam = { membership_id: 'mem_00000000-0000-4000-8000-000000000007', name: 'Sam Lee', active: true };
+  /** Ari's draft from a chat, not sent: no run, no decision, nobody owns it yet, due Nov 20. */
+  const draft = (patch: Partial<OpenItemView> = {}): OpenItemView => item({
+    item_id: 'itm_chat-0001', run_id: null, kind: 'action', relation: 'needs_updating', expected: 'Update the pricing page', due_on: '2026-11-20',
+    approver: ari, owner: { ...ari, match: 'approver' }, waits_on: 'approver', state: 'unsent', created_at: '2026-11-18T10:00:00.000Z', sent_at: null,
+    state_set_at: null, state_set_by: null, send_included: null, can: { set_state: false, assign: true, edit: true, send: true }, reach: 'not_read', ...patch,
+  });
+  const NOON = Date.parse('2026-11-18T12:00:00');
+
+  it('is titled by its own line, whatever it is about, and is a follow-up, never a meeting action', () => {
+    expect(itemTitle(draft())).toBe('Update the pricing page');
+    expect(itemTitle(draft({ kind: 'ticket' }))).toBe('Update the pricing page');
+    expect(itemKind(draft())).toBe('Follow-up');
+    expect(itemNames([draft(), draft({ item_id: 'itm_chat-0002' })]).get('itm_chat-0002')).toEqual({ name: 'Update the pricing page (2)', label: 'Update the pricing page (2)' });
+  });
+
+  it('says "From a chat" where a meeting would be, with its owner or none, and its due date', () => {
+    expect(followUpHover(draft(), ari.membership_id, NOON)).toBe(`Follow-up · ${FROM_CHAT} · No owner yet · Due Nov 20`);
+    expect(followUpHover(draft({ owner: { ...sam, match: 'name' } }), ari.membership_id, NOON)).toBe('Follow-up · From a chat · For Sam, not sent yet · Due Nov 20');
+    expect(draftLine(draft(), ari.membership_id, NOON)).toBe('From a chat · No owner yet · Due Nov 20');
+    expect(draftLine(draft({ owner: { ...sam, match: 'picked' }, due_on: null }), ari.membership_id, NOON)).toBe('From a chat · For Sam');
+    expect(draftLine(draft({ owner: { ...ari, match: 'picked' } }), ari.membership_id, NOON)).toBe('From a chat · For you · Due Nov 20');
+    // Sent to its owner, an Update row says where it came from and when it is due, never "Needs" its own title again.
+    expect(itemLine(draft({ state: 'open', owner: { ...ari, match: 'picked' } }), ari.membership_id)).toMatch(/^From a chat · (Was due|Due) Nov 20$/u);
+  });
+
+  it('starts its history in the chat, by who made it, and has no meeting to send it from', () => {
+    const words = (entry: OpenItemView) => itemHistory(entry, ari.membership_id).map(event => `${event.at.slice(11, 16)} ${event.words}`);
+    expect(words(draft())).toEqual(['10:00 From a chat by you']);
+    const sent = draft({ owner: { ...sam, match: 'picked' }, owner_set_at: '2026-11-18T10:30:00.000Z', owner_set_by: ari, state: 'open', sent_at: '2026-11-18T11:00:00.000Z',
+      state_set_at: '2026-11-18T11:00:00.000Z', state_set_by: ari, send_included: true });
+    expect(words(sent)).toEqual(['10:00 From a chat by you', '10:30 Owner set to Sam Lee by you', '11:00 Sent to Sam Lee by you']);
+  });
+
+  it('reads with no owner as "No owner yet" until one is picked: Pick owner, as a meeting\'s card does', () => {
+    expect(ownerUnmatched(draft())).toBe(true);
+    expect(ownerAndStatus(draft(), ari.membership_id)).toBe('Pick owner · Not sent');
+    expect(markWords(draft(), NOON)).toBe('Not sent yet · no owner · needs attention');
+    expect(sendLabel(draft({ owner: { ...sam, match: 'picked' } }), ari.membership_id)).toBe('Send to Sam');
+  });
+
+  it('says its due date by the calendar: today, tomorrow, a day ahead, or a day past', () => {
+    expect(dueOnWords(null, NOON)).toBeNull();
+    expect(dueOnWords('2026-11-18', NOON)).toBe('Due today');
+    expect(dueOnWords('2026-11-19', NOON)).toBe('Due tomorrow');
+    expect(dueOnWords('2026-11-20', NOON)).toBe('Due Nov 20');
+    expect(dueOnWords('2026-11-17', NOON)).toBe('Was due Nov 17');
   });
 });

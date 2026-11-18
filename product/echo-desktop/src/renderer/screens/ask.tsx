@@ -23,6 +23,7 @@ import { MAX_QUESTION, questionCount } from '../bar.js';
 import {
   allOmitted, behindEarlierLine, shownInFull, showsOf, turnGroups, type Suggestion, type TurnChecks,
 } from '../timeline.js';
+import { AskFollowUps } from './ask-follow-ups.js';
 import { Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
 
 /** What an original source may show: 2,000 characters. */
@@ -622,6 +623,7 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
       <div class="question selectable" data-testid="question">{turn.text}</div>
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
       {!omitted && <AgenticAnswer state={state} view={view} empty={foundNothingInProject(turn) ? null : nothingLine(turn, state)} />}
+      {turn.answer.follow_ups && <AskFollowUps state={state} ids={turn.answer.follow_ups} />}
       {(foundNothingInProject(turn) || widen) && (
         <div class="project-empty" data-testid={foundNothingInProject(turn) ? 'project-empty' : undefined}>
           {foundNothingInProject(turn) && <span>{nothingLine(turn, state)}</span>}
@@ -673,6 +675,7 @@ function OpenedTurn({ state, turn, checks }: { state: State; turn: TimelineTurn;
     <div class="opened" data-testid="opened-turn">
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
       {!omitted && <AgenticAnswer state={state} view={view} empty={nothingLine(turn, state)} dimmed />}
+      {turn.answer.follow_ups && <AskFollowUps state={state} ids={turn.answer.follow_ups} />}
       <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={undefined} again copy={!omitted} />
     </div>
   );

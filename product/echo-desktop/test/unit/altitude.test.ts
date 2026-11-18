@@ -18,7 +18,7 @@ function item(overrides: Partial<OpenItemView> & { sentDaysAgo?: number } = {}):
     relation: null, expected: 'Send the revised quote', approver: person('Ari'), owner: { ...person('Mina Patel'), match: 'name' },
     waits_on: 'owner', state: 'open', created_at: ago(sentDaysAgo), sent_at: ago(sentDaysAgo), state_set_at: ago(sentDaysAgo),
     state_set_by: person('Ari'), owner_set_at: null, owner_set_by: null, send_included: true,
-    can: { set_state: true, assign: true }, reach: 'not_read', ...rest,
+    due_on: null, can: { set_state: true, assign: true, edit: false, send: false }, reach: 'not_read', ...rest,
   };
 }
 const unsentItem = (createdDaysAgo: number, extra: Partial<OpenItemView> = {}) =>

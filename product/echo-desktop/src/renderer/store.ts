@@ -26,7 +26,7 @@ import { renamedProject, reread } from './feed.js';
 import { askedWhen } from './format.js';
 import * as freshness from './freshness.js';
 import { meetingMessage, message } from './messages.js';
-import { ACTIVE_STATES, CLOSED_STATES, firstName, ownerRows, ownerShown, reopenSends, sentWords } from './needs.js';
+import { ACTIVE_STATES, CLOSED_STATES, firstName, ownerRows, ownerShown, ownerUnmatched, reopenSends, sentWords } from './needs.js';
 
 /** Only me: everything only you can read, filed in a project or not (ADR-0049). Follow-ups: everything you sent, own or last handed on. */
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'only-me' } | { page: 'tools' } | { page: 'decision' }
@@ -552,6 +552,8 @@ export interface State {
   decision: DecisionState | null;
   /** Follow-up lists and item pages, over the page they were opened from. */
   followUps: FollowUpsState | null;
+  /** The follow-ups Ask answers drafted (ADR-0053), by item id, as last read, and the owner picker open under one of them. */
+  askCards: AskCardsState;
   /** The follow-ups line of the approved meeting the reader or the decision page shows. */
   impactLine: ItemsLine | null;
   /** The follow-ups line above the feed of the project on screen. */
@@ -628,7 +630,7 @@ let state: State = {
   barScope: { kind: 'global' }, barText: '', ask: null, timeline: { turns: [], checks: {} }, sources: null, compose: null, toast: null, toastShown: 0,
   concealed: false, signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null,
   employeeWrite: null, home: null, decision: null, followUps: null, impactLine: null, projectLine: null, projectReads: null, news: new Set(), visit: null,
-  update: { state: 'none' }, updateFailure: null, altitude: emptyAltitude(),
+  update: { state: 'none' }, updateFailure: null, altitude: emptyAltitude(), askCards: { cards: {}, picker: null },
 };
 const listeners = new Set<() => void>();
 let seq = 0;
@@ -3581,6 +3583,7 @@ async function loadTimeline(): Promise<void> {
 function forgetTimeline(): void {
   timelineSeq += 1;
   forgetChecks();
+  forgetAskCards();
   if (state.timeline.turns.length > 0 || Object.keys(state.timeline.checks).length > 0) setTimeline({ turns: [], checks: {} });
 }
 
@@ -3823,6 +3826,8 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const shown = took >= PROGRESS_AFTER_MS ? { ...current.took, [turn.id]: { receipt, took } } : current.took;
   set({ ask: { ...current, asking: null, asked: [...current.asked, turn.id], took: shown } });
   startSources(turn.id);
+  // Follow-ups it drafted wait, not sent, in your own list (ADR-0053): Home's Send rows list them.
+  if (kept.follow_ups) void loadHome(false);
 }
 
 /**
@@ -4035,8 +4040,9 @@ export async function copyAnswer(id: string | null): Promise<boolean> {
   const earlier = turn.again_of === undefined ? undefined : turnOf(turn.again_of)?.asked_at;
   const since = turn.since === undefined ? undefined : { statements: turn.since, when: earlier === undefined ? 'then' : askedWhen(earlier) };
   const nothing = nothingLine(turn);
-  const markdown = answerMarkdown(answer, groups.map(group => sourceName(answer.sources[group.indexes[0]!]!, state.sources)), groups, shows, since, nothing);
-  const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : answerText(answer, shows, since, nothing);
+  const drafts = askCardLines(answer.follow_ups);
+  const markdown = answerMarkdown(answer, groups.map(group => sourceName(answer.sources[group.indexes[0]!]!, state.sources)), groups, shows, since, nothing, drafts);
+  const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : answerText(answer, shows, since, nothing, drafts);
   return text !== '' && (await rpc('clipboard.writeText', { text })).ok;
 }
 
@@ -5047,6 +5053,8 @@ export type NeedRow =
   | { kind: 'checking'; review: PersonMeetingReviewV2; run?: PersonRunV1 }
   | { kind: 'failed'; review: PersonMeetingReviewV2; run: PersonRunV1 }
   | { kind: 'send'; send: HomeView['send'][number] }
+  /** A follow-up of yours from a chat, not sent yet (ADR-0053): a Send row of its own, which opens its page. */
+  | { kind: 'send'; item: OpenItemView }
   | { kind: 'update'; item: OpenItemView };
 interface HomeState {
   seq: number;
@@ -5146,6 +5154,7 @@ export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readon
   return [
     ...approve, ...failed,
     ...(open?.send ?? []).map(send => ({ kind: 'send' as const, send })),
+    ...(open?.drafts ?? []).map((item): NeedRow => ({ kind: 'send', item })),
     ...(open?.items ?? []).map((item): NeedRow => ({ kind: 'update', item })),
     ...checking,
   ];
@@ -5174,7 +5183,7 @@ export function needAt(row: NeedRow): string | null {
     case 'approve': return row.review.meeting_at;
     case 'checking': return row.run?.updated_at ?? null;
     case 'failed': return row.run.updated_at;
-    case 'send': return row.send.finished_at;
+    case 'send': return 'send' in row ? row.send.finished_at : freshness.changedAt(row.item);
     default: return freshness.changedAt(row.item);
   }
 }
@@ -6135,9 +6144,17 @@ function openToldFollowUps(item_ids: readonly string[]): Promise<void> {
   return readList(list.seq, 'first');
 }
 
-/** A Not sent row you may send: before Send only its approver may pick its owner, exactly when they may send it. */
+/**
+ * A Not sent row you may send: before Send only its approver may pick its owner, exactly when they may send it. A follow-up
+ * from a chat (ADR-0053) is sent on its own by its creator (`can.send`), and only once someone owns it.
+ */
 export function sendable(item: OpenItemView): boolean {
-  return item.state === 'unsent' && item.can.assign;
+  return item.state === 'unsent' && (item.run_id === null ? item.can.send && !ownerUnmatched(item) : item.can.assign);
+}
+
+/** A Not sent row you may dismiss: one you may send, or a follow-up from a chat of yours that nobody owns yet. */
+export function dismissable(item: OpenItemView): boolean {
+  return item.state === 'unsent' && (item.run_id === null ? item.can.send : item.can.assign);
 }
 
 /** The decision a meeting's list counts the follow-ups of, from any of its rows whose decision you read. */
@@ -6413,7 +6430,7 @@ function changedFrom(mine: number): void {
 /** A write and how it went: why it did not go, and whether it may have gone all the same. */
 interface Attempt { failure?: Failure; unknown: boolean }
 
-async function attempt(request: Extract<PersonRunsRequestV1, { readonly operation: 'send' | 'set_state' | 'assign' }>): Promise<Attempt> {
+async function attempt(request: Extract<PersonRunsRequestV1, { readonly operation: 'send' | 'set_state' | 'assign' | 'send_item' | 'edit' }>): Promise<Attempt> {
   try {
     await runsCommand(request);
     return { unknown: false };
@@ -6432,6 +6449,21 @@ async function sendRun(run_id: string, items: readonly { item_id: string; includ
   const key = JSON.stringify(items);
   const command = { command: kept?.key === key ? kept.command : crypto.randomUUID(), key };
   return { ...(await attempt({ schema_version: 1, operation: 'send', run_id, command_id: command.command, items })), command };
+}
+
+/**
+ * One send of a follow-up from a chat on its own (ADR-0053): a fresh command for each click, which a click whose outcome was
+ * unknown keeps (`kept`), so Send again replays it and nothing goes twice.
+ */
+async function sendItem(item_id: string, include: boolean, kept: SendCommand | null | undefined): Promise<Attempt & { command: SendCommand }> {
+  const key = JSON.stringify({ item_id, include });
+  const command = { command: kept?.key === key ? kept.command : crypto.randomUUID(), key };
+  return { ...(await attempt({ schema_version: 1, operation: 'send_item', item_id, command_id: command.command, include })), command };
+}
+
+/** Where a row is sent from: its check (run), all its ticked rows in one send; or, from a chat, on its own. */
+function sendBatch(item: OpenItemView): string {
+  return item.run_id ?? `item:${item.item_id}`;
 }
 
 /** What a send that did not go says. */
@@ -6457,12 +6489,15 @@ export async function sendTicked(include: boolean): Promise<void> {
   if (ticked.length === 0) return;
   setView({ ...list, busy: true, said: null, picker: null });
   const sends: Record<string, SendCommand> = { ...list.sends };
-  const tried: { run_id: string; failure?: Failure }[] = [];
-  for (const run_id of new Set(ticked.map(item => item.run_id))) {
+  const tried: { batch: string; failure?: Failure }[] = [];
+  for (const batch of new Set(ticked.map(sendBatch))) {
     if (!viewOf('list', list.seq) || !sameAccount(account)) break;
-    const sent = await sendRun(run_id, ticked.filter(item => item.run_id === run_id).map(item => ({ item_id: item.item_id, include })), sends[run_id]);
-    if (sent.unknown) sends[run_id] = sent.command; else delete sends[run_id];
-    tried.push({ run_id, ...(sent.failure ? { failure: sent.failure } : {}) });
+    const rows = ticked.filter(item => sendBatch(item) === batch);
+    const run_id = rows[0]!.run_id;
+    const sent = run_id === null ? await sendItem(rows[0]!.item_id, include, sends[batch])
+      : await sendRun(run_id, rows.map(item => ({ item_id: item.item_id, include })), sends[batch]);
+    if (sent.unknown) sends[batch] = sent.command; else delete sends[batch];
+    tried.push({ batch, ...(sent.failure ? { failure: sent.failure } : {}) });
     if (sent.failure) break;
   }
   if (!viewOf('list', list.seq) || !sameAccount(account)) return;
@@ -6470,8 +6505,8 @@ export async function sendTicked(include: boolean): Promise<void> {
   const current = viewOf('list', list.seq);
   if (!current || !sameAccount(account)) return;
   const fresh = new Map(current.failed ? [] : current.items.map(item => [item.item_id, item]));
-  const triedRows = ticked.filter(item => tried.some(entry => entry.run_id === item.run_id));
-  const failedOf = (item: OpenItemView) => tried.find(entry => entry.run_id === item.run_id)?.failure;
+  const triedRows = ticked.filter(item => tried.some(entry => entry.batch === sendBatch(item)));
+  const failedOf = (item: OpenItemView) => tried.find(entry => entry.batch === sendBatch(item))?.failure;
   const unknown = (item: OpenItemView) => {
     const failed = failedOf(item);
     return failed !== undefined && outcomeUnknown(failed, false);
@@ -6483,8 +6518,8 @@ export async function sendTicked(include: boolean): Promise<void> {
   if (!viewOf('list', list.seq) || !sameAccount(account)) return;
   // What went: every row of a send that was answered, and of one whose outcome was unknown, each row read again as no longer Not sent.
   const went = triedRows.filter(item => failedOf(item) === undefined || (unknown(item) && fresh.has(item.item_id) && fresh.get(item.item_id)!.state !== 'unsent'));
-  for (const run_id of Object.keys(sends)) if (went.some(item => item.run_id === run_id)) delete sends[run_id];
-  if (went.length > 0 || Object.keys(sends).some(run_id => tried.some(entry => entry.run_id === run_id))) changedFrom(list.seq);
+  for (const batch of Object.keys(sends)) if (went.some(item => sendBatch(item) === batch)) delete sends[batch];
+  if (went.length > 0 || Object.keys(sends).some(batch => tried.some(entry => entry.batch === batch))) changedFrom(list.seq);
   const failure = tried.find(entry => entry.failure)?.failure;
   const done = went.length === 0 ? null : sentWords(went.map(item => (fresh.get(item.item_id) ?? item).owner), account.membership_id, include);
   const left = ticked.length - went.length;
@@ -6636,10 +6671,11 @@ async function changeItem(view: FollowUpList | ItemPage, item_id: string, write:
 export async function sendFollowUp(include: boolean): Promise<void> {
   const page = shownView('item');
   const item = page?.item;
-  if (!page || !item || page.busy || !sendable(item) || state.concealed) return;
+  if (!page || !item || page.busy || !(include ? sendable(item) : dismissable(item)) || state.concealed) return;
   const kept: { send: SendCommand | null } = { send: null };
   const { went, unknown } = await changeItem(page, item.item_id, async () => {
-    const sent = await sendRun(item.run_id, [{ item_id: item.item_id, include }], page.send);
+    // A follow-up from a chat (ADR-0053) goes on its own; any other in a send of its check listing it alone.
+    const sent = item.run_id === null ? await sendItem(item.item_id, include, page.send) : await sendRun(item.run_id, [{ item_id: item.item_id, include }], page.send);
     kept.send = sent.unknown ? sent.command : null;
     return sent;
   }, () => rereadItem(page.seq), fresh => fresh.state !== 'unsent', { words: sentWords([item.owner], expect()?.membership_id ?? null, include) },
@@ -6664,6 +6700,36 @@ export async function setFollowUpState(to: 'open' | 'done' | 'not_relevant'): Pr
     fresh => fresh.state === to, said, shown => ({ ...shown, state: to }));
 }
 
+/** A change to a follow-up's one line, its due date or both (ADR-0053): only `can.edit` offers it. */
+export interface ItemEdit { expected?: string; due_on?: string | null }
+
+/** The edit as the runs contract takes it: what changed, the line trimmed; nothing when nothing did. */
+function editOf(item: OpenItemView, edit: ItemEdit): ItemEdit | null {
+  const expected = edit.expected?.trim();
+  const changes: ItemEdit = {
+    ...(expected !== undefined && expected !== '' && expected !== item.expected ? { expected } : {}),
+    ...(edit.due_on !== undefined && edit.due_on !== item.due_on ? { due_on: edit.due_on } : {}),
+  };
+  return Object.keys(changes).length === 0 ? null : changes;
+}
+
+/** Whether a follow-up read again says what an edit asked for. */
+function edited(changes: ItemEdit): (item: OpenItemView) => boolean {
+  return item => (changes.expected === undefined || item.expected === changes.expected) && (changes.due_on === undefined || item.due_on === changes.due_on);
+}
+
+/** Save, on an item page's edit of a follow-up from a chat: its line and due date change at once; the page says "Saved". */
+export async function editFollowUp(edit: ItemEdit): Promise<boolean> {
+  const page = shownView('item');
+  const item = page?.item;
+  if (!page || !item || page.busy || !item.can.edit || state.concealed) return false;
+  const changes = editOf(item, edit);
+  if (changes === null) return true;
+  const { went } = await changeItem(page, item.item_id, () => attempt({ schema_version: 1, operation: 'edit', item_id: item.item_id, ...changes }),
+    () => rereadItem(page.seq), edited(changes), { words: 'Saved' }, shown => ({ ...shown, ...changes }));
+  return went;
+}
+
 /** Undo, after Mark done or a Dismiss of an open item: it is open again. */
 export function undoFollowUp(): Promise<void> {
   return shownView('item')?.said?.undo ? setFollowUpState('open') : Promise.resolve();
@@ -6674,6 +6740,7 @@ let pickerSeq = 0;
 
 /** An owner chip: its people picker opens with you first, then the organization's first people; or closes. */
 export function toggleOwnerPicker(item_id: string): void {
+  if (state.ask !== null && state.askCards.cards[item_id]) { toggleAskPicker(item_id); return; }
   const view = changeView();
   if (!view || view.busy) return;
   pickerSeq += 1;
@@ -6684,6 +6751,7 @@ export function toggleOwnerPicker(item_id: string): void {
 
 /** Escape or Cancel: the picker closes. */
 export function closeOwnerPicker(): void {
+  if (askPicking()) { pickerSeq += 1; setAskCards({ picker: null }); return; }
   const view = changeView();
   if (!view?.picker) return;
   pickerSeq += 1;
@@ -6692,6 +6760,7 @@ export function closeOwnerPicker(): void {
 
 /** The organization's people by name, from the people directory. Typing reads once it pauses. */
 export async function findOwner(query: string): Promise<void> {
+  if (askPicking()) return findAskOwner(query);
   const view = changeView();
   const account = expect();
   if (!view?.picker || !account) return;
@@ -6732,6 +6801,7 @@ export function ownerChoices(picker: OwnerPicker, item: OpenItemView, me: Member
  * away and no longer see says so: the page offers Back, the list's row goes.
  */
 export async function pickFollowUpOwner(person: Member): Promise<void> {
+  if (askPicking()) return pickAskOwner(person);
   const view = changeView();
   const item = view?.picker ? itemIn(view, view.picker.item_id) : undefined;
   if (!view || !item || view.busy || !item.can.assign || state.concealed) return;
@@ -6855,4 +6925,186 @@ export function openNotified(target: NoticeTarget): void {
       else void openFollowUp(target.item_id, freshness.toldRow(target.item_id), true);
     }
   }
+}
+
+// ---- follow-ups an Ask answer drafted (ADR-0053) -------------------------------------------
+
+/**
+ * One follow-up an answer drafted, as Ask shows it under the answer. A turn keeps only its id: the card is read again, rows
+ * only, each time its turn shows, so what it says (not sent, sent, done, dismissed) is never older than that read.
+ */
+export interface AskCard {
+  /** Its row as last read; null until the first read answers. */
+  item: OpenItemView | null;
+  loading: boolean;
+  /** The last read said it is not there for you (`not_found`): it was given away, or is gone. */
+  gone: boolean;
+  /** Why the last read failed. */
+  failure?: Failure;
+  /** A change on its way. */
+  busy: boolean;
+  said: Said | null;
+  /** A send whose outcome is unknown: sending exactly the same again replays it. */
+  send: SendCommand | null;
+}
+
+export interface AskCardsState {
+  cards: Readonly<Record<string, AskCard>>;
+  /** The people picker open under one card's owner. */
+  picker: OwnerPicker | null;
+}
+
+/** Bumped when the account's cards go, so a reply for the last account changes nothing. */
+let askCardsSeq = 0;
+
+function setAskCards(patch: Partial<AskCardsState>): void {
+  set({ askCards: { ...state.askCards, ...patch } });
+}
+
+function setAskCard(item_id: string, patch: Partial<AskCard>): void {
+  const card = state.askCards.cards[item_id] ?? { item: null, loading: false, gone: false, busy: false, said: null, send: null };
+  setAskCards({ cards: { ...state.askCards.cards, [item_id]: { ...card, ...patch } } });
+}
+
+/** An account change or a sign-out: no card of the last account's stays. */
+function forgetAskCards(): void {
+  askCardsSeq += 1;
+  if (Object.keys(state.askCards.cards).length > 0 || state.askCards.picker !== null) set({ askCards: { cards: {}, picker: null } });
+}
+
+/** An owner picker is open under one of Ask's cards, while Ask shows. */
+function askPicking(): boolean {
+  return state.ask !== null && state.askCards.picker !== null;
+}
+
+/**
+ * The cards a turn's answer drafted, read again rows only, side by side: each time the turn shows. What a card last said stays
+ * while it is read; one you no longer see says so (`gone`); a read that fails says it could not load, with Try again.
+ */
+export async function readAskCards(item_ids: readonly string[]): Promise<void> {
+  const account = expect();
+  if (!account) return;
+  const mine = askCardsSeq;
+  const ids = item_ids.filter(id => !state.askCards.cards[id]?.loading && !state.askCards.cards[id]?.busy);
+  for (const id of ids) setAskCard(id, { loading: true });
+  await Promise.all(ids.map(async id => {
+    const read = await readOne(account, id);
+    if (mine !== askCardsSeq || !sameAccount(account)) return;
+    if ('item' in read) setAskCard(id, { item: read.item, loading: false, gone: false, failure: undefined });
+    else if (read.failure.code === 'not_found') setAskCard(id, { loading: false, gone: true, failure: undefined });
+    else setAskCard(id, { loading: false, failure: read.failure });
+  }));
+}
+
+/**
+ * A change to one card (ADR-0053): sent (`write`), what the Authority answered shown at once (`patch`), then the card read
+ * again rows only. The card says what happened; a change whose outcome is unknown is settled by that read (`landed`), as on
+ * an item page. Home's rows are read again after a change that may have gone.
+ */
+async function changeAskCard(item_id: string, write: () => Promise<Attempt>, landed: (item: OpenItemView) => boolean, done: Said,
+  patch: (item: OpenItemView) => OpenItemView): Promise<{ went: boolean; unknown: boolean }> {
+  const account = expect();
+  const card = state.askCards.cards[item_id];
+  if (!account || !card?.item || card.busy || state.concealed) return { went: false, unknown: false };
+  const mine = askCardsSeq;
+  const ours = () => mine === askCardsSeq && sameAccount(account);
+  pickerSeq += 1;
+  setAskCards({ picker: null });
+  setAskCard(item_id, { busy: true, said: null });
+  const { failure, unknown } = await write();
+  if (!ours()) return { went: false, unknown };
+  const answered = state.askCards.cards[item_id];
+  if (!failure && answered?.item) setAskCard(item_id, { item: patch(answered.item) });
+  const read = await readOne(account, item_id);
+  if (!ours()) return { went: false, unknown };
+  const settled = 'item' in read;
+  const went = !failure || (unknown && settled && landed(read.item));
+  const gone = !settled && read.failure.code === 'not_found';
+  const said: Said = went ? done : unknown && settled ? { words: message({ code: 'not_saved', retryable: true }), error: true } : changeFailed(failure!);
+  setAskCard(item_id, { busy: false, said, ...(settled ? { item: read.item } : {}), ...(gone ? { gone: true } : {}) });
+  if (!failure || unknown) void loadHome(false);
+  return { went, unknown: unknown && !went && !settled };
+}
+
+/**
+ * Send to <owner> (Keep it myself) or Dismiss, on a card Ask shows: one `send_item` of it alone, under a fresh command each
+ * click, kept while the outcome is unknown so the same click again replays it.
+ */
+export async function sendAskCard(item_id: string, include: boolean): Promise<void> {
+  const card = state.askCards.cards[item_id];
+  const item = card?.item;
+  if (!card || !item || card.busy || !(include ? sendable(item) : dismissable(item))) return;
+  const kept: { send: SendCommand | null } = { send: null };
+  const { went, unknown } = await changeAskCard(item_id, async () => {
+    const sent = await sendItem(item_id, include, card.send);
+    kept.send = sent.unknown ? sent.command : null;
+    return sent;
+  }, fresh => fresh.state !== 'unsent', { words: sentWords([item.owner], expect()?.membership_id ?? null, include) },
+  shown => ({ ...shown, state: include ? 'open' : 'not_relevant', send_included: include, can: { ...shown.can, send: false, edit: include && shown.can.edit } }));
+  if (state.askCards.cards[item_id]) {
+    setAskCard(item_id, { send: went ? null : kept.send, ...(kept.send && !went && !unknown ? { said: { words: notSent(include), error: true as const } } : {}) });
+  }
+}
+
+/** Save, on a card's edit: its line, its due date or both change at once (`edit`). Answers whether it went. */
+export async function editAskCard(item_id: string, edit: ItemEdit): Promise<boolean> {
+  const item = state.askCards.cards[item_id]?.item;
+  if (!item || !item.can.edit) return false;
+  const changes = editOf(item, edit);
+  if (changes === null) return true;
+  const { went } = await changeAskCard(item_id, () => attempt({ schema_version: 1, operation: 'edit', item_id, ...changes }), edited(changes),
+    { words: 'Saved' }, shown => ({ ...shown, ...changes }));
+  return went;
+}
+
+/** A card's owner chip: its people picker opens with you first, then the organization's first people; or closes. */
+function toggleAskPicker(item_id: string): void {
+  if (state.askCards.cards[item_id]?.busy) return;
+  pickerSeq += 1;
+  if (state.askCards.picker?.item_id === item_id) { setAskCards({ picker: null }); return; }
+  setAskCards({ picker: { item_id, query: '', results: [], loading: true } });
+  setAskCard(item_id, { said: null });
+  void findAskOwner('');
+}
+
+/** The organization's people by name, under a card's owner chip. Typing reads once it pauses. */
+async function findAskOwner(query: string): Promise<void> {
+  const picker = state.askCards.picker;
+  const account = expect();
+  if (!picker || !account) return;
+  const mine = ++pickerSeq;
+  const typing = query !== picker.query;
+  setAskCards({ picker: { ...picker, query, loading: true, failure: undefined } });
+  if (typing) await new Promise(resolve => setTimeout(resolve, SEARCH_PAUSE_MS));
+  if (mine !== pickerSeq) return;
+  const name = query.trim();
+  const result = await rpc('people.directory', { expect: account, ...(name === '' ? {} : { query: name }) });
+  const current = state.askCards.picker;
+  if (mine !== pickerSeq || current?.item_id !== picker.item_id) return;
+  if (!result.ok) {
+    setAskCards({ picker: { ...current, loading: false, results: [], failure: message(result.failure) } });
+    accountLost(result.failure);
+    return;
+  }
+  setAskCards({ picker: { ...current, loading: false, results: result.value.items } });
+}
+
+/** A person picked under a card's owner chip: the card is theirs at once (`assign`), and says so. */
+async function pickAskOwner(person: Member): Promise<void> {
+  const item_id = state.askCards.picker?.item_id;
+  const item = item_id === undefined ? undefined : state.askCards.cards[item_id]?.item;
+  if (item_id === undefined || !item || !item.can.assign) return;
+  await changeAskCard(item_id, () => attempt({ schema_version: 1, operation: 'assign', item_id, owner_membership_id: person.membership_id }),
+    fresh => fresh.owner.membership_id === person.membership_id,
+    { words: `Owner changed to ${person.membership_id === expect()?.membership_id ? 'you' : firstName(person.display_name)}` },
+    shown => ({ ...shown, owner: { membership_id: person.membership_id, name: person.display_name, active: true, match: shown.state === 'unsent' ? 'picked' : 'reassigned' } }));
+}
+
+/** Copy answer's lines for the follow-ups an answer drafted, as their cards last read them; none gone or dismissed. */
+function askCardLines(item_ids: readonly string[] | undefined): string[] {
+  return (item_ids ?? []).flatMap(id => {
+    const card = state.askCards.cards[id];
+    const item = card?.item;
+    return item && !card.gone && item.state !== 'not_relevant' && item.expected !== null ? [item.expected] : [];
+  });
 }

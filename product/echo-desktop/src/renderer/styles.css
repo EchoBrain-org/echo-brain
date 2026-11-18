@@ -1220,3 +1220,23 @@ button.alt-group-head:hover, button.alt-group-head:focus-visible { color: var(--
 .alt-group-head > * { flex-shrink: 0; }
 .alt-group-head .alt-label { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .alt-level:focus { outline: none; }
+
+/* Follow-ups from a chat (ADR-0053). Under an answer, each draft is a follow-ups row (state, line, owner) with one faint line of
+   where it stands and its due date, then Send, Edit and Dismiss; in a list, a row says faintly that it came from a chat. */
+.ask-follow-ups { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.ask-follow-up { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 10px; border-top: 1px solid var(--line); font-size: 13px; }
+.ask-follow-up.error { display: block; color: var(--danger); }
+.ask-follow-up .follow-up-row { height: 36px; padding: 0 4px; grid-template-columns: 20px minmax(0, 1fr) auto; border-bottom: 0; cursor: default; }
+.ask-follow-up .follow-up-open { cursor: pointer; }
+.ask-follow-up > .picker { margin: 0 4px 4px 36px; }
+.ask-follow-up-line { padding-left: 36px; font-size: 12.5px; color: var(--faint); }
+.ask-follow-up-actions { display: flex; align-items: center; gap: 8px; padding-left: 36px; }
+.ask-follow-up-actions .primary-button.small { height: 30px; padding: 0 12px; font-size: 13px; }
+.ask-follow-up > .result-line { padding-left: 36px; font-size: 12.5px; }
+.ask-follow-up .edit-follow-up { margin-left: 36px; }
+.edit-follow-up { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; }
+.edit-follow-up-field { min-width: 0; flex: 1 1 260px; display: flex; flex-direction: column; gap: 4px; }
+.edit-follow-up-field.due { flex: 0 0 auto; }
+.edit-follow-up-actions { display: flex; gap: 8px; }
+.card-head .edit-follow-up { margin-top: 10px; }
+.follow-up-from { flex: none; font-size: 12px; color: var(--faint); white-space: nowrap; }
