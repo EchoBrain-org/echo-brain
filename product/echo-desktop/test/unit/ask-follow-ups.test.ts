@@ -233,11 +233,15 @@ describe('review fixes: a send binds what you saw, a stale card waits, and a los
     expect(runs('send_item').every(request => request.include === true)).toBe(true);
   });
 
-  it('says the owner the Authority reports after a send, never the name the button remembered', async () => {
+  it('a send whose reply was lost names the owner the read again shows: it rests on what ECHO reports', async () => {
     card = { ...drafted(), owner: ownedBy(sam) };
     const { store, thread } = await answered();
     await store.readAskCards([DRAFT]);
     deliverTo = pat;
+    // It went, but its reply was lost.
+    meanwhile = () => { card = { ...card!, owner: ownedBy(pat), state: 'open', sent_at: '2026-11-18T12:00:00.000Z', state_set_at: '2026-11-18T12:00:00.000Z',
+      state_set_by: me, send_included: true }; };
+    refuse = fail('timeout', { retryable: true, mutation_outcome: 'unknown' });
     await store.sendAskCard(DRAFT, true);
     await flush();
     expect(text(byTestId(thread(), 'ask-follow-up-said'))).toBe('Sent to Pat');
@@ -293,5 +297,40 @@ describe('review fixes: a send binds what you saw, a stale card waits, and a los
     await store.sendAskCard(DRAFT, false);
     await flush();
     expect(store.getState().askCards.cards[DRAFT]!.said).toEqual({ words: 'Not dismissed: it was sent to Pat meanwhile', error: true });
+  });
+});
+
+describe('second review: what Send did is decided by send_included, and named as sent', () => {
+  it('a send whose reply was lost, dismissed by its owner before the read, still says it was sent, and what happened since', async () => {
+    card = { ...drafted(), owner: ownedBy(sam) };
+    const { store, thread } = await answered();
+    await store.readAskCards([DRAFT]);
+    meanwhile = () => { card = { ...card!, state: 'not_relevant', sent_at: '2026-11-18T12:00:00.000Z', state_set_at: '2026-11-18T12:05:00.000Z',
+      state_set_by: { ...sam, name: sam.display_name, active: true }, send_included: true, can: { ...card!.can, send: false } }; };
+    refuse = fail('timeout', { retryable: true, mutation_outcome: 'unknown' });
+    await store.sendAskCard(DRAFT, true);
+    await flush();
+    expect(store.getState().askCards.cards[DRAFT]!.said).toEqual({ words: 'Sent to Sam. It has since been dismissed' });
+    expect(store.getState().askCards.cards[DRAFT]!.send).toBeNull();
+    expect(text(byTestId(thread(), 'ask-follow-up-said'))).not.toMatch(/Not sent/u);
+  });
+
+  it('a confirmed send says it went to the owner it named, though its owner handed it on at once; the card shows who has it now', async () => {
+    card = { ...drafted(), owner: ownedBy(sam) };
+    const { store, thread } = await answered();
+    await store.readAskCards([DRAFT]);
+    // The send is confirmed; Sam hands it to Pat before the card reads it again.
+    const handOn = vi.fn(() => { card = { ...card!, owner: { ...ownedBy(pat), match: 'reassigned' }, owner_set_at: '2026-11-18T12:01:00.000Z',
+      owner_set_by: { ...sam, name: sam.display_name, active: true } }; });
+    rpc.mockImplementation(((base: (method: string, params: Record<string, unknown>) => unknown) => async (method: string, params: Record<string, unknown>) => {
+      const reply = await base(method, params);
+      if (method === 'runs' && (params.request as Runs).operation === 'send_item') handOn();
+      return reply;
+    })(rpc.getMockImplementation()! as (method: string, params: Record<string, unknown>) => unknown));
+    await store.sendAskCard(DRAFT, true);
+    await flush();
+    expect(handOn).toHaveBeenCalled();
+    expect(text(byTestId(thread(), 'ask-follow-up-said'))).toBe('Sent to Sam');
+    expect(text(byTestId(thread(), 'ask-follow-up-line'))).toMatch(/^From this chat · With Pat/u);
   });
 });

@@ -22,14 +22,16 @@ const owned = (n = 1) => draft(n, { owner: { ...MINA, active: true, match: 'pick
 
 type Runs = { operation: string } & Record<string, unknown>;
 let items: Map<string, OpenItemView>;
+let held: Held;
 /** Per item: what another window does to it as a send reaches the Authority, which then loses its reply. */
 let lost: Map<string, (item: OpenItemView) => OpenItemView>;
 storeLifecycle(new Date('2026-11-18T12:00:00'));
 beforeEach(() => {
   items = new Map();
+  held = new Held();
   lost = new Map();
   rpc.mockReset();
-  rpc.mockImplementation(rpcFor(new Held(), {
+  rpc.mockImplementation(rpcFor(held, {
     runs: params => {
       const request = params.request as Runs;
       const item = items.get(request.item_id as string);
@@ -196,5 +198,90 @@ describe('review fixes on a list and a page: a lost reply is settled by what hap
     expect(said.words).toBe('Sent to Mina · Not sent: it was dismissed meanwhile');
     expect(said.words).not.toMatch(/Sent 2/u);
     expect((store.followUpShown() as FollowUpList).sends).toEqual({});
+  });
+});
+
+describe('second review on a list and a page', () => {
+  const sentThenDismissed = (item: OpenItemView): OpenItemView => ({ ...item, state: 'not_relevant', sent_at: '2026-11-18T12:00:00.000Z',
+    state_set_at: '2026-11-18T12:05:00.000Z', send_included: true, can: { ...item.can, send: false } });
+  const dismissedElsewhere = (item: OpenItemView): OpenItemView => ({ ...item, state: 'not_relevant', sent_at: '2026-11-18T12:00:00.000Z',
+    state_set_at: '2026-11-18T12:00:00.000Z', send_included: false, can: { ...item.can, send: false } });
+  const listOf = (ticked: readonly string[]): FollowUpList => ({
+    kind: 'list', seq: 1, scope: 'involved', title: null, loading: false, items: [...items.values()], live: {}, reading: false,
+    reads: [{ parts: ['active'], pages: [{ cursor: null, ids: [...items.keys()] }], next: null }], summary: { ...EMPTY_SUMMARY, unsent: items.size }, stage: null,
+    ticks: Object.fromEntries(ticked.map(id => [id, true])), sends: {}, expanded: {}, busy: false, said: null, picker: null, stale: false,
+  });
+
+  it('on its page, a send whose reply was lost and that its owner dismissed since says it was sent, and what happened since', async () => {
+    const store = await startStore();
+    items.set('itm_chat-0001', owned(1));
+    await store.openFollowUp('itm_chat-0001', owned(1));
+    await flush();
+    lost.set('itm_chat-0001', sentThenDismissed);
+    await store.sendFollowUp(true);
+    await flush();
+    expect((store.followUpShown() as ItemPage).said).toEqual({ words: 'Sent to Mina. It has since been dismissed' });
+  });
+
+  it('Send N counts a lost reply as sent by send_included, whatever the state since', async () => {
+    const store = await startStore();
+    items.set('itm_chat-0001', owned(1));
+    lost.set('itm_chat-0001', sentThenDismissed);
+    store.getState().followUps = { route: store.getState().route, views: [listOf(['itm_chat-0001'])], changed: false };
+    await store.sendTicked(true);
+    await flush();
+    expect((store.followUpShown() as FollowUpList).said).toEqual({ words: 'Sent to Mina. It has since been dismissed' });
+  });
+
+  it('Send N whose every row was changed elsewhere still marks what is under it to be read again', async () => {
+    const store = await startStore();
+    items.set('itm_chat-0001', owned(1));
+    lost.set('itm_chat-0001', dismissedElsewhere);
+    store.getState().followUps = { route: store.getState().route, views: [listOf(['itm_chat-0001'])], changed: false };
+    await store.sendTicked(true);
+    await flush();
+    expect((store.followUpShown() as FollowUpList).said).toEqual({ words: 'Not sent: it was dismissed meanwhile', error: true });
+    expect(store.getState().followUps!.changed).toBe(true);
+  });
+
+  it('a page offers no action on a follow-up from a chat until its own read succeeds', async () => {
+    const store = await startStore();
+    const { FollowUp } = await import('../../src/renderer/screens/follow-ups.js');
+    items.set('itm_chat-0001', owned(1));
+    const release = held.hold('runs');
+    void store.openFollowUp('itm_chat-0001', owned(1));
+    await flush();
+    const shown = () => render(FollowUp({ state: store.getState(), page: store.followUpShown() as ItemPage }));
+    const aside = () => elements(shown()).find(node => node.type === 'aside');
+    // Its cached copy shows, but nothing acts on it: no Send, Dismiss or Edit, and the owner is not a picker.
+    expect(elements(aside()).filter(node => node.type === 'button').map(text)).toEqual([]);
+    expect(byTestId(shown(), 'follow-up-edit')).toEqual([]);
+    await store.sendFollowUp(true);
+    await store.sendFollowUp(false);
+    expect(await store.editFollowUp({ expected: 'Else' })).toBe(false);
+    store.toggleOwnerPicker('itm_chat-0001');
+    expect((store.followUpShown() as ItemPage).picker).toBeNull();
+    expect(sent('send_item')).toEqual([]);
+    expect(sent('edit')).toEqual([]);
+    // Read: it acts again.
+    release(ok(owned(1)));
+    await flush();
+    expect(elements(aside()).filter(node => node.type === 'button').map(text)).toEqual(['MPMina', 'Send to Mina', 'Dismiss']);
+    expect(byTestId(shown(), 'follow-up-edit')).toHaveLength(1);
+  });
+
+  it('a page whose read failed offers no action on a follow-up from a chat, only Try again', async () => {
+    const store = await startStore();
+    const { FollowUp } = await import('../../src/renderer/screens/follow-ups.js');
+    items.set('itm_chat-0001', owned(1));
+    const release = held.hold('runs');
+    void store.openFollowUp('itm_chat-0001', owned(1));
+    await flush();
+    release(fail('unavailable', { retryable: true }));
+    await flush();
+    const tree = render(FollowUp({ state: store.getState(), page: store.followUpShown() as ItemPage }));
+    const buttons = elements(tree).filter(node => node.type === 'button').map(text);
+    expect(buttons).toContain('Try again');
+    for (const label of ['Send to Mina', 'Dismiss', 'Edit']) expect(buttons).not.toContain(label);
   });
 });
