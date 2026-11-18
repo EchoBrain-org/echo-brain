@@ -8,6 +8,7 @@ import type { PersonAccessAuthorization } from '@echo-brain/organization-authori
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
+import { createAskFollowUpSinksV1 } from '../src/composition/ask-follow-up-sink-v1.js';
 import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
 import { personWorkspaceGrantsV1 } from '../src/composition/person-workspace-evidence-v1.js';
 import { askClient, auditBodies as audits, closeAskServers, decodeAll, liveAskOptions, serveAsk } from './fixtures/ask-over-http.js';
@@ -151,5 +152,41 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     expect(bound).toHaveBeenCalledTimes(1);
     // Bound to the asker the request authenticated ("mina", the client's default token).
     expect(saved).toEqual([{ principal_id: f.openItemsOptions.sessions.authenticateAccess({ access_token: 'mina' }).principal_id, drafts: [{ item_id: id, task: 'Call the vendor', owner_name: 'Ari' }] }]);
+  });
+
+  it('saves a drafted follow-up through the real sink as the asker\'s own unsent open item, seen by nobody else until it is sent (ADR-0053)', async () => {
+    const f = await sentFixture();
+    const planner = leadsAndTasks();
+    const model: StructuredGenerationPort = { async generate(input) {
+      const value = await planner.model.generate(input) as Record<string, unknown>;
+      return (input.schema.properties as Readonly<Record<string, unknown>>).follow_ups === undefined ? value
+        : { ...value, follow_ups: [{ task: 'Call the vendor', owner: 'Rafael Moreno', due_on: '2026-11-20' }] };
+    } };
+    // The wiring the API runtime gives the Ask route: the open items' own store and member directory.
+    const base = await origin(f, model, { follow_up_drafts: createAskFollowUpSinksV1({ items: f.items, people: f.directory }) });
+    const terminal = decode(await (await ask(base)).text()).at(-1)!;
+    if (terminal.type !== 'answer') throw new Error('expected the answer event');
+    expect(terminal.response.follow_ups).toHaveLength(1);
+    const item_id = terminal.response.follow_ups![0]!;
+    const read = (access_token: 'mina' | 'rafael' | 'okafor') => f.openItemsApp.item({ access_token, request: { schema_version: 1, operation: 'item', item_id, read: 'rows' } });
+
+    // The asker ("mina", the client's default token) has it as a draft, with the owner the writer named.
+    const { item } = await read('mina');
+    expect(item).toMatchObject({
+      item_id, run_id: null, kind: 'action', relation: 'needs_updating', expected: 'Call the vendor', due_on: '2026-11-20', state: 'unsent',
+      approver: { name: 'Mina Patel' }, owner: { name: 'Rafael Moreno', match: 'name' }, can: { set_state: false, assign: true, edit: true, send: true },
+    });
+    expect(item).not.toHaveProperty('decision');
+    const home = await f.openItemsApp.home({ access_token: 'mina', request: { schema_version: 1, operation: 'home', read: 'rows' } });
+    expect(home.drafts.map(draft => draft.item_id)).toEqual([item_id]);
+
+    // Its owner and everyone else see nothing before it is sent.
+    await expect(read('rafael')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(read('okafor')).rejects.toMatchObject({ code: 'not_found' });
+
+    // Sent, its owner has it and may close it; a stranger still sees nothing.
+    expect(await f.openItemsApp.send_item({ access_token: 'mina', request: { schema_version: 1, operation: 'send_item', item_id, command_id: 'send-chat-1', include: true } })).toEqual({ state: 'open' });
+    expect((await read('rafael')).item).toMatchObject({ state: 'open', can: { set_state: true, edit: false, send: false } });
+    await expect(read('okafor')).rejects.toMatchObject({ code: 'not_found' });
   });
 });

@@ -9,6 +9,7 @@ import { startPersonDocumentProcessingV1 } from './person-document-processing-v1
 import { createPersonResearchEvalV1 } from './person-research-eval-v1.js';
 import { createPersonTriggerRunsV1 } from './person-trigger-runs-v1.js';
 import { createPersonOpenItemsV1 } from './person-open-items-v1.js';
+import { createAskFollowUpSinksV1 } from './ask-follow-up-sink-v1.js';
 import { createPersonChangesV1 } from './person-changes-v1.js';
 import { createPersonProjectActivityV1 } from './person-project-activity-v1.js';
 import { SqlitePersonProjectActivityV1 } from '../adapters/persistence/sqlite/person-project-activity-v1.js';
@@ -413,7 +414,12 @@ export async function startOrganizationAuthorityApiRuntime(
       }),
       // Agentic Ask is the only Ask (ADR-0022), on `/v7`. The request catalog contains local context even when no external
       // source is configured.
-      person_answer_v7: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps, workspace }),
+      // An answer's writer may draft follow-ups (ADR-0053): each is saved, once the answer is released, as the asker's own
+      // unsent open item. Only this route saves them; the research evaluation drafts none.
+      person_answer_v7: createPersonLiveAnswerRouteV1({
+        ...answerOptions, live_sources: liveSources, follow_ups: followUps, workspace,
+        follow_up_drafts: createAskFollowUpSinksV1({ items, people }),
+      }),
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
       person_trigger_runs: triggerRuns,
       person_ask_check: askCheck,

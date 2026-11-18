@@ -108,6 +108,16 @@ Options for asking the person whether they want a card:
 - **Research stays read only.** ADR-0042's rule holds for the loop. What
   changes is that an answer's release may also save not-sent cards for the
   person who asked.
+- **Research no longer refuses the request.** The researcher was told that Ask
+  cannot change data, so a request to hand someone a task ended as "can't make
+  changes". It is now told that drafting a follow-up is the one supported
+  action, and its finish may say the person asked for one. That flag lets the
+  writer run when research found nothing, so a task about something ECHO has
+  no record of can still be drafted. No research tool is added or changed.
+- **A card is about at most one item.** When the writer links a draft to a
+  ticket, a page, an ECHO record or an ECHO document it was shown, that item
+  is the card's own pointer, read live like any other card's. Otherwise the
+  card points at itself.
 
 Consequences:
 
@@ -124,17 +134,23 @@ form, a card tool inside the loop, and a plain "new card" form.
 
 ## Migration, rollback, and evidence
 
-- Not built. `run_id` and `record_sha256` are required columns today, an
-  insert trigger demands a finished impact run, and an update trigger keeps a
-  card's text fixed, so the storage has to change. That is a new Authority
-  baseline. The release rules say an incompatible baseline needs a designed
-  migration or an authorized reset
+- Built on branch `worktree-chat-cards` on 2026-11-18; not merged, deployed or
+  qualified. `run_id` and `record_sha256` were required columns, an insert
+  trigger demanded a finished impact run, and an update trigger kept a card's
+  text fixed, so the storage changed: Authority baseline V17. It carries no
+  migration, as no baseline has. The release rules say an incompatible
+  baseline needs a designed migration or an authorized reset
   ([deploy/release/README.md](../../deploy/release/README.md)); which of the
   two is the founder's call and is not made yet.
+- The cleanups other documents deferred to the next baseline (the unused sweep
+  columns among them) are not part of V17.
+- The older step-by-step research path has no "asked for a follow-up" flag, so
+  with it a task about something ECHO has no record of is not drafted.
 - Existing clients reject an Ask answer that carries a key they do not know,
   so the Authority, the CLI and the desktop change together (ADR-0050).
 - Rollback is not designed yet. A chat card has no run or record to fall back
   to, so removing the feature after cards exist needs its own answer.
-- Evidence to gather before acceptance of an implementation: Ask writer
-  evaluation cases for a clear request, an implied task, an ordinary question,
-  an unknown owner and a relative date.
+- Evidence still to gather: the Ask writer's live evaluation. Its five cases
+  (a clear request, an implied task, an ordinary question, an unknown owner and
+  a relative date) are pre-registered in `tools/evals/ask-blocks` and have not
+  been run against a model.
