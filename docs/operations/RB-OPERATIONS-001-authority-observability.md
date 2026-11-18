@@ -781,6 +781,11 @@ Ask's follow-up resolver (`agentic-follow-up-resolver-v1.ts`) and the renderers 
 | `writer_fallback` | Stated lists or records in place of a writer that gave no usable reply |
 | `writer_quote_unquoted` | Read a quote block whose words are not word for word in what it cites as plain text (ADR-0051) |
 | `writer_event_undated` | Read a timeline event whose day no item it cites records or writes as plain text, without that day (ADR-0051) |
+| `follow_up_dropped` | Dropped a follow-up the writer drafted when the request saves none, or one whose task screened to nothing (ADR-0053) |
+| `follow_up_task_screened` | Replaced the title of an item read from outside ECHO in a drafted follow-up's task with "a cited item" (ADR-0053) |
+| `follow_up_owner_dropped` | Dropped a drafted follow-up's owner that names an item read from outside ECHO (ADR-0053) |
+| `follow_up_date_dropped` | Dropped a drafted follow-up's due day that is not a calendar day; the follow-up stays (ADR-0053) |
+| `follow_up_link_dropped` | Dropped a drafted follow-up's link to an item the writer was not shown, or one that is not a ticket, page or ECHO record or document (ADR-0053) |
 | `card_line_screened` | Sent back an impact-card line that suggests an edit or claims ownership |
 | `card_unknown_id_dropped` | Dropped a decided or affected entry naming an item the model was not shown, or the wrong kind of item |
 | `card_date_dropped` | Dropped a date at risk that the item does not state, that is not a date, or that has no milestone |

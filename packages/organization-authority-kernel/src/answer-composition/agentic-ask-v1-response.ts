@@ -7,6 +7,7 @@ import {
   type PersonAnswerStatementV4,
 } from "@echo-brain/organization-api";
 import { AgenticAskOutputErrorV1 } from "./agentic-ask-v1-model-protocol.js";
+import type { AskFollowUpDraftV1 } from "./ask-follow-ups-v1.js";
 
 type AnswerItem = PersonAnswerStatementV4 | PersonAnswerEvidenceFallbackV4;
 type Part = { question: string; status: PersonAnswerResponseV8["parts"][number]["status"]; statements: PersonAnswerStatementV4[]; gap?: string; gap_details?: PersonAnswerResponseV8["parts"][number]["gap_details"]; records?: PersonAnswerEvidenceFallbackV4[] };
@@ -71,12 +72,15 @@ export function compactAndValidateAgenticAskResponseV1(result: PersonAnswerRespo
 
 /**
  * Ask's answer, as its audit binds it: the direct statement and parts, and, on an answer to a request that carried the
- * previous turn (ADR-0047), the question it answers, what is different since and the choices it offers.
+ * previous turn (ADR-0047), the question it answers, what is different since and the choices it offers. An answer that
+ * drafted follow-ups (ADR-0053) binds them too: `drafts`, what is saved, when the caller has them, else their ids. An
+ * answer that drafted none hashes as before.
  */
-export function agenticAskAnswerSha256V1(response: PersonAnswerResponseV8): Sha256Digest {
+export function agenticAskAnswerSha256V1(response: PersonAnswerResponseV8, drafts?: readonly AskFollowUpDraftV1[]): Sha256Digest {
   const previous = {
     ...(response.question === undefined ? {} : { question: response.question }), ...(response.since === undefined ? {} : { since: response.since }),
     ...(response.choices === undefined ? {} : { choices: response.choices }),
   };
-  return canonicalSha256({ direct: response.direct ?? null, parts: response.parts, ...previous });
+  const followUps = response.follow_ups === undefined ? {} : { follow_ups: drafts ?? response.follow_ups };
+  return canonicalSha256({ direct: response.direct ?? null, parts: response.parts, ...previous, ...followUps });
 }

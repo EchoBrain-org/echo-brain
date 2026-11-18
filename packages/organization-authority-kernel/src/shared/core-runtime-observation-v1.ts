@@ -73,6 +73,8 @@ export const CORE_RUNTIME_MODEL_CORRECTIONS_V1 = Object.freeze([
   // Renderers: Ask's writer and the impact card.
   "writer_repeat_dropped", "writer_unknown_id_dropped", "writer_uncited_sentence_dropped", "writer_fallback",
   "writer_quote_unquoted", "writer_event_undated",
+  // The follow-ups Ask's writer drafts (ADR-0053).
+  "follow_up_dropped", "follow_up_task_screened", "follow_up_owner_dropped", "follow_up_date_dropped", "follow_up_link_dropped",
   "card_line_screened", "card_unknown_id_dropped", "card_date_dropped", "card_fallback",
 ] as const);
 export type CoreRuntimeModelCorrectionV1 = (typeof CORE_RUNTIME_MODEL_CORRECTIONS_V1)[number];
