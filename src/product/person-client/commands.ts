@@ -263,12 +263,15 @@ Runs a versioned request against approved-record impact runs and the open items 
   list                 your own impact runs
   start, retry, view   with run_id; view shows a finished run's impact card to anyone who can read its decision
   next                 starts your oldest queued impact check, as start does by run_id: idle when none is queued, busy while another of yours runs and one waits, pending while the search index catches up; the desktop sends it with each change check
-  home                 what waits on you: Send rows and open items; read "rows" reads no item live (every reach not_read)
+  home                 what waits on you: Send rows, open items, and drafts (your follow-ups from a chat not sent yet); read "rows" reads no item live (every reach not_read)
   items                with scope mine, involved, run, record or project, an id for run, record and project, and an optional cursor; involved is mine plus the items you last handed on that you can still see; states (a non-empty list of unsent, open, done and not_relevant) pages over items in those states only, with the same states again beside a cursor; changed_since (a UTC millisecond time, mine and involved only) pages over the items sent, handed on or set since then, sent again beside a cursor; read "rows" answers the same page with no item read live (every reach not_read), and read "counts" the counts alone, with no cursor, states or changed_since
   item                 with item_id; read "rows" reads it with no live read
   send                 with run_id, command_id and items [{item_id, include, owner_membership_id?}] naming any of the run's unsent items: include true sends one to its owner, false dismisses it, and unlisted items stay unsent; the approver only
   set_state            with item_id and state open, done or not_relevant; the approver or the owner
   assign               with item_id and owner_membership_id; before send the approver only, then the approver, the owner or a lead of the decision's projects
+  send_item            with item_id, command_id and include, and an optional owner_membership_id with include true: sends (true) or dismisses (false) one unsent follow-up from a chat on its own; its creator only, and a send needs an owner; the same command_id answers its first result again
+  edit                 with item_id and expected (one line), due_on (YYYY-MM-DD, or null to clear it) or both: changes a follow-up from a chat; its creator only, until it is done or dismissed
+A follow-up from a chat (an Ask answer drafted it) has run_id null, no decision, and its own due_on; can.edit and can.send say what you may do to it.
 `,
   "project-activity": `usage: echo-brain person project-activity
 
