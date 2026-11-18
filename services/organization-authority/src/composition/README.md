@@ -47,6 +47,10 @@ import a provider implementation.
   `open-items-policy-v1.ts` every access question; it sends the fields that
   carried the retired sweeps' results as constants. Both services read a
   run's stored impact card through `person-stored-impact-card-v1.ts`.
+  A follow-up may also come from a chat answer (ADR-0053): it has no run and
+  no decision, `ask-follow-up-sink-v1.ts` saves a released answer's drafts as
+  the asker's own unsent follow-ups, and the same open-items service lists
+  them as Home's drafts and serves `send_item` and `edit` for them.
   `person-changes-v1.ts` serves `GET /v1/person/changes` (ADR-0036):
   fingerprints of the caller's projects, `involved` open items, and reviews
   with the caller's own impact checks, read in one Authority read transaction

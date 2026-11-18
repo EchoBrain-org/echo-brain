@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { openItemAccessV1, openItemDecisionAccessV1, openItemSendAccessV1 } from '../src/composition/open-items-policy-v1.js';
 
-const base = { viewer: 'mem_x', approver: 'mem_ari', owner: 'mem_mina', approver_active: true, owner_active: true, sent_to_owner: false, state: 'open', reads_decision: false, leads_decision_project: false } as const;
+const base = { viewer: 'mem_x', approver: 'mem_ari', owner: 'mem_mina', approver_active: true, owner_active: true, sent_to_owner: false, state: 'open', reads_decision: false, leads_decision_project: false, from_chat: false } as const;
 const table = [
   ['approver reading the decision', { viewer: 'mem_ari', reads_decision: true }, { see_row: true, set_state: true, assign: true, waits_on: 'owner', waits_on_viewer: false }],
   ['owner who cannot read the decision', { viewer: 'mem_mina', sent_to_owner: true }, { see_row: true, set_state: true, assign: true, waits_on: 'owner', waits_on_viewer: true }],
@@ -53,6 +53,41 @@ it('decides who sees a decision once, for a record and for each of its rows', ()
     const all = { ...base, ...facts };
     expect(openItemAccessV1(all).see_decision, name).toBe(openItemDecisionAccessV1({ reads_decision: all.reads_decision }).see_decision);
   }
+});
+
+// A follow-up from a run is never edited or sent alone, whoever asks.
+it('never lets anyone edit or send alone an item from a run', () => {
+  for (const [name, facts] of table) expect(openItemAccessV1({ ...base, ...facts }), name).toMatchObject({ edit: false, send: false });
+});
+
+// A follow-up from a chat (ADR-0053): Ari created it, Mina owns it. Its creator always sees it; its owner once it reached them;
+// nobody else ever does, a project lead or a decision reader included. It has no decision and no project.
+const chat = { ...base, from_chat: true, reads_decision: false, leads_decision_project: false } as const;
+const chatTable = [
+  ['creator of an unsent follow-up', { viewer: 'mem_ari', state: 'unsent' },
+    { see_row: true, see_decision: false, set_state: false, assign: true, edit: true, send: true, waits_on: 'approver', waits_on_viewer: true }],
+  ['owner of an unsent follow-up', { viewer: 'mem_mina', state: 'unsent' },
+    { see_row: false, see_outside: false, set_state: false, assign: false, edit: false, send: false, waits_on_viewer: false }],
+  ['stranger on an unsent follow-up', { state: 'unsent' }, { see_row: false, set_state: false, assign: false, edit: false, send: false }],
+  ['creator of a sent follow-up', { viewer: 'mem_ari', sent_to_owner: true },
+    { see_row: true, set_state: true, assign: true, edit: true, send: false, waits_on: 'owner', waits_on_viewer: false }],
+  ['owner of a sent follow-up', { viewer: 'mem_mina', sent_to_owner: true },
+    { see_row: true, see_decision: false, set_state: true, assign: true, edit: false, send: false, waits_on: 'owner', waits_on_viewer: true }],
+  ['stranger on a sent follow-up', { sent_to_owner: true }, { see_row: false, set_state: false, assign: false, edit: false, send: false, waits_on_viewer: false }],
+  ['stranger who would read a decision and leads a project', { sent_to_owner: true, reads_decision: true, leads_decision_project: true },
+    { see_row: false, see_decision: false, assign: false }],
+  ['owner who opened the item it is about', { viewer: 'mem_mina', sent_to_owner: true, opens_item: true }, { see_row: true, see_outside: true }],
+  ['creator of a done follow-up', { viewer: 'mem_ari', sent_to_owner: true, state: 'done' },
+    { see_row: true, set_state: true, assign: true, edit: false, send: false, waits_on_viewer: false }],
+  ['owner of a done follow-up', { viewer: 'mem_mina', sent_to_owner: true, state: 'done' }, { see_row: true, set_state: true, edit: false }],
+  ['creator of a dismissed follow-up', { viewer: 'mem_ari', state: 'not_relevant' }, { see_row: true, set_state: true, edit: false, send: false }],
+  ['owner of a dismissed follow-up', { viewer: 'mem_mina', state: 'not_relevant' }, { see_row: false, set_state: false, assign: false }],
+  ['creator after the owner left', { viewer: 'mem_ari', sent_to_owner: true, owner_active: false }, { waits_on: 'approver', waits_on_viewer: true }],
+  ['anyone after both left', { sent_to_owner: true, owner_active: false, approver_active: false, leads_decision_project: true }, { see_row: false, waits_on: 'leads', waits_on_viewer: false }],
+] as const;
+
+it.each(chatTable)('follow-up from a chat: %s', (_name, facts, expected) => {
+  expect(openItemAccessV1({ ...chat, ...facts })).toMatchObject(expected);
 });
 
 it('lets only a reading approver send', () => {
