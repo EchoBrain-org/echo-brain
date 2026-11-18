@@ -107,9 +107,14 @@ function draftedGap(count: number): string {
 }
 /** How many words in a row, shared with an outside item's text or title, make a drafted task a copy of it (ADR-0053). */
 const COPIED_RUN_WORDS = 6;
+/** One character of a script written without spaces (Han, kana, Thai, Lao, Khmer, Myanmar), or a run of any other letters and digits. */
+const UNSPACED = String.raw`\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}`;
+const UNSPACED_CHARACTER_OR_WORD = new RegExp(String.raw`[${UNSPACED}]|(?:(?![${UNSPACED}])[\p{L}\p{N}\p{M}])+`, "gu");
 /** Each run of COPIED_RUN_WORDS words of `text`: its words are its letters and digits, NFC and case-folded, so punctuation and spacing hide no copy. */
 function wordRuns(text: string): readonly string[] {
-  const words = text.normalize("NFC").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  // A script written without spaces between words has no word to count: each of its characters counts as one, so a copied
+  // Chinese, Japanese or Thai sentence is a run like any other. Code points only, no locale data: the same on every runtime.
+  const words = text.normalize("NFC").toLowerCase().match(UNSPACED_CHARACTER_OR_WORD) ?? [];
   return words.length < COPIED_RUN_WORDS ? [] : words.slice(0, words.length - COPIED_RUN_WORDS + 1).map((_, at) => words.slice(at, at + COPIED_RUN_WORDS).join(" "));
 }
 /** The items a drafted follow-up may be about: a ticket, a page, an ECHO record or an ECHO document (ADR-0053). */
@@ -141,7 +146,13 @@ type DraftShape = { readonly kind: "text" } | {
 const PROSE: DraftShape = Object.freeze({ kind: "text" });
 
 export interface AskRendererInputV1 {
+  /** The question the answer answers: a follow-up's is the one its resolver rewrote (ADR-0047). */
   readonly question: string;
+  /**
+   * What the person typed in this request, when it differs from `question`. Only these words, never the resolver's
+   * rewrite or the previous answer it drew on, may vouch for a follow-up's task (ADR-0053). Defaults to `question`.
+   */
+  readonly typed_question?: string;
 }
 export interface AskRenderedV1 {
   readonly response: PersonAnswerResponseV8;
@@ -498,7 +509,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const outside = bundle.items.filter(entry => !ECHO_CITATION_KINDS.has(entry.item.citation.kind));
         const echoOwn = bundle.items.filter(entry => ECHO_CITATION_KINDS.has(entry.item.citation.kind));
         const runsOf = (values: readonly (string | undefined)[]) => new Set(values.flatMap(value => value === undefined ? [] : wordRuns(value)));
-        const allowed = runsOf([askedQuestion, ...echoOwn.flatMap(entry => [entry.item.text, entry.item.label])]);
+        // Only what the person typed vouches for their words: a follow-up's rewritten question can carry an outside item's text.
+        const allowed = runsOf([input.trigger_input.typed_question ?? askedQuestion, ...echoOwn.flatMap(entry => [entry.item.text, entry.item.label])]);
         const copied = new Set([...runsOf(outside.flatMap(entry => [entry.item.text, entry.item.label, entry.item.list_label]))].filter(run => !allowed.has(run)));
         const kept: AskFollowUpDraftV1[] = [];
         const seen = new Set<string>();

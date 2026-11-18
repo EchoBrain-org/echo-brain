@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { validatePersonAnswerResponseV8 } from '@echo-brain/organization-api';
+import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
+import { validatePersonAnswerResponseV8, type PersonAnswerPreviousV1 } from '@echo-brain/organization-api';
 import { createAgenticAskV5, type AgenticAskAuditEntryV1, type AskFollowUpDraftV1 } from '../../src/answer-composition/agentic-ask-v1.js';
-import { answerBlocksFollowUpsSchema, answerBlocksSchema } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
+import { ANSWER_PROMPT, answerBlocksFollowUpsSchema, answerBlocksSchema } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
+import { FOLLOW_UP_RESOLVER_PROMPT } from '../../src/answer-composition/agentic-follow-up-resolver-v1.js';
 import { parseAgenticDriverFinishV1, type AgenticResearchDriverSessionV1 } from '../../src/answer-composition/agentic-research-driver-v1.js';
 import { askFollowUpItemIdV1 } from '../../src/answer-composition/ask-follow-ups-v1.js';
 import { AuthorityOperationError } from '../../src/domain/errors.js';
@@ -118,6 +119,36 @@ describe('Ask answers that draft follow-ups (ADR-0053)', () => {
     expect(h.inputs[0]!.schema).toBe(answerBlocksSchema);
     // Research asked for a follow-up this request cannot save: the answer says Ask could not act.
     expect(output.response.parts[0]!.gap_details).toMatchObject({ unsupported_action: true });
+  });
+
+  it('screens a follow-up turn against what the person typed, not the question the resolver rewrote from the previous answer', async () => {
+    const text = 'The heater controller overshoots during the 45 degree soak and trips the fixture.';
+    const ticket = Object.freeze({
+      id: 'ticket-77', kind: 'ticket' as const, label: 'THERM-77: Heater overshoot', text, visibility: 'only_me' as const, occurred_at: '2026-11-10', receipt_sha256: canonicalSha256({ ticket: 77 }),
+      citation: { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: 'cloud-1', ticket_id: '10077', permalink: 'https://example.atlassian.net/browse/THERM-77', text_sha256: sha256Digest(text) },
+    });
+    const typed = 'assign that task to Sam';
+    const rewritten = 'Assign the task the heater controller overshoots during the 45 degree soak to Sam';
+    const replies: Record<string, unknown[]> = {
+      resolver: [{ resolution: 'resolved', question: rewritten, about: [1] }],
+      step: [{ parts: [{ question: rewritten, notes: '', needs: [{ need: 'the task', status: 'found', evidence: ['E1'] }] }], actions: [{ tool: 'finish', args: {} }] }],
+      writer: [{ ...writerReply([{ text: 'The heater controller overshoots.', evidence: ['E1'] }]), follow_ups: [{ task: 'Fix why the heater controller overshoots during the soak', owner: 'Sam' }] }],
+    };
+    const roleOf = (input: StructuredGenerationInput) => input.system_prompt === FOLLOW_UP_RESOLVER_PROMPT ? 'resolver' : input.system_prompt.startsWith(ANSWER_PROMPT) ? 'writer' : 'step';
+    const sink = { save: vi.fn() };
+    const ask = createAgenticAskV5({
+      desk: { scope: { kind: 'global' }, live_sources: [], search: async () => result([]), open: async () => result([]), list: async () => result([]), revalidate: async () => checked,
+        openCitation: async () => result([ticket]) },
+      model: { generate: async (input: StructuredGenerationInput) => { const reply = replies[roleOf(input)]!.shift(); if (reply === undefined) throw new Error(`unscripted ${roleOf(input)}`); return reply; } },
+      generation, audit: { append: () => undefined }, today: () => '2026-11-18', follow_ups: { request_id: REQUEST, sink },
+    });
+    const previous: PersonAnswerPreviousV1 = { purpose: 'follow_up', question: 'What is wrong with the fixture?', asked_at: '2026-11-18T17:00:00.000Z',
+      statements: [{ text: text, citation_indexes: [0] }],
+      citations: [{ citation: ticket.citation, kind: 'ticket', label: ticket.label, visibility: 'only_me' }] };
+    const response = await ask.answer({ question: typed, previous });
+    expect(response.question).toBe(rewritten);
+    expect(response).not.toHaveProperty('follow_ups');
+    expect(sink.save).not.toHaveBeenCalled();
   });
 
   it('reads a researcher finish that asks for a follow-up only for a question, and lets it name nothing to research', () => {

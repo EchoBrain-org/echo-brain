@@ -470,7 +470,8 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
         let selectedEvidence: readonly string[] = [];
         progress?.stage("writing");
         const rendered = await observeAgenticLifecycleV1('renderer', 'research_output', { output_kind: 'answer' }, () => writer.render({
-          bundle, trigger_input: { question: resolvedQuestion ?? goal.question }, gate, signal: activeSignal, prompt_budget: promptBudget,
+          // The writer answers the resolved question; only the words the person typed (the brief's) vouch for a follow-up's task.
+          bundle, trigger_input: { question: resolvedQuestion ?? goal.question, typed_question: goal.question }, gate, signal: activeSignal, prompt_budget: promptBudget,
           // The release step keeps its reserve after the writer.
           remaining: () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
           on_context: selected => {
