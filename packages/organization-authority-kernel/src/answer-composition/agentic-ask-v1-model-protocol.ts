@@ -9,6 +9,7 @@ import {
   PERSON_ANSWER_EVENT_TEXT_MAX_BYTES_V2,
   PERSON_ANSWER_FACT_LABEL_MAX_BYTES_V2,
   PERSON_ANSWER_FACT_VALUE_MAX_BYTES_V2,
+  PERSON_ANSWER_FOLLOW_UPS_MAX_V1,
   PERSON_ANSWER_QUOTE_FROM_MAX_BYTES_V2,
   PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2,
   PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1,
@@ -65,6 +66,9 @@ const EVENT_ACTOR = "the person explicitly recorded as performing or reporting t
 const LABEL_CHARS = COLUMN_CHARS;
 const VALUE_CHARS = 200;
 const FROM_CHARS = 120;
+/** A drafted follow-up's task as code stores it (ADR-0053), and the longest owner name it keeps. */
+export const FOLLOW_UP_TASK_CHARS = 120;
+export const FOLLOW_UP_OWNER_CHARS = 200;
 
 /** A model response failed its closed, request-local protocol. */
 export class AgenticAskOutputErrorV1 extends Error {
@@ -110,7 +114,11 @@ export type AnswerItem =
 export type Answer = {
   readonly sentences: readonly AnswerSentence[]; readonly not_found: readonly string[]; readonly lists: readonly AgenticAnswerListUseV1[];
   readonly since?: readonly Pick<AnswerSentence, "text" | "evidence">[];
+  /** The follow-ups the writer drafted (ADR-0053), as it gave them: absent when it gave none. The renderer checks each field. */
+  readonly follow_ups?: readonly AnswerFollowUp[];
 };
+/** One drafted follow-up as the writer gave it, each line on one line: its task, and the owner, day and evidence id it named. */
+export type AnswerFollowUp = { readonly task: string; readonly owner?: string; readonly due_on?: string; readonly about?: string };
 
 /** Each tool's first argument is required; finish has no arguments. A task goal's arguments, byte for byte. */
 const ACTION_ARGS = {
@@ -277,6 +285,23 @@ export const answerBlocksSchema: StructuredGenerationJsonSchema = Object.freeze(
 });
 /** Ask's answer when it is asked again (ADR-0047): answerBlocksSchema, with what is different since the earlier answer. */
 export const answerBlocksSinceSchema: StructuredGenerationJsonSchema = withSince(answerBlocksSchema);
+
+/**
+ * The follow-ups a writer drafts (ADR-0053): at most 10, each a task, and optionally the owner's name, the day it is due
+ * and the id of the one evidence item it is about.
+ */
+const followUpDrafts = { type: "array", maxItems: PERSON_ANSWER_FOLLOW_UPS_MAX_V1, items: {
+  type: "object", additionalProperties: false, required: ["task"], properties: {
+    task: { type: "string", maxLength: FOLLOW_UP_TASK_CHARS }, owner: { type: "string", maxLength: FOLLOW_UP_OWNER_CHARS }, due_on: eventDate, about: { type: "string", maxLength: 16 },
+  },
+} } as const;
+/** `schema` with the follow-ups an answer drafts (ADR-0053), which the reply must give, [] when it drafts none. */
+function withFollowUps(schema: StructuredGenerationJsonSchema): StructuredGenerationJsonSchema {
+  return Object.freeze({ ...schema, required: [...(schema.required as readonly string[]), "follow_ups"], properties: { ...(schema.properties as Readonly<Record<string, unknown>>), follow_ups: followUpDrafts } });
+}
+/** Ask's answer when the request saves follow-ups (ADR-0053), asked once or asked again: only that writer is told to draft them. */
+export const answerBlocksFollowUpsSchema: StructuredGenerationJsonSchema = withFollowUps(answerBlocksSchema);
+export const answerBlocksSinceFollowUpsSchema: StructuredGenerationJsonSchema = withFollowUps(answerBlocksSinceSchema);
 
 function object(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -535,7 +560,7 @@ export function stripEvidenceIds(text: string, lists = false): string {
 }
 
 /** A real YYYY-MM-DD calendar day, or undefined ("2026-02-30" and "next week" are none). */
-function calendarDay(value: string): string | undefined {
+export function calendarDay(value: string): string | undefined {
   try { return calendarDateV1(value); } catch { return undefined; }
 }
 
@@ -758,7 +783,28 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
     }
   }
   const since = options.since === true && Array.isArray(body.since) ? sinceOf(body.since) : undefined;
-  return Object.freeze({ sentences: Object.freeze(sentences), not_found: notFoundOf(body), lists: listUsesOf(body), ...(since === undefined ? {} : { since }) });
+  const followUps = followUpsOf(body);
+  return Object.freeze({ sentences: Object.freeze(sentences), not_found: notFoundOf(body), lists: listUsesOf(body), ...(since === undefined ? {} : { since }),
+    ...(followUps.length === 0 ? {} : { follow_ups: followUps }) });
+}
+
+/**
+ * A reply's "follow_ups" (ADR-0053): the first 10 entries with a task, each field one line within its schema bound, a
+ * field that is not text left out. Only their shape is read here: the renderer checks each task, owner, day and id.
+ */
+function followUpsOf(body: Record<string, unknown>): readonly AnswerFollowUp[] {
+  const given: readonly unknown[] = Array.isArray(body.follow_ups) ? body.follow_ups : [];
+  const drafts: AnswerFollowUp[] = [];
+  for (const [index, raw] of given.entries()) {
+    if (drafts.length === PERSON_ANSWER_FOLLOW_UPS_MAX_V1) { observeCoreModelCorrectionV1("model_items_capped", given.length - index); break; }
+    const entry = object(raw);
+    const task = entry === null ? "" : cleanModelLine(entry.task, FOLLOW_UP_TASK_CHARS);
+    if (task.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
+    const field = (value: unknown, maximum: number) => { const line = cleanModelLine(value, maximum); return line.length === 0 ? undefined : line; };
+    const [owner, due, about] = [field(entry!.owner, FOLLOW_UP_OWNER_CHARS), field(entry!.due_on, 64), field(entry!.about, 16)];
+    drafts.push(Object.freeze({ task, ...(owner === undefined ? {} : { owner }), ...(due === undefined ? {} : { due_on: due }), ...(about === undefined ? {} : { about }) }));
+  }
+  return Object.freeze(drafts);
 }
 
 /**
@@ -1092,6 +1138,23 @@ export const ANSWER_SINCE_PROMPT = [
   "- Never write a \"since\" sentence about a fact that has not changed, or one the evidence does not show. When nothing material changed, give \"since\": [].",
   "",
   "Add \"since\" to the JSON object you reply with: {\"since\":[{\"text\":\"<what is different now>\",\"evidence\":[\"E2\"]}]}",
+].join("\n");
+
+/**
+ * What Ask's writer is told last when the answer can save follow-ups (ADR-0053): the model decides whether the person
+ * asked for a task to be handed on or tracked, or described one that needs doing, and drafts it, or drafts none. ECHO
+ * never asks in words: the unsent draft is the question. A writer that is not told this has its drafts dropped.
+ */
+export const ANSWER_FOLLOW_UPS_PROMPT = [
+  "Follow-ups: \"follow_ups\" holds tasks you draft for the person. Each is saved unsent in their own list, where they send, edit or dismiss it. These are new drafts, not the follow-ups the evidence holds.",
+  "- When the person asks for a task to be handed to someone or tracked, or clearly describes a task that still needs doing, draft it. Otherwise give \"follow_ups\": []. Never ask in your answer whether they want one: the draft is the question.",
+  "- \"task\": what needs doing, one short line in your own words that starts with a verb. Never copy a ticket's or page's title into it.",
+  "- \"owner\": the name of the person who should do it, as the question or the evidence gives it; \"me\" or \"I\" is asked_by. Leave it out when no one is named.",
+  "- \"due_on\": the day it is due, YYYY-MM-DD; leave it out when no day is given. Turn a relative day into a date from today and time_zone: \"tomorrow\" is the day after today, and a weekday such as \"Friday\" is the next such day after today.",
+  "- \"about\": the id of the one evidence item the task is about; leave it out when there is none.",
+  "- A request for a follow-up is not a question: never put it in \"not_found\". Your answer still says only what the evidence supports.",
+  "",
+  "Add \"follow_ups\" to the JSON object you reply with: {\"follow_ups\":[{\"task\":\"<what needs doing>\",\"owner\":\"<who does it>\",\"due_on\":\"YYYY-MM-DD\"}]}",
 ].join("\n");
 
 /**

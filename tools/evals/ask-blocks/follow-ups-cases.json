@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "kind": "echo-ask-follow-ups-eval-cases-v1",
+  "description": "Pre-registered cases for the follow-ups Ask's writer drafts (ADR-0053, README.md \"Follow-up cases\"). Synthetic engineering content. Research is scripted: one search that returns the case's items, then finish citing them all; only the writer is the product's model, told to draft follow-ups because the request saves them.",
+  "today": "2026-11-18",
+  "time_zone": "America/Los_Angeles",
+  "asked_at": "2026-11-18T18:00:00.000Z",
+  "asker": "Noor Haddad",
+  "cases": [
+    {
+      "id": "clear-request",
+      "question": "Give the fixture quote follow-up to Sam Lee, due Friday.",
+      "research": { "query": "fixture quote", "need": "the fixture quote decision" },
+      "items": [
+        {
+          "kind": "decision", "label": "DVT fixture review", "occurred_at": "2026-11-16",
+          "text": "Approved: get a second quote for the DVT test fixture before the purchase order goes out. No owner was named."
+        }
+      ],
+      "expect": { "drafts": 1, "owner": "Sam Lee", "due_on": "2026-11-20", "task_mentions": ["quote"] }
+    },
+    {
+      "id": "implied-task",
+      "question": "The thermal soak failed again and nobody has rebooked the thermal chamber. What did the last review say about the soak?",
+      "research": { "query": "thermal soak chamber", "need": "what the review said about the soak" },
+      "items": [
+        {
+          "kind": "decision", "label": "Thermal soak review", "occurred_at": "2026-11-12",
+          "text": "Approved: rerun the 48 hour thermal soak once the fan curve fix lands, in the thermal chamber booked through the lab desk."
+        }
+      ],
+      "expect": { "drafts": 1, "task_mentions": ["chamber"] }
+    },
+    {
+      "id": "ordinary-question",
+      "question": "What did the fan curve review decide?",
+      "research": { "query": "fan curve review", "need": "the fan curve decision" },
+      "items": [
+        {
+          "kind": "decision", "label": "Fan curve review", "occurred_at": "2026-11-10",
+          "text": "Approved: ship fan curve v2 for DVT. The firmware team owns it and it is already merged."
+        }
+      ],
+      "expect": { "drafts": 0 }
+    },
+    {
+      "id": "unknown-owner",
+      "question": "Someone needs to send the calibration report to the vendor before the next build.",
+      "research": { "query": "calibration report vendor", "need": "the calibration report" },
+      "items": [
+        {
+          "kind": "decision", "label": "Calibration sync", "occurred_at": "2026-11-13",
+          "text": "Approved: the vendor gets the final calibration report before the next build. The sender was not decided."
+        }
+      ],
+      "expect": { "drafts": 1, "owner": null, "task_mentions": ["calibration"] }
+    },
+    {
+      "id": "relative-date",
+      "question": "Remind Dana Okafor to renew the test lab contract by Monday.",
+      "research": { "query": "test lab contract", "need": "the test lab contract" },
+      "items": [
+        {
+          "kind": "decision", "label": "Lab budget review", "occurred_at": "2026-11-05",
+          "text": "Approved: renew the test lab contract for another year at the current rate."
+        }
+      ],
+      "expect": { "drafts": 1, "owner": "Dana Okafor", "due_on": "2026-11-23", "task_mentions": ["contract"] }
+    }
+  ]
+}

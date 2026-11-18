@@ -3,9 +3,12 @@ import {
   AgenticAskOutputErrorV1,
   ANSWER_BLOCK_CATALOG,
   ANSWER_BLOCKS_PROMPT,
+  ANSWER_FOLLOW_UPS_PROMPT,
   ANSWER_PROMPT,
   ASK_STEP_PROMPT,
+  answerBlocksFollowUpsSchema,
   answerBlocksSchema,
+  answerBlocksSinceFollowUpsSchema,
   answerBlocksSinceSchema,
   cleanId,
   createStepSchema,
@@ -287,6 +290,33 @@ describe("agentic Ask model protocol parity", () => {
     expect(answerBlocksSinceSchema).toMatchObject({ required: ["lists", "blocks", "not_found", "since"], properties: { since: { maxItems: 6 } } });
   });
 
+  it("reads the follow-ups a writer drafts (ADR-0053): a task each, the rest optional, at most 10", () => {
+    const reply = writerReply([{ text: "Done.", evidence: ["E1"] }]);
+    const read = (follow_ups: unknown) => parseBlocksAnswer({ ...reply, follow_ups });
+    // An ordinary reply has none, and says so by leaving the key out.
+    expect(parseBlocksAnswer(reply)).not.toHaveProperty("follow_ups");
+    expect(read([])).not.toHaveProperty("follow_ups");
+    expect(read([{ task: "  Call the\nvendor ", owner: " Sam Lee ", due_on: "2026-11-20", about: "E1" }, { task: "Book the room" }]).follow_ups).toEqual([
+      { task: "Call the vendor", owner: "Sam Lee", due_on: "2026-11-20", about: "E1" }, { task: "Book the room" },
+    ]);
+    // An entry with no task, or no object, says nothing; a field that is not text is left out; past 10 entries are cut.
+    expect(read([{ task: "" }, "Call Sam", { task: "Chase the quote", owner: 7, due_on: null, about: null }]).follow_ups).toEqual([{ task: "Chase the quote" }]);
+    expect(corrected(() => read([{ task: "" }, "Call Sam", { task: "Chase the quote" }]))).toEqual({ model_entry_dropped: 2 });
+    expect(read(Array.from({ length: 12 }, (_, at) => ({ task: `Task ${at}` }))).follow_ups).toHaveLength(10);
+    expect(corrected(() => read(Array.from({ length: 12 }, (_, at) => ({ task: `Task ${at}` }))))).toEqual({ model_items_capped: 2 });
+    expect(read([{ task: "x".repeat(130) }]).follow_ups![0]!.task).toHaveLength(120);
+    // Only a writer told to draft follow-ups must give them: its reply shape adds them, [] for none, as an Ask again's adds since.
+    for (const [schema, base] of [[answerBlocksFollowUpsSchema, answerBlocksSchema], [answerBlocksSinceFollowUpsSchema, answerBlocksSinceSchema]] as const) {
+      expect(schema.required).toEqual([...(base.required as string[]), "follow_ups"]);
+      expect(schema).toMatchObject({ properties: { follow_ups: { maxItems: 10, items: { required: ["task"], properties: { task: { maxLength: 120 }, due_on: { format: "date" } } } } } });
+    }
+    // The prompt shows the key it adds, with an example draft the parser keeps.
+    const last = ANSWER_FOLLOW_UPS_PROMPT.split("\n").at(-1)!;
+    const shape = JSON.parse(last.slice(last.indexOf("{"))) as Schema;
+    expect(Object.keys(shape)).toEqual(["follow_ups"]);
+    expect(parseBlocksAnswer({ ...reply, ...shape }).follow_ups).toEqual(shape.follow_ups);
+  });
+
   it("names the actual keys when the root shape is wrong", () => {
     expect(() => parseStep({ answer_parts: [], actions: [] })).toThrow('"parts" must be an array (got keys "answer_parts", "actions")');
     expect(() => parseStep({ parts: [] })).toThrow('"actions" must be an array');
@@ -492,6 +522,8 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     for (let seed = 1; seed <= 400; seed += 1) {
       expect(() => parseBlocksAnswer(generator(seed)(answerBlocksSchema))).not.toThrow();
       expect(() => parseBlocksAnswer(generator(seed)(answerBlocksSinceSchema), { since: true })).not.toThrow();
+      expect(() => parseBlocksAnswer(generator(seed)(answerBlocksFollowUpsSchema))).not.toThrow();
+      expect(() => parseBlocksAnswer(generator(seed)(answerBlocksSinceFollowUpsSchema), { since: true })).not.toThrow();
     }
   });
 
@@ -610,6 +642,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
       ],
       not_found: ["the due date"],
       since: [{ text: "Six.", evidence: ["E1"] }],
+      follow_ups: [{ task: "Seven.", owner: "Ana", due_on: "2026-10-30", about: "E1" }],
     };
     const put = (path: Path, value: unknown) => {
       const copy = structuredClone(full) as Record<string, any>;
@@ -625,8 +658,8 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
       : node.type === "object" ? Object.entries(node.properties as Schema).flatMap(([key, child]) => fieldsOf(child, `${name}.${key}`))
       : node.type === "array" ? [name, ...fieldsOf(node.items as Schema, `${name}[]`)]
       : node.type === "string" && node.enum === undefined && node.pattern === undefined ? [name] : [];
-    for (const schema of [answerBlocksSchema, answerBlocksSinceSchema]) {
-      const since = schema === answerBlocksSinceSchema;
+    for (const schema of [answerBlocksSchema, answerBlocksSinceSchema, answerBlocksFollowUpsSchema, answerBlocksSinceFollowUpsSchema]) {
+      const since = schema === answerBlocksSinceSchema || schema === answerBlocksSinceFollowUpsSchema;
       const read = (reply: unknown) => corrected(() => parseBlocksAnswer(reply, { since }));
       const cuts = (path: Path, length: number) => "model_text_truncated" in read(put(path, "x".repeat(length)));
       const caps = (path: Path, first: unknown, count: number) => "model_items_capped" in read(put(path, entries(first, count)));

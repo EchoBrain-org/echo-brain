@@ -1241,6 +1241,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   let researchStop: 'finished' | 'empty_catalog' | 'no_progress' | 'step_limit' | 'budget' | 'unusable_step' = 'step_limit';
   let researchAdmission: AgenticResearchAdmissionV1 | undefined;
   let unsupportedAction = false;
+  let followUpRequested = false;
 
   // ---- research bookkeeping (never enters a prompt) ----------------------
   const rounds: AgenticResearchRoundV1[] = [];
@@ -1598,10 +1599,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
                 // then incomplete, and a completed=false finish is accepted as the driver gave it.
                 const unconfirmed = absenceUnconfirmed(candidate);
                 const completed = value.completed || (ask && !unconfirmed && candidate.every(part => part.needs.every(need => need.status !== 'open')));
-                const capabilityOnly = value.unsupported_action === true && candidate.length === 0;
+                // A request only to change something, or only for a follow-up (ADR-0053), may name nothing to research.
+                const capabilityOnly = (value.unsupported_action === true || value.follow_up_requested === true) && candidate.length === 0;
                 if (completed && !capabilityOnly) checkCompletion(candidate, seenObservations.size > 0 || [...entries.values()].some(entry => entry.full), [...seenObservations]);
                 plan = candidate; finished = true; researchIncomplete = !completed || unconfirmed; researchStop = 'finished';
                 unsupportedAction = value.unsupported_action === true;
+                followUpRequested = value.follow_up_requested === true;
                 addAction(started, roundView('finish', {}, undefined));
                 return { accepted: true, completed: !researchIncomplete };
               }
@@ -1679,7 +1682,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       plan: planView() as readonly AgenticResearchPartV1[], items: Object.freeze(items), ...(ask ? { lists: Object.freeze(listRecords) } : {}),
       unreadable_starting: Object.freeze([...unreadableStarting]), rounds: Object.freeze([...rounds]),
       coverage: Object.freeze({ reads: Object.freeze(readCoverage.map(read => Object.freeze({ ...read }))), inventories: Object.freeze(inventoryView().map(({ args, ...inventory }) => Object.freeze({ source: args.source, ...inventory }))), notices: Object.freeze([...notice]) }),
-      stop: Object.freeze({ reason: researchStop, completed: !researchIncomplete, ...(researchAdmission === undefined ? {} : { admission: researchAdmission }), ...(unsupportedAction ? { unsupported_action: true as const } : {}) }),
+      stop: Object.freeze({ reason: researchStop, completed: !researchIncomplete, ...(researchAdmission === undefined ? {} : { admission: researchAdmission }), ...(unsupportedAction ? { unsupported_action: true as const } : {}),
+        ...(followUpRequested ? { follow_up_requested: true as const } : {}) }),
       cost: Object.freeze({ rounds: steps, model_calls: calls, repairs, fallbacks, input_tokens: usage("input_tokens"), output_tokens: usage("output_tokens"), total_tokens: usage("total_tokens"),
         model_ms: Math.max(0, Math.round(observed.model_ms)), desk_ms: Math.max(0, Math.round(observed.desk_ms)), elapsed_ms: Math.max(0, Math.round(now() - researchStartedAt)) }),
       gathered_for: Object.freeze({ scope: desk.scope, checked_at: observed.checked_at }),

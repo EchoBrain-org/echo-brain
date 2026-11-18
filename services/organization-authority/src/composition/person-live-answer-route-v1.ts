@@ -135,10 +135,13 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
     return runPersonAskV1(options, input, async ({ authorization, context, signal }) => {
       const desk = await bindPersonLiveEvidenceDeskV1(options, options.live_sources ?? [], { access_token: input.access_token, scope, ask: true, signal }, context);
       const asker = askerOf(options, authorization);
+      // The follow-ups an answer drafts (ADR-0053) are saved for this asker, under this request's id, which every attempt shares.
+      const sink = options.follow_up_drafts?.(authorization);
       const askOptions = { model: options.model, generation: options.generation,
         ...(options.research_driver === undefined ? {} : { research_driver: options.research_driver }),
         ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, audit: options.audit.forRequest(context),
         ...(asker === undefined ? {} : { asker }),
+        ...(sink === undefined ? {} : { follow_ups: { request_id: context.request_id, sink } }),
       };
       // Each attempt audits what it named; only the released attempt's receipt is returned. It streams progress V3, whose
       // names may be follow-ups, workspace items and tool containers.

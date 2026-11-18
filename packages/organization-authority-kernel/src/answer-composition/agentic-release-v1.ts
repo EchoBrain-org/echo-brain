@@ -86,6 +86,11 @@ export interface ReleaseAgenticResultV1Options<R> extends AgenticAuditContextV1 
   readonly on_checked: (checked_at: string) => void;
   /** The audit record is durable; the request must not write a terminal witness after this. */
   readonly on_audited: () => void;
+  /**
+   * Runs once every check has passed, just before the result is handed over: an Ask answer's follow-ups are saved here
+   * (ADR-0053), so a cancelled, refused or failed request saves nothing. What it throws fails the request.
+   */
+  readonly on_released?: () => void;
 }
 
 function auditEntry(context: AgenticAuditContextV1, outcome: AgenticAskAuditEntryV1["outcome"], citations: number, checkedAt: string | null, released: { readonly answer_sha256: Sha256Digest; readonly result: unknown } | null): AgenticAskAuditEntryV1 {
@@ -133,7 +138,8 @@ export async function releaseAgenticResultV1<R>(options: ReleaseAgenticResultV1O
   options.on_checked(released.checked_at);
   // An abort that races the terminal audit still suppresses publication.
   assertLive();
-  // 4. Hand over.
+  // 4. What the release saves, after every check (ADR-0053), then hand over.
+  options.on_released?.();
   return options.result;
   }, result => ({ outcome: options.outcome, result }));
 }

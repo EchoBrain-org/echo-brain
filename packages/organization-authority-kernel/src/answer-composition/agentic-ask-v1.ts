@@ -42,6 +42,7 @@ import {
   type AgenticResearchSourceV1,
 } from "./agentic-research-loop-v1.js";
 import type { AgenticResearchDriverV1 } from './agentic-research-driver-v1.js';
+import type { AskFollowUpDraftV1, AskFollowUpSinkV1 } from "./ask-follow-ups-v1.js";
 import { createAskRendererV1, type AskEarlierAnswerV1 } from "./renderers/ask-renderer-v1.js";
 import {
   AGENTIC_RESEARCH_LIVE_BUDGET_V1,
@@ -106,6 +107,12 @@ export interface CreateAgenticAskOptions {
    * and "my" resolve to a person. Only the models see it; audits never do.
    */
   readonly asker?: { readonly display_name: string };
+  /**
+   * Where an Ask answer's follow-ups are saved (ADR-0053), bound to the asker, and the id of the request this run is one
+   * attempt of (`ask_<uuid>`), which fixes each follow-up's id. Only with it is the writer told to draft follow-ups; the
+   * drafts are saved once the answer is released, after its last check. Task triggers never draft.
+   */
+  readonly follow_ups?: { readonly request_id: string; readonly sink: AskFollowUpSinkV1 };
 }
 
 /** One run: the brief, and the trigger definition's name as a label for the audit and the evaluation. */
@@ -260,7 +267,11 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
    * question, the trigger's own for a task, or none) and the shared release step.
    */
   /** Every request researches, except a follow-up that asked which one (ADR-0047). */
-  type RequestOutput = { readonly response?: PersonAnswerResponseV8; readonly rendered?: unknown; readonly research?: AgenticResearchResultV1; readonly writer_evidence: readonly string[]; readonly receipt?: PersonAskReceiptV3 };
+  type RequestOutput = {
+    readonly response?: PersonAnswerResponseV8; readonly rendered?: unknown; readonly research?: AgenticResearchResultV1; readonly writer_evidence: readonly string[]; readonly receipt?: PersonAskReceiptV3;
+    /** The follow-ups an Ask answer drafted and its release saved (ADR-0053); absent for none. */
+    readonly follow_ups?: readonly AskFollowUpDraftV1[];
+  };
   /** `previous`: the asker's previous turn (ADR-0047), which only an Ask carries. */
   const request = async (input: AgenticResearchInputV1, render?: Pick<AgenticRenderedResearchInputV1<unknown, unknown>, "renderer" | "trigger_input">, previous?: PersonAnswerPreviousV1): Promise<RequestOutput> => observeAgenticLifecycleV1<RequestOutput>('run', undefined, { trigger: input.trigger }, async () => {
       const brief = await observeAgenticLifecycleV1('brief', 'research_brief', { trigger: input.trigger, brief: input.brief, scope: options.desk.scope }, async () => {
@@ -354,13 +365,14 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
        * streams the access check and gets its receipt, rebuilt from the run's own record after every check passed, timed
        * from the request's start, before its first attempt, when the run is one attempt of a request.
        */
-      const release = async <Result>(outcome: PersonAnswerResponseV8["outcome"], citationCount: number, result: Result, answerSha256: Sha256Digest) => {
+      const release = async <Result>(outcome: PersonAnswerResponseV8["outcome"], citationCount: number, result: Result, answerSha256: Sha256Digest, onReleased?: () => void) => {
         const asked = researchOnly ? undefined : progress;
         asked?.stage("checking_access");
         const released = await releaseAgenticResultV1({
           ...auditContext(), desk, outcome, citation_count: citationCount, result, answer_sha256: answerSha256,
           signal: activeSignal, assert_live: assertLive,
           on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
+          ...(onReleased === undefined ? {} : { on_released: onReleased }),
         });
         annotateCoreRuntimeV1({ result: outcome, counts: { citation_count: citationCount } });
         clearTimeout(deadlineTimer);
@@ -452,6 +464,8 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
           // Ask again is answered as asked: it cannot say what changed.
           ...(previous === undefined ? {} : { answers: resolvedQuestion ?? goal.question }),
           ...(previous?.purpose === "ask_again" && previous.statements.length > 0 ? { earlier: earlierAnswer(previous, temporal?.time_zone ?? "UTC") } : {}),
+          // Only a request that saves follow-ups drafts them (ADR-0053).
+          ...(options.follow_ups === undefined ? {} : { follow_ups: { request_id: options.follow_ups.request_id } }),
         });
         let selectedEvidence: readonly string[] = [];
         progress?.stage("writing");
@@ -468,10 +482,14 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
         writerFallbacks += rendered.fallbacks;
         annotateCoreRuntimeV1({ counts: { context_atom_count: selectedEvidence.length } });
         phase = "final";
-        // Only a released answer has a receipt.
-        const { released: response, ...receipt } = await release(rendered.outcome, rendered.cited.length, rendered.result.response, rendered.answer_sha256);
+        // Only a released answer has a receipt. Its follow-ups are saved once every check has passed, so a cancelled,
+        // refused or failed answer saves none; their ids are the request's, so a restarted attempt saves the same ones.
+        const drafts = rendered.result.follow_ups;
+        const sink = options.follow_ups?.sink;
+        const save = sink === undefined || drafts.length === 0 ? undefined : () => sink.save(drafts);
+        const { released: response, ...receipt } = await release(rendered.outcome, rendered.cited.length, rendered.result.response, rendered.answer_sha256, save);
         ticketCitationCount = response.citations.filter(value => value.citation.kind === "ticket").length;
-        return Object.freeze({ response, research: researched, writer_evidence: rendered.result.writer_evidence, ...receipt });
+        return Object.freeze({ response, research: researched, writer_evidence: rendered.result.writer_evidence, ...receipt, ...(save === undefined ? {} : { follow_ups: drafts }) });
       } catch (error) {
         clearTimeout(deadlineTimer);
         const inheritedDeadline = input.signal?.aborted && input.signal.reason instanceof AgenticAskDeadlineErrorV1 ? input.signal.reason : undefined;
@@ -513,7 +531,7 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
     /** Ask plus its research result and writer input, for the research evaluation. */
     async answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }): Promise<AgenticAskWithResearchV1<PersonAnswerResponseV8>> {
       const output = await request({ trigger: "ask", brief: questionBrief(input.question, input.budget ?? AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal) });
-      return Object.freeze({ response: output.response!, research: output.research!, writer_evidence: output.writer_evidence });
+      return Object.freeze({ response: output.response!, research: output.research!, writer_evidence: output.writer_evidence, ...(output.follow_ups === undefined ? {} : { follow_ups: output.follow_ups }) });
     },
     /** One trigger's brief: a task brief runs research only and its trimmed result is audited and returned. */
     async research(input: AgenticResearchInputV1): Promise<AgenticResearchResultV1> {

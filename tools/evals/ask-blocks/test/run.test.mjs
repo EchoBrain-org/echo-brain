@@ -82,7 +82,7 @@ test("makes no request without an explicit run and a private credential file, an
   assert.deepEqual([parsed.caseSet, parsed.trials, parsed.concurrency, parsed.timeoutMs, parsed.caseIds], ["main", 1, 4, 120_000, ["soak-owner"]]);
   assert.deepEqual([parseArgs(base).trials, parseArgs(base).caseIds, parseArgs([...base, "--case-set", "main"]).caseSet], [3, null, "main"]);
   // Each case set names its own cases and its own timeout bounds.
-  assert.throws(() => parseArgs([...base, "--case-set", "other"]), /--case-set must be main or wording/u);
+  assert.throws(() => parseArgs([...base, "--case-set", "other"]), /--case-set must be main, wording or follow_ups/u);
   assert.throws(() => parseArgs([...base, "--case-set", "wording", "--cases", "soak-owner"]), /--cases must select known cases/u);
   assert.deepEqual([parseArgs([...base, "--case-set", "wording", "--cases", "owner-plain"]).caseIds, parseArgs([...base, "--case-set", "wording"]).timeoutMs], [["owner-plain"], 60_000]);
   assert.equal(parseArgs([...base, "--timeout-ms", "180000"]).timeoutMs, 180_000);
@@ -151,7 +151,7 @@ test("fingerprints its cases, its pre-registration and every module the run load
   const out = mkdtempSync(join(tmpdir(), "ask-blocks-code-"));
   const { report } = await run(options(out), { loaded: { structured_output: answering(), generation }, progress: () => undefined });
   const fingerprinted = Object.keys(report.code.before.files_sha256);
-  assert.deepEqual(fingerprinted, ["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/wording-cases.json", "tools/evals/ask-blocks/README.md", ...loadedModules("tools/evals/ask-blocks/run.mjs")]);
+  assert.deepEqual(fingerprinted, ["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/wording-cases.json", "tools/evals/ask-blocks/follow-ups-cases.json", "tools/evals/ask-blocks/README.md", ...loadedModules("tools/evals/ask-blocks/run.mjs")]);
   // Among them layout v2's checks and title bound, and the kernel's shared modules on the writer's path.
   for (const file of ["packages/organization-api/dist/person-answer-layout-checks.js", "packages/organization-api/dist/person-answer-layout-v2.js",
     "packages/organization-authority-kernel/dist/shared/core-runtime-observation-v1.js", "packages/organization-authority-kernel/dist/shared/evidence-desk-v2.js"]) assert.ok(fingerprinted.includes(file), file);
