@@ -101,7 +101,12 @@ Options for asking the person whether they want a card:
 - **Who sees a chat card:** its creator, and its owner once it is sent. This
   is a new case in the one access policy function ADR-0033 names.
 - **No outside text is stored.** A card keeps pointers and ECHO's own words,
-  never text read from a connected tool (ADR-0032, ADR-0033).
+  never text read from a connected tool (ADR-0032, ADR-0033). Code replaces a
+  title of an outside item in a draft's line and drops a draft that copies
+  six or more consecutive words from an outside item's text, unless the
+  person's question or one of ECHO's own items says the same words.
+- **A dismissed draft is final.** Only its creator ever sees it, and it cannot
+  be reopened, closed or given to someone else.
 - **Edits.** The creator can change the task and the due date. The owner can
   hand the card on or close it.
 - **Send works on one card.**
@@ -128,6 +133,18 @@ Consequences:
   evaluation has to cover "no card here" as well as "card here".
 - An answer that carries cards is a change to the Ask response, so the
   desktop and older clients are affected (ADR-0050, ADR-0051).
+
+Known limits of what was built, found in review on 2026-11-18:
+
+- A phrase shorter than six words taken from an outside item's text can still
+  reach a draft. The person reads every draft before sending it.
+- A person who asks again after an answer was saved but never arrived gets a
+  second draft, because an Ask request carries no retry key. The duplicate is
+  an unsent draft in their own list.
+- If saving a draft fails after the answer's audit row is written, the request
+  fails while the audit still records the answer.
+- A member who stops owning a card while they are reading it may still receive
+  that one read.
 
 Not decided here: the after-approval impact check adopting the same card
 form, a card tool inside the loop, and a plain "new card" form.
