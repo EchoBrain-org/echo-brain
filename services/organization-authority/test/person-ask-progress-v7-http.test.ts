@@ -3,7 +3,8 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   PERSON_ANSWER_PATH_V7, createPersonAskProgressDecoderV3, type OrganizationPersonToolV4,
 } from '@echo-brain/organization-api';
-import { createAgenticAskV5 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import { askFollowUpItemIdV1, createAgenticAskV5, type AskFollowUpDraftV1, type AskFollowUpSinkV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
@@ -67,13 +68,13 @@ const tools = async (access_token: string): Promise<readonly OrganizationPersonT
 }];
 
 /** The `/v7` route as the runtime composes it, the asker's workspace beside the follow-up sources. */
-function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort) {
+function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort, extra: Partial<CreatePersonLiveAnswerRouteOptionsV1> = {}) {
   const sessions = f.openItemsOptions.sessions;
   const projects = new SqliteProjectContextRepositoryV1(f.db);
   const options: CreatePersonLiveAnswerRouteOptionsV1 = { ...liveAskOptions(f, model), workspace: {
     projects: createProjectContextApplicationV1({ authenticate: access_token => sessions.authenticateAccess({ access_token }), repository: projects }),
     grants: personWorkspaceGrantsV1(projects), people: f.directory, tools,
-  } };
+  }, ...extra };
   return serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(options) });
 }
 const ask = askClient({ path: PERSON_ANSWER_PATH_V7, question: QUESTION });
@@ -125,5 +126,30 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     }
     // Each request created its Ask.
     expect(created).toHaveBeenCalledTimes(6);
+  });
+
+  it('binds the follow-ups an answer drafts to the asker and the request, saves them once released, and lists their ids (ADR-0053)', async () => {
+    const f = await sentFixture();
+    const planner = leadsAndTasks();
+    // The writer of a request that saves follow-ups drafts one beside its answer.
+    const model: StructuredGenerationPort = { async generate(input) {
+      const value = await planner.model.generate(input) as Record<string, unknown>;
+      return (input.schema.properties as Readonly<Record<string, unknown>>).follow_ups === undefined ? value : { ...value, follow_ups: [{ task: 'Call the vendor', owner: 'Ari' }] };
+    } };
+    const saved: { readonly principal_id: string; readonly drafts: readonly AskFollowUpDraftV1[] }[] = [];
+    const bound = vi.fn((authorization: PersonAccessAuthorization): AskFollowUpSinkV1 => ({ save: drafts => { saved.push({ principal_id: authorization.principal_id, drafts }); } }));
+    const created = vi.mocked(createAgenticAskV5);
+    created.mockClear();
+    const base = await origin(f, model, { follow_up_drafts: bound });
+    const streamed = await ask(base);
+    const terminal = decode(await streamed.text()).at(-1)!;
+    if (terminal.type !== 'answer') throw new Error('expected the answer event');
+    const request = created.mock.calls[0]![0].follow_ups!.request_id;
+    expect(request).toMatch(/^ask_[0-9a-f-]{36}$/u);
+    const id = askFollowUpItemIdV1(request, 0);
+    expect(terminal.response.follow_ups).toEqual([id]);
+    expect(bound).toHaveBeenCalledTimes(1);
+    // Bound to the asker the request authenticated ("mina", the client's default token).
+    expect(saved).toEqual([{ principal_id: f.openItemsOptions.sessions.authenticateAccess({ access_token: 'mina' }).principal_id, drafts: [{ item_id: id, task: 'Call the vendor', owner_name: 'Ari' }] }]);
   });
 });
