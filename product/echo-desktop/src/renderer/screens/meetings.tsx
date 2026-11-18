@@ -128,7 +128,7 @@ export function Meetings({ toolId }: { toolId: string }) {
       </div>}
       {home?.sources.map(s => <div key={s.source_key} class="source-notes">
         {s.error && <div class="error">{s.error}</div>}
-        {s.pending_imports.map(id => <div key={id} class="notice-line">Extraction queued · {id}
+        {s.pending_imports.map(id => <div key={id} class="notice-line">Extraction queued{meetings.some(m => m.id === id) ? ` · ${meetings.find(m => m.id === id)!.title}` : ''}
           <button type="button" class="link-button" disabled={busy} onClick={() => void run(async () => { await command({ operation: 'cancel_import', source_key: s.source_key, meeting_id: id }); await refresh(); })}>Cancel</button></div>)}
       </div>)}
     {home?.connected && <>

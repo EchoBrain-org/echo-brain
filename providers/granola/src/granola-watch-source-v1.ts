@@ -79,9 +79,9 @@ export const GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 = Object.freeze({
     return { ...rest, ...(Object.keys(retry).length === 0 ? {} : { retry_after: retry }) };
   },
   acquisitionStatus(checkpoint: GranolaCheckpointV1): string | null {
-    const ids = Object.keys(checkpoint.retry_after ?? {});
-    if (ids.length === 0) return null;
-    return ids.length === 1 ? `Waiting to retry meeting ${ids[0]}.` : `Waiting to retry ${ids.length} meetings, including ${ids[0]}.`;
+    const waiting = Object.keys(checkpoint.retry_after ?? {}).length;
+    if (waiting === 0) return null;
+    return `Granola could not give ${waiting === 1 ? '1 meeting' : `${waiting} meetings`} yet. ECHO tries again within 10 minutes.`;
   },
   ready: (checkpoint: GranolaCheckpointV1): boolean => checkpoint.baseline,
 });

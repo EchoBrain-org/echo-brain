@@ -8,7 +8,7 @@ import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authori
 import { impactCardLineV1, impactItemKeyV1, refreshImpactCardV1, storableImpactCardV1, type FreshImpactItemV1, type StoredImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
-import { SqliteTriggerRunsV1, triggerRunStateAtV1, type ApprovalActorV1, type TriggerRunRowV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
+import { SqliteTriggerRunsV1, TRIGGER_RUN_ATTEMPTS_MAX_V1, triggerRunStateAtV1, type ApprovalActorV1, type TriggerRunRowV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
 import type { ImpactItemDraftV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { TicketOwnerAccountsV1 } from '../application/ports/ticket-owner-accounts-v1.js';
 import { matchImpactOwnersV1, type ImpactOwnerCandidateV1, type ImpactOwnerPeopleV1 } from './impact-owner-matching-v1.js';
@@ -19,7 +19,7 @@ import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1
 import type { AgenticAskAuditRequestContextV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import type { PersonEvidenceDeskExclusionsV1 } from './person-evidence-desk-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
-import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, currentCoreRuntimeDetailV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { annotateCoreRuntimeV1, coreRuntimeDiagnosticErrorKindV1, coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, currentCoreRuntimeDetailV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { taskLiveSourcesV1 } from './person-open-items-v1.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
 import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
@@ -159,10 +159,15 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
         .filter(item => (item.citation as { readonly kind?: unknown }).kind !== 'approved_record' && (item.citation as { readonly kind?: unknown }).kind !== 'source_revision').map(item => item.title);
     } catch (error) {
       signal.throwIfAborted();
-      if (!actions.some(action => impactCardLineV1(action.text, PERSON_IMPACT_CARD_LIMITS_V1.expected_chars) !== '') ||
+      // A timeout or an outage is tried again while the run has attempts left: a finished run is frozen, so falling back
+      // on the first one would lose the impact check for good. Only the attempt that would fail the run falls back.
+      const triedAgain = (unavailable(error) || error instanceof AgenticAskDeadlineErrorV1) && row.attempts + 1 < TRIGGER_RUN_ATTEMPTS_MAX_V1;
+      if (triedAgain || !actions.some(action => impactCardLineV1(action.text, PERSON_IMPACT_CARD_LIMITS_V1.expected_chars) !== '') ||
           error instanceof PersonRecordSearchIndexLagV1 ||
           (error instanceof AuthorityOperationError && !['unavailable', 'invalid_output', 'quota_exceeded'].includes(error.code))) throw error;
-      // Research adds external impact. The approved action itself already has an authorized source.
+      // Research adds external impact. The approved action itself already has an authorized source. The run finishes as
+      // done, so the failure it absorbed is reported here or nowhere.
+      observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'research', event: 'failed', error_kind: coreRuntimeDiagnosticErrorKindV1(error), data: { run_id: row.run_id, fallback: 'not_assessed' } });
       card = validatePersonImpactCardV1({ status: 'not_assessed', decided: [], affected: [], unconfirmed: [], people: [], citations: [] });
     }
     const value = storableImpactCardV1(card, outsideLabels);

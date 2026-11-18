@@ -152,6 +152,10 @@ describe('Granola watch over a rolling window, through the shared source cursor'
       expect(f.reads).toEqual([c, b]);
       expect(readGranolaCheckpointV1(pulled.next_cursor!).seen).toEqual({ [b]: ago(20) });
       expect(readGranolaCheckpointV1(pulled.next_cursor!).retry_after).toEqual({ [c]: ago(-10) });
+      // What the person is told names no meeting id.
+      expect(GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1.acquisitionStatus(readGranolaCheckpointV1(pulled.next_cursor!)))
+        .toBe('Granola could not give 1 meeting yet. ECHO tries again within 10 minutes.');
+      expect(GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1.acquisitionStatus(readGranolaCheckpointV1(baseline.next_cursor!))).toBeNull();
       // Restarting during the cooldown skips the failed read. The same version can recover.
       expect(await source.pull({ cursor: pulled.next_cursor })).toEqual({ meetings: [], next_cursor: pulled.next_cursor });
       expect(f.reads).toEqual([c, b]);

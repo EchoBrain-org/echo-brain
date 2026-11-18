@@ -37,9 +37,11 @@ https://claude.ai/code/artifact/ffa8478f-578d-40d0-bc7a-578a66f4adb0.
 ## Approved meeting actions
 
 Every approved action with printable text gets an unsent draft when its impact
-run finishes. The short expected line includes any approved deadline. If
-research fails while the approver still has access, ECHO records impact as
-unassessed and keeps the meeting's own actions. Each Send request carries up
+run finishes. The short expected line includes any approved deadline, which
+the desktop shows as a day ("Due Nov 20"). A timeout or outage is retried up
+to the run's three attempts first. If research still fails while the approver
+has access, ECHO records impact as unassessed and keeps the meeting's own
+actions. Each Send request carries up
 to 40 choices. The desktop batches larger selections, and command replay
 preserves the original result. Earlier completed runs stay frozen.
 
