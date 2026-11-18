@@ -12,6 +12,8 @@ vi.mock('preact/hooks', original => plainHooks(original));
 const DRAFT = 'itm_chat-0001';
 const me = { membership_id: ACCOUNT.membership_id, name: 'Fixture', active: true };
 const sam = { membership_id: 'mem_00000000-0000-4000-8000-000000000007', display_name: 'Sam Lee' };
+const pat = { membership_id: 'mem_00000000-0000-4000-8000-000000000009', display_name: 'Pat Kim' };
+const ownedBy = (person: typeof sam) => ({ ...person, name: person.display_name, active: true, match: 'picked' as const });
 /** Your draft from this chat: not sent, nobody owns it yet, due Nov 20. */
 const drafted = (): OpenItemView => ({
   item_id: DRAFT, run_id: null, kind: 'action', relation: 'needs_updating', expected: 'Update the pricing page', due_on: '2026-11-20',
@@ -33,6 +35,10 @@ let card: OpenItemView | null;
 let refuse: ReturnType<typeof fail> | null;
 let itemReads: number;
 let failReads: boolean;
+/** What another window does to the card as a send reaches the Authority, before it answers. */
+let meanwhile: (() => void) | null;
+/** The Authority delivers to this owner, whatever the send names (to prove the card says what it reports). */
+let deliverTo: typeof sam | null;
 storeLifecycle(new Date('2026-11-18T12:00:00'));
 beforeEach(() => {
   held = new Held();
@@ -40,6 +46,8 @@ beforeEach(() => {
   refuse = null;
   itemReads = 0;
   failReads = false;
+  meanwhile = null;
+  deliverTo = null;
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
     'people.directory': () => ok({ items: [sam], next_cursor: null }),
@@ -62,8 +70,12 @@ beforeEach(() => {
           return ok({ expected: card.expected, due_on: card.due_on });
         }
         case 'send_item': {
+          if (meanwhile) { meanwhile(); meanwhile = null; }
           if (refuse) return refuse;
           const include = request.include as boolean;
+          const pick = [sam, pat].find(person => person.membership_id === request.owner_membership_id);
+          if (deliverTo) card = { ...card!, owner: ownedBy(deliverTo) };
+          else if (pick) card = { ...card!, owner: ownedBy(pick) };
           card = { ...card!, state: include ? 'open' : 'not_relevant', sent_at: '2026-11-18T12:00:00.000Z', state_set_at: '2026-11-18T12:00:00.000Z', state_set_by: me,
             send_included: include, waits_on: 'owner', can: { set_state: true, assign: true, edit: include, send: false } };
           return ok({ state: card.state });
@@ -150,7 +162,8 @@ describe('an answer that drafted a follow-up (ADR-0053)', () => {
     await flush();
     const [send] = runs('send_item');
     expect(send).toMatchObject({ schema_version: 1, operation: 'send_item', item_id: DRAFT, include: true });
-    expect(send).not.toHaveProperty('owner_membership_id');
+    // Bound to the owner the button named.
+    expect(send).toHaveProperty('owner_membership_id', sam.membership_id);
     const shown = cardOf(thread());
     expect(shown.props['data-state']).toBe('open');
     expect(text(byTestId(shown, 'ask-follow-up-line'))).toBe('From this chat · Sent to Sam · Due Nov 21');
@@ -200,5 +213,85 @@ describe('an answer that drafted a follow-up (ADR-0053)', () => {
     await flush();
     await store.copyAnswer(id);
     expect(copied()).not.toContain('Follow-ups');
+  });
+});
+
+describe('review fixes: a send binds what you saw, a stale card waits, and a lost reply is settled by what happened', () => {
+  it('sends to the owner its button names, even when another window changed the owner since, and then says the owner ECHO reports', async () => {
+    card = { ...drafted(), owner: ownedBy(sam) };
+    const { store, thread } = await answered();
+    await store.readAskCards([DRAFT]);
+    expect(text(byTestId(thread(), 'ask-follow-up-send'))).toBe('Send to Sam');
+    // Another window gives it to Pat; this card has not read it again.
+    card = { ...card, owner: ownedBy(pat) };
+    click(byTestId(thread(), 'ask-follow-up-send')[0]);
+    await flush();
+    expect(runs('send_item')).toMatchObject([{ item_id: DRAFT, include: true, owner_membership_id: sam.membership_id }]);
+    expect(text(byTestId(thread(), 'ask-follow-up-said'))).toBe('Sent to Sam');
+    expect(text(byTestId(thread(), 'ask-follow-up-line'))).toMatch(/^From this chat · Sent to Sam/u);
+    // A dismissal names no owner.
+    expect(runs('send_item').every(request => request.include === true)).toBe(true);
+  });
+
+  it('says the owner the Authority reports after a send, never the name the button remembered', async () => {
+    card = { ...drafted(), owner: ownedBy(sam) };
+    const { store, thread } = await answered();
+    await store.readAskCards([DRAFT]);
+    deliverTo = pat;
+    await store.sendAskCard(DRAFT, true);
+    await flush();
+    expect(text(byTestId(thread(), 'ask-follow-up-said'))).toBe('Sent to Pat');
+    expect(text(byTestId(thread(), 'ask-follow-up-line'))).toMatch(/^From this chat · Sent to Pat/u);
+  });
+
+  it('says a card it could not read again could not be refreshed, and offers nothing on the stale copy but Try again', async () => {
+    card = { ...drafted(), owner: ownedBy(sam) };
+    const { store, thread } = await answered();
+    await store.readAskCards([DRAFT]);
+    failReads = true;
+    await store.readAskCards([DRAFT]);
+    const shown = cardOf(thread());
+    expect(text(shown)).toContain('Couldn\'t refresh this follow-up');
+    for (const id of ['ask-follow-up-send', 'ask-follow-up-edit', 'ask-follow-up-dismiss']) expect(byTestId(shown, id)).toEqual([]);
+    expect(elements(shown).filter(node => node.type === 'button').map(text)).toContain('Try again');
+    // Nor does the store act on it.
+    await store.sendAskCard(DRAFT, true);
+    await store.sendAskCard(DRAFT, false);
+    expect(await store.editAskCard(DRAFT, { expected: 'Something else' })).toBe(false);
+    store.toggleOwnerPicker(DRAFT);
+    expect(store.getState().askCards.picker).toBeNull();
+    expect(runs('send_item')).toEqual([]);
+    expect(runs('edit')).toEqual([]);
+    // A read that succeeds makes it actionable again.
+    failReads = false;
+    await store.readAskCards([DRAFT]);
+    expect(byTestId(cardOf(thread()), 'ask-follow-up-send')).toHaveLength(1);
+  });
+
+  it('never says Sent when a send whose reply was lost finds the card dismissed meanwhile, and keeps no command to replay', async () => {
+    card = { ...drafted(), owner: ownedBy(sam) };
+    const { store, thread } = await answered();
+    await store.readAskCards([DRAFT]);
+    meanwhile = () => { card = { ...card!, state: 'not_relevant', sent_at: '2026-11-18T12:00:00.000Z', state_set_at: '2026-11-18T12:00:00.000Z', send_included: false,
+      can: { ...card!.can, send: false, edit: false } }; };
+    refuse = fail('timeout', { retryable: true, mutation_outcome: 'unknown' });
+    await store.sendAskCard(DRAFT, true);
+    await flush();
+    const said = store.getState().askCards.cards[DRAFT]!.said!;
+    expect(said).toEqual({ words: 'Not sent: it was dismissed meanwhile', error: true });
+    expect(text(byTestId(thread(), 'ask-follow-up-said'))).not.toMatch(/^Sent/u);
+    expect(store.getState().askCards.cards[DRAFT]!.send).toBeNull();
+  });
+
+  it('never says Dismissed when a dismissal whose reply was lost finds the card sent meanwhile', async () => {
+    card = { ...drafted(), owner: ownedBy(sam) };
+    const { store } = await answered();
+    await store.readAskCards([DRAFT]);
+    meanwhile = () => { card = { ...card!, owner: ownedBy(pat), state: 'open', sent_at: '2026-11-18T12:00:00.000Z', state_set_at: '2026-11-18T12:00:00.000Z',
+      send_included: true }; };
+    refuse = fail('timeout', { retryable: true, mutation_outcome: 'unknown' });
+    await store.sendAskCard(DRAFT, false);
+    await flush();
+    expect(store.getState().askCards.cards[DRAFT]!.said).toEqual({ words: 'Not dismissed: it was sent to Pat meanwhile', error: true });
   });
 });

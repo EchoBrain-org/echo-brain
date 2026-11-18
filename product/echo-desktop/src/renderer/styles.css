@@ -1240,3 +1240,4 @@ button.alt-group-head:hover, button.alt-group-head:focus-visible { color: var(--
 .edit-follow-up-actions { display: flex; gap: 8px; }
 .card-head .edit-follow-up { margin-top: 10px; }
 .follow-up-from { flex: none; font-size: 12px; color: var(--faint); white-space: nowrap; }
+.ask-follow-up-stale { padding-left: 36px; font-size: 12.5px; }
