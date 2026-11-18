@@ -107,9 +107,15 @@ function draftedGap(count: number): string {
 }
 /** How many words in a row, shared with an outside item's text or title, make a drafted task a copy of it (ADR-0053). */
 const COPIED_RUN_WORDS = 6;
-/** One character of a script written without spaces (Han, kana, Thai, Lao, Khmer, Myanmar), or a run of any other letters and digits. */
-const UNSPACED = String.raw`\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}`;
-const UNSPACED_CHARACTER_OR_WORD = new RegExp(String.raw`[${UNSPACED}]|(?:(?![${UNSPACED}])[\p{L}\p{N}\p{M}])+`, "gu");
+/**
+ * One character of a script written without spaces (Han, kana, Thai, Lao, Khmer, Myanmar), or a run of any other letters
+ * and digits. Matched by script extensions, so a mark these scripts share (the prolonged sound mark ー, script Common, or
+ * an iteration mark) is a character of their writing too, never glued to its neighbours.
+ */
+const UNSPACED = String.raw`\p{scx=Han}\p{scx=Hira}\p{scx=Kana}\p{scx=Thai}\p{scx=Laoo}\p{scx=Khmr}\p{scx=Mymr}`;
+// Script extensions also take in punctuation these scripts share (。、「」): only a letter, digit or mark is a word, so
+// punctuation, changed or dropped, still hides no copy.
+const UNSPACED_CHARACTER_OR_WORD = new RegExp(String.raw`(?=[\p{L}\p{N}\p{M}])[${UNSPACED}]|(?:(?![${UNSPACED}])[\p{L}\p{N}\p{M}])+`, "gu");
 /** Each run of COPIED_RUN_WORDS words of `text`: its words are its letters and digits, NFC and case-folded, so punctuation and spacing hide no copy. */
 function wordRuns(text: string): readonly string[] {
   // A script written without spaces between words has no word to count: each of its characters counts as one, so a copied

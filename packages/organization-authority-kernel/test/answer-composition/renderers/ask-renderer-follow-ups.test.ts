@@ -200,6 +200,22 @@ describe("Ask renderer: follow-ups the writer drafts (ADR-0053)", () => {
     expect(corrections).toMatchObject({ follow_up_dropped: 2 });
   });
 
+  it("counts a mark these scripts share, such as the prolonged sound mark ー or an iteration mark, as a word of its own", async () => {
+    const ja = ticketBody(7, "試合はゴーールです。人々々は喜んだ。");
+    const { rendered, corrections } = await observed(() => alone({ bundle: bundle([decided, ja]), request_id: REQUEST, replies: [answered([
+      // Six characters copied, two of them ー (script Common): dropped.
+      { task: "ゴーールです" },
+      // Six characters copied, around the iteration mark 々: dropped.
+      { task: "人々々は喜ん" },
+      // Five of them: kept.
+      { task: "ゴーールで確認" },
+      // Copied across the ticket's full stop with the stop left out: punctuation is no word, so this is still a run.
+      { task: "ールです人々" },
+    ])] }).render());
+    expect(rendered.result.follow_ups.map(value => value.task)).toEqual(["ゴーールで確認"]);
+    expect(corrections).toMatchObject({ follow_up_dropped: 3 });
+  });
+
   it("keeps drafts with the same task and owner apart when their day or their item differs, and drops only a true repeat", async () => {
     const { rendered, corrections } = await observed(() => alone({ bundle: bundle([decided, ticket]), request_id: REQUEST, replies: [answered([
       { task: "Check the status", owner: "Sam Lee", about: "E1" },
