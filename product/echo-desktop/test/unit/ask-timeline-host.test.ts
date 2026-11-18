@@ -240,6 +240,17 @@ describe('the timeline file (C5)', () => {
     }
   });
 
+  it('keeps the ids of the follow-ups an answer drafted, and never a card itself (ADR-0053)', () => {
+    const original = turn();
+    const kept = { ...original, answer: { ...original.answer, follow_ups: ['itm_chat-0001', 'itm_chat-0002'] } };
+    putTimeline(person, ARI, kept, NOW);
+    expect(readTimeline(person, ARI)).toEqual([kept]);
+    for (const follow_ups of [[], ['itm_chat-0001', 'itm_chat-0001'], ['run_1'], [{ item_id: 'itm_chat-0001', expected: 'Update the pricing page' }],
+      Array.from({ length: 11 }, (_, at) => `itm_chat-${String(at).padStart(4, '0')}`), 'itm_chat-0001']) {
+      expect(timelineTurn({ ...kept, answer: { ...kept.answer, follow_ups } })).toBeNull();
+    }
+  });
+
   it('keeps an answer arranged in blocks (ADR-0051) as the page wrote it, and refuses blocks the page could not draw', () => {
     const scope = { kind: 'global' } as const;
     /** An answer as the page keeps it: what the host handed it, less what only its Ask reads. */

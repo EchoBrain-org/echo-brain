@@ -71,13 +71,13 @@ describe('view models copy only what the renderer may see', () => {
       item_id: 'itm_00000001', run_id: 'run_00000001', kind: 'ticket', relation: 'conflicts', expected: 'launch next week', approver: person,
       owner: { ...person, match: 'jira_account' }, waits_on: 'owner', state: 'open', created_at: '2026-10-07T10:05:00.000Z', sent_at: '2026-10-07T11:00:00.000Z',
       state_set_at: '2026-10-07T11:00:00.000Z', state_set_by: person, owner_set_at: '2026-10-07T12:00:00.000Z', owner_set_by: person, send_included: true,
-      can: { set_state: true, assign: true }, reach: 'no_access',
+      due_on: null, can: { set_state: true, assign: true, edit: false, send: false }, reach: 'no_access',
     } as const;
     // A meeting's action is never read live: it crosses as ECHO's own words.
     const action = { ...base, item_id: 'itm_00000002', kind: 'action', relation: 'needs_updating', expected: 'Send the revised quote', decision, reach: 'not_read' } as const;
     expect(openItemView(action as unknown as Parameters<typeof openItemView>[0])).toStrictEqual(action);
     const opened = { ...base, decision, reach: 'opened', current: { citation, says_now: 'Planned for the end of the month.', due_at: '2026-10-30' } };
-    const home = homeView({ send: [], items: [opened, base], waiting: 1 } as unknown as Parameters<typeof homeView>[0]);
+    const home = homeView({ send: [], items: [opened, base], waiting: 1, drafts: [] } as unknown as Parameters<typeof homeView>[0]);
     expect(home.items[0]).toEqual({ ...base, decision, reach: 'opened', current: { source: { kind: 'ticket', tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink },
       says_now: 'Planned for the end of the month.', due_at: '2026-10-30' } });
     expect(home.items[1]).toStrictEqual(base);
@@ -91,6 +91,19 @@ describe('view models copy only what the renderer may see', () => {
     expect(page.items[0]?.current?.source).toEqual({ kind: 'ticket', tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink });
     expect(page.summary.by_decision).toEqual([{ record_sha256: sha('2'), unsent: 0, open: 1 }]);
     expect(openItemView(opened as unknown as Parameters<typeof openItemView>[0]).current?.source).toMatchObject({ kind: 'ticket' });
+  });
+
+  it('a follow-up from a chat crosses with no run and no decision, its due date and what its creator may do, and Home lists it as a draft (ADR-0053)', () => {
+    const person = { membership_id: 'mem_00000000-0000-4000-8000-000000000001', name: 'Ari', active: true };
+    const draft = {
+      item_id: 'itm_chat-0001', run_id: null, kind: 'action', relation: 'needs_updating', expected: 'Update the pricing page', due_on: '2026-11-20',
+      approver: person, owner: { ...person, match: 'approver' }, waits_on: 'approver', state: 'unsent', created_at: '2026-11-18T10:00:00.000Z', sent_at: null,
+      state_set_at: null, state_set_by: null, owner_set_at: null, owner_set_by: null, send_included: null,
+      can: { set_state: false, assign: true, edit: true, send: true }, reach: 'not_read',
+    } as const;
+    expect(openItemView(draft as unknown as Parameters<typeof openItemView>[0])).toStrictEqual(draft);
+    const home = homeView({ send: [], items: [], waiting: 0, drafts: [draft] } as unknown as Parameters<typeof homeView>[0]);
+    expect(home.drafts).toStrictEqual([draft]);
   });
 
   it('status keeps the account and nothing else, not even when the weekly sign-in is due', () => {
@@ -718,6 +731,15 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
     // An answer to an Ask that carried nothing says none of it.
     const plain = answerView(line({}), scope);
     for (const key of ['question', 'since', 'choices']) expect(plain).not.toHaveProperty(key);
+  });
+
+  it('carries the ids of the follow-ups an answer drafted, and nothing of them more (ADR-0053)', () => {
+    const drafted = answerView(line({ follow_ups: ['itm_chat-0001', 'itm_chat-0002'] }), scope);
+    expect(drafted.follow_ups).toEqual(['itm_chat-0001', 'itm_chat-0002']);
+    expect(answerView(line({}), scope)).not.toHaveProperty('follow_ups');
+    // The contract's own bounds hold: none listed is no list, and an id that is not an open item's is refused.
+    expect(() => answerView(line({ follow_ups: [] }), scope)).toThrow(ViewError);
+    expect(() => answerView(line({ follow_ups: ['run_1'] }), scope)).toThrow(ViewError);
   });
 
   // Its bounds (two to four choices, each a label and a full question; no off_scope outcome) are the contract's to test

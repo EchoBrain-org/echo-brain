@@ -355,6 +355,11 @@ export interface Answer {
   readonly since?: readonly AnswerStatement[];
   /** Only with outcome `clarify`: two to four things the question could mean. */
   readonly choices?: readonly AskChoice[];
+  /**
+   * The follow-ups the answer drafted (ADR-0053), by open-item id, in the writer's order; only when there is one. Each
+   * waits, not sent, in the asker's own list; the page reads each card live (`runs` `item`), so a turn keeps only the ids.
+   */
+  readonly follow_ups?: readonly string[];
 }
 
 /**
@@ -632,9 +637,10 @@ interface OpenItemCurrent extends Omit<PersonOpenItemCurrentV1, 'citation'> {
 export interface OpenItemView extends Omit<PersonOpenItemV1, 'current'> {
   readonly current?: OpenItemCurrent;
 }
-/** Home's part of the runs: Send rows, the items that wait on you, and what waits on others. */
-export interface HomeView extends Omit<PersonRunsResultsV1['home'], 'items'> {
+/** Home's part of the runs: Send rows, the items that wait on you, what waits on others, and your follow-ups from a chat not sent yet. */
+export interface HomeView extends Omit<PersonRunsResultsV1['home'], 'items' | 'drafts'> {
   readonly items: readonly OpenItemView[];
+  readonly drafts: readonly OpenItemView[];
 }
 /** A page of a scope's open items, its summary, and each decision's check. */
 export interface OpenItemsView extends Omit<PersonRunsResultsV1['items'], 'items'> {
@@ -657,6 +663,8 @@ export interface RunsResults {
   send: PersonRunsResultsV1['send'];
   set_state: PersonRunsResultsV1['set_state'];
   assign: PersonRunsResultsV1['assign'];
+  send_item: PersonRunsResultsV1['send_item'];
+  edit: PersonRunsResultsV1['edit'];
 }
 
 export interface HostMethods {
@@ -835,7 +843,7 @@ export function isWriteCall(method: string, params: unknown): boolean {
 }
 /** Every runs operation the page sends: only these reach the log by name. */
 const RUNS_OPERATIONS: ReadonlySet<string> = new Set<PersonRunsRequestV1['operation']>(
-  ['list', 'home', 'next', 'retry', 'items', 'item', 'send', 'set_state', 'assign'],
+  ['list', 'home', 'next', 'retry', 'items', 'item', 'send', 'set_state', 'assign', 'send_item', 'edit'],
 );
 /**
  * A call as desktop.log names it, content-free: the method, and for runs its operation and how much it read ("runs.home",

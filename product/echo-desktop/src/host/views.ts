@@ -279,7 +279,8 @@ export function recordRead(value: unknown): RecordRead | null {
  * ADR-0040, research tool contract v1). An answer to an Ask that carried `previous`
  * (ADR-0047) also says the full question it answers, Ask again's "since" (its
  * citations among the answer's), or, asking which one (`clarify`), the
- * choices and no part. Its diagnostic notice stays out; the desktop and Copy
+ * choices and no part. An answer that drafted follow-ups (ADR-0053) names them by id only: the page reads each card
+ * itself, so what it shows of one is never older than the read. Its diagnostic notice stays out; the desktop and Copy
  * derive actionable explanations from gap_details.
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
@@ -289,7 +290,8 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
   return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome, receipt: { looked_through: receipt.looked_through },
     ...(result.question === undefined ? {} : { question: result.question }),
     ...(result.since === undefined ? {} : { since: result.since.statements }),
-    ...(result.choices === undefined ? {} : { choices: result.choices }) };
+    ...(result.choices === undefined ? {} : { choices: result.choices }),
+    ...(result.follow_ups === undefined ? {} : { follow_ups: result.follow_ups }) };
 }
 
 /** Who alone may read an item cited as private: you, or the approver. */
@@ -396,15 +398,18 @@ export function openItemView(item: PersonOpenItemV1): OpenItemView {
       ...(current.status === undefined ? {} : { status: current.status }),
       ...(current.due_at === undefined ? {} : { due_at: current.due_at }),
     } }),
-    relation: item.relation, expected: item.expected, approver: item.approver, owner: item.owner, waits_on: item.waits_on, state: item.state,
+    relation: item.relation, expected: item.expected, due_on: item.due_on, approver: item.approver, owner: item.owner, waits_on: item.waits_on, state: item.state,
     created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at, state_set_by: item.state_set_by, owner_set_at: item.owner_set_at,
     owner_set_by: item.owner_set_by, send_included: item.send_included, can: item.can, reach: item.reach,
   };
 }
 
-/** Home's part of the runs: Send rows, the items that wait on this viewer, and how many of the rest wait on others. */
+/**
+ * Home's part of the runs: Send rows, the items that wait on this viewer, how many of the rest wait on others, and the
+ * viewer's own follow-ups from a chat not sent yet (ADR-0053).
+ */
 export function homeView(result: PersonRunsResultsV1['home']): HomeView {
-  return { send: result.send, items: result.items.map(openItemView), waiting: result.waiting };
+  return { send: result.send, items: result.items.map(openItemView), waiting: result.waiting, drafts: result.drafts.map(openItemView) };
 }
 
 /** A page of a scope's open items, with the scope's summary and each decision's check. */
