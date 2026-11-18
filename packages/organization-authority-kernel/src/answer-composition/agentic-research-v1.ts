@@ -1,4 +1,5 @@
 import type { AgenticListEvidenceV1 } from "./agentic-list-evidence-v1.js";
+import type { AskFollowUpDraftV1 } from "./ask-follow-ups-v1.js";
 
 /**
  * The research loop's types, separate from any one consumer (research loop
@@ -146,6 +147,8 @@ export interface AgenticResearchResultV1 {
     readonly admission?: AgenticResearchAdmissionV1;
     /** Ask only: the request includes a change or message that its read-only tools cannot execute. */
     readonly unsupported_action?: true;
+    /** Ask only (ADR-0053): the person asked for a task to be handed to someone or tracked, which Ask's writer may draft. */
+    readonly follow_up_requested?: true;
   };
   readonly cost: {
     readonly rounds: number;
@@ -167,4 +170,6 @@ export interface AgenticAskWithResearchV1<R> {
   readonly research: AgenticResearchResultV1;
   /** Short ids handed to the writer, in order: items it read, then list rows it saw (ADR-0041); empty when the writer was not called. */
   readonly writer_evidence: readonly string[];
+  /** The follow-ups the answer drafted and its release saved (ADR-0053); absent for none. */
+  readonly follow_ups?: readonly AskFollowUpDraftV1[];
 }
