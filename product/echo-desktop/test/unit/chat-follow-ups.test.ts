@@ -27,12 +27,18 @@ let held: Held;
 let lost: Map<string, (item: OpenItemView) => OpenItemView>;
 /** Reads of one item fail while set, as an outage would. */
 let failItem: boolean;
+/** Reads of a list's rows fail while set. */
+let failItems: boolean;
+/** Items a write makes gone for you: a send_item's reply is then lost; a set_state answers. */
+let vanish: Set<string>;
 storeLifecycle(new Date('2026-11-18T12:00:00'));
 beforeEach(() => {
   items = new Map();
   held = new Held();
   lost = new Map();
   failItem = false;
+  failItems = false;
+  vanish = new Set();
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
     runs: params => {
@@ -40,7 +46,7 @@ beforeEach(() => {
       const item = items.get(request.item_id as string);
       switch (request.operation) {
         case 'item': return failItem ? fail('timeout', { retryable: true }) : item ? ok(item) : fail('not_found');
-        case 'items': return ok({ items: [...items.values()], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] });
+        case 'items': if (failItems) return fail('timeout', { retryable: true }); return ok({ items: [...items.values()], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] });
         case 'send': {
           for (const entry of request.items as { item_id: string; include: boolean }[]) {
             const row = items.get(entry.item_id)!;
@@ -50,10 +56,12 @@ beforeEach(() => {
           return ok({ sent: 1, not_relevant: 0 });
         }
         case 'set_state': {
+          if (vanish.has(item!.item_id)) { items.delete(item!.item_id); return ok({ state: request.state }); }
           items.set(item!.item_id, { ...item!, state: request.state as OpenItemView['state'], state_set_at: '2026-11-18T12:10:00.000Z', state_set_by: me });
           return ok({ state: request.state });
         }
         case 'send_item': {
+          if (vanish.has(item!.item_id)) { items.delete(item!.item_id); return fail('timeout', { retryable: true, mutation_outcome: 'unknown' }); }
           const elsewhere = lost.get(item!.item_id);
           if (elsewhere) { items.set(item!.item_id, elsewhere(item!)); return fail('timeout', { retryable: true, mutation_outcome: 'unknown' }); }
           const state = request.include ? 'open' : 'not_relevant';
@@ -377,5 +385,73 @@ describe('third review: meeting wording, and nothing acts from a copy not read s
     store.retryFollowUp();
     await flush();
     expect(byTestId(shown(), 'follow-up-edit')).toHaveLength(1);
+  });
+});
+
+describe('last review: a meeting send not read again names no one, and a gone chat follow-up offers only the way back', () => {
+  const meeting = (owner = MINA): OpenItemView => followUp(1, { approver: me, owner: { ...owner, match: 'name' }, state: 'unsent', sent_at: null, state_set_at: null,
+    state_set_by: null, send_included: null, waits_on: 'approver', can: { set_state: false, assign: true, edit: false, send: false } });
+  const sentChat = (): OpenItemView => ({ ...owned(1), state: 'open', sent_at: '2026-11-18T11:00:00.000Z', state_set_at: '2026-11-18T11:00:00.000Z', state_set_by: me,
+    send_included: true, waits_on: 'owner', can: { set_state: true, assign: true, edit: true, send: false } });
+  async function page(item: OpenItemView, kept = true) {
+    const store = await startStore();
+    if (kept) items.set(item.item_id, item);
+    await store.openFollowUp(item.item_id, item);
+    await flush();
+    const { FollowUp } = await import('../../src/renderer/screens/follow-ups.js');
+    const shown = () => render(FollowUp({ state: store.getState(), page: store.followUpShown() as ItemPage }));
+    return { store, shown, buttons: () => elements(shown()).filter(node => node.type === 'button').map(text) };
+  }
+  const goneWords = 'You no longer see this follow-up';
+
+  it('a confirmed meeting send whose read again failed says Sent, naming no one, on its page and in Send N', async () => {
+    const { store } = await page(meeting(MINA));
+    items.set(followUp(1).item_id, meeting(RAFAEL));
+    failItem = true;
+    await store.sendFollowUp(true);
+    await flush();
+    expect((store.followUpShown() as ItemPage).said).toEqual({ words: 'Sent' });
+
+    const listed = await startStore();
+    items.clear();
+    items.set(followUp(1).item_id, meeting(RAFAEL));
+    failItem = true;
+    failItems = true;
+    const list: FollowUpList = {
+      kind: 'list', seq: 1, scope: 'involved', title: null, loading: false, items: [meeting(MINA)], live: {}, reading: false,
+      reads: [{ parts: ['active'], pages: [{ cursor: null, ids: [followUp(1).item_id] }], next: null }], summary: { ...EMPTY_SUMMARY, unsent: 1 }, stage: null,
+      ticks: { [followUp(1).item_id]: true }, sends: {}, expanded: {}, busy: false, said: null, picker: null, stale: false,
+    };
+    listed.getState().followUps = { route: listed.getState().route, views: [list], changed: false };
+    await listed.sendTicked(true);
+    await flush();
+    expect((listed.followUpShown() as FollowUpList).said).toEqual({ words: 'Sent' });
+  });
+
+  it('a chat follow-up whose send reply was lost and that is gone says so, and offers only Back', async () => {
+    const { store, shown, buttons } = await page(owned(1));
+    vanish.add('itm_chat-0001');
+    await store.sendFollowUp(true);
+    await flush();
+    expect((store.followUpShown() as ItemPage).gone).toBe(true);
+    expect(text(shown())).toContain(goneWords);
+    expect(buttons()).toEqual(['Back']);
+  });
+
+  it('a chat follow-up gone after a confirmed Mark done offers no Undo, only Back', async () => {
+    const { store, shown, buttons } = await page(sentChat());
+    vanish.add('itm_chat-0001');
+    await store.setFollowUpState('done');
+    await flush();
+    expect((store.followUpShown() as ItemPage).gone).toBe(true);
+    expect(text(shown())).toContain(goneWords);
+    expect(buttons()).toEqual(['Back']);
+  });
+
+  it('a chat follow-up page whose read says it is gone says so, with no Try again', async () => {
+    const { store, shown, buttons } = await page(owned(1), false);
+    expect((store.followUpShown() as ItemPage).gone).toBe(true);
+    expect(text(shown())).toContain(goneWords);
+    expect(buttons()).toEqual(['Back']);
   });
 });

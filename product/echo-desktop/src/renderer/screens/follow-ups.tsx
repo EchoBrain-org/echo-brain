@@ -452,7 +452,8 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
     return (
       <div class="column center" ref={box} data-testid="follow-up-gone">
         <h1 class="card-title" tabIndex={-1}>{itemTitle(item)}</h1>
-        <SaidLine said={page.said} testid="follow-up-said" line={said} />
+        {/* Gone, nothing acts on it: on a follow-up from a chat (ADR-0053) no Undo either, only Back. */}
+        <SaidLine said={page.said && item.run_id === null ? { ...page.said, undo: undefined } : page.said} testid="follow-up-said" line={said} />
         <div class="notice">You no longer see this follow-up</div>
         <button type="button" class="link-button" onClick={closeFollowUp}>Back</button>
       </div>

@@ -6572,8 +6572,11 @@ export async function sendTicked(include: boolean): Promise<void> {
   const sentTo = went.map(item => (failedOf(item) === undefined && item.run_id === null ? item : fresh.get(item.item_id) ?? item).owner);
   // What became of what went since, said once: the one, or how many.
   const since = went.flatMap(item => { const read = item.run_id === null ? fresh.get(item.item_id) : undefined; const words = read ? sinceWords(read, include) : null; return words === null ? [] : [words]; });
-  const done = went.length === 0 ? null : since.length === 0 ? sentWords(sentTo, account.membership_id, include)
-    : since.length === 1 ? `${sentWords(sentTo, account.membership_id, include)}. ${since[0]}` : `${sentWords(sentTo, account.membership_id, include)} · ${since.length} changed since`;
+  // A meeting row that could not be read again names no one: who has it now is not known ("Sent", "Sent 2").
+  const unnamed = went.some(item => item.run_id !== null && !fresh.has(item.item_id));
+  const sentLine = include && unnamed ? (went.length === 1 ? 'Sent' : `Sent ${went.length}`) : sentWords(sentTo, account.membership_id, include);
+  const done = went.length === 0 ? null : since.length === 0 ? sentLine
+    : since.length === 1 ? `${sentLine}. ${since[0]}` : `${sentLine} · ${since.length} changed since`;
   const other = elsewhere.length === 0 ? null
     : elsewhere.length === 1 ? meanwhileWords(fresh.get(elsewhere[0]!.item_id)!, include, account.membership_id) : `${elsewhere.length} changed meanwhile`;
   const left = ticked.length - went.length - elsewhere.length;
@@ -6624,6 +6627,11 @@ async function readItem(mine: number): Promise<void> {
     const current = viewOf('item', mine);
     if (!current || !sameAccount(account)) return;
     if ('failure' in read) {
+      // A follow-up from a chat (ADR-0053) that no longer exists for you is gone: the page says so and offers only Back.
+      if (!live && current.item?.run_id === null && read.failure.code === 'not_found') {
+        setView({ ...current, loading: false, failure: undefined, read: false, picker: null, gone: true });
+        return;
+      }
       const outage = current.item !== null && !ACCESS_LOST.includes(read.failure.code) && !ACCOUNT_GONE.includes(read.failure.code);
       setView({ ...current, loading: false, failure: read.failure, ...(live ? {} : { read: false, ...(current.item?.run_id === null ? { picker: null } : {}) }),
         ...(outage ? { live: { [current.item_id]: UNREAD, ...current.live } } : {}) });
@@ -6651,7 +6659,7 @@ async function rereadItem(mine: number): Promise<OneRead | null> {
   // closes; a meeting's keeps what it did before.
   const chat = current.item?.run_id === null;
   setView('item' in read ? { ...current, item: read.item, read: true, ...(chat ? { failure: undefined } : {}) }
-    : { ...current, read: false, ...(chat && read.failure.code !== 'not_found' ? { failure: read.failure, picker: null } : {}) });
+    : { ...current, read: false, ...(!chat ? {} : read.failure.code === 'not_found' ? { picker: null, gone: true as const } : { failure: read.failure, picker: null }) });
   return read;
 }
 
@@ -6716,8 +6724,11 @@ async function changeItem(view: FollowUpList | ItemPage, item_id: string, write:
   if (!current) return { went: false, unknown, confirmed: !failure };
   const settled = read !== null && 'item' in read;
   const went = !failure || (settled && landed(read.item));
-  const gone = !failure && read !== null && 'failure' in read && read.failure.code === 'not_found';
-  const said: Said = !went ? (!unknown ? changeFailed(failure!) : settled ? { words: message({ code: 'not_saved', retryable: true }), error: true } : { words: message(failure!), error: true })
+  // A follow-up from a chat (ADR-0053) read again as no longer there for you is gone, whether the write's reply came or not.
+  const chatPage = current.kind === 'item' && current.item?.run_id === null;
+  const gone = (!failure || chatPage) && read !== null && 'failure' in read && read.failure.code === 'not_found';
+  const said: Said | null = gone && chatPage ? (failure ? null : { words: done.words })
+    : !went ? (!unknown ? changeFailed(failure!) : settled ? { words: message({ code: 'not_saved', retryable: true }), error: true } : { words: message(failure!), error: true })
     : gone && current.kind === 'list' ? { words: `${done.words} · You no longer see it` } : done;
   const answer = { ...current, busy: false, said };
   setView(gone && answer.kind === 'item' ? { ...answer, gone: true } : answer);
@@ -6751,9 +6762,11 @@ export async function sendFollowUp(include: boolean): Promise<void> {
   // Confirmed, it went to the owner it named; settled by a read again, to the owner that read shows. Then what became of it since.
   // A meeting's send names no owner: it is said from the read again, as it always was, and nothing more.
   const chat = item.run_id === null;
-  const to = confirmed && chat ? item.owner : fresh?.owner ?? item.owner;
+  // A meeting's send that could not be read again names no one: who has it now is not known ("Sent").
+  const to = confirmed && chat ? item.owner : fresh?.owner ?? null;
+  const words = to === null ? (include ? 'Sent' : 'Dismissed') : sentWords([to], me, include);
   setView({ ...current, send: went || elsewhere ? null : kept.send,
-    ...(went && current.said && !current.said.error ? { said: { words: chat ? landedWords(sentWords([to], me, include), fresh, include) : sentWords([to], me, include) } } : {}),
+    ...(went && current.said && !current.said.error ? { said: { words: chat ? landedWords(words, fresh, include) : words } } : {}),
     ...(elsewhere ? { said: { words: meanwhileWords(elsewhere, include, me), error: true as const } }
       : kept.send && !went && !unknown ? { said: { words: notSent(include), error: true as const } } : {}) });
 }
