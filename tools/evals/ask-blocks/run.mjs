@@ -67,7 +67,7 @@ export const CASE_SETS = Object.freeze({
   // the writer's own reply together with the released answer, and a release from code's fallback fails. Full traces.
   lists: Object.freeze({ file: LISTS_CASES_FILE, count: LIST_CASE_IDS.length, load: loadListCases, fixture: "lists", askedAt: (document) => document.asked_at,
     timeoutMs: 120_000, maxTimeoutMs: 180_000, traces: true, exitsOnFailure: true,
-    grade: (caseDefinition, { reply, read, response, fallbacks }) => gradeLists(caseDefinition, { reply, read, response, fallbacks }),
+    grade: (caseDefinition, { reply, read, response, fallbacks, oldReplyShape }) => gradeLists(caseDefinition, { reply, read, response, fallbacks, oldReplyShape }),
     summarize: (trials) => summarizeLists(trials), decide: decideLists,
     progress: (result) => ({ kind: "echo-ask-lists-evaluation-progress-v1", case_id: result.case_id, trial: result.trial, checks: result.grade.checks, attempts: result.attempts.length }),
     printed: ({ summary: s, decision }) => ({ passed: `${s.passed}/${s.trials}`, decision, checks: checkCounts(s.checks) }) }),
@@ -90,6 +90,8 @@ export function help() {
     "  --concurrency N     Model calls at once, 1 through 6 (default: 4).",
     "  --timeout-ms N      Per-trial timeout of the whole Ask, 15000 through 180000 (default: 120000); for wording and",
     "                      follow_ups 15000 through 85000 (default: 60000).",
+    "  --reply-shape SHAPE With --case-set lists: list-blocks (default) or before-adr-0054, which also credits a reply's",
+    "                      top-level \"lists\" as placed lists; only for the record run on main.",
     "  --writer ROUTE      openrouter (default) or claude-account: the product's personal Claude account writer, the",
     "                      same model through the Claude Agent SDK and your own signed-in claude binary.",
     "  --claude-executable PATH  With --writer claude-account: the signed-in claude binary.",
@@ -107,7 +109,7 @@ export function help() {
 }
 
 export function parseArgs(argv) {
-  const options = { run: false, credentialFile: null, out: null, caseSet: "main", caseIds: null, trials: TRIALS, concurrency: 4, timeoutMs: null, writer: "openrouter", claudeExecutable: null };
+  const options = { run: false, credentialFile: null, out: null, caseSet: "main", caseIds: null, trials: TRIALS, concurrency: 4, timeoutMs: null, writer: "openrouter", claudeExecutable: null, oldReplyShape: false };
   const list = (value) => value.split(",").map((part) => part.trim()).filter(Boolean);
   if (readFlags(argv, options, {
     "--credential-file": (value) => { options.credentialFile = value; },
@@ -117,8 +119,10 @@ export function parseArgs(argv) {
     "--trials": (value) => { options.trials = Number(value); },
     "--concurrency": (value) => { options.concurrency = Number(value); },
     "--timeout-ms": (value) => { options.timeoutMs = Number(value); },
+    "--reply-shape": (value) => { if (value !== "list-blocks" && value !== "before-adr-0054") throw new Error("--reply-shape must be list-blocks or before-adr-0054"); options.oldReplyShape = value === "before-adr-0054"; },
     ...writerFlags(options),
   })) return { help: true };
+  if (options.oldReplyShape && options.caseSet !== "lists") throw new Error("--reply-shape before-adr-0054 is only for --case-set lists");
   assertWriterRoute(options);
   assertExplicitRun(options);
   options.trials = boundedInteger(options.trials, "--trials", 1, TRIALS);
@@ -226,7 +230,7 @@ export async function runTrial(set, caseDefinition, trial, prompts, evidence, do
   }
   // The writer's own reply, for a traced set: its last call that did not fail.
   const reply = set.traces ? attempts.filter((entry) => entry.error === undefined).at(-1)?.value ?? null : null;
-  const grade = set.grade(caseDefinition, { read, response, evidence, drafts, reply, fallbacks: audits.at(-1)?.fallbacks ?? null });
+  const grade = set.grade(caseDefinition, { read, response, evidence, drafts, reply, fallbacks: audits.at(-1)?.fallbacks ?? null, oldReplyShape: options.oldReplyShape === true });
   const kept = set.traces ? { attempts, read, response }
     : { outcome: response?.outcome ?? null, gaps: Object.freeze((response?.parts ?? []).flatMap((part) => (part.gap === undefined ? [] : [part.gap]))), attempts };
   return Object.freeze({ case_id: caseDefinition.id, ...(caseDefinition.group === undefined ? {} : { group: caseDefinition.group }), trial, ...kept,
@@ -287,6 +291,8 @@ export async function run(options, dependencies = {}) {
     synthetic_only: true,
     complete,
     case_set: caseSet,
+    // Only the record run on main credits the reply shape before ADR-0054.
+    ...(options.oldReplyShape === true ? { reply_shape: "before-adr-0054" } : {}),
     cases_sha256: sha256(readFileSync(set.file)),
     code: Object.freeze({ before: identityBefore, after: identityAfter, unchanged: sha256(JSON.stringify(identityBefore)) === sha256(JSON.stringify(identityAfter)) }),
     model,

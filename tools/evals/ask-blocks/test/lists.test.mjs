@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { caseAsk, caseItems, scriptedModel } from "../../shared/ask-cases.mjs";
 import { CASE_IDS, PASS, caseProblems, decide, gradeTrial, loadCases, placedLists, releasedLists, summarize } from "../lists.mjs";
-import { run } from "../run.mjs";
+import { parseArgs, run } from "../run.mjs";
 
 const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072 };
 const document = loadCases();
@@ -51,9 +51,11 @@ test("refuses a set that is not the registered one", () => {
   assert.deepEqual(caseProblems(wrongCount), ["case how-many: count is the whole list's, with its noun"]);
 });
 
-test("reads a placed list from a list block and from the reply shape before ADR-0054", () => {
+test("reads a placed list from a list block, and from the reply shape before ADR-0054 only when asked to", () => {
   assert.deepEqual(placedLists({ blocks: [{ block: "list", list: "L1", where: { field: "status", value: "open" } }] }), [{ list: "L1", where: { field: "status", value: "open" } }]);
-  assert.deepEqual(placedLists({ lists: [{ id: "L1", members: ["E2"] }], blocks: [] }), [{ list: "L1", members: ["E2"] }]);
+  // The retired top-level "lists" is credited only for the record run on main, which passes the option; never by default.
+  const old = { lists: [{ id: "L1", members: ["E2"] }], blocks: [] };
+  assert.deepEqual([placedLists(old), placedLists(old, { oldReplyShape: true })], [[], [{ list: "L1", members: ["E2"] }]]);
   assert.deepEqual([placedLists(null), placedLists({ blocks: [{ block: "answer", sentences: [] }], not_found: [] })], [[], []]);
   // A caption says how many it shows of how many, after fitting too.
   assert.deepEqual(releasedLists(readWith("3 of the 9 Jira tickets created on October 4, 2026 (first 2 shown)", ["E1", "E3"])).map(({ shown, total }) => [shown, total]), [[2, 9]]);
@@ -70,9 +72,10 @@ test("fails a trial whose release came from the fallback, whatever the answer sh
 
 test("passes which-items only when the reply places the list and the answer shows every member", () => {
   assert.deepEqual(gradeTrial(whichItems, { reply: wholeReply, read: wholeRead, response, fallbacks: 0 }).checks, { released: true, own_reply: true, placed: true, shown: true });
-  // Hand-picking every member is the whole list; the old reply shape is read the same way.
+  // Hand-picking every member is the whole list; the old reply shape is read the same way, only for the record run on main.
   assert.equal(gradeTrial(whichItems, { reply: replyWith({ block: "list", list: "l1", members: ids(5).reverse() }), read: wholeRead, response, fallbacks: 0 }).checks.placed, true);
-  assert.equal(gradeTrial(whichItems, { reply: { ...replyWith(), lists: [{ id: "L1" }] }, read: wholeRead, response, fallbacks: 0 }).checks.placed, true);
+  const oldShape = { reply: { ...replyWith(), lists: [{ id: "L1" }] }, read: wholeRead, response, fallbacks: 0 };
+  assert.deepEqual([gradeTrial(whichItems, oldShape).checks.placed, gradeTrial(whichItems, { ...oldShape, oldReplyShape: true }).checks.placed], [false, true]);
   // Code's list in the answer does not make the writer's choice: a reply with no list fails `placed`.
   const unplaced = gradeTrial(whichItems, { reply: replyWith(), read: wholeRead, response, fallbacks: 0 });
   assert.deepEqual([unplaced.checks.placed, unplaced.checks.shown, unplaced.passed], [false, true, false]);
@@ -93,6 +96,9 @@ test("passes a part only on exactly its members and a caption that says shown of
   // A whole list placed is not a part; an answer that does not say how many were read fails `says`.
   assert.equal(gradeTrial(byMeaning, { reply: wholeReply, read: readWith("3 of the 9 Jira tickets", ["E1", "E3", "E6"], lead), response, fallbacks: 0 }).checks.placed, false);
   assert.equal(gradeTrial(byMeaning, { reply, read: readWith("3 of the 9 Jira tickets", ["E1", "E3", "E6"]), response, fallbacks: 0 }).checks.says, false);
+  // "6 of the 9" says how many were read only beside words about reading or checking them.
+  const reads = (lead) => gradeTrial(byMeaning, { reply, read: readWith("3 of the 9 Jira tickets created on October 4, 2026", ["E1", "E3", "E6"], lead), response, fallbacks: 0 }).checks.says;
+  assert.deepEqual([reads("6 of the 9 mention the probe recall."), reads("Six of the nine tickets mention the probe recall."), reads("I checked 6 of the 9 tickets."), reads("Six of the nine were opened.")], [false, false, true, true]);
 });
 
 test("grades what the answer says it did not find, a count, and an answer that places no list", () => {
@@ -108,12 +114,17 @@ test("grades what the answer says it did not find, a count, and an answer that p
   const disagrees = caseOf("note-disagrees");
   const signed = { valid: true, problems: [], blocks: [{ kind: "answer", claims: [{ text: "Ana Silva signed it off on October 6.", evidence: ["E2"] }] }] };
   assert.equal(gradeTrial(disagrees, { reply: replyWith(), read: signed, response, fallbacks: 0 }).passed, true);
+  // The statement that carries the fact cites the ticket that states it, not another one.
+  const elsewhere = { valid: true, problems: [], blocks: [{ kind: "answer", claims: [{ text: "Ana Silva signed it off on October 6.", evidence: ["E1"] }] }] };
+  assert.equal(gradeTrial(disagrees, { reply: replyWith(), read: elsewhere, response, fallbacks: 0 }).checks.says, false);
   const typed = { outcome: "partial", parts: [{ status: "partial", gap_details: { not_found: "Who signed off the seal re-test." } }] };
   assert.equal(gradeTrial(disagrees, { reply: replyWith(), read: signed, response: typed, fallbacks: 0 }).checks.not_found_never_mentions, false);
   // How many: the caption's count is the list's, and no sentence counts the tickets otherwise.
   const howMany = caseOf("how-many");
   const counted = (lead) => gradeTrial(howMany, { reply: wholeReply, read: readWith("7 Jira tickets created on October 4, 2026", ids(7), lead), response, fallbacks: 0 }).checks.count;
   assert.deepEqual([counted("Seven tickets were created."), counted("7 tickets were created."), counted("8 Jira tickets were created."), counted("6 tickets were created.")], [true, true, false, false]);
+  // A count in words is a count too.
+  assert.deepEqual([counted("Eight tickets were created."), counted("Twelve Jira tickets were created."), counted("Seven Jira tickets were created.")], [false, false, true]);
   // One named item: a list placed, or a captioned table shown, fails.
   const named = caseOf("one-named-item");
   const owner = { valid: true, problems: [], blocks: [{ kind: "answer", claims: [{ text: "Ana Silva owns THERM-633.", evidence: ["E3"] }] }] };
@@ -138,6 +149,22 @@ test("decides on 19 of 21 trials and 2 of 3 in every case, only for a complete r
   assert.equal(decide(summarize(trialsPassing(19, { worstCase: 1 })), true).passes, false);
   assert.equal(decide(summarize(trialsPassing(18, { worstCase: 2 })), true).passes, false);
   assert.equal(decide(summarize(trialsPassing(21)), false).passes, null);
+});
+
+test("credits the reply shape before ADR-0054 only on a lists run that asks for it, for the record run on main", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "ask-blocks-lists-shape-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const credential = join(directory, "credential");
+  writeFileSync(credential, "not read", { mode: 0o600 });
+  const base = ["--run", "--credential-file", credential, "--out", join(directory, "out"), "--case-set", "lists"];
+  assert.deepEqual([parseArgs(base).oldReplyShape, parseArgs([...base, "--reply-shape", "before-adr-0054"]).oldReplyShape, parseArgs([...base, "--reply-shape", "list-blocks"]).oldReplyShape], [false, true, false]);
+  assert.throws(() => parseArgs([...base, "--reply-shape", "lists"]), /--reply-shape must be list-blocks or before-adr-0054/u);
+  assert.throws(() => parseArgs([...base.slice(0, -2), "--reply-shape", "before-adr-0054"]), /--reply-shape before-adr-0054 is only for --case-set lists/u);
+  // The runner hands the option to the grader: an old-shape reply's top-level lists is credited only with it.
+  const route = { async generate_with_observation() { return { value: { ...replyWith(), lists: [{ id: "L1" }] }, finish_reason: "stop", usage: null, provider_latency_ms: 1 }; } };
+  const placed = async (oldReplyShape) => (await run({ run: true, credentialFile: null, out: directory, caseSet: "lists", caseIds: ["which-items"], trials: 1, concurrency: 1, timeoutMs: 20_000, oldReplyShape },
+    { loaded: { structured_output: route, generation }, progress: () => undefined })).report.trials[0].grade.checks.placed;
+  assert.deepEqual([await placed(false), await placed(true)], [false, true]);
 });
 
 test("runs a list case through the kernel and grades it from the writer's reply and the released answer", async (t) => {

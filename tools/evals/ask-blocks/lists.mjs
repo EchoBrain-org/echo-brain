@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import { validatePersonQueryText } from "@echo-brain/organization-api";
 import { nonEmptyStrings, says, words } from "../shared/grading.mjs";
-import { claimsOf, readingText } from "./grade.mjs";
+import { claimsOf } from "./grade.mjs";
 
 export const CASES_FILE = new URL("./lists-cases.json", import.meta.url);
 /** The pre-registered cases, by id, covering ADR-0054's six new evaluation cases (its second is two). */
@@ -77,11 +77,15 @@ const narrowing = (entry) => ({
   ...(entry.members === undefined || entry.members === null ? {} : { members: Array.isArray(entry.members) ? entry.members.map(cleanId) : entry.members }),
 });
 
-/** The lists a writer's raw reply places, in either reply shape: list blocks, or the top-level "lists" of the reply before ADR-0054. */
-export function placedLists(reply) {
+/**
+ * The lists a writer's raw reply places: its list blocks. With `oldReplyShape` (only the record run on `main`, whose
+ * runner passes it), also the top-level "lists" of the reply before ADR-0054; never by default, so a retired shape
+ * cannot pass for the writer placing a list.
+ */
+export function placedLists(reply, { oldReplyShape = false } = {}) {
   if (reply === null || typeof reply !== "object") return [];
   const blocks = Array.isArray(reply.blocks) ? reply.blocks.filter((block) => block?.block === "list" && cleanId(block.list) !== null).map((block) => ({ list: cleanId(block.list), ...narrowing(block) })) : [];
-  const lists = Array.isArray(reply.lists) ? reply.lists.filter((entry) => cleanId(entry?.id) !== null).map((entry) => ({ list: cleanId(entry.id), ...narrowing(entry) })) : [];
+  const lists = oldReplyShape && Array.isArray(reply.lists) ? reply.lists.filter((entry) => cleanId(entry?.id) !== null).map((entry) => ({ list: cleanId(entry.id), ...narrowing(entry) })) : [];
   return [...blocks, ...lists];
 }
 
@@ -113,27 +117,52 @@ const releasedNotFound = (response) => (response?.parts ?? []).flatMap((part) =>
 const replyNotFound = (reply) => (Array.isArray(reply?.not_found) ? reply.not_found.filter((value) => typeof value === "string") : []);
 const sameSet = (left, right) => left.length === right.length && left.every((id) => right.includes(id));
 
-/** Whether the released statements outside any table write a number other than `count` directly before `noun` (one word between allowed, as "8 Jira tickets"). */
+/** Numbers written as words, one to twenty, by value. */
+const NUMBER_WORDS = Object.freeze(["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
+  "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"]);
+/** The number a word writes, in digits or as a word from one to twenty; null for any other word. */
+const numberOf = (word) => (/^\d+$/u.test(word) ? Number(word) : NUMBER_WORDS.includes(word) ? NUMBER_WORDS.indexOf(word) + 1 : null);
+
+/** Whether the released statements outside any table write a number other than `count`, in digits or words, directly before `noun` (one word between allowed, as "8 Jira tickets"). */
 function otherCount(blocks, count, noun) {
   const wanted = words(noun)[0];
   return claimsOf(blocks).filter((claim) => claim.kind !== "table").some((claim) => {
     const said = words(claim.text);
-    return said.some((word, at) => /^\d+$/u.test(word) && Number(word) !== count && (said[at + 1] === wanted || said[at + 2] === wanted));
+    return said.some((word, at) => numberOf(word) !== null && numberOf(word) !== count && (said[at + 1] === wanted || said[at + 2] === wanted));
   });
+}
+
+/** Words that say items were read or checked, which a coverage count ("6 of the 9") must stand beside. */
+const READING_WORDS = Object.freeze(["read", "checked", "looked at", "opened"]);
+/** Whether a set of alternatives is a coverage count: every one is "<number> of the <number>". */
+const coverage = (options) => options.every((phrase) => {
+  const said = words(phrase);
+  return said.length === 4 && numberOf(said[0]) !== null && said[1] === "of" && said[2] === "the" && numberOf(said[3]) !== null;
+});
+/** The case's items, by evidence id, whose text says one of `options`: those that support it. */
+const supportOf = (caseDefinition, options) => caseDefinition.items.flatMap((item, at) => (typeof item.text === "string" && options.some((phrase) => says(item.text, phrase)) ? [`E${at + 1}`] : []));
+/**
+ * Whether one released statement says one of `options` as it must: citing an item whose text says it, when a case item
+ * does, and, for a coverage count, with words about reading or checking.
+ */
+function saidAsRequired(caseDefinition, blocks, options) {
+  const support = supportOf(caseDefinition, options);
+  return claimsOf(blocks).some((claim) => options.some((phrase) => says(claim.text, phrase))
+    && (support.length === 0 || claim.evidence.some((id) => support.includes(id)))
+    && (!coverage(options) || READING_WORDS.some((word) => says(claim.text, word))));
 }
 
 /**
  * One trial's checks (README.md, "List cases"). `reply` is the writer's last reply without an error (null for none),
  * `read` the released answer read as blocks (grade.mjs's readReleased; null for none), `response` the released answer,
- * and `fallbacks` the run's fallback count from its audit entry.
+ * `fallbacks` the run's fallback count from its audit entry, and `oldReplyShape` true only for the record run on `main`.
  */
-export function gradeTrial(caseDefinition, { reply, read, response, fallbacks }) {
+export function gradeTrial(caseDefinition, { reply, read, response, fallbacks, oldReplyShape = false }) {
   const expect = caseDefinition.expect;
   const members = membersOf(caseDefinition);
-  const placed = placedLists(reply);
+  const placed = placedLists(reply, { oldReplyShape });
   const shown = releasedLists(read);
   const blocks = read?.valid === true ? read.blocks : [];
-  const text = readingText(blocks);
   const ownL1 = placed.filter((entry) => entry.list === "L1");
   const wholeEntry = (entry) => (entry.where === undefined && entry.members === undefined) || (entry.where === undefined && Array.isArray(entry.members) && sameSet([...new Set(entry.members)], members));
   const checks = {
@@ -147,7 +176,7 @@ export function gradeTrial(caseDefinition, { reply, read, response, fallbacks })
         : expect.list === "whole" ? shown.length === 1 && sameSet([...new Set(shown[0].rows.flat())], members) && shown[0].total === members.length && shown[0].shown === members.length
         : shown.length === 1 && sameSet([...new Set(shown[0].rows.flat())], expect.members) && shown[0].caption.startsWith(`${expect.members.length} of the ${members.length} `),
     }),
-    ...(expect.says === undefined ? {} : { says: expect.says.every((options) => options.some((phrase) => says(text, phrase))) }),
+    ...(expect.says === undefined ? {} : { says: expect.says.every((options) => saidAsRequired(caseDefinition, blocks, options)) }),
     ...(expect.not_found_mentions === undefined ? {} : { not_found_mentions: expect.not_found_mentions.every((options) =>
       replyNotFound(reply).some((entry) => options.some((phrase) => says(entry, phrase))) && releasedNotFound(response).some((entry) => options.some((phrase) => says(entry, phrase)))) }),
     ...(expect.not_found_never_mentions === undefined ? {} : { not_found_never_mentions: ![...replyNotFound(reply), ...releasedNotFound(response)].some((entry) => expect.not_found_never_mentions.some((phrase) => says(entry, phrase))) }),

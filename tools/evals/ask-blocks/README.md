@@ -1147,6 +1147,13 @@ run; nothing here is run yet.
   of their case, and no case passes fewer than 2 of its 3 trials. Only a
   complete run (every case, three trials) decides; a run that does not pass
   exits 1.**
+- 2026-11-19, before any gating run, the grader was tightened and the marks
+  kept: `count` also fails a different count written in words (one to
+  twenty); `says` needs one statement that says the words and cites a case
+  item whose text says them, when one does, and for a coverage count ("6 of
+  the 9") also says "read", "checked", "looked at" or "opened"; and a
+  reply's top-level `lists` is credited as placed only with
+  `--reply-shape before-adr-0054`, for the record run on `main`.
 
 Run it (it needs a writer credential and costs money):
 
@@ -1157,20 +1164,22 @@ node tools/evals/ask-blocks/run.mjs --run --case-set lists \
 ```
 
 The same cases are run on `main` for the record, with the harness of the
-commit that registered them:
+branch commit that gates the change (its grader, tightened 2026-11-19):
 
 ```sh
 git worktree add /absolute/private/main-record main
-git -C /absolute/private/main-record checkout <commit that registered the list cases> -- tools/evals
+git -C /absolute/private/main-record checkout <the branch commit that gates the change> -- tools/evals
 cd /absolute/private/main-record && npm ci && npm run build:workspaces
-node tools/evals/ask-blocks/run.mjs --run --case-set lists --credential-file /absolute/private/credential-file --out /absolute/private/report-directory
+node tools/evals/ask-blocks/run.mjs --run --case-set lists --reply-shape before-adr-0054 --credential-file /absolute/private/credential-file --out /absolute/private/report-directory
 ```
 
 That runs the changed harness against `main`'s kernel with uncommitted files.
 `checkout -- tools/evals` stages them, so `git diff` and the report's
 `code.before.tracked_patch_sha256` do not show them; the report's
-`code.before.files_sha256` records each of them by its digest. On `main` the
-grader reads the reply's top-level `lists` as the writer's placements. There
+`code.before.files_sha256` records each of them by its digest. With
+`--reply-shape before-adr-0054`, which only this run passes and its report
+records, the grader also reads the reply's top-level `lists` as the writer's
+placements. There
 code states every list a `which_items` need cites whatever the writer
 replies, so `shown` passes for `which-items` and `how-many` while `placed`
 depends on the reply; the record shows each check on its own.
