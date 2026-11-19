@@ -380,6 +380,27 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     else expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
   });
 
+  // A list block hand-picking no member is the writer saying none answers (ADR-0054): a selection that matched nothing,
+  // whose absence is typed only over a list read to its end.
+  it.each([
+    ["complete", {}], ["truncated", { ended: false, truncated: true }], ["unverified end", { unverified_end: true }], ["notice", { available: false }],
+    ["unshown members", { shown: 40 }], ["untested dates", { unchecked: { count: 2, dates: ["updated" as const] } }],
+  ] as const)("types an explicit none's absence like a no-match selection's, only over a complete list: %s", async (state, extra) => {
+    const rendered = await alone({ bundle: listBundle(50, 0, [list("L1", ids(1, 50), extra)], [WI(["L1"])]), replies: [{ ...use({ id: "L1", members: [] }), not_found: ["tickets assigned to Casey"] }] })
+      .render("Which tickets are assigned to Casey?");
+    expect(rendered.outcome).toBe(state === "complete" ? "not_found" : "partial");
+    if (state === "complete") expect(rendered.result.response.parts[0]!.gap_details).toEqual({ not_found: "Not found: tickets assigned to Casey." });
+    else expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
+  });
+  it("leaves an explicit none's absence untyped over an incomplete list no which_items need cites", async () => {
+    const research = listBundle(50, 1, [list("L1", ids(1, 50), { unverified_end: true })], [C(["E51"])]);
+    const rendered = await alone({ bundle: research, replies: [writerReply([{ text: "The review approved the plan.", evidence: ["E51"] }], { lists: [{ id: "L1", members: [] }], not_found: ["tickets assigned to Casey"] })] })
+      .render("What did the review approve, and which tickets are Casey's?");
+    expect(rendered.outcome).toBe("partial");
+    expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual(["The review approved the plan."]);
+    expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
+  });
+
   it("keeps a selected no-match over a list read to its end typed beside the retry line when research stopped", async () => {
     const research: AgenticEvidenceBundleV1 = { ...listBundle(2, 0, [list("L1", ids(1, 2))], [WI(["L1"])]), stop: { reason: "budget", completed: false } };
     const rendered = await alone({ bundle: research, replies: [{ ...use({ id: "L1", where: { field: "status", value: "Blocked" } }), not_found: ["the Harbor owner"] }] })
@@ -878,14 +899,23 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect([empty.fallbacks, statementsOf(empty), empty.result.response.parts[0]!.gap]).toEqual([1, [EIGHT], LIST_FALLBACK]);
       const missing = await alone({ bundle: research, replies: [{ blocks: [], not_found: ["tickets created on October 4"] }] }).render(Q);
       expect([missing.fallbacks, missing.result.response.parts[0]!.statements, missing.outcome]).toEqual([0, [], "not_found"]);
-      const unreadable = await alone({ bundle: research, replies: [{ blocks: [{ block: "list", list: "L1", members: "E1" }], not_found: [] }] }).render(Q);
-      expect([unreadable.fallbacks, statementsOf(unreadable)]).toEqual([1, [EIGHT]]);
       // Something that survives makes a reply usable: one placed list alone, or one sentence alone.
       const listOnly = await alone({ bundle: research, replies: [{ blocks: [{ block: "list", list: "L1", members: ["E2"] }], not_found: [] }] }).render(Q);
       expect([listOnly.fallbacks, statementsOf(listOnly)]).toEqual([0, [`1 of the 8 tickets created on October 4, 2026: ${facts(2)}.`]]);
       // A sentence code leaves out (it cites no text) does not survive.
       const uncited = await alone({ bundle: research, replies: [{ blocks: [{ block: "answer", sentences: [{ text: "Nothing to see.", evidence: [] }] }], not_found: [] }] }).render(Q);
       expect([uncited.fallbacks, statementsOf(uncited)]).toEqual([1, [EIGHT]]);
+    });
+    it("never has the fallback state a list whose placement was dropped, and says something was left out", async () => {
+      // The reply's only content is a block narrowing L1 code cannot read: nothing survives, and the fallback runs.
+      const dropped = { blocks: [{ block: "list", list: "L1", members: "E2" }], not_found: [] };
+      const alone1 = await alone({ bundle: eightAnd1([WI(["L1"])]), replies: [dropped] }).render(Q);
+      const part = alone1.result.response.parts[0]!;
+      expect([alone1.fallbacks, statementsOf(alone1), part.status, part.records?.map(value => value.text)]).toEqual([1, [], "records_only", ["Approved record 1."]]);
+      expect(part.gap).toBe(`${RECORDS} ${LIST_DROPPED}`);
+      // The fallback still states every other list the plan's which_items needs cite.
+      const two = await alone({ bundle: listBundle(16, 0, [list("L1", ids(1, 8)), list("L2", ids(9, 8))], [WI(["L1", "L2"])]), replies: [dropped] }).render(Q);
+      expect([statementsOf(two), two.result.response.parts[0]!.gap]).toEqual([[`8 tickets created on October 4, 2026: ${names(9, 8)}.`], `${LIST_FALLBACK} ${LIST_DROPPED}`]);
     });
     it("releases an answer with no list as written, though a which_items need cites one", async () => {
       const rendered = await alone({ bundle: eightAnd1([WI(["L1"]), C(["E9"])]), replies: [placing()] }).render(Q);

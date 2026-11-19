@@ -533,6 +533,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
        * the reply afresh; only the first counts the writer's corrections (`count`). `survived` says whether anything of the
        * reply survived the check, so a reply of which nothing did takes the fallback.
        */
+      /** The lists whose block a reply that takes the fallback placed and code dropped (ADR-0054): the fallback never states them. */
+      let withheld: ReadonlySet<AgenticListIdV1> = new Set();
       const respond = (reply: Answer | null, count: boolean, withSince: boolean, keep?: number) => {
         const correct = (correction: CoreRuntimeModelCorrectionV1, times?: number) => { if (count) observeCoreModelCorrectionV1(correction, times); };
         const used: Entry[] = [];
@@ -576,10 +578,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // phrase, confirmed only for a complete list whose members all record the fact.
         const filled: { readonly list: AgenticWriterListV1; readonly block: number; readonly fill: Extract<AgenticListFillV1, { readonly kind: "rows" }> }[] = [];
         const placedLists = new Set<AgenticListIdV1>();
+        /** The lists whose block was dropped, which the fallback never states. */
+        const droppedLists = new Set<AgenticListIdV1>();
         for (const placed of reply?.placed ?? []) {
           const shown = writerById.get(placed.list);
           if (shown === undefined) { correct("writer_unknown_id_dropped"); continue; }
-          if (placed.unreadable === true) { listGaps.push({ text: LIST_DROPPED_GAP, partial: true }); continue; }
+          if (placed.unreadable === true) { droppedLists.add(placed.list); listGaps.push({ text: LIST_DROPPED_GAP, partial: true }); continue; }
           const list = views.get(placed.list)!, all = rows.get(placed.list)!;
           const fill = agenticListFillV1({
             placed, all, list: listById.get(placed.list)!, member_of: id => membership.in(placed.list, id),
@@ -587,7 +591,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             shown: new Set([...shown.members.map(member => member.id), ...all.filter(member => textGiven.has(member.id)).map(member => member.id)]),
           });
           if ((fill.kind === "rows" || fill.kind === "dropped") && fill.unknown > 0) correct("writer_unknown_id_dropped", fill.unknown);
-          if (fill.kind === "dropped") { listGaps.push({ text: LIST_DROPPED_GAP, partial: true }); continue; }
+          if (fill.kind === "dropped") { droppedLists.add(placed.list); listGaps.push({ text: LIST_DROPPED_GAP, partial: true }); continue; }
           placedLists.add(placed.list);
           if (fill.kind === "none_matched") {
             if (!fill.testable) listGaps.push({ text: UNRECORDED_GAP, partial: true });
@@ -668,6 +672,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // is stated once, under the first list it cites that holds it; members different needs request keep a statement under
         // each need's list. After a usable reply none of this runs: the writer's choice of lists stands (ADR-0054).
         const fallbackLists: { readonly id: AgenticListIdV1; readonly members?: readonly string[] }[] = [];
+        // A list whose block the writer's reply placed and code dropped is never stated in its place: the fallback says
+        // something was left out, and never widens the writer's narrowing to the whole list (ADR-0054).
+        if (reply === null && withheld.size > 0) listGaps.push({ text: LIST_DROPPED_GAP, partial: true });
         if (reply === null) {
           const added = new Map<string, readonly string[]>();
           const whole = new Set<string>();
@@ -681,7 +688,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
               else added.set(id, [...new Set([...(added.get(id) ?? []), ...fresh])]);
             }
           }
-          for (const id of stated) {
+          for (const id of stated.filter(id => !withheld.has(id))) {
             const missing = added.get(id) ?? [];
             if (whole.has(id) || (missing.length > 0 && missing.length === views.get(id)!.count)) fallbackLists.push({ id });
             else if (missing.length > 0) fallbackLists.push({ id, members: missing });
@@ -914,13 +921,14 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // What of the reply survived the check, before byte fitting: a statement, a placed list's rows, something it did not
         // find (its own or a selection that matched none), or a follow-up it drafted (ADR-0054).
         const survived = reading.length > 0 || notFound.length > 0 || drafts.length > 0;
-        return { result, used, statements: reading.length, survived };
+        return { result, used, statements: reading.length, survived, dropped_lists: droppedLists };
       };
       // A reply is usable when something of it survives the check. Only one of which nothing survives takes the fallback
       // kept from before ADR-0054, as no reply does: code states the lists the plan's which_items needs cite, or the records
       // research read, or says nothing was found.
       const first = respond(answer, true, true);
       const usable = answer === null || first.survived;
+      if (!usable) withheld = first.dropped_lists;
       // A writer that gave up after its repair has already counted its fallback.
       if (!usable && written?.value !== null) observeCoreModelCorrectionV1("writer_fallback");
       const reply = usable ? answer : null;

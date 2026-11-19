@@ -668,9 +668,12 @@ export function agenticListSelectV1<T extends AgenticListNamedMemberV1>(members:
   }));
 }
 
-/** Whether every row records the fact needed to decide the selection; missing facts cannot prove an empty subset. */
+/**
+ * Whether every row records the fact needed to decide the selection; missing facts cannot prove an empty subset. An
+ * owner "none recorded" (ADR-0021) is row projection's word for an owner no record confirms: no fact either.
+ */
 export function agenticListSelectionVerifiedV1(members: readonly AgenticListNamedMemberV1[], where: AgenticListSelectionV1, timeZone?: string): boolean {
-  return members.every(member => "value" in where ? member[where.field] !== undefined
+  return members.every(member => "value" in where ? member[where.field] !== undefined && !(where.field === "owner" && member.owner === "none recorded")
     : evidenceDayV1(memberDate(member, where.field) ?? "", timeZone ?? "UTC") !== undefined);
 }
 
@@ -684,7 +687,8 @@ export interface AgenticPlacedListV1 {
 /**
  * What code fills a placed list with: the rows it shows (`unknown` counts ids that named no row the writer was shown),
  * a selection that matched none (`testable` when every member records the fact; `confirmed` only when the list is also
- * complete and has no untested items), a list with no member, or a hand-picked block left with none.
+ * complete and has no untested items), a list with no member or a hand-pick of none (the writer saying no member
+ * answers), or a hand-picked block left with none.
  */
 export type AgenticListFillV1 =
   | { readonly kind: "rows"; readonly selected: readonly AgenticWriterListMemberV1[]; readonly by_id: boolean; readonly where?: AgenticListSelectionV1; readonly unknown: number }
@@ -709,6 +713,7 @@ export function agenticListFillV1(input: {
   readonly list: Pick<AgenticListEvidenceV1, "complete" | "unchecked" | "filter">;
 }): AgenticListFillV1 {
   const { placed, all, list } = input;
+  if (placed.members?.length === 0) return Object.freeze({ kind: "empty" });
   if (placed.members !== undefined) {
     const picked = new Set<string>();
     let unknown = 0;

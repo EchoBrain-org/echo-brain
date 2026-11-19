@@ -465,8 +465,16 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     const placed = (extra: object) => parseBlocksAnswer({ blocks: [{ block: "list", list: "L1", ...extra }], not_found: [] }).placed;
     for (const extra of [{ members: "E5" }, { members: ["x", "y"] }, { where: "open" }, { where: { field: "colour", value: "red" } }, { where: { field: "due", since: "next week" } }])
       expect(placed(extra)).toEqual([{ block: 0, list: "L1", unreadable: true }]);
-    expect(placed({ members: [] })).toEqual([]);
     expect(parseBlocksAnswer({ blocks: [{ block: "list", list: "E4" }], not_found: [] }).placed).toEqual([]);
+  });
+
+  it("keeps a list block that hand-picks no member: the writer says none answers (ADR-0054)", () => {
+    expect(parseBlocksAnswer({ blocks: [{ block: "list", list: "L1", members: [] }], not_found: [] }).placed).toEqual([{ block: 0, list: "L1", members: [] }]);
+  });
+
+  it("reads a list block with a key it does not know as unreadable, never as the whole list", () => {
+    for (const extra of [{ member: "E2" }, { member: ["E2"] }, { filter: { field: "status", value: "open" } }, { members: ["E2"], selection: "open" }])
+      expect(parseBlocksAnswer({ blocks: [{ block: "list", list: "L1", ...extra }], not_found: [] }).placed).toEqual([{ block: 0, list: "L1", unreadable: true }]);
   });
 
   it("offers the list block in every reply schema, and no top-level lists or member", () => {

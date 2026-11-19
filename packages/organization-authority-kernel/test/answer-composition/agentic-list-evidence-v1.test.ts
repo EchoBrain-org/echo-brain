@@ -482,6 +482,12 @@ describe("a placed list (ADR-0054)", () => {
     expect(fill({ where }, {}, [...all, rowWithoutOwner])).toMatchObject({ testable: false, confirmed: false });
   });
 
+  it("counts an action whose owner is not recorded as untestable by owner, never as a confirmed no-match", () => {
+    // Row projection writes "none recorded" for a meeting action with no confirmed owner (ADR-0021): a value, but no fact.
+    const unowned = [row("E1", "open", "none recorded"), row("E2", "open", "none recorded")].map(member => Object.freeze({ ...member, kind: "action" }));
+    expect(fill({ where: { field: "owner", value: "Dana" } }, {}, unowned)).toEqual({ kind: "none_matched", where: { field: "owner", value: "Dana" }, testable: false, confirmed: false });
+  });
+
   it("says how many rows are shown only when fitting cut some", () => {
     expect([agenticListShownNoteV1(7, 12), agenticListShownNoteV1(12, 12)]).toEqual(["(first 7 shown)", undefined]);
   });

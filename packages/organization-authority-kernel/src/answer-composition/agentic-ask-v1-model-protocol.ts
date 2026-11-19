@@ -588,14 +588,17 @@ function selectionOf(where: Record<string, unknown> | null): AgenticListSelectio
   return Object.freeze({ field: field as EvidenceDateFieldV1, ...bounds });
 }
 
+/** The keys a list block has (ADR-0054), and a title, which is ignored. */
+const LIST_BLOCK_KEYS: ReadonlySet<string> = new Set(["block", "list", "where", "members", "title"]);
+
 /**
  * A list block (ADR-0054) at its place among the writer's blocks: {"block": "list", "list": "L1"} for the whole list,
  * with "where" for the members one row fact selects, or with "members" for the members it names by E id, each once.
  * Members given beside a where are kept and the where dropped (ADR-0041's precedent). A narrowing code cannot read
- * (members that are not an array or name no readable id, a where that is not a readable selection) is `unreadable`:
- * the block shows nothing and the reader is told, so one mistyped selector never publishes every item. Null for a
- * block that names no list, and for empty members, which select nothing and leave nothing out. A title is ignored: a
- * list block has none.
+ * (members that are not an array or name no readable id, a where that is not a readable selection, or any key a list
+ * block does not have, such as a mistyped "member") is `unreadable`: the block shows nothing and the reader is told, so
+ * one mistyped selector never publishes every item. Empty members are the writer saying no member answers: a selection
+ * that matched nothing. Null for a block that names no list. A title is ignored: a list block has none.
  */
 function placedListOf(entry: Record<string, unknown>, block: number): AnswerList | null {
   const id = parseAgenticListIdV1(entry.list);
@@ -605,10 +608,11 @@ function placedListOf(entry: Record<string, unknown>, block: number): AnswerList
     observeCoreModelCorrectionV1("model_entry_dropped");
     return Object.freeze({ block, list: id, unreadable: true as const });
   };
+  if (Object.keys(entry).some(key => !LIST_BLOCK_KEYS.has(key))) return unreadable();
   if (entry.members !== undefined) {
     if (entry.where !== undefined) observeCoreModelCorrectionV1("model_entry_dropped");
     if (!Array.isArray(entry.members)) return unreadable();
-    if (entry.members.length === 0) return null;
+    if (entry.members.length === 0) return Object.freeze({ block, list: id, members: Object.freeze([]) });
     const members: string[] = [];
     for (const member of entry.members) {
       const short = cleanId(member);
