@@ -61,13 +61,17 @@ export type Scenario = {
 type Said = { readonly text: string; readonly evidence: readonly string[] };
 /**
  * The Ask writer's reply (answer layout v2, ADR-0051) that says `sentences`: the first as its answer block, any others as
- * one text block after it, so the answer states them in the order given. Beside them, the lists it uses (ADR-0041),
- * what it did not find, and for an Ask again what is different since (ADR-0047).
+ * one text block after it, so the answer states them in the order given. Each list it uses ({ id, where?, members? })
+ * is a list block (ADR-0054) right after the answer, where code stated a list before; beside them, what it did not find,
+ * and for an Ask again what is different since (ADR-0047).
  */
 export function writerReply(sentences: readonly Said[], fields: { readonly lists?: readonly unknown[]; readonly not_found?: readonly string[]; readonly since?: unknown } = {}) {
+  const placed = (fields.lists ?? []).map(use => {
+    const { id, ...narrowing } = use as { readonly id: unknown; readonly where?: unknown; readonly members?: unknown };
+    return { block: "list", list: id, ...narrowing };
+  });
   return {
-    lists: fields.lists ?? [],
-    blocks: [...(sentences.length === 0 ? [] : [{ block: "answer", sentences: sentences.slice(0, 1) }]), ...(sentences.length < 2 ? [] : [{ block: "text", sentences: sentences.slice(1) }])],
+    blocks: [...(sentences.length === 0 ? [] : [{ block: "answer", sentences: sentences.slice(0, 1) }]), ...placed, ...(sentences.length < 2 ? [] : [{ block: "text", sentences: sentences.slice(1) }])],
     not_found: fields.not_found ?? [],
     ...(fields.since === undefined ? {} : { since: fields.since }),
   };

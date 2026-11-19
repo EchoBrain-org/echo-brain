@@ -1011,7 +1011,8 @@ describe("agentic Ask: research loop", () => {
       step([{}], [search("atlas")]),
       step([{}], actions.slice(0, 4)), step([{}], actions.slice(4, 8)), step([{}], actions.slice(8, 12)),
       finish([missing()]), finish([missing()]),
-      answer([{ text: "x.", evidence: ["E1"] }]),
+      // The writer cites the passage research opened last, which its small window still holds, so its reply survives (ADR-0054).
+      answer([{ text: "x.", evidence: ["E12"] }]),
     ]);
     const evidence = desk({ search: () => passages, open: id => passages.filter(value => value.id === id) });
     await ask({ desk: evidence, model: script.model, context_tokens: 16_000 }).answer({ question: "When is launch?" });

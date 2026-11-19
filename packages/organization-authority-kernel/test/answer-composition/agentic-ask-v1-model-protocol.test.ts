@@ -22,6 +22,9 @@ import {
 import { observeCoreRuntimeSyncV1, type CoreRuntimeModelCorrectionsV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import { writerReply } from "./fixtures/agentic-scenarios.js";
 
+/** A writer's reply with the top-level "lists" of the reply before ADR-0054, which the parser still reads. */
+const withLists = (sentences: Parameters<typeof writerReply>[0], fields: { readonly lists: readonly unknown[] }) => ({ ...writerReply(sentences), lists: fields.lists });
+
 type Schema = Readonly<Record<string, any>>;
 const stepSchema = createStepSchema(["meetings", "documents", "slack"]);
 
@@ -189,7 +192,7 @@ describe("agentic Ask model protocol parity", () => {
   });
 
   it("reads the lists Ask's answer uses: each once in full or by an owner or status selection, and once by members' ids", () => {
-    const parsed = parseBlocksAnswer(writerReply([{ text: "Two pages mention BUG-412 (L1, E4).", evidence: ["L1", "E4"] }], { lists: [
+    const parsed = parseBlocksAnswer(withLists([{ text: "Two pages mention BUG-412 (L1, E4).", evidence: ["L1", "E4"] }], { lists: [
       "l2", { id: "L1" }, { id: "[L3]", where: { field: "Owner", value: " Dana  Lee " } }, { id: "L1", where: { field: "owner", value: "x" } },
       { id: "L4", where: { field: "title", value: "PRD" } }, { id: "L5", where: { field: "status", value: " " } }, { id: "E6" }, 7, { id: "L8" }, { id: "L9" },
     ] }));
@@ -199,7 +202,7 @@ describe("agentic Ask model protocol parity", () => {
     ]);
     // Member intent is uncapped and takes the place of a filter, which is kept beside it for code to use when the ids name no
     // member; ids none of which code can read are the filter, or no use; an empty members array stays an empty selection.
-    const members = parseBlocksAnswer(writerReply([], { lists: [
+    const members = parseBlocksAnswer(withLists([], { lists: [
       { id: "L1", members: ["e5", "E5", "[E7]", "L2", 9], where: { field: "owner", value: "Dana" } }, { id: "L2", members: ["x"], where: { field: "status", value: "open" } },
       { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) }, { id: "L4", members: [], where: { field: "status", value: "In Progress" } }, { id: "L5", members: [] },
     ] })).lists;
@@ -207,10 +210,10 @@ describe("agentic Ask model protocol parity", () => {
       { id: "L1", members: ["E5", "E7", "E9"], where: { field: "owner", value: "Dana" } }, { id: "L2", where: { field: "status", value: "open" } },
       { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) }, { id: "L4", members: [], where: { field: "status", value: "In Progress" } }, { id: "L5", members: [] },
     ]);
-    expect(parseBlocksAnswer(writerReply([], { lists: [{ id: "L1", members: ["x", "L2"] }, { id: "L2", members: ["E999"], where: { field: "status", value: "open" } }] })).lists)
+    expect(parseBlocksAnswer(withLists([], { lists: [{ id: "L1", members: ["x", "L2"] }, { id: "L2", members: ["E999"], where: { field: "status", value: "open" } }] })).lists)
       .toEqual([{ id: "L2", members: ["E999"], where: { field: "status", value: "open" } }]);
     // A list may be used once in full or by a selection and once by id, in the writer's order; still at most 5 lists.
-    expect(parseBlocksAnswer(writerReply([], { lists: [
+    expect(parseBlocksAnswer(withLists([], { lists: [
       { id: "L1", members: ["E5"] }, { id: "L1" }, { id: "L1", where: { field: "owner", value: "Dana" } }, { id: "L1", members: ["E6"] },
       { id: "L2" }, { id: "L3" }, { id: "L4" }, { id: "L5" }, { id: "L6" }, { id: "L5", members: ["E2"] },
     ] })).lists).toEqual([{ id: "L1", members: ["E5", "E6"] }, { id: "L1" }, { id: "L2" }, { id: "L3" }, { id: "L4" }, { id: "L5" }, { id: "L5", members: ["E2"] }]);
@@ -227,7 +230,7 @@ describe("agentic Ask model protocol parity", () => {
     // An owner or status reads its value, as before; an empty one is the list in full.
     [{ field: "status", value: " Open ", since: "2026-10-18" }, { field: "status", value: "Open" }], [{ field: "owner", value: "" }, undefined], [{ field: "title", value: "PRD" }, undefined],
   ])("reads a where selection %j as %j, anything else as the list in full (ADR-0041)", (value, where) => {
-    expect(parseBlocksAnswer(writerReply([], { lists: [{ id: "L1", where: value }] })).lists[0]).toEqual({ id: "L1", ...(where === undefined ? {} : { where }) });
+    expect(parseBlocksAnswer(withLists([], { lists: [{ id: "L1", where: value }] })).lists[0]).toEqual({ id: "L1", ...(where === undefined ? {} : { where }) });
   });
 
   it("names each selection field, and either bound, in the answer schema (ADR-0041)", () => {
