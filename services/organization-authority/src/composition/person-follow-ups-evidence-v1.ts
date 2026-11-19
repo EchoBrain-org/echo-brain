@@ -36,6 +36,7 @@ import {
   observeEventV1,
   openItemCurrentV1,
   openItemDecisionPartsV1,
+  openItemIsFromChatV1,
   openItemIsOwnActionV1,
   openItemKindV1,
   openItemLiveReadV1,
@@ -157,15 +158,15 @@ export const FOLLOW_UPS_KEY_PAST_READS_V1 = 'This request has read as many follo
 const NARROWEST: readonly EvidenceDeskVisibilityV1[] = ['only_me', 'approver_only', 'project', 'projects', 'team'];
 
 /** How a follow-up from a chat nobody owns yet names its owner (ADR-0053). */
-export const FOLLOW_UP_NO_OWNER_V1 = 'No owner yet';
+const NO_OWNER = 'No owner yet';
 /** A follow-up from a chat that never reached an owner: its creator was kept for want of a match, and it was never sent to anyone. */
 function unowned(row: Pick<ImpactItemRowV1, 'run_id' | 'owner_match' | 'send_included'>): boolean {
   // Never sent to anyone, with no owner chosen: whatever its state (a dismissed draft included), it has no owner.
-  return row.run_id === null && row.owner_match === 'approver' && row.send_included !== true;
+  return openItemIsFromChatV1(row) && row.owner_match === 'approver' && row.send_included !== true;
 }
 /** Its owner as a follow-up names them: their display name, or none yet. */
 function ownerName(people: Context['people'], row: Pick<ImpactItemRowV1, 'run_id' | 'owner_match' | 'send_included' | 'owner_membership_id'>): string {
-  return unowned(row) ? FOLLOW_UP_NO_OWNER_V1 : openItemNameV1(people, row.owner_membership_id);
+  return unowned(row) ? NO_OWNER : openItemNameV1(people, row.owner_membership_id);
 }
 
 const stale = (): never => { throw new AuthorityOperationError('stale_access_state', 'A follow-up is no longer available to this person'); };
@@ -377,7 +378,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
     if (!access.see_row) return undefined;
     const live = opened !== undefined && access.see_outside && openItemCurrentV1(opened) !== undefined ? opened : undefined;
     // A follow-up from a chat has its own due date (ADR-0053), never that of the item it is about; a run's item shows its tool's.
-    const chat = row.run_id === null;
+    const chat = openItemIsFromChatV1(row);
     const due = chat ? row.due_on ?? '' : live === undefined ? '' : openItemCurrentV1(live)?.due_at ?? '';
     const liveTitle = live === undefined ? '' : impactCardLineV1(live.label, LIMITS.title_chars);
     const expected = impactCardLineV1(row.expected, LIMITS.expected_chars);
