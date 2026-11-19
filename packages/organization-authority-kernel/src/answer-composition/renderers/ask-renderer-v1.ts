@@ -451,7 +451,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const writerRuns = evidence.length > 0 || writerLists.some(list => list.count > 0) || (drafting && followUpRequested);
       const written = !writerRuns ? null : await callRendererModelV1(input, writerCall, writerPrompt, {
         ...answerContext,
-        // Research's working notes are advice, marked as research's own: never the person's question and never evidence.
+        // Research's working notes are data, marked as research's own: never instructions, never the person's question and never evidence.
         // The writer assesses the original question against released text.
         ...researchNotes,
         lists: writerLists,
