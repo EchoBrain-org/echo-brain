@@ -30,14 +30,23 @@ const sentSchema = (body: Record<string, unknown>) => (body.response_format as {
 
 describe('Sonnet receives supported schemas for the real Ask protocol', () => {
   it.each([
-    ['research', createStepSchema(['meetings', 'pages'], ['E1', 'E2'], true, true, true)],
     // The writer's blocks (answer layout v2, ADR-0051).
     ['answer', answerBlocksSchema],
-    // Ask again's writer and the follow-up resolver (ADR-0047).
+    // Ask again's writer (ADR-0047).
     ['answer asked again', answerBlocksSinceSchema],
     // The writer of an answer that may draft follow-ups (ADR-0053), asked once or again.
     ['answer with follow-ups', answerBlocksFollowUpsSchema],
     ['answer asked again with follow-ups', answerBlocksSinceFollowUpsSchema],
+  ])('%s is too large for Claude\'s strict grammar, so it is sent whole as the StructuredOutput tool', async (_role, schema) => {
+    // Sent strict, Claude refuses each of these with HTTP 400 "The compiled grammar is too large" (staging V17, 2026-11-19).
+    const body = await wireRequest(schema);
+    expect(body).not.toHaveProperty('response_format');
+    expect(body.tools).toEqual([{ type: 'function', function: { name: 'StructuredOutput', description: expect.any(String), parameters: schema } }]);
+  });
+
+  it.each([
+    ['research', createStepSchema(['meetings', 'pages'], ['E1', 'E2'], true, true, true)],
+    // The follow-up resolver (ADR-0047).
     ['follow-up resolution', followUpResolutionSchema],
   ])('%s keeps the closed protocol without unsupported wire bounds', async (_role, schema) => {
     const before = JSON.stringify(schema);

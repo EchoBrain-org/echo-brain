@@ -92,6 +92,62 @@ describe("OpenRouter structured generation", () => {
     expect(request?.headers).toMatchObject({ "x-openrouter-metadata": "enabled" });
   });
 
+  it("sends a schema too large for Claude's grammar as the SDK's StructuredOutput tool, and reads the reply from its call or from text", async () => {
+    // 61 schema positions: one more than Claude's strict grammar is trusted to hold.
+    const schema = { type: "object", additionalProperties: false, required: ["f0"], properties: Object.fromEntries(Array.from({ length: 60 }, (_, index) => [`f${index}`, { type: "string", maxLength: 40 }])) };
+    const bodies: Array<Record<string, unknown>> = [];
+    const replies = [
+      { finish_reason: "tool_calls", message: { content: null, tool_calls: [{ type: "function", function: { name: "StructuredOutput", arguments: '{"f0":"from the tool"}' } }] } },
+      { finish_reason: "stop", message: { content: '{"f0":"from text"}' } },
+    ];
+    const adapter = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "openrouter-production", credential_resolver: () => "secret-not-in-errors",
+      fetch_impl: (async (_input, init) => {
+        bodies.push(JSON.parse(init?.body as string) as Record<string, unknown>);
+        return new Response(JSON.stringify({ choices: [replies[bodies.length - 1]] }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+    });
+    await expect(adapter.generate_with_observation!({ ...structuredRequest, schema })).resolves.toMatchObject({ value: { f0: "from the tool" }, finish_reason: "stop" });
+    await expect(adapter.generate({ ...structuredRequest, schema })).resolves.toEqual({ f0: "from text" });
+    // The schema travels whole, bounds included, and no grammar is requested.
+    expect(bodies[0]).not.toHaveProperty("response_format");
+    expect(bodies[0]).not.toHaveProperty("tool_choice");
+    expect(bodies[0]?.tools).toEqual([{ type: "function", function: { name: "StructuredOutput", description: expect.any(String), parameters: schema } }]);
+    expect(bodies[0]?.provider).toEqual({ require_parameters: true, data_collection: "deny", sort: "throughput" });
+  });
+
+  it.each([
+    ["two calls of the reply tool", { finish_reason: "tool_calls", message: { content: null, tool_calls: [{ function: { name: "StructuredOutput", arguments: '{"f0":"first"}' } }, { function: { name: "StructuredOutput", arguments: '{"f0":"second"}' } }] } }, "adapter_response"],
+    ["another tool's call beside JSON text", { finish_reason: "tool_calls", message: { content: '{"f0":"text"}', tool_calls: [{ function: { name: "Search", arguments: '{"f0":"x"}' } }] } }, "adapter_response"],
+    ["empty arguments beside JSON text", { finish_reason: "tool_calls", message: { content: '{"f0":"text"}', tool_calls: [{ function: { name: "StructuredOutput", arguments: " " } }] } }, "adapter_response"],
+    ["arguments that are not JSON", { finish_reason: "tool_calls", message: { content: null, tool_calls: [{ function: { name: "StructuredOutput", arguments: "not json" } }] } }, "adapter_json"],
+    ["a reply cut at the output limit", { finish_reason: "length", message: { content: null, tool_calls: [{ function: { name: "StructuredOutput", arguments: '{"f0":"x"}' } }] } }, "adapter_finish"],
+    ["a refusal beside a call", { finish_reason: "tool_calls", message: { content: null, refusal: "no", tool_calls: [{ function: { name: "StructuredOutput", arguments: '{"f0":"x"}' } }] } }, "adapter_refusal"],
+  ])("never reads a tool-sent schema's reply from %s", async (_name, choice, failureClass) => {
+    const schema = { type: "object", additionalProperties: false, required: ["f0"], properties: Object.fromEntries(Array.from({ length: 60 }, (_, index) => [`f${index}`, { type: "string" }])) };
+    const adapter = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "openrouter-production", credential_resolver: () => "secret-not-in-errors",
+      fetch_impl: (async () => new Response(JSON.stringify({ choices: [choice] }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch,
+    });
+    await expect(adapter.generate({ ...structuredRequest, schema })).rejects.toMatchObject({ diagnostic: { failure_class: failureClass } });
+  });
+
+  it("keeps a schema Claude's grammar holds strict, where a tool call is not a reply", async () => {
+    // 60 schema positions: the most the strict grammar is trusted to hold.
+    const schema = { type: "object", additionalProperties: false, required: ["f0"], properties: Object.fromEntries(Array.from({ length: 59 }, (_, index) => [`f${index}`, { type: "string" }])) };
+    const bodies: Array<Record<string, unknown>> = [];
+    const adapter = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "openrouter-production", credential_resolver: () => "secret-not-in-errors",
+      fetch_impl: (async (_input, init) => {
+        bodies.push(JSON.parse(init?.body as string) as Record<string, unknown>);
+        return new Response(JSON.stringify({ choices: [{ finish_reason: "tool_calls", message: { content: null, tool_calls: [{ type: "function", function: { name: "StructuredOutput", arguments: '{"f0":"x"}' } }] } }] }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+    });
+    await expect(adapter.generate({ ...structuredRequest, schema })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_finish", finish_reason: "other" } });
+    expect(bodies[0]).not.toHaveProperty("tools");
+    expect(bodies[0]?.response_format).toMatchObject({ type: "json_schema", json_schema: { strict: true } });
+  });
+
   it("gives Sonnet 5.5 bounded reasoning headroom without sending unsupported temperature", async () => {
     const bodies: Array<Record<string, unknown>> = [];
     const adapter = createOpenRouterStructuredGenerationAdapter({
