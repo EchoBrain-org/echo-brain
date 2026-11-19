@@ -674,13 +674,17 @@ describe('follow-ups from a chat as Ask evidence (ADR-0053)', () => {
     const f = await sentFixture({ meetingActions: [{ signal_id: 'act-1', text: 'Send quote', owner: 'Mina Patel', due_at: '2026-11-20T12:00:00.000Z', due_on: '2026-11-20' }] });
     const chat = askFollowUpItemIdV1('ask-by-day', 0);
     const other = askFollowUpItemIdV1('ask-by-day', 1);
+    const undated = askFollowUpItemIdV1('ask-by-day', 2);
     createAskFollowUpSinksV1({ items: f.items, people: f.directory })(f.openItemsOptions.sessions.authenticateAccess({ access_token: 'ari' })).save([
       { item_id: chat, task: 'Book the pilot room', due_on: '2026-11-20' },
       { item_id: other, task: 'Book the pilot hall', due_on: '2026-11-21' },
+      { item_id: undated, task: 'Reconcile the 2026-11-22 invoice' },
     ]);
     const { desk } = askDesk(f, 'ari');
     expect(titles(await search(desk, '2026-11-20'))).toEqual(['Book the pilot room', 'Send quote']);
     expect(titles(await search(desk, '2026-11-21'))).toEqual(['Book the pilot hall']);
+    // A day a card's own line writes finds it too, whole: no other card's year or month does.
+    expect(titles(await search(desk, '2026-11-22'))).toEqual(['Reconcile the 2026-11-22 invoice']);
     // The ticket's own tool date is read live, never held: it does not find the ticket.
     expect(titles(await search(desk, '2026-10-30'))).toEqual([]);
   });

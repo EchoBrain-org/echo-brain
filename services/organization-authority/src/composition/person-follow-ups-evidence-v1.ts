@@ -211,9 +211,15 @@ function keyOf(word: string): string | undefined {
   const key = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').toUpperCase();
   return TICKET_KEY.test(key) ? key : undefined;
 }
+/** A calendar day a word names, from a word that is one once punctuation around it is trimmed. */
+function dayOf(word: string): string | undefined {
+  const day = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+  return isCalendarDay(day) ? day : undefined;
+}
 /**
- * A search's terms (`evidenceTermsV1`) and ticket keys. A ticket key stays one key, matched against a ticket item's own
- * key and against the same key-shaped word where ECHO's text holds it.
+ * A search's terms (`evidenceTermsV1`), ticket keys and calendar days. A ticket key stays one key, matched against a ticket
+ * item's own key and against the same key-shaped word where ECHO's text holds it. A calendar day stays one day, matched
+ * against a card's own due date and against the same day where ECHO's text writes it, never as its year, month and day apart.
  */
 function queryOf(query: string): { readonly terms: readonly string[]; readonly keys: readonly string[]; readonly days: readonly string[] } {
   const keys = new Set<string>();
@@ -222,16 +228,18 @@ function queryOf(query: string): { readonly terms: readonly string[]; readonly k
   for (const word of query.normalize('NFC').trim().split(/\s+/u)) {
     const key = keyOf(word);
     if (key !== undefined) { keys.add(key); continue; }
-    // A calendar day stays one day, matched against a card's own due date, never as its year, month and day apart.
-    const day = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
-    if (isCalendarDay(day)) { days.add(day); continue; }
+    const day = dayOf(word);
+    if (day !== undefined) { days.add(day); continue; }
     for (const term of evidenceTermsV1(word)) terms.add(term);
   }
   return { terms: [...terms], keys: [...keys], days: [...days] };
 }
-/** Words of ECHO-held text shaped like a ticket key, such as the build name "EVT-2", as written: a query's key matches them too. */
-function keysOf(values: readonly (string | null | undefined)[]): ReadonlySet<string> {
-  return new Set(values.flatMap(value => (value ?? '').normalize('NFC').split(/\s+/u).flatMap(word => keyOf(word) ?? [])));
+/**
+ * Whole words of ECHO-held text that `as` recognises, as written: a build name shaped like a ticket key ("EVT-2"), or a
+ * calendar day in a card's line. A query's key or day matches them too.
+ */
+function writtenOf(values: readonly (string | null | undefined)[], as: (word: string) => string | undefined): ReadonlySet<string> {
+  return new Set(values.flatMap(value => (value ?? '').normalize('NFC').split(/\s+/u).flatMap(word => as(word) ?? [])));
 }
 /** A name as one compares it with another: NFC, lower case, runs of space as one. */
 function spelled(name: string): string {
@@ -475,11 +483,12 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
         const decision = decisionPart(entry);
         const held = [decision?.title, decision?.first_line, entry.row.expected, ...(unowned(entry.row) ? [] : [openItemNameV1(context.people, entry.row.owner_membership_id)])];
         const words = evidenceWordsV1(held);
-        const written = keysOf(held);
+        const written = writtenOf(held, keyOf);
+        const dated = writtenOf(held, dayOf);
         // A key-shaped word ECHO holds as written ("EVT-2") is one of its words; the key's parts alone are not.
-        // A card's own due date (a meeting action's day, or a chat follow-up's) is ECHO-held too.
+        // A card's own due date (a meeting action's day, or a chat follow-up's) is ECHO-held too, and so is a day its text writes.
         const matched = terms.filter(term => words.has(term)).length + keys.filter(key => written.has(key)).length
-          + days.filter(day => entry.row.due_on === day).length;
+          + days.filter(day => entry.row.due_on === day || dated.has(day)).length;
         const key = ticketKeyOf(entry.row);
         const keyed = key !== undefined && keys.includes(key);
         // Ranked by ECHO's words alone: a key, which the asker may not be able to open, never moves or cuts a hit.
