@@ -269,9 +269,13 @@ what they said moves into the notes.
 
 ### Consequences
 
-- The writer's reply schema gets smaller. Record its size in schema
-  positions before and after. Getting under the strict-grammar limit is not
-  a goal; the transport fix handles size.
+- The writer's reply schema barely changes size. In schema positions, as
+  `claudeGrammarHolds` counts them: answer 78 to 76, asked again 83 to 81,
+  with follow-ups 84 to 82, both 89 to 87. Dropping `lists` and `member`
+  removed about as much as the list block added. All four stay above the
+  strict-grammar limit and keep travelling as a tool. What this change buys
+  is the boundary, not a smaller schema; the size comes down when actions
+  leave the reply.
 - A weak answer is possible where code used to guarantee a list.
 - Ask again compares backing statements, as today. A long list can fall out
   of the comparison when its statement passes the previous-turn citation
