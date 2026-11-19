@@ -1180,6 +1180,97 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.result.response.parts[0]!.statements.map(value => value.text)).toEqual([REVIEW.text]);
     });
   });
+
+  describe("Ask renderer: a list the writer places (ADR-0054)", () => {
+    const LIST_DROPPED = "A list was left out because its selection could not be read.";
+    const UNRECORDED = "Some list items do not record the fact used to select them.";
+    /** A reply whose answer is REVIEW, citing the record `on`, followed by the blocks given. */
+    const placedOn = (on: string, ...blocks: readonly object[]) => ({ blocks: [{ block: "answer", sentences: [{ ...REVIEW, evidence: [on] }] }, ...blocks], not_found: [] });
+    const placing = (...blocks: readonly object[]) => placedOn("E9", ...blocks);
+    const statementsOf = (rendered: Rendered) => rendered.result.response.parts[0]!.statements.map(statement => statement.text);
+    /** Eight rows and one record, the first three rows in review. */
+    const threeInReview = (): AgenticEvidenceBundleV1 => {
+      const research = eightAnd1([C(["E9"])]);
+      return Object.freeze({ ...research, items: research.items.map((entry, index) => index < 3 ? Object.freeze({ ...entry, item: { ...entry.item, attributes: { status: "In Review", owner: "Dana Lee" } } }) : entry) });
+    };
+
+    it("fills a whole list from the desk, past the rows the writer was shown", async () => {
+      // 80 rows whose long participant lists, which no statement names, fill the writer's half of the prompt: it is shown
+      // only the first of them.
+      const research = listBundle(80, 1, [list("L1", ids(1, 80))], [C(["E81"])]);
+      const long = Object.freeze({ ...research, items: research.items.map(entry => entry.full ? entry : Object.freeze({ ...entry, item: { ...entry.item, attributes: { ...entry.item.attributes, participants: Array.from({ length: 40 }, (_, at) => `Person ${at + 1}`).join(", ") } } })) });
+      const run = alone({ bundle: long, replies: [placedOn("E81", { block: "list", list: "L1" })] });
+      const rendered = await run.render("Which tickets were created on October 4?");
+      expect(run.prompt(0).lists[0].members_omitted).toBeGreaterThan(0);
+      const table = blocksOf(rendered).find(block => block.kind === "table")!;
+      if (table.kind !== "table") throw new Error("Expected the list as a table");
+      expect([table.caption, table.rows.length]).toEqual(["80 tickets created on October 4, 2026", 80]);
+      expect(rendered.result.response.citations).toHaveLength(81);
+    });
+    it("fills a list narrowed by one row fact and says shown of total", async () => {
+      const rendered = await alone({ bundle: threeInReview(), replies: [placing({ block: "list", list: "L1", where: { field: "status", value: "in review" } })] }).render("Which tickets are in review?");
+      const table = blocksOf(rendered).find(block => block.kind === "table")!;
+      if (table.kind !== "table") throw new Error("Expected the selection as a table");
+      expect([table.caption, table.rows.length]).toEqual(["3 of the 8 tickets created on October 4, 2026 have status In Review", 3]);
+      expect(rendered.outcome).toBe("answered");
+    });
+    it("fills a hand-picked list only from rows the writer was shown", async () => {
+      const research = listBundle(400, 1, [list("L1", ids(1, 400))], [C(["E401"])]);
+      const run = alone({ bundle: research, replies: [placedOn("E401", { block: "list", list: "L1", members: ["E2", "E400"] })] });
+      const { rendered, corrections } = await observed(() => run.render("Who owns THERM-2 and THERM-400?"));
+      expect(run.prompt(0).lists[0].members.map((member: { id: string }) => member.id)).not.toContain("E400");
+      expect(statementsOf(rendered)).toEqual([REVIEW.text, `1 of the 400 tickets created on October 4, 2026: ${facts(2)}.`]);
+      expect(corrections).toMatchObject({ writer_unknown_id_dropped: 1 });
+      const alonePast = await alone({ bundle: research, replies: [placedOn("E401", { block: "list", list: "L1", members: ["E400"] })] }).render("Who owns THERM-400?");
+      expect(statementsOf(alonePast)).toEqual([REVIEW.text]);
+      expect(alonePast.result.response.parts[0]).toMatchObject({ status: "partial", gap: LIST_DROPPED });
+    });
+    it("drops a list block whose narrowing could not be read and says so", async () => {
+      const rendered = await alone({ bundle: eightAnd1([C(["E9"])]), replies: [placing({ block: "list", list: "L1", members: "E5" })] }).render("Which tickets?");
+      expect(statementsOf(rendered)).toEqual([REVIEW.text]);
+      expect(rendered.result.response.parts[0]).toMatchObject({ status: "partial", gap: LIST_DROPPED });
+      expect(rendered.result.response.citations).toHaveLength(1);
+    });
+    it("releases a placed list where the writer put it", async () => {
+      const again = { block: "text", sentences: [{ text: "The review closed the fixture work.", evidence: ["E9"] }] };
+      const after = await alone({ bundle: eightAnd1([C(["E9"])]), replies: [placing(again, { block: "list", list: "L1" })] }).render("Which tickets?");
+      expect(blocksOf(after).map(block => block.kind)).toEqual(["answer", "text", "table"]);
+      const before = await alone({ bundle: eightAnd1([C(["E9"])]), replies: [placing({ block: "list", list: "L1" }, again)] }).render("Which tickets?");
+      expect(blocksOf(before).map(block => block.kind)).toEqual(["answer", "table", "text"]);
+    });
+    it("says none matched through the list's own not-found phrase, confirmed only for a complete list that records the fact", async () => {
+      const NOBODY = "Not found: tickets created on October 4, 2026 that have owner Nobody.";
+      const reply = placing({ block: "list", list: "L1", where: { field: "owner", value: "Nobody" } });
+      const confirmed = await alone({ bundle: eightAnd1([C(["E9"])]), replies: [reply] }).render("Which tickets does Nobody own?");
+      expect(blocksOf(confirmed).map(block => block.kind)).toEqual(["answer"]);
+      expect(confirmed.result.response.parts[0]).toMatchObject({ gap: NOBODY, gap_details: { not_found: NOBODY } });
+      const research = eightAnd1([C(["E9"])]);
+      const unrecorded = { ...research, items: research.items.map((entry, index) => index === 0 ? { ...entry, item: { ...entry.item, attributes: { status: "In Progress" } } } : entry) };
+      const untested = await alone({ bundle: unrecorded, replies: [reply] }).render("Which tickets does Nobody own?");
+      expect(untested.result.response.parts[0]!.gap).toBe(`${NOBODY} ${UNRECORDED}`);
+      expect(untested.result.response.parts[0]).not.toHaveProperty("gap_details");
+    });
+    it("says how many rows are shown when fitting cuts a placed list", async () => {
+      const members = ids(1, 180);
+      const rendered = await alone({ bundle: listBundle(180, 0, [list("L1", members)], [C([])]), replies: [{ blocks: [{ block: "list", list: "L1" }], not_found: [] }] })
+        .render("Show every ticket with its owner and status.");
+      const part = rendered.result.response.parts[0]!;
+      const table = blocksOf(rendered).find(block => block.kind === "table")!;
+      if (table.kind !== "table") throw new Error("Expected the list as a table");
+      expect(table.rows.length).toBeLessThan(members.length);
+      expect(table.caption).toMatch(new RegExp(`\\(first ${table.rows.length} shown\\)$`, "u"));
+      expect(part.statements[table.statements[0]!]!.text).toMatch(/\(first \d+ shown\)\.$/u);
+      expect(part.gap).toContain(FIT);
+      expect(canonicalJsonBytes(rendered.result.response).byteLength).toBeLessThanOrEqual(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
+    });
+    it("keeps a since sentence that cites a placed list private when a row the writer saw is", async () => {
+      const rendered = await alone({
+        bundle: eightAnd1([C(["E9"])]), replies: [{ ...placing({ block: "list", list: "L1" }), since: [{ text: "The review now covers the fixture work.", evidence: ["L1", "E9"] }] }],
+        earlier: { asked_on: "2026-10-05", statements: [{ text: "The review had not met.", sources: ["Approved record 1"] }] }, answers: "Which tickets?",
+      }).render("Which tickets?");
+      expect(rendered.result.response.since!.statements[0]!.private).toBe(true);
+    });
+  });
 });
 
 describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
