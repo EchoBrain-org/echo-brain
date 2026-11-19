@@ -565,7 +565,8 @@ export function calendarDay(value: string): string | undefined {
 
 /**
  * A writer's selection: an owner or status with a non-empty value, or a date field with at least one of since and
- * until, each a real day, since not after until. Null for anything else, which uses the list in full.
+ * until, each a real day, since not after until. Null for anything else, which makes its list block unreadable: it
+ * shows nothing, never the list in full (ADR-0054).
  */
 function selectionOf(where: Record<string, unknown> | null): AgenticListSelectionV1 | null {
   const field = typeof where?.field === "string" ? where.field.trim().toLowerCase() : "";

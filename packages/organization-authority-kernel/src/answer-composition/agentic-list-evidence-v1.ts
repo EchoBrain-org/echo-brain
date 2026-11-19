@@ -288,18 +288,16 @@ export function agenticNeedReadsListV1(need: Pick<AgenticResearchNeedV1, "kind" 
 }
 
 /**
- * The lists a plan's declared kinds read (ADR-0041), each once in plan order, from the needs code reads a list for:
- * those its which_items needs cite by id, which code states, and those its which_say needs cite, which research
- * checks. `unlisted` when one of those needs cites none: research stopped before it found its list. `known` says which
- * ids name a list research read.
+ * The lists a plan's which_items needs cite by id (ADR-0041), each once in plan order, which code states with no usable
+ * writer reply (ADR-0054), from the needs code reads a list for. `unlisted` when one of those needs, which_items or
+ * which_say, cites none: research stopped before it found its list. `known` says which ids name a list research read.
  */
 export function agenticPlanListsV1(
   needs: readonly Pick<AgenticResearchNeedV1, "kind" | "status" | "evidence">[],
   known: (id: AgenticListIdV1) => boolean,
-): { readonly stated: readonly AgenticListIdV1[]; readonly checking: readonly AgenticListIdV1[]; readonly unlisted: boolean } {
+): { readonly stated: readonly AgenticListIdV1[]; readonly unlisted: boolean } {
   const read = needs.filter(agenticNeedReadsListV1).map(need => ({ kind: need.kind, lists: need.evidence.flatMap(id => { const list = parseAgenticListIdV1(id); return list !== null && known(list) ? [list] : []; }) }));
-  const cited = (kind: "which_items" | "which_say") => Object.freeze([...new Set(read.filter(need => need.kind === kind).flatMap(need => need.lists))]);
-  return Object.freeze({ stated: cited("which_items"), checking: cited("which_say"), unlisted: read.some(need => need.lists.length === 0) });
+  return Object.freeze({ stated: Object.freeze([...new Set(read.filter(need => need.kind === "which_items").flatMap(need => need.lists))]), unlisted: read.some(need => need.lists.length === 0) });
 }
 
 // ---- opens: what research read by opening an item ------------------------
