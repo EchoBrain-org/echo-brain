@@ -40,7 +40,8 @@ Every approved action with printable text gets an unsent draft when its impact
 run finishes. Its expected line is the action's own words, and an approved
 deadline becomes the draft's due date (`due_on`), the deadline's calendar day
 in the meeting's own time zone (UTC when the meeting names none), which the
-desktop shows as a day ("Due Nov 20") (ADR-0053). A timeout or outage is retried up
+desktop shows as a day ("Due Nov 20") (ADR-0053). The meeting's review, before
+and after approval, and what Ask reads of the meeting state that same day. A timeout or outage is retried up
 to the run's three attempts first. If research still fails while the approver
 has access, ECHO records impact as unassessed and keeps the meeting's own
 actions. Each Send request carries up

@@ -148,11 +148,12 @@ const MEETING_ACTIONS = [
  * cites (a note line, or a transcript part that may hold blank lines).
  */
 const PILOT_ITEMS = [
-  { signal_id: 'dec-1', kind: 'decision', text: 'Launch the pilot next week.', subject: null, status: 'decided', due_at: null,
+  { signal_id: 'dec-1', kind: 'decision', text: 'Launch the pilot next week.', subject: null, status: 'decided', due_at: null, due_on: null,
     quotes: ['Launch the pilot next week.', '[09:02] Ari: Let\'s launch the pilot next week.\n\n[09:03] Mina Patel: Agreed. The freeze lifts on Friday.'] },
-  { signal_id: 'act-1', kind: 'action', text: 'Send the revised quote', subject: null, status: null, due_at: null,
+  { signal_id: 'act-1', kind: 'action', text: 'Send the revised quote', subject: null, status: null, due_at: null, due_on: null,
     quotes: ['[09:04] Ari: Rafael, can you send the revised quote?'] },
-  { signal_id: 'act-2', kind: 'action', text: 'Confirm the trace', subject: null, status: null, due_at: '2026-10-10T12:00:00.000Z',
+  // The day beside the deadline is the meeting's own (ADR-0053), and the day the card shows.
+  { signal_id: 'act-2', kind: 'action', text: 'Confirm the trace', subject: null, status: null, due_at: '2026-10-10T12:00:00.000Z', due_on: '2026-10-10',
     quotes: ['[09:05] Mina Patel: I\'ll confirm the trace by Friday.'] },
 ] as const;
 const PILOT_REASONS = [{ signal_id: 'why-1', text: 'The freeze lifts on Friday, so next week is the first clear window.', supports: ['dec-1'],

@@ -115,7 +115,9 @@ test('a meeting added through Granola reaches Home as a decision to approve, eac
   await expect(card).toContainText('Launch the pilot next week.');
   // The card reads the review the Authority sent: what was decided, who does what by when, what was said, and where each goes.
   await expect(card).toContainText('1 decision · 2 actions');
-  await expect(card.getByTestId('card-signal').filter({ hasText: 'Confirm the trace' })).toContainText('Due Oct 10');
+  // The action's day is the one the Authority sent (the meeting's own), said by this computer's calendar: October 10, 2026
+  // is behind every day this runs on, so it always reads "Was due".
+  await expect(card.getByTestId('card-signal').filter({ hasText: 'Confirm the trace' })).toContainText('Was due Oct 10');
   await expect(card.getByRole('region', { name: 'In the meeting · 3' })).toContainText('Rafael Moreno');
   // The meeting's words are behind one button in the head, not one per item, and open at the card's full width.
   await expect(card.getByRole('button', { name: /^In the meeting:/ })).toHaveCount(0);

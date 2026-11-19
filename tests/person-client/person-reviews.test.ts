@@ -33,7 +33,26 @@ describe('person reviews CLI', () => {
   it('documents all operations and the provider-independent route', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(); const { run, output } = cli(fetch);
     expect(await run(['reviews', '--help'])).toBe(0);
-    for (const value of ['reviews', 'review_open', 'review', 'no tool_id']) expect(output.stdout).toContain(value);
+    for (const value of ['reviews', 'review_open', 'review', 'no tool_id', 'due_on']) expect(output.stdout).toContain(value);
     expect(fetch).not.toHaveBeenCalled();
+  });
+  // One deadline, one day (ADR-0053): noon on November 20 in Tokyo is still the 19th in Los Angeles, so the review carries
+  // the meeting's own day and the CLI prints it as sent.
+  it("prints an opened review's action with its deadline and its day in the meeting's own time zone, and refuses a review without the day", async () => {
+    const item = { signal_id: 'act-1', kind: 'action', text: 'Send the launch checklist.', subject: null, status: null, due_at: '2026-11-20T03:00:00.000Z', due_on: '2026-11-20',
+      quotes: [], owner: null, owner_editable: false, project_ids: [] };
+    const opened = { review: { approval_id: 'apr_tokyo', title: 'Tokyo launch sync', project_ids: [], status: 'pending', decided_on: null, first_line: null, action_count: 1,
+      meeting_at: '2026-11-17T01:00:00.000Z', all_day: false, records: [] }, snapshot_sha256: `sha256:${'a'.repeat(64)}`, participants: ['Aiko Tanaka'], items: [item],
+      reasons: [], suggested_projects: [], records: [] };
+    const request = JSON.stringify({ schema_version: 1, operation: 'review_open', approval_id: 'apr_tokyo' });
+    const answer = (body: unknown) => vi.fn<typeof globalThis.fetch>().mockImplementation(async () => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } }));
+    const sent = cli(answer(opened));
+    expect(await sent.run(['reviews', '--request', request])).toBe(0);
+    expect(JSON.parse(sent.output.stdout)).toEqual({ ok: true, result: opened });
+    // An Authority from before the day existed: the keys are exact, so the two ship together (ADR-0050).
+    const { due_on: _day, ...before } = item;
+    const older = cli(answer({ ...opened, items: [before] }));
+    expect(await older.run(['reviews', '--request', request])).not.toBe(0);
+    expect(older.output.stdout).not.toContain('2026-11-20');
   });
 });

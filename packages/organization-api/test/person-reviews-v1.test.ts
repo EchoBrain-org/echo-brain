@@ -13,10 +13,10 @@ const review = { approval_id: approval, title: 'Pilot planning', project_ids: [p
 const routes = (...destinations: (readonly string[] | null)[]) => destinations.map((project_ids, index) => ({ signal_id: `sig-${index + 1}`, project_ids }));
 const request = (value: Record<string, unknown>) => ({ schema_version: 1, operation: 'review', approval_id: approval, command_id: 'review-1', snapshot_sha256: digest,
   action: 'approve', routes: routes([projectA], null, []), owners: [], ...value });
-const item = { signal_id: 'decision:sha256:1', kind: 'decision', text: 'Launch the pilot\nnext week.', subject: null, status: 'decided', due_at: null,
+const item = { signal_id: 'decision:sha256:1', kind: 'decision', text: 'Launch the pilot\nnext week.', subject: null, status: 'decided', due_at: null, due_on: null,
   quotes: ['[09:01] Mina: Launch it.\n\nActions'], owner: null, owner_editable: false, project_ids: [projectA] } as const;
 const action = { signal_id: 'action:sha256:2', kind: 'action', text: 'Send the plan.', subject: 'THERM-48', status: null, due_at: '2026-10-20T00:00:00.000Z',
-  quotes: [], owner: 'Rafael Moreno', owner_editable: true, project_ids: [] } as const;
+  due_on: '2026-10-20', quotes: [], owner: 'Rafael Moreno', owner_editable: true, project_ids: [] } as const;
 const opened = (value: Record<string, unknown> = {}) => ({ review, snapshot_sha256: digest, participants: ['Mina Patel'], items: [item, action],
   reasons: [{ signal_id: 'rationale:sha256:3', text: 'The freeze lifts.', supports: ['decision:sha256:1'], quotes: ['It lifts Friday.'] }],
   suggested_projects: [{ project_id: projectA, name: 'Project A' }], records: [], ...value });
@@ -104,6 +104,10 @@ describe('person-owned review contract', () => {
     const records = [{ approval_id: `apr_${'c'.repeat(64)}`, project_ids: [projectA] }, { approval_id: `apr_${'d'.repeat(64)}`, project_ids: [] }];
     expect(validatePersonReviewResultV1('review_open', opened({ review: { ...review, status: 'approved', records }, records })).records).toEqual(records);
     expect(validatePersonReviewResultV1('review_open', opened({ items: [{ ...item, project_ids: null }, { ...action, owner_editable: false }] })).items).toHaveLength(2);
+    // An action's day is the meeting's own (ADR-0053): there with its deadline, null with none, and null when the deadline cannot be written as a day.
+    for (const due of [{ due_at: null, due_on: null }, { due_at: '0999-11-20T12:00:00.000Z', due_on: null }, { due_at: '2026-11-20T03:00:00.000Z', due_on: '2026-11-20' }]) {
+      expect(validatePersonReviewResultV1('review_open', opened({ items: [item, { ...action, ...due }] })).items[1]).toMatchObject(due);
+    }
     // A decided item and its record kept private inside a project say so.
     const kept = [{ approval_id: `apr_${'e'.repeat(64)}`, project_ids: [projectA], private: true }, ...records];
     const decided = opened({ review: { ...review, status: 'approved', records: kept }, records: kept, items: [{ ...item, private: true }, { ...action, owner_editable: false }] });
@@ -121,6 +125,12 @@ describe('person-owned review contract', () => {
     ['an action with a status', { items: [{ ...action, status: 'decided' }] }],
     ['a decision with a due date', { items: [{ ...item, due_at: '2026-10-20T00:00:00.000Z' }] }],
     ['a due date that is not a timestamp', { items: [{ ...action, due_at: 'Friday' }] }],
+    ['an item without its day field', { items: [item, (({ due_on: _day, ...rest }) => rest)(action)] }],
+    ['a decision with a day', { items: [{ ...item, due_on: '2026-10-20' }] }],
+    ['a day that is no calendar day', { items: [{ ...action, due_on: '2026-02-30' }] }],
+    ['a day written as a time', { items: [{ ...action, due_on: '2026-10-20T00:00:00.000Z' }] }],
+    ['a day whose year has three digits', { items: [{ ...action, due_at: '0999-11-20T12:00:00.000Z', due_on: '999-11-20' }] }],
+    ['a day with no deadline behind it', { items: [{ ...action, due_at: null }] }],
     ['an empty text', { items: [{ ...item, text: '' }] }],
     ['an empty quote', { items: [{ ...item, quotes: [''] }] }],
     ['an owner of a decision', { items: [{ ...item, owner: 'Rafael Moreno' }] }],

@@ -113,6 +113,15 @@ Options for asking the person whether they want a card:
 - **A meeting action's card carries its due date as a day.** The day is the
   action's deadline in the meeting's own time zone, fixed like the card's
   line, and the line is the action's words only.
+- **A meeting action's deadline reads as that one day everywhere.** The
+  proposal, the approved decision, the action's card and what Ask reads of the
+  meeting all state the deadline as its calendar day in the meeting's own time
+  zone (UTC when the meeting names none), never as an instant drawn in the
+  reader's time zone. One piece of code works the day out for all four. A
+  review item carries it as `due_on` beside the instant `due_at`; Ask's
+  meeting source gives the day as the action's due date and matches a due-date
+  window against it. A deadline that cannot be written as a calendar day has
+  no day in any of them.
 - **Research stays read only.** ADR-0042's rule holds for the loop. What
   changes is that an answer's release may also save not-sent cards for the
   person who asked.
@@ -148,11 +157,6 @@ Known limits of what was built, found in review on 2026-11-18:
   fails while the audit still records the answer.
 - A member who stops owning a card while they are reading it may still receive
   that one read.
-- The approval and review screens, and what Ask reads from a meeting, still
-  show a meeting action's deadline as the reader's own day. For a reader 12 or
-  more hours from the meeting's time zone that day can differ by one from the
-  day on the follow-up card. Closing it needs a new field in the reviews
-  contract. The founder left it for a separate change on 2026-11-18.
 
 Not decided here: the after-approval impact check adopting the same card
 form, a card tool inside the loop, and a plain "new card" form.
@@ -172,7 +176,10 @@ form, a card tool inside the loop, and a plain "new card" form.
 - The older step-by-step research path has no "asked for a follow-up" flag, so
   with it a task about something ECHO has no record of is not drafted.
 - Existing clients reject an Ask answer that carries a key they do not know,
-  so the Authority, the CLI and the desktop change together (ADR-0050).
+  so the Authority, the CLI and the desktop change together (ADR-0050). The
+  same holds for an opened review, whose items gained `due_on`. That field
+  needed no storage change: the day is worked out from the stored deadline
+  each time it is read.
 - Rollback is not designed yet. A chat card has no run or record to fall back
   to, so removing the feature after cards exist needs its own answer.
 - Evidence still to gather: the Ask writer's live evaluation. Its five cases

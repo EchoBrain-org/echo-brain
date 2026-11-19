@@ -1,5 +1,7 @@
 import type { JsonObject, Sha256Digest } from "@echo-brain/federation-protocol";
 import { PERSON_CITED_RECORD_PARTICIPANTS_MAX_V1, PERSON_LIST_TEXT_MAX_BYTES_V1 } from "@echo-brain/organization-api";
+import { isCalendarDay } from "@echo-brain/organization-api/validation";
+import { localDateV1 } from "@echo-brain/organization-processing/core";
 import type { OrganizationRecordDecisionBriefV1, OrganizationRecordMeetingTimeV1 } from "@echo-brain/organization-protocol";
 import type { RecordApproverProjectorV1 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { READABLE_SEARCH_ADMISSION_BUDGET_V1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
@@ -7,9 +9,10 @@ import { AuthorityOperationError } from "@echo-brain/organization-authority-kern
 import { boundedTextV1 } from "../application/person-item-text-v1.js";
 
 /**
- * Pure meeting presentation for the person list and the desk (ADR-0024). Every
- * value here is projected from an approved record the caller was already
- * admitted to; nothing here reads a database or decides access.
+ * Pure meeting presentation for the person list, the desk (ADR-0024) and a
+ * review's items. Every value here is projected from an approved record the
+ * caller was already admitted to, or from the proposal its reviewer opened;
+ * nothing here reads a database or decides access.
  */
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -45,6 +48,18 @@ export function meetingDateV1(time: OrganizationRecordMeetingTimeV1 | undefined)
   if (!Number.isFinite(milliseconds)) return undefined;
   const local = time?.all_day === true ? value.slice(0, 10) : zonedDay(milliseconds, time?.timezone) ?? new Date(milliseconds).toISOString().slice(0, 10);
   return day(local);
+}
+
+/**
+ * A meeting action's deadline as the one calendar day every reader is shown (ADR-0053): the day of `due_at` in the
+ * meeting's own time zone, the zone extraction normalised it in (UTC when the meeting names none, or one that is not a
+ * time zone). The proposal, the approved decision, the action's follow-up and what Ask reads of the meeting all say this
+ * day. Null with no deadline, and for a deadline whose day is not a calendar day in the contract's form (a year the
+ * local form writes with fewer than four digits): a day must never fail what carries it.
+ */
+export function meetingActionDueOnV1(dueAt: string | null, timeZone: string | undefined): string | null {
+  const day = dueAt === null ? null : localDateV1(dueAt, timeZone);
+  return isCalendarDay(day) ? day : null;
 }
 
 /**

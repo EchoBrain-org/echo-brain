@@ -55,6 +55,17 @@ describe('client-local evidence presentation', () => {
     });
   });
 
+  // A meeting action's due date arrives as the day in the meeting's own time zone (ADR-0053): a reader in another zone is
+  // shown that day, where the instant behind it (noon in Tokyo) would have read as the day before in Los Angeles.
+  it("keeps a meeting action's due day for a reader whose own day differs", () => {
+    const action = { ...meeting, kind: 'action' as const, attributes: { owner: 'Aiko Tanaka', due_at: '2026-11-20' }, dates: { ...meeting.dates, due: '2026-11-20' } };
+    const entry = { short: 'E1', source: 'meetings', item: action };
+    expect(describeAgenticEvidenceItemV1(entry, 'America/Los_Angeles')).toMatchObject({ attributes: { owner: 'Aiko Tanaka', due_at: '2026-11-20' }, dates: { due: '2026-11-20' } });
+    expect(agenticWriterListMemberV1(entry, false, 'America/Los_Angeles')).toMatchObject({ due: '2026-11-20', dates: { due: '2026-11-20' } });
+    const instant = { ...action, attributes: { due_at: '2026-11-20T03:00:00.000Z' } };
+    expect(describeAgenticEvidenceItemV1({ ...entry, item: instant }, 'America/Los_Angeles')).toMatchObject({ attributes: { due_at: '2026-11-19T19:00:00.000-08:00' } });
+  });
+
   it('uses the timestamp of the same meaning for page revisions and due times', () => {
     const item = { ...meeting, date_kind: 'version_created' as const,
       dates: { created: '2026-10-15', updated: '2026-10-17T00:20:00.000Z', due: '2026-10-18T01:00:00.000Z' },

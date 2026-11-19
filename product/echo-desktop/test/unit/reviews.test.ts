@@ -8,7 +8,7 @@ vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
 const review = { approval_id: `apr_${'b'.repeat(64)}`, title: 'SYNTHETIC STAGING CANARY', project_ids: [], status: 'pending', decided_on: null,
   first_line: 'Verify the release.', action_count: 0, meeting_at: null, all_day: false, records: [] };
 const proposal = { review, snapshot_sha256: `sha256:${'a'.repeat(64)}`, participants: [], suggested_projects: [], reasons: [], records: [],
-  items: [{ signal_id: 's1', kind: 'decision', text: 'Verify the release.', subject: null, status: 'decided', due_at: null,
+  items: [{ signal_id: 's1', kind: 'decision', text: 'Verify the release.', subject: null, status: 'decided', due_at: null, due_on: null,
     quotes: ['Verify the release.'], owner: null, owner_editable: false, project_ids: [] }] };
 let tools: unknown;
 
