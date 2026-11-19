@@ -186,7 +186,7 @@ export function saysNow(item: OpenItemView): string {
   return `“${current.says_now}”`;
 }
 
-/** A due date as its row or its action shows it: "Due Oct 30". */
+/** A tool's own due date for an item, as its row shows it: "Due Oct 30". */
 export function dueWords(due: string | null): string | null {
   return due === null ? null : `Due ${monthDay(due) ?? due}`;
 }
@@ -490,9 +490,10 @@ function calendarDay(time: number, plusDays = 0): string {
 }
 
 /**
- * ECHO's own due date on a follow-up from a chat (ADR-0053), by this
- * computer's calendar: "Due today", "Due tomorrow", "Due Nov 20", or "Was due
- * Nov 20" once that day has passed. Nothing with none.
+ * A due day (`due_on`, ADR-0053): a follow-up's own, and a meeting action's
+ * on its review, where it is the day in the meeting's own time zone. Said by
+ * this computer's calendar: "Due today", "Due tomorrow", "Due Nov 20", or "Was
+ * due Nov 20" once that day has passed. Nothing with none.
  */
 export function dueOnWords(due: string | null, now = Date.now()): string | null {
   if (due === null) return null;

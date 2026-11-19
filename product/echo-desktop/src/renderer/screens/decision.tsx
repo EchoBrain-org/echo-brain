@@ -2,7 +2,7 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { MAX_CAPTURE_PROJECTS, type ProjectSummary } from '../../shared/protocol.js';
 import { dateTime } from '../format.js';
-import { dueWords } from '../needs.js';
+import { dueOnWords } from '../needs.js';
 import {
   decide, destinationFrom, keptItems, loadProjects, lockDecisionRoute, lockDecisionRoutes, ONLY_ME, retryImpact, routedProjects,
   setDecisionOwner, setDecisionRoute, setDecisionRoutes, tickDecisionRoute, tickDecisionRoutes, type DecisionState, type Destination,
@@ -239,7 +239,11 @@ function Decided({ items, under }: { items: readonly Item[]; under?(item: Item):
   );
 }
 
-/** Who does what: each action with its due date beside it, its owner and where it goes under it. */
+/**
+ * Who does what: each action with its due date beside it, its owner and where it goes under it. The due date is the
+ * day in the meeting's own time zone (`due_on`, ADR-0053), in the words its follow-up says it, never `due_at` by this
+ * computer's clock.
+ */
 function ToDo({ items, under }: { items: readonly Item[]; under?(item: Item): ComponentChildren }) {
   const actions = items.filter(item => item.kind === 'action');
   if (actions.length === 0) return null;
@@ -247,7 +251,7 @@ function ToDo({ items, under }: { items: readonly Item[]; under?(item: Item): Co
     <section class="card-section" aria-labelledby="decision-todo">
       <div class="section-label" id="decision-todo">To do</div>
       <div class="card-list">{actions.map(item => {
-        const when = dueWords(item.due_at);
+        const when = dueOnWords(item.due_on);
         return <SignalRow key={item.signal_id} signal={item} under={under?.(item)}>{when && <span class="card-due">{when}</span>}</SignalRow>;
       })}</div>
     </section>

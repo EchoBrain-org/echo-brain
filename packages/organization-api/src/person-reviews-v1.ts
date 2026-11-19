@@ -1,6 +1,6 @@
 import { validateProjectIdV1 } from './project-context-v1.js';
-import { PERSON_TOOL_REQUEST_MAX_BYTES_V1, type PersonToolHostV1 } from './person-tool-client.js';
-import { asEnumerableRecord, assertExactKeys, assertTimestamp, fail, utf8ByteLength } from './validation.js';
+import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_REQUEST_MAX_BYTES_V1, type PersonToolHostV1 } from './person-tool-client.js';
+import { asEnumerableRecord, assertExactKeys, assertTimestamp, fail, isCalendarDay, utf8ByteLength } from './validation.js';
 
 /**
  * Meeting reviews (ADR-0046) belong to the authenticated person, independently of connected or advertised source tools:
@@ -22,6 +22,12 @@ export interface PersonMeetingReviewItemV2 {
   readonly status: 'proposed' | 'decided' | 'unresolved' | null;
   /** An action's, as the meeting set it; null for a decision or when it set none. */
   readonly due_at: string | null;
+  /**
+   * The day to show for `due_at`: its calendar day in the meeting's own time zone (UTC when the meeting names none), the
+   * day the action's follow-up carries, so every reader reads the same day (ADR-0053). Null without `due_at`, and when
+   * that deadline cannot be written as a day.
+   */
+  readonly due_on: string | null;
   /** The meeting's own words. */
   readonly quotes: readonly string[];
   /** Pending: the owner the meeting proposes (editable). Decided: the owner the reviewer confirmed. */
@@ -70,6 +76,16 @@ const label = 'Personal review request';
 const SIGNAL = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 /** At most this many routes: one per decision and action of a meeting. */
 const ROUTES_MAX = 500;
+/** The most bytes the list of reviews (`reviews`) and a decision's receipt (`review`) take as JSON. */
+export const PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 = 120_000;
+/**
+ * The most bytes an opened review (`review_open`) takes as JSON. It had the bound above until an item carried `due_on`
+ * (ADR-0053). That key adds at most `,"due_on":"YYYY-MM-DD"` to an item, so this bound is larger by that much for each of
+ * the most items a review holds: every review that opened before the key still opens with it. Only an opened review has
+ * items, so only its bound grew. The Authority answers and the client reads within the tool transport's ceiling
+ * (PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1), which this bound must never pass.
+ */
+export const PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1 = PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 + ROUTES_MAX * ',"due_on":"YYYY-MM-DD"'.length;
 function text(value: unknown, maximum = 256): asserts value is string {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || /[\u0000-\u001f\u007f]/.test(value)) fail(label);
 }
@@ -133,7 +149,8 @@ export function validatePersonReviewResultV1<K extends keyof PersonReviewResults
   const row = asEnumerableRecord(value, 'Personal review response');
   const keys = { reviews: ['reviews'], review_open: ['review','snapshot_sha256','participants','items','reasons','suggested_projects','records'], review: ['status','decided_on'] };
   assertExactKeys(row, keys[operation], 'Personal review response');
-  if (utf8ByteLength(JSON.stringify(row)) > 120_000) fail('Personal review response exceeds its bound');
+  const bound = operation === 'review_open' ? PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1 : PERSON_REVIEW_RESPONSE_MAX_BYTES_V1;
+  if (utf8ByteLength(JSON.stringify(row)) > bound) fail('Personal review response exceeds its bound');
   const object = (value: unknown, keys: readonly string[], optional: readonly string[] = []) => {
     const item = asEnumerableRecord(value, 'Meeting response item');
     assertExactKeys(item, [...keys, ...optional.filter(key => Object.hasOwn(item, key))], 'Meeting response item');
@@ -169,12 +186,14 @@ export function validatePersonReviewResultV1<K extends keyof PersonReviewResults
     for (const name of array(row.participants, 500)) words(name, 1024);
     const items = new Set<unknown>();
     for (const value of array(row.items, ROUTES_MAX)) {
-      const item = object(value, ['signal_id','kind','text','subject','status','due_at','quotes','owner','owner_editable','project_ids'], ['private']);
+      const item = object(value, ['signal_id','kind','text','subject','status','due_at','due_on','quotes','owner','owner_editable','project_ids'], ['private']);
       signal(item.signal_id); if (items.has(item.signal_id)) fail('Invalid meeting review signal'); items.add(item.signal_id);
       words(item.text); if (item.subject !== null) words(item.subject); quotes(item.quotes);
       if (item.kind === 'decision' ? !['proposed','decided','unresolved'].includes(item.status as string) || item.due_at !== null
         : item.kind !== 'action' || item.status !== null) fail('Invalid meeting review item');
       if (item.due_at !== null) assertTimestamp(item.due_at, 'Meeting review due date');
+      // The day is a deadline's: never without one, and a real calendar day when there.
+      if (item.due_on !== null && (item.due_at === null || !isCalendarDay(item.due_on))) fail('Invalid meeting review due day');
       // An owner is an action's, one line of at most 120 characters; only a proposed one is editable.
       if (item.owner !== null && (item.kind !== 'action' || typeof item.owner !== 'string' || item.owner.length === 0 || item.owner.length > 120
         || item.owner.trim() !== item.owner || /[\p{Cc}\p{Cf}]/u.test(item.owner))) fail('Invalid meeting review owner');
@@ -194,5 +213,7 @@ export function validatePersonReviewResultV1<K extends keyof PersonReviewResults
 export function personReviewCommandV1<K extends PersonReviewOperationV1['operation']>(host: PersonToolHostV1, request: PersonReviewRequestV1 & { readonly operation: K }): Promise<PersonReviewResultsV1[K]> {
   const body = validatePersonReviewRequestV1(request);
   return host.withToolSession(session => session.transport.json({ path: PERSON_REVIEWS_PATH_V1, body, validate_request: validatePersonReviewRequestV1,
-    validate_response: value => validatePersonReviewResultV1(request.operation, value), maximum_request_bytes: PERSON_TOOL_REQUEST_MAX_BYTES_V1, maximum_response_bytes: 128 * 1024, timeout_ms: 75_000 }));
+    validate_response: value => validatePersonReviewResultV1(request.operation, value), maximum_request_bytes: PERSON_TOOL_REQUEST_MAX_BYTES_V1,
+    // The transport's ceiling, which the Authority's response shares: at least either typed bound above.
+    maximum_response_bytes: PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, timeout_ms: 75_000 }));
 }

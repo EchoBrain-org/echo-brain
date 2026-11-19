@@ -16,7 +16,7 @@ interface Signal { id: string; text: string; subject?: string | null; status?: s
 interface Brief { meeting: { title?: string; participants: { id: string; display_name?: string }[] }; decisions: Signal[]; actions: Signal[]; rationales: Signal[] }
 interface Review {
   participants: string[];
-  items: { signal_id: string; kind: string; text: string; subject: string | null; status: string | null; due_at: string | null; quotes: string[] }[];
+  items: { signal_id: string; kind: string; text: string; subject: string | null; status: string | null; due_at: string | null; due_on: string | null; quotes: string[] }[];
   reasons: { signal_id: string; text: string; supports: string[]; quotes: string[] }[];
 }
 
@@ -57,8 +57,33 @@ describe('approvalReviewV1', () => {
 
     const review = approvedReview(brief, 'therm');
     expect(review.items).toEqual([{ signal_id: brief.decisions[0]!.id, kind: 'decision', text: 'Treat the buffer change as an experiment, not the fix.', subject: null,
-      status: 'proposed', due_at: null, quotes: [meeting.content[0]!.text, meeting.content[1]!.text] }]);
+      status: 'proposed', due_at: null, due_on: null, quotes: [meeting.content[0]!.text, meeting.content[1]!.text] }]);
     expect(review.reasons).toEqual([]);
     expect(review.participants).toEqual(['Jonas Becker', 'Mallory']);
+  });
+
+  // One deadline, one day (ADR-0053). A model writes a deadline as a date; extraction stores it as noon in the meeting's
+  // own time zone. In Tokyo that is 03:00 UTC, still the evening of the 19th in Los Angeles, so the review carries the
+  // meeting's own day beside the instant, and every reader is shown that day.
+  it('gives a date-only deadline set in a Tokyo meeting its own day, November 20, through the real extraction', async () => {
+    const meeting = { schema_version: 1, id: 'meeting-tokyo', title: 'Tokyo launch sync',
+      capture: { state: 'complete', components: [{ kind: 'transcript', state: 'available' }] },
+      participants: [{ id: 'p-aiko', display_name: 'Aiko Tanaka' }],
+      time: { actual_start_at: '2026-11-17T01:00:00.000Z', timezone: 'Asia/Tokyo' },
+      content: [{ id: 'turn-1', kind: 'transcript', speaker_participant_id: 'p-aiko', text: 'I will send the launch checklist by November 20.' }],
+      artifacts: [],
+      provenance: { source: { kind: 'meeting-source', adapter_id: 'fixture-source', instance_id: 'local', version: '1.0.0' }, external_id: 'tokyo-1',
+        canonical_revision: 'sha256:tokyo-revision', observed_at: AT, normalizer_version: '1.0.0', source_updated_at: AT } };
+    const output = JSON.stringify({ signals: [{ kind: 'action', text: 'Send the launch checklist.', status: 'unresolved', owner: null,
+      due_at: '2026-11-20', confidence: null, evidence_units: ['T1'], supports_decision_indexes: [] }] });
+    const processor = new LlmDecisionProcessor({ adapter_id: 'llm', instance_id: 'local', settings: { model: 'fixture-model' } }, {
+      client: { provider: 'fixture-local', generateStructured: async () => ({ content: output }), verifyModel: async () => undefined },
+      validateProviderConfig: () => [], identityEndpoint: null, now: () => AT });
+    const decisions = await processor.extract(meeting, { processor_version: processor.identity.version, input_fingerprint: meeting.provenance.canonical_revision });
+    const brief = compileDecisionBrief('brief:tokyo', meeting, decisions);
+    // Noon on November 20 in Tokyo.
+    expect(brief.actions.map(action => action.due_at)).toEqual(['2026-11-20T03:00:00.000Z']);
+    expect(new Date(brief.actions[0]!.due_at!).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' })).toBe('2026-11-19');
+    expect(approvedReview(brief, 'tokyo').items.map(item => [item.kind, item.due_at, item.due_on])).toEqual([['action', '2026-11-20T03:00:00.000Z', '2026-11-20']]);
   });
 });

@@ -191,7 +191,13 @@ meeting by hand keeps its optional suggested project.
 
 - `items`: every decision and action, in brief order (decisions first), each
   with `signal_id`, `kind`, `text`, `subject`, `status` (decisions), `due_at`
-  (actions), `quotes`, `owner` and `owner_editable`, and `project_ids`.
+  and `due_on` (actions), `quotes`, `owner` and `owner_editable`, and
+  `project_ids`. `due_at` is the deadline as the meeting set it, an instant.
+  `due_on` is the day the card shows for it: its calendar day in the meeting's
+  own time zone (UTC when the meeting names none), the day the action's
+  follow-up carries, so every reader sees one day
+  ([ADR-0053](../decisions/ADR-0053-chat-answers-may-carry-cards.md)). It is
+  null with no deadline, or when the deadline cannot be written as a day.
   - Pending: `owner` is the grounded proposal and `owner_editable` is true
     when there is one; `project_ids` is the suggestion filtered to projects
     the reviewer can read now (`[]` = Only me).

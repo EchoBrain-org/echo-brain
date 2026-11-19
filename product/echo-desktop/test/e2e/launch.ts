@@ -246,11 +246,15 @@ export async function routeAll(card: Locator, choice: 'No project' | 'Don\'t kee
   await (choice === 'No project' ? menu.getByRole('radio', { name: /^No project\b/ }) : menu.getByRole('radio', { name: choice, exact: true })).click();
 }
 
-/** Adds the fixture meeting, then approves it from Home: every item to the project it suggests, or to no project, only you. Returns Home's rows. */
-export async function approveFromHome(page: Page, onlyMe = false): Promise<Locator> {
+/**
+ * Adds the fixture meeting, then approves it from Home: every item to the project it suggests, or to no project, only you.
+ * `review` reads the open review before Approve. Returns Home's rows.
+ */
+export async function approveFromHome(page: Page, onlyMe = false, review?: (card: Locator) => Promise<void>): Promise<Locator> {
   await addMeeting(page);
   await page.getByTestId('need-row').filter({ hasText: 'Pilot planning' }).click();
   const card = page.getByTestId('decision');
+  await review?.(card);
   if (onlyMe) await routeAll(card, 'No project');
   await card.getByTestId('decision-approve').click();
   await expect(page.getByTestId('toast')).toContainText('Approved');

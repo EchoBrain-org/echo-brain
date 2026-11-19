@@ -10,8 +10,6 @@ import {
   type EvidenceDatesV1,
 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
-import { isCalendarDay } from "@echo-brain/organization-api/validation";
-import { localDateV1 } from "@echo-brain/organization-processing/core";
 import {
   canonicalJson,
   canonicalSha256,
@@ -54,6 +52,7 @@ import {
   approverDisplayNameV1,
   approverTupleV1,
   confirmedOwners,
+  meetingActionDueOnV1,
   meetingDateV1,
   meetingParticipantsV1,
   type ApproverMembershipsV1,
@@ -299,8 +298,8 @@ export interface PersonRecordActionV1 {
   readonly text: string;
   readonly due_at?: string;
   /**
-   * The calendar day of `due_at` in the meeting's own time zone, the zone extraction normalised it in (UTC when the meeting
-   * names none, or one that is not a time zone). Present exactly with `due_at`.
+   * The day every reader is shown for `due_at` (meetingActionDueOnV1): its calendar day in the meeting's own time zone.
+   * Never without `due_at`, and absent too when that deadline cannot be written as a day.
    */
   readonly due_on?: string;
   /** The owner the approver confirmed on Approve (ADR-0021), else null; never the brief's own owner field. */
@@ -686,8 +685,11 @@ function deskItems(record: Database.Database, items: readonly ReadableSearchResu
     const owner = signal?.kind === "action" ? confirmedOwners(envelope.body.human_act_resolution_ref).get(signal.id) : undefined;
     const indexedText = signal === undefined ? undefined : owner === undefined ? signal.text : `${signal.text} Owner: ${owner}.`;
     if (signal === undefined || signal.kind !== item.item_kind || indexedText !== item.text) metadataUnavailable();
+    // An action's due date is the meeting's own day, the one its follow-up carries (ADR-0053), never an instant that a
+    // reader's time zone could move to the day before or after. A deadline that cannot be written as a day gives none.
+    const due = signal.kind === "action" ? meetingActionDueOnV1(signal.due_at, brief.meeting.time?.timezone) : null;
     const attributes = {
-      ...(signal.kind === "decision" ? { status: signal.status } : signal.kind === "action" ? { ...(owner === undefined ? {} : { owner }), ...(signal.due_at === null ? {} : { due_at: signal.due_at }) } : {}),
+      ...(signal.kind === "decision" ? { status: signal.status } : signal.kind === "action" ? { ...(owner === undefined ? {} : { owner }), ...(due === null ? {} : { due_at: due }) } : {}),
       ...(meeting.participants === undefined ? {} : { participants: meeting.participants }),
       ...(meeting.approved_by === undefined ? {} : { approved_by: meeting.approved_by }),
     };
@@ -695,7 +697,7 @@ function deskItems(record: Database.Database, items: readonly ReadableSearchResu
     const time = brief.meeting.time;
     const stamp = meetingStamp(time);
     const occurred_at = meetingDateV1(time);
-    const dates = { ...(stamp === undefined ? {} : { occurred: time?.all_day ? stamp.slice(0, 10) : stamp }), approved: meeting.approved_at, ...(signal.kind === 'action' && signal.due_at !== null ? { due: signal.due_at } : {}) };
+    const dates = { ...(stamp === undefined ? {} : { occurred: time?.all_day ? stamp.slice(0, 10) : stamp }), approved: meeting.approved_at, ...(due === null ? {} : { due }) };
     return Object.freeze({ atom_id: item.atom_id, record_sha256: item.record_sha256, item_kind: item.item_kind, text: item.text, policy_id: item.policy_id, record_position: item.record_position, envelope_sha256: item.envelope_sha256, atom_order: item.atom_order, audience_project_count: item.audience_project_count, label: deskLabel(brief.meeting.title, brief.meeting.time), list_label: deskListLabel(signal.text, brief.meeting.title, brief.meeting.time), visibility, ...(occurred_at === undefined ? {} : { occurred_at }), dates: Object.freeze(dates), ...(Object.keys(attributes).length === 0 ? {} : { attributes: Object.freeze(attributes) }) });
   }));
 }
@@ -1022,7 +1024,9 @@ export function createPersonRecordSearchRouteV1(
       const selected = new Set<number>();
       [...approved.brief.decisions, ...approved.brief.actions, ...approved.brief.rationales].forEach((signal, order) => {
         if (input.kinds !== undefined && !input.kinds.includes(signal.kind)) return;
-        const dates: EvidenceDatesV1 = { ...(occurred === undefined ? {} : { occurred }), approved: approved.approved_at, ...(signal.kind === "action" && signal.due_at !== null ? { due: signal.due_at } : {}) };
+        // The due date the desk releases with the atom: the meeting's own day, whatever zone the request names.
+        const due = signal.kind === "action" ? meetingActionDueOnV1(signal.due_at, time?.timezone) : null;
+        const dates: EvidenceDatesV1 = { ...(occurred === undefined ? {} : { occurred }), approved: approved.approved_at, ...(due === null ? {} : { due }) };
         if (!tally.tests(dates, field)) return;
         const tested = EVIDENCE_DATE_FIELDS_V1.filter((name) => dates[name] !== undefined && (field === EVIDENCE_ANY_DATE_V1 || name === field));
         if (tested.some((name) => matchesEvidenceDateV1(dates, { ...input, date_field: name, ...(zones[name] === undefined ? {} : { time_zone: zones[name] }) }, name))) selected.add(order);
@@ -1483,10 +1487,7 @@ export function createPersonRecordSearchRouteV1(
       const owners = confirmedOwners(record.reference);
       const zone = record.brief.meeting.time?.timezone;
       return Object.freeze(record.brief.actions.map((action) => {
-        // Only a real calendar day in the contract's form: a card's day must never fail the run that stores it (a year the
-        // local form writes with fewer than four digits gives none).
-        const day = action.due_at === null ? null : localDateV1(action.due_at, zone);
-        const due_on = isCalendarDay(day) ? day : null;
+        const due_on = meetingActionDueOnV1(action.due_at, zone);
         return Object.freeze({ signal_id: action.id, text: releasableBodyV1(action.text), ...(action.due_at === null ? {} : { due_at: action.due_at }),
           ...(due_on === null ? {} : { due_on }), owner: owners.get(action.id) ?? null });
       }));

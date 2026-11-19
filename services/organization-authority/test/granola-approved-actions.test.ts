@@ -2,6 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { PERSON_IMPACT_CARD_LIMITS_V1 } from '@echo-brain/organization-api';
 import { impactCardLineV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
+import { meetingActionDueOnV1 } from '../src/composition/person-meeting-items-v1.js';
 import { openItemsFixture } from './fixtures/open-items.js';
 import { EMP_A, SHARED, T, meetingWorld } from './fixtures/person-meeting-world.js';
 
@@ -86,6 +87,29 @@ it('keeps a date-only deadline on its day in a meeting held ahead of UTC', async
 it('gives no day to a deadline whose day is not one the card can hold, and still gives the other actions theirs', async () => {
   // The record takes a year written with fewer than four digits in its local form; a card's day must never fail the run.
   const world = await dueWorld(['0999-11-20T12:00:00.000Z', '2026-11-20T12:00:00.000Z'], undefined);
+  try {
+    const actions = world.route().recordActions({ access_token: 'emp_a', record_sha256: world.digest('r9') });
+    expect(actions.map(action => [action.due_at, action.due_on])).toEqual([['0999-11-20T12:00:00.000Z', undefined], ['2026-11-20T12:00:00.000Z', '2026-11-20']]);
+  } finally { world.close(); }
+});
+
+// A meeting may name something that is no time zone. It is read as a meeting naming none, in UTC, so one deadline never
+// has a day under one and none under the other: a year below 1000 has no day in either, and a year-0000 leap day (a day
+// no screen can draw) is never given as one.
+it('reads a deadline under a zone that is no time zone exactly as under UTC or none: the same day, or no day', async () => {
+  const UNKNOWN = 'Not/AZone';
+  const stated = [
+    ['2026-11-20T12:00:00.000Z', '2026-11-20'], ['2026-11-20T23:30:00.000Z', '2026-11-20'], ['9999-12-31T23:59:59.999Z', '9999-12-31'],
+    ['0999-11-20T12:00:00.000Z', null], ['0000-02-29T12:00:00.000Z', null],
+  ] as const;
+  for (const [due_at, day] of stated) {
+    expect([meetingActionDueOnV1(due_at, 'UTC'), meetingActionDueOnV1(due_at, undefined), meetingActionDueOnV1(due_at, UNKNOWN), meetingActionDueOnV1(due_at, ''), meetingActionDueOnV1(due_at, ' ')],
+      due_at).toEqual([day, day, day, day, day]);
+  }
+  // A real zone still reads in its own day: 23:30 UTC is already the 21st in Tokyo.
+  expect(meetingActionDueOnV1('2026-11-20T23:30:00.000Z', 'Asia/Tokyo')).toBe('2026-11-21');
+  // The same through an approved record whose meeting names the unknown zone: the card's day, and none for year 0999.
+  const world = await dueWorld(['0999-11-20T12:00:00.000Z', '2026-11-20T12:00:00.000Z'], UNKNOWN);
   try {
     const actions = world.route().recordActions({ access_token: 'emp_a', record_sha256: world.digest('r9') });
     expect(actions.map(action => [action.due_at, action.due_on])).toEqual([['0999-11-20T12:00:00.000Z', undefined], ['2026-11-20T12:00:00.000Z', '2026-11-20']]);

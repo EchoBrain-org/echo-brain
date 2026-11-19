@@ -92,7 +92,7 @@ interface OpenItem {
   item_id: string; run_id: string | null; kind: 'action' | 'ticket' | 'page';
   /** A follow-up from a chat has none: it is never `readable`, and its decision here is never shown. */
   decision: { approval_id: string; record_sha256: string; title: string; first_line: string | null; approved_at: string; project_ids: string[] };
-  /** ECHO's own due date, a calendar day: only a follow-up from a chat has one. */
+  /** ECHO's own due date, a calendar day: a follow-up from a chat's own, or a meeting action's day as its review states it. */
   due_on?: string | null;
   /** Ari can read its decision. */
   readable: boolean;
@@ -148,11 +148,12 @@ const MEETING_ACTIONS = [
  * cites (a note line, or a transcript part that may hold blank lines).
  */
 const PILOT_ITEMS = [
-  { signal_id: 'dec-1', kind: 'decision', text: 'Launch the pilot next week.', subject: null, status: 'decided', due_at: null,
+  { signal_id: 'dec-1', kind: 'decision', text: 'Launch the pilot next week.', subject: null, status: 'decided', due_at: null, due_on: null,
     quotes: ['Launch the pilot next week.', '[09:02] Ari: Let\'s launch the pilot next week.\n\n[09:03] Mina Patel: Agreed. The freeze lifts on Friday.'] },
-  { signal_id: 'act-1', kind: 'action', text: 'Send the revised quote', subject: null, status: null, due_at: null,
+  { signal_id: 'act-1', kind: 'action', text: 'Send the revised quote', subject: null, status: null, due_at: null, due_on: null,
     quotes: ['[09:04] Ari: Rafael, can you send the revised quote?'] },
-  { signal_id: 'act-2', kind: 'action', text: 'Confirm the trace', subject: null, status: null, due_at: '2026-10-10T12:00:00.000Z',
+  // The day beside the deadline is the meeting's own (ADR-0053), and the day the card shows.
+  { signal_id: 'act-2', kind: 'action', text: 'Confirm the trace', subject: null, status: null, due_at: '2026-10-10T12:00:00.000Z', due_on: '2026-10-10',
     quotes: ['[09:05] Mina Patel: I\'ll confirm the trace by Friday.'] },
 ] as const;
 const PILOT_REASONS = [{ signal_id: 'why-1', text: 'The freeze lifts on Friday, so next week is the first clear window.', supports: ['dec-1'],
@@ -845,7 +846,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       { ...unsent, item_id: 'itm_00000000-0000-4000-8000-000000000032', kind: 'page', relation: 'needs_updating', expected: 'pilot starts next week',
         opens: true, live: { citation: PRD_PAGE, says_now: 'starts after freeze' }, owner: { ...ARI, match: 'approver' } },
       ...MEETING_ACTIONS.map((action, index): OpenItem => ({ ...unsent, item_id: `itm_00000000-0000-4000-8000-00000000003${8 + index}`, kind: 'action',
-        relation: 'needs_updating', expected: action.text, opens: false, live: {}, owner: ownerOf(action.signal_id) })),
+        // Its day is the one its review states (ADR-0053): read from the proposal's item, so the two cannot disagree.
+        relation: 'needs_updating', expected: action.text, due_on: PILOT_ITEMS.find(item => item.signal_id === action.signal_id)?.due_on ?? null,
+        opens: false, live: {}, owner: ownerOf(action.signal_id) })),
     );
   };
   /** A destination group's key: its projects, and whether they are kept for Ari alone (the route says `private: true`). */

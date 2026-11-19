@@ -21,7 +21,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { approvalRecordIdV2 } from '@echo-brain/organization-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeRootV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
-import type { PersonMeetingOperationV2, PersonMeetingResultsV2, PersonOpenRefV1, PersonReviewOperationV1, PersonReviewResultsV1 } from '@echo-brain/organization-api';
+import { validatePersonReviewResultV1, type PersonMeetingOperationV2, type PersonMeetingResultsV2, type PersonOpenRefV1, type PersonReviewOperationV1, type PersonReviewResultsV1 } from '@echo-brain/organization-api';
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
 import { createGranolaMcpV1 } from '@echo-brain/provider-granola/granola-mcp-v1';
 import { GRANOLA_MEETING_NORMALIZER_VERSION_V1 } from '@echo-brain/provider-granola/granola-meeting-normalizer-v1';
@@ -50,7 +50,9 @@ const foreignProject = 'prj_00000000-0000-4000-8000-000000000023';
 const ledgers: SqliteExtractionAttemptStoreV1[] = [];
 afterEach(() => { for (const ledger of ledgers.splice(0)) ledger.close(); });
 /** `actions` adds that many unowned actions (act-2, act-3, …) to what the extractor finds; `reasonsOnly` finds one rationale and nothing else. */
-async function fixture(options: { readonly transcriptOnly?: boolean; readonly ownedAction?: boolean; readonly actions?: number; readonly started?: string; readonly path?: string; readonly reasonsOnly?: boolean } = {}) {
+async function fixture(options: { readonly transcriptOnly?: boolean; readonly ownedAction?: boolean; readonly actions?: number; readonly started?: string; readonly path?: string; readonly reasonsOnly?: boolean;
+  /** The meeting's own time zone (with `started`), and each action's deadline by its signal id. */
+  readonly timezone?: string; readonly due?: Readonly<Record<string, string>> } = {}) {
   const f = await approvalContextFixture(options.path === undefined ? {} : { path: options.path });
   f.db.prepare('INSERT INTO authority_project_authorization_state_v1 VALUES (?,0,?)').run(f.actor.organization_id, new Date().toISOString());
   const person = { organization_id: f.actor.organization_id, principal_id: f.actor.principal_id, membership_id: f.actor.membership_id };
@@ -95,7 +97,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
           const transcript = { id: 'private-transcript', kind: 'transcript' as const, text: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' };
           // A real provider names the meeting by its source instance, so two tool accounts never share a meeting id.
           const build = (external: string): MeetingDocument => ({ ...original, id: `${identity.instance_id}:${external}`, content: options.transcriptOnly ? [transcript] : [...original.content, transcript], title: `Test meeting${edition}`, provenance: { ...original.provenance, source: identity, external_id: external, canonical_revision: canonicalSha256(`meeting version${edition}`) },
-            ...(options.started === undefined ? {} : { time: { actual_start_at: options.started } }) });
+            ...(options.started === undefined ? {} : { time: { actual_start_at: options.started, ...(options.timezone === undefined ? {} : { timezone: options.timezone }) } }) });
           if (!cursor.manual[0]) {
             if (cursor.mode !== 'off' && cursor.baseline && folderDeliveries[0] !== undefined) {
               const delivered = folderDeliveries.shift()!;
@@ -127,9 +129,9 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
             if (options.reasonsOnly) return { ...decisions, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity,
               signals: [{ id: 'reason-1', kind: 'rationale' as const, text: 'The cohort is ready.', subject: null, confidence: 1, supports_signal_ids: [], evidence: [{ meeting_id: meeting.id, block_id: 'block-1' }] }] };
             return { ...decisions, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity,
-            signals: [...decisions.signals, ...(options.ownedAction ? [{ id: 'act-1', kind: 'action' as const, text: 'Send the pilot plan.', subject: null, confidence: 1, owner: 'Rafael Moreno', due_at: null,
+            signals: [...decisions.signals, ...(options.ownedAction ? [{ id: 'act-1', kind: 'action' as const, text: 'Send the pilot plan.', subject: null, confidence: 1, owner: 'Rafael Moreno', due_at: options.due?.['act-1'] ?? null,
               evidence: [{ meeting_id: meeting.id, block_id: 'block-1' }] }] : []),
-              ...Array.from({ length: options.actions ?? 0 }, (_, i) => ({ id: `act-${i + 2}`, kind: 'action' as const, text: `Follow up on item ${i + 2}.`, subject: null, confidence: 1, owner: null, due_at: null,
+              ...Array.from({ length: options.actions ?? 0 }, (_, i) => ({ id: `act-${i + 2}`, kind: 'action' as const, text: `Follow up on item ${i + 2}.`, subject: null, confidence: 1, owner: null, due_at: options.due?.[`act-${i + 2}`] ?? null,
                 evidence: [{ meeting_id: meeting.id, block_id: 'block-1' }] }))].map(signal => ({ ...signal, evidence: signal.evidence.map(evidence => ({ ...evidence, meeting_id: meeting.id,
                   ...(toolIsSynthetic(meeting) ? { block_id: meeting.content[0]!.id } : {}) })) })) }; } };
       },
@@ -1333,9 +1335,9 @@ describe('personal meeting intake uses the shared processing path', () => {
     const { pending, opened } = await f.pendingReview(runtime, project);
     expect(Object.keys(opened).sort()).toEqual(['items', 'participants', 'reasons', 'records', 'review', 'snapshot_sha256', 'suggested_projects']);
     expect(opened.items).toEqual([
-      { signal_id: 'decision-1', kind: 'decision', text: 'Ship the cohort onboarding.', subject: null, status: 'decided', due_at: null, quotes: [], owner: null, owner_editable: false, project_ids: [project] },
-      { signal_id: 'act-1', kind: 'action', text: 'Send the pilot plan.', subject: null, status: null, due_at: null, quotes: [], owner: 'Rafael Moreno', owner_editable: true, project_ids: [project] },
-      { signal_id: 'act-2', kind: 'action', text: 'Follow up on item 2.', subject: null, status: null, due_at: null, quotes: [], owner: null, owner_editable: false, project_ids: [project] },
+      { signal_id: 'decision-1', kind: 'decision', text: 'Ship the cohort onboarding.', subject: null, status: 'decided', due_at: null, due_on: null, quotes: [], owner: null, owner_editable: false, project_ids: [project] },
+      { signal_id: 'act-1', kind: 'action', text: 'Send the pilot plan.', subject: null, status: null, due_at: null, due_on: null, quotes: [], owner: 'Rafael Moreno', owner_editable: true, project_ids: [project] },
+      { signal_id: 'act-2', kind: 'action', text: 'Follow up on item 2.', subject: null, status: null, due_at: null, due_on: null, quotes: [], owner: null, owner_editable: false, project_ids: [project] },
     ]);
     expect(opened).toMatchObject({ reasons: [], records: [], suggested_projects: [{ project_id: project, name: 'ECHO' }], review: { status: 'pending', records: [] } });
     // Mixed destinations: THERM-like project B for the decision, both for the owned action, the other action not kept.
@@ -1359,6 +1361,26 @@ describe('personal meeting intake uses the shared processing path', () => {
     const later = await f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
     expect(later.items[0]!.project_ids).toEqual([projectB]);
     expect(later.suggested_projects.map(entry => entry.project_id)).toEqual([project]);
+  });
+  // One deadline, one day (ADR-0053). "By November 20" in a Tokyo meeting is stored as noon there, 03:00 UTC: still the
+  // 19th for a reviewer in Los Angeles, so a review says the meeting's own day beside the instant.
+  it("says an action's deadline as its day in the meeting's own time zone, on the proposal and on the approved decision", async () => {
+    const f = await fixture({ ownedAction: true, actions: 1, started: '2026-11-17T01:00:00.000Z', timezone: 'Asia/Tokyo',
+      // The second deadline's year has three digits in its local form: no calendar day says it, and nothing fails.
+      due: { 'act-1': '2026-11-20T03:00:00.000Z', 'act-2': '0999-11-20T03:00:00.000Z' } }), runtime = f.create(); f.grantProject();
+    const { pending, opened } = await f.pendingReview(runtime, project);
+    const days = (review: typeof opened) => review.items.map(item => [item.signal_id, item.due_at, item.due_on]);
+    const stated = [['decision-1', null, null], ['act-1', '2026-11-20T03:00:00.000Z', '2026-11-20'], ['act-2', '0999-11-20T03:00:00.000Z', null]];
+    expect(opened.review.status).toBe('pending');
+    expect(days(opened)).toEqual(stated);
+    await f.reviewCall(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-tokyo', action: 'approve',
+      routes: f.routes(opened, [project]), owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }] });
+    await runtime.processing.recoverV4Appends(new AbortController().signal);
+    const approved = await f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    expect(approved.review.status).toBe('approved');
+    expect(days(approved)).toEqual(stated);
+    // The client's own check of what the Authority sent accepts both.
+    for (const review of [opened, approved]) expect(() => validatePersonReviewResultV1('review_open', review)).not.toThrow();
   });
   it('keeps an item for the reviewer alone inside a project: the decided item and its record say private, and a private route needs a project', async () => {
     const f = await fixture({ ownedAction: true, actions: 1 }), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
