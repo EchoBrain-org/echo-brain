@@ -337,10 +337,12 @@ interface CopiedSince {
  * (ADR-0051), and its question heads what it says when there are several. A
  * partial answer's explanations are copied as shown on the page, including an
  * explanation that is the whole answer; an answer that says nothing and shows
- * no explanation says `nothing`, the line the page shows for it.
+ * no explanation says `nothing`, the line the page shows for it. The
+ * follow-ups it drafted (ADR-0053) follow it, each by its one line as its
+ * card last read it (`followUps`), before the sources.
  */
 export function answerMarkdown(answer: TimelineAnswer, names: readonly string[], groups: readonly SourceGroup[], shows: Shows, since?: CopiedSince,
-  nothing = nothingMatched(answer)): string {
+  nothing = nothingMatched(answer), followUps: readonly string[] = []): string {
   const numbers = (citations: readonly number[]) => statementGroups(citations, groups).map(group => `[${group + 1}]`).join('');
   /** Text, then the numbers of what it cites: they stay on their claim. */
   const cited = (text: string, citations: readonly number[]) => [markdownText(text), numbers(citations)].filter(Boolean).join(' ');
@@ -360,6 +362,7 @@ export function answerMarkdown(answer: TimelineAnswer, names: readonly string[],
     blocks.push(...shown(part.records ?? []).map(claim));
   }
   blocks.push(...answerEnd(answer, shows, nothing).map(markdownText));
+  if (followUps.length > 0) blocks.push('**Follow-ups**', followUps.map(line => `- ${markdownText(line)}`).join('\n'));
   if (groups.length > 0) blocks.push('Sources', groups.map((_, index) => `${index + 1}. ${markdownText(names[index] ?? '')}`.trimEnd()).join('\n'));
   return blocks.join('\n\n');
 }
@@ -368,13 +371,15 @@ export function answerMarkdown(answer: TimelineAnswer, names: readonly string[],
  * Copy answer's plain reading of what the page shows, for an answer whose
  * Markdown is longer than Copy answer takes: its sentences one a line, each
  * part's question first when there are several, without what a check left
- * out, then its explanations, or `nothing`, as the Markdown ends.
+ * out, then its explanations, or `nothing`, as the Markdown ends, then the
+ * follow-ups it drafted, one a line.
  */
-export function answerText(answer: TimelineAnswer, shows: Shows, since?: CopiedSince, nothing = nothingMatched(answer)): string {
+export function answerText(answer: TimelineAnswer, shows: Shows, since?: CopiedSince, nothing = nothingMatched(answer), followUps: readonly string[] = []): string {
   const said = (statements: readonly AnswerStatement[]) => statements.filter(statement => shows(statement.citation_indexes)).map(statement => statement.text);
   const listed = since === undefined ? [] : said(since.statements);
   const changes = since === undefined ? [] : since.statements.length === 0 ? [`Nothing changed since ${since.when}`] : listed.length > 0 ? [`Since ${since.when}`, ...listed] : [];
   return [...changes, ...said(answer.direct ? [answer.direct] : []), ...answer.parts.filter(part => partShows(part, shows))
-    .flatMap(part => [answer.parts.length > 1 ? part.question : '', ...said(part.statements), ...said(part.records ?? [])]), ...answerEnd(answer, shows, nothing)]
+    .flatMap(part => [answer.parts.length > 1 ? part.question : '', ...said(part.statements), ...said(part.records ?? [])]), ...answerEnd(answer, shows, nothing),
+    ...(followUps.length > 0 ? ['Follow-ups', ...followUps] : [])]
     .filter(line => line !== '').join('\n');
 }

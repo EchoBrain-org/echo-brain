@@ -106,6 +106,20 @@ at once, and the turn's line later reads the full question ("Who owns
 THERM-482?"); when several fit, the turn says "Which one?" with a button each,
 which asks that one's full question. It never guesses.
 
+An answer may draft follow-ups (ADR-0053): when you ask for a task to be
+handed to someone, the answer carries a card that already waits, not sent, in
+your own follow-ups. ECHO never asks in words whether you want it: the draft is
+the question. Under the answer each draft is a follow-ups row (its one line,
+its owner or **Pick owner**, "From this chat · No owner yet · Due Nov 20"), with
+**Send to Mina**, **Edit** (its line and due date) and **Dismiss**; it cannot
+be sent until someone owns it. The turn keeps only the draft's id, and the
+card is read again each time the turn shows, so it says what it is now (sent,
+done, dismissed, or that you no longer see it). Copy answer writes each
+draft's line. Home lists your drafts as Send rows ("From a chat · For Mina ·
+Due Nov 20"), each opening its page, and a follow-up with no meeting behind it
+says "From a chat" wherever a meeting's title would be. `npm start --
+ask-follow-ups` answers every Ask with one such draft.
+
 The refresh checks also read what arrived in your projects (`person
 project-activity`): the first check after sign-in, a return to ECHO and a wake
 read it at once; any other check shares one read every two minutes, and no
@@ -162,7 +176,8 @@ it says "Nothing needs you". Each row is one of:
 
 - **Approve**: a meeting waiting for your decision. Its card shows what was
   decided, numbered (a decision still proposed or unresolved says so), and
-  what is to be done, with a due date when the meeting set one and an owner
+  what is to be done, with a due date when the meeting set one (the day in the
+  meeting's own time zone, in the words its follow-up says it) and an owner
   you can retype where ECHO proposed one; the reasons given open on demand,
   and **See the notes** in the card's head opens what was said in the
   meeting behind every item, each quote once, with who said it and when above

@@ -412,6 +412,16 @@ describe('person ask --progress', () => {
     expect(pathOf(fetch.mock.calls[0]![0])).toBe('/v7/person/ask');
   });
 
+  it('prints an answer that drafted follow-ups with their ids, as the Authority sent them (ADR-0053)', async () => {
+    const drafted = { ...answerV8(), follow_ups: ['itm_chat-0001', 'itm_chat-0002'] };
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(framesV3([...STEPS_V3, { type: 'answer', response: drafted, receipt: receiptV3() }]), 7));
+    const { output, run } = cli(sessionHome(), fetch);
+    await expect(run(['ask', '--question', 'Give the pricing page to Sam, due Friday.', '--progress'])).resolves.toBe(0);
+    const printed = lines(output.stdout);
+    expect(validatePersonAskProgressResultLineV3(printed.at(-1))).toEqual({ ok: true, result: drafted, receipt: receiptV3() });
+    expect((printed.at(-1) as { result: { follow_ups: string[] } }).result.follow_ups).toEqual(['itm_chat-0001', 'itm_chat-0002']);
+  });
+
   it('keeps the project scope on the streamed request', async () => {
     const project = 'prj_00000000-0000-4000-8000-000000000019' as const;
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(framesV3([{ type: 'answer', response: answerV8({ kind: 'project', project_id: project }), receipt: receiptV3() }])));

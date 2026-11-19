@@ -10,12 +10,12 @@
 // sign-out deletes the account's file; reading one account's timeline deletes
 // any other account's, so an account change leaves nothing of the last one
 // here. Kept apart from host.ts so all of it is tested on a real folder.
-import { PERSON_ANSWER_CARD_ENTITIES_V2, validatePersonAnswerGapDetailsV1, validateProjectIdV1 } from '@echo-brain/organization-api';
+import { PERSON_ANSWER_CARD_ENTITIES_V2, PERSON_ANSWER_FOLLOW_UPS_MAX_V1, validatePersonAnswerGapDetailsV1, validateProjectIdV1 } from '@echo-brain/organization-api';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  MAX_TIMELINE_PUT_BYTES, MAX_TIMELINE_TURNS, TIMELINE_DAYS, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect,
+  ITEM_ID, MAX_TIMELINE_PUT_BYTES, MAX_TIMELINE_TURNS, TIMELINE_DAYS, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect,
   type TimelineAnswer, type TimelineTurn,
 } from '../shared/protocol.js';
 
@@ -239,6 +239,13 @@ function gapDetails(value: unknown): boolean {
 }
 
 /**
+ * The follow-ups an answer drafted (ADR-0053): their ids alone, at least one and each once. The page reads each card live
+ * whenever the turn shows, so a saved turn never keeps what one said.
+ */
+const followUps = (value: unknown): boolean => Array.isArray(value) && value.length >= 1 && value.length <= PERSON_ANSWER_FOLLOW_UPS_MAX_V1
+  && value.every(id => string(id, 64) && ITEM_ID.test(id)) && new Set(value).size === value.length;
+
+/**
  * An answer as the timeline keeps it: what the page reads back of a turn
  * (TimelineAnswer). A part with statements has them in blocks (answer layout
  * v2, ADR-0051), and one with none has nothing to arrange.
@@ -247,6 +254,7 @@ function answer(value: unknown): value is TimelineAnswer {
   if (!record(value) || !scope(value.scope) || !OUTCOMES.has(value.outcome)) return false;
   if (!Array.isArray(value.sources) || value.sources.length > MOST || !value.sources.every(source)) return false;
   if (value.direct !== undefined && !statement(value.direct)) return false;
+  if (value.follow_ups !== undefined && !followUps(value.follow_ups)) return false;
   return Array.isArray(value.parts) && value.parts.length <= 64 && value.parts.every(part => record(part) && string(part.question) && STATUSES.has(part.status)
     && statements(part.statements) && (part.gap === undefined || string(part.gap)) && (part.gap_details === undefined || gapDetails(part.gap_details)) && (part.records === undefined || statements(part.records))
     && (part.blocks === undefined ? part.statements.length === 0 : part.statements.length > 0 && arranged(part.blocks, part.statements.length)));

@@ -29,7 +29,9 @@ async function pickOwner(page: Page, name: string, query?: string) {
 test('a meeting\'s follow-ups go to their owners from one list, and come back done', async ({}, testInfo) => {
   app = await launch('granola');
   const { page } = app;
-  await approveFromHome(app.page);
+  // Before Approve, the review states the deadline of "Confirm the trace" (ADR-0053). October 10, 2026 is behind every
+  // day this runs on, so the words are always "Was due".
+  await approveFromHome(app.page, false, card => expect(card.getByTestId('card-signal').filter({ hasText: 'Confirm the trace' })).toContainText('Was due Oct 10'));
   // The check runs by itself (DSK-1): Approve asks for a change check at once, which checks in, so the Authority starts it,
   // and Home's read after that check finds it done. Should that read land before the check-in, the 15 s pace the Authority
   // keeps while a check is queued or running brings the next check, and what it found. Its Send row opens the meeting's
@@ -45,6 +47,10 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   // One list of what is not done yet, longest waiting first (here, as found); every row ticked, as one click sends them all.
   const unsent = ofState(list, 'unsent');
   await expect(unsent).toHaveText([/^ECHO-12 · Pilot launch/, /^Thermostat PRD · Pilot scope/, /^Send the revised quote/, /^Confirm the trace/]);
+  // The follow-up made from "Confirm the trace" says the day its review said, in the same words; an action with no
+  // deadline says none.
+  await expect(rowOf(unsent, 'Confirm the trace').getByTestId('follow-up-row-due')).toHaveText('Was due Oct 10');
+  await expect(rowOf(unsent, 'Send the revised quote').getByTestId('follow-up-row-due')).toHaveCount(0);
   for (const name of ['Send the revised quote', 'Confirm the trace', 'ECHO-12 · Pilot launch', 'Thermostat PRD · Pilot scope']) {
     await expect(list.getByRole('checkbox', { name, exact: true })).toBeChecked();
   }

@@ -6,7 +6,7 @@ let h: SyntheticProjectHarness;
 beforeEach(() => { h = new SyntheticProjectHarness(); });
 afterEach(() => h.close());
 
-describe('PC-06 synthetic table-delta invariant with real V16 custody', () => {
+describe('PC-06 synthetic table-delta invariant with real V17 custody', () => {
   it('adds only original custody/receipt/association rows, with no meeting, approval or work queue', () => {
     const counts = () => {
       const tables = h.database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as { name: string }[];

@@ -5,7 +5,7 @@ import { externalSourceProvider } from '../answer.js';
 import { message } from '../messages.js';
 import {
   CLOSED_STATES, followUpAge, followUpHover, followUpMark, followUpOrder, followUpProgress, itemHistory, itemKind, itemNames, itemTitle,
-  expectedWords, liveFacts, markWords, monthDay, ownerLine, ownerRows, ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, STAGES,
+  liveFacts, markWords, monthDay, ownerLine, ownerRows, ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, STAGES,
   summaryTotal, type OwnerFace,
 } from '../needs.js';
 import {
@@ -20,6 +20,11 @@ import { within } from './change.js';
 import { Chevron } from './icons.js';
 import { useKeptPlace } from './items.js';
 import { ProgressBar } from './progress-bar.js';
+// Follow-ups from a chat (ADR-0053).
+import { useState } from 'preact/hooks';
+import { dueOnWords, FROM_CHAT, fromChat } from '../needs.js';
+import { dismissable, editFollowUp, pageActs } from '../store.js';
+import { EditFollowUp } from './edit-follow-up.js';
 
 /** A person, as a chip: their initials in their color, and their first name. */
 function Chip({ person, label }: { person: { membership_id: string; name: string }; label: string }) {
@@ -67,7 +72,7 @@ function useSaidFocus(shown: Said | null, said: { current: HTMLElement | null })
  * a first name, dimmed while the item is not sent (it is not with them yet),
  * and "Pick owner" is orange beside an empty circle where a face would be.
  */
-function Owner({ state, busy, picking, item, name, flat = false }: { state: State; busy: boolean; picking: boolean; item: OpenItemView; name: string; flat?: boolean }) {
+export function Owner({ state, busy, picking, item, name, flat = false }: { state: State; busy: boolean; picking: boolean; item: OpenItemView; name: string; flat?: boolean }) {
   const me = state.status?.account?.membership_id;
   const unmatched = ownerUnmatched(item);
   const label = ownerWords(item, me);
@@ -92,7 +97,7 @@ function Owner({ state, busy, picking, item, name, flat = false }: { state: Stat
 }
 
 /** The people picker under an owner chip: you first ("You", as a chip says), then the organization's people by name. Picking one changes the owner at once. */
-function OwnerPicker({ state, picker, item }: { state: State; picker: Picker; item: OpenItemView }) {
+export function OwnerPicker({ state, picker, item }: { state: State; picker: Picker; item: OpenItemView }) {
   const field = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => { field.current?.focus(); }, []);
   const choices = ownerChoices(picker, item, meOf(state));
@@ -134,7 +139,7 @@ function SaidLine({ said, testid, line }: { said: Said | null; testid: string; l
  * once it waited over a week. Its words are its hover, and what a screen
  * reader hears.
  */
-function StateMark({ item, now }: { item: OpenItemView; now: number }) {
+export function StateMark({ item, now }: { item: OpenItemView; now: number }) {
   const { state, tone } = followUpMark(item, now);
   const words = markWords(item, now);
   return (
@@ -182,6 +187,9 @@ function Row({ state, list, item, label, name, now, ticking }: {
       <button type="button" class="follow-up-open" aria-busy={reading || undefined}>
         <span class={`follow-up-title${reading ? ' reading-title' : ''}`} data-reading={reading || undefined}>{label}</span>
         {item.kind !== 'action' && <span class="follow-up-kind" title={itemKind(item, state.tools?.items)}>{KIND_ICON[item.kind]()}</span>}
+        {fromChat(item) && <span class="follow-up-from" data-testid="follow-up-from">{FROM_CHAT}</span>}
+        {/* Its own day (ADR-0053), faint like where it came from: two same-worded actions read apart. */}
+        {item.due_on !== null && <span class="follow-up-from" data-testid="follow-up-row-due">{dueOnWords(item.due_on, now)}</span>}
       </button>
       <Owner state={state} busy={list.busy} picking={list.picker?.item_id === item.item_id} item={item} name={name} flat />
       <span class="follow-up-tile" title={projects.length > 0 ? projects.map(project => project.name).join(', ') : undefined}>
@@ -375,20 +383,36 @@ function Why({ state, item, reading }: { state: State; item: OpenItemView; readi
           <span class={`card-delta-now${reading ? ' reading-title' : ''}`}>{reading ? 'Reading…' : saysNow(item)}</span>
           {facts && <span class="card-delta-facts faint" data-testid="follow-up-facts">{facts}</span>}
         </div>
-        {item.expected !== null && <div><span class="card-delta-label needs">Meeting decided</span><span>{item.kind === 'action' ? expectedWords(item.expected) : item.expected}</span></div>}
+        {item.expected !== null && <div><span class="card-delta-label needs">{fromChat(item) ? 'Asked for' : 'Meeting decided'}</span><span>{item.expected}</span></div>}
       </div>
       <OpenInTool state={state} item={item} />
     </section>
   );
 }
 
+/** Edit, under a follow-up from a chat you may edit (ADR-0053): its one line and its due date, in place. */
+function Edit({ page, item }: { page: ItemPage; item: OpenItemView }) {
+  const [editing, setEditing] = useState(false);
+  if (!editing) return <button type="button" class="link-button inline" data-testid="follow-up-edit" disabled={page.busy} onClick={() => setEditing(true)}>Edit</button>;
+  return <EditFollowUp item={item} busy={page.busy} save={editFollowUp} close={() => setEditing(false)} />;
+}
+
 /** The one next step, by status and your rights: one primary button, one secondary at most. */
 function Actions({ state, page, item }: { state: State; page: ItemPage; item: OpenItemView }) {
   const me = state.status?.account?.membership_id ?? null;
   const frozen = page.busy;
+  // A follow-up from a chat (ADR-0053) offers nothing from a copy not read since: only once the page's own read succeeded.
+  if (!pageActs(page)) return null;
   if (sendable(item)) {
     return <>
       <button type="button" class="primary-button" disabled={frozen} onClick={() => void sendFollowUp(true)}>{sendLabel(item, me)}</button>
+      <button type="button" class="plain-button" disabled={frozen} onClick={() => void sendFollowUp(false)}>Dismiss</button>
+    </>;
+  }
+  // A follow-up from a chat that nobody owns yet (ADR-0053) is sent once someone is picked; it may be dismissed meanwhile.
+  if (dismissable(item)) {
+    return <>
+      <div class="faint">Pick an owner to send it</div>
       <button type="button" class="plain-button" disabled={frozen} onClick={() => void sendFollowUp(false)}>Dismiss</button>
     </>;
   }
@@ -416,7 +440,7 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
   usePickerFocus(page.picker?.item_id, box, said);
   useSaidFocus(page.said, said);
   const item = page.item && shownItem(page.item, page.live);
-  if (!item) {
+  if (!item && !page.gone) {
     return (
       <div class="column center" data-testid="follow-up-loading" aria-busy={page.loading}>
         {page.failure ? <>
@@ -426,11 +450,13 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
       </div>
     );
   }
-  if (page.gone) {
+  // Gone (with no copy, the only way here): it no longer exists for you, whatever its kind.
+  if (page.gone || !item) {
     return (
       <div class="column center" ref={box} data-testid="follow-up-gone">
-        <h1 class="card-title" tabIndex={-1}>{itemTitle(item)}</h1>
-        <SaidLine said={page.said} testid="follow-up-said" line={said} />
+        <h1 class="card-title" tabIndex={-1}>{item ? itemTitle(item) : 'Follow-up'}</h1>
+        {/* Gone, nothing acts on it: no Undo either, only Back. */}
+        <SaidLine said={page.said && { ...page.said, undo: undefined }} testid="follow-up-said" line={said} />
         <div class="notice">You no longer see this follow-up</div>
         <button type="button" class="link-button" onClick={closeFollowUp}>Back</button>
       </div>
@@ -439,6 +465,7 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
   const me = state.status?.account?.membership_id ?? null;
   const { decision } = item;
   const day = decision ? monthDay(decision.approved_at) : null;
+  const due = dueOnWords(item.due_on);
   // Its row shows at once; while ECHO reads it in its tool, its title says what it is and its meeting, faintly.
   const reading = page.loading && awaitingLive(item);
   return (
@@ -452,8 +479,10 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
               {itemKind(item, state.tools?.items)} · {decision
                 ? <button type="button" class="link-button inline" onClick={() => void openFollowUps('record', decision.record_sha256, decision.title)}>
                   from {decision.title}{day ? `, ${day}` : ''}</button>
-                : `Sent by ${item.approver.membership_id === me ? 'you' : item.approver.name}`}
+                : fromChat(item) ? FROM_CHAT : `Sent by ${item.approver.membership_id === me ? 'you' : item.approver.name}`}
+              {due && <span data-testid="follow-up-due"> · {due}</span>}
             </div>
+            {item.can.edit && pageActs(page) && <Edit page={page} item={item} />}
           </header>
           {item.kind !== 'action' && <Why state={state} item={item} reading={reading} />}
           <section class="card-section" aria-labelledby="follow-up-history">
@@ -472,10 +501,11 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
         <aside class="card-rail" aria-label="Owner and next step">
           <section class="card-panel" aria-labelledby="follow-up-owner">
             <div id="follow-up-owner" class="section-label">Owner</div>
-            <Owner state={state} busy={page.busy} picking={page.picker !== null} item={item} name={itemTitle(item)} />
+            <Owner state={state} busy={page.busy} picking={page.picker !== null} item={pageActs(page) ? item : { ...item, can: { ...item.can, assign: false } }} name={itemTitle(item)} />
             {page.picker && <OwnerPicker state={state} picker={page.picker} item={item} />}
             <div class="card-rule" />
-            <SaidLine said={page.said} testid="follow-up-said" line={said} />
+            {/* Undo is an action: on a follow-up from a chat, only from a copy read since (ADR-0053). */}
+            <SaidLine said={page.said && !pageActs(page) ? { ...page.said, undo: undefined } : page.said} testid="follow-up-said" line={said} />
             <Actions state={state} page={page} item={item} />
             {page.busy && <span class="asking card-busy"><i /><i /><i /></span>}
           </section>

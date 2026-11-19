@@ -9,7 +9,7 @@ import type { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/s
 import { triggerRunStateAtV1, type SqliteTriggerRunsV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
 import type { PersonChangesHttpApplicationV1 } from '../presentation/person-changes-http-application.js';
 import type { PersonReviewStatusesV1 } from './person-meeting-runtime-v1.js';
-import { errorCodeV1, observeEventV1, openItemViewerV1, visiblePersonalOpenItemsV1 } from './person-open-items-v1.js';
+import { errorCodeV1, observeEventV1, openItemIsFromChatV1, openItemViewerV1, visiblePersonalOpenItemsV1 } from './person-open-items-v1.js';
 import { recordProjectAuthorizationOfGrantsV1 } from './person-record-project-scope-v1.js';
 import type { PersonReadableDecisionProjectsV1 } from './person-record-search-route.js';
 
@@ -105,7 +105,9 @@ export function createPersonChangesV1(options: CreatePersonChangesV1Options): Pe
         return {
           areas: {
             projects: fingerprint(view.projects.map(project => [project.project_id, project.name, project.status, project.role])),
-            follow_ups: fingerprint(involved.map(({ row }) => [row.item_id, row.state, row.owner_membership_id, row.owner_set_at, row.state_set_at, row.sent_at])),
+            // A follow-up from a chat (ADR-0053) can also have its line and due date changed.
+            follow_ups: fingerprint(involved.map(({ row }) => [row.item_id, row.state, row.owner_membership_id, row.owner_set_at, row.state_set_at, row.sent_at,
+              ...(openItemIsFromChatV1(row) ? [row.expected, row.due_on] : [])])),
             reviews: fingerprint([...reviews, ...checks]),
           },
           soon: checks.some(([, state]) => state === 'pending' || state === 'running') || reviews.some(([, status]) => status === 'publishing'),

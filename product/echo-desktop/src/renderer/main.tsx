@@ -83,6 +83,8 @@ function back(): void {
   if (!state.status?.signed_in) return closeSigninForm();
   // Escape closes Capture's place list first, and only the list.
   if (state.compose && !state.compose.hidden) return state.compose.picking ? closeProjects() : closeCompose();
+  // An owner picker under a follow-up an answer drafted (ADR-0053) closes before Ask does.
+  if (state.ask && state.askCards.picker) return closeOwnerPicker();
   if (state.ask) return closeAsk();
   const view = followUpShown(state);
   if (view?.kind !== 'decision' && view?.picker) return closeOwnerPicker();

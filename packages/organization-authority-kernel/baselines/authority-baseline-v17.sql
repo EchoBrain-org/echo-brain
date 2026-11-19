@@ -1,7 +1,8 @@
--- Authority baseline V16: independent personal meeting-source progress, one approval proposal per meeting with one shared decision table,
+-- Authority baseline V17: independent personal meeting-source progress, one approval proposal per meeting with one shared decision table,
 -- plus project context, raw Person uploads, and optional search enrichment.
--- Pasted-meeting input and its dedicated storage are removed.
--- Fresh initialization only; no V15-to-V16 transition or backfill exists, and
+-- An open item may come from a chat answer (ADR-0053): it has no run and no record, and its creator may change its one
+-- line and its due date until it is closed. Any open item may carry a due date, a calendar day.
+-- Fresh initialization only; no V16-to-V17 transition or backfill exists, and
 -- this file is never an in-place upgrade.
 
 CREATE TABLE authority_metadata (
@@ -889,17 +890,22 @@ BEGIN SELECT RAISE(ABORT, 'trigger run deletion is denied'); END;
 
 -- Open items (ADR-0033): one shared row per item an approved decision affects. Rows hold pointers,
 -- ECHO's own expected phrase, member ids and check verdicts; never a word read from outside ECHO.
+-- A follow-up from a chat answer (ADR-0053) has no run and no record: the approver columns name its creator, and it
+-- alone may have its one line and due date changed. A meeting action's item keeps the action's day, fixed like its line.
+-- A chat follow-up's id is fixed by the Ask request, so the primary key makes saving it twice one row.
 CREATE TABLE authority_impact_items_v1 (
   item_id TEXT PRIMARY KEY CHECK (item_id GLOB 'itm_*' AND length(item_id) BETWEEN 8 AND 64),
-  run_id TEXT NOT NULL REFERENCES authority_trigger_runs_v1(run_id),
+  run_id TEXT REFERENCES authority_trigger_runs_v1(run_id),
   item_key TEXT NOT NULL CHECK (item_key LIKE 'sha256:%'),
   pointer_json TEXT NOT NULL CHECK (json_valid(pointer_json) AND json_type(pointer_json) = 'object'),
-  record_sha256 TEXT NOT NULL CHECK (record_sha256 LIKE 'sha256:%'),
+  record_sha256 TEXT CHECK (record_sha256 IS NULL OR record_sha256 LIKE 'sha256:%'),
   organization_id TEXT NOT NULL,
   approver_principal_id TEXT NOT NULL,
   approver_membership_id TEXT NOT NULL REFERENCES authority_memberships(membership_id),
   relation TEXT CHECK (relation IS NULL OR relation IN ('conflicts', 'needs_updating')),
   expected TEXT CHECK (expected IS NULL OR length(expected) BETWEEN 1 AND 120),
+  -- A real calendar day.
+  due_on TEXT CHECK (due_on IS NULL OR (due_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND date(due_on) IS due_on)),
   owner_membership_id TEXT NOT NULL REFERENCES authority_memberships(membership_id),
   owner_match TEXT NOT NULL CHECK (owner_match IN ('jira_account', 'name', 'picked', 'approver', 'reassigned')),
   owner_set_by TEXT REFERENCES authority_memberships(membership_id),
@@ -917,6 +923,8 @@ CREATE TABLE authority_impact_items_v1 (
   created_at TEXT NOT NULL CHECK (unixepoch(created_at) IS NOT NULL),
   updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
   UNIQUE (run_id, item_key),
+  CHECK ((run_id IS NULL) = (record_sha256 IS NULL)),
+  CHECK (run_id IS NOT NULL OR (relation = 'needs_updating' AND expected IS NOT NULL)),
   CHECK (relation IS NOT NULL OR expected IS NULL),
   CHECK ((state = 'unsent') = (sent_at IS NULL)),
   CHECK ((sent_at IS NULL) = (send_command_id IS NULL)),
@@ -930,18 +938,33 @@ CREATE INDEX authority_impact_items_by_approver_v1 ON authority_impact_items_v1 
 CREATE INDEX authority_impact_items_by_record_v1 ON authority_impact_items_v1 (record_sha256, state);
 CREATE TRIGGER authority_impact_item_insert_v1
 BEFORE INSERT ON authority_impact_items_v1
-WHEN NEW.state != 'unsent' OR NEW.state_set_by IS NOT NULL OR NEW.owner_set_by IS NOT NULL OR NEW.checked_at IS NOT NULL
+WHEN NEW.run_id IS NOT NULL AND (NEW.state != 'unsent' OR NEW.state_set_by IS NOT NULL OR NEW.owner_set_by IS NOT NULL OR NEW.checked_at IS NOT NULL
   OR NEW.owner_match NOT IN ('jira_account', 'name', 'approver')
   OR NOT EXISTS (SELECT 1 FROM authority_trigger_runs_v1 r WHERE r.run_id = NEW.run_id AND r.trigger = 'approved_record' AND r.state = 'done'
     AND r.record_sha256 = NEW.record_sha256 AND r.organization_id = NEW.organization_id
-    AND r.principal_id = NEW.approver_principal_id AND r.membership_id = NEW.approver_membership_id)
+    AND r.principal_id = NEW.approver_principal_id AND r.membership_id = NEW.approver_membership_id))
 BEGIN SELECT RAISE(ABORT, 'an open item starts unsent from its finished impact run'); END;
+-- A follow-up from a chat starts unsent with its creator, owned by a member matched by name or, with no match, by its
+-- creator. It points at itself or at the one item it is about.
+CREATE TRIGGER authority_impact_item_chat_insert_v1
+BEFORE INSERT ON authority_impact_items_v1
+WHEN NEW.run_id IS NULL AND (NEW.state != 'unsent' OR NEW.state_set_by IS NOT NULL OR NEW.owner_set_by IS NOT NULL OR NEW.checked_at IS NOT NULL
+  OR NEW.owner_match NOT IN ('name', 'approver')
+  OR (NEW.owner_match = 'approver' AND NEW.owner_membership_id != NEW.approver_membership_id)
+  OR coalesce(json_extract(NEW.pointer_json, '$.kind'), '') NOT IN ('chat_action', 'ticket', 'page', 'approved_record', 'source_revision')
+  OR (json_extract(NEW.pointer_json, '$.kind') = 'chat_action' AND json_extract(NEW.pointer_json, '$.id') IS NOT NEW.item_id)
+  OR NOT EXISTS (SELECT 1 FROM authority_memberships m WHERE m.membership_id = NEW.approver_membership_id
+    AND m.organization_id = NEW.organization_id AND m.principal_id = NEW.approver_principal_id))
+BEGIN SELECT RAISE(ABORT, 'a follow-up from a chat starts unsent with its creator'); END;
 CREATE TRIGGER authority_impact_item_identity_immutable_v1
 BEFORE UPDATE ON authority_impact_items_v1
-WHEN NEW.item_id != OLD.item_id OR NEW.run_id != OLD.run_id OR NEW.item_key != OLD.item_key OR NEW.pointer_json != OLD.pointer_json
-  OR NEW.record_sha256 != OLD.record_sha256 OR NEW.organization_id != OLD.organization_id
+WHEN NEW.item_id != OLD.item_id OR NEW.run_id IS NOT OLD.run_id OR NEW.item_key != OLD.item_key OR NEW.pointer_json != OLD.pointer_json
+  OR NEW.record_sha256 IS NOT OLD.record_sha256 OR NEW.organization_id != OLD.organization_id
   OR NEW.approver_principal_id != OLD.approver_principal_id OR NEW.approver_membership_id != OLD.approver_membership_id
-  OR NEW.relation IS NOT OLD.relation OR NEW.expected IS NOT OLD.expected OR NEW.created_at != OLD.created_at
+  OR NEW.relation IS NOT OLD.relation OR NEW.created_at != OLD.created_at
+  -- Only a follow-up from a chat has its line and due date changed, and only while it is not closed.
+  OR ((NEW.expected IS NOT OLD.expected OR NEW.due_on IS NOT OLD.due_on)
+    AND (OLD.run_id IS NOT NULL OR OLD.state IN ('done', 'not_relevant')))
 BEGIN SELECT RAISE(ABORT, 'open item identity is immutable'); END;
 CREATE TRIGGER authority_impact_item_send_v1
 BEFORE UPDATE OF state, sent_at, send_command_id, send_included ON authority_impact_items_v1
@@ -2311,7 +2334,7 @@ BEGIN
    WHERE organization_id = OLD.organization_id;
 END;
 
-PRAGMA user_version = 16;
+PRAGMA user_version = 17;
 
 -- A malformed legacy retained note must not pin the source-admission worker.
 -- The disposition carries no title, body, request ID or exception text.

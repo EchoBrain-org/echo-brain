@@ -73,7 +73,7 @@ export function createPersonProjectActivityV1(options: CreatePersonProjectActivi
       if (last === undefined) return null;
       const context = assessOpenItemsV1({ records: decisions, people: options.people }, viewer, page.map(entry => entry.row));
       const shown = new Set(context.assessed.flatMap(({ row, access }) =>
-        access.see_row && access.see_decision && context.decisions.get(row.record_sha256)?.project_ids.includes(projectId) === true ? [row.item_id] : []));
+        access.see_row && access.see_decision && row.record_sha256 !== null && context.decisions.get(row.record_sha256)?.project_ids.includes(projectId) === true ? [row.item_id] : []));
       const newest = page.find(entry => shown.has(entry.row.item_id));
       if (newest !== undefined) return newest.moved_at;
       if (page.length < MOVES_PAGE) return null;

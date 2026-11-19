@@ -7,6 +7,8 @@ import {
 } from '../store.js';
 import { Altitude, MyProjects } from './altitude.js';
 import { Chevron, KindMark, Plus } from './icons.js';
+// A follow-up of yours from a chat, not sent yet (ADR-0053).
+import { draftLine } from '../needs.js';
 
 /** The row's verb: what a click will ask of you. */
 const KIND: Record<NeedRow['kind'], string> = { approve: 'Approve', send: 'Send', update: 'Update', failed: 'Retry', checking: 'Checking' };
@@ -127,7 +129,9 @@ function ItemRow({ state, row, label }: { state: State; row: Extract<NeedRow, { 
         <span class={`need-title${reading ? ' reading-title' : ''}`} data-reading={reading || undefined}>{label}</span>
         <span class="need-change">
           <Where state={state} projects={item.decision?.project_ids ?? []} />
-          {itemLine(item, state.status?.account?.membership_id ?? null, state.tools?.items)}
+          {/* A follow-up of yours from a chat, not sent yet (ADR-0053): where it stands, "From a chat · For Sam · Due Nov 20". */}
+          {row.kind === 'send' ? draftLine(item, state.status?.account?.membership_id ?? null)
+            : itemLine(item, state.status?.account?.membership_id ?? null, state.tools?.items)}
         </span>
       </span>
     </button>

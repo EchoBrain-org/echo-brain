@@ -11,13 +11,19 @@ import {
   AgenticAskOutputErrorV1,
   ANSWER_BLOCK_CATALOG,
   ANSWER_BLOCKS_PROMPT,
+  ANSWER_FOLLOW_UPS_PROMPT,
   ANSWER_SINCE_PROMPT,
+  answerBlocksFollowUpsSchema,
   answerBlocksSchema,
+  answerBlocksSinceFollowUpsSchema,
   answerBlocksSinceSchema,
   attributed,
   boundedBytes,
+  calendarDay,
   cleanId,
   cleanLine,
+  cleanModelId,
+  FOLLOW_UP_TASK_CHARS,
   parseBlocksAnswer,
   partQuestion,
   textItem,
@@ -59,6 +65,8 @@ import { AGENTIC_ASK_MIN_ANSWER_MS_V1, type AgenticModelCallV1 } from "../agenti
 import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
 import { observeCoreModelCorrectionV1, type CoreRuntimeModelCorrectionV1 } from "../../shared/core-runtime-observation-v1.js";
 import { buildAskBlocksV2, daysWrittenV2, orderAskBlocksV2, quoteIsWordForWordV2, type AskBlockStatementV2 } from "./ask-layout-v2.js";
+import { ASK_FOLLOW_UP_ABOUT_KINDS_V1, askFollowUpItemIdV1, type AskFollowUpDraftV1 } from "../ask-follow-ups-v1.js";
+import { impactItemKeyV1, outsideLabelScreenV1 } from "./impact-card-storage-v1.js";
 
 /**
  * Ask's renderer: one writer call reads the question against released
@@ -89,6 +97,37 @@ const UNSUPPORTED_GAP = "Part of the answer was left out because no item's text 
 /** The writer's one repair for a sentence resting on list rows or list ids alone. */
 const ROWS_REASON = "a sentence cites list rows or list ids but no evidence text: code states which items exist, and members' title, dates, status and owner, through \"lists\" (with \"where\" or \"members\"); what no evidence text says belongs in \"not_found\"";
 const FIT_GAP = "Some evidence could not fit in this response.";
+/** What an answer that drafted follow-ups (ADR-0053) and found nothing about them says, after it says what it drafted. */
+const FOLLOW_UP_NOT_FOUND_GAP = "I couldn't find anything more about it in the sources you can access.";
+/** What an answer says it drafted: the drafts are the question, so it never asks. */
+function draftedGap(count: number): string {
+  return count === 1 ? "I drafted a follow-up for you to review and send." : `I drafted ${count} follow-ups for you to review and send.`;
+}
+/** How many words in a row, shared with an outside item's text or title, make a drafted task a copy of it (ADR-0053). */
+const COPIED_RUN_WORDS = 6;
+/**
+ * One character of a script written without spaces (Han, kana, Thai, Lao, Khmer, Myanmar), or a run of any other letters
+ * and digits. Matched by script extensions, so a mark these scripts share (the prolonged sound mark ー, script Common, or
+ * an iteration mark) is a character of their writing too, never glued to its neighbours.
+ */
+const UNSPACED = String.raw`\p{scx=Han}\p{scx=Hira}\p{scx=Kana}\p{scx=Thai}\p{scx=Laoo}\p{scx=Khmr}\p{scx=Mymr}`;
+// Script extensions also take in punctuation these scripts share (。、「」): only a letter, digit or mark is a word, so
+// punctuation, changed or dropped, still hides no copy.
+const UNSPACED_CHARACTER_OR_WORD = new RegExp(String.raw`(?=[\p{L}\p{N}\p{M}])[${UNSPACED}]|(?:(?![${UNSPACED}])[\p{L}\p{N}\p{M}])+`, "gu");
+/** Each run of COPIED_RUN_WORDS words of `text`: its words are its letters and digits, NFC and case-folded, so punctuation and spacing hide no copy. */
+function wordRuns(text: string): readonly string[] {
+  // A script written without spaces between words has no word to count: each of its characters counts as one, so a copied
+  // Chinese, Japanese or Thai sentence is a run like any other. Code points only, no locale data: the same on every runtime.
+  const words = text.normalize("NFC").toLowerCase().match(UNSPACED_CHARACTER_OR_WORD) ?? [];
+  return words.length < COPIED_RUN_WORDS ? [] : words.slice(0, words.length - COPIED_RUN_WORDS + 1).map((_, at) => words.slice(at, at + COPIED_RUN_WORDS).join(" "));
+}
+/**
+ * ECHO's own items, whose titles a stored line may keep: its records and documents, as for an impact card, and the
+ * asker's workspace directory (a project, a person, a tool), whose names a task and its owner must be free to use. Every
+ * other item's title, a ticket's, a page's, a tool container's or a follow-up's (which carries its ticket's), is screened
+ * out (ADR-0032, ADR-0053).
+ */
+const ECHO_CITATION_KINDS: ReadonlySet<string> = new Set(["approved_record", "source_revision", "project", "person", "tool"]);
 /** A list that is not complete: its statement says "at least" (ADR-0041). */
 function listEndGap(noun: string): string { return `The list of ${noun} could not be read to its end, so more may exist.`; }
 /**
@@ -109,12 +148,20 @@ type DraftShape = { readonly kind: "text" } | {
 const PROSE: DraftShape = Object.freeze({ kind: "text" });
 
 export interface AskRendererInputV1 {
+  /** The question the answer answers: a follow-up's is the one its resolver rewrote (ADR-0047). */
   readonly question: string;
+  /**
+   * What the person typed in this request, when it differs from `question`. Only these words, never the resolver's
+   * rewrite or the previous answer it drew on, may vouch for a follow-up's task (ADR-0053). Defaults to `question`.
+   */
+  readonly typed_question?: string;
 }
 export interface AskRenderedV1 {
   readonly response: PersonAnswerResponseV8;
   /** Short ids the writer was given, in order: items whose text it read, then list rows it saw; empty when no writer call ran. */
   readonly writer_evidence: readonly string[];
+  /** The follow-ups the answer drafted, as code checked them (ADR-0053), in the order the response lists their ids; empty for none. */
+  readonly follow_ups: readonly AskFollowUpDraftV1[];
 }
 
 /**
@@ -145,6 +192,11 @@ export interface CreateAskRendererV1Options {
   readonly answers?: string;
   /** For an Ask again (ADR-0047): the earlier answer; the writer also says what is different since, and the response carries it. */
   readonly earlier?: AskEarlierAnswerV1;
+  /**
+   * For an answer whose follow-ups the request saves (ADR-0053): the request's id, shared by its every attempt, which
+   * fixes each draft's id. Only then is the writer told to draft follow-ups; without it, any it drafts are dropped.
+   */
+  readonly follow_ups?: { readonly request_id: string };
 }
 
 function bytes(value: string | undefined): number { return value === undefined ? 0 : Buffer.byteLength(value, "utf8"); }
@@ -250,7 +302,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const { bundle } = input;
       const askedQuestion = input.trigger_input.question;
       const researchIncomplete = !bundle.stop.completed;
-      const unsupportedAction = bundle.stop.unsupported_action === true;
+      const drafting = options.follow_ups !== undefined;
+      // Research says the person asked for a follow-up (ADR-0053). A request that saves none cannot draft one: it is an
+      // action Ask cannot take, and the answer says so.
+      const followUpRequested = bundle.stop.follow_up_requested === true;
+      const unsupportedAction = bundle.stop.unsupported_action === true || (followUpRequested && !drafting);
       const byShort = new Map(bundle.items.map(entry => [entry.short, entry]));
       const entryOf = (short: string): Entry | undefined => {
         const id = cleanId(short);
@@ -351,9 +407,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       };
       // The writer is also told how to arrange blocks (ADR-0051), and an Ask again's what to say is different since
       // (ADR-0047), with a longer reply's room.
-      const writerPrompt = [options.answer_prompt, ANSWER_BLOCKS_PROMPT, ...(earlier === undefined ? [] : [ANSWER_SINCE_PROMPT])].join("\n\n");
+      // Only a writer whose follow-ups the request saves is told to draft them (ADR-0053); any other's prompt is unchanged.
+      const writerPrompt = [options.answer_prompt, ANSWER_BLOCKS_PROMPT, ...(earlier === undefined ? [] : [ANSWER_SINCE_PROMPT]), ...(drafting ? [ANSWER_FOLLOW_UPS_PROMPT] : [])].join("\n\n");
       const writerCall = earlier === undefined ? WRITER_CALL : SINCE_WRITER_CALL;
-      const writerSchema = earlier === undefined ? answerBlocksSchema : answerBlocksSinceSchema;
+      const writerSchema = earlier === undefined ? (drafting ? answerBlocksFollowUpsSchema : answerBlocksSchema) : (drafting ? answerBlocksSinceFollowUpsSchema : answerBlocksSinceSchema);
       const promptBudget = input.prompt_budget(writerPrompt, writerCall.output_tokens);
       const contextBudget = Math.max(0, promptBudget - bytes(JSON.stringify({ ...answerContext, lists: [], evidence: [] })));
       // Lists' rows take at most half the room; a smaller window shows fewer members of each, never fewer lists.
@@ -422,7 +479,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         return parsed;
       };
 
-      const writerRuns = evidence.length > 0 || writerLists.some(list => list.count > 0);
+      // A request for a follow-up (ADR-0053) runs the writer with no evidence too: it can draft one about nothing ECHO knows.
+      const writerRuns = evidence.length > 0 || writerLists.some(list => list.count > 0) || (drafting && followUpRequested);
       const written = !writerRuns ? null : await callRendererModelV1(input, writerCall, writerPrompt, {
         ...answerContext,
         lists: writerLists,
@@ -434,6 +492,64 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const answer = written === null ? null : written.value ?? last.answer;
       if (written?.value === null) observeCoreModelCorrectionV1("writer_fallback");
       const writerEvidence: readonly string[] = written === null ? [] : writerShown;
+
+      // ---- follow-ups (ADR-0053): each draft the writer gave, as code checks it -------------------------
+      // A task, an owner's name, a day and one item it is about, each optional but the task. No title of an item read from
+      // outside ECHO is kept, and a link names only an item the writer was shown. Each kept draft's id is fixed by the
+      // request and its place, so every attempt of one request names the same ids.
+      const drafts: readonly AskFollowUpDraftV1[] = (() => {
+        const given = answer?.follow_ups ?? [];
+        if (options.follow_ups === undefined) {
+          if (given.length > 0) observeCoreModelCorrectionV1("follow_up_dropped", given.length);
+          return [];
+        }
+        if (given.length === 0) return Object.freeze([]);
+        const { request_id: requestId } = options.follow_ups;
+        const outside = bundle.items.filter(entry => !ECHO_CITATION_KINDS.has(entry.item.citation.kind));
+        const echoOwn = bundle.items.filter(entry => ECHO_CITATION_KINDS.has(entry.item.citation.kind));
+        const screen = outsideLabelScreenV1(outside.flatMap(entry => [entry.item.label, agenticEvidenceLabelV1(entry.item, timeZone), ...(entry.item.list_label === undefined ? [] : [entry.item.list_label])]));
+        // Text copied from an outside item: any run of COPIED_RUN_WORDS words its text or title holds, unless the person's
+        // question or the text or title of one of ECHO's own items holds that run too.
+        const runsOf = (values: readonly (string | undefined)[]) => new Set(values.flatMap(value => value === undefined ? [] : wordRuns(value)));
+        // Only what the person typed vouches for their words: a follow-up's rewritten question can carry an outside item's text.
+        const allowed = runsOf([input.trigger_input.typed_question ?? askedQuestion, ...echoOwn.flatMap(entry => [entry.item.text, entry.item.label])]);
+        const copied = new Set([...runsOf(outside.flatMap(entry => [entry.item.text, entry.item.label, entry.item.list_label]))].filter(run => !allowed.has(run)));
+        const kept: AskFollowUpDraftV1[] = [];
+        const seen = new Set<string>();
+        // The parser already put each task and owner on one line within its bound (followUpsOf).
+        for (const draft of given) {
+          const line = draft.task;
+          // A sentence copied from an outside item's text is never stored, in any spelling or punctuation (ADR-0032).
+          if (wordRuns(line).some(run => copied.has(run))) {
+            observeCoreModelCorrectionV1("follow_up_task_screened"); observeCoreModelCorrectionV1("follow_up_dropped"); continue;
+          }
+          const screened = screen.names(line);
+          if (screened) observeCoreModelCorrectionV1("follow_up_task_screened");
+          const task = screened ? screen.scrub(line, FOLLOW_UP_TASK_CHARS) : line;
+          // A task that was only an outside title says nothing of ECHO's own.
+          if (task.length === 0 || /^a cited item[.!]?$/iu.test(task)) { observeCoreModelCorrectionV1("follow_up_dropped"); continue; }
+          let owner = draft.owner ?? "";
+          if (owner.length > 0 && screen.names(owner)) { observeCoreModelCorrectionV1("follow_up_owner_dropped"); owner = ""; }
+          const due = draft.due_on === undefined ? undefined : calendarDay(draft.due_on);
+          if (draft.due_on !== undefined && due === undefined) observeCoreModelCorrectionV1("follow_up_date_dropped");
+          const aboutId = draft.about === undefined ? null : cleanModelId(draft.about);
+          const aboutEntry = aboutId === null || !(textGiven.has(aboutId) || shownRows.has(aboutId)) ? undefined : byShort.get(aboutId);
+          const pointer = aboutEntry === undefined || !ASK_FOLLOW_UP_ABOUT_KINDS_V1.includes(aboutEntry.item.citation.kind) ? undefined
+            : citationOfAgenticEvidenceItemV8(aboutEntry.item, timeZone).citation as unknown as Readonly<Record<string, unknown>>;
+          const about = pointer !== undefined && impactItemKeyV1(pointer) !== undefined ? pointer : undefined;
+          if (draft.about !== undefined && about === undefined) observeCoreModelCorrectionV1("follow_up_link_dropped");
+          // A repeat says the same task to the same owner, on the same day, about the same item.
+          const key = JSON.stringify([folded(task), folded(owner), due ?? null, about === undefined ? null : impactItemKeyV1(about)]);
+          if (seen.has(key)) { observeCoreModelCorrectionV1("writer_repeat_dropped"); continue; }
+          seen.add(key);
+          kept.push(Object.freeze({
+            item_id: askFollowUpItemIdV1(requestId, kept.length), task,
+            ...(owner.length === 0 ? {} : { owner_name: owner }), ...(due === undefined ? {} : { due_on: due }), ...(about === undefined ? {} : { about }),
+          }));
+        }
+        return Object.freeze(kept);
+      })();
+      const followUpIds = drafts.length === 0 ? {} : { follow_ups: Object.freeze(drafts.map(draft => draft.item_id)) };
 
       // ---- layout (code, not model): one part, in blocks --------------------
       type Statement = { text: string; citation_indexes: number[]; private: boolean };
@@ -746,7 +862,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const records = fallback.map(entry => statementOf(entry.item.text!, [entry.short]));
           draft = records.length > 0
             ? { status: "records_only", statements: [], records, gap: withGaps(RECORDS_GAP)! }
-            : { status: "not_found", statements: [], gap: withGaps(gapText ?? (unsupportedAction && needs.length === 0 ? undefined : uncheckedEmpty ? UNCHECKED_EMPTY_GAP : NOT_FOUND_GAP))! };
+            : { status: "not_found", statements: [], gap: withGaps(drafts.length > 0
+              // An answer that drafted follow-ups says so first, in place of only saying it found nothing (ADR-0053).
+              ? `${draftedGap(drafts.length)} ${gapText ?? (uncheckedEmpty ? UNCHECKED_EMPTY_GAP : FOLLOW_UP_NOT_FOUND_GAP)}`
+              : gapText ?? (unsupportedAction && needs.length === 0 ? undefined : uncheckedEmpty ? UNCHECKED_EMPTY_GAP : NOT_FOUND_GAP))! };
         }
         const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
         // A writer's missing text has no per-need provenance, so incomplete coverage of a list a need still asks about leaves
@@ -822,6 +941,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           // Only an answer to a request that carried its previous turn names its question and says what is different since (ADR-0047).
           ...(options.answers === undefined ? {} : { question: options.answers }),
           ...(since === undefined ? {} : { since: Object.freeze({ statements: released(since) }) }),
+          // Only an answer that drafted follow-ups lists them (ADR-0053), so any other keeps its earlier shape.
+          ...followUpIds,
         });
         return { result, used, statements: reading.length };
       };
@@ -840,7 +961,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const { result, used } = fitted;
       const validated = compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV8);
       return Object.freeze({
-        result: Object.freeze({ response: validated, writer_evidence: writerEvidence }),
+        result: Object.freeze({ response: validated, writer_evidence: writerEvidence, follow_ups: drafts }),
         // `used` is in first-citation order, and fitting the byte bound drops
         // whole statements or records from the end, so the citations released
         // are always the first ones of `used`.
@@ -850,7 +971,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         fallbacks: written?.value === null ? 1 : 0,
         // Ask's answer is its direct statement and parts, and an answer to a request that carried its previous turn names
         // its question and what is different since (ADR-0047).
-        answer_sha256: agenticAskAnswerSha256V1(validated),
+        answer_sha256: agenticAskAnswerSha256V1(validated, drafts),
       });
     },
   });

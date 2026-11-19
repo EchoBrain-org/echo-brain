@@ -11,7 +11,7 @@ import { withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1 }
 import { checked as deskCheck, need, part, replay, researchHarness, SCENARIOS, step } from "./fixtures/agentic-scenarios.js";
 
 /** The release step on its own: a scripted desk and audit port, one trace of both. */
-function release(options: { readonly on_append?: () => void; readonly fence?: (index: number) => Promise<{ readonly checked_at: string }> } = {}) {
+function release(options: { readonly on_append?: () => void; readonly fence?: (index: number) => Promise<{ readonly checked_at: string }>; readonly save?: boolean } = {}) {
   const trace: string[] = [];
   const entries: AgenticAskAuditEntryV1[] = [];
   const checked: string[] = [];
@@ -33,6 +33,7 @@ function release(options: { readonly on_append?: () => void; readonly fence?: (i
     signal: controller.signal,
     assert_live: () => { if (controller.signal.aborted) throw new DOMException("Ask cancelled", "AbortError"); },
     on_checked: at => { checked.push(at); }, on_audited: () => { audited += 1; },
+    ...(options.save === true ? { on_released: () => { trace.push("save"); } } : {}),
   });
   return { run, trace, entries, checked, controller, context, response, audited: () => audited };
 }
@@ -55,6 +56,23 @@ describe("release step", () => {
     expect(r.trace).toEqual(["revalidate", "append"]);
     // The completed audit stays; the caller must not write a second witness.
     expect(r.audited()).toBe(1);
+  });
+
+  // An Ask answer's follow-ups (ADR-0053) are saved once, after every check, and never for an answer that is not released.
+  it("saves what the release saves after its last check, just before handing over", async () => {
+    const r = release({ save: true });
+    await expect(r.run()).resolves.toBe(r.response);
+    expect(r.trace).toEqual(["revalidate", "append", "revalidate", "save"]);
+  });
+
+  it.each([
+    ["a cancel during the audit", { on_append: () => undefined }, true],
+    ["a refused check before the audit", { fence: () => Promise.reject(new Error("membership revoked")) }, false],
+    ["a refused check after the audit", { fence: (index: number) => index === 2 ? Promise.reject(new AuthorityOperationError("stale_access_state", "Live evidence operation could not be completed")) : Promise.resolve({ checked_at: "2026-10-06T00:00:01.000Z" }) }, false],
+  ] as const)("saves nothing after %s", async (_name, fault, cancel) => {
+    const r = release({ ...fault, save: true, ...(cancel ? { on_append: () => r.controller.abort() } : {}) });
+    await expect(r.run()).rejects.toBeDefined();
+    expect(r.trace).not.toContain("save");
   });
 
   it("releases nothing and writes no audit when the final access check refuses", async () => {

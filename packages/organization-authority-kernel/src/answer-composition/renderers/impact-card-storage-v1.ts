@@ -54,7 +54,7 @@ const CITED_ITEM = "a cited item";
 const LABEL_PREFIX_CHARS = 200;
 
 /** Finds, and removes, the titles of outside items in a line of ECHO's own writing. */
-interface LabelScreen {
+export interface OutsideLabelScreenV1 {
   /** The line names an outside item. */
   readonly names: (line: string) => boolean;
   /** The line with each named title replaced by "a cited item", within `maximum` characters (a card line's by default). */
@@ -64,9 +64,10 @@ interface LabelScreen {
 /**
  * Titles match whatever their case, spacing or Unicode form, whole or by their
  * first 200 characters (a note cut short by `cleanLine` keeps no more than
- * that). A blank title matches nothing.
+ * that). A blank title matches nothing. Shared with the follow-ups an Ask
+ * answer drafts (ADR-0053), whose one line is stored under the same rule.
  */
-function screenFor(labels: readonly string[]): LabelScreen {
+export function outsideLabelScreenV1(labels: readonly string[]): OutsideLabelScreenV1 {
   const parts = new Map<string, { readonly length: number; readonly needsTrailingBoundary: boolean }>();
   for (const raw of labels) {
     const label = raw.normalize("NFC").replace(/\s+/gu, " ").trim();
@@ -107,7 +108,7 @@ export function storableImpactCardV1(input: PersonImpactCardV1, outsideLabels: r
   const at = positions(used);
 
   // Every line a model wrote is screened against the titles of outside items: the caller's, and those this card cites.
-  const screen = screenFor([...outsideLabels, ...card.citations.filter((_, index) => !local[index]).map(entry => entry.label)]);
+  const screen = outsideLabelScreenV1([...outsideLabels, ...card.citations.filter((_, index) => !local[index]).map(entry => entry.label)]);
   // Everyone who reads the record reads these notes, and they are not rebuilt per viewer: only a line of ECHO's own fixed shapes
   // is kept, so no item's title (an approver-only one included) is ever stored. Any other line is dropped.
   const unconfirmed = [...new Set(card.unconfirmed.filter(note => UNCONFIRMED_NOTES.some(shape => shape.test(note))))];
@@ -141,7 +142,8 @@ export interface FreshImpactItemV1 {
 /**
  * The fields that name the item a pointer opens, per kind. A section or a version may move on; the item may not.
  * `meeting_action` is an open item's own pointer to one action of an approved meeting's brief (follow-ups thread v1):
- * never a citation, so no card carries one.
+ * never a citation, so no card carries one. `chat_action` is the pointer of a follow-up an Ask answer drafted that is
+ * about no other item (ADR-0053): it names itself.
  */
 const PRIMARY_ID: Readonly<Record<string, readonly string[]>> = Object.freeze({
   ticket: ["tool_id", "external_scope_id", "ticket_id"],
@@ -149,6 +151,7 @@ const PRIMARY_ID: Readonly<Record<string, readonly string[]>> = Object.freeze({
   approved_record: ["atom_id", "record_sha256"],
   source_revision: ["source_id", "revision_id"],
   meeting_action: ["record_sha256", "signal_id"],
+  chat_action: ["id"],
 });
 
 /** The item a citation names: its kind and primary id, or undefined for a pointer that names none. */

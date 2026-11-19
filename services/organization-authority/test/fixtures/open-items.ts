@@ -19,7 +19,7 @@ import { approvalCoreFixture } from './approval-core.js';
 import { addMembership, revokeMembership } from './project-context-sqlite.js';
 
 /**
- * Open items over a real Authority V16 database (open items and Home v1).
+ * Open items over a real Authority V17 database (open items and Home v1).
  * Ari approves a meeting into project A, whose members are Ari (lead), Mina
  * Patel and Rafael Moreno; S. Okafor is in the organization but not in project
  * A. Decision readers are project A's active members. The impact check finds
@@ -257,6 +257,8 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     send: checked('send', openItemsApp.send) as (input: Request<'send'>) => Promise<PersonRunsResultsV1['send']>,
     set_state: checked('set_state', openItemsApp.set_state) as (input: Request<'set_state'>) => Promise<PersonRunsResultsV1['set_state']>,
     assign: checked('assign', openItemsApp.assign) as (input: Request<'assign'>) => Promise<PersonRunsResultsV1['assign']>,
+    send_item: checked('send_item', openItemsApp.send_item) as (input: Request<'send_item'>) => Promise<PersonRunsResultsV1['send_item']>,
+    edit: checked('edit', openItemsApp.edit) as (input: Request<'edit'>) => Promise<PersonRunsResultsV1['edit']>,
   } satisfies Partial<Record<keyof PersonTriggerRunsHttpApplicationV1, unknown>>;
   const finishImpactRun = async () => {
     await app.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id: run.run_id } });
@@ -281,7 +283,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     },
     /**
      * Leaves a last check on an item by raw SQL, stamped now, as a sweep of `by` that finished before sweeps were retired
-     * (SVC-2) left one: V16 state no code writes any more.
+     * (SVC-2) left one: V17 state no code writes any more.
      */
     check(itemId: string, verdict: 'landed' | 'still_open' | 'changed' | 'unreadable', by: FixturePerson = 'ari') {
       const sweep = `run_${randomUUID()}`;

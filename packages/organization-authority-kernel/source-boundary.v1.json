@@ -69,7 +69,7 @@
     "buffer"
   ],
   "runtime_assets": [
-    "packages/organization-authority-kernel/baselines/authority-baseline-v16.sql"
+    "packages/organization-authority-kernel/baselines/authority-baseline-v17.sql"
   ],
   "layer_rules": [
     {

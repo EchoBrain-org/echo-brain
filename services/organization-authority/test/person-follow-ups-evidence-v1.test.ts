@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { askFollowUpItemIdV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { impactItemKeyV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { EvidenceDeskPortV1, EvidenceDeskResultV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
 import type { EvidenceDeskPortV2, EvidenceDeskResultV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1 } from '@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
+import { createAskFollowUpSinksV1 } from '../src/composition/ask-follow-up-sink-v1.js';
 import { SqlitePersonAgenticAskAuditV1 } from '../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import { FOLLOW_UPS_KEY_ACROSS_SOURCES_V1, FOLLOW_UPS_KEY_PAST_READS_V1, createPersonFollowUpsEvidenceSourceV1 } from '../src/composition/person-follow-ups-evidence-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
@@ -604,5 +606,125 @@ describe("follow-ups as an Ask source: ECHO's own dates and links (research tool
     // A later release tries again.
     anchor.mockRestore();
     expect((await list(desk)).items.every(item => item.links?.decision?.[0] === 'desk-decision')).toBe(true);
+  });
+});
+
+describe('follow-ups from a chat as Ask evidence (ADR-0053)', () => {
+  /** Ari's answer drafted a follow-up for Mina, about no other item; nothing about the meeting. */
+  async function drafted() {
+    const f = await sentFixture();
+    const sinks = createAskFollowUpSinksV1({ items: f.items, people: f.directory });
+    const id = askFollowUpItemIdV1('ask-evidence', 0);
+    sinks(f.openItemsOptions.sessions.authenticateAccess({ access_token: 'ari' })).save([{ item_id: id, task: 'Draft the vendor contract', owner_name: 'Mina Patel', due_on: '2026-10-20' }]);
+    const sendIt = () => f.openItemsApp.send_item({ access_token: 'ari', request: { schema_version: 1, operation: 'send_item', item_id: id, command_id: 'send-chat', include: true } });
+    return { f, id, sendIt };
+  }
+
+  it('is found in the global scope by its creator, and by its owner only once sent, and never names a decision', async () => {
+    const { f, id, sendIt } = await drafted();
+    const before = f.opened.length;
+    const found = await search(askDesk(f, 'ari').desk, 'vendor contract');
+    expect(found.items).toHaveLength(1);
+    expect(found.items[0]).toMatchObject({ id: `follow_up_${id}`, label: 'Draft the vendor contract', attributes: { owner: 'Mina Patel', status: 'not sent yet' }, visibility: 'only_me' });
+    expect(found.items[0]!.links).toBeUndefined();
+    expect(found.items[0]!.text).not.toContain('Decision');
+    // Nothing is read live for it.
+    expect(f.opened).toHaveLength(before);
+    for (const name of ['mina', 'rafael', 'okafor'] as const) expect((await search(askDesk(f, name).desk, 'vendor contract')).items).toEqual([]);
+    await sendIt();
+    expect(titles(await search(askDesk(f, 'mina').desk, 'vendor contract'))).toEqual(['Draft the vendor contract']);
+    expect((await list(askDesk(f, 'mina').desk, { owner: 'me' })).items.map(item => item.id)).toContain(`follow_up_${id}`);
+    for (const name of ['rafael', 'okafor'] as const) expect((await search(askDesk(f, name).desk, 'vendor contract')).items).toEqual([]);
+  });
+
+  it("states a chat card's own owner and due date: none while nobody owns it, never its linked item's", async () => {
+    const f = await sentFixture();
+    const sinks = createAskFollowUpSinksV1({ items: f.items, people: f.directory });
+    const ticket = { kind: 'ticket', tool_id: 'jira', external_scope_id: CLOUD, ticket_id: '10012', permalink: 'https://echo-fixture.atlassian.net/browse/ECHO-12' };
+    const [unowned, linked, linkedDue] = [0, 1, 2].map(ordinal => askFollowUpItemIdV1('ask-owner-due', ordinal));
+    sinks(f.openItemsOptions.sessions.authenticateAccess({ access_token: 'ari' })).save([
+      { item_id: unowned!, task: 'Book the pilot room', due_on: '2026-10-24' },
+      { item_id: linked!, task: 'Chase the contract ticket', owner_name: 'Mina Patel', about: ticket },
+      { item_id: linkedDue!, task: 'Close the contract ticket', owner_name: 'Mina Patel', about: ticket, due_on: '2026-11-06' },
+    ]);
+    const { desk } = askDesk(f, 'ari');
+    const found = await list(desk);
+    const byId = (id: string) => found.items.find(item => item.id === `follow_up_${id}`)!;
+    expect(byId(unowned!).attributes).toEqual({ owner: 'No owner yet', status: 'not sent yet', due_at: '2026-10-24' });
+    // The ticket it is about is due Oct 30; the card itself has no due date, or its own.
+    expect(byId(linked!).attributes).toEqual({ owner: 'Mina Patel', status: 'not sent yet' });
+    expect(byId(linkedDue!).attributes).toEqual({ owner: 'Mina Patel', status: 'not sent yet', due_at: '2026-11-06' });
+    // Nobody owns it: it is no one's, Ari's included.
+    expect((await list(desk, { owner: 'me' })).items.map(item => item.id)).not.toContain(`follow_up_${unowned!}`);
+    expect((await list(desk, { owner: 'Ari' })).items.map(item => item.id)).not.toContain(`follow_up_${unowned!}`);
+    expect((await search(desk, 'ari')).items.map(item => item.id)).not.toContain(`follow_up_${unowned!}`);
+    // A run item keeps its tool's due date.
+    expect(found.items.find(item => item.id === `follow_up_${f.ticket.item_id}`)?.attributes).toMatchObject({ due_at: '2026-10-30' });
+  });
+
+  it("states a meeting action's own day as its due date, with its line the action's words only", async () => {
+    const f = await sentFixture({ meetingActions: [{ signal_id: 'act-1', text: 'Send the vendor the plan', owner: 'Mina Patel', due_at: '2026-11-20T12:00:00.000Z', due_on: '2026-11-20' }] });
+    const found = (await list(askDesk(f, 'ari').desk)).items.find(item => item.label === 'Send the vendor the plan');
+    expect(found?.attributes).toMatchObject({ due_at: '2026-11-20' });
+    // The ticket the impact card found still shows its own tool's due date.
+    expect((await list(askDesk(f, 'ari').desk)).items.find(item => item.id === `follow_up_${f.ticket.item_id}`)?.attributes).toMatchObject({ due_at: '2026-10-30' });
+  });
+
+  it('finds a card by its own day, a meeting action\'s or a chat follow-up\'s, and no row without one', async () => {
+    const f = await sentFixture({ meetingActions: [{ signal_id: 'act-1', text: 'Send quote', owner: 'Mina Patel', due_at: '2026-11-20T12:00:00.000Z', due_on: '2026-11-20' }] });
+    const chat = askFollowUpItemIdV1('ask-by-day', 0);
+    const other = askFollowUpItemIdV1('ask-by-day', 1);
+    const undated = askFollowUpItemIdV1('ask-by-day', 2);
+    createAskFollowUpSinksV1({ items: f.items, people: f.directory })(f.openItemsOptions.sessions.authenticateAccess({ access_token: 'ari' })).save([
+      { item_id: chat, task: 'Book the pilot room', due_on: '2026-11-20' },
+      { item_id: other, task: 'Book the pilot hall', due_on: '2026-11-21' },
+      { item_id: undated, task: 'Reconcile the 2026-11-22 invoice' },
+    ]);
+    const { desk } = askDesk(f, 'ari');
+    expect(titles(await search(desk, '2026-11-20'))).toEqual(['Book the pilot room', 'Send quote']);
+    expect(titles(await search(desk, '2026-11-21'))).toEqual(['Book the pilot hall']);
+    // A day a card's own line writes finds it too, whole: no other card's year or month does.
+    expect(titles(await search(desk, '2026-11-22'))).toEqual(['Reconcile the 2026-11-22 invoice']);
+    // The ticket's own tool date is read live, never held: it does not find the ticket.
+    expect(titles(await search(desk, '2026-10-30'))).toEqual([]);
+  });
+
+  it('names no owner for a chat card that never reached one, whatever its state', async () => {
+    const f = await sentFixture();
+    const sinks = createAskFollowUpSinksV1({ items: f.items, people: f.directory });
+    const id = askFollowUpItemIdV1('ask-dismissed-unowned', 0);
+    sinks(f.openItemsOptions.sessions.authenticateAccess({ access_token: 'ari' })).save([{ item_id: id, task: 'Book the pilot room' }]);
+    // Dismissed without anyone ever being picked: its creator is still not its owner.
+    await f.openItemsApp.send_item({ access_token: 'ari', request: { schema_version: 1, operation: 'send_item', item_id: id, command_id: 'dismiss', include: false } });
+    const { desk } = askDesk(f, 'ari');
+    const card = (await list(desk)).items.find(item => item.id === `follow_up_${id}`)!;
+    expect(card.attributes).toMatchObject({ owner: 'No owner yet', status: 'not relevant' });
+    expect((await list(desk, { owner: 'me' })).items.map(item => item.id)).not.toContain(`follow_up_${id}`);
+    expect((await list(desk, { owner: 'Ari' })).items.map(item => item.id)).not.toContain(`follow_up_${id}`);
+    expect((await search(desk, 'ari')).items.map(item => item.id)).not.toContain(`follow_up_${id}`);
+    // Sent to an owner Ari picked, it is that owner's.
+    const sent = askFollowUpItemIdV1('ask-dismissed-unowned', 1);
+    sinks(f.openItemsOptions.sessions.authenticateAccess({ access_token: 'ari' })).save([{ item_id: sent, task: 'Book the pilot hall' }]);
+    await f.openItemsApp.send_item({ access_token: 'ari', request: { schema_version: 1, operation: 'send_item', item_id: sent, command_id: 'send', include: true, owner_membership_id: f.membership('ari') } });
+    expect((await list(askDesk(f, 'ari').desk, { owner: 'me' })).items.map(item => item.id)).toContain(`follow_up_${sent}`);
+  });
+
+  it('is never found in a project scope, and leaves a global release when it is handed on', async () => {
+    const { f, id, sendIt } = await drafted();
+    await sendIt();
+    const projectA = f.projectA as `prj_${string}`;
+    for (const name of ['ari', 'mina'] as const) {
+      const { desk } = askDesk(f, name, { scope: { kind: 'project', project_id: projectA } });
+      expect((await search(desk, 'vendor contract')).items).toEqual([]);
+      expect((await list(desk)).items.map(item => item.id)).not.toContain(`follow_up_${id}`);
+    }
+    // In the global scope it is released and passes the checks while the asker still sees it.
+    const { desk } = askDesk(f, 'mina');
+    const found = await search(desk, 'vendor contract');
+    await expect(desk.open({ item: found.items[0]!.id })).resolves.toMatchObject({ items: [{ id: `follow_up_${id}` }] });
+    await expect(desk.revalidate({ mode: 'full' })).resolves.toBeDefined();
+    // Handed on, it is gone for Mina at the next check.
+    await assign(f, 'ari', id, 'rafael');
+    await expect(desk.revalidate({ mode: 'full' })).rejects.toMatchObject({ code: 'stale_access_state' });
   });
 });

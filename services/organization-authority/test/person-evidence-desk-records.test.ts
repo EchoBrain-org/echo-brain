@@ -19,10 +19,12 @@ import { applyAuthorityBaseline } from '@echo-brain/organization-authority-kerne
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import { localEvidenceDatesV1, localEvidenceTimeV1 } from '@echo-brain/organization-authority-kernel/shared/temporal-query-v1';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV3 } from '@echo-brain/organization-api';
 import { SqlitePersonRecordReadAuditV1 } from '../src/adapters/persistence/sqlite/person-record-read-audit-v1.js';
 import type { PersonOriginalContextEvidenceDeskPortV1 } from '../src/application/ports/person-original-context-retrieval-v1.js';
+import { approvalReviewV1 } from '../src/composition/approval-core-v1.js';
 import { createPersonEvidenceDeskV1 } from '../src/composition/person-evidence-desk-v1.js';
 import { createPersonRecordSearchRouteV1, type PersonEvidenceDeskRecordsV1 } from '../src/composition/person-record-search-route.js';
 import * as recordHeadReader from '../src/composition/readable-search-generation-reconciler.js';
@@ -491,9 +493,52 @@ describe('Person evidence desk: scopes and dates (ADR-0024)', () => {
     const filter = { since: '2026-10-20', until: '2026-10-20', date_field: 'due' as const, time_zone: 'America/Los_Angeles' };
     const page = await desk.list({ source: 'meeting', ...filter, limit: 1 });
     expect(page.items).toHaveLength(1);
-    expect(page.items[0]!.attributes?.due_at).toBe('2026-10-20T12:00:00.000Z');
+    // The deadline reads as its day in the meeting's own time zone (UTC: this meeting names none), not as an instant.
+    expect(page.items[0]!.attributes?.due_at).toBe('2026-10-20');
     expect(page.truncated).toBe(false);
     expect((await desk.search({ source: 'meeting', query: 'Deadline', ...filter, limit: 1 })).items[0]?.text).toContain('Deadline action 2');
+    await desk.revalidate({});
+  });
+
+  // One deadline, one day (ADR-0053). "By November 20" in a Tokyo meeting is stored as noon there, 03:00 UTC, which is
+  // 19:00 on November 19 in Los Angeles. Every place a reader meets the deadline says the meeting's own day.
+  it("states a Tokyo meeting's November 20 deadline as November 20 on the proposal, the approved decision, the follow-up card and in what Ask reads, for a reader in Los Angeles", async () => {
+    const NOON_IN_TOKYO = '2026-11-20T03:00:00.000Z', UNWRITABLE = '0999-11-20T03:00:00.000Z', LOS_ANGELES = 'America/Los_Angeles';
+    // The reader's own clock puts that instant on the day before: the day the review screens and Ask used to show.
+    expect(localEvidenceTimeV1(NOON_IN_TOKYO, LOS_ANGELES)).toBe('2026-11-19T19:00:00.000-08:00');
+    const w = await meetingWorld({ extra: [{ name: 'tokyo', approval_id: 'apr_tokyo', projects: [SHARED], final_approver: EMP_A, signals: { decisions: 1, actions: 2 },
+      brief: brief => ({ ...brief, meeting: { ...brief.meeting, time: { actual_start_at: '2026-11-17T01:00:00.000Z', timezone: 'Asia/Tokyo' } },
+        // The second deadline's year has three digits in its local form, so no calendar day can say it.
+        actions: brief.actions.map((action, index) => ({ ...action, text: `Tokyo action ${index}`, due_at: index === 0 ? NOON_IN_TOKYO : UNWRITABLE })) }),
+    }] });
+    closers.push(w.close);
+    const records = w.route();
+
+    // The proposal and the approved decision: one frozen snapshot, read by the one function both screens are sent from.
+    const envelope = JSON.parse(w.record.prepare('SELECT canonical_envelope FROM organization_record_log WHERE record_sha256 = ?').pluck().get(w.digest('tokyo')) as string);
+    const review = approvalReviewV1(JSON.stringify(envelope.body.event.approved_snapshot));
+    expect(review.items.filter(item => item.kind === 'action').map(item => [item.due_at, item.due_on])).toEqual([[NOON_IN_TOKYO, '2026-11-20'], [UNWRITABLE, null]]);
+
+    // The follow-up card.
+    expect(records.recordActions({ access_token: 'emp_a', record_sha256: w.digest('tokyo') }).map(action => [action.due_at, action.due_on]))
+      .toEqual([[NOON_IN_TOKYO, '2026-11-20'], [UNWRITABLE, undefined]]);
+
+    // What Ask reads of the meeting: the day, found on that day and on no other, whatever zone the reader asks in.
+    const desk = createPersonEvidenceDeskV1({ access_token: 'emp_a', scope: { kind: 'project', project_id: SHARED }, originals: emptyOriginals(), records });
+    const due = (day: string) => desk.list({ source: 'meeting', kinds: ['action'], since: day, until: day, date_field: 'due', time_zone: LOS_ANGELES, limit: 10 });
+    const found = await due('2026-11-20');
+    expect(found.items.map(item => [item.list_label, item.attributes?.due_at, item.dates?.due])).toEqual([[expect.stringContaining('Tokyo action 0'), '2026-11-20', '2026-11-20']]);
+    expect((await due('2026-11-19')).items).toEqual([]);
+    // A day is not an instant, so the reader's zone leaves it alone when Ask shows it to the model.
+    expect(localEvidenceTimeV1(found.items[0]!.attributes!.due_at, LOS_ANGELES)).toBe('2026-11-20');
+    expect(localEvidenceDatesV1(found.items[0]!.dates, LOS_ANGELES)).toMatchObject({ due: '2026-11-20' });
+
+    // The deadline no day can say: no due date anywhere, the action still read, and a dated read counts it as not checked.
+    const unwritable = (await desk.search({ source: 'meeting', query: 'Tokyo action', limit: 10 })).items.find(item => item.text?.includes('Tokyo action 1'));
+    expect(unwritable).toMatchObject({ kind: 'action' });
+    expect(unwritable!.attributes).not.toHaveProperty('due_at');
+    expect(unwritable!.dates).not.toHaveProperty('due');
+    expect(found.unchecked).toMatchObject({ count: 1 });
     await desk.revalidate({});
   });
 

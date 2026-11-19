@@ -1048,6 +1048,41 @@ longer told a follow-up's latest check. A record above is not comparable with
 a later run on a case that holds a follow-up. The rules, measures and
 thresholds are unchanged.
 
+## Follow-up cases (pre-registered), 2026-11-18
+
+[ADR-0053](../../../docs/decisions/ADR-0053-chat-answers-may-carry-cards.md):
+when the request saves follow-ups, Ask's writer is also told to draft a task
+the person asks to hand on or track, or clearly describes, and to draft none
+otherwise. The model decides; code only checks each draft. This set measures
+that decision and the draft's fields. Nothing here is run yet.
+
+- Cases: `follow-ups-cases.json`, five, synthetic, asked on Wednesday
+  2026-11-18 at 10:00 in America/Los_Angeles by Noor Haddad: a clear request
+  (`clear-request`, Sam Lee, due Friday 2026-11-20), an implied task
+  (`implied-task`), an ordinary question that must draft nothing
+  (`ordinary-question`), a task with no owner named (`unknown-owner`) and a
+  relative day (`relative-date`, Dana Okafor, by Monday 2026-11-23).
+- Procedure: as the wording cases, research scripted and only the writer on
+  the model, but the request binds a sink, so the writer gets
+  `ANSWER_FOLLOW_UPS_PROMPT` and `answerBlocksFollowUpsSchema`, and a trial is
+  graded on the drafts the release saved (`follow-ups.mjs`). The report keeps
+  no prompt or raw reply.
+- Checks per trial: the answer was released; it lists exactly the saved ids;
+  the count is the case's (one, or none); and, where the case names them, the
+  owner (none for `unknown-owner`), the day, and the task's words.
+- Rule: the set passes when at least 90% of all trials pass every check of
+  their case. `drafted_on_ordinary_question` is reported on its own. Only a
+  complete run (every case, three trials) decides; a run that does not pass
+  exits 1.
+
+Run it (it needs a writer credential and costs money):
+
+```sh
+npm run build:workspaces
+node tools/evals/ask-blocks/run.mjs --run --case-set follow_ups \
+  --credential-file /absolute/private/credential-file --out /absolute/private/report-directory
+```
+
 ## Wording records
 
 The wording evaluation's dated records, as they were written and run; "this

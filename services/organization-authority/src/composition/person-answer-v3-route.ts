@@ -13,6 +13,7 @@ import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/pe
 import type { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
 import { randomUUID } from "node:crypto";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
+import type { AskFollowUpSinkV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
 
 export interface CreatePersonAnswerV3RouteOptions {
@@ -26,6 +27,11 @@ export interface CreatePersonAnswerV3RouteOptions {
   readonly research_driver?: import('@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1').AgenticResearchDriverV1;
   readonly generation: AnswerCompositionGenerationProfileV1;
   readonly audit: SqlitePersonAgenticAskAuditV1;
+  /**
+   * Where an Ask answer saves the follow-ups its writer drafts (ADR-0053), bound to the authenticated asker of one
+   * request. Without it Ask drafts none. (`follow_ups` is taken: it names the follow-ups an answer can cite, ADR-0040.)
+   */
+  readonly follow_up_drafts?: (authorization: PersonAccessAuthorization) => AskFollowUpSinkV1;
   /**
    * The asker's own directory entry, so the loop reads "my" as a name. Only
    * the authenticated membership is looked up; its name reaches the model and

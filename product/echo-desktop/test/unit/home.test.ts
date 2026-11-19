@@ -27,23 +27,23 @@ const meeting = (id: string, status: PersonMeetingReviewV2['status']): PersonMee
 const decision = { approval_id: recordApproval, record_sha256: record, title: 'Pilot planning', first_line: 'Launch the pilot next week.', approved_at: '2026-10-08T10:00:00.000Z', project_ids: [] };
 /** A proposal's decision and action as review_open gives them. */
 const reviewItems = [
-  { signal_id: 'dec-1', kind: 'decision' as const, text: 'Launch the pilot next week.', subject: null, status: 'decided' as const, due_at: null, quotes: [], owner: null, owner_editable: false },
-  { signal_id: 'act-1', kind: 'action' as const, text: 'Send the revised quote', subject: null, status: null, due_at: null, quotes: [], owner: 'Rafael Moreno', owner_editable: true },
+  { signal_id: 'dec-1', kind: 'decision' as const, text: 'Launch the pilot next week.', subject: null, status: 'decided' as const, due_at: null, due_on: null, quotes: [], owner: null, owner_editable: false },
+  { signal_id: 'act-1', kind: 'action' as const, text: 'Send the revised quote', subject: null, status: null, due_at: null, due_on: null, quotes: [], owner: 'Rafael Moreno', owner_editable: true },
 ];
 const person = (name: string) => ({ membership_id: `mem_00000000-0000-4000-8000-00000000000${name.length}`, name, active: true });
 const item = (id: string): OpenItemView => ({
   item_id: `itm_0000000${id}`, run_id: impactRun('done').run_id, kind: 'ticket', decision, relation: 'conflicts', expected: 'launch next week',
   approver: person('Mina Patel'), owner: { ...person('Fixture'), match: 'jira_account' }, waits_on: 'owner', state: 'open',
   created_at: '2026-10-08T10:05:00.000Z', sent_at: '2026-10-08T11:00:00.000Z', state_set_at: '2026-10-08T11:00:00.000Z', state_set_by: person('Mina Patel'),
-  owner_set_at: null, owner_set_by: null, send_included: true, can: { set_state: true, assign: true }, reach: 'no_access',
+  owner_set_at: null, owner_set_by: null, send_included: true, due_on: null, can: { set_state: true, assign: true, edit: false, send: false }, reach: 'no_access',
 });
 /** An item of Ari's own check not sent yet: Ari ("member") approved it, so Ari may send it and pick its owner. */
 const unsent = (id: string, run_id = impactRun('done').run_id): OpenItemView => ({
   ...item(id), run_id, approver: { membership_id: 'member', name: 'Fixture', active: true }, state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null,
-  send_included: null, waits_on: 'approver', can: { set_state: false, assign: true },
+  send_included: null, waits_on: 'approver', due_on: null, can: { set_state: false, assign: true, edit: false, send: false },
 });
 const sendRow = (): HomeView['send'][number] => ({ run_id: impactRun('done').run_id, decision, items: 2, kinds: ['ticket'], owners: ['Mina Patel'], finished_at: '2026-10-08T10:05:00.000Z' });
-const emptyHome = (): HomeView => ({ send: [], items: [], waiting: 0 });
+const emptyHome = (): HomeView => ({ send: [], items: [], waiting: 0, drafts: [] });
 /** A row as a rows-only read answers it: nothing read live. */
 const rowOnly = (entry: OpenItemView): OpenItemView => {
   const { current: _current, ...rest } = entry;
@@ -111,6 +111,8 @@ const fresh = () => ({
   sendFailure: null as Failure | null,
   /** A send of this run fails as `sendFailure` says; any other run's goes. Null: every send fails so. */
   sendFailsFor: null as string | null,
+  /** So many sends go before `sendFailure` applies. Null: it applies from the first. */
+  sendsThatGo: null as number | null,
   /** Rows an items read pages at a time (null: all at once), and items reads to fail next. */
   pageSize: null as number | null,
   failItems: 0,
@@ -244,7 +246,8 @@ async function authority(method: string, params: { project_id?: string; request?
         return params.request.read === undefined ? held('live', () => answer) : answer;
       }
       if (params.request?.operation === 'send') {
-        const reply = fx.sendFailure && (fx.sendFailsFor === null || fx.sendFailsFor === params.request.run_id) ? { ok: false, failure: fx.sendFailure } : ok({ sent: 1, not_relevant: 0 });
+        const failing = fx.sendFailure && (fx.sendFailsFor === null || fx.sendFailsFor === params.request.run_id) && (fx.sendsThatGo === null || fx.sendsThatGo-- <= 0);
+        const reply = failing ? { ok: false, failure: fx.sendFailure } : ok({ sent: 1, not_relevant: 0 });
         return held('send', () => reply);
       }
   }
@@ -872,7 +875,7 @@ describe('Follow-up lists and item pages', () => {
   beforeEach(() => { fx.listed = false; });
 
   it('ticks every Not sent row you may send on a meeting\'s first read', async () => {
-    fx.page = listPage([unsent('1'), unsent('2'), { ...unsent('3'), can: { set_state: false, assign: false } }, item('4')]);
+    fx.page = listPage([unsent('1'), unsent('2'), { ...unsent('3'), due_on: null, can: { set_state: false, assign: false, edit: false, send: false } }, item('4')]);
     const store = await meetingList();
     expect(list(store)).toMatchObject({ kind: 'list', scope: 'record', id: record, title: 'Pilot planning', loading: false });
     expect(list(store).ticks).toEqual({ itm_00000001: true, itm_00000002: true });
@@ -893,6 +896,31 @@ describe('Follow-up lists and item pages', () => {
     const sent = requests('send');
     expect(sent.map(request => (request.items as unknown[]).length)).toEqual([40, 5]);
     expect(new Set(sent.map(request => request.command_id)).size).toBe(2);
+  });
+
+  it('keeps the command of a later part whose outcome is unknown when an earlier part of the same meeting went', async () => {
+    const ids = Array.from({ length: 45 }, (_, i) => String(i + 1));
+    fx.page = listPage(ids.map(id => unsent(id)));
+    const store = await start();
+    await store.openYourFollowUps();
+    for (const row of list(store).items) store.tickFollowUp(row.item_id);
+    // The first part goes; the second part's reply is lost, and its rows read again are still not sent.
+    fx.sendFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
+    fx.sendsThatGo = 1;
+    fx.page = listPage(ids.map((id, at) => (at < 40 ? item(id) : unsent(id))));
+    await store.sendTicked(true);
+    const [, second] = requests('send');
+    expect((second!.items as unknown[]).length).toBe(5);
+    // What went is said, and what did not is still to send, with its command kept to replay.
+    expect(said(store)?.error).toBe(true);
+    expect(Object.values(list(store).sends).map(kept => kept.command)).toEqual([second!.command_id]);
+    // Send again replays that part with the same command, so a send that did land is not sent twice.
+    fx.sendFailure = null;
+    fx.page = listPage(ids.map(id => item(id)));
+    await store.sendTicked(true);
+    expect(requests('send')).toHaveLength(3);
+    expect(requests('send')[2]).toEqual(second);
+    expect(list(store).sends).toEqual({});
   });
 
   it('sends only the ticked rows, one send per check with a command of its own, and stays on the list, read again', async () => {
@@ -997,7 +1025,7 @@ describe('Follow-up lists and item pages', () => {
     expect(store.followUpShown()).toMatchObject({ kind: 'item', item_id: 'itm_00000001', item: null, loading: true });
     await opening;
     expect(store.followUpShown()).toMatchObject({ item: { state: 'unsent' } });
-    fx.readItem = { ...unsent('1'), state: 'not_relevant', sent_at: '2026-10-08T12:00:00.000Z', state_set_at: '2026-10-08T12:00:00.000Z', send_included: false, can: { set_state: true, assign: true } };
+    fx.readItem = { ...unsent('1'), state: 'not_relevant', sent_at: '2026-10-08T12:00:00.000Z', state_set_at: '2026-10-08T12:00:00.000Z', send_included: false, due_on: null, can: { set_state: true, assign: true, edit: false, send: false } };
     await store.sendFollowUp(false);
     expect(requests('send')).toEqual([expect.objectContaining({ run_id: impactRun('done').run_id, items: [{ item_id: 'itm_00000001', include: false }] })]);
     // A dismissal before sending is never undone (F6).

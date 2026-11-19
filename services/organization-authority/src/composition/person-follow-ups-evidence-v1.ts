@@ -4,6 +4,7 @@ import {
   validatePersonFollowUpEvidenceV1,
   type PersonFollowUpEvidenceV1,
 } from '@echo-brain/organization-api';
+import { isCalendarDay } from '@echo-brain/organization-api/validation';
 import { impactCardLineV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -36,7 +37,8 @@ import {
   observeEventV1,
   openItemCurrentV1,
   openItemDecisionPartsV1,
-  openItemIsMeetingActionV1,
+  openItemIsFromChatV1,
+  openItemIsOwnActionV1,
   openItemKindV1,
   openItemLiveReadV1,
   openItemNameV1,
@@ -156,6 +158,18 @@ export const FOLLOW_UPS_KEY_PAST_READS_V1 = 'This request has read as many follo
 /** Private visibilities first: an answer statement citing any of them is private. */
 const NARROWEST: readonly EvidenceDeskVisibilityV1[] = ['only_me', 'approver_only', 'project', 'projects', 'team'];
 
+/** How a follow-up from a chat nobody owns yet names its owner (ADR-0053). */
+const NO_OWNER = 'No owner yet';
+/** A follow-up from a chat that never reached an owner: its creator was kept for want of a match, and it was never sent to anyone. */
+function unowned(row: Pick<ImpactItemRowV1, 'run_id' | 'owner_match' | 'send_included'>): boolean {
+  // Never sent to anyone, with no owner chosen: whatever its state (a dismissed draft included), it has no owner.
+  return openItemIsFromChatV1(row) && row.owner_match === 'approver' && row.send_included !== true;
+}
+/** Its owner as a follow-up names them: their display name, or none yet. */
+function ownerName(people: Context['people'], row: Pick<ImpactItemRowV1, 'run_id' | 'owner_match' | 'send_included' | 'owner_membership_id'>): string {
+  return unowned(row) ? NO_OWNER : openItemNameV1(people, row.owner_membership_id);
+}
+
 const stale = (): never => { throw new AuthorityOperationError('stale_access_state', 'A follow-up is no longer available to this person'); };
 
 /**
@@ -197,23 +211,35 @@ function keyOf(word: string): string | undefined {
   const key = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').toUpperCase();
   return TICKET_KEY.test(key) ? key : undefined;
 }
+/** A calendar day a word names, from a word that is one once punctuation around it is trimmed. */
+function dayOf(word: string): string | undefined {
+  const day = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+  return isCalendarDay(day) ? day : undefined;
+}
 /**
- * A search's terms (`evidenceTermsV1`) and ticket keys. A ticket key stays one key, matched against a ticket item's own
- * key and against the same key-shaped word where ECHO's text holds it.
+ * A search's terms (`evidenceTermsV1`), ticket keys and calendar days. A ticket key stays one key, matched against a ticket
+ * item's own key and against the same key-shaped word where ECHO's text holds it. A calendar day stays one day, matched
+ * against a card's own due date and against the same day where ECHO's text writes it, never as its year, month and day apart.
  */
-function queryOf(query: string): { readonly terms: readonly string[]; readonly keys: readonly string[] } {
+function queryOf(query: string): { readonly terms: readonly string[]; readonly keys: readonly string[]; readonly days: readonly string[] } {
   const keys = new Set<string>();
   const terms = new Set<string>();
+  const days = new Set<string>();
   for (const word of query.normalize('NFC').trim().split(/\s+/u)) {
     const key = keyOf(word);
     if (key !== undefined) { keys.add(key); continue; }
+    const day = dayOf(word);
+    if (day !== undefined) { days.add(day); continue; }
     for (const term of evidenceTermsV1(word)) terms.add(term);
   }
-  return { terms: [...terms], keys: [...keys] };
+  return { terms: [...terms], keys: [...keys], days: [...days] };
 }
-/** Words of ECHO-held text shaped like a ticket key, such as the build name "EVT-2", as written: a query's key matches them too. */
-function keysOf(values: readonly (string | null | undefined)[]): ReadonlySet<string> {
-  return new Set(values.flatMap(value => (value ?? '').normalize('NFC').split(/\s+/u).flatMap(word => keyOf(word) ?? [])));
+/**
+ * Whole words of ECHO-held text that `as` recognises, as written: a build name shaped like a ticket key ("EVT-2"), or a
+ * calendar day in a card's line. A query's key or day matches them too.
+ */
+function writtenOf(values: readonly (string | null | undefined)[], as: (word: string) => string | undefined): ReadonlySet<string> {
+  return new Set(values.flatMap(value => (value ?? '').normalize('NFC').split(/\s+/u).flatMap(word => as(word) ?? [])));
 }
 /** A name as one compares it with another: NFC, lower case, runs of space as one. */
 function spelled(name: string): string {
@@ -291,7 +317,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
    * request's bound. A read a cancelled call left unfinished is tried again.
    */
   const liveRead = async (row: ImpactItemRowV1, signal?: AbortSignal): Promise<LiveRead | undefined> => {
-    if (openItemIsMeetingActionV1(row)) return undefined;
+    if (openItemIsOwnActionV1(row)) return undefined;
     for (let attempt = 0; ; attempt += 1) {
       let read = reads.get(row.item_key);
       if (read === undefined) {
@@ -364,19 +390,22 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
     const access = openItemAccessV1(read === undefined ? facts : { ...facts, opens_item: opened !== undefined });
     if (!access.see_row) return undefined;
     const live = opened !== undefined && access.see_outside && openItemCurrentV1(opened) !== undefined ? opened : undefined;
-    const due = live === undefined ? '' : openItemCurrentV1(live)?.due_at ?? '';
+    // A card's own due date (ADR-0053: a chat follow-up's, or a meeting action's day) is the row's. A follow-up from a chat
+    // never takes the due date of the item it is about; another run item with none shows its tool's, read live.
+    const own = row.due_on !== null || openItemIsFromChatV1(row);
+    const due = own ? row.due_on ?? '' : live === undefined ? '' : openItemCurrentV1(live)?.due_at ?? '';
     const liveTitle = live === undefined ? '' : impactCardLineV1(live.label, LIMITS.title_chars);
     const expected = impactCardLineV1(row.expected, LIMITS.expected_chars);
     const decision = decisionPart(entry);
-    const readable = decision === undefined ? undefined : context.decisions.get(row.record_sha256);
+    const readable = decision === undefined || row.record_sha256 === null ? undefined : context.decisions.get(row.record_sha256);
     const evidence = (withLive: boolean, withDecision: boolean): PersonFollowUpEvidenceV1 => {
       const title = (withLive ? liveTitle : '') || expected || DEFAULT_TITLE;
       const decided = decision?.first_line === null || decision?.first_line === undefined ? '' : impactCardLineV1(decision.first_line, LIMITS.first_line_chars);
       return validatePersonFollowUpEvidenceV1({
-        item_id: row.item_id, kind: openItemKindV1(row.pointer), title, owner: openItemNameV1(context.people, row.owner_membership_id), status: row.state,
+        item_id: row.item_id, kind: openItemKindV1(row.pointer), title, owner: ownerName(context.people, row), status: row.state,
         // ECHO's own dates, which the runs API shows whoever sees the row.
         created_at: row.created_at, ...(row.sent_at === null ? {} : { sent_at: row.sent_at }), ...(row.owner_set_at === null ? {} : { reassigned_at: row.owner_set_at }),
-        ...(withLive && liveTitle !== '' && due !== '' ? { due_at: due } : {}),
+        ...(due !== '' && (own || (withLive && liveTitle !== '')) ? { due_at: due } : {}),
         ...(withDecision && decision !== undefined ? { decision: {
           title: impactCardLineV1(decision.title, LIMITS.decision_title_chars) || 'Approved meeting',
           ...(decided === '' ? {} : { first_line: decided }), ref: `meeting:${row.record_sha256}`,
@@ -407,7 +436,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       readonly untested?: EvidenceDeskUncheckedV1 | undefined; readonly links: boolean; readonly signal?: AbortSignal | undefined;
     }): Promise<EvidenceDeskResultV2> => {
     const shaped = entries.flatMap(entry => { const value = shape(view, entry); return value === undefined ? [] : [value]; });
-    const decided = links ? [...new Set(shaped.flatMap(value => (value.decision ? [value.record] : [])))] : [];
+    const decided = links ? [...new Set(shaped.flatMap(value => (value.decision && value.record !== null ? [value.record] : [])))] : [];
     const decisions = new Map(await Promise.all(decided.map(async record => [record, await decisionRead(record, signal)] as const)));
     signal?.throwIfAborted();
     const receipt = options.audit.record({ operation, items: shaped.map(({ evidence, visibility }) => ({ item_id: evidence.item_id, released_fields_sha256: canonicalSha256({ evidence, visibility }) })) });
@@ -416,7 +445,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       const id = `follow_up_${evidence.item_id}`;
       issued.set(id, evidence.item_id);
       ledger.record(evidence.item_id, previous => ({ decision: decision || previous?.decision === true }));
-      const decisionItems = decision ? decisions.get(record)?.items ?? [] : [];
+      const decisionItems = decision && record !== null ? decisions.get(record)?.items ?? [] : [];
       const followed = links ? follows : undefined;
       for (const item of [...decisionItems, ...(followed === undefined ? [] : [followed])]) linked.set(item.id, item);
       const named = { ...(decisionItems.length === 0 ? {} : { decision: Object.freeze(decisionItems.map(item => item.id)) }), ...(followed === undefined ? {} : { follows: Object.freeze([followed.id]) }) };
@@ -443,7 +472,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       const limit = evidencePageSizeV1(input.limit, FOLLOW_UPS_LIMITS_V1.search_hits);
       if (typeof input.query !== 'string') invalid('query is required');
       const live = input.live !== false;
-      const { terms, keys } = queryOf(input.query);
+      const { terms, keys, days } = queryOf(input.query);
       const view = visible(input.signal);
       const { context, decisionPart } = view;
       // Only ECHO-held text the policy shows the asker: the decision's title and first line where the decision is shown, the
@@ -452,11 +481,14 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       const candidates = context.assessed.flatMap(entry => {
         if (!inWindow(entry.row, window)) return [];
         const decision = decisionPart(entry);
-        const held = [decision?.title, decision?.first_line, entry.row.expected, openItemNameV1(context.people, entry.row.owner_membership_id)];
+        const held = [decision?.title, decision?.first_line, entry.row.expected, ...(unowned(entry.row) ? [] : [openItemNameV1(context.people, entry.row.owner_membership_id)])];
         const words = evidenceWordsV1(held);
-        const written = keysOf(held);
+        const written = writtenOf(held, keyOf);
+        const dated = writtenOf(held, dayOf);
         // A key-shaped word ECHO holds as written ("EVT-2") is one of its words; the key's parts alone are not.
-        const matched = terms.filter(term => words.has(term)).length + keys.filter(key => written.has(key)).length;
+        // A card's own due date (a meeting action's day, or a chat follow-up's) is ECHO-held too, and so is a day its text writes.
+        const matched = terms.filter(term => words.has(term)).length + keys.filter(key => written.has(key)).length
+          + days.filter(day => entry.row.due_on === day || dated.has(day)).length;
         const key = ticketKeyOf(entry.row);
         const keyed = key !== undefined && keys.includes(key);
         // Ranked by ECHO's words alone: a key, which the asker may not be able to open, never moves or cuts a hit.
@@ -508,7 +540,8 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       // Filters apply before anything is released or read live.
       const status = input.status;
       const selected = context.assessed.filter(({ row }) => (status === undefined || followUpInStatusV1(row.state, status)) &&
-        (owner === undefined || (asker ? row.owner_membership_id === viewer.membership : followUpOwnerMatchesV1(openItemNameV1(context.people, row.owner_membership_id), owner))));
+        // One nobody owns yet is nobody's, its creator's included.
+        (owner === undefined || (!unowned(row) && (asker ? row.owner_membership_id === viewer.membership : followUpOwnerMatchesV1(openItemNameV1(context.people, row.owner_membership_id), owner)))));
       const matching = selected.filter(({ row }) => inWindow(row, window)).sort((left, right) => newestFirst(left.row, right.row));
       const following = after === undefined ? matching : matching.filter(({ row }) => newestFirst(after, row) < 0);
       const page = following.slice(0, size);
@@ -525,7 +558,8 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       if (itemId === undefined) return notFound();
       current(input.signal);
       const row = sources.items.read(itemId);
-      if (row === undefined || (scope.kind === 'project' && !projectRecords(scope.project_id).has(row.record_sha256))) return notFound();
+      // A follow-up from a chat has no decision, so no project holds it: a project's Ask never finds it.
+      if (row === undefined || (scope.kind === 'project' && (row.record_sha256 === null || !projectRecords(scope.project_id).has(row.record_sha256)))) return notFound();
       const context = assessOpenItemsV1(sources, viewer, [row]);
       const entry = context.assessed[0];
       if (entry === undefined || !entry.access.see_row) return notFound();
@@ -546,7 +580,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       for (const { row, access } of context.assessed) {
         // The row still shown, its decision still shown wherever a release carried it, and still in the Ask's project.
         // A state or owner changed meanwhile is not an access change.
-        if (!access.see_row || (ledger.get(row.item_id)!.decision && !access.see_decision) || (inProject !== undefined && !inProject.has(row.record_sha256))) stale();
+        if (!access.see_row || (ledger.get(row.item_id)!.decision && !access.see_decision) || (inProject !== undefined && (row.record_sha256 === null || !inProject.has(row.record_sha256)))) stale();
       }
       input.signal?.throwIfAborted();
       due.checked();

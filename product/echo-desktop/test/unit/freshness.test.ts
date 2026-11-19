@@ -14,7 +14,7 @@ vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
 let account: Account;
 const apollo = project(1, 20, { name: 'Apollo' });
 const proposal = { snapshot_sha256: `sha256:${'a'.repeat(64)}`, suggested_projects: [], participants: [], reasons: [], records: [],
-  items: [{ signal_id: 's1', kind: 'action', text: 'Ship it', subject: null, status: null, due_at: null, quotes: [], owner: 'Mina', owner_editable: true, project_ids: [] }],
+  items: [{ signal_id: 's1', kind: 'action', text: 'Ship it', subject: null, status: null, due_at: null, due_on: null, quotes: [], owner: 'Mina', owner_editable: true, project_ids: [] }],
   review: { status: 'pending', records: [] } };
 /** apr_2, approved: its one record, whose check is keyed by the record's own approval id. */
 const approvedRecord = { approval_id: `apr_${'e'.repeat(64)}`, project_ids: [] };

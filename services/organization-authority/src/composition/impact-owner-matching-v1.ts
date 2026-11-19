@@ -6,7 +6,7 @@ export interface ImpactOwnerCandidateV1 {
   /** The owner name the impact card took from the item's details, if any. */
   readonly owner_name?: string;
 }
-/** An assignee account match is stored as `jira_account`: a frozen V16 baseline and organization-api value, renamed only by a versioned migration. */
+/** An assignee account match is stored as `jira_account`: a frozen V17 baseline and organization-api value, renamed only by a versioned migration. */
 interface ImpactOwnerMatchResultV1 { readonly owner_membership_id: string; readonly owner_match: 'jira_account' | 'name' | 'approver' }
 /** ECHO's member directory as owner matching reads it: the open items' people store. */
 export interface ImpactOwnerPeopleV1 {
@@ -18,6 +18,17 @@ export interface ImpactOwnerPeopleV1 {
 function siteTicketId(pointer: ImpactOwnerCandidateV1['pointer'], owners: TicketOwnerAccountsV1 | undefined): string | undefined {
   return owners !== undefined && pointer.kind === 'ticket' && pointer.tool_id === owners.tool_id && pointer.external_scope_id === owners.external_scope_id &&
     typeof pointer.ticket_id === 'string' ? pointer.ticket_id : undefined;
+}
+
+/**
+ * The one active member whose display name is `name`, trimmed, through `byName` (the roster `activeByName` reads), read only for a
+ * name that is not blank. Undefined for a blank name, no member or more than one.
+ */
+export function activeMemberNamedV1(byName: (name: string) => readonly string[], name: string | undefined): string | undefined {
+  const wanted = name?.trim();
+  if (wanted === undefined || wanted === '') return undefined;
+  const holders = [...new Set(byName(wanted))];
+  return holders.length === 1 ? holders[0] : undefined;
 }
 
 /** Items whose owner is a name ECHO itself holds: an ECHO record's or document's action, and the approved meeting's own action. */
@@ -67,8 +78,9 @@ export async function matchImpactOwnersV1(input: {
           .filter(person => person.organization_id === organization && people.isActiveMember(organization, person.membership_id))
           .map(person => person.membership_id), 'jira_account');
       }
-      const name = candidate.owner_name?.trim();
-      return NAMED_OWNER_KINDS.includes(candidate.pointer.kind) && name !== undefined && name !== '' ? theOne((named ??= people.activeByName(organization))(name), 'name') : fallback;
+      if (!NAMED_OWNER_KINDS.includes(candidate.pointer.kind)) return fallback;
+      const member = activeMemberNamedV1(name => (named ??= people.activeByName(organization))(name), candidate.owner_name);
+      return member === undefined ? fallback : Object.freeze({ owner_membership_id: member, owner_match: 'name' });
     } catch { return fallback; }
   }));
 }

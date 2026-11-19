@@ -73,6 +73,8 @@ interface RunsRequest {
   changed_since?: string;
   item_id?: string; command_id?: string; state?: 'open' | 'done' | 'not_relevant'; owner_membership_id?: string;
   items?: { item_id: string; include: boolean; owner_membership_id?: string }[];
+  /** `send_item` and `edit`, on a follow-up from a chat (ADR-0053). */
+  include?: boolean; expected?: string; due_on?: string | null;
 }
 
 /** Someone an item names: who set its state or its owner. */
@@ -86,8 +88,12 @@ interface Named { membership_id: string; name: string }
  * that viewer could open it. A meeting's action is never read live.
  */
 interface OpenItem {
-  item_id: string; run_id: string; kind: 'action' | 'ticket' | 'page';
+  /** Null for a follow-up from a chat (ADR-0053): no run and no decision stand behind it. */
+  item_id: string; run_id: string | null; kind: 'action' | 'ticket' | 'page';
+  /** A follow-up from a chat has none: it is never `readable`, and its decision here is never shown. */
   decision: { approval_id: string; record_sha256: string; title: string; first_line: string | null; approved_at: string; project_ids: string[] };
+  /** ECHO's own due date, a calendar day: a follow-up from a chat's own, or a meeting action's day as its review states it. */
+  due_on?: string | null;
   /** Ari can read its decision. */
   readable: boolean;
   /** What a live open of it reads, for someone with access to it in its tool. */
@@ -142,11 +148,12 @@ const MEETING_ACTIONS = [
  * cites (a note line, or a transcript part that may hold blank lines).
  */
 const PILOT_ITEMS = [
-  { signal_id: 'dec-1', kind: 'decision', text: 'Launch the pilot next week.', subject: null, status: 'decided', due_at: null,
+  { signal_id: 'dec-1', kind: 'decision', text: 'Launch the pilot next week.', subject: null, status: 'decided', due_at: null, due_on: null,
     quotes: ['Launch the pilot next week.', '[09:02] Ari: Let\'s launch the pilot next week.\n\n[09:03] Mina Patel: Agreed. The freeze lifts on Friday.'] },
-  { signal_id: 'act-1', kind: 'action', text: 'Send the revised quote', subject: null, status: null, due_at: null,
+  { signal_id: 'act-1', kind: 'action', text: 'Send the revised quote', subject: null, status: null, due_at: null, due_on: null,
     quotes: ['[09:04] Ari: Rafael, can you send the revised quote?'] },
-  { signal_id: 'act-2', kind: 'action', text: 'Confirm the trace', subject: null, status: null, due_at: '2026-10-10T12:00:00.000Z',
+  // The day beside the deadline is the meeting's own (ADR-0053), and the day the card shows.
+  { signal_id: 'act-2', kind: 'action', text: 'Confirm the trace', subject: null, status: null, due_at: '2026-10-10T12:00:00.000Z', due_on: '2026-10-10',
     quotes: ['[09:05] Mina Patel: I\'ll confirm the trace by Friday.'] },
 ] as const;
 const PILOT_REASONS = [{ signal_id: 'why-1', text: 'The freeze lifts on Friday, so next week is the first clear window.', supports: ['dec-1'],
@@ -839,7 +846,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       { ...unsent, item_id: 'itm_00000000-0000-4000-8000-000000000032', kind: 'page', relation: 'needs_updating', expected: 'pilot starts next week',
         opens: true, live: { citation: PRD_PAGE, says_now: 'starts after freeze' }, owner: { ...ARI, match: 'approver' } },
       ...MEETING_ACTIONS.map((action, index): OpenItem => ({ ...unsent, item_id: `itm_00000000-0000-4000-8000-00000000003${8 + index}`, kind: 'action',
-        relation: 'needs_updating', expected: action.text, opens: false, live: {}, owner: ownerOf(action.signal_id) })),
+        // Its day is the one its review states (ADR-0053): read from the proposal's item, so the two cannot disagree.
+        relation: 'needs_updating', expected: action.text, due_on: PILOT_ITEMS.find(item => item.signal_id === action.signal_id)?.due_on ?? null,
+        opens: false, live: {}, owner: ownerOf(action.signal_id) })),
     );
   };
   /** A destination group's key: its projects, and whether they are kept for Ari alone (the route says `private: true`). */
@@ -889,7 +898,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const mineAsOwner = (item: OpenItem) => item.owner.membership_id === ARI.membership_id;
   const involved = (item: OpenItem) => item.approver.membership_id === ARI.membership_id || mineAsOwner(item);
   /** Ari sees a row whose decision Ari can read, and an item sent to Ari as its owner. */
-  const visible = (item: OpenItem) => item.readable || (mineAsOwner(item) && item.state !== 'unsent');
+  const visible = (item: OpenItem) => item.readable || (mineAsOwner(item) && item.state !== 'unsent')
+    || (item.run_id === null && item.approver.membership_id === ARI.membership_id);
+  /** A follow-up from a chat (ADR-0053) that Ari made: Ari alone may edit it until it is closed, and send it while not sent. */
+  const ariChat = (item: OpenItem) => item.run_id === null && item.approver.membership_id === ARI.membership_id;
   /**
    * A row rebuilt for Ari: the decision only for a reader, what it says now only when Ari could open it (and `live`: a
    * rows read opens nothing), and how its live read went: opened, refused to Ari, or not answered just now. A
@@ -900,16 +912,21 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const person = (named: Named | null) => (named === null ? null : { ...named, active: true });
     return {
       item_id: item.item_id, run_id: item.run_id, kind: item.kind, ...(item.readable ? { decision: item.decision } : {}), ...(reach === 'opened' ? { current: item.live } : {}),
-      relation: item.relation, expected: item.expected, approver: { ...item.approver, active: true }, owner: { ...item.owner, active: true },
+      relation: item.relation, expected: item.expected, due_on: item.due_on ?? null, approver: { ...item.approver, active: true }, owner: { ...item.owner, active: true },
       waits_on: item.state === 'unsent' ? 'approver' : 'owner', state: item.state, created_at: item.created_at, sent_at: item.sent_at, state_set_at: item.state_set_at,
       state_set_by: person(item.state_set_by), owner_set_at: item.owner_set_at, owner_set_by: person(item.owner_set_by),
       send_included: item.send_included,
-      can: { set_state: item.state !== 'unsent' && involved(item), assign: item.state === 'unsent' ? item.approver.membership_id === ARI.membership_id : involved(item) },
+      can: { set_state: item.state !== 'unsent' && involved(item), assign: item.state === 'unsent' ? item.approver.membership_id === ARI.membership_id : involved(item),
+        edit: ariChat(item) && (item.state === 'unsent' || item.state === 'open'), send: ariChat(item) && item.state === 'unsent' },
       reach,
     };
   };
   /** Send commands applied, by command id, with the exact items each listed: a resend gets the same answer, other items under it conflict. */
   const sends = new Map<string, { items: string; result: { sent: number; not_relevant: number } }>();
+  /** Single sends of follow-ups from a chat, by command id: a resend of the same item and choice gets the same answer. */
+  const itemSends = new Map<string, { asked: string; result: { state: 'open' | 'not_relevant' } }>();
+  /** How many follow-ups Ask answers drafted (ADR-0053), each its own item. */
+  let drafted = 0;
   /** Mina has marked done what Ari sent her (the `mina-done` file in the test's home). */
   let minaDone = false;
   let assigns = 0;
@@ -1176,6 +1193,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           return result('home', {
             send, items: theirs.filter(mineAsOwner).sort((a, b) => since(b).localeCompare(since(a))).slice(0, 20).map(item => itemView(item, live)),
             waiting: theirs.filter(item => item.approver.membership_id === ARI.membership_id && !mineAsOwner(item)).length,
+            // Ari's follow-ups from a chat not sent yet, the newest first (ADR-0053).
+            drafts: shown.filter(item => ariChat(item) && item.state === 'unsent').sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 20)
+              .map(item => itemView(item, live)),
           });
         }
         case 'items': {
@@ -1269,6 +1289,34 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           // Made, but the first reply is lost on its way back.
           if (mode === 'granola-review-assign-lost' && ++assigns === 1) return failure('unavailable', 503);
           return result('assign', { owner: { membership_id: person.membership_id, name: person.display_name, active: true } });
+        }
+        // A follow-up from a chat (ADR-0053), sent or dismissed on its own by Ari, who made it: sent only once someone owns it,
+        // an owner picked with it. Once per command: the same item and choice again replay it, anything else under it conflicts.
+        case 'send_item': {
+          const item = shown.find(entry => entry.item_id === request.item_id && ariChat(entry));
+          if (!item) return failure('not_found', 404);
+          const asked = JSON.stringify([request.item_id, request.include, request.owner_membership_id ?? null]);
+          const earlier = itemSends.get(request.command_id!);
+          if (earlier) return earlier.asked === asked ? result('send_item', earlier.result) : failure('conflict', 409);
+          if (item.state !== 'unsent') return failure('conflict', 409);
+          const pick = request.owner_membership_id;
+          if (pick !== undefined && !desktop.people.some(person => person.membership_id === pick)) return failure('invalid_request', 400);
+          if (request.include && pick === undefined && item.owner.match === 'approver') return failure('invalid_request', 400);
+          const at = now();
+          if (pick !== undefined) Object.assign(item, { owner: { membership_id: pick, name: nameOf(pick), match: 'picked' }, owner_set_at: at, owner_set_by: ARI });
+          Object.assign(item, { state: request.include ? 'open' : 'not_relevant', sent_at: at, state_set_at: at, state_set_by: ARI, send_included: request.include });
+          const sent = { state: request.include ? 'open' as const : 'not_relevant' as const };
+          itemSends.set(request.command_id!, { asked, result: sent });
+          return result('send_item', sent);
+        }
+        // Its line, its due date or both, by Ari, who made it, until it is closed.
+        case 'edit': {
+          const item = shown.find(entry => entry.item_id === request.item_id && ariChat(entry));
+          if (!item) return failure('not_found', 404);
+          if (item.state === 'done' || item.state === 'not_relevant') return failure('invalid_request', 400);
+          if (request.expected !== undefined) item.expected = request.expected;
+          if (request.due_on !== undefined) item.due_on = request.due_on;
+          return result('edit', { expected: item.expected, due_on: item.due_on ?? null });
         }
         // One item, as Ari sees it now; read as rows, nothing read live.
         case 'item': {
@@ -1711,6 +1759,21 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }
       // `ask-blocks` answers THERM's question in every block of answer layout v2 (ADR-0051).
       if (mode === 'ask-blocks') return answered(blocksAnswer(question, scope));
+      // `ask-follow-ups` (ADR-0053): the answer drafts one follow-up for the task asked about, saved unsent in Ari's own list
+      // with no owner yet and a due date, as the Ask writer's sink saves one.
+      if (mode === 'ask-follow-ups') {
+        const [part] = desktop.answer.parts as Record<string, unknown>[];
+        drafted += 1;
+        const item_id = `itm_chat-${String(drafted).padStart(4, '0')}`;
+        openItems.push({
+          item_id, run_id: null, kind: 'action', decision: { approval_id: 'apr_' + '0'.repeat(64), record_sha256: digestOf('chat'), title: 'Chat', first_line: null,
+            approved_at: new Date().toISOString(), project_ids: [] },
+          readable: false, opens: false, live: {}, relation: 'needs_updating', expected: 'Update the pricing page for the new tiers', due_on: '2026-11-20',
+          approver: ARI, owner: { ...ARI, match: 'approver' }, state: 'unsent', created_at: new Date().toISOString(), sent_at: null, state_set_at: null,
+          state_set_by: null, owner_set_at: null, owner_set_by: null, send_included: null,
+        });
+        return answered({ ...answer, scope, parts: [{ ...part, question }], follow_ups: [item_id] });
+      }
       if (mode === 'ask-scroll') {
         const statements = question === 'Quick status' ? [{ text: 'The release remains scheduled for Friday, and the team has confirmed the owner and the remaining checks.', citation_indexes: [0], private: false }] : Array.from({ length: 12 }, (_, index) => ({
           text: `${question} Item ${index + 1}: The team reviewed the supplier report, the manufacturing checklist, and the latest test results. The next review will compare those results with the release requirements before confirming the schedule and assigning the remaining follow-ups.`,

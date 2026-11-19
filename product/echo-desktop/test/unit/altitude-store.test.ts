@@ -19,7 +19,7 @@ function row(id: string, of: ProjectSummary, extra: Partial<OpenItemView> = {}):
     decision: { approval_id: 'apr_1', record_sha256: 'sha256:1', title: 'Pilot planning', first_line: null, approved_at: '2026-10-20T10:00:00.000Z', project_ids: [of.project_id] },
     relation: 'conflicts', expected: 'launch next week', approver: MINA, owner: { ...MINA, match: 'name' }, waits_on: 'owner', state: 'open',
     created_at: '2026-10-20T10:00:00.000Z', sent_at: '2026-10-20T11:00:00.000Z', state_set_at: '2026-10-20T11:00:00.000Z', state_set_by: MINA,
-    owner_set_at: null, owner_set_by: null, send_included: true, can: { set_state: true, assign: true }, reach: 'not_read', ...extra,
+    owner_set_at: null, owner_set_by: null, send_included: true, due_on: null, can: { set_state: true, assign: true, edit: false, send: false }, reach: 'not_read', ...extra,
   };
 }
 
@@ -224,7 +224,7 @@ describe('one kind of what needs you, as Home zoomed into it (One place to look 
       'app.status': () => ok({ signed_in: true, account }),
       runs: params => {
         const request = (params as { request: Request }).request;
-        if (request.operation === 'home') return ok({ send: [], items: waits, waiting: 0 });
+        if (request.operation === 'home') return ok({ send: [], items: waits, waiting: 0, drafts: [] });
         if (request.operation === 'list') return ok({ runs: [] });
         return runsHandler(params);
       },
