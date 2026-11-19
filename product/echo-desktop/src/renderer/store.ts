@@ -7067,6 +7067,8 @@ export interface AskCard {
   said: Said | null;
   /** A send whose outcome is unknown: sending exactly the same again replays it. */
   send: SendCommand | null;
+  /** Moved on by every change to it: a refresh started before a change lets its answer go, so it never undoes what the change confirmed. */
+  generation: number;
 }
 
 export interface AskCardsState {
@@ -7083,7 +7085,7 @@ function setAskCards(patch: Partial<AskCardsState>): void {
 }
 
 /** A card before anything is known of it. */
-export const EMPTY_CARD: AskCard = Object.freeze({ item: null, loading: false, gone: false, busy: false, said: null, send: null });
+export const EMPTY_CARD: AskCard = Object.freeze({ item: null, loading: false, gone: false, busy: false, said: null, send: null, generation: 0 });
 
 function setAskCard(item_id: string, patch: Partial<AskCard>): void {
   const card = state.askCards.cards[item_id] ?? EMPTY_CARD;
@@ -7112,8 +7114,10 @@ export async function readAskCards(item_ids: readonly string[]): Promise<void> {
   const ids = item_ids.filter(id => !state.askCards.cards[id]?.loading && !state.askCards.cards[id]?.busy);
   for (const id of ids) setAskCard(id, { loading: true });
   await Promise.all(ids.map(async id => {
+    const generation = state.askCards.cards[id]!.generation;
     const read = await readOne(account, id);
-    if (mine !== askCardsSeq || !sameAccount(account)) return;
+    // A change made meanwhile settled the card from its own read again: this one is older, and goes.
+    if (mine !== askCardsSeq || !sameAccount(account) || state.askCards.cards[id]?.generation !== generation) return;
     if ('item' in read) setAskCard(id, { item: read.item, loading: false, gone: false, failure: undefined });
     else if (read.failure.code === 'not_found') setAskCard(id, { loading: false, gone: true, failure: undefined });
     else setAskCard(id, { loading: false, failure: read.failure });
@@ -7135,7 +7139,7 @@ async function changeAskCard(item_id: string, write: () => Promise<Attempt>, lan
   const ours = () => mine === askCardsSeq && sameAccount(account);
   pickerSeq += 1;
   setAskCards({ picker: null });
-  setAskCard(item_id, { busy: true, said: null });
+  setAskCard(item_id, { busy: true, said: null, generation: card.generation + 1 });
   const { failure, unknown } = await write();
   if (!ours()) return { went: false, unknown };
   const answered = state.askCards.cards[item_id];
@@ -7148,7 +7152,7 @@ async function changeAskCard(item_id: string, write: () => Promise<Attempt>, lan
   // What it did is said once, from the read again when it depends on it (`done` as a function), as on an item page.
   const said: Said = went ? (typeof done === 'function' ? done(read, !failure) : done) : unknown && settled ? { words: message({ code: 'not_saved', retryable: true }), error: true } : changeFailed(failure!);
   // What it says now is the read's: one that failed leaves the card stale, and it says so until a read succeeds.
-  setAskCard(item_id, { busy: false, said, ...(settled ? { item: read.item, failure: undefined } : gone ? { gone: true } : { failure: read.failure }) });
+  setAskCard(item_id, { busy: false, loading: false, said, ...(settled ? { item: read.item, failure: undefined } : gone ? { gone: true } : { failure: read.failure }) });
   if (!failure || unknown) void loadHome(false);
   return { went, unknown: unknown && !went && !settled };
 }

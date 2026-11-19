@@ -35,6 +35,8 @@ let failReads: boolean;
 let meanwhile: (() => void) | null;
 /** The Authority delivers to this owner, whatever the send names (to prove the card says what it reports). */
 let deliverTo: typeof sam | null;
+/** Other cards the Authority keeps, by id. */
+let others: Map<string, OpenItemView>;
 storeLifecycle(new Date('2026-11-18T12:00:00'));
 beforeEach(() => {
   held = new Held();
@@ -44,6 +46,7 @@ beforeEach(() => {
   failReads = false;
   meanwhile = null;
   deliverTo = null;
+  others = new Map();
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
     'people.directory': () => ok({ items: [sam], next_cursor: null }),
@@ -53,6 +56,7 @@ beforeEach(() => {
       switch (request.operation) {
         case 'home': return ok({ send: [], items: [], waiting: 0, drafts: card?.state === 'unsent' ? [card] : [] });
         case 'item':
+          if (request.item_id !== DRAFT) return others.has(request.item_id as string) ? ok(others.get(request.item_id as string)) : fail('not_found');
           itemReads += 1;
           if (failReads) return fail('unavailable', { retryable: true });
           return card ? ok(card) : fail('not_found');
@@ -328,5 +332,104 @@ describe('second review: what Send did is decided by send_included, and named as
     expect(handOn).toHaveBeenCalled();
     expect(text(byTestId(thread(), 'ask-follow-up-said'))).toBe('Sent to Sam');
     expect(text(byTestId(thread(), 'ask-follow-up-line'))).toMatch(/^From this chat · With Pat/u);
+  });
+});
+
+describe('a refresh of a card that a change overtook is let go (read generations)', () => {
+  const cardState = (store: { getState(): { askCards: { cards: Record<string, { item: OpenItemView | null; loading: boolean; said: unknown }> } } }, id = DRAFT) =>
+    store.getState().askCards.cards[id]!;
+
+  /** Ask answered, its card read once; then a refresh of it whose read is held, answering `old` when released. */
+  async function refreshing(start: OpenItemView) {
+    card = start;
+    const asked = await answered();
+    await asked.store.readAskCards([DRAFT]);
+    const release = held.hold('runs');
+    void asked.store.readAskCards([DRAFT]);
+    await flush();
+    expect(cardState(asked.store).loading).toBe(true);
+    return { ...asked, release: (answer: OpenItemView = start) => release(ok(answer)) };
+  }
+
+  it('1 and 3: a send during a refresh stays sent when the earlier read answers later, settled, offering what a sent card offers', async () => {
+    const { store, thread, release } = await refreshing({ ...drafted(), owner: ownedBy(sam) });
+    await store.sendAskCard(DRAFT, true);
+    await flush();
+    expect(cardState(store).item!.state).toBe('open');
+    expect(cardState(store).loading).toBe(false);
+    release();
+    await flush();
+    expect(cardState(store).item!.state).toBe('open');
+    expect(cardState(store).loading).toBe(false);
+    expect(cardState(store).said).toEqual({ words: 'Sent to Sam' });
+    const shown = cardOf(thread());
+    expect(shown.props['data-state']).toBe('open');
+    expect(byTestId(shown, 'ask-follow-up-send')).toEqual([]);
+    expect(byTestId(shown, 'ask-follow-up-dismiss')).toEqual([]);
+    expect(byTestId(shown, 'ask-follow-up-edit')).toHaveLength(1);
+  });
+
+  it('2: an edit during a refresh keeps the new line and date when the earlier read answers later', async () => {
+    const { store, release } = await refreshing(drafted());
+    expect(await store.editAskCard(DRAFT, { expected: 'Update the pricing page for Pro', due_on: '2026-11-27' })).toBe(true);
+    release();
+    await flush();
+    expect(cardState(store).item).toMatchObject({ expected: 'Update the pricing page for Pro', due_on: '2026-11-27' });
+    expect(cardState(store).loading).toBe(false);
+  });
+
+  it('2: an owner pick during a refresh keeps the new owner when the earlier read answers later', async () => {
+    const { store, release } = await refreshing(drafted());
+    store.toggleOwnerPicker(DRAFT);
+    await flush();
+    await store.pickFollowUpOwner({ membership_id: sam.membership_id, display_name: sam.display_name });
+    await flush();
+    release();
+    await flush();
+    expect(cardState(store).item!.owner.membership_id).toBe(sam.membership_id);
+    expect(cardState(store).loading).toBe(false);
+  });
+
+  it('4: only the card that changed lets its refresh go; another card in the same answer takes its own', async () => {
+    card = { ...drafted(), owner: ownedBy(sam) };
+    const other = chatDraft(2, { owner: ownedBy(sam) });
+    others.set(other.item_id, other);
+    const { store } = await answered();
+    await store.readAskCards([DRAFT, other.item_id]);
+    const first = held.hold('runs');
+    const second = held.hold('runs');
+    void store.readAskCards([DRAFT, other.item_id]);
+    await flush();
+    await store.sendAskCard(DRAFT, true);
+    await flush();
+    first(ok({ ...drafted(), owner: ownedBy(sam) }));
+    second(ok({ ...other, expected: 'Chat task 2, changed elsewhere' }));
+    await flush();
+    expect(cardState(store).item!.state).toBe('open');
+    expect(cardState(store, other.item_id).item!.expected).toBe('Chat task 2, changed elsewhere');
+    expect(cardState(store, other.item_id).loading).toBe(false);
+  });
+
+  it('5: a refresh with no change during it still applies', async () => {
+    const { store, release } = await refreshing(drafted());
+    release({ ...drafted(), expected: 'Changed elsewhere' });
+    await flush();
+    expect(cardState(store).item!.expected).toBe('Changed elsewhere');
+    expect(cardState(store).loading).toBe(false);
+  });
+
+  it('6: a change that fails during a refresh leaves the card settled at once, as read again, and the earlier read is let go', async () => {
+    const { store, thread, release } = await refreshing({ ...drafted(), owner: ownedBy(sam) });
+    refuse = fail('unavailable', { retryable: false });
+    await store.sendAskCard(DRAFT, true);
+    await flush();
+    // Settled by the change's own read again: not sent, not loading, saying why, and Send offered again.
+    expect(cardState(store).loading).toBe(false);
+    expect(cardState(store).item!.state).toBe('unsent');
+    expect(cardState(store).said).toMatchObject({ error: true });
+    release();
+    await flush();
+    expect(cardState(store).loading).toBe(false);
+    expect(byTestId(cardOf(thread()), 'ask-follow-up-send')).toHaveLength(1);
   });
 });
