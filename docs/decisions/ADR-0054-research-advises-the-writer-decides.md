@@ -141,14 +141,18 @@ The founder chose the first on 2026-11-19.
 5. **Reports on ECHO's own run are not the writer's to suppress.** Research
    stopped early, source coverage was incomplete, evidence did not fit, and
    the checker left something out: code reports these as it does today.
-6. **A partly read list is reported by what research did, not by a label.**
-   When the released answer uses a list (places it, or a kept sentence cites
-   it) and research read the text of only some of its members, the answer
-   says so as a fact: "4 of the 8 items were read in full." Code no longer
-   writes inside the writer's sentences.
+6. **Code says nothing about a partly read list.** Today, for a list a
+   `which_say` need cites, code writes "(4 of 8 checked so far)" inside the
+   writer's sentence. That is removed and not replaced. How many members
+   research read in full goes into the notes, and the writer is told to say
+   so when an answer about a list's members rests on only some of them. The
+   founder chose this on 2026-11-19 over a code-written line ("we can just
+   remove and keep it silent"), knowing an answer can now go out without
+   that qualification. It is the one named exception to "nothing a reader
+   can see today becomes invisible".
 
-The founder accepted research's wording in the notes (1), decision 6 and the
-gate below "for now", to be revisited after a live test.
+The founder accepted research's wording in the notes (1) and the gate below
+"for now", to be revisited after a live test.
 
 ### Open for the founder: run reports are mostly not on the screen
 
@@ -161,9 +165,8 @@ and desktop work, with a coordinated client release. That is a separate
 decision for the founder and is not built here.
 
 The rule this change holds itself to instead: **nothing a reader can see
-today becomes invisible.** That is why decision 6 puts the partly-read fact
-in the answer itself, as a code-written statement that cites the list's
-rows, the same shape a prose list statement has today.
+today becomes invisible**, with the one exception the founder chose in
+decision 6.
 
 ### Left as it is, on purpose
 
