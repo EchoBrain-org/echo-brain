@@ -851,6 +851,24 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       }).render("Which tickets?");
       expect(rendered.result.response.since!.statements[0]!.private).toBe(true);
     });
+    it("keeps a sentence and a since sentence citing a placed list private when the block shows a private row the writer never saw", async () => {
+      // 80 team rows whose long participant lists fill the writer's half of the prompt, the last approver-only and past the
+      // writer's window, and the team record E81. The placed block shows every row, E80 among them.
+      const research = teamRows(listBundle(80, 1, [list("L1", ids(1, 80))], [C(["E81"])]));
+      const long = Object.freeze({ ...research, items: research.items.map(entry => entry.full ? entry : Object.freeze({ ...entry, item: { ...entry.item,
+        ...(entry.short === "E80" ? { visibility: "approver_only" as const } : {}),
+        attributes: { ...entry.item.attributes, participants: Array.from({ length: 40 }, (_, at) => `Person ${at + 1}`).join(", ") } } })) });
+      const leans = { text: "The review covers the fixture work.", evidence: ["E81", "L1"] };
+      const run = alone({
+        bundle: long, replies: [{ blocks: [{ block: "answer", sentences: [leans] }, { block: "list", list: "L1" }], not_found: [], since: [leans] }],
+        earlier: { asked_on: "2026-10-05", statements: [{ text: "The review had not met.", sources: ["Approved record 1"] }] }, answers: Q,
+      });
+      const rendered = await run.render(Q);
+      expect(run.prompt(0).lists[0].members.map((member: { id: string }) => member.id)).not.toContain("E80");
+      const part = rendered.result.response.parts[0]!;
+      expect(part.statements[0]).toMatchObject({ text: leans.text, private: true });
+      expect(rendered.result.response.since!.statements[0]!.private).toBe(true);
+    });
 
     const LIST_FALLBACK = "I found these items, but could not write the rest of the answer.";
     const Q = "Which tickets were created on October 4?";

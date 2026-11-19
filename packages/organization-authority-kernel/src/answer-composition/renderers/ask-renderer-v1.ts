@@ -569,9 +569,45 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const sentences = reply?.sentences ?? [];
         // A sentence the kept reply still rests on rows or list ids is left out, and the part says so, never what it claimed.
         if (sentences.some(restsOnRows)) writerGaps.push({ text: UNSUPPORTED_GAP, partial: true });
+        // ---- the lists the writer placed (ADR-0054): code fills each from the desk, where the writer put it ----
+        // The whole list and a where read every member, past the rows the writer was shown; members by id only the rows it
+        // was shown. A narrowing code could not read, or members that name no row it was shown, show nothing and the reader
+        // is told: a block never widens to the whole list. A where that matches none says so through the list's not-found
+        // phrase, confirmed only for a complete list whose members all record the fact.
+        const filled: { readonly list: AgenticWriterListV1; readonly block: number; readonly fill: Extract<AgenticListFillV1, { readonly kind: "rows" }> }[] = [];
+        const placedLists = new Set<AgenticListIdV1>();
+        for (const placed of reply?.placed ?? []) {
+          const shown = writerById.get(placed.list);
+          if (shown === undefined) { correct("writer_unknown_id_dropped"); continue; }
+          if (placed.unreadable === true) { listGaps.push({ text: LIST_DROPPED_GAP, partial: true }); continue; }
+          const list = views.get(placed.list)!, all = rows.get(placed.list)!;
+          const fill = agenticListFillV1({
+            placed, all, list: listById.get(placed.list)!, member_of: id => membership.in(placed.list, id),
+            // The rows it saw listed, and any row whose own text it read.
+            shown: new Set([...shown.members.map(member => member.id), ...all.filter(member => textGiven.has(member.id)).map(member => member.id)]),
+          });
+          if ((fill.kind === "rows" || fill.kind === "dropped") && fill.unknown > 0) correct("writer_unknown_id_dropped", fill.unknown);
+          if (fill.kind === "dropped") { listGaps.push({ text: LIST_DROPPED_GAP, partial: true }); continue; }
+          placedLists.add(placed.list);
+          if (fill.kind === "none_matched") {
+            if (!fill.testable) listGaps.push({ text: UNRECORDED_GAP, partial: true });
+            selectionNotFound.push({ text: agenticListSelectionNotFoundV1(nounOf(list), list.filter, fill.where), confirmed: fill.confirmed });
+          }
+          if (fill.kind === "rows") filled.push({ list, block: placed.block, fill });
+        }
         // It stands on the items whose text the writer read (W1); after them, never as support, it cites the rows whose facts it
-        // may carry: each row it cites that the writer saw, and each private row the writer saw of a list it cites (W6).
-        const rowsOf = (id: string) => shownRows.has(id) ? [id] : writerById.get(parseAgenticListIdV1(id) ?? "L0")?.members.map(member => member.id).filter(short => privateItem(byShort.get(short)!.item)) ?? [];
+        // may carry: each row it cites that the writer saw, and each private row of a list it cites that the writer saw or a
+        // block placing that list shows (W6, ADR-0054), so a sentence leaning on a list is as private as every row of it the
+        // reader is shown.
+        const placedRows = new Map<string, readonly string[]>();
+        for (const { list, fill } of filled) placedRows.set(list.id, [...(placedRows.get(list.id) ?? []), ...fill.selected.map(member => member.id)]);
+        const rowsOf = (id: string) => {
+          if (shownRows.has(id)) return [id];
+          const list = parseAgenticListIdV1(id);
+          const shown = list === null ? undefined : writerById.get(list);
+          if (shown === undefined) return [];
+          return [...new Set([...shown.members.map(member => member.id), ...(placedRows.get(shown.id) ?? [])])].filter(short => privateItem(byShort.get(short)!.item));
+        };
         /** The sentence with code's note within a statement's 4 KiB: one too long to take the note whole, a wide row, is cut, never the note. */
         const fittedNote = (text: string, note: string) => {
           const whole = withNote(text, note);
@@ -650,32 +686,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             if (whole.has(id) || (missing.length > 0 && missing.length === views.get(id)!.count)) fallbackLists.push({ id });
             else if (missing.length > 0) fallbackLists.push({ id, members: missing });
           }
-        }
-        // ---- the lists the writer placed (ADR-0054): code fills each from the desk, where the writer put it ----
-        // The whole list and a where read every member, past the rows the writer was shown; members by id only the rows it
-        // was shown. A narrowing code could not read, or members that name no row it was shown, show nothing and the reader
-        // is told: a block never widens to the whole list. A where that matches none says so through the list's not-found
-        // phrase, confirmed only for a complete list whose members all record the fact.
-        const filled: { readonly list: AgenticWriterListV1; readonly block: number; readonly fill: Extract<AgenticListFillV1, { readonly kind: "rows" }> }[] = [];
-        const placedLists = new Set<AgenticListIdV1>();
-        for (const placed of reply?.placed ?? []) {
-          const shown = writerById.get(placed.list);
-          if (shown === undefined) { correct("writer_unknown_id_dropped"); continue; }
-          if (placed.unreadable === true) { listGaps.push({ text: LIST_DROPPED_GAP, partial: true }); continue; }
-          const list = views.get(placed.list)!, all = rows.get(placed.list)!;
-          const fill = agenticListFillV1({
-            placed, all, list: listById.get(placed.list)!, member_of: id => membership.in(placed.list, id),
-            // The rows it saw listed, and any row whose own text it read.
-            shown: new Set([...shown.members.map(member => member.id), ...all.filter(member => textGiven.has(member.id)).map(member => member.id)]),
-          });
-          if ((fill.kind === "rows" || fill.kind === "dropped") && fill.unknown > 0) correct("writer_unknown_id_dropped", fill.unknown);
-          if (fill.kind === "dropped") { listGaps.push({ text: LIST_DROPPED_GAP, partial: true }); continue; }
-          placedLists.add(placed.list);
-          if (fill.kind === "none_matched") {
-            if (!fill.testable) listGaps.push({ text: UNRECORDED_GAP, partial: true });
-            selectionNotFound.push({ text: agenticListSelectionNotFoundV1(nounOf(list), list.filter, fill.where), confirmed: fill.confirmed });
-          }
-          if (fill.kind === "rows") filled.push({ list, block: placed.block, fill });
         }
         const naming: Naming[] = fallbackLists.flatMap(({ id, members }): Naming[] => {
           const list = views.get(id)!, all = rows.get(id)!, noun = nounOf(list);
