@@ -8,6 +8,13 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
  * that was not released.
  */
 
+/**
+ * The kinds of item a drafted follow-up may be about: those an open item's live read can open. The one list for the
+ * renderer that checks a draft and the sink that saves it; the Authority baseline's insert trigger names the same kinds
+ * as the database's own guard.
+ */
+export const ASK_FOLLOW_UP_ABOUT_KINDS_V1: readonly string[] = Object.freeze(["ticket", "page", "approved_record", "source_revision"]);
+
 /** One follow-up the writer drafted, as code keeps it after its checks. */
 export interface AskFollowUpDraftV1 {
   /** Its open-item id (`askFollowUpItemIdV1`): fixed by the request and the draft's place, so saving it twice writes it once. */
