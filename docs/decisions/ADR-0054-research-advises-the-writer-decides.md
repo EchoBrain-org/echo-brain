@@ -196,6 +196,14 @@ next project), where "Ask cannot do this" becomes the absence of an action.
   selects nothing, and the reader is told something was left out. (ADR-0041
   read an unreadable `where` as the whole list. With no grammar holding the
   reply's shape, one mistyped selector must not publish every item.)
+- **A list block that hand-picks no member is the writer saying none
+  answers.** It is a usable reply, the fallback does not run, and the answer
+  takes the same path as a narrowing that matched nothing.
+- **An entry that cites more items than it may is left out whole.** A
+  sentence, point, row, event, fact or quote may cite 12 items. The parser
+  used to keep the first 12 and release the entry, which could strip a
+  private citation and release the sentence as public. It now drops the
+  entry, as the 40-citation rule already did after a list id is expanded.
 - **A list block has no title.** Today's layout drops a list's title, and a
   hand-picked list titled "Tickets mentioning the recall" would be a claim
   its rows do not support. The writer says why it chose the members in a
@@ -238,8 +246,9 @@ with their tests:
 
 - **Visibility follows citations, whatever the layout.** A sentence or a
   `since` sentence that cites a list inherits the visibility of every row of
-  that list the reader is shown, so an approver-only fact does not stay
-  readable in saved history after access is withdrawn.
+  that list the writer saw and of every row a placed block shows the reader,
+  so an approver-only fact does not stay readable in saved history after
+  access is withdrawn.
 - **A statement over the citation limit (40) is dropped whole,** never
   released with some of its citations.
 - **A follow-up draft's `about` points only at an item the writer was
