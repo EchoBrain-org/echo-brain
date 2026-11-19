@@ -438,7 +438,7 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
   usePickerFocus(page.picker?.item_id, box, said);
   useSaidFocus(page.said, said);
   const item = page.item && shownItem(page.item, page.live);
-  if (!item) {
+  if (!item && !page.gone) {
     return (
       <div class="column center" data-testid="follow-up-loading" aria-busy={page.loading}>
         {page.failure ? <>
@@ -448,12 +448,13 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
       </div>
     );
   }
-  if (page.gone) {
+  // Gone (with no copy, the only way here): it no longer exists for you, whatever its kind.
+  if (page.gone || !item) {
     return (
       <div class="column center" ref={box} data-testid="follow-up-gone">
-        <h1 class="card-title" tabIndex={-1}>{itemTitle(item)}</h1>
-        {/* Gone, nothing acts on it: on a follow-up from a chat (ADR-0053) no Undo either, only Back. */}
-        <SaidLine said={page.said && item.run_id === null ? { ...page.said, undo: undefined } : page.said} testid="follow-up-said" line={said} />
+        <h1 class="card-title" tabIndex={-1}>{item ? itemTitle(item) : 'Follow-up'}</h1>
+        {/* Gone, nothing acts on it: no Undo either, only Back. */}
+        <SaidLine said={page.said && { ...page.said, undo: undefined }} testid="follow-up-said" line={said} />
         <div class="notice">You no longer see this follow-up</div>
         <button type="button" class="link-button" onClick={closeFollowUp}>Back</button>
       </div>

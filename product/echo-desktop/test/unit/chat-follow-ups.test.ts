@@ -455,3 +455,68 @@ describe('last review: a meeting send not read again names no one, and a gone ch
     expect(buttons()).toEqual(['Back']);
   });
 });
+
+describe('final round: gone clears on a good read, a meeting send never names the remembered owner, and not_found is gone for any page', () => {
+  const meeting = (owner = MINA): OpenItemView => followUp(1, { approver: me, owner: { ...owner, match: 'name' }, state: 'unsent', sent_at: null, state_set_at: null,
+    state_set_by: null, send_included: null, waits_on: 'approver', can: { set_state: false, assign: true, edit: false, send: false } });
+  async function page(item: OpenItemView | null, id = item?.item_id ?? 'itm_chat-0001', kept = true) {
+    const store = await startStore();
+    if (kept && item) items.set(item.item_id, item);
+    await store.openFollowUp(id, item);
+    await flush();
+    const { FollowUp } = await import('../../src/renderer/screens/follow-ups.js');
+    const shown = () => render(FollowUp({ state: store.getState(), page: store.followUpShown() as ItemPage }));
+    return { store, shown, buttons: () => elements(shown()).filter(node => node.type === 'button').map(text) };
+  }
+  const goneWords = 'You no longer see this follow-up';
+
+  it('a gone chat follow-up read again successfully shows the card and its actions again', async () => {
+    const { store, shown, buttons } = await page(owned(1), 'itm_chat-0001', false);
+    expect((store.followUpShown() as ItemPage).gone).toBe(true);
+    // Assigned back to you: its notification reads the open page again.
+    items.set('itm_chat-0001', owned(1));
+    store.retryFollowUp();
+    await flush();
+    const now = store.followUpShown() as ItemPage;
+    expect(now.gone).toBeFalsy();
+    expect(now.failure).toBeUndefined();
+    expect(text(shown())).not.toContain(goneWords);
+    expect(buttons()).toContain('Send to Mina');
+  });
+
+  it('a meeting send never shows the remembered owner, not even for a moment, read again or not', async () => {
+    for (const [reads, last] of [[false, 'Sent'], [true, 'Sent to Rafael']] as const) {
+      items.clear();
+      const { store } = await page(meeting(MINA));
+      items.set(followUp(1).item_id, meeting(RAFAEL));
+      failItem = !reads;
+      const seen: string[] = [];
+      const stop = store.subscribe(() => { const view = store.followUpShown(); if (view?.kind === 'item' && view.said) seen.push(view.said.words); });
+      await store.sendFollowUp(true);
+      await flush();
+      stop();
+      failItem = false;
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.filter(words => words.includes('Mina'))).toEqual([]);
+      expect(seen.at(-1)).toBe(last);
+    }
+  });
+
+  it('a follow-up opened by its id alone that does not exist for you is gone, with only Back', async () => {
+    const { store, shown, buttons } = await page(null, 'itm_chat-0009');
+    expect((store.followUpShown() as ItemPage).gone).toBe(true);
+    expect(text(shown())).toContain(goneWords);
+    expect(buttons()).toEqual(['Back']);
+  });
+
+  it('a meeting follow-up that does not exist for you is gone too (it used to offer Try again); any other failure still does', async () => {
+    const { store, shown, buttons } = await page(meeting(MINA), followUp(1).item_id, false);
+    expect((store.followUpShown() as ItemPage).gone).toBe(true);
+    expect(text(shown())).toContain(goneWords);
+    expect(buttons()).toEqual(['Back']);
+    failItem = true;
+    const other = await page(meeting(MINA));
+    expect((other.store.followUpShown() as ItemPage).gone).toBeFalsy();
+    expect(other.buttons()).toContain('Try again');
+  });
+});
