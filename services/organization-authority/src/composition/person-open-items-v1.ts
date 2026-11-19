@@ -254,7 +254,7 @@ function currentOf(item: DeskItem): PersonOpenItemCurrentV1 | undefined {
   return Object.freeze({ citation, says_now, ...(assignee === '' ? {} : { assignee }), ...(status === '' ? {} : { status }), ...(due_at === '' ? {} : { due_at }) });
 }
 
-export { currentOf as openItemCurrentV1, ownAction as openItemIsOwnActionV1, nameOf as openItemNameV1, recordsOf as openItemRecordsV1 };
+export { currentOf as openItemCurrentV1, fromChat as openItemIsFromChatV1, ownAction as openItemIsOwnActionV1, nameOf as openItemNameV1 };
 
 /** The API's own result check on everything this service answers. */
 function checked<K extends keyof PersonRunsResultsV1>(operation: K, value: unknown): PersonRunsResultsV1[K] {
@@ -534,18 +534,29 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
     }));
   };
 
-  /** The item, when the policy lets this viewer take `right` on it. */
-  const actable = (viewer: Viewer, itemId: string, right: 'set_state' | 'assign'): ImpactItemRowV1 => {
+  /** The item and the policy's answer for this viewer; not_found when it is missing, `accept` refuses it, or the viewer cannot see it. */
+  const seen = (viewer: Viewer, itemId: string, accept: (row: ImpactItemRowV1) => boolean = () => true): Assessed => {
     const row = options.items.read(itemId);
-    if (row === undefined) throw notFound();
+    if (row === undefined || !accept(row)) throw notFound();
     const entry = assess(viewer, [row]).assessed[0];
     if (entry === undefined || !entry.access.see_row) throw notFound();
-    if (!entry.access[right]) {
+    return entry;
+  };
+  /** The caller's own follow-up from a chat (ADR-0053): anyone else, its owner included, is told it is not there. */
+  const ownChatFollowUp = (viewer: Viewer, itemId: string): Assessed => {
+    const entry = seen(viewer, itemId, fromChat);
+    if (!approvedBy(entry.row, viewer)) throw notFound();
+    return entry;
+  };
+  /** The item, when the policy lets this viewer take `right` on it. */
+  const actable = (viewer: Viewer, itemId: string, right: 'set_state' | 'assign'): ImpactItemRowV1 => {
+    const { row, facts, access } = seen(viewer, itemId);
+    if (!access[right]) {
       // An unsent item is its approver's to send first; only they may pick its owner before Send (F2). Whoever could act on it once
       // sent hears that; anyone else gets not_found.
-      if (row.state === 'unsent' && openItemAccessV1({ ...entry.facts, state: 'open', sent_to_owner: true })[right]) throw new AuthorityOperationError('invalid_request', 'Send it first');
+      if (row.state === 'unsent' && openItemAccessV1({ ...facts, state: 'open', sent_to_owner: true })[right]) throw new AuthorityOperationError('invalid_request', 'Send it first');
       // A follow-up from a chat its creator dismissed is final (ADR-0053): they still see it, and hear why nothing moves it.
-      if (fromChat(row) && row.send_included === false) throw new AuthorityOperationError('conflict', 'The follow-up was dismissed');
+      if (access.dismissed_draft) throw new AuthorityOperationError('conflict', 'The follow-up was dismissed');
       throw notFound();
     }
     return row;
@@ -602,7 +613,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         .sort((left, right) => ascending(waitingSince(right.row), waitingSince(left.row)) || oldestFirst(left.row, right.row))
         .slice(0, PERSON_HOME_ROWS_V1);
       const draftIds = new Set(drafts.map(row => row.item_id));
-      const drafted = context.assessed.filter(entry => draftIds.has(entry.row.item_id) && entry.row.state === 'unsent' && entry.access.see_row && entry.access.send);
+      const drafted = context.assessed.filter(entry => draftIds.has(entry.row.item_id) && entry.access.send);
       // One desk for both lists: the handoffs, then the drafts.
       const presented = await present(viewer, context, [...shown, ...drafted], { signal: input.signal, live: !rowsOnly });
       return checked('home', {
@@ -768,14 +779,10 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const viewer = viewerOf(input.access_token, input.signal);
       const { request } = input;
       const changed = () => new AuthorityOperationError('conflict', 'The follow-up changed. Open it again.');
-      const row = options.items.read(request.item_id);
-      if (row === undefined || !fromChat(row)) throw notFound();
-      const entry = assess(viewer, [row]).assessed[0];
-      // Its creator alone sends it: anyone else, its owner included, is told nothing more than that it is not there.
-      if (entry === undefined || !entry.access.see_row || !approvedBy(row, viewer)) throw notFound();
+      const { row, access } = ownChatFollowUp(viewer, request.item_id);
       // A retry of a committed send is answered before anything is checked again.
       const replay = row.send_command_id === request.command_id;
-      if (!replay && !entry.access.send) throw changed();
+      if (!replay && !access.send) throw changed();
       // Sent, it goes to the owner picked here, else its current one: either must be an active member. One nobody owns yet is
       // refused below.
       if (!replay && request.include && (request.owner_membership_id !== undefined || row.owner_match !== 'approver')) {
@@ -795,12 +802,9 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
     async edit(input: Parameters<PersonOpenItemsApplicationV1['edit']>[0]) {
       const viewer = viewerOf(input.access_token, input.signal);
       const { request } = input;
-      const row = options.items.read(request.item_id);
-      if (row === undefined || !fromChat(row)) throw notFound();
-      const entry = assess(viewer, [row]).assessed[0];
-      if (entry === undefined || !entry.access.see_row || !approvedBy(row, viewer)) throw notFound();
+      const { row, access } = ownChatFollowUp(viewer, request.item_id);
       const closed = () => new AuthorityOperationError('conflict', 'The follow-up is closed. Reopen it to change it.');
-      if (!entry.access.edit) throw closed();
+      if (!access.edit) throw closed();
       const updated = options.items.edit(row.item_id, {
         ...(request.expected === undefined ? {} : { expected: request.expected }), ...(request.due_on === undefined ? {} : { due_on: request.due_on }),
       });
