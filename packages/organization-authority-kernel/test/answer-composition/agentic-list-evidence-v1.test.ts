@@ -4,7 +4,7 @@ import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "../..
 import {
   AGENTIC_LIST_STATEMENT_BYTES_V1,
   agenticCalendarDayV1, agenticListCheckedNoteV1, agenticListCompleteV1, agenticListEndUnverifiedV1, agenticListFillV1, agenticListFilterNoticeV1, agenticListFilterPhraseV1, agenticListIdV1,
-  agenticListMembersNounV1, agenticListMembershipV1, agenticListNounV1, agenticListReadNoteV1, agenticListSelectionNotFoundV1, agenticListSelectV1, agenticListShownNoteV1,
+  agenticListMembersNounV1, agenticListMembershipV1, agenticListNounV1, agenticListSelectionNotFoundV1, agenticListSelectV1, agenticListShownNoteV1,
   agenticListStatementsV2, agenticListTableV1,
   agenticNeedReadsListV1, agenticOpenReadsV1, agenticPlanListsV1, agenticWriterListMemberV1, agenticWriterListV1, createAgenticListEvidenceV1, parseAgenticListIdV1,
   type AgenticAnswerListUseV1, type AgenticListEvidenceInputV1, type AgenticListEvidenceV1, type AgenticListFilterApplicationV1, type AgenticListIdV1,
@@ -459,7 +459,6 @@ describe("a placed list (ADR-0054)", () => {
   });
   const all = Object.freeze([row("E1", "open", "Dana Lee"), row("E2", "open", "Sam Roy"), row("E3", "done", "Dana Lee")]);
   const rowWithoutOwner = row("E4", "open");
-  const PAGES_NOUN = PAGES;
   /** Fills a placed L1 over `members`, every one shown, from a complete list unless `list` says otherwise. */
   const fill = (placed: Omit<AgenticPlacedListV1, "list">, list: Partial<Pick<AgenticListEvidenceV1, "complete" | "unchecked" | "filter">> = {}, members: readonly AgenticWriterListMemberV1[] = all) =>
     agenticListFillV1({
@@ -487,12 +486,7 @@ describe("a placed list (ADR-0054)", () => {
     expect(fill({ where }, {}, [...all, rowWithoutOwner])).toMatchObject({ testable: false, confirmed: false });
   });
 
-  it("says how many members were read in full only when some were and some were not", () => {
-    const list = { checked: 4, count: 8, complete: true, filter: { date_field: "created", since: "2026-10-04", until: "2026-10-04" } } as const;
-    expect(agenticListReadNoteV1(list, PAGES_NOUN)).toBe("4 of the 8 Confluence pages created on October 4, 2026 were read in full.");
-    expect(agenticListReadNoteV1({ ...list, complete: false }, PAGES_NOUN)).toBe("4 of at least 8 Confluence pages created on October 4, 2026 were read in full.");
-    expect(agenticListReadNoteV1({ ...list, checked: 1, count: 2 }, PAGES_NOUN)).toContain("1 of the 2 Confluence pages");
-    expect([agenticListReadNoteV1({ ...list, checked: 0 }, PAGES_NOUN), agenticListReadNoteV1({ ...list, checked: 8 }, PAGES_NOUN)]).toEqual([undefined, undefined]);
+  it("says how many rows are shown only when fitting cut some", () => {
     expect([agenticListShownNoteV1(7, 12), agenticListShownNoteV1(12, 12)]).toEqual(["(first 7 shown)", undefined]);
   });
 });

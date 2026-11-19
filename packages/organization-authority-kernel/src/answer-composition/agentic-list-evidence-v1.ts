@@ -875,16 +875,6 @@ export function agenticListSelectionNotFoundV1(noun: AgenticListNounFormsV1, fil
   return `${noun.plural}${phraseAfter(noun, filter)} ${condition}`;
 }
 
-/**
- * What code says, as its own statement, of a list the answer uses when research read the text of some of its members
- * but not all (ADR-0054): "4 of the 8 Confluence pages created on October 4, 2026 were read in full."; for a list not
- * read to its end, "4 of at least 8 ...". It states what research did, and never writes inside the writer's sentences.
- */
-export function agenticListReadNoteV1(list: Pick<AgenticWriterListV1, "checked" | "count" | "complete" | "filter">, noun: AgenticListNounFormsV1): string | undefined {
-  if (list.checked <= 0 || list.checked >= list.count) return undefined;
-  return `${list.checked} of ${list.complete ? "the" : "at least"} ${list.count} ${noun.plural}${phraseAfter(noun, list.filter)} ${list.checked === 1 ? "was" : "were"} read in full.`;
-}
-
 /** What a placed list's caption adds when fitting the response cut some of its selected rows: "(first 7 shown)". */
 export function agenticListShownNoteV1(shown: number, selected: number): string | undefined {
   return shown < selected ? `(first ${shown} shown)` : undefined;
