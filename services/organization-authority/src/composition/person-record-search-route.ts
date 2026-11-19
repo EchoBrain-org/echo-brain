@@ -10,6 +10,7 @@ import {
   type EvidenceDatesV1,
 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { isCalendarDay } from "@echo-brain/organization-api/validation";
 import { localDateV1 } from "@echo-brain/organization-processing/core";
 import {
   canonicalJson,
@@ -1482,7 +1483,10 @@ export function createPersonRecordSearchRouteV1(
       const owners = confirmedOwners(record.reference);
       const zone = record.brief.meeting.time?.timezone;
       return Object.freeze(record.brief.actions.map((action) => {
-        const due_on = action.due_at === null ? null : localDateV1(action.due_at, zone);
+        // Only a real calendar day in the contract's form: a card's day must never fail the run that stores it (a year the
+        // local form writes with fewer than four digits gives none).
+        const day = action.due_at === null ? null : localDateV1(action.due_at, zone);
+        const due_on = isCalendarDay(day) ? day : null;
         return Object.freeze({ signal_id: action.id, text: releasableBodyV1(action.text), ...(action.due_at === null ? {} : { due_at: action.due_at }),
           ...(due_on === null ? {} : { due_on }), owner: owners.get(action.id) ?? null });
       }));

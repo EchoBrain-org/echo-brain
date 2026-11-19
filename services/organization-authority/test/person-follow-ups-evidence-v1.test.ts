@@ -663,11 +663,26 @@ describe('follow-ups from a chat as Ask evidence (ADR-0053)', () => {
   });
 
   it("states a meeting action's own day as its due date, with its line the action's words only", async () => {
-    const f = await sentFixture({ meetingActions: [{ signal_id: 'act-1', text: 'Send the vendor the plan', owner: 'Mina Patel', due_at: '2026-11-19T15:00:00.000Z', due_on: '2026-11-20' }] });
+    const f = await sentFixture({ meetingActions: [{ signal_id: 'act-1', text: 'Send the vendor the plan', owner: 'Mina Patel', due_at: '2026-11-20T12:00:00.000Z', due_on: '2026-11-20' }] });
     const found = (await list(askDesk(f, 'ari').desk)).items.find(item => item.label === 'Send the vendor the plan');
     expect(found?.attributes).toMatchObject({ due_at: '2026-11-20' });
     // The ticket the impact card found still shows its own tool's due date.
     expect((await list(askDesk(f, 'ari').desk)).items.find(item => item.id === `follow_up_${f.ticket.item_id}`)?.attributes).toMatchObject({ due_at: '2026-10-30' });
+  });
+
+  it('finds a card by its own day, a meeting action\'s or a chat follow-up\'s, and no row without one', async () => {
+    const f = await sentFixture({ meetingActions: [{ signal_id: 'act-1', text: 'Send quote', owner: 'Mina Patel', due_at: '2026-11-20T12:00:00.000Z', due_on: '2026-11-20' }] });
+    const chat = askFollowUpItemIdV1('ask-by-day', 0);
+    const other = askFollowUpItemIdV1('ask-by-day', 1);
+    createAskFollowUpSinksV1({ items: f.items, people: f.directory })(f.openItemsOptions.sessions.authenticateAccess({ access_token: 'ari' })).save([
+      { item_id: chat, task: 'Book the pilot room', due_on: '2026-11-20' },
+      { item_id: other, task: 'Book the pilot hall', due_on: '2026-11-21' },
+    ]);
+    const { desk } = askDesk(f, 'ari');
+    expect(titles(await search(desk, '2026-11-20'))).toEqual(['Book the pilot room', 'Send quote']);
+    expect(titles(await search(desk, '2026-11-21'))).toEqual(['Book the pilot hall']);
+    // The ticket's own tool date is read live, never held: it does not find the ticket.
+    expect(titles(await search(desk, '2026-10-30'))).toEqual([]);
   });
 
   it('names no owner for a chat card that never reached one, whatever its state', async () => {
