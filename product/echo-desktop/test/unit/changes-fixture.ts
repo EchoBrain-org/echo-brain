@@ -23,6 +23,16 @@ export const at = (n: number) => new Date(Date.UTC(2026, 9, 14, 10, n)).toISOStr
  */
 export const CLOCK = new Date(Date.UTC(2026, 9, 14, 9, 30));
 
+/** Your follow-up from a chat (ADR-0053), not sent yet: no run, nobody owns it yet, due Nov 20. */
+export function chatDraft(n = 1, extra: Partial<OpenItemView> = {}): OpenItemView {
+  return {
+    item_id: `itm_chat-000${n}`, run_id: null, kind: 'action', relation: 'needs_updating', expected: `Chat task ${n}`, due_on: '2026-11-20',
+    approver: ME, owner: { ...ME, match: 'approver' }, waits_on: 'approver', state: 'unsent', created_at: `2026-11-18T1${n}:00:00.000Z`, sent_at: null,
+    state_set_at: null, state_set_by: null, owner_set_at: null, owner_set_by: null, send_included: null,
+    can: { set_state: false, assign: true, edit: true, send: true }, reach: 'not_read', ...extra,
+  };
+}
+
 /** A meeting's action Mina approved and sent to you ("member") at `at(n)`. */
 export function followUp(n: number, extra: Partial<OpenItemView> = {}): OpenItemView {
   return {

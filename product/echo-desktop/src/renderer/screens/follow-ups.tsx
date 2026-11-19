@@ -22,7 +22,7 @@ import { useKeptPlace } from './items.js';
 import { ProgressBar } from './progress-bar.js';
 // Follow-ups from a chat (ADR-0053).
 import { useState } from 'preact/hooks';
-import { dueOnWords, FROM_CHAT } from '../needs.js';
+import { dueOnWords, FROM_CHAT, fromChat } from '../needs.js';
 import { dismissable, editFollowUp, pageActs } from '../store.js';
 import { EditFollowUp } from './edit-follow-up.js';
 
@@ -187,7 +187,7 @@ function Row({ state, list, item, label, name, now, ticking }: {
       <button type="button" class="follow-up-open" aria-busy={reading || undefined}>
         <span class={`follow-up-title${reading ? ' reading-title' : ''}`} data-reading={reading || undefined}>{label}</span>
         {item.kind !== 'action' && <span class="follow-up-kind" title={itemKind(item, state.tools?.items)}>{KIND_ICON[item.kind]()}</span>}
-        {item.run_id === null && <span class="follow-up-from" data-testid="follow-up-from">{FROM_CHAT}</span>}
+        {fromChat(item) && <span class="follow-up-from" data-testid="follow-up-from">{FROM_CHAT}</span>}
       </button>
       <Owner state={state} busy={list.busy} picking={list.picker?.item_id === item.item_id} item={item} name={name} flat />
       <span class="follow-up-tile" title={projects.length > 0 ? projects.map(project => project.name).join(', ') : undefined}>
@@ -381,7 +381,7 @@ function Why({ state, item, reading }: { state: State; item: OpenItemView; readi
           <span class={`card-delta-now${reading ? ' reading-title' : ''}`}>{reading ? 'Reading…' : saysNow(item)}</span>
           {facts && <span class="card-delta-facts faint" data-testid="follow-up-facts">{facts}</span>}
         </div>
-        {item.expected !== null && <div><span class="card-delta-label needs">{item.run_id === null ? 'Asked for' : 'Meeting decided'}</span><span>{item.expected}</span></div>}
+        {item.expected !== null && <div><span class="card-delta-label needs">{fromChat(item) ? 'Asked for' : 'Meeting decided'}</span><span>{item.expected}</span></div>}
       </div>
       <OpenInTool state={state} item={item} />
     </section>
@@ -477,7 +477,7 @@ export function FollowUp({ state, page }: { state: State; page: ItemPage }) {
               {itemKind(item, state.tools?.items)} · {decision
                 ? <button type="button" class="link-button inline" onClick={() => void openFollowUps('record', decision.record_sha256, decision.title)}>
                   from {decision.title}{day ? `, ${day}` : ''}</button>
-                : item.run_id === null ? FROM_CHAT : `Sent by ${item.approver.membership_id === me ? 'you' : item.approver.name}`}
+                : fromChat(item) ? FROM_CHAT : `Sent by ${item.approver.membership_id === me ? 'you' : item.approver.name}`}
               {due && <span data-testid="follow-up-due"> · {due}</span>}
             </div>
             {item.can.edit && pageActs(page) && <Edit page={page} item={item} />}
