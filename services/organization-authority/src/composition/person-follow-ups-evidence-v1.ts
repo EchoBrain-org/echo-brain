@@ -4,6 +4,7 @@ import {
   validatePersonFollowUpEvidenceV1,
   type PersonFollowUpEvidenceV1,
 } from '@echo-brain/organization-api';
+import { isCalendarDay } from '@echo-brain/organization-api/validation';
 import { impactCardLineV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -214,15 +215,19 @@ function keyOf(word: string): string | undefined {
  * A search's terms (`evidenceTermsV1`) and ticket keys. A ticket key stays one key, matched against a ticket item's own
  * key and against the same key-shaped word where ECHO's text holds it.
  */
-function queryOf(query: string): { readonly terms: readonly string[]; readonly keys: readonly string[] } {
+function queryOf(query: string): { readonly terms: readonly string[]; readonly keys: readonly string[]; readonly days: readonly string[] } {
   const keys = new Set<string>();
   const terms = new Set<string>();
+  const days = new Set<string>();
   for (const word of query.normalize('NFC').trim().split(/\s+/u)) {
     const key = keyOf(word);
     if (key !== undefined) { keys.add(key); continue; }
+    // A calendar day stays one day, matched against a card's own due date, never as its year, month and day apart.
+    const day = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+    if (isCalendarDay(day)) { days.add(day); continue; }
     for (const term of evidenceTermsV1(word)) terms.add(term);
   }
-  return { terms: [...terms], keys: [...keys] };
+  return { terms: [...terms], keys: [...keys], days: [...days] };
 }
 /** Words of ECHO-held text shaped like a ticket key, such as the build name "EVT-2", as written: a query's key matches them too. */
 function keysOf(values: readonly (string | null | undefined)[]): ReadonlySet<string> {
@@ -459,7 +464,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       const limit = evidencePageSizeV1(input.limit, FOLLOW_UPS_LIMITS_V1.search_hits);
       if (typeof input.query !== 'string') invalid('query is required');
       const live = input.live !== false;
-      const { terms, keys } = queryOf(input.query);
+      const { terms, keys, days } = queryOf(input.query);
       const view = visible(input.signal);
       const { context, decisionPart } = view;
       // Only ECHO-held text the policy shows the asker: the decision's title and first line where the decision is shown, the
@@ -472,7 +477,9 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
         const words = evidenceWordsV1(held);
         const written = keysOf(held);
         // A key-shaped word ECHO holds as written ("EVT-2") is one of its words; the key's parts alone are not.
-        const matched = terms.filter(term => words.has(term)).length + keys.filter(key => written.has(key)).length;
+        // A card's own due date (a meeting action's day, or a chat follow-up's) is ECHO-held too.
+        const matched = terms.filter(term => words.has(term)).length + keys.filter(key => written.has(key)).length
+          + days.filter(day => entry.row.due_on === day).length;
         const key = ticketKeyOf(entry.row);
         const keyed = key !== undefined && keys.includes(key);
         // Ranked by ECHO's words alone: a key, which the asker may not be able to open, never moves or cuts a hit.
