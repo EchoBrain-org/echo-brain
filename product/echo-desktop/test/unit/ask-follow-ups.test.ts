@@ -3,6 +3,7 @@
 // date, sends it on its own or dismisses it; Copy answer writes its line.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, OpenItemView } from '../../src/shared/protocol.js';
+import { chatDraft } from './changes-fixture.js';
 import { ACCOUNT, asking as askingWith, byTestId, click, elements, fail, flush, Held, ok, plainHooks, project, rpcFor, storeLifecycle, text, type Node } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -15,12 +16,7 @@ const sam = { membership_id: 'mem_00000000-0000-4000-8000-000000000007', display
 const pat = { membership_id: 'mem_00000000-0000-4000-8000-000000000009', display_name: 'Pat Kim' };
 const ownedBy = (person: typeof sam) => ({ ...person, name: person.display_name, active: true, match: 'picked' as const });
 /** Your draft from this chat: not sent, nobody owns it yet, due Nov 20. */
-const drafted = (): OpenItemView => ({
-  item_id: DRAFT, run_id: null, kind: 'action', relation: 'needs_updating', expected: 'Update the pricing page', due_on: '2026-11-20',
-  approver: me, owner: { ...me, match: 'approver' }, waits_on: 'approver', state: 'unsent', created_at: '2026-11-18T10:00:00.000Z', sent_at: null,
-  state_set_at: null, state_set_by: null, owner_set_at: null, owner_set_by: null, send_included: null,
-  can: { set_state: false, assign: true, edit: true, send: true }, reach: 'not_read',
-});
+const drafted = (): OpenItemView => chatDraft(1, { expected: 'Update the pricing page', created_at: '2026-11-18T10:00:00.000Z' });
 const answer: Answer = {
   scope: { kind: 'global' }, sources: [], outcome: 'answered', receipt: { looked_through: 1 }, follow_ups: [DRAFT],
   parts: [{ question: 'Give the pricing page to Sam', status: 'answered', statements: [{ text: 'Nobody picked up the pricing page update.', citation_indexes: [], private: false }],

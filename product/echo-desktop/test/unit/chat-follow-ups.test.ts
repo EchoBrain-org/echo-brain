@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
 import type { OpenItemView } from '../../src/shared/protocol.js';
-import { followUp, MINA, RAFAEL } from './changes-fixture.js';
+import { chatDraft, followUp, MINA, RAFAEL } from './changes-fixture.js';
 import { ACCOUNT, byTestId, click, elements, EMPTY_SUMMARY, fail, flush, Held, ok, plainHooks, render, rpcFor, startStore, storeLifecycle, text } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -12,12 +12,7 @@ vi.mock('preact/hooks', original => plainHooks(original));
 
 const me = { membership_id: ACCOUNT.membership_id, name: 'Fixture', active: true };
 /** Your draft from a chat, not sent: nobody owns it yet, due Nov 20. */
-const draft = (n = 1, patch: Partial<OpenItemView> = {}): OpenItemView => ({
-  item_id: `itm_chat-000${n}`, run_id: null, kind: 'action', relation: 'needs_updating', expected: `Chat task ${n}`, due_on: '2026-11-20',
-  approver: me, owner: { ...me, match: 'approver' }, waits_on: 'approver', state: 'unsent', created_at: `2026-11-18T1${n}:00:00.000Z`, sent_at: null,
-  state_set_at: null, state_set_by: null, owner_set_at: null, owner_set_by: null, send_included: null,
-  can: { set_state: false, assign: true, edit: true, send: true }, reach: 'not_read', ...patch,
-});
+const draft = chatDraft;
 const owned = (n = 1) => draft(n, { owner: { ...MINA, active: true, match: 'picked' } });
 
 type Runs = { operation: string } & Record<string, unknown>;
