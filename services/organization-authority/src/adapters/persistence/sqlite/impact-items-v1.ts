@@ -321,19 +321,9 @@ export class SqliteImpactItemsV1 {
         return Object.freeze({ kind: 'stale' as const });
       }
       const timestamp = this.timestamp();
-      const move = this.database.prepare(`UPDATE authority_impact_items_v1 SET state=?, sent_at=?, send_command_id=?, send_included=?, state_set_by=?, state_set_at=?, updated_at=?
-        WHERE item_id=? AND run_id=? AND state='unsent'`);
-      const pick = this.database.prepare(`UPDATE authority_impact_items_v1 SET owner_membership_id=?, owner_match='picked', owner_set_by=?, owner_set_at=?, updated_at=?
-        WHERE item_id=? AND run_id=? AND state='unsent'`);
       let sent = 0;
       for (const choice of input.choices) {
-        const owner = choice.owner_membership_id;
-        const current = unsent.get(choice.item_id)!;
-        if (choice.include && owner !== undefined && ownerPickChanges(current, owner)) {
-          pick.run(owner, input.by, timestamp, timestamp, choice.item_id, input.run_id);
-        }
-        const changes = move.run(choice.include ? 'open' : 'not_relevant', timestamp, input.command_id, choice.include ? 1 : 0, input.by, timestamp, timestamp, choice.item_id, input.run_id).changes;
-        if (changes !== 1) throw new Error('Open item send lost its item');
+        this.sendOne(unsent.get(choice.item_id)!, input.run_id, { ...choice, by: input.by, command_id: input.command_id, timestamp });
         if (choice.include) sent++;
       }
       return Object.freeze({ kind: 'sent' as const, sent, not_relevant: input.choices.length - sent });
@@ -359,19 +349,30 @@ export class SqliteImpactItemsV1 {
           : Object.freeze({ kind: 'stale' as const });
       }
       if (item.state !== 'unsent') return Object.freeze({ kind: 'stale' as const });
-      const owner = input.include ? input.owner_membership_id : undefined;
-      if (input.include && owner === undefined && item.owner_match === 'approver') return Object.freeze({ kind: 'unowned' as const });
-      const timestamp = this.timestamp();
-      if (owner !== undefined && ownerPickChanges(item, owner)) {
-        this.database.prepare(`UPDATE authority_impact_items_v1 SET owner_membership_id=?, owner_match='picked', owner_set_by=?, owner_set_at=?, updated_at=?
-          WHERE item_id=? AND state='unsent'`).run(owner, input.by, timestamp, timestamp, item.item_id);
-      }
-      const state = input.include ? 'open' as const : 'not_relevant' as const;
-      const changes = this.database.prepare(`UPDATE authority_impact_items_v1 SET state=?, sent_at=?, send_command_id=?, send_included=?, state_set_by=?, state_set_at=?, updated_at=?
-        WHERE item_id=? AND state='unsent'`).run(state, timestamp, input.command_id, input.include ? 1 : 0, input.by, timestamp, timestamp, item.item_id).changes;
-      if (changes !== 1) throw new Error('Open item send lost its item');
+      if (input.include && input.owner_membership_id === undefined && item.owner_match === 'approver') return Object.freeze({ kind: 'unowned' as const });
+      const state = this.sendOne(item, null, { ...input, timestamp: this.timestamp() });
       return Object.freeze({ kind: 'sent' as const, state });
     });
+  }
+
+  /**
+   * Sends or dismisses one unsent item of `runId` (null: a follow-up from a chat), inside the caller's transaction: an included
+   * item takes the picked owner when the pick changes it (`ownerPickChanges`), then the item moves out of `unsent`. Throws when
+   * the item is no longer unsent there.
+   */
+  private sendOne(item: Pick<StoredItemV1, 'item_id' | 'owner_membership_id' | 'owner_match'>, runId: string | null,
+    choice: { readonly include: boolean; readonly owner_membership_id?: string; readonly by: string; readonly command_id: string; readonly timestamp: string }): 'open' | 'not_relevant' {
+    const { by, timestamp } = choice;
+    const owner = choice.owner_membership_id;
+    if (choice.include && owner !== undefined && ownerPickChanges(item, owner)) {
+      this.database.prepare(`UPDATE authority_impact_items_v1 SET owner_membership_id=?, owner_match='picked', owner_set_by=?, owner_set_at=?, updated_at=?
+        WHERE item_id=? AND run_id IS ? AND state='unsent'`).run(owner, by, timestamp, timestamp, item.item_id, runId);
+    }
+    const state = choice.include ? 'open' as const : 'not_relevant' as const;
+    const changes = this.database.prepare(`UPDATE authority_impact_items_v1 SET state=?, sent_at=?, send_command_id=?, send_included=?, state_set_by=?, state_set_at=?, updated_at=?
+      WHERE item_id=? AND run_id IS ? AND state='unsent'`).run(state, timestamp, choice.command_id, choice.include ? 1 : 0, by, timestamp, timestamp, item.item_id, runId).changes;
+    if (changes !== 1) throw new Error('Open item send lost its item');
+    return state;
   }
 
   /**

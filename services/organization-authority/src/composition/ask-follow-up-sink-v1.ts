@@ -1,17 +1,14 @@
-import { askFollowUpPointerV1, type AskFollowUpDraftV1, type AskFollowUpSinkV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import { ASK_FOLLOW_UP_ABOUT_KINDS_V1, askFollowUpPointerV1, type AskFollowUpDraftV1, type AskFollowUpSinkV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { impactItemKeyV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import type { ImpactChatItemDraftV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
-import type { ImpactOwnerPeopleV1 } from './impact-owner-matching-v1.js';
+import { activeMemberNamedV1, type ImpactOwnerPeopleV1 } from './impact-owner-matching-v1.js';
 
 export interface CreateAskFollowUpSinksV1Options {
   readonly items: Pick<SqliteImpactItemsV1, 'insertForAsk'>;
   /** ECHO's member directory, as impact owner matching reads it. */
   readonly people: Pick<ImpactOwnerPeopleV1, 'activeByName'>;
 }
-
-/** The items a follow-up from a chat may be about: those a run's live read can open (ADR-0053). */
-const ABOUT_KINDS: readonly unknown[] = ['ticket', 'page', 'approved_record', 'source_revision'];
 
 /**
  * Where a released Ask answer's follow-ups are saved (ADR-0053): each one as
@@ -29,15 +26,12 @@ export function createAskFollowUpSinksV1(options: CreateAskFollowUpSinksV1Option
       if (drafts.length === 0) return;
       let named: ((name: string) => readonly string[]) | undefined;
       const ownerOf = (name: string | undefined): Pick<ImpactChatItemDraftV1, 'owner_membership_id' | 'owner_match'> => {
-        const wanted = name?.trim();
-        if (wanted !== undefined && wanted !== '') {
-          const holders = [...new Set((named ??= options.people.activeByName(asker.organization_id))(wanted))];
-          if (holders.length === 1) return { owner_membership_id: holders[0]!, owner_match: 'name' };
-        }
-        return { owner_membership_id: asker.membership_id, owner_match: 'approver' };
+        const member = activeMemberNamedV1(wanted => (named ??= options.people.activeByName(asker.organization_id))(wanted), name);
+        return member === undefined ? { owner_membership_id: asker.membership_id, owner_match: 'approver' } : { owner_membership_id: member, owner_match: 'name' };
       };
       const rows = drafts.map((draft): ImpactChatItemDraftV1 => {
-        const about = draft.about !== undefined && ABOUT_KINDS.includes(draft.about.kind) ? draft.about : undefined;
+        const kind = draft.about?.kind;
+        const about = typeof kind === 'string' && ASK_FOLLOW_UP_ABOUT_KINDS_V1.includes(kind) ? draft.about : undefined;
         const aboutKey = about === undefined ? undefined : impactItemKeyV1(about);
         const pointer = about !== undefined && aboutKey !== undefined ? about : askFollowUpPointerV1(draft.item_id);
         const item_key = aboutKey ?? impactItemKeyV1(pointer);

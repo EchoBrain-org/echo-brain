@@ -20,6 +20,17 @@ function siteTicketId(pointer: ImpactOwnerCandidateV1['pointer'], owners: Ticket
     typeof pointer.ticket_id === 'string' ? pointer.ticket_id : undefined;
 }
 
+/**
+ * The one active member whose display name is `name`, trimmed, through `byName` (the roster `activeByName` reads), read only for a
+ * name that is not blank. Undefined for a blank name, no member or more than one.
+ */
+export function activeMemberNamedV1(byName: (name: string) => readonly string[], name: string | undefined): string | undefined {
+  const wanted = name?.trim();
+  if (wanted === undefined || wanted === '') return undefined;
+  const holders = [...new Set(byName(wanted))];
+  return holders.length === 1 ? holders[0] : undefined;
+}
+
 /** Items whose owner is a name ECHO itself holds: an ECHO record's or document's action, and the approved meeting's own action. */
 const NAMED_OWNER_KINDS: readonly unknown[] = ['approved_record', 'source_revision', 'meeting_action'];
 
@@ -67,8 +78,9 @@ export async function matchImpactOwnersV1(input: {
           .filter(person => person.organization_id === organization && people.isActiveMember(organization, person.membership_id))
           .map(person => person.membership_id), 'jira_account');
       }
-      const name = candidate.owner_name?.trim();
-      return NAMED_OWNER_KINDS.includes(candidate.pointer.kind) && name !== undefined && name !== '' ? theOne((named ??= people.activeByName(organization))(name), 'name') : fallback;
+      if (!NAMED_OWNER_KINDS.includes(candidate.pointer.kind)) return fallback;
+      const member = activeMemberNamedV1(name => (named ??= people.activeByName(organization))(name), candidate.owner_name);
+      return member === undefined ? fallback : Object.freeze({ owner_membership_id: member, owner_match: 'name' });
     } catch { return fallback; }
   }));
 }
