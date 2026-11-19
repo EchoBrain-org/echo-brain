@@ -20,7 +20,7 @@ import {
 } from "@echo-brain/organization-api";
 import { observeCoreModelCorrectionV1 } from "../shared/core-runtime-observation-v1.js";
 import { calendarDateV1, EVIDENCE_DATE_FIELDS_V1, type EvidenceDateFieldV1 } from "../shared/temporal-query-v1.js";
-import { AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_WRITER_LISTS_MAX_V1, parseAgenticListIdV1, type AgenticAnswerListUseV1, type AgenticListSelectionV1 } from "./agentic-list-evidence-v1.js";
+import { AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_WRITER_LISTS_MAX_V1, parseAgenticListIdV1, type AgenticAnswerListUseV1, type AgenticListIdV1, type AgenticListSelectionV1 } from "./agentic-list-evidence-v1.js";
 import { AGENTIC_RESEARCH_NEED_KINDS_V1, type AgenticResearchNeedKindV1 } from "./agentic-research-v1.js";
 import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.js";
 
@@ -113,9 +113,18 @@ export type AnswerItem =
  */
 export type Answer = {
   readonly sentences: readonly AnswerSentence[]; readonly not_found: readonly string[]; readonly lists: readonly AgenticAnswerListUseV1[];
+  /** The list blocks the writer placed (ADR-0054), in its order: code fills each from the desk. */
+  readonly placed: readonly AnswerList[];
   readonly since?: readonly Pick<AnswerSentence, "text" | "evidence">[];
   /** The follow-ups the writer drafted (ADR-0053), as it gave them: absent when it gave none. The renderer checks each field. */
   readonly follow_ups?: readonly AnswerFollowUp[];
+};
+/** A list block as the writer gave it (ADR-0054): its place among the writer's blocks, the list, and its narrowing. */
+export type AnswerList = {
+  readonly block: number; readonly list: AgenticListIdV1;
+  readonly where?: AgenticListSelectionV1; readonly members?: readonly string[];
+  /** The block named a narrowing code could not read: it shows nothing, and the reader is told. */
+  readonly unreadable?: true;
 };
 /** One drafted follow-up as the writer gave it, each line on one line: its task, and the owner, day and evidence id it named. */
 export type AnswerFollowUp = { readonly task: string; readonly owner?: string; readonly due_on?: string; readonly about?: string };
@@ -623,6 +632,46 @@ function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
   return Object.freeze({ id, members: Object.freeze(members), ...(where === null ? {} : { where }) });
 }
 
+/**
+ * A list block (ADR-0054) at its place among the writer's blocks: {"block": "list", "list": "L1"} for the whole list,
+ * with "where" for the members one row fact selects, or with "members" for the members it names by E id, each once.
+ * Members given beside a where are kept and the where dropped (ADR-0041's precedent). A narrowing code cannot read
+ * (members that are not an array or name no readable id, a where that is not a readable selection) is `unreadable`:
+ * the block shows nothing and the reader is told, so one mistyped selector never publishes every item. Null for a
+ * block that names no list, and for empty members, which select nothing and leave nothing out. A title is ignored: a
+ * list block has none.
+ */
+function placedListOf(entry: Record<string, unknown>, block: number): AnswerList | null {
+  const id = parseAgenticListIdV1(entry.list);
+  if (id === null) return null;
+  if (id !== entry.list) observeCoreModelCorrectionV1("model_id_respelled");
+  const unreadable = () => {
+    observeCoreModelCorrectionV1("model_entry_dropped");
+    return Object.freeze({ block, list: id, unreadable: true as const });
+  };
+  if (entry.members !== undefined) {
+    if (entry.where !== undefined) observeCoreModelCorrectionV1("model_entry_dropped");
+    if (!Array.isArray(entry.members)) return unreadable();
+    if (entry.members.length === 0) return null;
+    const members: string[] = [];
+    for (const member of entry.members) {
+      const short = cleanId(member);
+      if (short === null) observeCoreModelCorrectionV1("model_entry_dropped");
+      else if (members.includes(short)) observeCoreModelCorrectionV1("model_repeat_dropped");
+      else {
+        members.push(short);
+        if (short !== member) observeCoreModelCorrectionV1("model_id_respelled");
+      }
+    }
+    return members.length === 0 ? unreadable() : Object.freeze({ block, list: id, members: Object.freeze(members) });
+  }
+  if (entry.where !== undefined) {
+    const where = selectionOf(object(entry.where));
+    return where === null ? unreadable() : Object.freeze({ block, list: id, where });
+  }
+  return Object.freeze({ block, list: id });
+}
+
 /** A reply's "not_found": its phrases, each once, the first 5. */
 function notFoundOf(body: Record<string, unknown>): readonly string[] {
   const notFound: string[] = [];
@@ -675,6 +724,12 @@ function writtenLine(value: unknown, maximumChars: number, maximumBytes: number)
 }
 
 /**
+ * The block names a writer's reply may use: the contract's kinds, and "list" (ADR-0054), which code fills from the desk
+ * and releases as one of the contract's kinds, so it never joins them.
+ */
+const WRITER_BLOCK_KINDS = Object.freeze([...PERSON_ANSWER_BLOCK_KINDS_V2, "list"] as const);
+
+/**
  * Ask's answer (answer layout v2, ADR-0051): its blocks read in order into the writer's sentences, each with the item it
  * is and the list ids such as L1 in its evidence kept; then the lists it uses (ADR-0041), at most
  * AGENTIC_LIST_WRITER_LISTS_MAX_V1 of them, each at most once in full or by a selection and once by members' ids ("which
@@ -691,6 +746,7 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
   if (body === null) throw new AgenticAskOutputErrorV1("the reply was not a JSON object");
   if (!Array.isArray(body.blocks)) throw new AgenticAskOutputErrorV1(`"blocks" must be an array (got ${keysOf(body)})`);
   const sentences: AnswerSentence[] = [];
+  const placed: AnswerList[] = [];
   // No count is capped here: the part's bounds decide what is kept (W6), and say so when something does not fit.
   const add = (text: string, evidence: unknown, item: AnswerItem, presented?: unknown) => {
     if (text.length === 0) observeCoreModelCorrectionV1("model_entry_dropped");
@@ -709,9 +765,15 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
   let answered = false;
   for (const [block, raw] of body.blocks.entries()) {
     const entry = object(raw);
-    // The writer names each block by its kind in the contract.
-    const name = closedValue(entry?.block, PERSON_ANSWER_BLOCK_KINDS_V2);
+    // The writer names each block by its kind in the contract, or places a list (ADR-0054).
+    const name = closedValue(entry?.block, WRITER_BLOCK_KINDS);
     if (entry === null || name === undefined) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
+    if (name === "list") {
+      const list = placedListOf(entry, block);
+      if (list === null) observeCoreModelCorrectionV1("model_entry_dropped");
+      else placed.push(list);
+      continue;
+    }
     // A card's title is its name, read below within a name's caps; another block's is a heading.
     const title = name === "card" ? "" : boundedModelLine(entry.title, TITLE_CHARS, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2);
     const titled = title.length === 0 ? {} : { title };
@@ -784,7 +846,7 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
   }
   const since = options.since === true && Array.isArray(body.since) ? sinceOf(body.since) : undefined;
   const followUps = followUpsOf(body);
-  return Object.freeze({ sentences: Object.freeze(sentences), not_found: notFoundOf(body), lists: listUsesOf(body), ...(since === undefined ? {} : { since }),
+  return Object.freeze({ sentences: Object.freeze(sentences), not_found: notFoundOf(body), lists: listUsesOf(body), placed: Object.freeze(placed), ...(since === undefined ? {} : { since }),
     ...(followUps.length === 0 ? {} : { follow_ups: followUps }) });
 }
 

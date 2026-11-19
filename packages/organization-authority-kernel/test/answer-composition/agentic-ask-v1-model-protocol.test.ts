@@ -328,7 +328,7 @@ describe("agentic Ask model protocol parity", () => {
     expect(parseStep({ parts: [{ question: "Who owns it? ", needs: [{ need: " owner ", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "owner " } }] }))
       .toEqual({ parts: [{ question: "Who owns it?", needs: [{ need: "owner", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "owner" } }] });
     expect(parseBlocksAnswer(writerReply([{ text: " Done. ", evidence: ["e2", "[E3]"] }, { text: "", evidence: [] }], { not_found: ["", "owner"] })))
-      .toEqual({ sentences: [{ text: "Done.", evidence: ["E2", "E3"], item: { block: 0, kind: "answer" } }], not_found: ["owner"], lists: [] });
+      .toEqual({ sentences: [{ text: "Done.", evidence: ["E2", "E3"], item: { block: 0, kind: "answer" } }], not_found: ["owner"], lists: [], placed: [] });
   });
 
   it("reads the A2 input field and bare strings as the tool's main argument, and browse as list", () => {
@@ -472,6 +472,29 @@ describe("agentic Ask model protocol parity", () => {
 describe("answer layout v2: the writer arranges its answer from the block catalog (ADR-0051)", () => {
   const reply = (blocks: readonly unknown[], fields: Record<string, unknown> = {}) => ({ lists: [], blocks, not_found: [], ...fields });
   const read = (blocks: readonly unknown[]) => parseBlocksAnswer(reply(blocks)).sentences.map(sentence => [sentence.text, sentence.item?.kind]);
+
+  it("reads a list block where the writer put it: whole, by one row fact, or by members' ids", () => {
+    const answer = parseBlocksAnswer({ blocks: [
+      { block: "answer", sentences: [{ text: "Nine are open.", evidence: ["E20"] }] },
+      { block: "list", list: "l1", where: { field: "Status", value: "open" } },
+      { block: "list", list: "L2", members: ["E5", "e7", "E5"], title: "Recall tickets" },
+      { block: "list", list: "L1" },
+      { block: "list", list: "L1", where: { field: "owner", value: "Dana Lee" }, members: ["E3"] },
+    ], not_found: [] });
+    expect(answer.placed).toEqual([
+      { block: 1, list: "L1", where: { field: "status", value: "open" } }, { block: 2, list: "L2", members: ["E5", "E7"] },
+      { block: 3, list: "L1" }, { block: 4, list: "L1", members: ["E3"] },
+    ]);
+    expect(answer.sentences).toHaveLength(1);
+  });
+
+  it("reads a narrowing it cannot read as unreadable, never as the whole list", () => {
+    const placed = (extra: object) => parseBlocksAnswer({ blocks: [{ block: "list", list: "L1", ...extra }], not_found: [] }).placed;
+    for (const extra of [{ members: "E5" }, { members: ["x", "y"] }, { where: "open" }, { where: { field: "colour", value: "red" } }, { where: { field: "due", since: "next week" } }])
+      expect(placed(extra)).toEqual([{ block: 0, list: "L1", unreadable: true }]);
+    expect(placed({ members: [] })).toEqual([]);
+    expect(parseBlocksAnswer({ blocks: [{ block: "list", list: "E4" }], not_found: [] }).placed).toEqual([]);
+  });
 
   it("reads optional member bindings only on well-formed rows and points, separate from supporting citations", () => {
     const parsed = parseBlocksAnswer(reply([
