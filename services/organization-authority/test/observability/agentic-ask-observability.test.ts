@@ -60,9 +60,10 @@ function fixture() {
   const model = createOpenRouterStructuredGenerationAdapter({
     credential_ref: "fixture", credential_resolver: () => "fixture-credential-never-record",
     fetch_impl: async (_url, init) => {
-      const wire = JSON.parse(String(init?.body)) as { messages: { content: string }[]; response_format: { json_schema: { schema: { properties?: Record<string, unknown> } } } };
+      const wire = JSON.parse(String(init?.body)) as { messages: { content: string }[]; tools?: unknown[] };
       const prompt = JSON.parse(wire.messages[1]!.content) as Prompt;
-      const isAnswer = wire.response_format.json_schema.schema.properties?.blocks !== undefined;
+      // The writer's schema is too large for Claude's strict grammar, so only its call offers the reply tool.
+      const isAnswer = wire.tools !== undefined;
       let reply: unknown;
       if (isAnswer) reply = { blocks: [{ block: "answer", sentences: [{ text: "The launch window is October.", evidence: [prompt.evidence![0]!.id] }] }], not_found: [] };
       else {

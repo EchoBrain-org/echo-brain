@@ -40,3 +40,29 @@ export function claudeStructuredSchema(schema: StructuredGenerationJsonSchema): 
   };
   return visit(schema) as StructuredGenerationJsonSchema;
 }
+
+/**
+ * Claude compiles a strict schema into a grammar and refuses one that grows too large (HTTP 400, "The compiled
+ * grammar is too large"). Measured on 2026-11-19 through OpenRouter on Sonnet 5.5 and 4.6 over 24 variants of Ask's
+ * answer schema: what counts is the number of schema positions (every object, array, scalar and anyOf), not bytes,
+ * descriptions, enum values, optional fields or $ref sharing. 69 positions were accepted and 70 refused. Ask's
+ * step schema has 43 and its answer schemas 78 to 89, so this limit sits between them with room on both sides.
+ */
+const CLAUDE_GRAMMAR_MAX_SCHEMA_POSITIONS = 60;
+
+/** Whether Claude can hold `schema` as a strict grammar. A schema it cannot hold is sent as a tool instead. */
+export function claudeGrammarHolds(schema: StructuredGenerationJsonSchema): boolean {
+  const positions = (value: unknown): number => {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return 0;
+    let count = 1;
+    for (const [key, child] of Object.entries(value)) {
+      if (SCHEMA_MAPS.has(key) && child !== null && typeof child === 'object' && !Array.isArray(child)) {
+        for (const entry of Object.values(child)) count += positions(entry);
+      } else if (SCHEMA_ARRAYS.has(key) && Array.isArray(child)) {
+        for (const entry of child) count += positions(entry);
+      } else if (SCHEMA_VALUES.has(key)) count += positions(child);
+    }
+    return count;
+  };
+  return positions(schema) <= CLAUDE_GRAMMAR_MAX_SCHEMA_POSITIONS;
+}

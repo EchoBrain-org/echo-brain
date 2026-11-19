@@ -1,5 +1,5 @@
 import { observeCoreModelCorrectionV1, observeCoreModelMetadataV1, annotateCoreRuntimeV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
-import { claudeStructuredSchema } from "./claude-structured-schema.js";
+import { claudeGrammarHolds, claudeStructuredSchema } from "./claude-structured-schema.js";
 import {
   type StructuredGenerationFailureClassV1,
   type StructuredGenerationFailureDiagnosticV1,
@@ -49,6 +49,16 @@ interface OpenRouterObservedResult extends StructuredGenerationObservedResultV1 
  * reasoning-token budget.
  */
 const REASONING_HEADROOM_TOKENS = 4_096;
+
+/**
+ * A schema too large for Claude's strict grammar travels the way the Claude Agent SDK sends every output schema, and
+ * the way staging's Claude account route has always sent Ask's answer: as the input of one tool the model calls with
+ * its reply. The schema is sent whole, bounds included, and nothing is grammar-enforced; callers validate the reply
+ * against their own protocol on either path. Reasoning rules out forcing the tool, so a reply written as text is
+ * still read as JSON.
+ */
+const STRUCTURED_OUTPUT_TOOL = "StructuredOutput";
+const STRUCTURED_OUTPUT_TOOL_DESCRIPTION = "Return your final reply. Call this exactly once, with the JSON object the instructions ask for.";
 
 /**
  * Upstream host display names recorded as themselves: the hosts OpenRouter
@@ -335,6 +345,7 @@ export function createOpenRouterStructuredGenerationAdapter(
         "OpenRouter credential is unavailable",
       );
     }
+    const strict = claudeGrammarHolds(input.schema);
     const timeoutSignal = AbortSignal.timeout(input.timeout_ms);
     const signals: AbortSignal[] = [timeoutSignal];
     if (input.signal !== undefined) signals.push(input.signal);
@@ -356,14 +367,18 @@ export function createOpenRouterStructuredGenerationAdapter(
         stream: false,
         max_tokens: input.max_output_tokens + REASONING_HEADROOM_TOKENS,
         reasoning: { effort: "medium" },
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "echo_layer4",
-            strict: true,
-            schema: claudeStructuredSchema(input.schema),
+        ...(strict ? {
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "echo_layer4",
+              strict: true,
+              schema: claudeStructuredSchema(input.schema),
+            },
           },
-        },
+        } : {
+          tools: [{ type: "function", function: { name: STRUCTURED_OUTPUT_TOOL, description: STRUCTURED_OUTPUT_TOOL_DESCRIPTION, parameters: input.schema } }],
+        }),
         provider: {
           require_parameters: true,
           data_collection: "deny",
@@ -472,7 +487,9 @@ export function createOpenRouterStructuredGenerationAdapter(
         provider_latency_ms: providerLatency,
       });
     }
-    const completed = finishReason(first.finish_reason);
+    // Calling the reply tool is how a tool-sent schema's reply completes; what it called is checked below.
+    const calledTool = !strict && first.finish_reason === "tool_calls";
+    const completed = finishReason(calledTool ? "stop" : first.finish_reason);
     observeCoreModelMetadataV1({ provider: "openrouter", model: input.model, ...(typeof root?.id === "string" ? { request_id: root.id } : {}), ...(completed === null ? {} : { finish_reason: completed }) });
     if (completed !== null && completed !== "stop") {
       fail("OpenRouter response is invalid", {
@@ -503,7 +520,11 @@ export function createOpenRouterStructuredGenerationAdapter(
         provider_latency_ms: providerLatency,
       });
     }
-    const content = message?.content;
+    // A reply that finished by calling tools is exactly one call of the reply tool, and its arguments are the reply:
+    // text beside it, a second call or another tool's call is never read in its place. Any other reply is its text.
+    const toolCalls = calledTool && Array.isArray(message.tool_calls) ? message.tool_calls.map(call => object(object(call)?.function)) : [];
+    const content = !calledTool ? message?.content
+      : toolCalls.length === 1 && toolCalls[0]?.name === STRUCTURED_OUTPUT_TOOL ? toolCalls[0].arguments : undefined;
     if (!nonEmpty(content)) {
       fail("OpenRouter response is invalid", {
         failure_class: "adapter_response",
