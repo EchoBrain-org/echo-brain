@@ -352,6 +352,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   }
   const syntheticReview = mode === 'synthetic-review';
   let granolaImported = syntheticReview, granolaApproved = false, granolaBaselineHomeReads = 0;
+  let granolaBrowseReads = 0, offlineImportQueued = mode === 'granola-offline';
   // The automatic import granola-preparing saved: what it watches and the project it suggests.
   let granolaWatch: { watch: string; folder_id: string | null; project_id: string | null } | undefined;
   let granolaReview: Record<string, unknown> | undefined;
@@ -1061,6 +1062,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', all_day: false, records };
       switch (body?.operation) {
         case 'home': {
+          if (mode === 'granola-offline') return json({ connected: false, email: null, workspace: null, folders: [], settings_sha256: 'sha256:' + 'a'.repeat(64),
+            sources: [{ source_key: 'pms_fixture', watch: granolaWatch?.watch ?? 'mine', folder_id: null, project_id: null, baseline: granolaWatch === undefined,
+              pending_imports: offlineImportQueued ? [meetingId] : [], checked_at: null, error: null }] });
           // A saved watch prepares on its first home read and has been checked on the next.
           const watching = mode === 'granola-preparing' && granolaWatch !== undefined && granolaWatch.watch !== 'off', baseline = watching && granolaBaselineHomeReads++ > 0;
           return json({ connected: true, email: 'ari@example.test', workspace: 'EchoBrain', folders: [{ id: folderId, title: 'ECHO', count: 1 }], settings_sha256: 'sha256:' + 'a'.repeat(64),
@@ -1068,10 +1072,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
               checked_at: baseline ? '2026-10-24T17:04:00.000Z' : null, error: null }] : [] });
         }
         // Your recent meetings, or one folder's: the same meeting here.
-        case 'browse': return json({ meetings: [{ id: meetingId, title: 'Pilot planning', date: 'Oct 6, 2026 6:30 PM PDT' }] });
+        case 'browse':
+          if (mode === 'granola-browse-failure' && ++granolaBrowseReads <= 2) return failure('unavailable', 502);
+          return json({ meetings: [{ id: meetingId, title: 'Pilot planning', date: 'Oct 6, 2026 6:30 PM PDT' }] });
         case 'open': return json({ id: meetingId, title: 'Pilot planning', notes: 'Launch the pilot next week.', summary: 'Decision: launch.', truncated: false });
         case 'watch':
           granolaWatch = { watch: body?.watch as string, folder_id: body?.folder_id as string | null, project_id: body?.project_id as string | null }; return json({ status: 'saved' });
+        case 'cancel_import': offlineImportQueued = false; return json({ status: 'cancelled' });
         case 'import': granolaImported = true; return json({ status: 'queued' });
         case 'reviews':
           return json({ reviews: granolaImported ? [review] : [] });

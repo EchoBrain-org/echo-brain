@@ -24,7 +24,7 @@ export interface GranolaMeetingV1 {
   readonly meeting_at?: string; readonly created_at?: string; readonly updated_at?: string; readonly captured_by_me?: boolean;
   readonly known_participants: string; readonly private_notes?: string; readonly summary?: string;
 }
-/** One list_meetings page, newest first, with Granola's cursor while more follow. */
+/** One meeting discovery page, newest first, with Granola's cursor while more follow. */
 export interface GranolaMeetingPageV1 { readonly meetings: readonly GranolaMeetingV1[]; readonly next_cursor: string | null; readonly total_count: number | null; readonly incomplete?: true }
 /** What a listing reads: the meetings the person captured, or one folder's. */
 type GranolaMeetingFilterV1 = { readonly captured_by_me: true } | { readonly folder_id: string };
@@ -48,13 +48,15 @@ const MEETING_MISSING = 'Granola meeting not found';
 /** A Granola timestamp: ISO 8601 with an offset. */
 export const GRANOLA_TIMESTAMP_V1 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 // The current detail-only account guidance is an envelope, never meeting evidence or an authentication input.
-const DETAIL_CONTEXT = "The connected_user_email identifies the user you are answering for; the note creator may be someone else. Retrieve relevant get_agent_brief context when available if their role or work context matters. Before drafting, match each action to its explicit owner in the detailed evidence: a shared heading does not assign every action to every named person. If one person shares material with another, the sharing belongs to the sender, not the recipient. Raising an issue does not establish implementation ownership. Check every 'I', 'my' and 'you' claim against that mapping; leave unclear ownership unassigned. Resolve phrases like 'this week' relative to the meeting date. Describe historical assignments and targets as dated plans; use [confirm current status] in a draft when later progress is unknown, rather than calling work still in progress or complete.";
 function unwrapDetailContext(value: string): string {
   const account = /^<connected_user_email>[^<>\r\n]{1,320}<\/connected_user_email>\s*/u.exec(value)?.[0];
   if (account === undefined) return value;
-  const rest = value.slice(account.length), context = `${DETAIL_CONTEXT}\n\n`;
-  if (!rest.startsWith(context + WARNING)) failure('invalid_output');
-  return rest.slice(context.length);
+  const rest = value.slice(account.length);
+  const boundary = rest.indexOf(WARNING);
+  // Granola changes this guidance independently of the note format. Discard only bounded plain text
+  // between the account envelope and its warning. Markup must belong to the validated payload.
+  if (boundary < 0 || boundary > 4096 || /[<>\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(rest.slice(0, boundary))) failure('invalid_output');
+  return rest.slice(boundary);
 }
 const REQUESTED_RANGE = /^<requested_range(?:\s[^<>]*)?(?:\/>|>[^<>]*<\/requested_range>)/u;
 const PAGINATION = /^<pagination(?:\s[^<>]*)?(?:\/>|><\/pagination>)$/u;
@@ -129,7 +131,9 @@ function id(value: unknown): string { return string(value, 36, GRANOLA_ID_V1); }
 function timestamp(value: unknown): string | undefined {
   if (value === undefined || value === '') return undefined;
   const at = string(value, 64, GRANOLA_TIMESTAMP_V1);
-  if (!Number.isFinite(Date.parse(at))) failure('invalid_output');
+  const date = at.slice(0, 10), midnight = Date.parse(date + 'T00:00:00Z');
+  if (!Number.isFinite(Date.parse(at)) || !Number.isFinite(midnight) || new Date(midnight).toISOString().slice(0, 10) !== date ||
+      Number(at.slice(11, 13)) > 23) failure('invalid_output');
   return at;
 }
 function flag(value: unknown): boolean | undefined {
@@ -229,14 +233,15 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
   const rpc = createPersonProviderMcpTransportV1(GRANOLA_PERSON_PROVIDER_V1, authenticated, 'https://mcp.granola.ai/mcp');
   /** One page of a custom range, newest first. */
   async function page(input: GranolaMeetingRangeV1 & { readonly limit: number; readonly cursor?: string }): Promise<GranolaMeetingPageV1> {
-    const from_date = day(input.from_date), to_date = day(input.to_date);
+    const from_date = day(input.from_date), to_date = liveDate(input.to_date);
     const { captured_by_me: mine, folder_id: folder } = input as { readonly captured_by_me?: unknown; readonly folder_id?: unknown };
     // Exactly one filter: a listing never reads every meeting the person can access.
     if (from_date > to_date || !Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > MAX_LISTED
       || (mine === undefined) === (folder === undefined) || (mine !== undefined && mine !== true)) failure('invalid_request');
-    return parseGranolaMeetingPageV1(await rpc.call('list_meetings', { time_range: 'custom', from_date, to_date, limit: input.limit,
+    return parseGranolaMeetingPageV1(await rpc.call('search_meetings', { from_date, to_date, limit: Math.min(input.limit, 100),
       max_participants: MAX_LISTED_PARTICIPANTS, ...(input.cursor === undefined ? {} : { cursor: string(input.cursor, 2048) }),
-      ...(mine === true ? { involvement: { captured_by_me: true } } : { folder_id: id(folder) }),
+      // Attendance is broader than capture. Callers keep only captured_by_me rows for a personal listing.
+      ...(mine === true ? { attended_only: true, include_shared: false } : { folder_id: id(folder), include_shared: true }),
     }, input.signal), false);
   }
   return Object.freeze({
@@ -318,19 +323,32 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
      */
     async meetings(input: GranolaMeetingRangeV1): Promise<readonly GranolaMeetingV1[]> {
       const listed: GranolaMeetingV1[] = [];
+      const cursors = new Set<string>();
+      let total: number | null = null;
       for (let cursor: string | undefined; ;) {
         const next = await page({ ...input, limit: MAX_LISTED, ...(cursor === undefined ? {} : { cursor }) });
+        if (next.incomplete) failure('unavailable');
         listed.push(...next.meetings);
         if (listed.length > MAX_LISTED || (next.total_count ?? 0) > MAX_LISTED) {
           throw new AuthorityOperationError('quota_exceeded', 'Granola lists more than 200 meetings to watch');
         }
-        if (next.next_cursor === null) break;
-        // A page that promises more must move on.
-        if (next.meetings.length === 0 || next.next_cursor === cursor) failure('invalid_output');
+        if (next.total_count !== null) {
+          if (total !== null && total !== next.total_count) failure('unavailable');
+          total = next.total_count;
+        }
+        if (total !== null && listed.length > total) failure('unavailable');
+        if (next.next_cursor === null) {
+          if (total !== null && total !== listed.length) failure('unavailable');
+          break;
+        }
+        // Search can return empty pages with continuation. Bound those too, and reject cursor cycles.
+        if (cursors.has(next.next_cursor)) failure('invalid_output');
+        if (cursors.size >= 10) failure('unavailable');
+        cursors.add(next.next_cursor);
         cursor = next.next_cursor;
       }
       if (new Set(listed.map(meeting => meeting.id)).size !== listed.length) failure('invalid_output');
-      return Object.freeze(listed);
+      return Object.freeze('captured_by_me' in input ? listed.filter(meeting => meeting.captured_by_me === true) : listed);
     },
     async details(meetingIds: readonly string[], signal?: AbortSignal): Promise<readonly GranolaMeetingV1[]> {
       const keys = array(meetingIds, 10).map(id);
@@ -354,29 +372,44 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
      * The transcript's first whole turns within 256 KiB, read page by page, or null when the meeting has none: Granola's
      * `no_transcript` and `transcript_deleted` are final. A transcript still processing fails as pending, for a later try.
      */
-    async transcript(meetingId: string, signal?: AbortSignal): Promise<Readonly<{ text: string; created_at: string }> | null> {
+    async transcript(meetingId: string, signal?: AbortSignal): Promise<Readonly<{ text: string; created_at: string; truncated?: true }> | null> {
       const key = id(meetingId);
       let whole = '', created = '', offset = 0;
+      let version: string | undefined, truncated = false;
       for (let page = 0; page < MAX_TRANSCRIPT_PAGES; page++) {
         const value = json(await rpc.call('get_meeting_transcript', { meeting_id: key, max_chars: TRANSCRIPT_PAGE_CHARS, ...(page === 0 ? {} : { offset }) }, signal));
         if (value.id !== key) failure('invalid_output');
         if (value.transcript === null && page === 0) {
           const reason = value.transcript_unavailable === undefined ? undefined : record(value.transcript_unavailable).reason;
           if (reason === 'no_transcript' || reason === 'transcript_deleted') return null;
-          if (reason === 'transcript_pending') throw new AuthorityOperationError('unavailable', TRANSCRIPT_PENDING);
+          if (reason === 'transcript_pending' || reason === 'not_happened_yet') throw new AuthorityOperationError('unavailable', TRANSCRIPT_PENDING);
           failure('invalid_output');
         }
         if (typeof value.transcript !== 'string') failure('invalid_output');
-        if (page === 0) {
-          created = string(value.created_at, 32);
-          if (!Number.isFinite(Date.parse(created)) || new Date(created).toISOString() !== created) failure('invalid_output');
+        const stamp = timestamp(value.created_at);
+        if (page === 0 && stamp === undefined) failure('invalid_output');
+        if (stamp !== undefined) {
+          const normalized = new Date(stamp).toISOString();
+          if (page > 0 && normalized !== created) failure('invalid_output');
+          created = normalized;
         }
+        if (value.transcript_version !== undefined) {
+          const observed = string(value.transcript_version, 256);
+          if (version !== undefined && observed !== version) failure('invalid_output');
+          version = observed;
+        }
+        if (value.truncated !== undefined && typeof value.truncated !== 'boolean') failure('invalid_output');
         // Pages end between turns, unless one turn runs past a page and the next page continues it.
         whole += whole === '' || value.starts_mid_utterance === true ? value.transcript : `\n\n${value.transcript}`;
-        if (value.truncated !== true || Buffer.byteLength(whole, 'utf8') >= MAX_TEXT) break;
-        offset = count(value.next_offset, Number.MAX_SAFE_INTEGER);
+        const bytes = Buffer.byteLength(whole, 'utf8');
+        truncated = bytes > MAX_TEXT || value.truncated === true;
+        if (value.truncated !== true) break;
+        const next = count(value.next_offset, Number.MAX_SAFE_INTEGER);
+        if (next <= offset || value.transcript.length === 0) failure('invalid_output');
+        if (bytes >= MAX_TEXT) break;
+        offset = next;
       }
-      return Object.freeze({ text: transcriptText(whole), created_at: created });
+      return Object.freeze({ text: transcriptText(whole), created_at: created, ...(truncated ? { truncated: true as const } : {}) });
     },
   });
 }
@@ -444,14 +477,15 @@ function knownParticipants(value: string): { name: string; email?: string }[] {
  * audio labels prove neither identity nor attendance: the people get no role,
  * and the labels stay verbatim text.
  */
-export function granolaMcpMeetingContentV1(meeting: GranolaMeetingV1, transcript?: Readonly<{ text: string; created_at: string }> | null): GranolaMeetingContentInputV1 {
+export function granolaMcpMeetingContentV1(meeting: GranolaMeetingV1, transcript?: Readonly<{ text: string; created_at: string; truncated?: true }> | null): GranolaMeetingContentInputV1 {
   return {
     id: meeting.id, title: meeting.title, web_url: meeting.url,
     ...meetingStart(meeting.date),
+    ...(meeting.meeting_at === undefined ? {} : { scheduled_start_at: meeting.meeting_at }),
     reported_participants: knownParticipants(meeting.known_participants),
     ...(meeting.private_notes === undefined ? {} : { private_notes_markdown: meeting.private_notes }),
     ...(meeting.summary === undefined ? {} : { summary_markdown: meeting.summary }),
     provider_fields: { mcp_date_label: meeting.date, mcp_known_participants: meeting.known_participants },
-    ...(transcript === undefined || transcript === null ? {} : { created_at: transcript.created_at, transcript: [{ text: transcript.text }] }),
+    ...(transcript === undefined || transcript === null ? {} : { created_at: transcript.created_at, transcript: [{ text: transcript.text }], ...(transcript.truncated ? { transcript_truncated: true } : {}) }),
   };
 }

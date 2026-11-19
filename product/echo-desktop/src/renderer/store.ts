@@ -1,3 +1,4 @@
+import { PERSON_RUN_ITEMS_MAX_V1 } from '@echo-brain/organization-api/person-runs-limits-v1';
 import type {
   PersonImpactStageV1, PersonMeetingOperationV2, PersonMeetingResultsV2, PersonMeetingReviewV2, PersonReviewOperationV1, PersonReviewResultsV1, PersonOpenItemStateV1, PersonRunV1, PersonRunsRequestV1,
 } from '@echo-brain/organization-api';
@@ -6583,21 +6584,26 @@ export async function sendTicked(include: boolean): Promise<void> {
   if (ticked.length === 0) return;
   setView({ ...list, busy: true, said: null, picker: null });
   const sends: Record<string, SendCommand> = { ...list.sends };
-  const tried: { batch: string; failure?: Failure }[] = [];
-  for (const batch of new Set(ticked.map(sendBatch))) {
-    if (!viewOf('list', list.seq) || !sameAccount(account)) break;
-    const sent = await sendRows(ticked.filter(item => sendBatch(item) === batch), include, sends[batch]);
-    if (sent.unknown) sends[batch] = sent.command; else delete sends[batch];
-    tried.push({ batch, ...(sent.failure ? { failure: sent.failure } : {}) });
-    if (sent.failure) break;
+  const tried = new Map<string, Failure | undefined>();
+  batches: for (const batch of new Set(ticked.map(sendBatch))) {
+    const rows = ticked.filter(item => sendBatch(item) === batch);
+    // One Send lists at most so many of a run's items, so a long meeting goes in parts; a follow-up from a chat is a batch of its own.
+    for (let start = 0; start < rows.length; start += PERSON_RUN_ITEMS_MAX_V1) {
+      if (!viewOf('list', list.seq) || !sameAccount(account)) break batches;
+      const part = rows.slice(start, start + PERSON_RUN_ITEMS_MAX_V1);
+      const sent = await sendRows(part, include, sends[batch]);
+      if (sent.unknown) sends[batch] = sent.command; else delete sends[batch];
+      for (const item of part) tried.set(item.item_id, sent.failure);
+      if (sent.failure) break batches;
+    }
   }
   if (!viewOf('list', list.seq) || !sameAccount(account)) return;
   await readList(list.seq, 'again');
   const current = viewOf('list', list.seq);
   if (!current || !sameAccount(account)) return;
   const fresh = new Map(current.failed ? [] : current.items.map(item => [item.item_id, item]));
-  const triedRows = ticked.filter(item => tried.some(entry => entry.batch === sendBatch(item)));
-  const failedOf = (item: OpenItemView) => tried.find(entry => entry.batch === sendBatch(item))?.failure;
+  const triedRows = ticked.filter(item => tried.has(item.item_id));
+  const failedOf = (item: OpenItemView) => tried.get(item.item_id);
   const unknown = (item: OpenItemView) => {
     const failed = failedOf(item);
     return failed !== undefined && outcomeUnknown(failed, false);
@@ -6611,9 +6617,11 @@ export async function sendTicked(include: boolean): Promise<void> {
   // dismissed) by it. One read again as something else happened meanwhile did not go, and has nothing to replay.
   const went = triedRows.filter(item => failedOf(item) === undefined || (unknown(item) && fresh.has(item.item_id) && landedAs(include)(fresh.get(item.item_id)!)));
   const elsewhere = triedRows.filter(item => !went.includes(item) && unknown(item) && fresh.has(item.item_id) && fresh.get(item.item_id)!.state !== 'unsent');
-  for (const batch of Object.keys(sends)) if ([...went, ...elsewhere].some(item => sendBatch(item) === batch)) delete sends[batch];
-  if (went.length > 0 || elsewhere.length > 0 || Object.keys(sends).some(batch => tried.some(entry => entry.batch === batch))) changedFrom(list.seq);
-  const failure = tried.find(entry => entry.failure)?.failure;
+  // A kept command belongs to the one part whose outcome was unknown: it is let go once a row of that part is settled, never
+  // because an earlier part of the same meeting went.
+  for (const batch of Object.keys(sends)) if ([...went, ...elsewhere].some(item => sendBatch(item) === batch && unknown(item))) delete sends[batch];
+  if (went.length > 0 || elsewhere.length > 0 || triedRows.some(item => sends[sendBatch(item)] !== undefined)) changedFrom(list.seq);
+  const failure = [...tried.values()].find(failed => failed !== undefined);
   const sentTo = went.map(item => recipient(item, failedOf(item) === undefined, fresh.get(item.item_id) ?? null));
   // What became of what went since, said once: the one, or how many.
   const since = went.flatMap(item => { const read = fromChat(item) ? fresh.get(item.item_id) : undefined; const words = read ? sinceWords(read, include) : null; return words === null ? [] : [words]; });

@@ -111,6 +111,8 @@ const fresh = () => ({
   sendFailure: null as Failure | null,
   /** A send of this run fails as `sendFailure` says; any other run's goes. Null: every send fails so. */
   sendFailsFor: null as string | null,
+  /** So many sends go before `sendFailure` applies. Null: it applies from the first. */
+  sendsThatGo: null as number | null,
   /** Rows an items read pages at a time (null: all at once), and items reads to fail next. */
   pageSize: null as number | null,
   failItems: 0,
@@ -244,7 +246,8 @@ async function authority(method: string, params: { project_id?: string; request?
         return params.request.read === undefined ? held('live', () => answer) : answer;
       }
       if (params.request?.operation === 'send') {
-        const reply = fx.sendFailure && (fx.sendFailsFor === null || fx.sendFailsFor === params.request.run_id) ? { ok: false, failure: fx.sendFailure } : ok({ sent: 1, not_relevant: 0 });
+        const failing = fx.sendFailure && (fx.sendFailsFor === null || fx.sendFailsFor === params.request.run_id) && (fx.sendsThatGo === null || fx.sendsThatGo-- <= 0);
+        const reply = failing ? { ok: false, failure: fx.sendFailure } : ok({ sent: 1, not_relevant: 0 });
         return held('send', () => reply);
       }
   }
@@ -880,6 +883,44 @@ describe('Follow-up lists and item pages', () => {
     store.closeFollowUp();
     expect(store.getState().route).toEqual({ page: 'home' });
     expect(store.followUpShown()).toBeNull();
+  });
+
+  it('sends a large approved meeting in bounded batches with distinct commands', async () => {
+    const ids = Array.from({ length: 45 }, (_, i) => String(i + 1));
+    fx.page = listPage(ids.map(id => unsent(id)));
+    const store = await start();
+    await store.openYourFollowUps();
+    for (const row of list(store).items) store.tickFollowUp(row.item_id);
+    fx.page = listPage(ids.map(id => item(id)));
+    await store.sendTicked(true);
+    const sent = requests('send');
+    expect(sent.map(request => (request.items as unknown[]).length)).toEqual([40, 5]);
+    expect(new Set(sent.map(request => request.command_id)).size).toBe(2);
+  });
+
+  it('keeps the command of a later part whose outcome is unknown when an earlier part of the same meeting went', async () => {
+    const ids = Array.from({ length: 45 }, (_, i) => String(i + 1));
+    fx.page = listPage(ids.map(id => unsent(id)));
+    const store = await start();
+    await store.openYourFollowUps();
+    for (const row of list(store).items) store.tickFollowUp(row.item_id);
+    // The first part goes; the second part's reply is lost, and its rows read again are still not sent.
+    fx.sendFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
+    fx.sendsThatGo = 1;
+    fx.page = listPage(ids.map((id, at) => (at < 40 ? item(id) : unsent(id))));
+    await store.sendTicked(true);
+    const [, second] = requests('send');
+    expect((second!.items as unknown[]).length).toBe(5);
+    // What went is said, and what did not is still to send, with its command kept to replay.
+    expect(said(store)?.error).toBe(true);
+    expect(Object.values(list(store).sends).map(kept => kept.command)).toEqual([second!.command_id]);
+    // Send again replays that part with the same command, so a send that did land is not sent twice.
+    fx.sendFailure = null;
+    fx.page = listPage(ids.map(id => item(id)));
+    await store.sendTicked(true);
+    expect(requests('send')).toHaveLength(3);
+    expect(requests('send')[2]).toEqual(second);
+    expect(list(store).sends).toEqual({});
   });
 
   it('sends only the ticked rows, one send per check with a command of its own, and stays on the list, read again', async () => {

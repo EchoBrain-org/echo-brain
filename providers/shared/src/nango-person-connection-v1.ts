@@ -12,12 +12,16 @@ export interface NangoPersonConnectionV1 {
 }
 
 /** Current Nango HTTP API, no SDK/actions/syncs. Response bodies and credentials are never logged. */
-export function createNangoPersonConnectionV1(options: { readonly provider: Pick<PersonProviderV1, 'nango_provider_id' | 'oauth_scopes' | 'failure' | 'record' | 'string' | 'array'>; readonly integration_id: string; readonly authorization: () => string; readonly fetch: typeof fetch }): NangoPersonConnectionV1 {
+export function createNangoPersonConnectionV1(options: { readonly provider: Pick<PersonProviderV1, 'nango_provider_id' | 'oauth_scopes' | 'failure' | 'record' | 'string' | 'array'>; readonly integration_id: string; readonly base_url?: string; readonly authorization: () => string; readonly fetch: typeof fetch }): NangoPersonConnectionV1 {
   const { record, string, array } = options.provider;
   const failure: PersonProviderV1['failure'] = options.provider.failure;
   const integration = string(options.integration_id, 255);
   async function call(path: string, method: string, operation: 'connection_read' | 'connection_list' | 'connect_session' | 'connection_delete', body?: unknown, signal?: AbortSignal): Promise<unknown> {
     signal?.throwIfAborted();
+    // Personal connections use the Nango Cloud consent portal. A different Authority origin may serve Slack independently.
+    if (options.base_url !== undefined && options.base_url !== 'https://api.nango.dev') {
+      throw new AuthorityOperationError('unavailable', 'Personal connections require the Nango Cloud API origin');
+    }
     const combined = signal === undefined ? AbortSignal.timeout(15_000) : AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
     let response: Response | undefined;
     try {

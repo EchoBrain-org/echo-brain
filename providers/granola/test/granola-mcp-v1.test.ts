@@ -68,12 +68,14 @@ describe('verified Granola MCP contract', () => {
       'arbitrary preamble\n' + response,
       detailEnvelopeV1 + response,
       response.replace('fixture@example.test', '<nested>fixture@example.test</nested>'),
-      response.replace('The connected_user_email identifies', 'Unknown guidance identifies'),
+      response.replace('The connected_user_email identifies', '<unrecognized/>'),
       response.replace(warning, ''),
       response.replace('count="1"', 'count="2"'),
       response.replace('https://notes.granola.ai', 'https://attacker.example'),
       response + '<unexpected />',
     ]) expect(() => parseGranolaMeetingPageV1(value, true)).toThrow(expect.objectContaining({ code: 'invalid_output' }));
+    const changed = response.replace('The connected_user_email identifies', 'Revised provider guidance identifies');
+    expect(parseGranolaMeetingPageV1(changed, true)).toEqual(parseGranolaMeetingPageV1(response, true));
     expect(() => parseGranolaMeetingPageV1(response, false)).toThrow(expect.objectContaining({ code: 'invalid_output' }));
   });
   it('accepts current pagination-first results without discarding continuation', () => {
@@ -286,6 +288,11 @@ describe('one meeting\'s large or unnormalized fields never fail its read', () =
     expect(normalized.participants).toHaveLength(people);
     expect(normalized.participants.at(-1)).toMatchObject({ display_name: `Person ${people - 1}`, identities: [{ kind: 'email', value: `person${people - 1}@example.test` }] });
   });
+  it('normalizes transcript instants with offsets and refuses a nonadvancing offset', async () => {
+    const page = (fields: Record<string, unknown>) => warning + JSON.stringify({ id, created_at: '2026-08-29T22:14:34.163-07:00', transcript: 'Hello', ...fields });
+    expect(await fixture(page({})).adapter.transcript(id)).toEqual({ text: 'Hello', created_at: '2026-08-30T05:14:34.163Z' });
+    await expect(fixture(page({ truncated: true, next_offset: 0 })).adapter.transcript(id)).rejects.toMatchObject({ code: 'invalid_output' });
+  });
   it('reads a long transcript page by page from next_offset, joining turns, and continues a turn split across pages', async () => {
     const page = (fields: Record<string, unknown>) => warning + JSON.stringify({ id, title: 'Fixture', created_at: '2026-10-05T20:00:00.000Z', ...fields });
     const f = scripted(page({ transcript: 'Microphone: one.', truncated: true, next_offset: 16 }), page({ transcript: 'System audio: two, and', truncated: true, next_offset: 38, ends_mid_utterance: true }),
@@ -293,6 +300,12 @@ describe('one meeting\'s large or unnormalized fields never fail its read', () =
     expect(await f.adapter.transcript(id)).toEqual({ text: 'Microphone: one.\n\nSystem audio: two, and three.', created_at: '2026-10-05T20:00:00.000Z' });
     expect(f.calls().map(call => call.arguments)).toEqual([
       { meeting_id: id, max_chars: 80_000 }, { meeting_id: id, max_chars: 80_000, offset: 16 }, { meeting_id: id, max_chars: 80_000, offset: 38 }]);
+  });
+  it('reports an unfinished transcript after eight advancing pages and rejects mixed transcript versions', async () => {
+    const page = (offset: number, version: string) => JSON.stringify({ id, created_at: '2026-10-05T20:00:00Z',
+      transcript: 'excerpt', transcript_version: version, truncated: true, next_offset: offset });
+    expect(await scripted(...Array.from({ length: 8 }, (_, i) => page(i + 1, 'v1'))).adapter.transcript(id)).toMatchObject({ truncated: true });
+    await expect(scripted(page(1, 'v1'), page(2, 'v2')).adapter.transcript(id)).rejects.toMatchObject({ code: 'invalid_output' });
   });
   it('reads no transcript as none when Granola says so, as pending while it processes, and refuses an unexplained null', async () => {
     const answer = (fields: Record<string, unknown>) => fixture(warning + JSON.stringify({ id, title: 'Fixture', transcript: null, ...fields })).adapter.transcript(id);
@@ -308,7 +321,9 @@ describe('one meeting\'s large or unnormalized fields never fail its read', () =
     const transcript = (text: string) => fixture(warning + JSON.stringify({ id, title: 'Fixture', created_at: '2026-10-05T20:00:00.000Z', transcript: text })).adapter.transcript(id);
     const turns = Array.from({ length: 300 }, (_, index) => `${index % 2 === 0 ? 'Microphone' : 'System audio'}: ${'We go over the plan once more. '.repeat(30)}Turn ${index}.`);
     expect(Buffer.byteLength(turns.join('\n\n'), 'utf8')).toBeGreaterThan(256 * 1024);
-    const { text } = (await transcript(turns.join('\n\n')))!;
+    const captured = (await transcript(turns.join('\n\n')))!;
+    expect(captured.truncated).toBe(true);
+    const { text } = captured;
     const head = text.split('\n\n');
     expect(head).toEqual(turns.slice(0, head.length));
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(256 * 1024);
@@ -355,21 +370,21 @@ describe('Granola list contract, as observed live', () => {
     expect(() => parseGranolaMeetingPageV1(value, false)).toThrow(expect.objectContaining({ code: 'invalid_output' }));
   });
   it('lists a window page by page with the live arguments, for my meetings or one folder', async () => {
-    const last = listPage([plainRow(numbered(3)), plainRow(numbered(4))], '<pagination has_more="false" total_count="4" remaining_count="0" />');
+    const last = listPage([plainRow(numbered(3)), plainRow(numbered(4))].map(row => row.replace('<meeting ', '<meeting captured_by_me="true" ')), '<pagination has_more="false" total_count="4" remaining_count="0" />');
     const mine = scripted(LIVE_PAGE, last);
     expect((await mine.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', captured_by_me: true })).map(meeting => meeting.id))
       .toEqual([REVIEW, WEEKLY, numbered(3), numbered(4)]);
-    const range = { time_range: 'custom', from_date: '2026-10-17', to_date: '2026-10-25', limit: 200, max_participants: 50 };
+    const range = { from_date: '2026-10-17', to_date: '2026-10-25', limit: 100, max_participants: 50 };
     expect(mine.calls()).toEqual([
-      { name: 'list_meetings', arguments: { ...range, involvement: { captured_by_me: true } } },
-      { name: 'list_meetings', arguments: { ...range, cursor: 'eyJ2ZXJzaW9uIjoxfQ', involvement: { captured_by_me: true } } },
+      { name: 'search_meetings', arguments: { ...range, attended_only: true, include_shared: false } },
+      { name: 'search_meetings', arguments: { ...range, cursor: 'eyJ2ZXJzaW9uIjoxfQ', attended_only: true, include_shared: false } },
     ]);
     const folder = scripted(listPage([weeklyRow]));
     expect(await folder.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', folder_id: PUMP })).toHaveLength(1);
-    expect(folder.calls()).toEqual([{ name: 'list_meetings', arguments: { ...range, folder_id: PUMP } }]);
+    expect(folder.calls()).toEqual([{ name: 'search_meetings', arguments: { ...range, folder_id: PUMP, include_shared: true } }]);
     const browse = scripted(listPage([weeklyRow], '<pagination has_more="true" total_count="9" remaining_count="8" next_cursor="next" />'));
     expect((await browse.adapter.page({ from_date: '1970-01-01', to_date: '2026-10-25', captured_by_me: true, limit: 50 })).next_cursor).toBe('next');
-    expect(browse.calls()).toEqual([{ name: 'list_meetings', arguments: { ...range, from_date: '1970-01-01', limit: 50, involvement: { captured_by_me: true } } }]);
+    expect(browse.calls()).toEqual([{ name: 'search_meetings', arguments: { ...range, from_date: '1970-01-01', limit: 50, attended_only: true, include_shared: false } }]);
     for (const filter of [{}, { captured_by_me: true, folder_id: PUMP }]) {
       await expect(scripted().adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', ...filter } as never)).rejects.toMatchObject({ code: 'invalid_request' });
     }
@@ -382,10 +397,29 @@ describe('Granola list contract, as observed live', () => {
     const rows = (from: number) => Array.from({ length: 150 }, (_, index) => plainRow(numbered(from + index)));
     const paged = scripted(listPage(rows(0), '<pagination has_more="true" next_cursor="second" />'), listPage(rows(150)));
     await expect(paged.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', folder_id: PUMP })).rejects.toMatchObject(full);
-    const stuck = scripted(listPage([], '<pagination has_more="true" next_cursor="again" />'));
+    const stuck = scripted(...Array.from({ length: 2 }, () => listPage([], '<pagination has_more="true" next_cursor="again" />')));
     await expect(stuck.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', captured_by_me: true })).rejects.toMatchObject({ code: 'invalid_output' });
     const repeated = scripted(listPage([reviewRow], '<pagination has_more="true" next_cursor="again" />'), listPage([weeklyRow], '<pagination has_more="true" next_cursor="again" />'));
     await expect(repeated.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', captured_by_me: true })).rejects.toMatchObject({ code: 'invalid_output' });
+  });
+  it('continues empty search pages and keeps only captured meetings for a personal watch', async () => {
+    const rows = [reviewRow, weeklyRow.replace('captured_by_me="true"', 'captured_by_me="false"'), plainRow(numbered(3))];
+    const pages = () => [listPage([], '<pagination has_more="true" next_cursor="second" />'), listPage(rows)];
+    const range = { from_date: '2026-10-17', to_date: '2026-10-25' };
+    expect((await scripted(...pages()).adapter.meetings({ ...range, captured_by_me: true })).map(row => row.id)).toEqual([REVIEW]);
+    expect((await scripted(...pages()).adapter.meetings({ ...range, folder_id: PUMP })).map(row => row.id)).toEqual([REVIEW, WEEKLY, numbered(3)]);
+  });
+  it('refuses incomplete searches, cursor cycles and unbounded empty continuation instead of completing a watch baseline', async () => {
+    const input = { from_date: '2026-10-17', to_date: '2026-10-25', folder_id: PUMP };
+    await expect(scripted(listPage([], '<pagination has_more="false" completion_status="incomplete" />')).adapter.meetings(input))
+      .rejects.toMatchObject({ code: 'unavailable' });
+    await expect(scripted(LIVE_PAGE, listPage([])).adapter.meetings(input)).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(scripted(listPage([weeklyRow], '<pagination has_more="false" total_count="2" />')).adapter.meetings(input))
+      .rejects.toMatchObject({ code: 'unavailable' });
+    const cycle = scripted(...['a', 'b', 'a'].map(cursor => listPage([], `<pagination has_more="true" next_cursor="${cursor}" />`)));
+    await expect(cycle.adapter.meetings(input)).rejects.toMatchObject({ code: 'invalid_output' });
+    const endless = scripted(...Array.from({ length: 11 }, (_, index) => listPage([], `<pagination has_more="true" next_cursor="page-${index}" />`)));
+    await expect(endless.adapter.meetings(input)).rejects.toMatchObject({ code: 'unavailable' });
   });
   it('pages folders by offset, up to 200, and ignores the fields it does not read', async () => {
     const folders = (from: number, length: number) => Array.from({ length }, (_, index) => ({ id: numbered(from + index), title: `Folder ${from + index}`, description: null, note_count: 3,

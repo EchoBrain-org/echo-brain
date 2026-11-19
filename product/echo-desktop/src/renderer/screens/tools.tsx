@@ -140,10 +140,10 @@ function ConnectionManage({ sheet }: { sheet: ToolManageSheet }) {
           : <p>Disconnecting removes only your own {tool.name} connection; you can connect again later.</p>}
         {sheet.failure && <p class="error" aria-live="polite">{message(sheet.failure)}</p>}
         <div class={`choices${meetings ? ' between' : ''}`}>
-          {meetings && <span class="notice-line">Disconnecting stops new imports. Retained meetings keep their audience.</span>}
-          <button type="button" class={`${meetings ? 'link-button' : 'plain-button'} danger`} data-testid="tool-disconnect" disabled={sheet.busy} onClick={() => void disconnectTool()}>
+          {meetings && tool.status === 'linked' && <span class="notice-line">Disconnecting stops new imports. Retained meetings keep their audience.</span>}
+          {tool.status === 'linked' && <button type="button" class={`${meetings ? 'link-button' : 'plain-button'} danger`} data-testid="tool-disconnect" disabled={sheet.busy} onClick={() => void disconnectTool()}>
             {sheet.busy ? 'Disconnecting…' : meetings ? 'Disconnect Granola' : 'Disconnect'}
-          </button>
+          </button>}
           {!meetings && <button type="button" class="plain-button" ref={done} disabled={sheet.busy} onClick={closeSheet}>Done</button>}
         </div>
       </div>

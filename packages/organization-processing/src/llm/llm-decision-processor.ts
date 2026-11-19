@@ -703,12 +703,13 @@ function groundedSignals(
     .sort((left, right) => left.signal.index - right.signal.index)
     .map((entry): ExtractedSignal => {
       const { signal, spans, supports } = entry;
+      const retained = signal.units.slice(0, spans.length);
       const base = { id: ids.get(entry)!, text: signal.text, subject: null, confidence: signal.confidence, evidence: spans };
       switch (signal.kind) {
         case 'decision':
-          return { ...base, kind: 'decision', status: signal.status };
+          return { ...base, kind: 'decision', status: signal.status === 'decided' && retained.every(unit => unit.question) ? 'proposed' : signal.status };
         case 'action':
-          return { ...base, kind: 'action', owner: signal.owner, due_at: signal.dueAt };
+          return { ...base, kind: 'action', owner: groundedOwner(signal.owner, retained), due_at: signal.dueAt };
         case 'rationale': {
           const links = [...new Set(supports.map((decision) => ids.get(decision)!))];
           // Each of the model's links that is a repeat, or names no kept decision, is dropped.

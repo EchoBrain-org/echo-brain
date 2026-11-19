@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
-  actionCount, activeTotal, followUpAge, followUpCount, followUpHover, followUpMark, followUpOrder, followUpProgress, followUpsWords, itemHistory, itemKind,
+  actionCount, activeTotal, expectedWords, followUpAge, followUpCount, followUpHover, followUpMark, followUpOrder, followUpProgress, followUpsWords, itemHistory, itemKind,
   itemLine, itemNames, itemTitle, liveFacts, markWords, meetingSuffix, monthDay, ownerAndStatus, ownerKey, ownerLine, ownerRows,
   ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
 } from '../../src/renderer/needs.js';
@@ -40,6 +40,10 @@ describe('the words Home and the follow-ups use', () => {
     expect(monthDay('2026-10-30')).toBe('Oct 30');
     expect(monthDay('2026-10-06T12:00:00.000Z')).toBe('Oct 6');
     expect(monthDay('next week')).toBeNull();
+    // A meeting action's approved deadline reads as a day; its own words, and any other line, stay as written.
+    expect(expectedWords('Prepare the document · Due 2026-11-20T17:00:00.000Z')).toBe('Prepare the document · Due Nov 20');
+    expect(expectedWords('Prepare the document')).toBe('Prepare the document');
+    expect(expectedWords('Due 2026-11-20T17:00:00.000Z is the cutoff')).toBe('Due 2026-11-20T17:00:00.000Z is the cutoff');
   });
 
   it('names a meeting\'s action by its own words, and any other item by how its live read went', () => {
