@@ -1,5 +1,6 @@
 import { rmSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { signedInHome } from './signed-in-home.js';
 
@@ -54,5 +55,24 @@ describe('person reviews CLI', () => {
     const older = cli(answer({ ...opened, items: [before] }));
     expect(await older.run(['reviews', '--request', request])).not.toBe(0);
     expect(older.output.stdout).not.toContain('2026-11-20');
+  });
+  // The day made the largest review longer: the CLI's own read of the answer must still take it whole.
+  it('reads the largest review, 500 items each with its day, at the response bound', async () => {
+    const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+    // The most items a review holds, each an action with a deadline and its day; the first one's text pads it to the bound.
+    const sized = (pad: number) => ({ review: { approval_id: 'apr_largest', title: 'Quarterly planning', project_ids: [], status: 'pending', decided_on: null, first_line: null,
+      action_count: 500, meeting_at: '2026-10-06T16:00:00.000Z', all_day: false, records: [] }, snapshot_sha256: `sha256:${'b'.repeat(64)}`, participants: ['Mina Patel'],
+      items: Array.from({ length: 500 }, (_, index) => ({ signal_id: `action:${index}`, kind: 'action', text: index === 0 ? 'x'.repeat(pad) : 'Send the plan.', subject: null,
+        status: null, due_at: '2026-10-20T00:00:00.000Z', due_on: '2026-10-20', quotes: ['[09:01] Mina: send the plan.'], owner: null, owner_editable: false, project_ids: [] })),
+      reasons: [], suggested_projects: [], records: [] });
+    const largest = sized(1 + PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 - jsonBytes(sized(1)));
+    expect(jsonBytes(largest)).toBe(PERSON_REVIEW_RESPONSE_MAX_BYTES_V1);
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => new Response(JSON.stringify(largest), { headers: { 'content-type': 'application/json' } }));
+    const { run, output } = cli(fetch);
+    expect(await run(['reviews', '--request', JSON.stringify({ schema_version: 1, operation: 'review_open', approval_id: largest.review.approval_id })])).toBe(0);
+    const printed = JSON.parse(output.stdout) as { ok: boolean; result: { items: { due_on: string | null }[] } };
+    expect(printed.ok).toBe(true);
+    expect(printed.result.items).toHaveLength(500);
+    expect(printed.result.items.every(item => item.due_on === '2026-10-20')).toBe(true);
   });
 });

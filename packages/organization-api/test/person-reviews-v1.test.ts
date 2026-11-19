@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { personReviewCommandV1, validatePersonReviewRequestV1, validatePersonReviewResultV1 } from '../src/person-reviews-v1.js';
+import { PERSON_REVIEW_RESPONSE_MAX_BYTES_V1, personReviewCommandV1, validatePersonReviewRequestV1, validatePersonReviewResultV1 } from '../src/person-reviews-v1.js';
+import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 } from '../src/person-tool-client.js';
+import { jsonBytes, largestReviewV1 } from './fixtures/largest-review.js';
 import { validatePersonMeetingRequestV2 } from '../src/person-meetings-v1.js';
 
 const decision = { schema_version: 1, operation: 'review', approval_id: 'apr_123', command_id: 'review-once', snapshot_sha256: `sha256:${'a'.repeat(64)}`,
@@ -151,6 +153,33 @@ describe('person-owned review contract', () => {
     const body: Record<string, unknown> = opened(value);
     for (const [key, entry] of Object.entries(value)) if (entry === undefined) delete body[key];
     expect(() => validatePersonReviewResultV1('review_open', body)).toThrow();
+  });
+
+  // The day key made every item longer (ADR-0053). A review that opened before it must still open with it: the bound
+  // grew by what the key adds to each of the most items a review holds, and still fits what the client reads.
+  it('still opens the largest review that opened before items carried a day, with a day added to every one of its 500 items', () => {
+    const OLD_BOUND = 120_000, DAY_BYTES = ',"due_on":"2026-10-20"'.length;
+    // The most items a review holds, every one an action with a deadline and its day.
+    const after = largestReviewV1();
+    expect(after.items).toHaveLength(500);
+    // The same review as the Authority sent it before the key: exactly at the old limit, which the validator then accepted.
+    const before = { ...after, items: after.items.map(({ due_on: _day, ...item }) => item) };
+    expect(jsonBytes(before)).toBe(OLD_BOUND);
+    expect(jsonBytes(after)).toBe(OLD_BOUND + 500 * DAY_BYTES);
+    expect(jsonBytes(after)).toBe(PERSON_REVIEW_RESPONSE_MAX_BYTES_V1);
+    expect(validatePersonReviewResultV1('review_open', after).items).toHaveLength(500);
+    // No item gains more than a day: a deadline with no day adds less.
+    expect(jsonBytes({ ...after, items: after.items.map(item => ({ ...item, due_on: null })) })).toBeLessThan(jsonBytes(after));
+    // The typed bound is still a bound, and the transport reads at least as much: the Authority's response and the client's
+    // read share the tool transport's ceiling.
+    expect(() => validatePersonReviewResultV1('review_open', largestReviewV1(PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 + 1))).toThrow('exceeds its bound');
+    expect(PERSON_REVIEW_RESPONSE_MAX_BYTES_V1).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+  });
+
+  it('reads an opened review up to the transport ceiling, the cap the Authority answers within', async () => {
+    const json = vi.fn(async (input: { maximum_response_bytes?: number }) => { expect(input.maximum_response_bytes).toBe(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1); return opened(); });
+    await personReviewCommandV1({ withToolSession: operation => operation({ transport: { json } } as never) }, { schema_version: 1, operation: 'review_open', approval_id: 'apr_123' });
+    expect(json).toHaveBeenCalledOnce();
   });
 
   it('requires the review row fields, the whole-day flag and records included', () => {
