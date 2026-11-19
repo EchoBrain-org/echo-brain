@@ -15,7 +15,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  MAX_TIMELINE_PUT_BYTES, MAX_TIMELINE_TURNS, TIMELINE_DAYS, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect,
+  ITEM_ID, MAX_TIMELINE_PUT_BYTES, MAX_TIMELINE_TURNS, TIMELINE_DAYS, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect,
   type TimelineAnswer, type TimelineTurn,
 } from '../shared/protocol.js';
 
@@ -238,8 +238,6 @@ function gapDetails(value: unknown): boolean {
   try { validatePersonAnswerGapDetailsV1(value); return true; } catch { return false; }
 }
 
-/** An open item's id, as the runs contract writes one. */
-const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
 /**
  * The follow-ups an answer drafted (ADR-0053): their ids alone, at least one and each once. The page reads each card live
  * whenever the turn shows, so a saved turn never keeps what one said.

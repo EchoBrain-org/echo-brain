@@ -68,7 +68,7 @@ const WHAT: Readonly<Record<PersonOpenItemKindV1, string>> = {
  */
 export function itemTitle(item: OpenItemView): string {
   // A follow-up from a chat (ADR-0053) is its own one line, whatever it is about.
-  if (item.kind === 'action' || (item.run_id === null && item.expected !== null)) return item.expected ?? WHAT.action;
+  if (item.kind === 'action' || (fromChat(item) && item.expected !== null)) return item.expected ?? WHAT.action;
   if (item.current) return item.current.source.label;
   switch (item.reach) {
     case 'unavailable': return `${WHAT[item.kind]} ECHO couldn't read just now`;
@@ -146,7 +146,7 @@ export function itemKind(item: OpenItemView, tools?: readonly ConnectedTool[] | 
   const source = item.current?.source;
   const tool = source && 'permalink' in source ? externalSourceProvider(source, tools) : null;
   switch (item.kind) {
-    case 'action': return item.run_id === null ? 'Follow-up' : 'Meeting action';
+    case 'action': return fromChat(item) ? 'Follow-up' : 'Meeting action';
     case 'ticket': return `${tool ?? 'Jira'} ticket`;
     case 'page': return tool ? `${tool} page` : 'Page';
     case 'record': return 'Record';
@@ -170,8 +170,8 @@ export function meetingSuffix(title: string): string {
 export function itemLine(item: OpenItemView, me: string | null, tools?: readonly ConnectedTool[] | null): string {
   const mine = me === null || item.owner.membership_id === me;
   const line = joined([
-    item.run_id === null ? FROM_CHAT : null,
-    item.kind === 'action' || item.run_id === null || item.expected === null ? null : `Needs: ${item.expected}`,
+    fromChat(item) ? FROM_CHAT : null,
+    item.kind === 'action' || fromChat(item) || item.expected === null ? null : `Needs: ${item.expected}`,
     dueOnWords(item.due_on),
     nowWords(item),
     mine ? null : `${firstName(item.owner.name)}'s to update`,
@@ -326,7 +326,7 @@ export function followUpHover(item: OpenItemView, me: string | null, now: number
   const where = item.state === 'unsent' ? (ownerUnmatched(item) ? 'No owner yet' : `For ${who(item.owner)}, not sent yet`)
     : item.state === 'open' ? (item.sent_at === null || handedOn ? `With ${who(item.owner)}` : `Sent to ${who(item.owner)} ${daysAgo(daysSince(item.sent_at, now))}`)
     : item.state === 'done' ? `Done${item.state_set_by === null ? '' : ` by ${who(item.state_set_by)}`}` : STAGES.not_relevant;
-  return joined([itemKind(item, tools), item.decision ? `from ${item.decision.title}` : item.run_id === null ? FROM_CHAT : null, where, dueOnWords(item.due_on, now)]);
+  return joined([itemKind(item, tools), item.decision ? `from ${item.decision.title}` : fromChat(item) ? FROM_CHAT : null, where, dueOnWords(item.due_on, now)]);
 }
 
 /** Follow-ups not closed, as a total counts them (F7): not sent yet, or open. */
@@ -412,7 +412,7 @@ export function itemHistory(item: OpenItemView, me: string | null): HistoryEvent
     const ownerSince = item.owner_set_at !== null && Date.parse(item.owner_set_at) > Date.parse(at);
     return `Sent${ownerSince ? '' : ` to ${who(item.owner)}`}${by(sender)}`;
   };
-  const events: HistoryEvent[] = [{ at: item.created_at, words: item.run_id === null ? `${FROM_CHAT}${by(item.approver)}` : item.kind === 'action' ? 'From the meeting' : 'Found' }];
+  const events: HistoryEvent[] = [{ at: item.created_at, words: fromChat(item) ? `${FROM_CHAT}${by(item.approver)}` : item.kind === 'action' ? 'From the meeting' : 'Found' }];
   if (item.sent_at !== null) events.push({ at: item.sent_at, words: item.send_included === false ? `Dismissed${by(item.approver)}` : sent(item.sent_at, item.approver) });
   if (item.owner_set_at !== null) events.push({ at: item.owner_set_at, words: `Owner set to ${who(item.owner)}${by(item.owner_set_by)}` });
   if (item.state_set_at !== null && item.state_set_at !== item.sent_at) {
@@ -462,6 +462,26 @@ export function reopenLabel(item: OpenItemView, me: string | null): string {
 /** Where a follow-up with no meeting came from (ADR-0053), wherever a meeting's title would be. */
 export const FROM_CHAT = 'From a chat';
 
+/** A follow-up that came from a chat (ADR-0053): no run, and no meeting, stands behind it. */
+export function fromChat(item: Pick<OpenItemView, 'run_id'>): boolean {
+  return item.run_id === null;
+}
+
+/** Someone as a sentence names them: "you", or their first name. */
+export function whoWords(person: { membership_id: string; name: string }, me: string | null): string {
+  return person.membership_id === me ? 'you' : firstName(person.name);
+}
+
+/** Whose a follow-up not sent yet is: "No owner yet", "For you", "For Sam". */
+function forWhom(item: OpenItemView, me: string | null): string {
+  return ownerUnmatched(item) ? 'No owner yet' : `For ${whoWords(item.owner, me)}`;
+}
+
+/** Its owner was changed after it was sent: someone handed it on. */
+function handedOn(item: OpenItemView): boolean {
+  return item.owner_set_at !== null && item.sent_at !== null && Date.parse(item.owner_set_at) > Date.parse(item.sent_at);
+}
+
 /** A day as the calendar here names it: YYYY-MM-DD. */
 function calendarDay(time: number, plusDays = 0): string {
   const day = new Date(time);
@@ -488,6 +508,20 @@ export function dueOnWords(due: string | null, now = Date.now()): string | null 
  * owner yet", "From a chat · For you".
  */
 export function draftLine(item: OpenItemView, me: string | null, now = Date.now()): string {
-  const owner = ownerUnmatched(item) ? 'No owner yet' : `For ${item.owner.membership_id === me ? 'you' : firstName(item.owner.name)}`;
-  return joined([FROM_CHAT, owner, dueOnWords(item.due_on, now)]);
+  return joined([FROM_CHAT, forWhom(item, me), dueOnWords(item.due_on, now)]);
+}
+
+/** Where a card an answer drafted stands, after "From this chat": whose it is while not sent, else what became of it. */
+function standing(item: OpenItemView, me: string | null): string {
+  switch (item.state) {
+    case 'unsent': return forWhom(item, me);
+    case 'open': return item.owner.membership_id === me ? 'Kept for you' : `${handedOn(item) ? 'With' : 'Sent to'} ${firstName(item.owner.name)}`;
+    case 'done': return 'Done';
+    default: return 'Dismissed';
+  }
+}
+
+/** The faint line under a card an answer drafted: "From this chat · For Sam · Due Nov 20", "From this chat · Sent to Sam". */
+export function chatCardLine(item: OpenItemView, me: string | null, now = Date.now()): string {
+  return joined(['From this chat', standing(item, me), item.state === 'unsent' || item.state === 'open' ? dueOnWords(item.due_on, now) : null]);
 }

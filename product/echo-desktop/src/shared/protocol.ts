@@ -955,7 +955,7 @@ export function externalSourcePermalink(kind: unknown, raw: unknown): string | n
 }
 
 /** A follow-up's id, in the API's own grammar. */
-const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
+export const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
 /** A project's id, as the API writes one. */
 const NOTICE_PROJECT_ID = /^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 /** A name or a title a notification shows: as long as the API lets either be, in characters. */
