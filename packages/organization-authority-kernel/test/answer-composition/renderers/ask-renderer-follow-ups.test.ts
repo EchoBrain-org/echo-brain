@@ -280,6 +280,16 @@ describe("Ask renderer: follow-ups the writer drafts (ADR-0053)", () => {
     expect(rendered.result.follow_ups).toEqual([{ item_id: askFollowUpItemIdV1(REQUEST, 0), task: "Call the vendor", owner_name: "Sam", due_on: "2026-11-20" }]);
   });
 
+  it("adds no record research read beside a reply of only a draft: the reply is usable, and says only what it drafted (ADR-0054)", async () => {
+    const rendered = await alone({ bundle: bundle([decided]), request_id: REQUEST, replies: [{ blocks: [], not_found: [], follow_ups: [{ task: "Call the vendor", owner: "Sam" }] }] }).render();
+    const response = rendered.result.response;
+    expect(rendered.fallbacks).toBe(0);
+    expect(response).toMatchObject({ outcome: "not_found", citations: [], follow_ups: [askFollowUpItemIdV1(REQUEST, 0)] });
+    expect(response.parts[0]).not.toHaveProperty("records");
+    expect(response.parts[0]).toMatchObject({ status: "not_found", statements: [],
+      gap: "I drafted a follow-up for you to review and send. I couldn't find anything more about it in the sources you can access." });
+  });
+
   it("says plainly what it could not do when research asks for a follow-up the request cannot save, and never calls the writer for nothing", async () => {
     const run = alone({ bundle: bundle([], { reason: "finished", completed: true, follow_up_requested: true }), replies: [] });
     const rendered = await run.render();

@@ -104,6 +104,8 @@ const UNRECORDED_GAP = "Some list items do not record the fact used to select th
 /** The writer's one repair for a sentence resting on list rows or list ids alone. */
 const ROWS_REASON = "a sentence cites list rows or list ids but no evidence text: place a \"list\" block to show which items exist and members' title, dates, status and owner (whole, with \"where\" or with \"members\"); what no evidence text says belongs in \"not_found\"";
 const FIT_GAP = "Some evidence could not fit in this response.";
+/** UTF-8 bytes of the response's notice, as the Person protocol bounds it. */
+const NOTICE_MAX_BYTES = 2 * 1024;
 /** What an answer that drafted follow-ups (ADR-0053) and found nothing about them says, after it says what it drafted. */
 const FOLLOW_UP_NOT_FOUND_GAP = "I couldn't find anything more about it in the sources you can access.";
 /** What an answer says it drafted: the drafts are the question, so it never asks. */
@@ -369,14 +371,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const writerCall = earlier === undefined ? WRITER_CALL : SINCE_WRITER_CALL;
       const writerSchema = earlier === undefined ? (drafting ? answerBlocksFollowUpsSchema : answerBlocksSchema) : (drafting ? answerBlocksSinceFollowUpsSchema : answerBlocksSinceSchema);
       const promptBudget = input.prompt_budget(writerPrompt, writerCall.output_tokens);
-      // Research's notes (ADR-0054) never take room from evidence: their frame, with no need and the largest counts they
-      // can carry, is set aside first, and their needs fill only what lists and evidence leave.
-      const noteFrame = agenticResearchNotesV1({
-        plan: [], shown: () => false, max_bytes: Number.POSITIVE_INFINITY,
-        not_shown: { lists: lists.length, list_rows: lists.reduce((sum, list) => sum + list.members.length, 0) },
-        lists: writerOrder.map(list => ({ list: list.id, read: list.members.length, count: list.members.length })),
-      });
-      const contextBudget = Math.max(0, promptBudget - bytes(JSON.stringify({ ...answerContext, research_notes: noteFrame, lists: [], evidence: [] })));
+      // Research's notes (ADR-0054) never take room from evidence: lists and evidence are admitted against the whole room,
+      // and the notes take only what they leave.
+      const contextBudget = Math.max(0, promptBudget - bytes(JSON.stringify({ ...answerContext, lists: [], evidence: [] })));
       // Lists' rows take at most half the room; a smaller window shows fewer members of each, never fewer lists.
       // The largest per-list cap that fits (binary search), so no list loses rows that would have fit.
       const fits = (cap: number) => bytes(JSON.stringify(writerListsWith(cap))) <= contextBudget / 2;
@@ -406,14 +403,19 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const writerShown: readonly string[] = Object.freeze([...evidence.map(entry => entry.short), ...shownRows]);
       input.on_context?.(writerShown);
       // Research's notes (ADR-0054): its plan, need by need, in what lists and evidence left of the room; how many members
-      // of each list it was shown research read in full; and how many lists and rows it was not shown.
-      const notShown = { lists: lists.length - writerLists.length, list_rows: writerLists.reduce((sum, list) => sum + (list.members_omitted ?? 0), 0) };
-      const researchNotes: AgenticResearchNotesV1 = agenticResearchNotesV1({
+      // of each list it was shown research read in full; and how many lists and rows it was not shown. Needs give way from
+      // the end, and notes that cannot fit even with none are left out entirely.
+      // A list the writer was not shown leaves every one of its rows unshown.
+      const notShown = { lists: lists.length - writerLists.length, list_rows: lists.reduce((sum, list) => { const shown = writerById.get(list.id); return sum + (shown === undefined ? list.members.length : shown.members_omitted ?? 0); }, 0) };
+      // The notes' room: what lists and evidence left, less their key in the writer's input.
+      const noteRoom = writerBudget - evidenceBytes - bytes(`"research_notes":,`);
+      const notes: AgenticResearchNotesV1 = agenticResearchNotesV1({
         plan: bundle.plan, not_shown: notShown,
         shown: id => textGiven.has(id) || shownRows.has(id) || writerById.has(parseAgenticListIdV1(id) ?? "L0"),
         lists: writerLists.map(list => ({ list: list.id, read: list.checked, count: list.count })),
-        max_bytes: Math.max(0, writerBudget - evidenceBytes) + bytes(JSON.stringify(noteFrame)),
+        max_bytes: Math.max(0, noteRoom),
       });
+      const researchNotes = bytes(JSON.stringify(notes)) <= noteRoom ? { research_notes: notes } : {};
 
       // ---- the writer's sentences rest on text (W1) -------------------------
       /** A sentence resting on list rows or list ids: it cites one the writer saw, and no evidence text it read. */
@@ -451,13 +453,15 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         ...answerContext,
         // Research's working notes are advice, marked as research's own: never the person's question and never evidence.
         // The writer assesses the original question against released text.
-        research_notes: researchNotes,
+        ...researchNotes,
         lists: writerLists,
         evidence: evidence.map(entry => ({ ...describe(entry), text: entry.item.text })),
       }, writerSchema, parse);
       // A reply sent back only for a sentence resting on rows is still the writer's answer; code leaves that sentence out.
+      // Only a writer that ran and left no reply at all has fallen back here.
       const answer = written === null ? null : written.value ?? last.answer;
-      if (written?.value === null) observeCoreModelCorrectionV1("writer_fallback");
+      const noReply = written !== null && answer === null;
+      if (noReply) observeCoreModelCorrectionV1("writer_fallback");
       const writerEvidence: readonly string[] = written === null ? [] : writerShown;
 
       // ---- follow-ups (ADR-0053): each draft the writer gave, as code checks it -------------------------
@@ -587,8 +591,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const list = views.get(placed.list)!, all = rows.get(placed.list)!;
           const fill = agenticListFillV1({
             placed, all, list: listById.get(placed.list)!, member_of: id => membership.in(placed.list, id),
-            // The rows it saw listed, and any row whose own text it read.
-            shown: new Set([...shown.members.map(member => member.id), ...all.filter(member => textGiven.has(member.id)).map(member => member.id)]),
+            // The rows it saw listed, and the items whose text it read: a row's opened body names its row.
+            shown: new Set([...shown.members.map(member => member.id), ...textGiven]),
           });
           if ((fill.kind === "rows" || fill.kind === "dropped") && fill.unknown > 0) correct("writer_unknown_id_dropped", fill.unknown);
           if (fill.kind === "dropped") { droppedLists.add(placed.list); listGaps.push({ text: LIST_DROPPED_GAP, partial: true }); continue; }
@@ -654,7 +658,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
          */
         type Laid = {
           text: string; shorts: readonly string[]; read?: readonly string[]; shape: DraftShape; item?: AnswerItem; block?: number;
-          /** The lists a writer's sentence uses (listsCitedBy). */
+          /** The lists a writer's sentence uses (listsCitedBy), or the list a list statement states. */
           uses?: readonly AgenticListIdV1[];
           /** A placed list's statements share one `group`; `listed` counts the selected members this one names, and all of them. */
           group?: number; listed?: { readonly members: number; readonly selected: number };
@@ -722,7 +726,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
               rows: table.rows.slice(firstRow, firstRow + statement.names.length).map(row => ({ cells: row.cells, shorts: row.members.map(at => value.selected[at]!.id) })),
             };
             firstRow += statement.names.length;
-            return { text: statement.text, shorts: statement.cited.map(at => value.selected[at]!.id), shape,
+            return { text: statement.text, shorts: statement.cited.map(at => value.selected[at]!.id), shape, uses: [value.list.id],
               ...(block === undefined ? {} : { block, group, listed: { members: statement.cited.length, selected: value.selected.length } }) };
           });
         };
@@ -780,18 +784,28 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           return drafts;
         };
         // Only beside an answer with evidence: one with none cannot say what changed. With no statement, the fallback shows
-        // up to three records research read, unless the reply said what it did not find.
+        // up to three records research read, unless the reply said what it did not find. A usable reply never brings
+        // research-selected records with it (ADR-0054): a reply of only drafts says what it drafted.
         const notFound = [...(reply?.not_found ?? []), ...selectionNotFound.map(gap => gap.text)];
-        const fallbackRecords = notFound.length > 0 ? [] : (reply === null ? evidence.filter(entry => entry.full) : cited.filter(entry => textGiven.has(entry.short))).slice(0, 3);
+        const fallbackRecords = notFound.length > 0 || reply !== null ? [] : evidence.filter(entry => entry.full).slice(0, 3);
         const evidenced = fitted.length > 0 || fallbackRecords.length > 0;
         const sinceKept = !withSince || reply?.since === undefined || !evidenced ? undefined : sinceDrafts(reply.since);
+        // Only a writer that gave no answer block has its first item read as the answer (orderAskBlocksV2).
+        const keptLists = [...listStatements, ...placedStatements].filter(entry => kept.has(entry));
+        const reading = orderAskBlocksV2(keptLists, writerSentences.filter(entry => kept.has(entry)), sentences.some(sentence => sentence.item.kind === "answer"));
+        // An answer too large for its bytes keeps only its first statements, and says the rest did not fit.
+        const cut: readonly Laid[] = keep === undefined ? reading : reading.slice(0, keep);
+        if (cut.length < reading.length) dropped = true;
         /**
-         * The lists the answer uses (ADR-0054): those the writer placed, those a kept sentence or kept since sentence cites
-         * (listsCitedBy), and those code states with no usable writer reply. Their limits follow them: a list not read to its
-         * end, a filter that did not apply, and items its date filter could not test. No other list's limits are said.
+         * The lists the answer uses (ADR-0054), read from what is left after fitting: those a kept statement states, those a
+         * kept sentence or kept since sentence cites (listsCitedBy), and those the writer placed or code states with no
+         * usable writer reply that state nothing (a selection matching none, an empty list). Their limits follow them: a list
+         * not read to its end, a filter that did not apply, and items its date filter could not test. No other list's limits
+         * are said, and a list whose every statement fitting left out says none.
          */
-        const usedLists = [...new Set([...fallbackLists.map(use => use.id), ...placedLists,
-          ...fitted.flatMap(sentence => sentence.uses ?? []), ...(sinceKept ?? []).flatMap(value => value.uses)])].map(id => views.get(id)!);
+        const statedLists = new Set([...listStatements, ...placedStatements].flatMap(sentence => sentence.uses ?? []));
+        const usedLists = [...new Set([...[...fallbackLists.map(use => use.id), ...placedLists].filter(id => !statedLists.has(id)),
+          ...cut.flatMap(sentence => sentence.uses ?? []), ...(sinceKept ?? []).flatMap(value => value.uses)])].map(id => views.get(id)!);
         // A list that is not complete reads "at least", whatever it states, and the part says so.
         for (const list of usedLists) if (!list.complete) listGaps.push({ text: listEndGap(nounOf(list).plural), partial: true });
         // A list whose date filter could not test some items (research tool contract v1) supports neither "none" nor "all" of
@@ -804,12 +818,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           if (list.count === 0) uncheckedEmpty = true;
         }
         listGaps.push(...writerGaps);
-        // Only a writer that gave no answer block has its first item read as the answer (orderAskBlocksV2).
-        const keptLists = [...listStatements, ...placedStatements].filter(entry => kept.has(entry));
-        const reading = orderAskBlocksV2(keptLists, writerSentences.filter(entry => kept.has(entry)), sentences.some(sentence => sentence.item.kind === "answer"));
-        // An answer too large for its bytes keeps only its first statements, and says the rest did not fit.
-        const cut: readonly Laid[] = keep === undefined ? reading : reading.slice(0, keep);
-        if (cut.length < reading.length) dropped = true;
         // A placed list the cut left short says, in its caption and in each of its kept statements, how many it shows:
         // "(first 7 shown)". The caption is cut to fit beside the note, never the note.
         const shownOf = new Map<number, number>();
@@ -911,7 +919,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             ...(blocks === undefined ? {} : { blocks }),
           })]),
           citations: Object.freeze(anyEvidence ? used.map(entry => citationOfAgenticEvidenceItemV8(entry.item, timeZone)) : []),
-          ...(responseNotices.length === 0 ? {} : { notice: responseNotices.join(" ") }),
+          // The response holds a notice of 2 KiB: whole notices in order while they fit, the first that does not cut.
+          ...(responseNotices.length === 0 ? {} : { notice: boundedBytes(responseNotices.join(" "), NOTICE_MAX_BYTES) }),
           // Only an answer to a request that carried its previous turn names its question and says what is different since (ADR-0047).
           ...(options.answers === undefined ? {} : { question: options.answers }),
           ...(since === undefined ? {} : { since: Object.freeze({ statements: released(since) }) }),
@@ -929,8 +938,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const first = respond(answer, true, true);
       const usable = answer === null || first.survived;
       if (!usable) withheld = first.dropped_lists;
-      // A writer that gave up after its repair has already counted its fallback.
-      if (!usable && written?.value !== null) observeCoreModelCorrectionV1("writer_fallback");
+      // A writer that left no reply has already counted its fallback; one of whose reply nothing survived counts it here.
+      if (!usable) observeCoreModelCorrectionV1("writer_fallback");
       const reply = usable ? answer : null;
       // An answer is released within its byte bound. An Ask again's that cannot fit with its `since` goes without it
       // (ADR-0047); one that still cannot fit keeps the most statements, from its start as it reads, that fit, and says the
@@ -954,7 +963,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         cited: Object.freeze(used.slice(0, validated.citations.length).map(entry => entry.short)),
         // The writer never asks which one: only a follow-up's resolver does (ADR-0047).
         outcome: validated.outcome as Exclude<PersonAnswerResponseV8["outcome"], "clarify">,
-        fallbacks: written?.value === null || !usable ? 1 : 0,
+        // A release built from the writer's own reply, the first one kept after a failed repair included, is no fallback.
+        fallbacks: noReply || !usable ? 1 : 0,
         // Ask's answer is its direct statement and parts, and an answer to a request that carried its previous turn names
         // its question and what is different since (ADR-0047).
         answer_sha256: agenticAskAnswerSha256V1(validated, drafts),

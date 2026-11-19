@@ -698,15 +698,15 @@ export type AgenticListFillV1 =
 
 /**
  * Fills a placed list from the desk (ADR-0054). The whole list and a `where` read every member, including rows past
- * the writer's prompt, so nothing is retyped and the count is the desk's. Hand-picked `members` are kept only when they
- * name a row the writer was shown (an opened body counts as its row), each once and in list order: a writer never
- * reaches a row it did not see by naming its id.
+ * the writer's prompt, so nothing is retyped and the count is the desk's. Hand-picked `members` are kept only when the
+ * writer was shown the member's row or the id it names (an opened body counts as its row), each once and in list order:
+ * a writer never reaches a row it did not see by naming its id.
  */
 export function agenticListFillV1(input: {
   readonly placed: AgenticPlacedListV1;
   /** Every member of the desk list, in list order. */
   readonly all: readonly AgenticWriterListMemberV1[];
-  /** Row ids of this list the writer was shown. */
+  /** Ids the writer was shown: rows of this list, and items whose text it read. */
   readonly shown: ReadonlySet<string>;
   /** The member of this list an id is, or is part of (agenticListMembershipV1's `in`). */
   readonly member_of: (id: string) => string | undefined;
@@ -719,7 +719,7 @@ export function agenticListFillV1(input: {
     let unknown = 0;
     for (const id of placed.members) {
       const member = input.member_of(id);
-      if (member === undefined || !input.shown.has(member)) unknown += 1;
+      if (member === undefined || !(input.shown.has(member) || input.shown.has(id))) unknown += 1;
       else picked.add(member);
     }
     const selected = all.filter(member => picked.has(member.id));

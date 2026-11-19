@@ -827,6 +827,40 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(statementsOf(alonePast)).toEqual([REVIEW.text]);
       expect(alonePast.result.response.parts[0]).toMatchObject({ status: "partial", gap: LIST_DROPPED });
     });
+    it("hand-picks a member by its opened text when its row is past the writer's window", async () => {
+      // 80 rows whose long participant lists keep THERM-80's row past the writer's window; research opened its body as E81.
+      const research = listBundle(80, 0, [list("L1", ids(1, 80))], [C(["E81"])]);
+      const opened = Object.freeze({ ...research, items: [
+        ...research.items.map(entry => Object.freeze({ ...entry, item: { ...entry.item, attributes: { ...entry.item.attributes, participants: Array.from({ length: 40 }, (_, at) => `Person ${at + 1}`).join(", ") } } })),
+        Object.freeze({ short: "E81", source: "tickets", item: ticketRow(80, "THERM-80: BUG-412 blocks DVT."), full: true, opened: true, preloaded: false, touched: 81, cited_by_plan: true }),
+      ] });
+      const run = alone({ bundle: opened, replies: [placedOn("E81", { block: "list", list: "L1", members: ["E81"] })] });
+      const rendered = await run.render("Who owns THERM-80?");
+      expect(run.prompt(0).lists[0].members.map((member: { id: string }) => member.id)).not.toContain("E80");
+      expect(statementsOf(rendered)).toEqual([REVIEW.text, `1 of the 80 tickets created on October 4, 2026: ${facts(80)}.`]);
+      expect(rendered.result.response.parts[0]!.gap).toBeUndefined();
+    });
+    it("reports the limits only of lists the answer still uses after fitting", async () => {
+      // A complete 180-row L1 placed first, then a sentence citing the cut-short L2: fitting leaves that sentence out.
+      const research = listBundle(182, 1, [list("L1", ids(1, 180)), list("L2", ids(181, 2), { ended: false, truncated: true })], [C(["E183"])]);
+      const rendered = await alone({ bundle: research, replies: [{ blocks: [
+        { block: "answer", sentences: [{ ...REVIEW, evidence: ["E183"] }] }, { block: "list", list: "L1" },
+        { block: "text", sentences: [{ text: "The review also covers the open work.", evidence: ["L2", "E183"] }] },
+      ], not_found: ["the Harbor owner"] }] }).render("Which tickets were created on October 4, and who owns Harbor?");
+      const part = rendered.result.response.parts[0]!;
+      expect(statementsOf(rendered)).not.toContain("The review also covers the open work.");
+      expect(part.gap).toContain(FIT);
+      expect(part.gap).not.toContain(LEG);
+      expect(part.gap_details).toEqual({ not_found: "Not found: the Harbor owner." });
+    });
+    it("counts no fallback when it releases the writer's first reply after a malformed repair", async () => {
+      const run = alone({ bundle: eightAnd1([C(["E9"])]), replies: [writerReply([REVIEW, { text: "THERM-2 is in progress.", evidence: ["E2"] }], { lists: [{ id: "L1" }] }), { wrong: true }] });
+      const { rendered, corrections } = await observed(() => run.render(Q));
+      expect(run.trace.filter(step => step === "generate")).toHaveLength(2);
+      expect(statementsOf(rendered)).toEqual([REVIEW.text, EIGHT]);
+      expect(rendered.fallbacks).toBe(0);
+      expect(corrections).not.toHaveProperty("writer_fallback");
+    });
     it("drops a list block whose narrowing could not be read and says so", async () => {
       const rendered = await alone({ bundle: eightAnd1([C(["E9"])]), replies: [placing({ block: "list", list: "L1", members: "E5" })] }).render("Which tickets?");
       expect(statementsOf(rendered)).toEqual([REVIEW.text]);
@@ -963,11 +997,21 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       const research = listBundle(48, 1, Array.from({ length: 6 }, (_, at) => list(`L${at + 1}`, ids(at * 8 + 1, 8))), [C(["E49"])]);
       const run = alone({ bundle: research, replies: [placedOn("E49", { block: "list", list: "L6" }, { block: "list", list: "L1" })] });
       const { rendered, corrections } = await observed(() => run.render(Q));
-      expect(run.prompt(0).research_notes.not_shown).toEqual({ lists: 1, list_rows: 0 });
-      expect(rendered.result.response.notice).toContain("1 list research read was not shown to the answer's writer.");
+      // The sixth list's eight rows were not shown either.
+      expect(run.prompt(0).research_notes.not_shown).toEqual({ lists: 1, list_rows: 8 });
+      expect(rendered.result.response.notice).toContain("1 list research read was not shown to the answer's writer. 8 list rows were not shown to the answer's writer.");
       expect(blocksOf(rendered).filter(block => block.kind === "table").map(block => block.kind === "table" ? block.rows.length : 0)).toEqual([8]);
       expect(rendered.cited).toEqual(["E49", ...ids(1, 8)]);
       expect(corrections).toMatchObject({ writer_unknown_id_dropped: 1 });
+    });
+    it("bounds the response's notice to its 2 KiB, keeping whole notices in order while they fit", async () => {
+      // Two 1,000-byte coverage notices, and the notice of a sixth list the writer was not shown.
+      const research = listBundle(48, 1, Array.from({ length: 6 }, (_, at) => list(`L${at + 1}`, ids(at * 8 + 1, 8))), [C(["E49"])]);
+      const long = (n: number) => `Coverage note ${n}: ${"x".repeat(1_000 - `Coverage note ${n}: `.length)}`;
+      const rendered = await alone({ bundle: { ...research, coverage: { reads: [], inventories: [], notices: [long(1), long(2)] } }, replies: [placedOn("E49")] }).render(Q);
+      const notice = rendered.result.response.notice!;
+      expect(Buffer.byteLength(notice, "utf8")).toBeLessThanOrEqual(2 * 1024);
+      expect(notice.startsWith(`${long(1)} ${long(2)} `)).toBe(true);
     });
     it("writes from notes that say nothing: an interrupted Claude account run's one synthetic open need", async () => {
       const research: AgenticEvidenceBundleV1 = { ...records(1), plan: [{ part: 1, question: Q, notes: "", needs: [{ need: Q, kind: "content", status: "open", evidence: [] }] }], stop: { reason: "budget", completed: false } };
@@ -1013,19 +1057,20 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       await run.render(Q);
       expect(run.prompt(0).lists.map((value: { id: string }) => value.id)).toEqual(["L7", "L1", "L2", "L3", "L4"]);
     });
-    it("gives evidence its room before the notes", async () => {
-      // Records that fill the writer's room, and a 30-need plan: the notes take only what the evidence left.
-      const long = (n: number) => record(`r${n}`, `Approved record ${n}. ${"Detail ".repeat(400)}`);
-      const many = bundle(Array.from({ length: 60 }, (_, at) => ({ item: long(at + 1), full: true, touched: at + 1 })), []);
-      const plan = [{ part: 1, question: Q, notes: "", needs: Array.from({ length: 30 }, (_, at) => ({ need: `need ${at + 1} ${"x".repeat(200)}`, status: "found" as const, evidence: [`E${at + 1}`] })) }];
-      const withNotes = alone({ bundle: { ...many, plan }, replies: [writerReply([{ text: "Approved record 1 says so.", evidence: ["E1"] }])] });
-      await withNotes.render(Q);
-      const without = alone({ bundle: { ...many, plan: [] }, replies: [writerReply([{ text: "Approved record 1 says so.", evidence: ["E1"] }])] });
-      await without.render(Q);
-      const shown = (run: ReturnType<typeof alone>) => (run.prompt(0).evidence as { text: string }[]).map(entry => entry.text);
-      expect(shown(without).length).toBeLessThan(60);
-      expect(shown(withNotes)).toEqual(expect.arrayContaining(shown(without)));
-      expect(withNotes.prompt(0).research_notes.needs_omitted).toBeGreaterThan(0);
+    it("gives evidence the whole room before the notes, which give way need by need and then entirely", async () => {
+      // One passage, cited by a 30-need plan, and no list: the writer runs only when the passage is admitted.
+      const plan = [{ part: 1, question: Q, notes: "", needs: Array.from({ length: 30 }, (_, at) => ({ need: `need ${at + 1} ${"x".repeat(200)}`, status: "found" as const, evidence: ["E1"] })) }];
+      const sole = (size: number) => alone({ bundle: { ...bundle([{ item: record("r1", "y".repeat(size)), full: true, touched: 1 }], ["E1"]), plan }, replies: [writerReply([{ text: "Approved record 1 says so.", evidence: ["E1"] }])] });
+      const runs = async (size: number) => { const run = sole(size); await run.render(Q); return run.trace.includes("generate") ? run : undefined; };
+      // The largest passage the writer is given: it fits the room with fewer bytes to spare than the notes' frame takes.
+      let low = 0, high = 4_000_000;
+      while (low < high) { const mid = Math.ceil((low + high) / 2); if (await runs(mid) !== undefined) low = mid; else high = mid - 1; }
+      const edge = (await runs(low))!;
+      expect(edge.prompt(0).evidence).toHaveLength(1);
+      expect(edge.prompt(0)).not.toHaveProperty("research_notes");
+      // With a little more room the notes come back, their needs left out from the end.
+      const roomier = (await runs(low - 2_000))!;
+      expect(roomier.prompt(0).research_notes.needs_omitted).toBeGreaterThan(0);
     });
   });
 });
