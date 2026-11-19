@@ -68,7 +68,7 @@ const VALUE_CHARS = 200;
 const FROM_CHARS = 120;
 /** A drafted follow-up's task as code stores it (ADR-0053), and the longest owner name it keeps. */
 export const FOLLOW_UP_TASK_CHARS = 120;
-export const FOLLOW_UP_OWNER_CHARS = 200;
+const FOLLOW_UP_OWNER_CHARS = 200;
 
 /** A model response failed its closed, request-local protocol. */
 export class AgenticAskOutputErrorV1 extends Error {

@@ -6,6 +6,7 @@ import {
   AUTHORITY_BASELINE_SCHEMA_VERSION,
   authorityBaselineSha256,
 } from "../../../../src/adapters/persistence/sqlite/baseline.js";
+import { ASK_FOLLOW_UP_ABOUT_KINDS_V1 } from "../../../../src/answer-composition/ask-follow-ups-v1.js";
 
 const databases: Database.Database[] = [];
 const NOW = "2026-09-26T00:00:00.000Z";
@@ -117,6 +118,13 @@ describe("Authority baseline V17", () => {
       database.prepare("INSERT INTO authority_memberships(membership_id, organization_id, principal_id, membership_type, status, provisioned_at, employee_email, employee_email_sha256) VALUES (?, ?, ?, 'employee', 'active', ?, 'owner@example.test', ?)").run(OTHER, ORG, OTHER_PRINCIPAL, NOW, `sha256:${"e".repeat(64)}`);
       return database;
     }
+
+    it("lets a chat follow-up point only at itself or at an item of the kinds Ask's writer may link (ASK_FOLLOW_UP_ABOUT_KINDS_V1)", () => {
+      const { sql } = seeded().prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'authority_impact_item_chat_insert_v1'").get() as { sql: string };
+      const kinds = /'\$\.kind'\), ''\) NOT IN \(([^)]*)\)/u.exec(sql)?.[1]?.split(",").map(kind => kind.trim().replace(/^'|'$/gu, ""));
+      expect(new Set(kinds)).toEqual(new Set(["chat_action", ...ASK_FOLLOW_UP_ABOUT_KINDS_V1]));
+      expect(kinds).toHaveLength(ASK_FOLLOW_UP_ABOUT_KINDS_V1.length + 1);
+    });
 
     it("makes the run, the record and the due date optional columns", () => {
       const database = seeded();

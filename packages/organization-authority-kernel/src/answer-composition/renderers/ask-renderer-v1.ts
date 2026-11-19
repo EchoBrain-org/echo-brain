@@ -23,8 +23,6 @@ import {
   cleanId,
   cleanLine,
   cleanModelId,
-  cleanModelLine,
-  FOLLOW_UP_OWNER_CHARS,
   FOLLOW_UP_TASK_CHARS,
   parseBlocksAnswer,
   partQuestion,
@@ -67,7 +65,7 @@ import { AGENTIC_ASK_MIN_ANSWER_MS_V1, type AgenticModelCallV1 } from "../agenti
 import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
 import { observeCoreModelCorrectionV1, type CoreRuntimeModelCorrectionV1 } from "../../shared/core-runtime-observation-v1.js";
 import { buildAskBlocksV2, daysWrittenV2, orderAskBlocksV2, quoteIsWordForWordV2, type AskBlockStatementV2 } from "./ask-layout-v2.js";
-import { askFollowUpItemIdV1, type AskFollowUpDraftV1 } from "../ask-follow-ups-v1.js";
+import { ASK_FOLLOW_UP_ABOUT_KINDS_V1, askFollowUpItemIdV1, type AskFollowUpDraftV1 } from "../ask-follow-ups-v1.js";
 import { impactItemKeyV1, outsideLabelScreenV1 } from "./impact-card-storage-v1.js";
 
 /**
@@ -123,8 +121,6 @@ function wordRuns(text: string): readonly string[] {
   const words = text.normalize("NFC").toLowerCase().match(UNSPACED_CHARACTER_OR_WORD) ?? [];
   return words.length < COPIED_RUN_WORDS ? [] : words.slice(0, words.length - COPIED_RUN_WORDS + 1).map((_, at) => words.slice(at, at + COPIED_RUN_WORDS).join(" "));
 }
-/** The items a drafted follow-up may be about: a ticket, a page, an ECHO record or an ECHO document (ADR-0053). */
-const FOLLOW_UP_ABOUT_KINDS: ReadonlySet<string> = new Set(["ticket", "page", "approved_record", "source_revision"]);
 /**
  * ECHO's own items, whose titles a stored line may keep: its records and documents, as for an impact card, and the
  * asker's workspace directory (a project, a person, a tool), whose names a task and its owner must be free to use. Every
@@ -507,21 +503,22 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           if (given.length > 0) observeCoreModelCorrectionV1("follow_up_dropped", given.length);
           return [];
         }
+        if (given.length === 0) return Object.freeze([]);
         const { request_id: requestId } = options.follow_ups;
-        const screen = outsideLabelScreenV1(bundle.items.filter(entry => !ECHO_CITATION_KINDS.has(entry.item.citation.kind))
-          .flatMap(entry => [entry.item.label, agenticEvidenceLabelV1(entry.item, timeZone), ...(entry.item.list_label === undefined ? [] : [entry.item.list_label])]));
-        // Text copied from an outside item: any run of COPIED_RUN_WORDS words its text or title holds, unless the person's
-        // question or the text or title of one of ECHO's own items holds that run too.
         const outside = bundle.items.filter(entry => !ECHO_CITATION_KINDS.has(entry.item.citation.kind));
         const echoOwn = bundle.items.filter(entry => ECHO_CITATION_KINDS.has(entry.item.citation.kind));
+        const screen = outsideLabelScreenV1(outside.flatMap(entry => [entry.item.label, agenticEvidenceLabelV1(entry.item, timeZone), ...(entry.item.list_label === undefined ? [] : [entry.item.list_label])]));
+        // Text copied from an outside item: any run of COPIED_RUN_WORDS words its text or title holds, unless the person's
+        // question or the text or title of one of ECHO's own items holds that run too.
         const runsOf = (values: readonly (string | undefined)[]) => new Set(values.flatMap(value => value === undefined ? [] : wordRuns(value)));
         // Only what the person typed vouches for their words: a follow-up's rewritten question can carry an outside item's text.
         const allowed = runsOf([input.trigger_input.typed_question ?? askedQuestion, ...echoOwn.flatMap(entry => [entry.item.text, entry.item.label])]);
         const copied = new Set([...runsOf(outside.flatMap(entry => [entry.item.text, entry.item.label, entry.item.list_label]))].filter(run => !allowed.has(run)));
         const kept: AskFollowUpDraftV1[] = [];
         const seen = new Set<string>();
+        // The parser already put each task and owner on one line within its bound (followUpsOf).
         for (const draft of given) {
-          const line = cleanModelLine(draft.task, FOLLOW_UP_TASK_CHARS);
+          const line = draft.task;
           // A sentence copied from an outside item's text is never stored, in any spelling or punctuation (ADR-0032).
           if (wordRuns(line).some(run => copied.has(run))) {
             observeCoreModelCorrectionV1("follow_up_task_screened"); observeCoreModelCorrectionV1("follow_up_dropped"); continue;
@@ -531,13 +528,13 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const task = screened ? screen.scrub(line, FOLLOW_UP_TASK_CHARS) : line;
           // A task that was only an outside title says nothing of ECHO's own.
           if (task.length === 0 || /^a cited item[.!]?$/iu.test(task)) { observeCoreModelCorrectionV1("follow_up_dropped"); continue; }
-          let owner = draft.owner === undefined ? "" : cleanModelLine(draft.owner, FOLLOW_UP_OWNER_CHARS);
+          let owner = draft.owner ?? "";
           if (owner.length > 0 && screen.names(owner)) { observeCoreModelCorrectionV1("follow_up_owner_dropped"); owner = ""; }
           const due = draft.due_on === undefined ? undefined : calendarDay(draft.due_on);
           if (draft.due_on !== undefined && due === undefined) observeCoreModelCorrectionV1("follow_up_date_dropped");
           const aboutId = draft.about === undefined ? null : cleanModelId(draft.about);
           const aboutEntry = aboutId === null || !(textGiven.has(aboutId) || shownRows.has(aboutId)) ? undefined : byShort.get(aboutId);
-          const pointer = aboutEntry === undefined || !FOLLOW_UP_ABOUT_KINDS.has(aboutEntry.item.citation.kind) ? undefined
+          const pointer = aboutEntry === undefined || !ASK_FOLLOW_UP_ABOUT_KINDS_V1.includes(aboutEntry.item.citation.kind) ? undefined
             : citationOfAgenticEvidenceItemV8(aboutEntry.item, timeZone).citation as unknown as Readonly<Record<string, unknown>>;
           const about = pointer !== undefined && impactItemKeyV1(pointer) !== undefined ? pointer : undefined;
           if (draft.about !== undefined && about === undefined) observeCoreModelCorrectionV1("follow_up_link_dropped");
