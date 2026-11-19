@@ -116,8 +116,9 @@ Options for asking the person whether they want a card:
 - **A meeting action's deadline reads as that one day everywhere.** The
   proposal, the approved decision, the action's card and what Ask reads of the
   meeting all state the deadline as its calendar day in the meeting's own time
-  zone (UTC when the meeting names none), never as an instant drawn in the
-  reader's time zone. One piece of code works the day out for all four. A
+  zone (UTC when the meeting names none, or names something that is not a
+  time zone), never as an instant drawn in the reader's time zone. One piece
+  of code works the day out for all four. A
   review item carries it as `due_on` beside the instant `due_at`; Ask's
   meeting source gives the day as the action's due date and matches a due-date
   window against it. A deadline that cannot be written as a calendar day has
@@ -157,6 +158,12 @@ Known limits of what was built, found in review on 2026-11-18:
   fails while the audit still records the answer.
 - A member who stops owning a card while they are reading it may still receive
   that one read.
+- What Ask reads of a meeting states an action's deadline as a day only (its
+  `attributes.due_at` and `dates.due`). The time of a deadline that was set
+  with an explicit time is not in those fields. A date-only deadline is
+  stored as noon in the meeting's time zone, so the stored instant cannot tell
+  "by November 20" from "by noon on November 20", and showing a time would
+  invent one. A review item still carries the instant as `due_at`.
 
 Not decided here: the after-approval impact check adopting the same card
 form, a card tool inside the loop, and a plain "new card" form.
@@ -180,6 +187,11 @@ form, a card tool inside the loop, and a plain "new card" form.
   same holds for an opened review, whose items gained `due_on`. That field
   needed no storage change: the day is worked out from the stored deadline
   each time it is read.
+- `due_on` adds at most 22 bytes to a review item, and a review holds at most
+  500 items. The review response's byte bound grew by that much, from 120,000
+  to 131,000, so every review that opened before still opens. It stays within
+  the 131,072 bytes the Authority answers a tool route in and the client
+  reads.
 - Rollback is not designed yet. A chat card has no run or record to fall back
   to, so removing the feature after cards exist needs its own answer.
 - Evidence still to gather: the Ask writer's live evaluation. Its five cases
