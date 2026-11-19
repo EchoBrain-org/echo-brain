@@ -5,7 +5,7 @@ import { externalSourceProvider } from '../answer.js';
 import { message } from '../messages.js';
 import {
   CLOSED_STATES, followUpAge, followUpHover, followUpMark, followUpOrder, followUpProgress, itemHistory, itemKind, itemNames, itemTitle,
-  liveFacts, markWords, monthDay, ownerLine, ownerRows, ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, STAGES,
+  expectedWords, liveFacts, markWords, monthDay, ownerLine, ownerRows, ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, STAGES,
   summaryTotal, type OwnerFace,
 } from '../needs.js';
 import {
@@ -375,7 +375,7 @@ function Why({ state, item, reading }: { state: State; item: OpenItemView; readi
           <span class={`card-delta-now${reading ? ' reading-title' : ''}`}>{reading ? 'Reading…' : saysNow(item)}</span>
           {facts && <span class="card-delta-facts faint" data-testid="follow-up-facts">{facts}</span>}
         </div>
-        {item.expected !== null && <div><span class="card-delta-label needs">Meeting decided</span><span>{item.expected}</span></div>}
+        {item.expected !== null && <div><span class="card-delta-label needs">Meeting decided</span><span>{item.kind === 'action' ? expectedWords(item.expected) : item.expected}</span></div>}
       </div>
       <OpenInTool state={state} item={item} />
     </section>

@@ -22,6 +22,14 @@ records the original intake and routing design; its hand-in sections are histori
 
 ## Goal
 
+Implementation update, 2026-11-17: manual browsing and automatic watch discovery
+use Granola `search_meetings`, with pages capped at 100 and bounded continuation
+through empty pages. Personal discovery additionally requires each result's
+`captured_by_me` flag; attendance alone never authorizes automatic intake.
+Incomplete searches fail without advancing the watch baseline. A failed manual
+listing shows an error, and Refresh retries the currently selected folder.
+The seven-day watch and explicit historical-import rules below are unchanged.
+
 Meetings enter ECHO automatically and stay private. Sharing is a choice made
 per item: each decision or action goes to its own project, to several, to the
 reviewer alone, or nowhere. A meeting source only delivers meetings; it never
@@ -361,14 +369,20 @@ these were decided while building and reviewing it.
     window held before that moment, so a meeting that ends between Save and
     the first pass is still imported. Changing only the suggested project
     keeps change detection; Save updates an active watch.
-12. A meeting Granola can never give (unusable output) is passed over at its
-    listed version, at most five per pull, and the watch moves on; an outage,
-    a rate limit or changed access still fails the pull. Titles, participant
-    lists and transcripts are trimmed to their caps instead of failing.
-13. A transcript Granola says is pending is left for a later pull, without
-    passing the meeting over. A meeting with no transcript (`no_transcript`,
-    `transcript_deleted`) imports with its notes and summary alone.
-    Transcripts are read in 80,000-character pages up to the 256 KiB kept.
+12. A failed detail or transcript read stays eligible at the same revision.
+    The watch stores a ten-minute retry time per meeting and defers at most
+    five failed reads per pull. Other selected meetings and the watch continue.
+    An outage, rate limit or loss of access stops the pull. A historical
+    meeting without a known baseline revision establishes its baseline on
+    the first successful read. To recover a specific past meeting, select it
+    in **Extract from one meeting** and allow retention.
+13. A pending transcript is retried. A meeting with a final
+    `no_transcript` or `transcript_deleted` response imports with notes and
+    summary alone. Acquisition reads up to eight 80,000-character pages and
+    256 KiB. A shortened transcript carries partial coverage into custody.
+    Personal Granola requires Nango Cloud and permission to read the selected
+    transcript. A linked account alone establishes neither. OpenRouter billing
+    refusals use the existing shared provider cooldown and bounded retry.
 14. The 200-meeting window cap is checked at Save and has its own status line.
 15. A whole-day pasted meeting is its date at noon UTC; review rows carry
     `all_day`, and the card and Home show the UTC date only. The importer

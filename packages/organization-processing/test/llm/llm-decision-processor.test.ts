@@ -368,6 +368,16 @@ describe('llm decision processor extraction', () => {
     ]);
   });
 
+  it('rechecks action owners against the quotes that survive the meeting byte limit', async () => {
+    const text = ['一', '二', '三', '四'].map(c => c.repeat(599)).concat('Maya ' + '五'.repeat(594)).join('\n');
+    const wide: MeetingDocument = { ...meeting, content: [{ id: 'notes-1', kind: 'note', text }] };
+    const result = await extractWith(modelOutput(Array.from({ length: 25 }, (_, i) =>
+      modelSignal({ kind: 'action', text: `Task ${i}`, owner: 'Maya', evidence_units: ['N1', 'N2', 'N3', 'N4', 'N5'] }))), wide);
+    const trimmed = result.signals.filter(signal => !signal.evidence.some(span => span.quote?.includes('Maya')));
+    expect(trimmed.length).toBeGreaterThan(0);
+    expect(trimmed.every(signal => signal.kind === 'action' && signal.owner === null)).toBe(true);
+  });
+
   it('trims the largest evidence lists, last span first, until the meeting fits 160,000 evidence bytes', async () => {
     // N1–N5 are 600 CJK characters each, so every span is 1,862 bytes of JSON and at most 85 spans fit.
     const wide: MeetingDocument = { ...meeting, content: [

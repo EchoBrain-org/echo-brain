@@ -52,6 +52,9 @@ export function triggerRunStateAtV1(row: Pick<TriggerRunRowV1, 'state' | 'lease_
   return row.state === 'running' && row.lease_expires_at !== null && row.lease_expires_at <= at ? 'pending' : row.state;
 }
 
+/** The counted attempts (a timeout or an outage each) after which a run fails rather than queue again. */
+export const TRIGGER_RUN_ATTEMPTS_MAX_V1 = 3;
+
 /**
  * Durable runs: an approved record's impact check. Actor-fenced, except the
  * reads named unfenced, whose callers apply the open-items access policy before
@@ -169,7 +172,7 @@ export class SqliteTriggerRunsV1 {
           WHERE run_id=? AND state='running' AND lease_token=? AND lease_expires_at>?`).run(timestamp, runId, leaseToken, timestamp);
       } else {
         const attempts = current.attempts + 1;
-        if (attempts >= 3) this.database.prepare(`UPDATE authority_trigger_runs_v1 SET state='failed', attempts=?, lease_token=NULL,
+        if (attempts >= TRIGGER_RUN_ATTEMPTS_MAX_V1) this.database.prepare(`UPDATE authority_trigger_runs_v1 SET state='failed', attempts=?, lease_token=NULL,
           lease_expires_at=NULL, error_code=?, updated_at=? WHERE run_id=? AND state='running' AND lease_token=? AND lease_expires_at>?`).run(attempts, attempt.exhausted, timestamp, runId, leaseToken, timestamp);
         else this.database.prepare(`UPDATE authority_trigger_runs_v1 SET state='pending', attempts=?, lease_token=NULL,
           lease_expires_at=NULL, updated_at=? WHERE run_id=? AND state='running' AND lease_token=? AND lease_expires_at>?`).run(attempts, timestamp, runId, leaseToken, timestamp);

@@ -42,6 +42,36 @@ const folders = { count: 1, folders: [{ id: folder, title: 'ECHO', description: 
 const empty = { count: 0, total_in_range: 0, meetings: [] };
 
 describe('Granola verified account and meeting listings', () => {
+  it('browses a populated folder through current meeting search when the old listing tool is unavailable', async () => {
+    const db = new Database(':memory:');
+    try {
+      const { service, calls } = await connected(db, name => {
+        if (name === 'get_account_info') return account();
+        if (name === 'list_meeting_folders') return folders;
+        if (name !== 'search_meetings') return new Response('', { status: 502 });
+        return `<pagination has_more="false" total_count="1" completion_status="exhausted" />\n\n<meetings_data count="1"><meeting id="${workspace}" title="Pilot planning" date="Jul 9, 2026" captured_by_me="true" url="https://notes.granola.ai/d/${workspace}" /></meetings_data>`;
+      });
+      const session = await service.open(person, () => {});
+      expect(await session.recent(folder)).toMatchObject([{ id: workspace, title: 'Pilot planning' }]);
+      expect(calls.find(call => call.name === 'search_meetings')?.arguments).toMatchObject({ folder_id: folder, from_date: '1970-01-01' });
+    } finally { db.close(); }
+  });
+  it('continues empty or attendance-only browse pages without importing another person\'s recording', async () => {
+    const db = new Database(':memory:');
+    try {
+      const { service } = await connected(db, (name, args) => {
+        if (name === 'get_account_info') return account();
+        if (name === 'list_meeting_folders') return folders;
+        if (args.cursor === undefined) return '<pagination has_more="true" next_cursor="empty" /><meetings_data count="0" />';
+        const own = args.cursor === 'own';
+        const key = own ? workspace : folder;
+        return `<pagination has_more="${!own}" ${own ? '' : 'next_cursor="own"'} /><meetings_data count="1"><meeting id="${key}" title="Pilot planning" date="Jul 9, 2026" captured_by_me="${own}" url="https://notes.granola.ai/d/${key}" /></meetings_data>`;
+      });
+      const session = await service.open(person, () => {});
+      expect((await session.recent(null)).map(meeting => meeting.id)).toEqual([workspace]);
+      expect((await session.recent(folder)).map(meeting => meeting.id)).toEqual([folder, workspace]);
+    } finally { db.close(); }
+  });
   it('maps folders independently of watches and fences reads on mapping, project grant and connection changes', async () => {
     const db = new Database(':memory:');
     try {
@@ -55,7 +85,7 @@ describe('Granola verified account and meeting listings', () => {
       const saved = await service.projectSet({ access_token: 'session', request: command });
       expect(saved.mapping).toEqual({ cloud_id: workspace, folder_ids: [folder] });
       expect(await service.projectSet({ access_token: 'session', request: command })).toEqual(saved);
-      expect(calls.filter(call => call.name === 'list_meetings')).toEqual([]);
+      expect(calls.filter(call => call.name === 'search_meetings')).toEqual([]);
       const source = await service.source({ access_token: 'session', project_id, audit });
       expect(source).toBeDefined(); source!.assertCurrent();
       project.revision++;
@@ -135,7 +165,7 @@ describe('Granola verified account and meeting listings', () => {
     try {
       let changed = false;
       const { service, store } = await connected(db, name => {
-        if (changed && change === 'plan' && name === 'list_meetings') return new Response('', { status: 403 });
+        if (changed && change === 'plan' && name === 'search_meetings') return new Response('', { status: 403 });
         if (name === 'get_account_info') return account(changed && change === 'account' ? 'other@example.test' : undefined, changed && change === 'workspace' ? '00000000-0000-4000-8000-000000000002' : workspace);
         if (name === 'list_meeting_folders') return folders;
         return changed && change === 'full' ? '<meetings_data count="0"></meetings_data><pagination has_more="false" total_count="201" />' : empty;
@@ -165,13 +195,13 @@ describe('Granola verified account and meeting listings', () => {
       calls.length = 0;
       expect(await session.recent(null)).toEqual([]);
       expect(await session.recent(folder)).toEqual([]);
-      const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
-      const listed = { time_range: 'custom', from_date: '1970-01-01', to_date: tomorrow, limit: 50, max_participants: 50 };
+      const listed = { from_date: '1970-01-01', to_date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T.*Z$/), limit: 50, max_participants: 50 };
       expect(calls.filter(call => call.name !== 'get_account_info')).toEqual([
-        { name: 'list_meetings', arguments: { ...listed, involvement: { captured_by_me: true } } },
+        { name: 'search_meetings', arguments: { ...listed, attended_only: true, include_shared: false } },
         { name: 'list_meeting_folders', arguments: { limit: 100, offset: 0 } },
-        { name: 'list_meetings', arguments: { ...listed, folder_id: folder } },
+        { name: 'search_meetings', arguments: { ...listed, folder_id: folder, include_shared: true } },
       ]);
+      for (const call of calls.filter(call => call.name === 'search_meetings')) expect(Date.parse(call.arguments.to_date as string)).toBeLessThanOrEqual(Date.now());
       await expect(session.recent('00000000-0000-4000-8000-0000000000f2')).rejects.toMatchObject({ code: 'not_found' });
       await expect(session.window({ ...window, mode: 'mine' })).rejects.toMatchObject({ code: 'invalid_request' });
     } finally { db.close(); }
@@ -186,11 +216,11 @@ describe('Granola verified account and meeting listings', () => {
       calls.length = 0;
       await session.watchable({ watch: 'mine', folder_id: null });
       await session.watchable({ watch: 'folder', folder_id: folder });
-      const days = { time_range: 'custom', ...granolaWatchWindowV1(Date.now()), limit: 200, max_participants: 50 };
+      const days = { ...granolaWatchWindowV1(Date.now()), to_date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T.*Z$/), limit: 100, max_participants: 50 };
       expect(calls.filter(call => call.name !== 'get_account_info')).toEqual([
-        { name: 'list_meetings', arguments: { ...days, involvement: { captured_by_me: true } } },
+        { name: 'search_meetings', arguments: { ...days, attended_only: true, include_shared: false } },
         { name: 'list_meeting_folders', arguments: { limit: 100, offset: 0 } },
-        { name: 'list_meetings', arguments: { ...days, folder_id: folder } },
+        { name: 'search_meetings', arguments: { ...days, folder_id: folder, include_shared: true } },
       ]);
       await expect(session.watchable({ watch: 'folder', folder_id: '00000000-0000-4000-8000-0000000000f2' })).rejects.toMatchObject({ code: 'not_found' });
       await expect(session.watchable({ watch: 'off', folder_id: null })).rejects.toMatchObject({ code: 'invalid_request' });

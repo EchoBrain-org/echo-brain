@@ -21,7 +21,7 @@ const UNTITLED = 'Untitled meeting';
 /** Only this selecting bootstrap knows Granola; it opens the Granola connections and returns one meeting provider. */
 export function openGranolaPersonMeetingProviderV1(options: {
   readonly state_directory: string; readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
-  readonly resources: Pick<PersonHttpRuntimeResourcesV1, 'coordinates'>; readonly nango_authorization: () => string;
+  readonly resources: Pick<PersonHttpRuntimeResourcesV1, 'coordinates'>; readonly nango_authorization: () => string; readonly nango_base_url?: string;
   readonly seams?: { readonly database?: Database.Database; readonly nango?: NangoPersonConnectionV1; readonly fetch?: typeof fetch };
 }): { readonly provider: PersonMeetingProviderV1; readonly live_connector: PersonLiveConnectorDefinitionV1; close(): void } {
   const { coordinates } = options.resources;
@@ -33,7 +33,7 @@ export function openGranolaPersonMeetingProviderV1(options: {
   try {
     const transport = options.seams?.fetch ?? fetch;
     const connectionOptions = { store: new PersonConnectionStoreV1(connections, GRANOLA_PERSON_PROVIDER_V1),
-      nango: options.seams?.nango ?? createNangoPersonConnectionV1({ provider: GRANOLA_PERSON_PROVIDER_V1, integration_id: 'granola-mcp', authorization: options.nango_authorization, fetch: transport }),
+      nango: options.seams?.nango ?? createNangoPersonConnectionV1({ provider: GRANOLA_PERSON_PROVIDER_V1, integration_id: 'granola-mcp', ...(options.nango_base_url === undefined ? {} : { base_url: options.nango_base_url }), authorization: options.nango_authorization, fetch: transport }),
       fetch: transport, authenticate: personToolAuthenticationV1(options.sessions) };
     const application = createGranolaPersonConnectionV1(connectionOptions);
     const provider: PersonMeetingProviderV1 = {

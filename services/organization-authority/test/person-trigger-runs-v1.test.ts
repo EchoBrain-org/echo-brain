@@ -518,12 +518,12 @@ describe('open items written when an impact check finishes', () => {
     expect(actions.get('act-4')).toMatchObject({ expected: 'Order spare fans', owner_membership_id: f.membership('ari'), owner_match: 'approver' });
   });
 
-  it('makes at most twenty meeting actions into follow-ups, the first ones in the brief that have a line', async () => {
-    // Three actions with no printable text first: they make nothing, and so take none of the twenty.
+  it('makes every printable meeting action into a follow-up', async () => {
+    // Three actions have no printable text.
     const f = await openItemsFixture({ meetingActions: Array.from({ length: 25 }, (_, at) => ({ signal_id: `act-${String(at).padStart(2, '0')}`, text: at < 3 ? ' \u0007 ' : `Action ${at}`, owner: null })) });
     await f.finishImpactRun();
     const signals = f.items.forRun(f.runId).filter(item => item.pointer.kind === 'meeting_action').map(item => item.pointer.signal_id as string).sort();
-    expect(signals).toEqual(Array.from({ length: 20 }, (_, at) => `act-${String(at + 3).padStart(2, '0')}`));
+    expect(signals).toEqual(Array.from({ length: 22 }, (_, at) => `act-${String(at + 3).padStart(2, '0')}`));
   });
 
   it('never makes the approved meeting\'s own record a follow-up of itself', async () => {

@@ -40,6 +40,7 @@ export function Meetings({ toolId }: { toolId: string }) {
   const alive = useRef(true);
   const [home, setHome] = useState<PersonMeetingHomeV2 | null>(null);
   const [meetings, setMeetings] = useState<PersonMeetingResultsV2['browse']['meetings']>([]);
+  const [browseState, setBrowseState] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle');
   const [preview, setPreview] = useState<PersonMeetingResultsV2['open'] | null>(null);
   // Automatic extraction: what it watches, its folder, and the project it suggests.
   const [mode, setMode] = useState<PersonMeetingWatchV2>('off'), [watchFolder, setWatchFolder] = useState(''), [suggest, setSuggest] = useState('');
@@ -57,16 +58,21 @@ export function Meetings({ toolId }: { toolId: string }) {
   }
   /** Your recent meetings, or one folder's, newest first. */
   async function browse(folder: string) {
-    setMeetings([]); setPreview(null);
-    const result = await command({ operation: 'browse', folder_id: folder || null });
-    if (alive.current) setMeetings(result.meetings);
+    setMeetings([]); setPreview(null); setBrowseState('loading');
+    try {
+      const result = await command({ operation: 'browse', folder_id: folder || null });
+      if (alive.current) { setMeetings(result.meetings); setBrowseState('ready'); }
+    } catch (error) {
+      if (alive.current) setBrowseState('failed');
+      throw error;
+    }
   }
   async function refresh(initialize = false) {
     const next = await command({ operation: 'home' }).catch((error: unknown) => { setHome(null); throw error; });
     if (!alive.current) return;
     setHome(next); show(next.sources.find(s => s.watch !== 'off'));
     if (initialize && next.connected) {
-      try { await browse(''); } catch { /* the list can be read again */ }
+      try { await browse(from); } catch { /* the list shows its error and Refresh retries it */ }
     }
   }
   async function run(work: () => Promise<void>) {
@@ -103,9 +109,9 @@ export function Meetings({ toolId }: { toolId: string }) {
 
   return <section class="personal-meetings" aria-label="Personal meetings" aria-busy={busy}>
     <div class="meetings-sub">
-      <span class="notice-line">{home === null ? (busy ? '' : 'Granola could not be reached.') : home.connected ? `${home.email} · ${home.workspace}` : 'Reconnect Granola to search meetings.'}</span>
+      <span class="notice-line">{home === null ? (busy ? '' : 'Granola could not be reached.') : home.connected ? `${home.email} · ${home.workspace}` : 'Granola is unavailable. Refresh or reconnect to search meetings.'}</span>
       {busy ? <span class="asking"><i /><i /><i /><span>Working…</span></span>
-        : <button type="button" class="link-button" onClick={() => void run(refresh)}>Refresh</button>}
+        : <button type="button" class="link-button" onClick={() => void run(() => refresh(true))}>Refresh</button>}
     </div>
     {notice && <div class="meetings-status" role="status">{notice}</div>}
 
@@ -113,13 +119,20 @@ export function Meetings({ toolId }: { toolId: string }) {
     {home?.connected && <>
       <div class="section-label">Live meeting search</div>
       <p class="notice-line" data-testid="meeting-search-ready">Ask can search your accessible Granola history now. Meetings stay in Granola. To search a folder within a project, select it in the project’s Tools settings.</p>
-      <div class="section-label">Automatic extraction</div>
-      <p class="notice-line">Optional: extract decisions, actions and rationale from new meetings for your review. Historical search does not require extraction or approval.</p>
+    </>}
+    {(home?.connected || watch) && <div class="section-label">Automatic extraction</div>}
       {watch && <div class="watch-row" data-testid="meeting-watch">
         <span class="item-icon" aria-hidden="true"><Calendar /></span>
         <span class="lines"><span class="name">{watchState}</span></span>
         <button type="button" class="link-button" disabled={busy} onClick={stopWatch}>Stop</button>
       </div>}
+      {home?.sources.map(s => <div key={s.source_key} class="source-notes">
+        {s.error && <div class="error">{s.error}</div>}
+        {s.pending_imports.map(id => <div key={id} class="notice-line">Extraction queued{meetings.some(m => m.id === id) ? ` · ${meetings.find(m => m.id === id)!.title}` : ''}
+          <button type="button" class="link-button" disabled={busy} onClick={() => void run(async () => { await command({ operation: 'cancel_import', source_key: s.source_key, meeting_id: id }); await refresh(); })}>Cancel</button></div>)}
+      </div>)}
+    {home?.connected && <>
+      <p class="notice-line">Extract decisions, actions and rationale from new meetings for your review.</p>
       {/* With a watch active these show it, and Save updates it; Stop is how it ends. */}
       <div class="meeting-controls thirds" role="group" aria-label="Automatic extraction">
         <Select label="Extract" value={mode} disabled={busy} onChange={value => setMode(value as PersonMeetingWatchV2)}>
@@ -130,11 +143,6 @@ export function Meetings({ toolId }: { toolId: string }) {
         </Select>}
         {mode !== 'off' && <><Select label="Suggest" value={suggest} disabled={busy} onChange={setSuggest}><option value="">None</option>{suggestOptions}</Select>{moreProjects}</>}
       </div>
-      {home.sources.map(s => <div key={s.source_key} class="source-notes">
-        {s.error && <div class="error">{s.error}</div>}
-        {s.pending_imports.map(id => <div key={id} class="notice-line">Extraction queued
-          <button type="button" class="link-button" disabled={busy} onClick={() => void run(async () => { await command({ operation: 'cancel_import', source_key: s.source_key, meeting_id: id }); await refresh(); })}>Cancel</button></div>)}
-      </div>)}
       <label class="check consent"><input type="checkbox" checked={retain} disabled={busy} onChange={e => setRetain(e.currentTarget.checked)} />
         <span>I allow ECHO to retain a processing copy of notes and transcripts for extraction and review. Only approved decisions, actions and rationale are published to my chosen projects.</span></label>
       {unsaved && <div class="choices start">
@@ -149,7 +157,8 @@ export function Meetings({ toolId }: { toolId: string }) {
         <Select label="Suggest" value={project} disabled={busy} onChange={setProject}><option value="">None</option>{projectOptions}</Select>
         {moreProjects}
       </div>
-      {!busy && meetings.length === 0 && <div class="notice-line">No meetings.</div>}
+      {!busy && browseState === 'failed' && <div class="error" role="alert">Could not load meetings. Try Refresh.</div>}
+      {!busy && browseState === 'ready' && meetings.length === 0 && <div class="notice-line">No meetings.</div>}
       <div class="meeting-list">
         {meetings.map(m => {
           const open = preview?.id === m.id;

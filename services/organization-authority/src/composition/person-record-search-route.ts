@@ -295,6 +295,7 @@ export interface PersonRecordActionV1 {
   readonly signal_id: string;
   /** The action's approved text, released as a body is (releasableBodyV1). */
   readonly text: string;
+  readonly due_at?: string;
   /** The owner the approver confirmed on Approve (ADR-0021), else null; never the brief's own owner field. */
   readonly owner: string | null;
 }
@@ -1473,7 +1474,7 @@ export function createPersonRecordSearchRouteV1(
       const { admitted } = admit(input);
       const record = approvedRecord(admitted.position, admitted.record_sha256);
       const owners = confirmedOwners(record.reference);
-      return Object.freeze(record.brief.actions.map((action) => Object.freeze({ signal_id: action.id, text: releasableBodyV1(action.text), owner: owners.get(action.id) ?? null })));
+      return Object.freeze(record.brief.actions.map((action) => Object.freeze({ signal_id: action.id, text: releasableBodyV1(action.text), ...(action.due_at === null ? {} : { due_at: action.due_at }), owner: owners.get(action.id) ?? null })));
     },
     recordProjects(input: Parameters<PersonRecordProjectsV1["recordProjects"]>[0]): readonly ProjectIdV1[] {
       const { projects, admitted } = admit(input);

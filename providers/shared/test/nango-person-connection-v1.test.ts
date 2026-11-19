@@ -22,6 +22,13 @@ function fixture() {
   const nango = createNangoPersonConnectionV1({ provider, integration_id: integration, authorization: () => 'synthetic-nango-key', fetch: fetch as typeof globalThis.fetch });
   return { fetch, nango };
 }
+  it('refuses a non-Cloud configuration before any personal connection request', async () => {
+    const fetch = vi.fn(), authorization = vi.fn();
+    const client = createNangoPersonConnectionV1({ provider, integration_id: integration, base_url: 'https://nango.example.test', authorization, fetch });
+    await expect(client.find(tags)).rejects.toThrow('Nango Cloud');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(authorization).not.toHaveBeenCalled();
+  });
   it('preserves and attributes credential throttling without reading, exposing or retrying the response', async () => {
     const f = fixture(); const events: CoreRuntimeObservationV1[] = [];
     const response = new Response('private Nango rejection body', { status: 429, headers: { 'Retry-After': '41', 'X-RateLimit-Remaining': '0' } });

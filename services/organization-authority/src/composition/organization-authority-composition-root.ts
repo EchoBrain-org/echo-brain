@@ -300,6 +300,7 @@ export async function openOrganizationAuthorityService(
           sessions,
           resources,
           nango_authorization: () => nango.secret_key,
+          ...(nango.base_url === undefined ? {} : { nango_base_url: nango.base_url }),
           ...(dependencies.granola_person_live_seams === undefined ? {} : { seams: dependencies.granola_person_live_seams }),
         });
         granola = openedGranola;

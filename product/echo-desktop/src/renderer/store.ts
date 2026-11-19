@@ -1,3 +1,4 @@
+import { PERSON_RUN_ITEMS_MAX_V1 } from '@echo-brain/organization-api/person-runs-limits-v1';
 import type {
   PersonImpactStageV1, PersonMeetingOperationV2, PersonMeetingResultsV2, PersonMeetingReviewV2, PersonReviewOperationV1, PersonReviewResultsV1, PersonOpenItemStateV1, PersonRunV1, PersonRunsRequestV1,
 } from '@echo-brain/organization-api';
@@ -6457,21 +6458,25 @@ export async function sendTicked(include: boolean): Promise<void> {
   if (ticked.length === 0) return;
   setView({ ...list, busy: true, said: null, picker: null });
   const sends: Record<string, SendCommand> = { ...list.sends };
-  const tried: { run_id: string; failure?: Failure }[] = [];
-  for (const run_id of new Set(ticked.map(item => item.run_id))) {
-    if (!viewOf('list', list.seq) || !sameAccount(account)) break;
-    const sent = await sendRun(run_id, ticked.filter(item => item.run_id === run_id).map(item => ({ item_id: item.item_id, include })), sends[run_id]);
-    if (sent.unknown) sends[run_id] = sent.command; else delete sends[run_id];
-    tried.push({ run_id, ...(sent.failure ? { failure: sent.failure } : {}) });
-    if (sent.failure) break;
+  const tried = new Map<string, Failure | undefined>();
+  batches: for (const run_id of new Set(ticked.map(item => item.run_id))) {
+    const choices = ticked.filter(item => item.run_id === run_id).map(item => ({ item_id: item.item_id, include }));
+    for (let start = 0; start < choices.length; start += PERSON_RUN_ITEMS_MAX_V1) {
+      if (!viewOf('list', list.seq) || !sameAccount(account)) break batches;
+      const batch = choices.slice(start, start + PERSON_RUN_ITEMS_MAX_V1);
+      const sent = await sendRun(run_id, batch, sends[run_id]);
+      if (sent.unknown) sends[run_id] = sent.command; else delete sends[run_id];
+      for (const item of batch) tried.set(item.item_id, sent.failure);
+      if (sent.failure) break batches;
+    }
   }
   if (!viewOf('list', list.seq) || !sameAccount(account)) return;
   await readList(list.seq, 'again');
   const current = viewOf('list', list.seq);
   if (!current || !sameAccount(account)) return;
   const fresh = new Map(current.failed ? [] : current.items.map(item => [item.item_id, item]));
-  const triedRows = ticked.filter(item => tried.some(entry => entry.run_id === item.run_id));
-  const failedOf = (item: OpenItemView) => tried.find(entry => entry.run_id === item.run_id)?.failure;
+  const triedRows = ticked.filter(item => tried.has(item.item_id));
+  const failedOf = (item: OpenItemView) => tried.get(item.item_id);
   const unknown = (item: OpenItemView) => {
     const failed = failedOf(item);
     return failed !== undefined && outcomeUnknown(failed, false);
@@ -6483,9 +6488,9 @@ export async function sendTicked(include: boolean): Promise<void> {
   if (!viewOf('list', list.seq) || !sameAccount(account)) return;
   // What went: every row of a send that was answered, and of one whose outcome was unknown, each row read again as no longer Not sent.
   const went = triedRows.filter(item => failedOf(item) === undefined || (unknown(item) && fresh.has(item.item_id) && fresh.get(item.item_id)!.state !== 'unsent'));
-  for (const run_id of Object.keys(sends)) if (went.some(item => item.run_id === run_id)) delete sends[run_id];
-  if (went.length > 0 || Object.keys(sends).some(run_id => tried.some(entry => entry.run_id === run_id))) changedFrom(list.seq);
-  const failure = tried.find(entry => entry.failure)?.failure;
+  for (const run_id of Object.keys(sends)) if (went.some(item => item.run_id === run_id && unknown(item))) delete sends[run_id];
+  if (went.length > 0 || triedRows.some(item => sends[item.run_id] !== undefined)) changedFrom(list.seq);
+  const failure = [...tried.values()].find(failure => failure !== undefined);
   const done = went.length === 0 ? null : sentWords(went.map(item => (fresh.get(item.item_id) ?? item).owner), account.membership_id, include);
   const left = ticked.length - went.length;
   // A send whose outcome was unknown, its rows read again still Not sent, did not go.

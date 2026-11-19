@@ -24,6 +24,8 @@ export interface GranolaMeetingContentInputV1 {
   private_notes_markdown?: string | null;
   /** Actual start, ISO with offset. */
   started_at?: string | null;
+  scheduled_start_at?: string;
+  transcript_truncated?: true;
   /** IANA zone of `started_at`. */
   timezone?: string | null;
   /** Transcript turns without speaker metadata: audio labels stay in the text. */
@@ -78,15 +80,18 @@ function stableJson(value: JsonValue): string {
     .join(",")}}`;
 }
 
-function sourceRevision(note: GranolaMeetingContentInputV1): string {
+function sourceRevision(note: GranolaMeetingContentInputV1, distinctNames?: readonly string[]): string {
   const normalized = sanitizeJson({
     mapping_version: GRANOLA_MEETING_NORMALIZER_VERSION_V1,
+    distinct_same_name_participants: distinctNames,
     id: note.id,
     title: note.title,
     created_at: note.created_at,
     summary_markdown: note.summary_markdown,
     private_notes_markdown: note.private_notes_markdown,
     started_at: note.started_at,
+    scheduled_start_at: note.scheduled_start_at,
+    transcript_truncated: note.transcript_truncated,
     timezone: note.timezone,
     transcript: note.transcript,
     reported_participants: note.reported_participants,
@@ -99,12 +104,22 @@ function sourceRevision(note: GranolaMeetingContentInputV1): string {
   return `sha256:${digest}`;
 }
 
+/** Compare a saved content-only baseline from before structured dates, partial transcripts and same-name identities were mapped. */
+export function granolaLegacyWatchRevisionV1(note: GranolaMeetingContentInputV1): string {
+  const { scheduled_start_at: _scheduled, transcript_truncated: _partial, ...legacy } = note;
+  return sourceRevision(legacy);
+}
+
 function meetingTime(note: GranolaMeetingContentInputV1): MeetingDocument["time"] {
   const startedAt = normalizedIso(note.started_at);
-  if (startedAt === null) return undefined;
+  const scheduled = normalizedIso(note.scheduled_start_at);
+  if (startedAt === null && scheduled === null) return undefined;
+  const offset = note.scheduled_start_at?.match(/([+-]\d{2}:\d{2}|Z)$/u)?.[1];
+  const zone = note.timezone ?? (offset === 'Z' ? 'UTC' : offset);
   return {
-    actual_start_at: startedAt,
-    ...(isNonEmptyString(note.timezone) ? { timezone: note.timezone.trim() } : {}),
+    ...(startedAt === null ? {} : { actual_start_at: startedAt }),
+    ...(scheduled === null ? {} : { scheduled_start_at: scheduled }),
+    ...(isNonEmptyString(zone) ? { timezone: zone.trim() } : {}),
   };
 }
 
@@ -170,7 +185,7 @@ function noteParticipants(note: GranolaMeetingContentInputV1): MeetingParticipan
     const existingIndex = participants.findIndex(
       (existing) =>
         participantIdentityKeys(existing).some((key) => keys.has(key)) ||
-        (name !== undefined && existing.display_name?.toLowerCase() === name),
+        ((!participant.identities?.length || !existing.identities?.length) && name !== undefined && existing.display_name?.toLowerCase() === name),
     );
     if (existingIndex >= 0) {
       participants[existingIndex] = mergeParticipant(
@@ -263,7 +278,7 @@ function captureState(
         : "empty";
   return {
     state:
-      summaryState === "available" && transcriptState === "available"
+      summaryState === "available" && transcriptState === "available" && !note.transcript_truncated
         ? "complete"
         : "partial",
     components: [
@@ -279,6 +294,7 @@ function captureState(
       {
         kind: "transcript",
         state: transcriptState,
+        ...(note.transcript_truncated ? { reason: "Only the start of the transcript was captured." } : {}),
       },
       { kind: "agenda", state: "not_provided" },
       { kind: "notes", state: notesState },
@@ -288,7 +304,7 @@ function captureState(
       { kind: "artifacts", state: "empty" },
     ],
     ...(transcriptAvailable
-      ? { warnings: ["Some Granola transcript turns did not include usable speaker metadata."] }
+      ? { warnings: [...(note.transcript_truncated ? ["Transcript shortened at the acquisition limit."] : []), "Some Granola transcript turns did not include usable speaker metadata."] }
       : {}),
   };
 }
@@ -300,6 +316,8 @@ export function normalizeGranolaMeetingV1(
   observedAt: string,
 ): MeetingDocument {
   const participants = noteParticipants(note);
+  const names = participants.map(person => person.display_name?.toLowerCase()).filter((name): name is string => name !== undefined);
+  const distinctNames = new Set(names).size < names.length ? participants.map(person => person.id) : undefined;
   const content = noteContent(note);
   const time = meetingTime(note);
   const extensions = sourceExtensions(note);
@@ -316,7 +334,7 @@ export function normalizeGranolaMeetingV1(
     provenance: {
       source: source,
       external_id: note.id,
-      canonical_revision: sourceRevision(note),
+      canonical_revision: sourceRevision(note, distinctNames),
       observed_at: observedAt,
       normalizer_version: GRANOLA_MEETING_NORMALIZER_VERSION_V1,
       ...(sourceCreatedAt === undefined

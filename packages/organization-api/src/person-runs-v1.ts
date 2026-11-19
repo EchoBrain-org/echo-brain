@@ -1,3 +1,4 @@
+import { PERSON_RUN_ITEMS_MAX_V1 } from './person-runs-limits-v1.js';
 import { validatePersonAnswerCitationV6 } from './person-answer-v4.js';
 import type { PersonAnswerCitationV6 } from './person-answer-v8.js';
 import { PERSON_IMPACT_CARD_LIMITS_V1, validatePersonImpactCardV1, type PersonImpactCardV1 } from './person-impact-card-v1.js';
@@ -218,13 +219,10 @@ export const PERSON_RUNS_LIST_LIMIT_V1 = 100;
 export const PERSON_OPEN_ITEMS_PAGE_V1 = 50;
 /** The most Send rows, and the most item rows, one `home` returns. */
 export const PERSON_HOME_ROWS_V1 = 20;
-/**
- * The most meeting actions one impact run makes into items: the first ones in brief order that have text (an action with
- * none makes no item and takes no place). An approved meeting with more actions than this has the rest only in its record.
- */
+/** Original native-action allowance, retained for v1 wire compatibility. */
 export const PERSON_RUN_MEETING_ACTIONS_MAX_V1 = 20;
-/** The most items one impact run makes: one per affected row of its card, and one per meeting action up to the cap. */
-export const PERSON_RUN_ITEMS_MAX_V1 = PERSON_IMPACT_CARD_LIMITS_V1.affected + PERSON_RUN_MEETING_ACTIONS_MAX_V1;
+/** Maximum choices per Send request and owner labels per Home summary. */
+export { PERSON_RUN_ITEMS_MAX_V1 } from './person-runs-limits-v1.js';
 
 const RUN_ID = /^run_[A-Za-z0-9-]{4,60}$/;
 const COMMAND_ID = /^[A-Za-z0-9_-]{1,128}$/;
