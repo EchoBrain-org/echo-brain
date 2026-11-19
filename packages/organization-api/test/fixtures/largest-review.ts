@@ -1,4 +1,4 @@
-import { PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 } from '../../src/person-reviews-v1.js';
+import { PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1 } from '../../src/person-reviews-v1.js';
 
 /** A value's size as the Authority sends it and the validator measures it: its JSON in UTF-8. */
 export const jsonBytes = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length;
@@ -7,7 +7,7 @@ export const jsonBytes = (value: unknown): number => new TextEncoder().encode(JS
  * The largest opened review: the most items a review holds (500), every one an action with a deadline and its day, the
  * first one's text padded so the whole response is `size` bytes as JSON (the response's bound unless told otherwise).
  */
-export function largestReviewV1(size: number = PERSON_REVIEW_RESPONSE_MAX_BYTES_V1) {
+export function largestReviewV1(size: number = PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1) {
   const build = (pad: number) => ({
     review: { approval_id: `apr_${'a'.repeat(64)}`, title: 'Quarterly planning', project_ids: [], status: 'pending' as const, decided_on: null, first_line: null,
       action_count: 500, meeting_at: '2026-10-06T16:00:00.000Z', all_day: false, records: [] },

@@ -188,10 +188,11 @@ form, a card tool inside the loop, and a plain "new card" form.
   needed no storage change: the day is worked out from the stored deadline
   each time it is read.
 - `due_on` adds at most 22 bytes to a review item, and a review holds at most
-  500 items. The review response's byte bound grew by that much, from 120,000
-  to 131,000, so every review that opened before still opens. It stays within
+  500 items. An opened review's byte bound grew by that much, from 120,000 to
+  131,000, so every review that opened before still opens. It stays within
   the 131,072 bytes the Authority answers a tool route in and the client
-  reads.
+  reads. The list of reviews and a decision's receipt gained nothing and keep
+  the 120,000 they had.
 - Rollback is not designed yet. A chat card has no run or record to fall back
   to, so removing the feature after cards exist needs its own answer.
 - Evidence still to gather: the Ask writer's live evaluation. Its five cases

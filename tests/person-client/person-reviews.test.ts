@@ -1,6 +1,6 @@
 import { rmSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
+import { PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { signedInHome } from './signed-in-home.js';
 
@@ -65,8 +65,8 @@ describe('person reviews CLI', () => {
       items: Array.from({ length: 500 }, (_, index) => ({ signal_id: `action:${index}`, kind: 'action', text: index === 0 ? 'x'.repeat(pad) : 'Send the plan.', subject: null,
         status: null, due_at: '2026-10-20T00:00:00.000Z', due_on: '2026-10-20', quotes: ['[09:01] Mina: send the plan.'], owner: null, owner_editable: false, project_ids: [] })),
       reasons: [], suggested_projects: [], records: [] });
-    const largest = sized(1 + PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 - jsonBytes(sized(1)));
-    expect(jsonBytes(largest)).toBe(PERSON_REVIEW_RESPONSE_MAX_BYTES_V1);
+    const largest = sized(1 + PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1 - jsonBytes(sized(1)));
+    expect(jsonBytes(largest)).toBe(PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1);
     const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => new Response(JSON.stringify(largest), { headers: { 'content-type': 'application/json' } }));
     const { run, output } = cli(fetch);
     expect(await run(['reviews', '--request', JSON.stringify({ schema_version: 1, operation: 'review_open', approval_id: largest.review.approval_id })])).toBe(0);

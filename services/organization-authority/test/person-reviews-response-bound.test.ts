@@ -1,6 +1,6 @@
 import { once } from 'node:events';
 import { expect, it } from 'vitest';
-import { PERSON_REVIEW_RESPONSE_MAX_BYTES_V1, PERSON_REVIEWS_PATH_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, validatePersonReviewResultV1 } from '@echo-brain/organization-api';
+import { PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1, PERSON_REVIEWS_PATH_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, validatePersonReviewResultV1 } from '@echo-brain/organization-api';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
@@ -25,7 +25,7 @@ it('answers the largest review a reviewer could open before items carried a day,
     expect(response.status).toBe(200);
     const bytes = new Uint8Array(await response.arrayBuffer());
     // On the wire it is the bytes the typed bound measured, within what the client reads.
-    expect(bytes.byteLength).toBe(PERSON_REVIEW_RESPONSE_MAX_BYTES_V1);
+    expect(bytes.byteLength).toBe(PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1);
     expect(bytes.byteLength).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
     expect(validatePersonReviewResultV1('review_open', JSON.parse(new TextDecoder().decode(bytes))).items).toHaveLength(500);
   } finally { const closed = once(instance, 'close'); instance.close(); await closed; }

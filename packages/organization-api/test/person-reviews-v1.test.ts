@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PERSON_REVIEW_RESPONSE_MAX_BYTES_V1, personReviewCommandV1, validatePersonReviewRequestV1, validatePersonReviewResultV1 } from '../src/person-reviews-v1.js';
+import { PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1, PERSON_REVIEW_RESPONSE_MAX_BYTES_V1, personReviewCommandV1, validatePersonReviewRequestV1, validatePersonReviewResultV1 } from '../src/person-reviews-v1.js';
 import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 } from '../src/person-tool-client.js';
 import { jsonBytes, largestReviewV1 } from './fixtures/largest-review.js';
 import { validatePersonMeetingRequestV2 } from '../src/person-meetings-v1.js';
@@ -158,7 +158,8 @@ describe('person-owned review contract', () => {
   // The day key made every item longer (ADR-0053). A review that opened before it must still open with it: the bound
   // grew by what the key adds to each of the most items a review holds, and still fits what the client reads.
   it('still opens the largest review that opened before items carried a day, with a day added to every one of its 500 items', () => {
-    const OLD_BOUND = 120_000, DAY_BYTES = ',"due_on":"2026-10-20"'.length;
+    // An opened review's bound before the key was the one every review response had.
+    const OLD_BOUND = PERSON_REVIEW_RESPONSE_MAX_BYTES_V1, DAY_BYTES = ',"due_on":"2026-10-20"'.length;
     // The most items a review holds, every one an action with a deadline and its day.
     const after = largestReviewV1();
     expect(after.items).toHaveLength(500);
@@ -166,14 +167,33 @@ describe('person-owned review contract', () => {
     const before = { ...after, items: after.items.map(({ due_on: _day, ...item }) => item) };
     expect(jsonBytes(before)).toBe(OLD_BOUND);
     expect(jsonBytes(after)).toBe(OLD_BOUND + 500 * DAY_BYTES);
-    expect(jsonBytes(after)).toBe(PERSON_REVIEW_RESPONSE_MAX_BYTES_V1);
+    expect(jsonBytes(after)).toBe(PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1);
     expect(validatePersonReviewResultV1('review_open', after).items).toHaveLength(500);
     // No item gains more than a day: a deadline with no day adds less.
     expect(jsonBytes({ ...after, items: after.items.map(item => ({ ...item, due_on: null })) })).toBeLessThan(jsonBytes(after));
     // The typed bound is still a bound, and the transport reads at least as much: the Authority's response and the client's
     // read share the tool transport's ceiling.
-    expect(() => validatePersonReviewResultV1('review_open', largestReviewV1(PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 + 1))).toThrow('exceeds its bound');
-    expect(PERSON_REVIEW_RESPONSE_MAX_BYTES_V1).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(() => validatePersonReviewResultV1('review_open', largestReviewV1(PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1 + 1))).toThrow('exceeds its bound');
+    expect(PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+  });
+
+  // Only an opened review's items gained a key, so only its bound grew. The list of reviews gained nothing and keeps the
+  // bound it had (a decision's receipt is two closed fields and cannot come near either).
+  it('holds the list of reviews to the bound it had, and only an opened review to the larger one', () => {
+    expect([PERSON_REVIEW_RESPONSE_MAX_BYTES_V1, PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1]).toEqual([120_000, 131_000]);
+    // The most reviews a list holds, their titles sized so the whole list is `size` bytes as JSON.
+    const listOf = (size: number) => {
+      const titled = (first: number, rest: number) => ({ reviews: Array.from({ length: 100 }, (_, index) => ({ ...review, title: 'T'.repeat(index === 0 ? first : rest) })) });
+      const room = size - jsonBytes(titled(0, 0)), rest = Math.floor(room / 100);
+      return titled(room - 99 * rest, rest);
+    };
+    expect(jsonBytes(listOf(120_000))).toBe(120_000);
+    expect(validatePersonReviewResultV1('reviews', listOf(120_000)).reviews).toHaveLength(100);
+    expect(jsonBytes(listOf(120_001))).toBe(120_001);
+    expect(() => validatePersonReviewResultV1('reviews', listOf(120_001))).toThrow('exceeds its bound');
+    // The largest opened review, 11,000 bytes past the list's bound, still opens.
+    expect(jsonBytes(largestReviewV1())).toBe(131_000);
+    expect(validatePersonReviewResultV1('review_open', largestReviewV1()).items).toHaveLength(500);
   });
 
   it('reads an opened review up to the transport ceiling, the cap the Authority answers within', async () => {

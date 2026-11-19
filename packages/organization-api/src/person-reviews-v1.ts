@@ -76,13 +76,16 @@ const label = 'Personal review request';
 const SIGNAL = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 /** At most this many routes: one per decision and action of a meeting. */
 const ROUTES_MAX = 500;
+/** The most bytes the list of reviews (`reviews`) and a decision's receipt (`review`) take as JSON. */
+export const PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 = 120_000;
 /**
- * The most bytes a review response takes as JSON. It was 120,000 until an item carried `due_on` (ADR-0053). That key adds
- * at most `,"due_on":"YYYY-MM-DD"` to an item, so the bound grew by that much for each of the most items a review holds:
- * every review that opened before the key still opens with it. The Authority answers and the client reads within the tool
- * transport's ceiling (PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1), which this bound must never pass.
+ * The most bytes an opened review (`review_open`) takes as JSON. It had the bound above until an item carried `due_on`
+ * (ADR-0053). That key adds at most `,"due_on":"YYYY-MM-DD"` to an item, so this bound is larger by that much for each of
+ * the most items a review holds: every review that opened before the key still opens with it. Only an opened review has
+ * items, so only its bound grew. The Authority answers and the client reads within the tool transport's ceiling
+ * (PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1), which this bound must never pass.
  */
-export const PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 = 120_000 + ROUTES_MAX * ',"due_on":"YYYY-MM-DD"'.length;
+export const PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1 = PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 + ROUTES_MAX * ',"due_on":"YYYY-MM-DD"'.length;
 function text(value: unknown, maximum = 256): asserts value is string {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || /[\u0000-\u001f\u007f]/.test(value)) fail(label);
 }
@@ -146,7 +149,8 @@ export function validatePersonReviewResultV1<K extends keyof PersonReviewResults
   const row = asEnumerableRecord(value, 'Personal review response');
   const keys = { reviews: ['reviews'], review_open: ['review','snapshot_sha256','participants','items','reasons','suggested_projects','records'], review: ['status','decided_on'] };
   assertExactKeys(row, keys[operation], 'Personal review response');
-  if (utf8ByteLength(JSON.stringify(row)) > PERSON_REVIEW_RESPONSE_MAX_BYTES_V1) fail('Personal review response exceeds its bound');
+  const bound = operation === 'review_open' ? PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1 : PERSON_REVIEW_RESPONSE_MAX_BYTES_V1;
+  if (utf8ByteLength(JSON.stringify(row)) > bound) fail('Personal review response exceeds its bound');
   const object = (value: unknown, keys: readonly string[], optional: readonly string[] = []) => {
     const item = asEnumerableRecord(value, 'Meeting response item');
     assertExactKeys(item, [...keys, ...optional.filter(key => Object.hasOwn(item, key))], 'Meeting response item');
@@ -210,6 +214,6 @@ export function personReviewCommandV1<K extends PersonReviewOperationV1['operati
   const body = validatePersonReviewRequestV1(request);
   return host.withToolSession(session => session.transport.json({ path: PERSON_REVIEWS_PATH_V1, body, validate_request: validatePersonReviewRequestV1,
     validate_response: value => validatePersonReviewResultV1(request.operation, value), maximum_request_bytes: PERSON_TOOL_REQUEST_MAX_BYTES_V1,
-    // The transport's ceiling, which the Authority's response shares: at least the typed bound above.
+    // The transport's ceiling, which the Authority's response shares: at least either typed bound above.
     maximum_response_bytes: PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, timeout_ms: 75_000 }));
 }
