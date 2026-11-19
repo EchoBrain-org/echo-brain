@@ -370,15 +370,13 @@ export function cleanModelId(value: unknown): string | null {
 /** Raw entries read from one evidence array before the cap. */
 const EVIDENCE_IDS_READ = 64;
 /**
- * Evidence ids, each once. Without `lists` (a task's need) the first 12 ids are kept, as before ADR-0041. With `lists`
- * (Ask), list ids such as L1 are read beside item ids from a bounded read, and a list id never takes an item's place.
- * With `listsFirst`, where a list id carries meaning (an Ask need's evidence, which the finish check reads), past 12
- * ids every list id stays and item ids fill the rest, in their order. Otherwise (a writer's sentence, whose list ids
- * support nothing, W1) a list id is no item and takes no item's slot: the first 12 item ids stay, and the list ids beside
- * them, which the writer's repair reads and which bring their lists' private rows into the sentence's citations.
- * `all` preserves a which_items need's complete selection intent; presentation bounds never trim that member set.
+ * A need's evidence ids, each once. Without `lists` (a task's need) the first 12 ids are kept, as before ADR-0041. With
+ * `lists` (Ask), list ids such as L1 are read beside item ids from a bounded read, and a list id, which carries meaning
+ * there (the finish check reads it), never takes an item's place: past 12 ids every list id stays and item ids fill the
+ * rest, in their order. `all` preserves a which_items need's complete selection intent; presentation bounds never trim
+ * that member set.
  */
-function cleanIds(value: unknown, lists = false, listsFirst = lists, all = false): readonly string[] {
+function cleanIds(value: unknown, lists = false, all = false): readonly string[] {
   if (!Array.isArray(value)) return Object.freeze([]);
   const result: string[] = [];
   const read = lists && !all ? value.slice(0, EVIDENCE_IDS_READ) : value;
@@ -396,12 +394,35 @@ function cleanIds(value: unknown, lists = false, listsFirst = lists, all = false
       break;
     }
   }
-  if (all || (listsFirst && result.length <= AGENTIC_ASK_MAX_EVIDENCE_IDS_V1)) return Object.freeze(result);
-  const listIds = result.filter(id => parseAgenticListIdV1(id) !== null).slice(0, listsFirst ? AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 : undefined);
-  let items = AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 - (listsFirst ? listIds.length : 0);
+  if (all || result.length <= AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) return Object.freeze(result);
+  const listIds = result.filter(id => parseAgenticListIdV1(id) !== null).slice(0, AGENTIC_ASK_MAX_EVIDENCE_IDS_V1);
+  let items = AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 - listIds.length;
   const kept = result.filter(id => listIds.includes(id) || (parseAgenticListIdV1(id) === null && items-- > 0));
   if (kept.length < result.length) observeCoreModelCorrectionV1("model_items_capped", result.length - kept.length);
   return Object.freeze(kept);
+}
+/**
+ * The evidence of a writer's sentence, item, row, event, fact, quote or since sentence: its ids, each once, list ids such
+ * as L1 beside its item ids. Its list ids support nothing (W1), so a list id is no item and takes no item's slot; the
+ * writer's repair reads them, and they bring their lists' private rows into the entry's citations. Repeats and ids code
+ * cannot read are dropped first. Null when the entry cites more than 12 distinct items: it is then dropped whole, never
+ * kept with some of its citations (ADR-0054).
+ */
+function writerIds(value: unknown): readonly string[] | null {
+  if (!Array.isArray(value)) return Object.freeze([]);
+  const result: string[] = [];
+  let items = 0;
+  for (const raw of value) {
+    const id = parseAgenticListIdV1(raw) ?? cleanId(raw);
+    if (id === null) observeCoreModelCorrectionV1("model_entry_dropped");
+    else if (result.includes(id)) observeCoreModelCorrectionV1("model_repeat_dropped");
+    else {
+      if (parseAgenticListIdV1(id) === null && ++items > AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) return null;
+      result.push(id);
+      if (id !== raw) observeCoreModelCorrectionV1("model_id_respelled");
+    }
+  }
+  return Object.freeze(result);
 }
 /** Counted when a model wrote a closed value in another spelling, as an alias, or not at all. */
 export function respelled<T>(value: unknown, known: T): T {
@@ -489,7 +510,7 @@ function needs(value: unknown, lists: boolean): readonly StepNeed[] {
     if (kind !== undefined && entry !== null) respelled(entry.kind, kind);
     result.push(Object.freeze({
       ...(id === undefined ? {} : { id }), need, ...(kind === undefined ? {} : { kind }),
-      status: entry === null ? "open" : needStatus(entry.status), evidence: entry === null ? Object.freeze([]) : cleanIds(entry.evidence, lists, lists, kind === "which_items"),
+      status: entry === null ? "open" : needStatus(entry.status), evidence: entry === null ? Object.freeze([]) : cleanIds(entry.evidence, lists, kind === "which_items"),
     }));
     if (result.length === AGENTIC_ASK_MAX_NEEDS_PER_PART_V1) {
       if (index + 1 < value.length) observeCoreModelCorrectionV1("model_items_capped", value.length - index - 1);
@@ -688,10 +709,12 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
   if (!Array.isArray(body.blocks)) throw new AgenticAskOutputErrorV1(`"blocks" must be an array (got ${keysOf(body)})`);
   const sentences: AnswerSentence[] = [];
   const placed: AnswerList[] = [];
-  // No count is capped here: the part's bounds decide what is kept (W6), and say so when something does not fit.
+  // No count is capped here: the part's bounds decide what is kept (W6), and say so when something does not fit. An entry
+  // that says nothing, or cites more items than it may, is dropped whole.
   const add = (text: string, evidence: unknown, item: AnswerItem) => {
-    if (text.length === 0) observeCoreModelCorrectionV1("model_entry_dropped");
-    else sentences.push(Object.freeze({ text, evidence: cleanIds(evidence, true, false), item: Object.freeze(item) }));
+    const ids = text.length === 0 ? null : writerIds(evidence);
+    if (ids === null) observeCoreModelCorrectionV1("model_entry_dropped");
+    else sentences.push(Object.freeze({ text, evidence: ids, item: Object.freeze(item) }));
   };
   /** A block's entries: its array, or none. */
   const entries = (field: unknown): readonly Record<string, unknown>[] => (Array.isArray(field) ? field : []).flatMap(entry => {
@@ -808,19 +831,21 @@ function followUpsOf(body: Record<string, unknown>): readonly AnswerFollowUp[] {
 
 /**
  * An Ask again's `since` (ADR-0047): its first 6 sentences, each read as a writer's sentence is, its list ids kept beside
- * its first 12 item ids. A list with an entry that is not a sentence with text is a comparison the reply cannot stand
- * behind: it reads as none, never as the empty list that says nothing changed.
+ * its item ids. A list with an entry that is not a sentence with text, or that cites more items than a sentence may, is a
+ * comparison the reply cannot stand behind: it reads as none, never as the empty list that says nothing changed, and
+ * never as a list saying less changed than did.
  */
 function sinceOf(given: readonly unknown[]): readonly Pick<AnswerSentence, "text" | "evidence">[] | undefined {
   const since: Pick<AnswerSentence, "text" | "evidence">[] = [];
   for (const [index, raw] of given.entries()) {
     const entry = object(raw);
     const text = entry === null ? "" : writtenSentence(entry.text);
-    if (text.length === 0) {
+    const evidence = text.length === 0 ? null : writerIds(entry!.evidence);
+    if (evidence === null) {
       observeCoreModelCorrectionV1("model_entry_dropped");
       return undefined;
     }
-    since.push(Object.freeze({ text, evidence: cleanIds(entry!.evidence, true, false) }));
+    since.push(Object.freeze({ text, evidence }));
     if (since.length === AGENTIC_ASK_MAX_SINCE_V1) {
       if (index + 1 < given.length) observeCoreModelCorrectionV1("model_items_capped", given.length - index - 1);
       break;

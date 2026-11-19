@@ -167,17 +167,41 @@ describe("agentic Ask model protocol parity", () => {
     const mixed = ["L1", "[l2]", " L 3 ", "E4", "4", "L1", "N1", "L0"];
     expect([need(mixed, { lists: true }), need(mixed), need([...items(1, 11), "L1", "L2"], { lists: true }).length, need([...items(1, 15), "L1"], { lists: true })])
       .toEqual([["L1", "L2", "L3", "E4"], ["E4"], 12, [...items(1, 11), "L1"]]);
-    // A sentence's list ids support nothing (W1), so a list id takes no item's slot: the first 12 item ids stay wherever its
-    // list ids stand, and the list ids beside them, which the writer's repair and the renderer read.
-    const sentence = (evidence: readonly string[]) => parseBlocksAnswer(writerReply([{ text: "x", evidence }])).sentences[0]!.evidence;
+    // A sentence's list ids support nothing (W1), so a list id takes no item's slot: its 12 item ids stay wherever its list
+    // ids stand, and the list ids beside them, which the writer's repair and the renderer read. A sentence citing more than
+    // 12 items is dropped whole, never kept with some of its citations.
+    const sentence = (evidence: readonly string[]) => parseBlocksAnswer(writerReply([{ text: "x", evidence }])).sentences[0]?.evidence;
     for (const [evidence, kept] of [
-      [[...items(1, 13), "L2"], [...items(1, 12), "L2"]], [[...items(1, 12), "L1"], [...items(1, 12), "L1"]], [["L1", ...items(1, 12)], ["L1", ...items(1, 12)]],
-      [[...items(1, 6), "L1", ...items(7, 7)], [...items(1, 6), "L1", ...items(7, 6)]], [["L1", "E2"], ["L1", "E2"]],
+      [[...items(1, 13), "L2"], undefined], [[...items(1, 12), "L1"], [...items(1, 12), "L1"]], [["L1", ...items(1, 12)], ["L1", ...items(1, 12)]],
+      [[...items(1, 6), "L1", ...items(7, 7)], undefined], [["L1", "E2"], ["L1", "E2"]],
     ]) expect(sentence(evidence!)).toEqual(kept);
     // The same twelve items whatever the list ids' positions.
     for (const evidence of [["L1", ...items(9, 11), "E1"], [...items(9, 11), "E1", "L1"], [...items(9, 5), "L1", ...items(14, 6), "E1"]]) {
       expect(sentence(evidence).filter(id => id.startsWith("E"))).toEqual([...items(9, 11), "E1"]);
     }
+  });
+
+  it("drops whole a writer's entry citing more items than it may, never keeping some of its citations (ADR-0054)", () => {
+    const items = (from: number, count: number) => Array.from({ length: count }, (_, index) => `E${from + index}`);
+    const over = items(1, 13);
+    // Repeats and ids code cannot read are cleaned first, and list ids take no item's slot: only distinct readable items count.
+    const within = [...items(1, 12), "e1", "E1", "THERM-48", "L1", "L2"];
+    const blocks = [
+      { block: "answer", sentences: [{ text: "Over.", evidence: over }, { text: "Within.", evidence: within }] },
+      { block: "points", ordered: false, items: [{ text: "Over point.", evidence: over }, { text: "Point.", evidence: ["E1"] }] },
+      { block: "table", columns: ["Item", "Owner"], rows: [{ cells: ["Over", "Ana"], evidence: over }, { cells: ["Fix", "Ana"], evidence: ["E1"] }] },
+      { block: "timeline", events: [{ date: "2026-10-20", text: "Over event.", evidence: over }, { date: "2026-10-21", text: "Event.", evidence: ["E1"] }] },
+      { block: "card", title: "THERM-48", kind: "ticket", facts: [{ label: "Over", value: "Open", evidence: over }, { label: "Status", value: "Open", evidence: ["E1"] }] },
+      { block: "quote", text: "Over quote.", from: "Ana", evidence: over },
+    ];
+    let parsed: ReturnType<typeof parseBlocksAnswer> | undefined;
+    expect(corrected(() => { parsed = parseBlocksAnswer({ blocks, not_found: [] }); })).toEqual({ model_entry_dropped: 7, model_repeat_dropped: 2 });
+    expect(parsed!.sentences.map(sentence => [sentence.text, sentence.evidence.length])).toEqual([
+      ["Within.", 14], ["Point.", 1], ["Item: Fix; Owner: Ana.", 1], ["2026-10-21: Event.", 1], ["Ticket: THERM-48; Status: Open.", 1],
+    ]);
+    // A since sentence over its bound is dropped whole, and a since list missing one of its sentences says nothing changed of none.
+    const since = (evidence: readonly string[]) => parseBlocksAnswer({ ...writerReply([{ text: "x", evidence: ["E1"] }]), since: [{ text: "Changed.", evidence }, { text: "Also.", evidence: ["E1"] }] }, { since: true }).since;
+    expect([since(over), since(items(1, 12))?.length]).toEqual([undefined, 2]);
   });
 
   it("preserves every requested member of a which_items need beyond the old evidence and read caps", () => {
@@ -684,9 +708,12 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
         if (node.type === "array") {
           seen.add(name);
           const most = node.maxItems as number | undefined;
-          // Past its bound the answer's sentences read as text; every other list is cut at its bound, and the cut counted.
+          // Past its bound the answer's sentences read as text; an entry citing more items than its bound is dropped whole,
+          // never kept with some of its citations; every other list is cut at its bound, and the cut counted.
+          const drops = (count: number) => "model_entry_dropped" in read(put(path, entries(value[0], count)));
           const kept = name.endsWith("(answer).sentences")
             ? parseBlocksAnswer(put(path, entries(value[0], 64)), { since }).sentences.filter(sentence => sentence.item?.kind === "answer").length === most
+            : name.endsWith(".evidence") ? !drops(most!) && drops(most! + 1) && !caps(path, value[0], most! + 1)
             : most === undefined ? !caps(path, value[0], 64) : !caps(path, value[0], most) && caps(path, value[0], most + 1);
           if (!kept) differ.push(`${name}: ${most}`);
           (value as unknown[]).forEach((entry, at) => visit(node.items as Schema, entry, [...path, at], `${name}[]`));

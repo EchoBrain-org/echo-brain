@@ -512,6 +512,17 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(rendered.result.response.citations).toHaveLength(2);
     expect(corrections).toEqual({ writer_unknown_id_dropped: 2 });
   });
+  it("leaves out whole a sentence citing more items than a sentence may, never releasing it without its private citation", async () => {
+    // 41 readable records, only E41 private: cut to its first 12 ids, the sentence would be released public.
+    const research = records(41);
+    const bundle41: AgenticEvidenceBundleV1 = { ...research, items: research.items.map(entry => entry.short === "E41" ? { ...entry, item: { ...entry.item, visibility: "only_me" as const } } : entry) };
+    const run = alone({ bundle: bundle41, replies: [writerReply([{ text: "The reviews approved all forty-one.", evidence: ids(1, 41) }, { text: "The review approved record 1.", evidence: ["E1"] }])] });
+    const { rendered, corrections } = await observed(() => run.render("What did the reviews approve?"));
+    expect(rendered.result.response.parts[0]!.statements).toEqual([{ text: "The review approved record 1.", citation_indexes: [0], private: false }]);
+    expect(rendered.cited).toEqual(["E1"]);
+    expect(corrections).toMatchObject({ model_entry_dropped: 1 });
+    expect(corrections).not.toHaveProperty("model_items_capped");
+  });
   it("separates a missing fact from output-fit diagnostics", async () => {
     // A sentence whose list id brings 45 private rows would cite past a statement's 40: it is left out, and says so.
     const rendered = await alone({ bundle: listBundle(45, 2, [list("L1", ids(1, 45))], [C(["E46", "E47"])]), replies: [writerReply([
