@@ -16,7 +16,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072 };
 const document = loadCases();
 /** The writer's answer that Priya Raman owns it, in blocks. */
-const REPLY = Object.freeze({ lists: [], blocks: [{ block: "answer", sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }], not_found: [] });
+const REPLY = Object.freeze({ blocks: [{ block: "answer", sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }], not_found: [] });
 /** A run over soak-owner, one trial, with `fields` changed. */
 const options = (out, fields = {}) => ({ run: true, credentialFile: null, out, caseIds: ["soak-owner"], trials: 1, concurrency: 1, timeoutMs: 20_000, ...fields });
 /** A route that answers each writer call with REPLY, keeping every input. */
@@ -36,7 +36,7 @@ function privateRoot(t) {
   return { root, credential };
 }
 /** A layout v2 reply: one answer block whose sentence cites `evidence`. */
-const answerBlock = (text, evidence) => ({ lists: [], blocks: [{ block: "answer", sentences: [{ text, evidence }] }], not_found: [] });
+const answerBlock = (text, evidence) => ({ blocks: [{ block: "answer", sentences: [{ text, evidence }] }], not_found: [] });
 /**
  * A writer for the wording cases that answers with `lead(case)` (by default every required fact, briefly) as its answer
  * block and cites everything it was shown; it never sees a credential.

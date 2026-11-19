@@ -100,7 +100,7 @@ export async function allSourceAskFixture(owned: string[], options: { readonly n
       await beforeAnswerReturn?.();
       const sentences = (prompt.evidence ?? []).map(item => ({ text: item.text!, evidence: [item.id] }));
       // The writer arranges its answer in blocks (ADR-0051): the same sentences, as one block of text.
-      return { lists: [], blocks: [{ block: 'text', sentences }], not_found: [] };
+      return { blocks: [{ block: 'text', sentences }], not_found: [] };
     }
     // A result names its items by id; their details are in seen.
     const returned = new Set(prompt.last_results?.flatMap(result => result.results ?? []));

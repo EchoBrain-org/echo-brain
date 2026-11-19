@@ -42,7 +42,7 @@ function leadAndSection(): StructuredGenerationPort {
       steps = 0; project = undefined; mine = undefined;
       const lead = { text: 'Ari leads Project A.', evidence: [of('project')] };
       const task = { text: 'Your open follow-up is on the launch ticket.', evidence: [of('follow_up')] };
-      return { lists: [], blocks: [{ block: 'answer', sentences: [lead] }, { block: 'text', title: 'Your tasks', sentences: [task] }], not_found: [] };
+      return { blocks: [{ block: 'answer', sentences: [lead] }, { block: 'text', title: 'Your tasks', sentences: [task] }], not_found: [] };
     }
     project ??= prompt.last_results?.find(result => result.tool === 'list' && result.args?.source === 'projects')?.items?.[0];
     mine ??= prompt.last_results?.find(result => result.tool === 'list' && result.args?.owner !== undefined)?.items?.[0];

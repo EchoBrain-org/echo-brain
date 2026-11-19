@@ -7,7 +7,7 @@ import {
   agenticListMembersNounV1, agenticListMembershipV1, agenticListNounV1, agenticListSelectionNotFoundV1, agenticListSelectV1, agenticListShownNoteV1,
   agenticListStatementsV2, agenticListTableV1,
   agenticNeedReadsListV1, agenticOpenReadsV1, agenticPlanListsV1, agenticWriterListMemberV1, agenticWriterListV1, createAgenticListEvidenceV1, parseAgenticListIdV1,
-  type AgenticAnswerListUseV1, type AgenticListEvidenceInputV1, type AgenticListEvidenceV1, type AgenticListFilterApplicationV1, type AgenticListIdV1,
+  type AgenticListEvidenceInputV1, type AgenticListEvidenceV1, type AgenticListFilterApplicationV1, type AgenticListIdV1,
   type AgenticListNounFormsV1, type AgenticListSelectionV1, type AgenticListStatementInputV1, type AgenticOpenActionV1, type AgenticPlacedListV1, type AgenticWriterListMemberV1,
 } from "../../src/answer-composition/agentic-list-evidence-v1.js";
 import type { AgenticResearchResultV1 } from "../../src/answer-composition/agentic-research-v1.js";
@@ -249,7 +249,7 @@ describe("the writer's view", () => {
     const ids = Array.from({ length: 105 }, (_, index) => `E${index + 1}`);
     const list = createAgenticListEvidenceV1({ ...OCTOBER_4, members: ids, shown: 105 });
     const rows = ids.map((id, index) => agenticWriterListMemberV1({ short: id, item: pageRow(String(index + 1), `Page ${index + 1}`) }, false));
-    const view = agenticWriterListV1(list, rows, true);
+    const view = agenticWriterListV1(list, rows);
     expect(view.members).toHaveLength(105);
     expect(view).not.toHaveProperty('members_omitted');
   });
@@ -257,32 +257,33 @@ describe("the writer's view", () => {
   it("preserves a long list and counts all checked members, reducing rows only for an explicit prompt bound", () => {
     const short = createAgenticListEvidenceV1(OCTOBER_4);
     const eight = short.members.map((id, index) => agenticWriterListMemberV1({ short: id, item: pageRow(String(index + 1), `Page ${index + 1}`) }, false));
-    expect(agenticWriterListV1(short, eight, true, 3)).toMatchObject({ count: 8, members: eight.slice(0, 3), members_omitted: 5 });
-    expect(agenticWriterListV1(short, eight, true, 0)).toMatchObject({ count: 8, members: [], members_omitted: 8 });
-    expect(() => agenticWriterListV1(short, eight, true, -1)).toThrow(/max_members/u);
-    expect(agenticWriterListV1(short, eight, false)).not.toHaveProperty("members_omitted");
+    expect(agenticWriterListV1(short, eight, 3)).toMatchObject({ count: 8, members: eight.slice(0, 3), members_omitted: 5 });
+    expect(agenticWriterListV1(short, eight, 0)).toMatchObject({ count: 8, members: [], members_omitted: 8 });
+    expect(() => agenticWriterListV1(short, eight, -1)).toThrow(/max_members/u);
+    expect(agenticWriterListV1(short, eight)).not.toHaveProperty("members_omitted");
     const ids = Array.from({ length: 120 }, (_, index) => `E${index + 1}`);
     const list = createAgenticListEvidenceV1({ ...OCTOBER_4, members: ids, shown: 120 });
     const rows = ids.map((id, index) => agenticWriterListMemberV1({ short: id, item: pageRow(String(index + 1), `Page ${index + 1}`) }, index === 0 || index === 110));
-    const view = agenticWriterListV1(list, rows, true);
-    expect(view).toMatchObject({ id: "L1", source: "pages", complete: true, count: 120, checked: 2, stated: true, read_at: OCTOBER_4.read_at });
+    const view = agenticWriterListV1(list, rows);
+    expect(view).toMatchObject({ id: "L1", source: "pages", complete: true, count: 120, checked: 2, read_at: OCTOBER_4.read_at });
+    expect(view).not.toHaveProperty("stated");
     expect(view.members).toHaveLength(120);
     expect(view).not.toHaveProperty("members_omitted");
-    expect(() => agenticWriterListV1(list, [...rows].reverse(), true)).toThrow(/the list's members, in order/u);
+    expect(() => agenticWriterListV1(list, [...rows].reverse())).toThrow(/the list's members, in order/u);
   });
 
-  it("lets the writer choose a list and select by one row fact other than its title, never write names", () => {
-    const mine: AgenticAnswerListUseV1 = { id: "L1", where: { field: "owner", value: "Dana Lee" } };
-    const week: AgenticAnswerListUseV1 = { id: "L1", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } };
+  it("lets the writer place a list and select by one row fact other than its title, never write names", () => {
+    const mine: AgenticPlacedListV1 = { list: "L1", where: { field: "owner", value: "Dana Lee" } };
+    const week: AgenticPlacedListV1 = { list: "L1", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } };
     expect([mine.where?.field, week.where?.field]).toEqual(["owner", "due"]);
-    expectTypeOf<NonNullable<AgenticAnswerListUseV1["where"]>>().toEqualTypeOf<AgenticListSelectionV1>();
-    expectTypeOf<NonNullable<AgenticAnswerListUseV1["where"]>["field"]>().toEqualTypeOf<"owner" | "status" | "due" | "created" | "updated" | "received" | "occurred" | "approved" | "sent" | "reassigned" | "checked">();
+    expectTypeOf<NonNullable<AgenticPlacedListV1["where"]>>().toEqualTypeOf<AgenticListSelectionV1>();
+    expectTypeOf<NonNullable<AgenticPlacedListV1["where"]>["field"]>().toEqualTypeOf<"owner" | "status" | "due" | "created" | "updated" | "received" | "occurred" | "approved" | "sent" | "reassigned" | "checked">();
     // @ts-expect-error a selection is never by title
-    const byTitle: AgenticAnswerListUseV1 = { id: "L1", where: { field: "title", value: "PRD" } };
+    const byTitle: AgenticPlacedListV1 = { list: "L1", where: { field: "title", value: "PRD" } };
     // @ts-expect-error the writer names lists, never member names
-    const named: AgenticAnswerListUseV1 = { id: "L1", names: ["PRD"] };
+    const named: AgenticPlacedListV1 = { list: "L1", names: ["PRD"] };
     // It selects members for their row facts by id, never by what it would write of them.
-    const prd: AgenticAnswerListUseV1 = { id: "L1", members: ["E5"] };
+    const prd: AgenticPlacedListV1 = { list: "L1", members: ["E5"] };
     expect([byTitle, named, prd]).toHaveLength(3);
   });
 });

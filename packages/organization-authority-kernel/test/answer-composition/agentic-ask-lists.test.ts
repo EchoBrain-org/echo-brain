@@ -59,10 +59,11 @@ const cite = (text: string, count: number, shared = false, from = 0) => ({ text,
 const noted = (text: string, note: string) => text.replace(/\.$/u, ` ${note}.`);
 const of8 = (count: number) => `(${count} of 8 checked so far)`;
 
-const ROWS_REASON = 'a sentence cites list rows or list ids but no evidence text: code states which items exist, and members\' title, dates, status and owner, through "lists" (with "where" or "members"); what no evidence text says belongs in "not_found"';
+/** What notice records when the writer ran and was not shown one list research read (ADR-0054). */
+const NOT_SHOWN_LIST = "1 list research read was not shown to the answer's writer.";
+const ROWS_REASON = 'a sentence cites list rows or list ids but no evidence text: place a "list" block to show which items exist and members\' title, dates, status and owner (whole, with "where" or with "members"); what no evidence text says belongs in "not_found"';
 const UNSUPPORTED = "Part of the answer was left out because no item's text supports it.";
 const UNCHECKED = "Not every listed item was checked, so others may also match.";
-const WHICH = "I could not confirm the full list of items asked for.";
 /** With no usable writer reply, code states the plan's which_items lists and says so (ADR-0041, kept by ADR-0054). */
 const FALLBACK = "I found these items, but could not write the rest of the answer.";
 const RECORDS = "I found these records, but could not write a verified summary.";
@@ -173,11 +174,9 @@ const FOLLOW_UPS = { tool: "list", args: { source: "follow_ups", owner: "Mara Li
 const KEEP_FOLLOW_UPS = 'list L1 is unfinished: keep reading the list (repeat list with {"source":"follow_ups","status":"open","owner":"Mara Lind"})';
 const TWELVE = Array.from({ length: 12 }, (_, index) => followUpItem(index + 1));
 const FU = { q: "What are my open follow-ups?", need: "my open follow-ups", asked: {}, desk: () => followUps(TWELVE) };
-const FU12 = `12 follow-ups with owner Mara Lind and status open: ${TWELVE.map(item => item.label).join("; ")}.`;
 /** Follow-ups with due dates: THERM-41 is overdue on October 18, THERM-43 and THERM-47 are due that week. */
 const DUES: Readonly<Record<number, readonly [string, string]>> = { 1: ["2026-10-09", "October 9, 2026"], 2: ["2026-10-30", "October 30, 2026"], 3: ["2026-10-20", "October 20, 2026"], 7: ["2026-10-22", "October 22, 2026"], 9: ["2026-11-02", "November 2, 2026"] };
 const DUE_ITEMS = Array.from({ length: 12 }, (_, index) => followUpItem(index + 1, DUES[index + 1]?.[0]));
-const FULL12 = `12 follow-ups with owner Mara Lind and status open: ${DUE_ITEMS.map((item, index) => DUES[index + 1] === undefined ? item.label : `${item.label} (due ${DUES[index + 1]![1]})`).join("; ")}.`;
 const dueFacts = (n: number) => `THERM-${40 + n} follow-up (status open, owner Mara Lind, due ${DUES[n]![1]})`;
 const LEAD12 = "of the 12 follow-ups with owner Mara Lind and status open";
 const MARA = { q: "Which actions does Mara own?", need: "actions owned by Mara" };
@@ -367,7 +366,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
         expect(response.citations.map((citation: { citation: unknown }) => citation.citation)).toEqual(PAGES.map(page => page.citation));
         expect([writer[0]!.evidence, writer[0]!.research.inventories, writer_evidence]).toEqual([[], undefined, ids(1, 8)]);
         expect(writer[0]!.lists).toEqual([{
-          id: "L1", source: "pages", filter: OCT4_FILTER, filter_applied: OCT4_APPLIED, complete: true, count: 8, checked: 0, read_at: LIST_READ_AT, stated: true,
+          id: "L1", source: "pages", filter: OCT4_FILTER, filter_applied: OCT4_APPLIED, complete: true, count: 8, checked: 0, read_at: LIST_READ_AT,
           members: PAGES.map((page, index) => ({ id: `E${index + 1}`, kind: "page", title: OCT4_TITLES[index], dates: page.dates, date: page.occurred_at, date_kind: "version_created", status: "current", checked: false })),
         }]);
         const prompt = h.inputs.find(input => input.system_prompt.startsWith(ANSWER_PROMPT))!.user_prompt;
@@ -380,7 +379,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       ...(writer === useL1 ? { out: "answered" } : { out: "partial", gap: FALLBACK }),
     })),
     { id: "C2", name: "notes a which_say need's sentence and states no list, the writer seeing the list as checked, not stated", ...B4, steps: [...READ4, fin(WS, "L1", "E12")], w: [say(TRACE, ["E12"])],
-      out: "partial", says: [cite(noted(TRACE, of8(4)), 1)], gap: UNCHECKED, wl: { id: "L1", count: 8, checked: 4, stated: false },
+      out: "partial", says: [cite(noted(TRACE, of8(4)), 1)], gap: UNCHECKED, wl: { id: "L1", count: 8, checked: 4 },
       check: ({ writer }) => expect(writer[0]!.lists[0].members.map((member: { checked: boolean }) => member.checked)).toEqual([true, true, true, true, false, false, false, false]) },
     { id: "C2", name: "notes a sentence citing the list's id too, which brings the 8 only_me page rows after its text (W1)", ...B4, steps: [...READ4, fin(WS, "L1", "E12")], w: [say(TRACE, ["L1", "E12"])],
       out: "partial", says: [cite(noted(TRACE, of8(4)), 9)], gap: UNCHECKED,
@@ -394,7 +393,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       steps: [...READ4, fin(WS, "L1", ...SECTIONS)], w: [say(FOUR, SECTIONS, [{ id: "L1" }])], out: "partial", says: [noted(FOUR, of8(4)), FULL8], gap: UNCHECKED },
     ...[fin(WS, "L1", "E11", "E12"), fin(C, "E11", "E12")].map((finish, index): Row => ({
       id: index === 0 ? "C2b, R2" : "R2 (content)", name: `answers which pages mention BUG-412 once every page was checked, ${index === 0 ? "a which_say need" : "declared content"}: the sentence stands, with no note and no list`, ...B4,
-      steps: [...READ8, finish], w: [say(TWO, ["E11", "E12"])], out: "answered", says: [cite(TWO, 2)], wl: { count: 8, checked: 8, complete: true, stated: false },
+      steps: [...READ8, finish], w: [say(TWO, ["E11", "E12"])], out: "answered", says: [cite(TWO, 2)], wl: { count: 8, checked: 8, complete: true },
     })),
     { id: "X35d", name: "cites the 8 only_me page rows after the two sections when the sentence also cites the list", ...B4, steps: [...READ8, fin(WS, "L1", "E11", "E12")], w: [say(TWO, ["L1", "E11", "E12"])], out: "answered", says: [cite(TWO, 10)] },
     { id: "X35d", name: "cites only the two sections on team pages, whatever the sentence cites beside them", ...B4, desk: () => oct4({ team: true }), steps: [...READ8, fin(WS, "L1", "E11", "E12")], w: [say(TWO, ["L1", "E11", "E12"])], out: "answered", says: [cite(TWO, 2, true)] },
@@ -404,7 +403,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       check: ({ research }) => expect(research.rounds[1].actions.map((action: any) => [action.args.id, action.result.id])).toEqual(PAGES.slice(0, 4).map((row, index) => [row.label, `E${index + 1}`])) },
     ...([["C3", ["E1"]], ["C3b", ["L1", "E1"]]] as const).map(([id, evidence]): Row => ({
       id, name: "answers one follow-up's due date from its text on the list's first page, stating no list: a content need never waits", q: "When is THERM-41 due?", need: "THERM-41's due date", asked: {}, desk: () => followUps(DUE_ITEMS),
-      steps: [read([FOLLOW_UPS], C), fin(C, ...evidence)], w: [say("THERM-41 follow-up is due October 9, 2026.", ["E1"])], out: "answered", says: [cite("THERM-41 follow-up is due October 9, 2026.", 1, true)], listed: 1, wl: { complete: false, count: 10, stated: false },
+      steps: [read([FOLLOW_UPS], C), fin(C, ...evidence)], w: [say("THERM-41 follow-up is due October 9, 2026.", ["E1"])], out: "answered", says: [cite("THERM-41 follow-up is due October 9, 2026.", 1, true)], listed: 1, wl: { complete: false, count: 10 },
     })),
     { id: "C3c (misdeclared)", name: "keeps the explicit follow-up selection and its facts for a due-date question declared which_items", q: "When is THERM-41 due?", need: "THERM-41's due date", asked: {}, desk: () => followUps(DUE_ITEMS),
       steps: [read([FOLLOW_UPS], WI), fin(WI, "L1"), read([FOLLOW_UPS], WI), fin(WI, "L1")], w: [say("THERM-41 follow-up is due October 9, 2026.", ["E1"], [{ id: "L1", members: ["E1"] }])],
@@ -416,8 +415,8 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       says: [cite(writer.blocks[0]?.block === "answer" ? "THERM-46 is owned by Dana Lee." : "1 of the 10 Jira tickets: THERM-46: Fixture work 46 (status In Progress, owner Dana Lee, created October 4, 2026).", 1)],
     })),
     { id: "C5", name: "asks a which_items need to keep reading a follow-up list, then releases the writer's answer as written: code adds no list it did not place (ADR-0054)", ...FU, steps: [read([FOLLOW_UPS], WI), fin(WI, "L1"), read([FOLLOW_UPS], WI), fin(WI, "L1")],
-      w: [say("You have 10 open follow-ups.", ["L1", ...ids(1, 10)])], rejected: [`need N1 "my open follow-ups": ${KEEP_FOLLOW_UPS}`], out: "answered", says: ["You have 10 open follow-ups."], listed: 2, wl: { id: "L1", complete: true, count: 12, stated: true } },
-    { id: "X8 (misdeclared)", name: "finishes a which-question declared content on ten follow-up rows without reading on, and states no list (Known limit)", ...FU, steps: [read([FOLLOW_UPS]), fin(C, ...ids(1, 10))], w: [say("You have 10 open follow-ups.", ["L1", ...ids(1, 10)])], out: "answered", says: ["You have 10 open follow-ups."], stop: "finished", listed: 1, wl: { id: "L1", complete: false, count: 10, stated: false } },
+      w: [say("You have 10 open follow-ups.", ["L1", ...ids(1, 10)])], rejected: [`need N1 "my open follow-ups": ${KEEP_FOLLOW_UPS}`], out: "answered", says: ["You have 10 open follow-ups."], listed: 2, wl: { id: "L1", complete: true, count: 12 } },
+    { id: "X8 (misdeclared)", name: "finishes a which-question declared content on ten follow-up rows without reading on, and states no list (Known limit)", ...FU, steps: [read([FOLLOW_UPS]), fin(C, ...ids(1, 10))], w: [say("You have 10 open follow-ups.", ["L1", ...ids(1, 10)])], out: "answered", says: ["You have 10 open follow-ups."], stop: "finished", listed: 1, wl: { id: "L1", complete: false, count: 10 } },
     { id: "C6, R1, R8", name: "says what a reply that found nothing did not find, with no repair, and states no list the writer did not place (ADR-0054)", ...O4, steps: [read([OCT4_LIST]), fin(WI, "L1")], w: [nothing("Confluence pages created on October 4, 2026")], out: "not_found", says: [], gap: "Not found: Confluence pages created on October 4, 2026." },
     { id: "C7a, CF6", name: "names one meeting's actions by their own lines, each with its own due date, though they share the meeting's label", ...MARA,
       desk: () => meetings([0, 1, 2].map(index => meetingAction(`a${index + 1}`, { label: "DVT review (2026-10-01)", list_label: LINES[index]!, ...(index < 2 ? { due_at: ["2026-10-09", "2026-10-12"][index] } : {}) }))),
@@ -431,7 +430,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     ...([[WI, "C7b, CF9d"], [WS, "C7d"]] as const).map(([kind, id]): Row => ({
       id, name: kind === WI ? "releases the opened subset's sentence as written, stating no list the writer did not place (ADR-0054)" : "notes the same sentence for a which_say need checking the list", ...MARA,
       ...(kind === WS ? { q: "Which of Mara's actions name a numbered task?" } : {}), desk: tasks, steps: [read([MARA_LIST]), read(opens(ids(1, 4))), kind === WI ? fin(WI, "L1") : fin(WS, "L1", ...ids(1, 4))],
-      w: [say("Mara owns tasks 1, 2, 3 and 4.", ["L1", ...ids(1, 4)])], wl: { complete: true, count: 8, checked: 4, stated: kind === WI },
+      w: [say("Mara owns tasks 1, 2, 3 and 4.", ["L1", ...ids(1, 4)])], wl: { complete: true, count: 8, checked: 4 },
       ...(kind === WI ? { out: "answered", says: ["Mara owns tasks 1, 2, 3 and 4."] } : { out: "partial", says: [`Mara owns tasks 1, 2, 3 and 4 ${of8(4)}.`], gap: UNCHECKED }),
       // An opened meeting record keeps its row's id: research read the four members in full.
       check: ({ research }) => expect(research.items.filter((item: any) => item.read_in_full).map((item: any) => item.id)).toEqual(ids(1, 4)),
@@ -449,16 +448,16 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       ...(repair !== useL1 ? { out: "partial", gap: FALLBACK, says: [cite(FULL8, 8)], check: ({ writer }: Run) => expect(writer[1]!.rejected_response).toContain("The pages are") } : { out: "answered", says: [FULL8] }),
     })),
     { id: "CF9a", name: "refuses a which_items finish on opened sections alone once, then releases the sentence as written, adding no page selection (ADR-0054)", ...O4,
-      steps: [...READ4, fin(WI, ...SECTIONS), fin(WI, "L1", ...SECTIONS)], w: [say(FOUR, SECTIONS)], rejected: [`${UNLISTED} (L1). `], out: "answered", says: [FOUR], wl: { id: "L1", count: 8, checked: 4, stated: true } },
+      steps: [...READ4, fin(WI, ...SECTIONS), fin(WI, "L1", ...SECTIONS)], w: [say(FOUR, SECTIONS)], rejected: [`${UNLISTED} (L1). `], out: "answered", says: [FOUR], wl: { id: "L1", count: 8, checked: 4 } },
     ...[READ4, READ8].map((reads): Row => ({
       id: "R5, CF7", name: `keeps a sentence citing the list's id beside four opened sections, ${reads === READ4 ? "four" : "all eight"} pages opened: code names no list the writer did not place (ADR-0054)`, ...O4,
-      steps: [...reads, fin(WI, "L1")], w: [say(FOUR, ["L1", ...SECTIONS])], out: "answered", says: [FOUR], wl: { checked: reads === READ4 ? 4 : 8, stated: true },
+      steps: [...reads, fin(WI, "L1")], w: [say(FOUR, ["L1", ...SECTIONS])], out: "answered", says: [FOUR], wl: { checked: reads === READ4 ? 4 : 8 },
     })),
     { id: "R3, CF12c", name: "refuses a finish without its inventory, then releases the 4-name sentence as written, restoring no requested member (ADR-0054)", ...O4,
-      steps: [...READ4, fin(WI, ...ids(1, 12)), fin(WI, "L1", ...ids(1, 12))], w: [say(FOUR, SECTIONS)], rejected: [`${UNLISTED} (L1). `], out: "answered", says: [FOUR], wl: { checked: 4, stated: true } },
+      steps: [...READ4, fin(WI, ...ids(1, 12)), fin(WI, "L1", ...ids(1, 12))], w: [say(FOUR, SECTIONS)], rejected: [`${UNLISTED} (L1). `], out: "answered", says: [FOUR], wl: { checked: 4 } },
     { id: "R3", name: "releases a sentence naming four members from their bodies, opened under the rows' own ids, stating no list the writer did not place (ADR-0054)", ...TIX, desk: () => jira(tickets(1, 12), { last: { page_full: false }, body: n => `THERM-${n}: created October 4 for fixture work.` }),
       steps: [read([TICKETS_LIST]), read(opens(ids(1, 4))), fin(WI, ...ids(1, 12)), fin(WI, "L1", ...ids(1, 12))], w: [say("The tickets created on October 4 are THERM-1, THERM-2, THERM-3 and THERM-4.", ids(1, 4))],
-      rejected: [`${UNLISTED} (L1). `], out: "answered", says: ["The tickets created on October 4 are THERM-1, THERM-2, THERM-3 and THERM-4."], wl: { count: 12, checked: 4, complete: true, stated: true } },
+      rejected: [`${UNLISTED} (L1). `], out: "answered", says: ["The tickets created on October 4 are THERM-1, THERM-2, THERM-3 and THERM-4."], wl: { count: 12, checked: 4, complete: true } },
     { id: "CF8a", name: "refuses a content finish on the list with what each kind of support is, then answers from the page research opened", ...DVT, desk: () => oct4(),
       steps: [read([OCT4_LIST], C), fin(C, "L1"), read(opens(["E3"]), C), fin(C, "E9")], w: [say(HOLD, ["E9"])], rejected: [`need N1 "whether DVT is on hold" ${HINT}`], out: "answered", says: [HOLD] },
     ...([[[claim(["E3"], [{ id: "L1" }]), nothing("whether DVT is on hold")], "Not found: whether DVT is on hold."], [[claim(["E3"], [{ id: "L1" }]), claim(["E3"], [{ id: "L1" }])], UNSUPPORTED]] as const)
@@ -484,14 +483,14 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     ...([["CF10b", ["L1", "E9"]], ["CF10a, CF12b", ["E3", "E9"]]] as const).map(([id, plan]): Row => ({
       id, name: `answers what one page says from its section when the content need cites ${plan[0] === "L1" ? "the list" : "the page's row"} too: no list, no note`, q: "What does the gate review page created on October 4 say about DVT?", need: "what the gate review page says about DVT",
       desk: () => oct4(), steps: [read([OCT4_LIST]), read(opens(["E3"])), fin(C, ...plan)], w: [say("The gate review says DVT is on hold pending fixture rework.", ["E9"])], out: "answered",
-      says: [cite("The gate review says DVT is on hold pending fixture rework.", 1)], wl: { id: "L1", stated: false, checked: 1 },
+      says: [cite("The gate review says DVT is on hold pending fixture rework.", 1)], wl: { id: "L1", checked: 1 },
     })),
     { id: "CF11 (i, iii)", name: "refuses a which_items finish on ten follow-up rows once; read to its end, the writer's two names are released as written (ADR-0054)", ...FU,
       steps: [read([FOLLOW_UPS], WI), fin(WI, ...ids(1, 10)), read([FOLLOW_UPS], WI), fin(WI, "L1")], w: [say("Your open follow-ups are THERM-41 and THERM-42.", ["E1", "E2"])],
       rejected: [`need N1 "my open follow-ups" ${UNLISTED} (L1); part 1 need N1 "my open follow-ups": ${KEEP_FOLLOW_UPS}`], out: "answered", says: ["Your open follow-ups are THERM-41 and THERM-42."] },
     { id: "CF11 (ii)", name: "stops research when the repair cites L1 alone, still unfinished: the writer's count stays, partial", ...FU, steps: [read([FOLLOW_UPS], WI), fin(WI, ...ids(1, 10)), fin(WI, "L1")], w: [say("You have 10 open follow-ups.", ids(1, 10))],
       rejected: [`need N1 "my open follow-ups" ${UNLISTED} (L1); part 1 need N1 "my open follow-ups": ${KEEP_FOLLOW_UPS}`, `need N1 "my open follow-ups": ${KEEP_FOLLOW_UPS}`],
-      stop: "unusable_step", out: "partial", says: ["You have 10 open follow-ups."], notice: STOPPED, listed: 1, wl: { id: "L1", stated: false } },
+      stop: "unusable_step", out: "partial", says: ["You have 10 open follow-ups."], notice: STOPPED, listed: 1, wl: { id: "L1" } },
     { id: "CF12a", name: "accepts a finish on an opened page's row and section while that page's list is unfinished", q: "What accuracy does the PRD require?", need: "the PRD's accuracy requirement",
       desk: () => oct4({ more: true, open: vi.fn(async (input: { readonly item: string }) => { const row = PAGES.find(page => page.id === input.item)!; return result([section(row, "Readings within 0.1 C."), section(row, "Probe at 37 C.", 2)]) as EvidenceDeskResultV2; }) }),
       steps: [read([{ tool: "list", args: { source: "pages" } }]), read(opens(["E5"])), fin(undefined, "E5", "E9")], w: [say("The PRD requires readings within 0.1 C.", ["E9"])],
@@ -508,7 +507,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     { id: "R6", name: "answers with the list alone once the writer drops a list-id sentence after its repair", ...O4, steps: [read([OCT4_LIST]), fin(WI, "L1")], w: [say("All eight are current pages.", ["L1"]), useL1], repaired: true, out: "answered", says: [FULL8] },
     { id: "R7 (R2a)", name: "answers which tickets mention BUG-412 once all 8 were opened, the list's id beside the two: no note", q: "Which Jira tickets created on October 4, 2026 mention BUG-412?", need: "tickets created on 2026-10-04 that mention BUG-412",
       desk: () => jira(tickets(1, 8), { body: bodyText }), steps: [read([TICKETS_LIST]), read(opens(ids(1, 4))), read(opens(ids(5, 4))), fin(WS, "L1", "E3", "E5")], w: [say("THERM-3 and THERM-5 mention BUG-412.", ["L1", "E3", "E5"])],
-      out: "answered", says: ["THERM-3 and THERM-5 mention BUG-412."], wl: { id: "L1", count: 8, checked: 8, stated: false } },
+      out: "answered", says: ["THERM-3 and THERM-5 mention BUG-412."], wl: { id: "L1", count: 8, checked: 8 } },
     { id: "R7 (R2b)", name: "notes the same form after four opens, never forcing it into a list", q: "Which Jira tickets created on October 4, 2026 mention BUG-412?", need: "tickets created on 2026-10-04 that mention BUG-412",
       desk: () => jira(tickets(1, 8), { body: bodyText }), steps: [read([TICKETS_LIST]), read(opens(ids(1, 4))), fin(WS, "L1", "E3")], w: [say("THERM-3 mentions BUG-412.", ["L1", "E3"])],
       out: "partial", says: [`THERM-3 mentions BUG-412 ${of8(4)}.`], gap: UNCHECKED },
@@ -583,7 +582,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     ...[sayAll([[TWO, ["L1", "E11", "E12"]]]), sayAll([[TWO, ["L1", "E11", "E12"]], ["The PRD and the verification plan were also created that day.", ["E5", "E6"]]])].map((repair): Row => ({
       id: "X15 (W4, W1)", name: `keeps a sentence on a which_say list's members, stating no list the writer did not place, and ${repair.blocks.length === 1 ? "accepts the repair that drops a rows sentence" : "leaves out a repeated rows sentence"}`, ...X15,
       steps: [bothOpen([OCT4_LIST], false), bothOpen(opens(ids(1, 4)), false), bothOpen(opens(ids(5, 4)), false), step([FINISH], ["found", ["L1"], WI], ["found", ["L1", "E11", "E12"], WS])],
-      w: [sayAll([[TWO, ["L1", "E11", "E12"]], ["The PRD and the verification plan were also created that day.", ["E5", "E6"]]]), repair], repaired: true, wl: { id: "L1", count: 8, checked: 8, stated: true },
+      w: [sayAll([[TWO, ["L1", "E11", "E12"]], ["The PRD and the verification plan were also created that day.", ["E5", "E6"]]]), repair], repaired: true, wl: { id: "L1", count: 8, checked: 8 },
       says: [TWO], ...(repair.blocks.length === 1 ? { out: "answered" } : { out: "partial", gap: UNSUPPORTED }),
     })),
     { id: "X17a", name: "states a where date range with its condition, and keeps the writer's sentence beside a statement that names some members (Known limit)", ...WEEK,
@@ -622,9 +621,9 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       // A list with no member is named by its kind filter: Mara's list is of actions (research tool contract v1).
       ...(id === "X23c" ? { out: "not_found", gap: MISSING } : { out: "partial", gap: `${MISSING} ${leg("actions")}`, ...(id === "X23b" ? { notice: "Meetings are temporarily unavailable." } : {}) }),
     })),
-    { id: "X26a", name: "with nothing from the writer, the fallback states every list a which_items need reads past the writer's five, and the sixth list's filter notice", ...daily(6, WI, EMPTY, { owner: 6 }), out: "partial", gap: FALLBACK, notice: ownerNotice("Confluence pages"), says: [1, 2, 3, 4, 5, 6].map(dayStatement) },
-    { id: "X26b", name: "with nothing from the writer, the fallback states all eleven lists past the writer's five: an answer has no count of statements", ...daily(11, WI, EMPTY), out: "partial", gap: FALLBACK, says: Array.from({ length: 11 }, (_, index) => dayStatement(index + 1)) },
-    { id: "X26c", name: "notes and gaps a which_say need checking a sixth list past the writer's five", out: "partial", says: ["Day 6 plan traces BUG-412 to TC-D-03 (1 of 2 checked so far)."], gap: UNCHECKED,
+    { id: "X26a", name: "with nothing from the writer, the fallback states every list a which_items need reads past the writer's five, and the sixth list's filter notice", ...daily(6, WI, EMPTY, { owner: 6 }), out: "partial", gap: FALLBACK, notice: `${ownerNotice("Confluence pages")} ${NOT_SHOWN_LIST}`, says: [1, 2, 3, 4, 5, 6].map(dayStatement) },
+    { id: "X26b", name: "with nothing from the writer, the fallback states all eleven lists past the writer's five: an answer has no count of statements", ...daily(11, WI, EMPTY), out: "partial", gap: FALLBACK, notice: "6 lists research read were not shown to the answer's writer.", says: Array.from({ length: 11 }, (_, index) => dayStatement(index + 1)) },
+    { id: "X26c", name: "notes and gaps a which_say need checking a sixth list past the writer's five", out: "partial", says: ["Day 6 plan traces BUG-412 to TC-D-03 (1 of 2 checked so far)."], gap: UNCHECKED, notice: NOT_SHOWN_LIST,
       ...daily(6, WS, say("Day 6 plan traces BUG-412 to TC-D-03.", ["E8"]), { pages: n => n === 6 ? [dayPage(6), dayPage(7)] : [dayPage(n)], opened: ["E6"], cited: ["E8"] }) },
     { id: "X27a", name: "keeps a sentence on a list member's text while a content need research left open cites nothing, stating no list (ADR-0054)", ...X27,
       steps: [X27_LIST, step(opens(["E3"]), ["found", ["L1"], WI], ["open", [], C]), ...UNUSABLE], w: [say(DVT_GATE, ["E9"])], rejected: BAD, stop: "unusable_step", out: "partial", notice: STOPPED, says: [DVT_GATE] },

@@ -20,7 +20,7 @@ import {
 } from "@echo-brain/organization-api";
 import { observeCoreModelCorrectionV1 } from "../shared/core-runtime-observation-v1.js";
 import { calendarDateV1, EVIDENCE_DATE_FIELDS_V1, type EvidenceDateFieldV1 } from "../shared/temporal-query-v1.js";
-import { AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_WRITER_LISTS_MAX_V1, parseAgenticListIdV1, type AgenticAnswerListUseV1, type AgenticListIdV1, type AgenticListSelectionV1 } from "./agentic-list-evidence-v1.js";
+import { AGENTIC_LIST_SELECTION_FIELDS_V1, parseAgenticListIdV1, type AgenticListIdV1, type AgenticListSelectionV1 } from "./agentic-list-evidence-v1.js";
 import { AGENTIC_RESEARCH_NEED_KINDS_V1, type AgenticResearchNeedKindV1 } from "./agentic-research-v1.js";
 import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.js";
 
@@ -89,8 +89,6 @@ export type Step = { readonly parts: readonly StepPart[]; readonly actions: read
 /** A writer's sentence: its text and the evidence it stands on. */
 export type AnswerSentence = {
   readonly text: string; readonly evidence: readonly string[];
-  /** Internal binding: the listed member this grounded row or point presents, independent of its supporting citations. */
-  readonly member?: string;
   /** The item the sentence is in its writer's blocks (answer layout v2, ADR-0051). It never changes what it cites. */
   readonly item: AnswerItem;
 };
@@ -108,11 +106,11 @@ export type AnswerItem =
   | { readonly block: number; readonly kind: "fact"; readonly title: string; readonly entity: PersonAnswerCardEntityV2; readonly label: string; readonly value: string }
   | { readonly block: number; readonly kind: "quote"; readonly text: string; readonly from?: string };
 /**
- * `lists` (ADR-0041): the lists whose members code names. Only an Ask again's reply (ADR-0047) has `since`, what is
- * different since the earlier answer: absent when the reply gave no list of it.
+ * The writer's reply as code reads it. Only an Ask again's reply (ADR-0047) has `since`, what is different since the
+ * earlier answer: absent when the reply gave no list of it.
  */
 export type Answer = {
-  readonly sentences: readonly AnswerSentence[]; readonly not_found: readonly string[]; readonly lists: readonly AgenticAnswerListUseV1[];
+  readonly sentences: readonly AnswerSentence[]; readonly not_found: readonly string[];
   /** The list blocks the writer placed (ADR-0054), in its order: code fills each from the desk. */
   readonly placed: readonly AnswerList[];
   readonly since?: readonly Pick<AnswerSentence, "text" | "evidence">[];
@@ -221,26 +219,17 @@ export function createStepSchema(sources: readonly StepSource[], openIds?: reado
 }); }
 
 /**
- * A list the answer uses (ADR-0041): its id, and optionally the members one row fact selects (an owner or status by
- * value, or a date within since and until), or the members it names by id for their row facts. Code names them.
+ * A list block's narrowing (ADR-0041, ADR-0054): the members one row fact selects, an owner or status by value, or a
+ * date within since and until.
  */
-const listUse = {
-  type: "object", additionalProperties: false, required: ["id"], properties: {
-    id: { type: "string", maxLength: 8 },
-    where: { type: "object", additionalProperties: false, required: ["field"], properties: {
-      field: closedString(AGENTIC_LIST_SELECTION_FIELDS_V1), value: { type: "string", maxLength: SELECTION_CHARS }, since: { type: "string", maxLength: 10 }, until: { type: "string", maxLength: 10 },
-    } },
-    members: { type: "array", items: { type: "string", maxLength: 16 } },
-  },
-} as const;
+const listWhere = { type: "object", additionalProperties: false, required: ["field"], properties: {
+  field: closedString(AGENTIC_LIST_SELECTION_FIELDS_V1), value: { type: "string", maxLength: SELECTION_CHARS }, since: { type: "string", maxLength: 10 }, until: { type: "string", maxLength: 10 },
+} } as const;
 
 /** A writer's sentence: its text, and the evidence it stands on. */
 const citedSentence = {
   type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string", maxLength: SENTENCE_CHARS }, evidence: ids },
 } as const;
-/** A structured item can explicitly present one list member; ordinary prose citations carry no membership claim. */
-const presentedMember = { type: "string", maxLength: 16 } as const;
-const memberSentence = { ...citedSentence, properties: { ...citedSentence.properties, member: presentedMember } } as const;
 
 /** What is different since the earlier answer (ADR-0047): cited sentences, as many as the answer's `since` holds. */
 const sinceSentences = { type: "array", maxItems: AGENTIC_ASK_MAX_SINCE_V1, items: citedSentence } as const;
@@ -258,22 +247,21 @@ function blockShape(name: string, required: readonly string[], properties: Reado
 }
 
 /**
- * Ask's answer (answer layout v2, ADR-0051): the lists code names first (ADR-0041), the writer's blocks, each one of
- * ANSWER_BLOCK_CATALOG's with the fields it takes, and what it could not find. Every Ask's writer sees it, whether or not
+ * Ask's answer (answer layout v2, ADR-0051): the writer's blocks, each one of ANSWER_BLOCK_CATALOG's with the fields it
+ * takes, a list it places among them (ADR-0054), and what it could not find. Every Ask's writer sees it, whether or not
  * its answer is released in blocks.
  */
 export const answerBlocksSchema: StructuredGenerationJsonSchema = Object.freeze({
-  type: "object", additionalProperties: false, required: ["lists", "blocks", "not_found"], properties: {
-    lists: { type: "array", maxItems: AGENTIC_LIST_WRITER_LISTS_MAX_V1, items: listUse },
+  type: "object", additionalProperties: false, required: ["blocks", "not_found"], properties: {
     blocks: { type: "array", minItems: 1, items: { anyOf: [
       blockShape("answer", ["sentences"], { sentences: { type: "array", minItems: 1, maxItems: PERSON_ANSWER_BLOCKS_ANSWER_MAX_STATEMENTS_V2, items: citedSentence } }),
       blockShape("text", ["sentences"], { title: blockTitle, sentences: { type: "array", minItems: 1, items: citedSentence } }),
-      blockShape("points", ["ordered", "items"], { title: blockTitle, ordered: { type: "boolean" }, items: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, items: memberSentence } }),
+      blockShape("points", ["ordered", "items"], { title: blockTitle, ordered: { type: "boolean" }, items: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, items: citedSentence } }),
       blockShape("table", ["columns", "rows"], {
         title: blockTitle, columns: { type: "array", minItems: 2, items: { type: "string", maxLength: COLUMN_CHARS } },
         rows: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, items: {
           type: "object", additionalProperties: false, required: ["cells", "evidence"],
-          properties: { cells: { type: "array", minItems: 2, items: { type: "string", maxLength: CELL_CHARS } }, evidence: ids, member: presentedMember },
+          properties: { cells: { type: "array", minItems: 2, items: { type: "string", maxLength: CELL_CHARS } }, evidence: ids },
         } },
       }),
       blockShape("timeline", ["events"], { title: blockTitle, events: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, items: {
@@ -288,6 +276,8 @@ export const answerBlocksSchema: StructuredGenerationJsonSchema = Object.freeze(
         } },
       }),
       blockShape("quote", ["text", "from", "evidence"], { text: { type: "string", maxLength: SENTENCE_CHARS }, from: { type: "string", maxLength: FROM_CHARS }, evidence: ids }),
+      // A list block has no title (ADR-0054): code fills it from the list and writes its caption.
+      blockShape("list", ["list"], { list: { type: "string", maxLength: 8 }, where: listWhere, members: { type: "array", items: { type: "string", maxLength: 16 } } }),
     ] } },
     not_found: { type: "array", maxItems: AGENTIC_ASK_MAX_PARTS_V1, items: { type: "string", maxLength: NOT_FOUND_CHARS } },
   },
@@ -599,40 +589,6 @@ function selectionOf(where: Record<string, unknown> | null): AgenticListSelectio
 }
 
 /**
- * A list the answer uses: "L1", {"id": "L1"}, {"id": "L1", "where": {"field": "owner", "value": "Dana Lee"}},
- * {"id": "L1", "where": {"field": "due", "since": "2026-10-18", "until": "2026-10-24"}} or {"id": "L1", "members":
- * ["E5"]}; members, each once, take the place of a selection, and a where beside them is kept, for code to use when
- * they name no member of the list. Null for anything else, and for members none of which code can read with no where
- * beside them. A where code cannot read uses the list in full.
- */
-function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
-  const entry = object(raw);
-  const given = entry === null ? raw : entry.id;
-  const id = parseAgenticListIdV1(given);
-  if (id === null) return null;
-  if (entry === null) observeCoreModelCorrectionV1("model_bare_string");
-  else if (id !== given) observeCoreModelCorrectionV1("model_id_respelled");
-  const named = Array.isArray(entry?.members) ? entry.members : [];
-  const members: string[] = [];
-  for (const member of named) {
-    const short = cleanId(member);
-    if (short === null) observeCoreModelCorrectionV1("model_entry_dropped");
-    else if (members.includes(short)) observeCoreModelCorrectionV1("model_repeat_dropped");
-    else {
-      members.push(short);
-      if (short !== member) observeCoreModelCorrectionV1("model_id_respelled");
-    }
-  }
-  const asked = entry === null ? null : object(entry.where);
-  const where = selectionOf(asked);
-  if (asked !== null && where === null) observeCoreModelCorrectionV1("model_entry_dropped");
-  if (!Array.isArray(entry?.members)) return Object.freeze(where === null ? { id } : { id, where });
-  // Ids none of which code can read select nothing: the where beside them selects, or the list has no use.
-  if (members.length === 0 && named.length > 0) return where === null ? null : Object.freeze({ id, where });
-  return Object.freeze({ id, members: Object.freeze(members), ...(where === null ? {} : { where }) });
-}
-
-/**
  * A list block (ADR-0054) at its place among the writer's blocks: {"block": "list", "list": "L1"} for the whole list,
  * with "where" for the members one row fact selects, or with "members" for the members it names by E id, each once.
  * Members given beside a where are kept and the where dropped (ADR-0041's precedent). A narrowing code cannot read
@@ -689,26 +645,6 @@ function notFoundOf(body: Record<string, unknown>): readonly string[] {
   return Object.freeze(notFound);
 }
 
-/** A reply's "lists" (ADR-0041): each list's use in full or by a selection once, and by members' ids once, at most 5 lists. */
-function listUsesOf(body: Record<string, unknown>): readonly AgenticAnswerListUseV1[] {
-  const uses: AgenticAnswerListUseV1[] = [];
-  const asked: readonly unknown[] = Array.isArray(body.lists) ? body.lists : [];
-  for (const raw of asked) {
-    const use = listUseOf(raw);
-    if (use === null) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
-    const repeat = uses.findIndex(existing => existing.id === use.id && (existing.members === undefined) === (use.members === undefined));
-    if (repeat >= 0) {
-      const where = uses[repeat]!.where ?? use.where;
-      if (use.members !== undefined) uses[repeat] = Object.freeze({ id: use.id, members: Object.freeze([...new Set([...uses[repeat]!.members!, ...use.members])]), ...(where === undefined ? {} : { where }) });
-      else observeCoreModelCorrectionV1("model_repeat_dropped");
-      continue;
-    }
-    if (!uses.some(existing => existing.id === use.id) && new Set(uses.map(existing => existing.id)).size === AGENTIC_LIST_WRITER_LISTS_MAX_V1) { observeCoreModelCorrectionV1("model_items_capped"); continue; }
-    uses.push(use);
-  }
-  return Object.freeze(uses);
-}
-
 /** How a card's kind reads in its facts' statements ("Ticket: THERM-48; Status: In review."). */
 const ENTITY_WORDS: Readonly<Record<PersonAnswerCardEntityV2, string>> = Object.freeze({ person: "Person", project: "Project", ticket: "Ticket", decision: "Decision" });
 /** Quotation marks a writer put around a quote's words, which the block sets itself. */
@@ -731,10 +667,10 @@ const WRITER_BLOCK_KINDS = Object.freeze([...PERSON_ANSWER_BLOCK_KINDS_V2, "list
 
 /**
  * Ask's answer (answer layout v2, ADR-0051): its blocks read in order into the writer's sentences, each with the item it
- * is and the list ids such as L1 in its evidence kept; then the lists it uses (ADR-0041), at most
- * AGENTIC_LIST_WRITER_LISTS_MAX_V1 of them, each at most once in full or by a selection and once by members' ids ("which
- * pages were created, and when was the PRD updated"); what it did not find; and, with `since` (Ask again, ADR-0047), what
- * is different since the earlier answer, which a reply that gives no list of it has none of, and is not sent back for.
+ * is and the list ids such as L1 in its evidence kept, and the list blocks it placed among them (ADR-0054); what it did
+ * not find; and, with `since` (Ask again, ADR-0047), what is different since the earlier answer, which a reply that gives
+ * no list of it has none of, and is not sent back for. A top-level "lists" and a row's or point's "member", the reply's
+ * shape before ADR-0054, are never read.
  * Code writes a row's, an event's, a fact's and a quote's sentence from what the block shows. The first answer block, wherever the
  * writer put it, is the answer, with its first two sentences; any other answer sentence is text. An item the block cannot show reads as
  * text in its block: a row whose cells do not match its columns, an event with no real day, a fact of a card with no
@@ -748,13 +684,9 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
   const sentences: AnswerSentence[] = [];
   const placed: AnswerList[] = [];
   // No count is capped here: the part's bounds decide what is kept (W6), and say so when something does not fit.
-  const add = (text: string, evidence: unknown, item: AnswerItem, presented?: unknown) => {
+  const add = (text: string, evidence: unknown, item: AnswerItem) => {
     if (text.length === 0) observeCoreModelCorrectionV1("model_entry_dropped");
-    else {
-      const member = presented === undefined ? null : cleanModelId(presented);
-      if (presented !== undefined && member === null) observeCoreModelCorrectionV1("model_entry_dropped");
-      sentences.push(Object.freeze({ text, evidence: cleanIds(evidence, true, false), item: Object.freeze(item), ...(member === null ? {} : { member }) }));
-    }
+    else sentences.push(Object.freeze({ text, evidence: cleanIds(evidence, true, false), item: Object.freeze(item) }));
   };
   /** A block's entries: its array, or none. */
   const entries = (field: unknown): readonly Record<string, unknown>[] => (Array.isArray(field) ? field : []).flatMap(entry => {
@@ -779,7 +711,7 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
     const titled = title.length === 0 ? {} : { title };
     /** What reads as text in the block: its sentences, and an item it cannot show. */
     const prose: AnswerItem = { block, kind: "text", ...titled };
-    const claim = (item: AnswerItem) => (sentence: Record<string, unknown>) => add(writtenSentence(sentence.text), sentence.evidence, item, item.kind === "point" ? sentence.member : undefined);
+    const claim = (item: AnswerItem) => (sentence: Record<string, unknown>) => add(writtenSentence(sentence.text), sentence.evidence, item);
     if (name === "answer") {
       const opens = !answered;
       if (!opens) observeCoreModelCorrectionV1("model_enum_respelled");
@@ -806,7 +738,7 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
         const matches = columns.length >= 2 && given.length === columns.length && cells.some(cell => cell.length > 0);
         const claim = matches ? rowClaim(cells, columns) : rowClaim(cells);
         if (matches && Buffer.byteLength(claim, "utf8") <= PERSON_ANSWER_STATEMENT_MAX_BYTES_V4) {
-          add(claim, row.evidence, { block, kind: "row", ...titled, columns: Object.freeze([...columns]), cells: Object.freeze(cells) }, row.member);
+          add(claim, row.evidence, { block, kind: "row", ...titled, columns: Object.freeze([...columns]), cells: Object.freeze(cells) });
         } else {
           observeCoreModelCorrectionV1("model_enum_respelled");
           const cut = boundedBytes(claim, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4);
@@ -846,7 +778,7 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
   }
   const since = options.since === true && Array.isArray(body.since) ? sinceOf(body.since) : undefined;
   const followUps = followUpsOf(body);
-  return Object.freeze({ sentences: Object.freeze(sentences), not_found: notFoundOf(body), lists: listUsesOf(body), placed: Object.freeze(placed), ...(since === undefined ? {} : { since }),
+  return Object.freeze({ sentences: Object.freeze(sentences), not_found: notFoundOf(body), placed: Object.freeze(placed), ...(since === undefined ? {} : { since }),
     ...(followUps.length === 0 ? {} : { follow_ups: followUps }) });
 }
 
@@ -1118,11 +1050,13 @@ export const ANSWER_PROMPT = [
   "- Every factual answer sentence cites the ids that support it, and only those, in \"evidence\". Never write ids such as E4 or L1 in the sentence text. Use only the evidence and lists; never guess or add outside knowledge.",
   "- Answer only what was asked. Do not add facts about other topics, customers or projects. If the question asks about something the evidence does not cover, put that missing fact in \"not_found\"; do not substitute a related answer, and do not guess who or what the question means.",
   "- source_catalog describes source capabilities, not extra questions to answer. Do not report an unrequested discussion, document or approval as missing when the requested fact is already supported.",
-  "- Search limitations such as \"I couldn't find a matching decision\" belong in \"not_found\", not in cited \"sentences\". If neither the evidence nor a list answers the question, return {\"lists\":[],\"blocks\":[{\"block\":\"answer\",\"sentences\":[{\"text\":\"<what could not be found>\",\"evidence\":[]}]}],\"not_found\":[\"<the requested fact>\"]}. Do not attach unrelated citations just because those sources were retrieved.",
-  "- \"lists\" holds each list research read: its id (L1, L2, ...), source, the filter it applied (filter_applied says how each requested filter applied; \"ignored\" means the list is not limited by it), complete, count, checked, read_at, stated and its members. A member is a row: id, title, dates, status, owner and due date, never its text. When complete is true, count is exactly how many items match the filter; otherwise at least count exist. read_at is when the list was read; a source's search can lag recent edits.",
-  "- List selection is separate from presentation. Return lists only when the question asks which or how many items exist: answer a question about one named item, such as who leads it or when it is due, with sentences citing its text, and return no list. A list marked stated is evidence for a requested membership need; it does not mean its whole inventory answers the question. requested_members, when present, are the exact members research found for that need. Return the members that answer the question in lists: that is your selection. Preserve every requested member; code adds any your selection leaves out. In lists return {\"id\":\"L1\"} only when every member is relevant, {\"id\":\"L1\",\"where\":{\"field\":\"status\",\"value\":\"Open\"}} for one exact row field, a date-field where with since/until for a range, or {\"id\":\"L1\",\"members\":[\"E5\",\"E7\"]} for any other selection. Include every matching id in one members array; repeated groups are merged. Code states the members your selection names, with their grounded names and row facts. If you omit a found membership need's list, code restores its requested_members; if research declared only the list and you provide no selection, code states that declared inventory. To say that no member of a list answers, give it an empty members array and put the missing fact in not_found; code still states that list's requested_members. Selection arrays have no presentation-size limit; only the released answer can be shortened, with an explicit partial notice.",
-  "- A list shows which items exist and each member's title, dates, status and owner, never what an item says. Each of your sentences cites evidence text; rows and list ids are not evidence for a sentence, and a sentence that cites no evidence text is left out. For which members of a list say something, write what the evidence text you have says; code adds how many of the list's members were checked.",
-  "- Add the requested details beyond the list code states, without repeating its enumeration. Sharing a source does not make two facts duplicates: keep each requested owner, status, date or explanation that the evidence supports.",
+  "- Search limitations such as \"I couldn't find a matching decision\" belong in \"not_found\", not in cited \"sentences\". If neither the evidence nor a list answers the question, return {\"blocks\":[{\"block\":\"answer\",\"sentences\":[{\"text\":\"<what could not be found>\",\"evidence\":[]}]}],\"not_found\":[\"<the requested fact>\"]}. Do not attach unrelated citations just because those sources were retrieved.",
+  "- \"lists\" holds each list research read: its id (L1, L2, ...), source, the filter it applied (filter_applied says how each requested filter applied; \"ignored\" means the list is not limited by it), complete, count, checked, read_at and its members. A member is a row: id, title, dates, status, owner and due date, never its text. When complete is true, count is exactly how many items match the filter; otherwise at least count exist. read_at is when the list was read; a source's search can lag recent edits.",
+  "- A list is a fact on the desk. When the question asks which or how many items exist, place a \"list\" block: the whole list, the members one row fact selects (\"where\"), or the members you name by id (\"members\"). Code fills the block and writes its count. Never retype a list's members in a sentence, a table or points, and take any count of a list from its list block. For a question about one named item, cite its text and place no list.",
+  "- A list shows which items exist and each member's title, dates, status and owner, never what an item says. Each of your sentences cites evidence text; rows and list ids are not evidence for a sentence, and a sentence that cites no evidence text is left out. When a sentence says something about a list's members as a group, cite the list's id beside the text it stands on.",
+  "- \"research_notes\" are research's own notes on what it looked for and where it left it: advice on what the desk holds, never the person's question and never evidence. Decide from the question and the evidence. When a note and the evidence disagree, follow the evidence. A note that says something was not found is a reason to check, and what the evidence does not answer goes in \"not_found\".",
+  "- research_notes.lists says, for each list, how many of its members research read in full (\"read\") out of how many it listed (\"count\"). When your answer about which members say something rests on only some of them, say so, with those numbers, such as \"4 of the 8 pages were read in full\".",
+  "- Add the requested details a list block does not show, without repeating its members. Sharing a source does not make two facts duplicates: keep each requested owner, status, date or explanation that the evidence supports.",
   "- Keep each fact's owner, date and status with it.",
   "- dates carries source timestamps converted to the request time_zone, with explicit offsets, or calendar-only dates, by meaning (occurred, created, updated, due, received, approved, and a follow-up's sent, reassigned and checked). date and ECHO-generated meeting label dates use that same local day. Match these supplied local dates to the requested day; do not reinterpret them as UTC. Calendar-only dates keep their stated day. Source-authored titles and quoted text are unchanged. Received is capture/upload time, never proof of when the described events happened. Updated describes the current revision, not a complete activity history. Use the supplied now/today to interpret relative wording; client time is query context, not evidence that an event occurred.",
   "- date_kind gives a supplied date's meaning: created is item creation, version_created is page-version creation, occurred is the recorded event, and unspecified has no established meaning. Never call a creation date a status-change date, a retrieval date, or an as-of date for the current status. State decision or completion dates only when the evidence explicitly supports them. provenance identifies the evidence record type; a page version identifies the retrieved version, not its approval status.",
@@ -1137,7 +1071,7 @@ export const ANSWER_PROMPT = [
   "- For a date-specific question, only events explicitly supported on that date answer it. A meeting on another day does not establish that the asker had no meeting on the requested day. If event-date coverage is missing, say you cannot verify the requested day and put it in not_found; do not correct the asker to a different date. An explicit event date in source text may support an answer even when structured dates are absent. Do not invent dates from receipt or approval times.",
   "- Missing evidence is not evidence of absence. For example, pending gate tickets support \"The retrieved gate records do not establish approval\", not \"No implementation or tests exist\". Make an absence claim only when evidence explicitly establishes it within a stated scope. Put unsupported requested facts in not_found.",
   "- research is observed retrieval coverage, not factual evidence: completed means the loop finished, not that all relevant information exists in these excerpts. Truncated reads, lists that are not complete, notices, omitted evidence, or an early stop limit absence and completeness claims. A complete released passage can still be only part of a document. Use supported facts even when research is incomplete; name only gaps needed for this question. Never cite research metadata as proof of a real-world fact.",
-  "- A list's \"unchecked\" counts items its date filter could not test because they do not record that date: never say none exist among them; say they were not checked, with their count. Code adds that count to the answer.",
+  "- A list's \"unchecked\" counts items its date filter could not test because they do not record that date: never say none exist among them; say they were not checked, with their count. Code adds that count to the answer for a list it uses.",
   "- An item's link in its tool travels with its citation: when the question asks for a link to something, name it and cite it, and the person can open it there. Never write a URL yourself. A meeting record's \"participants\" are who the meeting recorded, and \"approved_by\" who approved it. Use today for how long ago something happened.",
   "- \"not_found\": short phrases for what the question asks that the evidence does not answer; [] when nothing is missing. Never list something the evidence answers. Research plans, source_catalog entries, and optional context do not create extra missing requirements.",
   "- Check every requested fact before returning JSON. If your prose says a requested date, owner, result or decision is unknown or not recorded, that fact must also appear in not_found. For example, when asked when a ticket moved to Done, a creation date and current Done status cannot answer: return not_found containing \"date the ticket moved to Done\".",
@@ -1158,19 +1092,18 @@ const BLOCK_TITLE = "optional: a heading of a few words";
 export const ANSWER_BLOCK_CATALOG = Object.freeze([
   { block: "answer", description: "The direct answer to the question, in one or two sentences.", params: { sentences: "1 to 2 sentences, each with its text and evidence" } },
   { block: "text", description: "A short paragraph that explains, qualifies or connects facts.", params: { title: BLOCK_TITLE, sentences: "1 or more sentences, each with its text and evidence" } },
-  { block: "points", description: "Parallel items, one sentence each, such as blockers, conditions, decisions or steps.", params: { title: BLOCK_TITLE, ordered: "true when the order matters, such as steps taken in turn; false otherwise", items: "2 or more items, each with text and evidence; optional member is the inventory E id this item explicitly presents" } },
-  { block: "table", description: "Items that share the same fields, one row each, under columns you name, such as each action's owner, due date and status, or two options compared on the same points.", params: { title: BLOCK_TITLE, columns: "2 or more column names", rows: "2 or more rows, each with cells (one per column, in the columns' order, empty where the evidence does not say) and evidence; optional member is the inventory E id this row explicitly presents" } },
+  { block: "points", description: "Parallel items, one sentence each, such as blockers, conditions, decisions or steps.", params: { title: BLOCK_TITLE, ordered: "true when the order matters, such as steps taken in turn; false otherwise", items: "2 or more items, each with text and evidence" } },
+  { block: "table", description: "Items that share the same fields, one row each, under columns you name, such as each action's owner, due date and status, or two options compared on the same points.", params: { title: BLOCK_TITLE, columns: "2 or more column names", rows: "2 or more rows, each with cells (one per column, in the columns' order, empty where the evidence does not say) and evidence" } },
   { block: "timeline", description: "Events in date order, oldest first: each event's date, what happened, and its actor when explicitly recorded.", params: { title: BLOCK_TITLE, events: `2 or more events, each with date (YYYY-MM-DD, as the evidence dates the event), text (what happened, in one sentence), who (optional: ${EVENT_ACTOR}) and evidence` } },
   { block: "card", description: "One person, project, ticket or decision, with its key facts as label and value.", params: { title: "its name", kind: "person, project, ticket or decision", facts: "2 or more facts, each with label, value and evidence" } },
   { block: "quote", description: "The exact words of one source, such as an approved decision's text or what someone said, with where they come from.", params: { text: "words copied exactly from the cited evidence", from: "who said or recorded it, and when", evidence: "the one id it is copied from" } },
+  { block: "list", description: "One list research read, shown as a row per member. Code fills it from the list and writes its count, so you never type a member's name or facts.", params: { list: "the list's id, such as L1", where: "optional: show only the members one row fact selects: an owner or status by value, or a date field with since and until (YYYY-MM-DD)", members: "optional: show only these members, by the E ids of rows you were shown; never together with where" } },
 ].map(entry => Object.freeze({ ...entry, params: Object.freeze(entry.params) })));
 
 /**
  * What Ask's writer is told after ANSWER_PROMPT and its guidance (answer layout v2, ADR-0051): how to arrange the answer
  * from block_catalog, how to word an answer the app shows right under its question (never restating it, and a long
  * identifier at most once), and the reply shape answerBlocksSchema holds, the only one the writer is shown.
- * A structured row or point that presents a selected member declares and names it, and code does not state that member
- * again in an answer released in blocks; supporting citations alone never establish that presentation.
  */
 export const ANSWER_BLOCKS_PROMPT = [
   "Layout: the person's app shows the answer as a short document made of blocks. \"block_catalog\" lists the blocks it can show:",
@@ -1180,13 +1113,12 @@ export const ANSWER_BLOCKS_PROMPT = [
   NO_RESTATING_RULE,
   LONG_IDS_ONCE_RULE,
   "- Every sentence, item, row, event, fact and quote cites the evidence that supports it in \"evidence\", and only that evidence. Never write ids such as E4 in the text.",
-  "- Return the members that answer the question in lists, as your selection; code writes their names and row facts. A table row or points item that presents one member must declare member as that member's E id and name it by its title or key as its list shows it; code states the selected members you do not present that way, and never repeats one you do. The member id identifies what the item presents; evidence alone does not. Do not declare a member on an aggregate or unrelated claim.",
   "- Write a date in a date field or a table cell as YYYY-MM-DD.",
   "- Put in a block only what the evidence says.",
   "- An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds.",
   "",
   "Reply with ONLY a JSON object in exactly this shape:",
-  "{\"lists\":[],\"blocks\":[{\"block\":\"answer\",\"sentences\":[{\"text\":\"<the conclusion>\",\"evidence\":[\"E1\"]}]},{\"block\":\"<a block from block_catalog>\",\"<its params>\":\"...\"}],\"not_found\":[]}",
+  "{\"blocks\":[{\"block\":\"answer\",\"sentences\":[{\"text\":\"<the conclusion>\",\"evidence\":[\"E1\"]}]},{\"block\":\"<a block from block_catalog>\",\"<its params>\":\"...\"}],\"not_found\":[]}",
 ].join("\n");
 
 /**

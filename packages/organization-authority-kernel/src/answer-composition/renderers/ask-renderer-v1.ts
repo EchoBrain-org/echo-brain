@@ -64,6 +64,7 @@ import {
   type AgenticWriterListV1,
 } from "../agentic-list-evidence-v1.js";
 import { AGENTIC_ASK_MIN_ANSWER_MS_V1, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
+import { agenticNotShownNoticeV1, agenticResearchNotesV1, type AgenticResearchNotesV1 } from "../agentic-research-notes-v1.js";
 import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
 import { observeCoreModelCorrectionV1, type CoreRuntimeModelCorrectionV1 } from "../../shared/core-runtime-observation-v1.js";
 import { buildAskBlocksV2, daysWrittenV2, orderAskBlocksV2, quoteIsWordForWordV2, type AskBlockStatementV2 } from "./ask-layout-v2.js";
@@ -102,7 +103,7 @@ const LIST_DROPPED_GAP = "A list was left out because its selection could not be
 /** A selection that matched no member of a list some of whose members do not record the fact it selects by: no absence is proven. */
 const UNRECORDED_GAP = "Some list items do not record the fact used to select them.";
 /** The writer's one repair for a sentence resting on list rows or list ids alone. */
-const ROWS_REASON = "a sentence cites list rows or list ids but no evidence text: code states which items exist, and members' title, dates, status and owner, through \"lists\" (with \"where\" or \"members\"); what no evidence text says belongs in \"not_found\"";
+const ROWS_REASON = "a sentence cites list rows or list ids but no evidence text: place a \"list\" block to show which items exist and members' title, dates, status and owner (whole, with \"where\" or with \"members\"); what no evidence text says belongs in \"not_found\"";
 const FIT_GAP = "Some evidence could not fit in this response.";
 /** What an answer that drafted follow-ups (ADR-0053) and found nothing about them says, after it says what it drafted. */
 const FOLLOW_UP_NOT_FOUND_GAP = "I couldn't find anything more about it in the sources you can access.";
@@ -322,7 +323,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           .map(id => ({ id, members: [...new Set(need.evidence.flatMap(short => membership.in(id, short) ?? []))] }));
         return [{ cited, declares: cited.every(list => list.members.length === 0) }];
       });
-      const viewOf = (list: (typeof lists)[number], cap?: number) => agenticWriterListV1(list, rows.get(list.id)!, stated.includes(list.id), cap);
+      const viewOf = (list: (typeof lists)[number], cap?: number) => agenticWriterListV1(list, rows.get(list.id)!, cap);
       /** Every list as code reads it: code states, notes and filters each list the plan's kinds read, past the writer's bound too. */
       const views = new Map(lists.map(list => [list.id, viewOf(list)]));
       // The writer sees at most 5 lists, the plan's first.
@@ -354,8 +355,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         question: askedQuestion, ...(earlier === undefined ? {} : { earlier }), ...options.context, scope: options.scope, source_catalog: options.source_catalog,
         // The writer picks its blocks from a catalog beside the sources' (ADR-0051).
         block_catalog: ANSWER_BLOCK_CATALOG,
-        // Planner need text is intentionally excluded. Lists carry their filters (ADR-0041); this describes what
-        // research read, not whether an arbitrary fact exists.
+        // Lists carry their filters (ADR-0041); this describes what research read, not whether an arbitrary fact exists.
+        // Research's plan reaches the writer apart from it, as research's own notes (ADR-0054).
         research: {
           completed: !researchIncomplete, stop_reason: bundle.stop.reason, reads,
           notices: [...bundle.coverage.notices], omitted_evidence_items: bundle.items.filter(entry => entry.item.text !== undefined).length,
@@ -368,7 +369,14 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const writerCall = earlier === undefined ? WRITER_CALL : SINCE_WRITER_CALL;
       const writerSchema = earlier === undefined ? (drafting ? answerBlocksFollowUpsSchema : answerBlocksSchema) : (drafting ? answerBlocksSinceFollowUpsSchema : answerBlocksSinceSchema);
       const promptBudget = input.prompt_budget(writerPrompt, writerCall.output_tokens);
-      const contextBudget = Math.max(0, promptBudget - bytes(JSON.stringify({ ...answerContext, lists: [], evidence: [] })));
+      // Research's notes (ADR-0054) never take room from evidence: their frame, with no need and the largest counts they
+      // can carry, is set aside first, and their needs fill only what lists and evidence leave.
+      const noteFrame = agenticResearchNotesV1({
+        plan: [], shown: () => false, max_bytes: Number.POSITIVE_INFINITY,
+        not_shown: { lists: lists.length, list_rows: lists.reduce((sum, list) => sum + list.members.length, 0) },
+        lists: writerOrder.map(list => ({ list: list.id, read: list.members.length, count: list.members.length })),
+      });
+      const contextBudget = Math.max(0, promptBudget - bytes(JSON.stringify({ ...answerContext, research_notes: noteFrame, lists: [], evidence: [] })));
       // Lists' rows take at most half the room; a smaller window shows fewer members of each, never fewer lists.
       // The largest per-list cap that fits (binary search), so no list loses rows that would have fit.
       const fits = (cap: number) => bytes(JSON.stringify(writerListsWith(cap))) <= contextBudget / 2;
@@ -397,6 +405,15 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const shownRows = new Set(writerLists.flatMap(list => list.members.map(member => member.id)).filter(short => !textGiven.has(short)));
       const writerShown: readonly string[] = Object.freeze([...evidence.map(entry => entry.short), ...shownRows]);
       input.on_context?.(writerShown);
+      // Research's notes (ADR-0054): its plan, need by need, in what lists and evidence left of the room; how many members
+      // of each list it was shown research read in full; and how many lists and rows it was not shown.
+      const notShown = { lists: lists.length - writerLists.length, list_rows: writerLists.reduce((sum, list) => sum + (list.members_omitted ?? 0), 0) };
+      const researchNotes: AgenticResearchNotesV1 = agenticResearchNotesV1({
+        plan: bundle.plan, not_shown: notShown,
+        shown: id => textGiven.has(id) || shownRows.has(id) || writerById.has(parseAgenticListIdV1(id) ?? "L0"),
+        lists: writerLists.map(list => ({ list: list.id, read: list.checked, count: list.count })),
+        max_bytes: Math.max(0, writerBudget - evidenceBytes) + bytes(JSON.stringify(noteFrame)),
+      });
 
       // ---- the writer's sentences rest on text (W1) -------------------------
       /** A sentence resting on list rows or list ids: it cites one the writer saw, and no evidence text it read. */
@@ -423,9 +440,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const writerRuns = evidence.length > 0 || writerLists.some(list => list.count > 0) || (drafting && followUpRequested);
       const written = !writerRuns ? null : await callRendererModelV1(input, writerCall, writerPrompt, {
         ...answerContext,
+        // Research's working notes are advice, marked as research's own: never the person's question and never evidence.
+        // The writer assesses the original question against released text.
+        research_notes: researchNotes,
         lists: writerLists,
-        // Working hypotheses are not user requirements or evidence. The
-        // writer assesses the original question against released text.
         evidence: evidence.map(entry => ({ ...describe(entry), text: entry.item.text })),
       }, writerSchema, parse);
       // A reply sent back only for a sentence resting on rows is still the writer's answer; code leaves that sentence out.
@@ -808,8 +826,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const filterNotices = [...new Set([...usedLists, ...checking.map(id => views.get(id)!)])].flatMap(list => agenticListFilterNoticeV1(list, nounOf(list).plural) ?? []);
         // A completed answer can retain source coverage as a notice. A stop
         // becomes a notice only when the rendered answer has no existing gap.
+        // Whenever the writer ran, `notice` records the lists and rows research read that it was not shown (ADR-0054).
+        const notShownNotice = written === null ? undefined : agenticNotShownNoticeV1(notShown);
         const responseNotices = [
-          ...new Set([...bundle.coverage.notices, ...filterNotices]),
+          ...new Set([...bundle.coverage.notices, ...filterNotices, ...(notShownNotice === undefined ? [] : [notShownNotice])]),
           ...(coverageLimited ? [LIMITED_COVERAGE_GAP] : []),
           ...(researchIncomplete && anyEvidence && draft.gap === undefined ? [INCOMPLETE_SEARCH_NOTICE] : []),
         ];

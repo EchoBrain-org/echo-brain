@@ -22,9 +22,6 @@ import {
 import { observeCoreRuntimeSyncV1, type CoreRuntimeModelCorrectionsV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import { writerReply } from "./fixtures/agentic-scenarios.js";
 
-/** A writer's reply with the top-level "lists" of the reply before ADR-0054, which the parser still reads. */
-const withLists = (sentences: Parameters<typeof writerReply>[0], fields: { readonly lists: readonly unknown[] }) => ({ ...writerReply(sentences), lists: fields.lists });
-
 type Schema = Readonly<Record<string, any>>;
 const stepSchema = createStepSchema(["meetings", "documents", "slack"]);
 
@@ -191,51 +188,25 @@ describe("agentic Ask model protocol parity", () => {
     expect(need.properties.evidence).not.toHaveProperty("maxItems");
   });
 
-  it("reads the lists Ask's answer uses: each once in full or by an owner or status selection, and once by members' ids", () => {
-    const parsed = parseBlocksAnswer(withLists([{ text: "Two pages mention BUG-412 (L1, E4).", evidence: ["L1", "E4"] }], { lists: [
-      "l2", { id: "L1" }, { id: "[L3]", where: { field: "Owner", value: " Dana  Lee " } }, { id: "L1", where: { field: "owner", value: "x" } },
-      { id: "L4", where: { field: "title", value: "PRD" } }, { id: "L5", where: { field: "status", value: " " } }, { id: "E6" }, 7, { id: "L8" }, { id: "L9" },
-    ] }));
-    expect([parsed.lists, parsed.sentences, parseBlocksAnswer(writerReply([])).lists]).toEqual([
-      [{ id: "L2" }, { id: "L1" }, { id: "L3", where: { field: "owner", value: "Dana Lee" } }, { id: "L4" }, { id: "L5" }],
-      [{ text: "Two pages mention BUG-412.", evidence: ["L1", "E4"], item: { block: 0, kind: "answer" } }], [],
-    ]);
-    // Member intent is uncapped and takes the place of a filter, which is kept beside it for code to use when the ids name no
-    // member; ids none of which code can read are the filter, or no use; an empty members array stays an empty selection.
-    const members = parseBlocksAnswer(withLists([], { lists: [
-      { id: "L1", members: ["e5", "E5", "[E7]", "L2", 9], where: { field: "owner", value: "Dana" } }, { id: "L2", members: ["x"], where: { field: "status", value: "open" } },
-      { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) }, { id: "L4", members: [], where: { field: "status", value: "In Progress" } }, { id: "L5", members: [] },
-    ] })).lists;
-    expect(members).toEqual([
-      { id: "L1", members: ["E5", "E7", "E9"], where: { field: "owner", value: "Dana" } }, { id: "L2", where: { field: "status", value: "open" } },
-      { id: "L3", members: Array.from({ length: 30 }, (_, index) => `E${index + 1}`) }, { id: "L4", members: [], where: { field: "status", value: "In Progress" } }, { id: "L5", members: [] },
-    ]);
-    expect(parseBlocksAnswer(withLists([], { lists: [{ id: "L1", members: ["x", "L2"] }, { id: "L2", members: ["E999"], where: { field: "status", value: "open" } }] })).lists)
-      .toEqual([{ id: "L2", members: ["E999"], where: { field: "status", value: "open" } }]);
-    // A list may be used once in full or by a selection and once by id, in the writer's order; still at most 5 lists.
-    expect(parseBlocksAnswer(withLists([], { lists: [
-      { id: "L1", members: ["E5"] }, { id: "L1" }, { id: "L1", where: { field: "owner", value: "Dana" } }, { id: "L1", members: ["E6"] },
-      { id: "L2" }, { id: "L3" }, { id: "L4" }, { id: "L5" }, { id: "L6" }, { id: "L5", members: ["E2"] },
-    ] })).lists).toEqual([{ id: "L1", members: ["E5", "E6"] }, { id: "L1" }, { id: "L2" }, { id: "L3" }, { id: "L4" }, { id: "L5" }, { id: "L5", members: ["E2"] }]);
-    // A list reference in prose is stripped only for Ask's answer; elsewhere "(L2)" stays prose.
+  it("strips a list reference written in prose only for Ask's answer", () => {
     expect([stripEvidenceIds("Support tier (L2) owns it (E4)."), stripEvidenceIds("Support tier owns it (L2) [E4, L1].", true)]).toEqual(["Support tier (L2) owns it.", "Support tier owns it."]);
   });
 
   it.each([
     [{ field: "due", since: "2026-10-18", until: "2026-10-24" }, { field: "due", since: "2026-10-18", until: "2026-10-24" }], [{ field: "Updated", since: " 2026-10-11 " }, { field: "updated", since: "2026-10-11" }],
     [{ field: "created", until: "2026-10-04", value: "x" }, { field: "created", until: "2026-10-04" }], [{ field: "occurred", since: "2026-10-04", until: "2026-10-04" }, { field: "occurred", since: "2026-10-04", until: "2026-10-04" }],
-    // A date field with no bound, a bound that is not a real day, or a reversed range: the list in full.
+    // A date field with no bound, a bound that is not a real day, or a reversed range: a narrowing code cannot read.
     [{ field: "due" }, undefined], [{ field: "due", value: "2026-10-18" }, undefined], [{ field: "received", since: "2026-02-30" }, undefined], [{ field: "due", since: "next week" }, undefined],
     [{ field: "due", until: "2026-10-18T00:00:00Z" }, undefined], [{ field: "due", since: "2026-10-24", until: "2026-10-18" }, undefined], [{ field: "due", since: "2026-10-18", until: "soon" }, undefined],
-    // An owner or status reads its value, as before; an empty one is the list in full.
+    // An owner or status reads its value; an empty one, or a field that is no row fact, cannot be read.
     [{ field: "status", value: " Open ", since: "2026-10-18" }, { field: "status", value: "Open" }], [{ field: "owner", value: "" }, undefined], [{ field: "title", value: "PRD" }, undefined],
-  ])("reads a where selection %j as %j, anything else as the list in full (ADR-0041)", (value, where) => {
-    expect(parseBlocksAnswer(withLists([], { lists: [{ id: "L1", where: value }] })).lists[0]).toEqual({ id: "L1", ...(where === undefined ? {} : { where }) });
+  ])("reads a list block's where %j as %j, anything else as unreadable, never as the whole list (ADR-0054)", (value, where) => {
+    expect(parseBlocksAnswer({ blocks: [{ block: "list", list: "L1", where: value }], not_found: [] }).placed[0]).toEqual({ block: 0, list: "L1", ...(where === undefined ? { unreadable: true } : { where }) });
   });
 
-  it("names each selection field, and either bound, in the answer schema (ADR-0041)", () => {
-    const listUse = ((answerBlocksSchema.properties as Schema).lists as Schema).items as Schema;
-    expect((listUse.properties as Schema).where).toEqual({ type: "object", additionalProperties: false, required: ["field"], properties: {
+  it("names each selection field, and either bound, in the list block's schema (ADR-0041, ADR-0054)", () => {
+    const list = ((((answerBlocksSchema.properties as Schema).blocks as Schema).items as Schema).anyOf as Schema[]).find(variant => variant.properties.block.enum[0] === "list")!;
+    expect((list.properties as Schema).where).toEqual({ type: "object", additionalProperties: false, required: ["field"], properties: {
       field: { type: "string", enum: ["owner", "status", "due", "created", "updated", "received", "occurred", "approved", "sent", "reassigned", "checked"] }, value: { type: "string", maxLength: 120 }, since: { type: "string", maxLength: 10 }, until: { type: "string", maxLength: 10 },
     } });
   });
@@ -290,7 +261,7 @@ describe("agentic Ask model protocol parity", () => {
     }
     // A reply with no list of it has none; it is not sent back for that.
     expect(parseBlocksAnswer({ ...reply, since: "nothing" }, { since: true })).not.toHaveProperty("since");
-    expect(answerBlocksSinceSchema).toMatchObject({ required: ["lists", "blocks", "not_found", "since"], properties: { since: { maxItems: 6 } } });
+    expect(answerBlocksSinceSchema).toMatchObject({ required: ["blocks", "not_found", "since"], properties: { since: { maxItems: 6 } } });
   });
 
   it("reads the follow-ups a writer drafts (ADR-0053): a task each, the rest optional, at most 10", () => {
@@ -331,7 +302,7 @@ describe("agentic Ask model protocol parity", () => {
     expect(parseStep({ parts: [{ question: "Who owns it? ", needs: [{ need: " owner ", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "owner " } }] }))
       .toEqual({ parts: [{ question: "Who owns it?", needs: [{ need: "owner", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "owner" } }] });
     expect(parseBlocksAnswer(writerReply([{ text: " Done. ", evidence: ["e2", "[E3]"] }, { text: "", evidence: [] }], { not_found: ["", "owner"] })))
-      .toEqual({ sentences: [{ text: "Done.", evidence: ["E2", "E3"], item: { block: 0, kind: "answer" } }], not_found: ["owner"], lists: [], placed: [] });
+      .toEqual({ sentences: [{ text: "Done.", evidence: ["E2", "E3"], item: { block: 0, kind: "answer" } }], not_found: ["owner"], placed: [] });
   });
 
   it("reads the A2 input field and bare strings as the tool's main argument, and browse as list", () => {
@@ -430,22 +401,21 @@ describe("agentic Ask model protocol parity", () => {
       expect(corrected(() => parseStep(value, options))).toEqual(expected);
     });
 
-    const answer = ({ sentences = [], ...fields }: Record<string, unknown>) => ({ lists: [], blocks: [{ block: "text", sentences }], not_found: [], ...fields });
+    const answer = ({ sentences = [], placed = [], ...fields }: Record<string, unknown>) => ({ blocks: [{ block: "text", sentences }, ...(placed as unknown[]).map(list => ({ block: "list", ...(list as object) }))], not_found: [], ...fields });
     it.each([
-      ["an answer the schema already holds", answer({ lists: [{ id: "L1" }], sentences: [{ text: "Mara owns OPS-17.", evidence: ["E1", "L1"] }] }), {}],
+      ["an answer the schema already holds", answer({ placed: [{ list: "L1" }], sentences: [{ text: "Mara owns OPS-17.", evidence: ["E1", "L1"] }] }), {}],
       ["evidence ids written into a sentence", answer({ sentences: [{ text: "Mara owns OPS-17 (E1).", evidence: ["E1"] }] }), { model_inline_ids_stripped: 1 }],
       ["a sentence that is not an object, or has no text", answer({ sentences: ["Mara owns it.", { text: " ", evidence: [] }, { text: "Mara owns OPS-17.", evidence: ["E1"] }] }), { model_entry_dropped: 2 }],
       ["a blank, repeated or extra not_found phrase", answer({ not_found: ["", "owner", "owner", "a", "b", "c", "d", "e"] }), { model_entry_dropped: 1, model_repeat_dropped: 1, model_items_capped: 1 }],
       ["sentence evidence ids in other spellings", answer({ sentences: [{ text: "Done.", evidence: ["e2", "[E3]"] }] }), { model_id_respelled: 2 }],
-      ["a list used as a bare id", answer({ lists: ["L2"] }), { model_bare_string: 1 }],
-      ["a list id in another spelling", answer({ lists: [{ id: "[L3]" }] }), { model_id_respelled: 1 }],
-      ["a list use that names no list", answer({ lists: [{ id: "E6" }, 7] }), { model_entry_dropped: 2 }],
-      ["a where field in another case", answer({ lists: [{ id: "L1", where: { field: "Owner", value: "Dana Lee" } }] }), { model_enum_respelled: 1 }],
-      ["a where code cannot read, so the list is used in full", answer({ lists: [{ id: "L1", where: { field: "title", value: "PRD" } }] }), { model_entry_dropped: 1 }],
-      ["a date bound past its cap", answer({ lists: [{ id: "L1", where: { field: "due", until: "2026-10-18T00:00:00Z" } }] }), { model_text_truncated: 1, model_entry_dropped: 1 }],
-      ["members respelled, repeated or unreadable", answer({ lists: [{ id: "L1", members: ["e5", "E5", "[E7]", "L2", 9] }] }), { model_id_respelled: 3, model_repeat_dropped: 1, model_entry_dropped: 1 }],
-      ["member selection intent has no presentation cap", answer({ lists: [{ id: "L3", members: items(1, 30) }] }), {}],
-      ["a list used twice the same way, or past five lists", answer({ lists: ["L1", "L1", "L2", "L3", "L4", "L5", "L6"].map(id => ({ id })) }), { model_repeat_dropped: 1, model_items_capped: 1 }],
+      ["a list id in another spelling", answer({ placed: [{ list: "[L3]" }] }), { model_id_respelled: 1 }],
+      ["a list block that names no list", answer({ placed: [{ list: "E6" }, { list: 7 }] }), { model_entry_dropped: 2 }],
+      ["a where field in another case", answer({ placed: [{ list: "L1", where: { field: "Owner", value: "Dana Lee" } }] }), { model_enum_respelled: 1 }],
+      ["a where code cannot read, so the block shows nothing", answer({ placed: [{ list: "L1", where: { field: "title", value: "PRD" } }] }), { model_entry_dropped: 1 }],
+      ["a date bound past its cap", answer({ placed: [{ list: "L1", where: { field: "due", until: "2026-10-18T00:00:00Z" } }] }), { model_text_truncated: 1, model_entry_dropped: 1 }],
+      ["members respelled, repeated or unreadable", answer({ placed: [{ list: "L1", members: ["e5", "E5", "[E7]", "L2", 9] }] }), { model_id_respelled: 3, model_repeat_dropped: 1, model_entry_dropped: 1 }],
+      ["members beside a where, which is dropped", answer({ placed: [{ list: "L1", members: ["E5"], where: { field: "status", value: "open" } }] }), { model_entry_dropped: 1 }],
+      ["member selection intent has no presentation cap", answer({ placed: [{ list: "L3", members: items(1, 30) }] }), {}],
     ] as const)("in an answer: %s", (_name, value, expected) => {
       expect(corrected(() => parseBlocksAnswer(value))).toEqual(expected);
     });
@@ -473,7 +443,7 @@ describe("agentic Ask model protocol parity", () => {
 });
 
 describe("answer layout v2: the writer arranges its answer from the block catalog (ADR-0051)", () => {
-  const reply = (blocks: readonly unknown[], fields: Record<string, unknown> = {}) => ({ lists: [], blocks, not_found: [], ...fields });
+  const reply = (blocks: readonly unknown[], fields: Record<string, unknown> = {}) => ({ blocks, not_found: [], ...fields });
   const read = (blocks: readonly unknown[]) => parseBlocksAnswer(reply(blocks)).sentences.map(sentence => [sentence.text, sentence.item?.kind]);
 
   it("reads a list block where the writer put it: whole, by one row fact, or by members' ids", () => {
@@ -499,29 +469,36 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(parseBlocksAnswer({ blocks: [{ block: "list", list: "E4" }], not_found: [] }).placed).toEqual([]);
   });
 
-  it("reads optional member bindings only on well-formed rows and points, separate from supporting citations", () => {
-    const parsed = parseBlocksAnswer(reply([
-      { block: "table", columns: ["Entry", "Owner"], rows: [{ member: "e1", cells: ["Abbreviated label", "Casey"], evidence: ["E2"] }, { member: "E3", cells: ["Malformed row"], evidence: ["E3"] }] },
-      { block: "points", ordered: false, items: [{ member: "E4", text: "A member.", evidence: ["E5"] }, { member: "not-an-id", text: "No binding.", evidence: ["E6"] }] },
-      { block: "text", sentences: [{ member: "E7", text: "Prose does not declare presentation.", evidence: ["E7"] }] },
-    ])).sentences;
-    expect(parsed.map(sentence => [sentence.member, sentence.evidence])).toEqual([["E1", ["E2"]], [undefined, ["E3"]], ["E4", ["E5"]], [undefined, ["E6"]], [undefined, ["E7"]]]);
+  it("offers the list block in every reply schema, and no top-level lists or member", () => {
+    const variant = (schema: Schema, name: string) => (((schema.properties as Schema).blocks as Schema).items.anyOf as Schema[]).find(entry => entry.properties.block.enum[0] === name)!;
+    for (const schema of [answerBlocksSchema, answerBlocksSinceSchema, answerBlocksFollowUpsSchema, answerBlocksSinceFollowUpsSchema]) {
+      expect(schema.required).not.toContain("lists"); expect(schema.properties).not.toHaveProperty("lists");
+      const list = variant(schema, "list");
+      expect([list.required, Object.keys(list.properties)]).toEqual([["block", "list"], ["block", "list", "where", "members"]]);
+      // A hand-picked list's members have no count of their own: only the released answer is bounded.
+      expect(list.properties.members).not.toHaveProperty("maxItems");
+      expect(JSON.stringify(schema)).not.toContain('"member"');
+    }
   });
 
-  it("keeps selections beyond legacy name/read bounds and unions repeated member groups", () => {
-    const members = Array.from({ length: 100 }, (_, index) => `E${index + 1}`);
-    const lists = [{ id: "L1", members: members.slice(0, 70) }, { id: "L1", members: members.slice(60) }];
-    expect(parseBlocksAnswer(reply([], { lists })).lists).toEqual([{ id: "L1", members }]);
-    const full = Array.from({ length: 5 }, (_, index) => ({ id: `L${index + 1}` }));
-    const allUses = [...full, ...full.map(use => ({ ...use, members: ["E1"] })), { id: "L1", members: ["E2"] }];
-    expect(parseBlocksAnswer(reply([], { lists: allUses })).lists.find(use => use.id === "L1" && use.members !== undefined)?.members).toEqual(["E1", "E2"]);
-    expect(parseBlocksAnswer(reply([], { lists: [{ id: "L1", members: [] }] })).lists).toEqual([{ id: "L1", members: [] }]);
-    expect((answerBlocksSchema.properties as Schema).lists.items.properties.members).not.toHaveProperty("maxItems");
-    expect((answerBlocksSinceSchema.properties as Schema).lists.items.properties.members).not.toHaveProperty("maxItems");
+  it("describes the list block in the catalog with no title, and builds the schema from the same entries", () => {
+    expect(ANSWER_BLOCK_CATALOG.map(entry => entry.block)).toEqual(["answer", "text", "points", "table", "timeline", "card", "quote", "list"]);
+    expect(Object.keys(ANSWER_BLOCK_CATALOG.at(-1)!.params)).toEqual(["list", "where", "members"]);
+  });
+
+  it("tells the writer notes are advice, counts come from the list block, and never to retype members", () => {
+    for (const said of ["never the person's question and never evidence", "take any count of a list from its list block", "Never retype a list's members"]) expect(ANSWER_PROMPT).toContain(said);
+    // "stated" is the list marker's name; the unrelated rules that say a date or scope is stated keep the word.
+    for (const gone of ["requested_members", "marked stated", "read_at, stated", "code restores", '"lists":[]', "declare member"]) expect(`${ANSWER_PROMPT}\n${ANSWER_BLOCKS_PROMPT}`).not.toContain(gone);
+  });
+
+  it("ignores a top-level lists and a member the reply still carries", () => {
+    const answer = parseBlocksAnswer({ lists: [{ id: "L1" }], blocks: [{ block: "points", ordered: false, items: [{ text: "One.", evidence: ["E1"], member: "E1" }, { text: "Two.", evidence: ["E2"] }] }], not_found: [] });
+    expect(answer).not.toHaveProperty("lists"); expect(answer.placed).toEqual([]); expect(answer.sentences[0]).not.toHaveProperty("member");
   });
 
   it("describes each block as research sources are described, and builds the reply schema from the same entries", () => {
-    expect(ANSWER_BLOCK_CATALOG.map(entry => entry.block)).toEqual(["answer", "text", "points", "table", "timeline", "card", "quote"]);
+    expect(ANSWER_BLOCK_CATALOG.map(entry => entry.block)).toEqual(["answer", "text", "points", "table", "timeline", "card", "quote", "list"]);
     for (const entry of ANSWER_BLOCK_CATALOG) {
       expect(Object.keys(entry)).toEqual(["block", "description", "params"]);
       // A description says what the block shows, never when to use it (ADR-0042).
@@ -530,7 +507,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     const variants = (((answerBlocksSchema.properties as Schema).blocks as Schema).items as Schema).anyOf as Schema[];
     expect(variants.map(variant => [(variant.properties as Schema).block.enum[0], Object.keys(variant.properties as Schema)]))
       .toEqual(ANSWER_BLOCK_CATALOG.map(entry => [entry.block, ["block", ...Object.keys(entry.params)]]));
-    expect([Object.keys(answerBlocksSchema.properties as Schema), Object.keys(answerBlocksSinceSchema.properties as Schema)]).toEqual([["lists", "blocks", "not_found"], ["lists", "blocks", "not_found", "since"]]);
+    expect([Object.keys(answerBlocksSchema.properties as Schema), Object.keys(answerBlocksSinceSchema.properties as Schema)]).toEqual([["blocks", "not_found"], ["blocks", "not_found", "since"]]);
   });
 
   // The writer's wording is reviewed and measured by the research test, not pinned here (T-5); what code reads of it is.
@@ -541,7 +518,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
   it("shows the writer a nothing-found example the parser reads", () => {
     // Its nothing-found example is a blocks reply: an answer that cites nothing, which code leaves out (W1), and not_found.
     const nothingFound = /If neither the evidence nor a list answers the question, return (\{.*?\})\. Do not attach/u.exec(ANSWER_PROMPT)?.[1];
-    expect(parseBlocksAnswer(JSON.parse(nothingFound!))).toMatchObject({ lists: [], sentences: [{ evidence: [] }], not_found: ["<the requested fact>"] });
+    expect(parseBlocksAnswer(JSON.parse(nothingFound!))).toMatchObject({ placed: [], sentences: [{ evidence: [] }], not_found: ["<the requested fact>"] });
   });
 
   it("never rejects a reply the blocks schema permits, asked again or not", () => {
@@ -581,7 +558,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
       { block: 4, kind: "point", title: "Before PVT", ordered: true }, { block: 4, kind: "point", title: "Before PVT", ordered: true },
       { block: 5, kind: "quote", text: "Start PVT once the soak passes.", from: "Noor Haddad, Oct 23 review" },
     ]);
-    expect([parsed.lists, parsed.not_found, parsed.since]).toEqual([[], [], undefined]);
+    expect([parsed.placed, parsed.not_found, parsed.since]).toEqual([[], [], undefined]);
   });
 
   it("reads the first answer block as the answer wherever the writer put it, and at most two of its sentences", () => {
@@ -649,22 +626,24 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     // The schema bounds only the answer's sentences, and every text's length.
     const variants = (((answerBlocksSchema.properties as Schema).blocks as Schema).items as Schema).anyOf as Schema[];
     const most = (value: Schema): readonly string[] => Object.entries(value).flatMap(([key, child]) => key === "maxItems" ? [String(child)] : child !== null && typeof child === "object" ? most(child as Schema) : []);
-    expect([(answerBlocksSchema.properties as Schema).blocks.maxItems, ...variants.map(variant => most(variant).join(","))]).toEqual([undefined, "2,12", "12", "12", "12", "12", "12", "12"]);
+    expect([(answerBlocksSchema.properties as Schema).blocks.maxItems, ...variants.map(variant => most(variant).join(","))]).toEqual([undefined, "2,12", "12", "12", "12", "12", "12", "12", ""]);
   });
 
   it("bounds each list and text in its reply schemas exactly where the parser cuts it", () => {
     type Path = readonly (string | number)[];
     // A reply with every field the schemas take, which the parser reads with no correction.
     const full = {
-      lists: [{ id: "L1", where: { field: "owner", value: "Dana" }, members: ["E1"] }, { id: "L2", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } }],
       blocks: [
         { block: "answer", sentences: [{ text: "One.", evidence: ["E1"] }] },
         { block: "text", title: "Why", sentences: [{ text: "Two.", evidence: ["E1"] }] },
-        { block: "points", title: "Next", ordered: true, items: [{ text: "Three.", evidence: ["E1"], member: "E1" }] },
-        { block: "table", title: "Owners", columns: ["Item", "Owner"], rows: [{ cells: ["Fix", "Ana"], evidence: ["E1"], member: "E1" }] },
+        { block: "points", title: "Next", ordered: true, items: [{ text: "Three.", evidence: ["E1"] }] },
+        { block: "table", title: "Owners", columns: ["Item", "Owner"], rows: [{ cells: ["Fix", "Ana"], evidence: ["E1"] }] },
         { block: "timeline", title: "Week", events: [{ date: "2026-10-20", text: "Four.", who: "Ana", evidence: ["E1"] }] },
         { block: "card", title: "THERM-48", kind: "ticket", facts: [{ label: "Status", value: "Open", evidence: ["E1"] }] },
         { block: "quote", text: "Five.", from: "Ana", evidence: ["E1"] },
+        { block: "list", list: "L1", where: { field: "owner", value: "Dana" } },
+        { block: "list", list: "L2", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } },
+        { block: "list", list: "L3", members: ["E1"] },
       ],
       not_found: ["the due date"],
       since: [{ text: "Six.", evidence: ["E1"] }],
@@ -678,7 +657,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     /** `count` entries like `first`, each one the parser keeps: other ids, other words, or copies. */
     const entries = (first: unknown, count: number) => Array.from({ length: count }, (_, at) => typeof first === "string"
       ? (/^[EL]\d+$/u.test(first) ? `${first[0]}${at + 1}` : `${first} ${at + 1}`)
-      : (first as Schema).id === undefined ? structuredClone(first) : { ...(first as Schema), id: `L${at + 1}` });
+      : structuredClone(first));
     /** Every list and every free text or id a schema takes, by name. */
     const fieldsOf = (node: Schema, name: string): string[] => node.anyOf !== undefined ? (node.anyOf as Schema[]).flatMap(variant => fieldsOf(variant, `${name}(${variant.properties.block.enum[0]})`))
       : node.type === "object" ? Object.entries(node.properties as Schema).flatMap(([key, child]) => fieldsOf(child, `${name}.${key}`))
@@ -708,7 +687,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
         if (node.type !== "string" || node.enum !== undefined || node.pattern !== undefined) return;
         seen.add(name);
         // An id is read by its form, E or L and up to four digits, and never cut: its bound is the room the schema gives it.
-        if (/\.(id|member|members\[\]|evidence\[\])$/u.test(name)) { ids[name.endsWith(".id") ? "list" : "item"].push(node.maxLength as number); return; }
+        if (/\(list\)\.list$|\.(members\[\]|evidence\[\])$/u.test(name)) { ids[name.endsWith(".list") ? "list" : "item"].push(node.maxLength as number); return; }
         const most = node.maxLength as number | undefined;
         if (most === undefined ? cuts(path, 4_096) : cuts(path, most) || !cuts(path, most + 1)) differ.push(`${name}: ${most}`);
       };
@@ -719,11 +698,11 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     }
   });
 
-  it("reads a reply's lists, what it did not find and, asked again, since, beside its blocks", () => {
-    const fields = { lists: [{ id: "L1", where: { field: "owner", value: "Dana Lee" } }], not_found: ["the due date"], since: [{ text: "The owner changed.", evidence: ["E1"] }] };
-    const given = reply([{ block: "answer", sentences: [{ text: "Two are open.", evidence: ["E1", "L1"] }] }], fields);
+  it("reads a reply's list blocks, what it did not find and, asked again, since, beside its other blocks", () => {
+    const fields = { not_found: ["the due date"], since: [{ text: "The owner changed.", evidence: ["E1"] }] };
+    const given = reply([{ block: "answer", sentences: [{ text: "Two are open.", evidence: ["E1", "L1"] }] }, { block: "list", list: "L1", where: { field: "owner", value: "Dana Lee" } }], fields);
     const parsed = parseBlocksAnswer(given, { since: true });
-    expect([parsed.lists, parsed.not_found, parsed.since, parsed.sentences[0]!.evidence]).toEqual([fields.lists, fields.not_found, fields.since, ["E1", "L1"]]);
+    expect([parsed.placed, parsed.not_found, parsed.since, parsed.sentences[0]!.evidence]).toEqual([[{ block: 1, list: "L1", where: { field: "owner", value: "Dana Lee" } }], fields.not_found, fields.since, ["E1", "L1"]]);
     expect(parseBlocksAnswer(given)).not.toHaveProperty("since");
   });
 });

@@ -143,10 +143,10 @@ test("decides on 19 of 21 trials and 2 of 3 in every case, only for a complete r
 test("runs a list case through the kernel and grades it from the writer's reply and the released answer", async (t) => {
   const out = mkdtempSync(join(tmpdir(), "ask-blocks-lists-"));
   t.after(() => rmSync(out, { recursive: true, force: true }));
-  // The reply places L1 in both shapes at once, so whichever the kernel reads, the answer shows the list.
+  // The reply places L1 as a list block, the only shape the kernel reads (ADR-0054).
   const route = { inputs: [], async generate_with_observation(input) {
     route.inputs.push(input);
-    return { value: { ...wholeReply, lists: [{ id: "L1" }] }, finish_reason: "stop", usage: null, provider_latency_ms: 1 };
+    return { value: wholeReply, finish_reason: "stop", usage: null, provider_latency_ms: 1 };
   } };
   const options = { run: true, credentialFile: null, out, caseSet: "lists", caseIds: ["which-items"], trials: 1, concurrency: 1, timeoutMs: 20_000 };
   const { report } = await run(options, { loaded: { structured_output: route, generation }, progress: () => undefined });
@@ -155,5 +155,5 @@ test("runs a list case through the kernel and grades it from the writer's reply 
   assert.deepEqual(trial.grade.checks, { released: true, own_reply: true, placed: true, shown: true });
   assert.deepEqual(trial.grade.released_lists, [{ caption: "5 Jira tickets created on October 4, 2026", shown: 5, total: 5 }]);
   // The trial keeps full traces: the writer's raw reply and the released answer.
-  assert.deepEqual([trial.attempts.length, trial.attempts[0].value.lists, trial.response.outcome], [1, [{ id: "L1" }], "answered"]);
+  assert.deepEqual([trial.attempts.length, trial.attempts[0].value.blocks.at(-1), trial.response.outcome], [1, wholeReply.blocks.at(-1), "answered"]);
 });

@@ -439,10 +439,6 @@ export interface AgenticWriterListV1 {
   /** Members research checked, out of `count`. */
   readonly checked: number;
   readonly read_at: string;
-  /** A which_items need research has not given up on cites this inventory; selection remains separate from presentation. */
-  readonly stated: boolean;
-  /** Exact requested members from which_items needs research has not given up on, mapped from any opened bodies to inventory row ids. */
-  readonly requested_members?: readonly string[];
   /** Members that fit the writer prompt, in list order. */
   readonly members: readonly AgenticWriterListMemberV1[];
   /** Members past the writer's bound; present only when some were left out. */
@@ -480,13 +476,13 @@ export function agenticWriterListMemberV1(entry: { readonly short: string; reado
  * `max_members` when the writer's prompt has less room. The default includes
  * every row: an unrelated fixed row ceiling must not invent a coverage gap.
  */
-export function agenticWriterListV1(list: AgenticListEvidenceV1, members: readonly AgenticWriterListMemberV1[], stated: boolean, max_members: number = members.length): AgenticWriterListV1 {
+export function agenticWriterListV1(list: AgenticListEvidenceV1, members: readonly AgenticWriterListMemberV1[], max_members: number = members.length): AgenticWriterListV1 {
   if (members.length !== list.members.length || members.some((member, index) => member.id !== list.members[index])) invalid("writer members must be the list's members, in order");
   if (!Number.isSafeInteger(max_members) || max_members < 0) invalid("max_members must be a whole, non-negative count");
   const shown = members.slice(0, max_members);
   return Object.freeze({
     id: list.id, source: list.source, filter: list.filter, filter_applied: list.filter_applied, complete: list.complete,
-    count: list.members.length, checked: members.filter(member => member.checked).length, read_at: list.read_at, stated,
+    count: list.members.length, checked: members.filter(member => member.checked).length, read_at: list.read_at,
     members: Object.freeze(shown), ...(shown.length === members.length ? {} : { members_omitted: members.length - shown.length }),
     ...(list.unchecked === undefined ? {} : { unchecked: list.unchecked }),
   });
@@ -498,19 +494,6 @@ export const AGENTIC_LIST_SELECTION_FIELDS_V1 = Object.freeze(["owner", "status"
 export type AgenticListSelectionV1 =
   | { readonly field: "owner" | "status"; readonly value: string }
   | { readonly field: EvidenceDateFieldV1; readonly since?: string; readonly until?: string };
-
-/**
- * The writer's use of a list: code names its members, all of them, those
- * one row fact selects (`where`), or those `members` names by id, each with
- * every row fact it records ("who owns THERM-46"). The writer never writes
- * the names or the row facts itself.
- */
-export interface AgenticAnswerListUseV1 {
-  readonly id: AgenticListIdV1;
-  readonly where?: AgenticListSelectionV1;
-  /** Members selected by their E ids, every one named. A `where` beside them selects only when they name no member. */
-  readonly members?: readonly string[];
-}
 
 // ---- the statement code writes ----------------------------------------
 

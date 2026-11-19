@@ -161,7 +161,7 @@ export async function captureWriterPrompts(caseDefinition, document, generation,
   const { model } = scriptedModel(caseDefinition, (input) => {
     captured ??= Object.freeze({ system_prompt: input.system_prompt, user_prompt: input.user_prompt, schema: input.schema });
     // A reply that says nothing, in layout v2's shape.
-    return { value: { lists: [], blocks: [], not_found: [caseDefinition.research.need ?? caseDefinition.research.needs[0]] }, finish_reason: "stop", usage: null, provider_latency_ms: null };
+    return { value: { blocks: [], not_found: [caseDefinition.research.need ?? caseDefinition.research.needs[0]] }, finish_reason: "stop", usage: null, provider_latency_ms: null };
   }, "the capture runs only research and the Ask writer");
   const items = caseItems(set.fixture, caseDefinition);
   await caseAsk(items, document, set.askedAt(document), model, generation, undefined, { listed: listedOf(caseDefinition, items) })
