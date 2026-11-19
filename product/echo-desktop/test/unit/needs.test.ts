@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
   actionCount, activeTotal, followUpAge, followUpCount, followUpHover, followUpMark, followUpOrder, followUpProgress, followUpsWords, itemHistory, itemKind,
@@ -412,7 +412,10 @@ describe('a follow-up from a chat (ADR-0053)', () => {
     expect(draftLine(draft({ owner: { ...sam, match: 'picked' }, due_on: null }), ari.membership_id, NOON)).toBe('From a chat · For Sam');
     expect(draftLine(draft({ owner: { ...ari, match: 'picked' } }), ari.membership_id, NOON)).toBe('From a chat · For you · Due Nov 20');
     // Sent to its owner, an Update row says where it came from and when it is due, never "Needs" its own title again.
-    expect(itemLine(draft({ state: 'open', owner: { ...ari, match: 'picked' } }), ari.membership_id)).toMatch(/^From a chat · (Was due|Due) Nov 20$/u);
+    // A row reads this computer's calendar, so the day is pinned: two days ahead it names the date, not "tomorrow" or "today".
+    vi.useFakeTimers({ toFake: ['Date'], now: NOON });
+    try { expect(itemLine(draft({ state: 'open', owner: { ...ari, match: 'picked' } }), ari.membership_id)).toBe('From a chat · Due Nov 20'); }
+    finally { vi.useRealTimers(); }
   });
 
   it('starts its history in the chat, by who made it, and has no meeting to send it from', () => {

@@ -26,7 +26,8 @@ test('a draft under the answer is edited, given an owner and sent, and then read
   const { page } = run;
   const card = await ask(page);
   await expect(card.getByTestId('ask-follow-up-title')).toHaveText('Update the pricing page for the new tiers');
-  await expect(card.getByTestId('ask-follow-up-line')).toHaveText(/^From this chat · No owner yet · (Was due|Due) Nov 20$/u);
+  // The app reads this computer's calendar, so the day it runs on decides which form the due date takes; the unit tests pin each form.
+  await expect(card.getByTestId('ask-follow-up-line')).toHaveText(/^From this chat · No owner yet · (Due today|Due tomorrow|(Was due|Due) Nov 20)$/u);
   // Nobody owns it yet: no Send.
   await expect(card.getByTestId('ask-follow-up-send')).toHaveCount(0);
 
@@ -36,7 +37,7 @@ test('a draft under the answer is edited, given an owner and sent, and then read
   await card.getByTestId('edit-follow-up-save').click();
   await expect(card.getByTestId('ask-follow-up-said')).toHaveText('Saved');
   await expect(card.getByTestId('ask-follow-up-title')).toHaveText('Update the pricing page for the Pro tier');
-  await expect(card.getByTestId('ask-follow-up-line')).toHaveText(/^From this chat · No owner yet · (Was due|Due) Nov 27$/u);
+  await expect(card.getByTestId('ask-follow-up-line')).toHaveText(/^From this chat · No owner yet · (Due today|Due tomorrow|(Was due|Due) Nov 27)$/u);
 
   // Escape closes the people picker first, and leaves Ask open.
   await card.getByRole('button', { name: /^Pick owner/u }).click();
