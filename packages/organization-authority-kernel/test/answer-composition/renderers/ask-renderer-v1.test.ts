@@ -355,7 +355,6 @@ describe("Ask renderer: lists (ADR-0041)", () => {
   const WAITS = "THERM-2 (Fixture work 2, owner Dana Lee) waits on the approved record.";
   const ROWS_REASON = "a sentence cites list rows or list ids but no evidence text: place a \"list\" block to show which items exist and members' title, dates, status and owner (whole, with \"where\" or with \"members\"); what no evidence text says belongs in \"not_found\"";
   const UNSUPPORTED = "Part of the answer was left out because no item's text supports it.";
-  const UNCHECKED = "Not every listed item was checked, so others may also match.";
   const RECORDS = "I found these records, but could not write a verified summary.";
   const FIT = "Some evidence could not fit in this response.";
   const LEG = "The list of tickets could not be read to its end, so more may exist.";
@@ -385,7 +384,8 @@ describe("Ask renderer: lists (ADR-0041)", () => {
   it("types writer absence beside a which_say list the answer does not use: a need's kind decides nothing (ADR-0054)", async () => {
     const rendered = await alone({ bundle: eightAnd1([WS(["L1", "E9"])]), replies: [writerReply([], { not_found: ["the requested topic"] })] }).render("Which tickets mention the topic?");
     expect(rendered.outcome).toBe("not_found");
-    expect(rendered.result.response.parts[0]!.gap).toContain("Not every listed item was checked");
+    // Code says nothing about how many of the list's members research read (ADR-0054).
+    expect(rendered.result.response.parts[0]!.gap).toBe("Not found: the requested topic.");
     expect(rendered.result.response.parts[0]!.gap_details).toEqual({ not_found: "Not found: the requested topic." });
   });
 
@@ -551,7 +551,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       q: "What waits on the approved records?", status: "answered", says: [st("THERM-1 waits on the approved records.", 12)], cited: [...ids(9, 11), "E1"],
     })),
     { id: "W1, W5", name: "leaves out a rows sentence beside a content sentence after one repair, the kept one citing L1's rows after its text", bundle: eightAnd1([WI(["L1"])]), replies: [sayWithL1(FOUR, ON_THEM), sayWithL1(FOUR, ON_THEM)], calls: 2, repaired: true, q: "Which tickets were created on October 4, and what did the review approve?", status: "partial", gap: UNSUPPORTED, says: [EIGHT, st(ON_THEM.text, [8, 0, 1, 2, 3, 4, 5, 6, 7])] },
-    { id: "W1, W5", name: "adds a which_say need's unchecked gap and notes no sentence citing no member's text", bundle: eightAnd1([WI(["L1"]), WS(["L1", "E9"])]), replies: [sayWithL1(FOUR, ON_THEM), sayWithL1(FOUR, ON_THEM)], calls: 2, q: "Which tickets were created on October 4, and what did the review approve?", status: "partial", gap: `${UNCHECKED} ${UNSUPPORTED}`, says: [EIGHT, st(ON_THEM.text, [8, 0, 1, 2, 3, 4, 5, 6, 7])] },
+    { id: "W1, W5", name: "adds no gap for a which_say need, and notes no sentence (ADR-0054)", bundle: eightAnd1([WI(["L1"]), WS(["L1", "E9"])]), replies: [sayWithL1(FOUR, ON_THEM), sayWithL1(FOUR, ON_THEM)], calls: 2, q: "Which tickets were created on October 4, and what did the review approve?", status: "partial", gap: UNSUPPORTED, says: [EIGHT, st(ON_THEM.text, [8, 0, 1, 2, 3, 4, 5, 6, 7])] },
     { id: "CF5b", name: "says 'at least' for a list not read to a confirmed end, and leaves out a count resting on one row and the list's id", bundle: listBundle(25, 0, [list("L1", ids(1, 25), { unverified_end: true })], [WI(["L1"])]),
       replies: Array.from({ length: 2 }, () => sayWithL1({ text: "25 tickets were created on October 4, 2026.", evidence: ["L1", "E1"] })), calls: 2, status: "partial", gap: `${LEG} ${UNSUPPORTED}`, says: [st(`At least 25 tickets created on October 4, 2026: ${names(1, 25)}.`, 25)] },
     // Opened ticket rows carry their text: citing it is citing text, whatever it says.
@@ -583,9 +583,9 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       replies: Array.from({ length: 2 }, () => say({ text: "THERM-2 is in progress.", evidence: ["E2"] })), calls: 2, repaired: true, q: "Is THERM-2 in progress?", status: "records_only", says: [], gap: RECORDS,
       check: rendered => expect(rendered.result.response.parts[0]!.records).toEqual([expect.objectContaining({ text: "Approved record 1.", citation_indexes: [0] })]) },
     { id: "X24c", name: "answers the repair's selection by id", bundle: listBundle(3, 1, [list("L1", ids(1, 3))], [C(["E4"])]), replies: [say({ text: "THERM-2 is in progress.", evidence: ["E2"] }), use({ id: "L1", members: ["E2"] })], calls: 2, q: "Is THERM-2 in progress?", status: "answered", says: [`1 of the 3 tickets created on October 4, 2026: ${facts(2)}.`] },
-    ...([["X24a", WS(["L1", "E9"]), UNCHECKED], ["X24b", WI(ids(1, 8)), "I could not confirm the full list of items asked for."]] as const).map(([id, need, gap]): Row => ({
-      id, name: `gives the records a failed writer falls back to ${id === "X24a" ? "a which_say list's unchecked gap" : "the gap of a which_items need left on rows"}`, bundle: eightAnd1([need]), replies: [{ wrong: true }, { still: "wrong" }], calls: 2,
-      q: "Which tickets created on October 4 mention BUG-412?", status: "records_only", gap: `${RECORDS} ${gap}`, check: rendered => expect(rendered.result.response.parts[0]!.records).toEqual([expect.objectContaining({ text: "Approved record 1." })]),
+    ...([["X24a", WS(["L1", "E9"]), undefined], ["X24b", WI(ids(1, 8)), "I could not confirm the full list of items asked for."]] as const).map(([id, need, gap]): Row => ({
+      id, name: `gives the records a failed writer falls back to ${id === "X24a" ? "with no gap for a which_say list (ADR-0054)" : "the gap of a which_items need left on rows"}`, bundle: eightAnd1([need]), replies: [{ wrong: true }, { still: "wrong" }], calls: 2,
+      q: "Which tickets created on October 4 mention BUG-412?", status: "records_only", gap: gap === undefined ? RECORDS : `${RECORDS} ${gap}`, check: rendered => expect(rendered.result.response.parts[0]!.records).toEqual([expect.objectContaining({ text: "Approved record 1." })]),
     })),
     ...[[REVIEW], [REVIEW, { text: "THERM-2 is in progress.", evidence: ["E2"] }]].map((sentences): Row => ({
       id: "W1", name: sentences.length === 1 ? "keeps the writer's sentence as written with no model call left for a repair" : "leaves out a rows sentence it cannot send back, and says so",
@@ -608,11 +608,6 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     { id: "W6", name: "keeps every statement past ADR-0041's ten", bundle: listBundle(63, 10, [list("L1", ids(1, 60)), list("L2", ids(61, 3))], [WI(["L1", "L2"])]), q: "Which tickets?", status: "answered",
       replies: [writerReply(Array.from({ length: 10 }, (_, index) => ({ text: `Record ${index + 1} applies.`, evidence: [`E${64 + index}`] })), { lists: [{ id: "L1" }, { id: "L2" }] })],
       check: rendered => expect(rendered.result.response.parts[0]!.statements.map(value => value.text).slice(4)).toEqual(Array.from({ length: 9 }, (_, index) => `Record ${index + 2} applies.`)) },
-    {
-      // E9 is a record outside L1: the sentence cites no member's text, so it carries no note; none of the 8 was checked.
-      id: "CF5c", name: "adds the unchecked gap for a which_say list even when no sentence cites its members, and notes no sentence", bundle: eightAnd1([WS(["L1", "E9"])]), replies: [say({ text: "THERM-1 mentions BUG-412.", evidence: ["L1", "E9"] })],
-      q: "Which tickets created on October 4 mention BUG-412?", status: "partial", gap: UNCHECKED, says: [st("THERM-1 mentions BUG-412.", 9)], cited: ["E9", ...ids(1, 8)],
-      check: (_, run) => expect(run.prompt(0).lists[0]).toMatchObject({ id: "L1", checked: 0 }) },
     { id: "W6", name: "gives a listed ticket's row and its opened body one citation", q: "Which tickets were created on October 4, and why is DVT blocked?", status: "answered", citations: 1,
       bundle: Object.freeze({
         ...EMPTY_BUNDLE, lists: [list("L1", ["E1"])], plan: planOf([WI(["L1"]), C(["E2"])]),
@@ -734,43 +729,6 @@ describe("Ask renderer: lists (ADR-0041)", () => {
         { block: "answer", sentences: [{ ...REVIEW, evidence: ["E2"] }] }, { block: "list", list: "L1" },
       ] });
       expect(one.blocks).toEqual([{ kind: "answer", statements: [0] }, { kind: "text", statements: [1] }]);
-    });
-    it("reads events whose sentences carry code's checked note as text, so the note shows (W5)", async () => {
-      const research: AgenticEvidenceBundleV1 = Object.freeze({
-        ...EMPTY_BUNDLE, lists: [list("L1", ["E1", "E2"])], plan: planOf([WS(["L1", "E1"])]),
-        items: [
-          { short: "E1", source: "tickets", item: ticketRow(1, "THERM-1: BUG-412 blocks DVT."), full: true, opened: true, preloaded: false, touched: 1, cited_by_plan: true },
-          { short: "E2", source: "tickets", item: ticketRow(2), full: false, opened: false, preloaded: false, touched: 2, cited_by_plan: false },
-        ],
-      });
-      const part = await arranged(research, { lists: [], not_found: [], blocks: [{ block: "timeline", title: "Blocked", events: [
-        { date: "2026-10-04", text: "THERM-1 was created.", evidence: ["E1"] }, { date: "2026-10-04", text: "BUG-412 blocked it.", evidence: ["E1"] },
-      ] }] });
-      expect(part.statements.map(value => value.text)).toEqual(["2026-10-04: THERM-1 was created (1 of 2 checked so far).", "2026-10-04: BUG-412 blocked it (1 of 2 checked so far)."]);
-      expect(part.blocks).toEqual([{ kind: "text", title: "Blocked", statements: [0, 1] }]);
-    });
-    it("keeps a wide row's statement within 4 KiB with code's checked note, the row cut and never the note (W5)", async () => {
-      const research: AgenticEvidenceBundleV1 = Object.freeze({
-        ...EMPTY_BUNDLE, lists: [list("L1", ["E1", "E2"])], plan: planOf([WS(["L1", "E1"])]),
-        items: [
-          { short: "E1", source: "tickets", item: ticketRow(1, "THERM-1: BUG-412 blocks DVT."), full: true, opened: true, preloaded: false, touched: 1, cited_by_plan: true },
-          { short: "E2", source: "tickets", item: ticketRow(2), full: false, opened: false, preloaded: false, touched: 2, cited_by_plan: false },
-        ],
-      });
-      const columns = (count: number) => Array.from({ length: count }, (_, at) => `C${String(at + 1).padStart(2, "0")}`);
-      // Forty cells of 100 characters are too wide for a statement, so the row reads as text cut to 4 KiB; 37 of them and one
-      // of 120 are a row of 4,085 bytes, which its note would take past 4 KiB.
-      const wide = { block: "table", title: "Fixture", columns: columns(40), rows: [{ cells: columns(40).map(() => "x".repeat(100)), evidence: ["E1"] }] };
-      const near = { block: "table", title: "Fixture", columns: columns(38), rows: [{ cells: columns(38).map((_, at) => "y".repeat(at === 37 ? 120 : 100)), evidence: ["E1"] }] };
-      for (const table of [wide, near]) {
-        const { rendered, corrections } = await observed(() => alone({ bundle: research, replies: [{ lists: [], not_found: [], blocks: [table] }] }).render("Which tickets were created on October 4?"));
-        const part = rendered.result.response.parts[0]!;
-        expect(Buffer.byteLength(part.statements[0]!.text, "utf8")).toBeLessThanOrEqual(PERSON_ANSWER_STATEMENT_MAX_BYTES_V4);
-        expect(part.statements[0]!.text).toMatch(/^C01: [xy]+.*… \(1 of 2 checked so far\)$/u);
-        expect(blocksOf(rendered)).toEqual([{ kind: "text", title: "Fixture", statements: [0] }]);
-        // The reader counts its cut of the row too wide for a statement; the renderer counts its own, for the note.
-        expect(corrections.model_text_truncated).toBe(table === wide ? 2 : 1);
-      }
     });
     // 45 only_me rows: an item citing L1 beside text would cite 46 items, past the 40 one statement may cite in blocks too.
     const pastOne = () => listBundle(45, 2, [list("L1", ids(1, 45))], [C(["E46", "E47"])]);
@@ -959,6 +917,43 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       const rendered = await run.render(Q);
       expect(run.prompt(0).research_notes.needs).toEqual([{ part: 1, need: Q, kind: "content", status: "open", on_desk: [] }]);
       expect([statementsOf(rendered), rendered.result.response.parts[0]!.gap_details, rendered.outcome]).toEqual([["Approved record 1 says so."], { interrupted: true }, "partial"]);
+    });
+    /** Eight rows with E1 opened in full (its text read), and the record E9; the plan's needs as given. */
+    const firstOpened = (needs: readonly Need[], extra: Partial<AgenticListEvidenceV1> = {}): AgenticEvidenceBundleV1 => {
+      const research = listBundle(8, 1, [list("L1", ids(1, 8), extra)], needs);
+      return { ...research, items: research.items.map(entry => entry.short === "E1" ? Object.freeze({ ...entry, full: true, opened: true, item: ticketRow(1, "THERM-1: BUG-412 blocks DVT.") }) : entry) };
+    };
+    it("says nothing in a sentence or the gap about how many members of a list research read (ADR-0054)", async () => {
+      const mentions = { text: "THERM-1 mentions BUG-412.", evidence: ["L1", "E1"] };
+      const rendered = await alone({ bundle: firstOpened([WS(["L1", "E1"])]), replies: [writerReply([mentions])] }).render("Which tickets mention BUG-412?");
+      const part = rendered.result.response.parts[0]!;
+      expect([statementsOf(rendered), part.status, part.gap, rendered.outcome]).toEqual([[mentions.text], "answered", undefined, "answered"]);
+      expect(JSON.stringify(rendered.result.response)).not.toMatch(/checked so far|Not every listed item was checked/u);
+    });
+    it("reports a list's filter, cut-off and unrecorded facts for a list the answer uses, placed or cited, and for no other", async () => {
+      const limits = { ended: false, truncated: true, filter_applied: { date_field: "applied", since: "applied", until: "applied", owner: "ignored" }, unchecked: { count: 1, dates: ["updated" as const] } } as Partial<AgenticListEvidenceV1>;
+      const research = firstOpened([WS(["L1", "E9"])], limits);
+      const UNRECORDED_DATE = "1 ticket has no created date, so it was not checked against these dates.";
+      const FILTER = "Tickets could not be filtered by owner, so this list is not limited to that owner.";
+      const reported = async (reply: unknown) => {
+        const rendered = await alone({ bundle: research, replies: [reply] }).render("Which tickets mention BUG-412?");
+        const part = rendered.result.response.parts[0]!;
+        return [part.gap?.includes(LEG) ?? false, part.gap?.includes(UNRECORDED_DATE) ?? false, rendered.result.response.notice?.includes(FILTER) ?? false];
+      };
+      const used = [true, true, true], unused = [false, false, false];
+      // (a) placed; (b) cited by a kept sentence through the list's id, or through a row the writer saw as a row only.
+      expect(await reported(placing({ block: "list", list: "L1" }))).toEqual(used);
+      expect(await reported(writerReply([{ ...REVIEW, evidence: ["L1", "E9"] }]))).toEqual(used);
+      expect(await reported(writerReply([{ ...REVIEW, evidence: ["E2", "E9"] }]))).toEqual(used);
+      // Neither placed nor cited, though a which_say need cites it; and a sentence citing one member's text alone.
+      expect(await reported(writerReply([REVIEW]))).toEqual(unused);
+      expect(await reported(writerReply([{ text: "THERM-1 mentions BUG-412.", evidence: ["E1"] }]))).toEqual(unused);
+    });
+    it("shows the writer the lists the plan cites first, whatever kind of need cites them", async () => {
+      const research = listBundle(14, 1, Array.from({ length: 7 }, (_, at) => list(`L${at + 1}`, ids(at * 2 + 1, 2))), [C(["L7", "E15"])]);
+      const run = alone({ bundle: research, replies: [placedOn("E15")] });
+      await run.render(Q);
+      expect(run.prompt(0).lists.map((value: { id: string }) => value.id)).toEqual(["L7", "L1", "L2", "L3", "L4"]);
     });
     it("gives evidence its room before the notes", async () => {
       // Records that fill the writer's room, and a 30-need plan: the notes take only what the evidence left.

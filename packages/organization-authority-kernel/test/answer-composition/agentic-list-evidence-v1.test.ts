@@ -3,7 +3,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import {
   AGENTIC_LIST_STATEMENT_BYTES_V1,
-  agenticCalendarDayV1, agenticListCheckedNoteV1, agenticListCompleteV1, agenticListEndUnverifiedV1, agenticListFillV1, agenticListFilterNoticeV1, agenticListFilterPhraseV1, agenticListIdV1,
+  agenticCalendarDayV1, agenticListCompleteV1, agenticListEndUnverifiedV1, agenticListFillV1, agenticListFilterNoticeV1, agenticListFilterPhraseV1, agenticListIdV1,
   agenticListMembersNounV1, agenticListMembershipV1, agenticListNounV1, agenticListSelectionNotFoundV1, agenticListSelectV1, agenticListShownNoteV1,
   agenticListStatementsV2, agenticListTableV1,
   agenticNeedReadsListV1, agenticOpenReadsV1, agenticPlanListsV1, agenticWriterListMemberV1, agenticWriterListV1, createAgenticListEvidenceV1, parseAgenticListIdV1,
@@ -446,11 +446,6 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     expect(wide.every(value => Buffer.byteLength(value.text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1)).toBe(true);
     expect(wide.flatMap(value => value.cited)).toEqual(Array.from({ length: 25 }, (_, index) => index));
     expect(() => statement({ noun: PAGES, selected: [] })).toThrow(RangeError);
-  });
-
-  it("says how many members were checked for content across a list (addition 4)", () => {
-    expect([{ checked: 4, count: 8, complete: true }, { checked: 25, count: 25, complete: false }, { checked: 8, count: 8, complete: true }].map(agenticListCheckedNoteV1))
-      .toEqual(["(4 of 8 checked so far)", "(25 of at least 25 checked so far)", undefined]);
   });
 });
 

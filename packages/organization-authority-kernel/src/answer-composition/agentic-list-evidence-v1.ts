@@ -863,13 +863,3 @@ export function agenticListShownNoteV1(shown: number, selected: number): string 
   return shown < selected ? `(first ${shown} shown)` : undefined;
 }
 
-/**
- * What code adds to a sentence citing the text of members of a list a
- * which_say need checks (addition 4) when not every member was checked: "(4 of
- * 8 checked so far)"; for a list not read to its end, "(4 of at least 8
- * checked so far)". Undefined once every member of a complete list was checked.
- */
-export function agenticListCheckedNoteV1(list: Pick<AgenticWriterListV1, "checked" | "count" | "complete">): string | undefined {
-  if (list.complete && list.checked >= list.count) return undefined;
-  return `(${list.checked} of ${list.complete ? "" : "at least "}${list.count} checked so far)`;
-}
