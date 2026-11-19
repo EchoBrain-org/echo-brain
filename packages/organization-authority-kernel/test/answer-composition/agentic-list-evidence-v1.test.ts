@@ -3,11 +3,12 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import {
   AGENTIC_LIST_STATEMENT_BYTES_V1,
-  agenticCalendarDayV1, agenticListCheckedNoteV1, agenticListCompleteV1, agenticListEndUnverifiedV1, agenticListFilterNoticeV1, agenticListFilterPhraseV1, agenticListIdV1,
-  agenticListMembersNounV1, agenticListMembershipV1, agenticListNounV1, agenticListSelectionNotFoundV1, agenticListSelectV1, agenticListStatementsV2, agenticListTableV1,
+  agenticCalendarDayV1, agenticListCheckedNoteV1, agenticListCompleteV1, agenticListEndUnverifiedV1, agenticListFillV1, agenticListFilterNoticeV1, agenticListFilterPhraseV1, agenticListIdV1,
+  agenticListMembersNounV1, agenticListMembershipV1, agenticListNounV1, agenticListReadNoteV1, agenticListSelectionNotFoundV1, agenticListSelectV1, agenticListShownNoteV1,
+  agenticListStatementsV2, agenticListTableV1,
   agenticNeedReadsListV1, agenticOpenReadsV1, agenticPlanListsV1, agenticWriterListMemberV1, agenticWriterListV1, createAgenticListEvidenceV1, parseAgenticListIdV1,
   type AgenticAnswerListUseV1, type AgenticListEvidenceInputV1, type AgenticListEvidenceV1, type AgenticListFilterApplicationV1, type AgenticListIdV1,
-  type AgenticListNounFormsV1, type AgenticListSelectionV1, type AgenticListStatementInputV1, type AgenticOpenActionV1, type AgenticWriterListMemberV1,
+  type AgenticListNounFormsV1, type AgenticListSelectionV1, type AgenticListStatementInputV1, type AgenticOpenActionV1, type AgenticPlacedListV1, type AgenticWriterListMemberV1,
 } from "../../src/answer-composition/agentic-list-evidence-v1.js";
 import type { AgenticResearchResultV1 } from "../../src/answer-composition/agentic-research-v1.js";
 import type { EvidenceDeskResultV1 } from "../../src/shared/evidence-desk-v1.js";
@@ -449,5 +450,49 @@ describe("the statement code writes for a list (ADR-0041)", () => {
   it("says how many members were checked for content across a list (addition 4)", () => {
     expect([{ checked: 4, count: 8, complete: true }, { checked: 25, count: 25, complete: false }, { checked: 8, count: 8, complete: true }].map(agenticListCheckedNoteV1))
       .toEqual(["(4 of 8 checked so far)", "(25 of at least 25 checked so far)", undefined]);
+  });
+});
+
+describe("a placed list (ADR-0054)", () => {
+  const row = (id: string, status: string, owner?: string): AgenticWriterListMemberV1 => Object.freeze({
+    id, kind: "ticket", title: `THERM-${id.slice(1)}`, status, ...(owner === undefined ? {} : { owner }), checked: false,
+  });
+  const all = Object.freeze([row("E1", "open", "Dana Lee"), row("E2", "open", "Sam Roy"), row("E3", "done", "Dana Lee")]);
+  const rowWithoutOwner = row("E4", "open");
+  const PAGES_NOUN = PAGES;
+  /** Fills a placed L1 over `members`, every one shown, from a complete list unless `list` says otherwise. */
+  const fill = (placed: Omit<AgenticPlacedListV1, "list">, list: Partial<Pick<AgenticListEvidenceV1, "complete" | "unchecked" | "filter">> = {}, members: readonly AgenticWriterListMemberV1[] = all) =>
+    agenticListFillV1({
+      placed: { list: "L1", ...placed }, all: members, shown: new Set(members.map(member => member.id)),
+      member_of: (id: string) => members.some(member => member.id === id) ? id : undefined, list: { complete: true, filter: {}, ...list },
+    });
+
+  it("fills a whole list from every member, a where from every member that matches, and members only from rows the writer was shown", () => {
+    const base = { all, shown: new Set(["E1", "E2"]), member_of: (id: string) => all.some(m => m.id === id) ? id : undefined, list: { complete: true, filter: {} } };
+    expect(agenticListFillV1({ ...base, placed: { list: "L1" } })).toEqual({ kind: "rows", selected: all, by_id: false, unknown: 0 });
+    expect(agenticListFillV1({ ...base, placed: { list: "L1", where: { field: "status", value: "OPEN" } } })).toMatchObject({ kind: "rows", selected: [all[0], all[1]], by_id: false });
+    expect(agenticListFillV1({ ...base, placed: { list: "L1", members: ["E3", "E2", "E9"] } })).toEqual({ kind: "rows", selected: [all[1]], by_id: true, unknown: 2 });
+    expect(agenticListFillV1({ ...base, placed: { list: "L1", members: ["E3"] } })).toEqual({ kind: "dropped", unknown: 1 });
+  });
+
+  it("is empty for a whole list with no member, and keeps hand-picked members once each, in list order", () => {
+    expect(fill({}, {}, [])).toEqual({ kind: "empty" });
+    expect(fill({ members: ["E3", "E1", "E3"] })).toEqual({ kind: "rows", selected: [all[0], all[2]], by_id: true, unknown: 0 });
+  });
+
+  it("confirms that none matched only for a complete list whose members all record the fact", () => {
+    const where = { field: "owner", value: "Nobody" } as const;
+    expect(fill({ where })).toEqual({ kind: "none_matched", where, testable: true, confirmed: true });
+    expect(fill({ where }, { complete: false })).toMatchObject({ confirmed: false });
+    expect(fill({ where }, {}, [...all, rowWithoutOwner])).toMatchObject({ testable: false, confirmed: false });
+  });
+
+  it("says how many members were read in full only when some were and some were not", () => {
+    const list = { checked: 4, count: 8, complete: true, filter: { date_field: "created", since: "2026-10-04", until: "2026-10-04" } } as const;
+    expect(agenticListReadNoteV1(list, PAGES_NOUN)).toBe("4 of the 8 Confluence pages created on October 4, 2026 were read in full.");
+    expect(agenticListReadNoteV1({ ...list, complete: false }, PAGES_NOUN)).toBe("4 of at least 8 Confluence pages created on October 4, 2026 were read in full.");
+    expect(agenticListReadNoteV1({ ...list, checked: 1, count: 2 }, PAGES_NOUN)).toContain("1 of the 2 Confluence pages");
+    expect([agenticListReadNoteV1({ ...list, checked: 0 }, PAGES_NOUN), agenticListReadNoteV1({ ...list, checked: 8 }, PAGES_NOUN)]).toEqual([undefined, undefined]);
+    expect([agenticListShownNoteV1(7, 12), agenticListShownNoteV1(12, 12)]).toEqual(["(first 7 shown)", undefined]);
   });
 });

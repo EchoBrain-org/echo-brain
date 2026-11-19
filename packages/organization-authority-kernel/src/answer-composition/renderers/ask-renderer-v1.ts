@@ -646,8 +646,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         };
         /** How an item reads: one whose sentence carries code's note reads as text when its block shows other fields than its sentence, so the note shows. */
         const itemShape = (item: AnswerItem, noted: boolean): AnswerItem => !noted || item.kind === "answer" || item.kind === "text" || item.kind === "point" ? item : textItem(item);
-        /** A statement as code lays it out; a writer's item also keeps the ids it cites that the writer saw, text or rows, and the member it declares. */
-        type Laid = { text: string; shorts: readonly string[]; read?: readonly string[]; cites?: readonly string[]; shape: DraftShape; item?: AnswerItem; member?: string };
+        /**
+         * A statement as code lays it out; a writer's item also keeps the ids it cites that the writer saw, text or rows, and the member it declares.
+         * `block` is the writer's block a list statement reads at (orderAskBlocksV2); a list code states of its own accord has none.
+         */
+        type Laid = { text: string; shorts: readonly string[]; read?: readonly string[]; cites?: readonly string[]; shape: DraftShape; item?: AnswerItem; member?: string; block?: number };
         const writerSentences: (Laid & { item: AnswerItem })[] = sentences.flatMap(given => {
           const sentence = verified(given);
           const kept = drafted(sentence);
@@ -774,7 +777,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             ...(picked === undefined || picked.length === 0 ? [] : rest(picked, { which: stated.includes(id) && picked.length === all.length, by_id: true })),
           ];
         });
-        const listStatements = naming.flatMap((value, index) => {
+        const listStatements: Laid[] = naming.flatMap((value, index) => {
           // An owner or status reads as the first selected member records it; a date range as the writer gave it.
           const where = value.where === undefined || !("value" in value.where) ? value.where : { field: value.where.field, value: value.selected[0]![value.where.field]! };
           const description = {

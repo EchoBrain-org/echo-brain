@@ -36,26 +36,34 @@ export interface AskBlockStatementV2 {
 }
 
 /**
- * A v2 answer's kept statements in reading order: the writer's answer, then the list statements code writes, then the
- * writer's other items block by block in its order, each block's own items first, then those that read as text, and a
- * timeline's events oldest first. Only when the writer gave no answer at all (`answered`) is its first kept item the
- * answer, and only when it is untitled text: an answer the writer gave and code left out (W1, a repeat) leaves the part
- * with none, rather than one the writer never chose.
+ * A v2 answer's kept statements in reading order: the writer's answer, then the list statements code writes of its own
+ * accord (lists with no `block`), then the writer's other blocks in ascending block index. A list the writer placed
+ * (ADR-0054) carries its block's index and reads where the writer put it among them, lists of one index in input order;
+ * one placed before the answer reads right after it, since the answer is always first. Inside a writer block its own
+ * items come first, then those that read as text, and a timeline's events oldest first. Only when the writer gave no
+ * answer at all (`answered`) is its first kept item the answer, and only when it is untitled text: an answer the writer
+ * gave and code left out (W1, a repeat) leaves the part with none, rather than one the writer never chose.
  */
-export function orderAskBlocksV2<L, S extends { readonly item: AnswerItem }>(lists: readonly L[], sentences: readonly S[], answered: boolean): readonly (L | S)[] {
+export function orderAskBlocksV2<L extends { readonly block?: number }, S extends { readonly item: AnswerItem }>(lists: readonly L[], sentences: readonly S[], answered: boolean): readonly (L | S)[] {
   const first = sentences[0];
   const promoted = !answered && first !== undefined && first.item.kind === "text" && first.item.title === undefined;
   const answers = answered ? sentences.filter(sentence => sentence.item.kind === "answer")
     : promoted ? [{ ...first, item: Object.freeze({ block: first.item.block, kind: "answer" as const }) }] : [];
   const rest = sentences.filter(sentence => sentence.item.kind !== "answer" && !(promoted && sentence === first));
   const day = (sentence: S) => sentence.item.kind === "event" ? sentence.item.date : "";
+  // Read by property, not `in`: a list may be any value, and one with no block is code's own.
+  const placedAt = (list: L): number | undefined => list.block;
+  const own = lists.filter(list => placedAt(list) === undefined);
+  const placed = lists.filter(list => placedAt(list) !== undefined);
+  const blocks = [...new Set([...rest.map(sentence => sentence.item.block), ...placed.map(list => placedAt(list)!)])]
+    .sort((left, right) => left - right);
   return Object.freeze([
-    ...answers, ...lists,
-    ...[...new Set(rest.map(sentence => sentence.item.block))].flatMap(block => {
-      const own = rest.filter(sentence => sentence.item.block === block);
+    ...answers, ...own,
+    ...blocks.flatMap(block => {
+      const items = rest.filter(sentence => sentence.item.block === block);
       // A stable sort, so events of one day keep the writer's order.
-      const shown = own.filter(sentence => sentence.item.kind !== "text").sort((left, right) => day(left) < day(right) ? -1 : day(left) > day(right) ? 1 : 0);
-      return [...shown, ...own.filter(sentence => sentence.item.kind === "text")];
+      const shown = items.filter(sentence => sentence.item.kind !== "text").sort((left, right) => day(left) < day(right) ? -1 : day(left) > day(right) ? 1 : 0);
+      return [...shown, ...items.filter(sentence => sentence.item.kind === "text"), ...placed.filter(list => placedAt(list) === block)];
     }),
   ]);
 }

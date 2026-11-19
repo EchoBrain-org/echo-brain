@@ -691,6 +691,62 @@ export function agenticListSelectionVerifiedV1(members: readonly AgenticListName
     : evidenceDayV1(memberDate(member, where.field) ?? "", timeZone ?? "UTC") !== undefined);
 }
 
+/** A list block as the writer placed it: whole, by one row fact, or by members' ids (ADR-0054). It never carries a title. */
+export interface AgenticPlacedListV1 {
+  readonly list: AgenticListIdV1;
+  readonly where?: AgenticListSelectionV1;
+  readonly members?: readonly string[];
+}
+
+/**
+ * What code fills a placed list with: the rows it shows (`unknown` counts ids that named no row the writer was shown),
+ * a selection that matched none (`testable` when every member records the fact; `confirmed` only when the list is also
+ * complete and has no untested items), a list with no member, or a hand-picked block left with none.
+ */
+export type AgenticListFillV1 =
+  | { readonly kind: "rows"; readonly selected: readonly AgenticWriterListMemberV1[]; readonly by_id: boolean; readonly where?: AgenticListSelectionV1; readonly unknown: number }
+  | { readonly kind: "none_matched"; readonly where: AgenticListSelectionV1; readonly testable: boolean; readonly confirmed: boolean }
+  | { readonly kind: "empty" }
+  | { readonly kind: "dropped"; readonly unknown: number };
+
+/**
+ * Fills a placed list from the desk (ADR-0054). The whole list and a `where` read every member, including rows past
+ * the writer's prompt, so nothing is retyped and the count is the desk's. Hand-picked `members` are kept only when they
+ * name a row the writer was shown (an opened body counts as its row), each once and in list order: a writer never
+ * reaches a row it did not see by naming its id.
+ */
+export function agenticListFillV1(input: {
+  readonly placed: AgenticPlacedListV1;
+  /** Every member of the desk list, in list order. */
+  readonly all: readonly AgenticWriterListMemberV1[];
+  /** Row ids of this list the writer was shown. */
+  readonly shown: ReadonlySet<string>;
+  /** The member of this list an id is, or is part of (agenticListMembershipV1's `in`). */
+  readonly member_of: (id: string) => string | undefined;
+  readonly list: Pick<AgenticListEvidenceV1, "complete" | "unchecked" | "filter">;
+}): AgenticListFillV1 {
+  const { placed, all, list } = input;
+  if (placed.members !== undefined) {
+    const picked = new Set<string>();
+    let unknown = 0;
+    for (const id of placed.members) {
+      const member = input.member_of(id);
+      if (member === undefined || !input.shown.has(member)) unknown += 1;
+      else picked.add(member);
+    }
+    const selected = all.filter(member => picked.has(member.id));
+    return selected.length === 0 ? Object.freeze({ kind: "dropped", unknown }) : Object.freeze({ kind: "rows", selected: Object.freeze(selected), by_id: true, unknown });
+  }
+  if (placed.where !== undefined) {
+    const where = placed.where;
+    const selected = agenticListSelectV1(all, where, list.filter.time_zone);
+    if (selected.length > 0) return Object.freeze({ kind: "rows", selected, by_id: false, where, unknown: 0 });
+    const testable = agenticListSelectionVerifiedV1(all, where, list.filter.time_zone);
+    return Object.freeze({ kind: "none_matched", where, testable, confirmed: list.complete && !list.unchecked?.count && testable });
+  }
+  return all.length === 0 ? Object.freeze({ kind: "empty" }) : Object.freeze({ kind: "rows", selected: all, by_id: false, unknown: 0 });
+}
+
 /** A selection as a statement says it: "have owner Dana Lee", "are due from October 18 to October 24, 2026", "were updated since October 11, 2026". */
 function selectionWords(where: AgenticListSelectionV1, one: boolean): string {
   if ("value" in where) return `${one ? "has" : "have"} ${where.field} ${line(where.value, 120)}`;
@@ -817,6 +873,21 @@ export function agenticListTableV1(input: { readonly selected: readonly AgenticL
 export function agenticListSelectionNotFoundV1(noun: AgenticListNounFormsV1, filter: AgenticListFilterV1, where: AgenticListSelectionV1): string {
   const condition = "value" in where ? `that have ${where.field} ${line(where.value, 120)}` : `${DATE_WORDS[where.field]} ${dateRange(where.since, where.until)!}`;
   return `${noun.plural}${phraseAfter(noun, filter)} ${condition}`;
+}
+
+/**
+ * What code says, as its own statement, of a list the answer uses when research read the text of some of its members
+ * but not all (ADR-0054): "4 of the 8 Confluence pages created on October 4, 2026 were read in full."; for a list not
+ * read to its end, "4 of at least 8 ...". It states what research did, and never writes inside the writer's sentences.
+ */
+export function agenticListReadNoteV1(list: Pick<AgenticWriterListV1, "checked" | "count" | "complete" | "filter">, noun: AgenticListNounFormsV1): string | undefined {
+  if (list.checked <= 0 || list.checked >= list.count) return undefined;
+  return `${list.checked} of ${list.complete ? "the" : "at least"} ${list.count} ${noun.plural}${phraseAfter(noun, list.filter)} ${list.checked === 1 ? "was" : "were"} read in full.`;
+}
+
+/** What a placed list's caption adds when fitting the response cut some of its selected rows: "(first 7 shown)". */
+export function agenticListShownNoteV1(shown: number, selected: number): string | undefined {
+  return shown < selected ? `(first ${shown} shown)` : undefined;
 }
 
 /**
