@@ -56,10 +56,25 @@ export function meetingDateV1(time: OrganizationRecordMeetingTimeV1 | undefined)
  * time zone). The proposal, the approved decision, the action's follow-up and what Ask reads of the meeting all say this
  * day. Null with no deadline, and for a deadline whose day is not a calendar day in the contract's form (a year the
  * local form writes with fewer than four digits): a day must never fail what carries it.
+ *
+ * A zone that is no time zone is read here as none, before localDateV1 sees it. Given one, localDateV1 answers with the
+ * timestamp's own first ten characters, not with UTC's local form, so a year below 1000 would have a day under an unknown
+ * zone and none under UTC. Asked in UTC, the two always agree.
  */
 export function meetingActionDueOnV1(dueAt: string | null, timeZone: string | undefined): string | null {
-  const day = dueAt === null ? null : localDateV1(dueAt, timeZone);
+  const day = dueAt === null ? null : localDateV1(dueAt, knownTimeZone(timeZone));
   return isCalendarDay(day) ? day : null;
+}
+
+/** The zone when Intl takes it as a time zone, else none. */
+function knownTimeZone(timeZone: string | undefined): string | undefined {
+  if (timeZone === undefined) return undefined;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return timeZone;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
