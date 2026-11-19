@@ -515,3 +515,21 @@ describe('final round: gone clears on a good read, a meeting send never names th
     expect(other.buttons()).toContain('Try again');
   });
 });
+
+describe('a meeting action with a due date, on its page', () => {
+  // The clock is pinned for the whole file (storeLifecycle): Nov 20 is two days ahead.
+  it('says its day in the meta line, as a chat follow-up does, and offers no Edit', async () => {
+    {
+      const store = await startStore();
+      const action = followUp(1, { expected: 'Prepare the document', due_on: '2026-11-20' });
+      items.set(action.item_id, action);
+      await store.openFollowUp(action.item_id, action);
+      await flush();
+      const { FollowUp } = await import('../../src/renderer/screens/follow-ups.js');
+      const tree = render(FollowUp({ state: store.getState(), page: store.followUpShown() as ItemPage }));
+      expect(text(elements(tree).find(node => node.type === 'h1'))).toBe('Prepare the document');
+      expect(text(byTestId(tree, 'follow-up-due'))).toBe(' · Due Nov 20');
+      expect(byTestId(tree, 'follow-up-edit')).toEqual([]);
+    }
+  });
+});

@@ -22,17 +22,6 @@ export function monthDay(value: string): string | null {
   return new Date(time).toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(day ? { timeZone: 'UTC' } : {}) });
 }
 
-/**
- * A meeting action's line as its reader sees it. Its approved deadline arrives as an instant at the end of the line
- * ("· Due 2026-11-20T17:00:00.000Z"); it is said as the reader's own day, "· Due Nov 20", like every other due date.
- */
-export function expectedWords(expected: string): string {
-  return expected.replace(/ · Due (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)$/u, (whole, at: string) => {
-    const day = monthDay(at);
-    return day === null ? whole : ` · Due ${day}`;
-  });
-}
-
 /** "2 actions", "1 action", or nothing when there are none. */
 export function actionCount(count: number): string | null {
   return count === 0 ? null : count === 1 ? '1 action' : `${count} actions`;
@@ -78,9 +67,8 @@ const WHAT: Readonly<Record<PersonOpenItemKindV1, string>> = {
  * its live read fills in.
  */
 export function itemTitle(item: OpenItemView): string {
-  // A follow-up from a chat (ADR-0053) is its own one line, whatever it is about, exactly as it was written.
-  if (fromChat(item) && item.expected !== null) return item.expected;
-  if (item.kind === 'action') return item.expected === null ? WHAT.action : expectedWords(item.expected);
+  // A follow-up from a chat (ADR-0053) is its own one line, whatever it is about.
+  if (item.kind === 'action' || (fromChat(item) && item.expected !== null)) return item.expected ?? WHAT.action;
   if (item.current) return item.current.source.label;
   switch (item.reach) {
     case 'unavailable': return `${WHAT[item.kind]} ECHO couldn't read just now`;
