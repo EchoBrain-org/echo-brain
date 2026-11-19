@@ -148,6 +148,11 @@ Known limits of what was built, found in review on 2026-11-18:
   fails while the audit still records the answer.
 - A member who stops owning a card while they are reading it may still receive
   that one read.
+- The approval and review screens, and what Ask reads from a meeting, still
+  show a meeting action's deadline as the reader's own day. For a reader 12 or
+  more hours from the meeting's time zone that day can differ by one from the
+  day on the follow-up card. Closing it needs a new field in the reviews
+  contract. The founder left it for a separate change on 2026-11-18.
 
 Not decided here: the after-approval impact check adopting the same card
 form, a card tool inside the loop, and a plain "new card" form.
