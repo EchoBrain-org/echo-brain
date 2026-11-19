@@ -2,6 +2,7 @@ import {
   PERSON_ANSWER_CAPTION_MAX_BYTES_V1,
   PERSON_ANSWER_STATEMENT_MAX_BYTES_V4,
   PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4,
+  PERSON_EVIDENCE_TEXT_MAX_BYTES_V1,
   personAnswerCitationKeyV8,
   validatePersonAnswerBlocksV2,
   type PersonAnswerBlockV2,
@@ -830,7 +831,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           // Honor a completed writer's no-match result instead of substituting research-selected records.
           // Raw fallback remains limited to research-read evidence; merely sending
           // a search passage to a failed writer does not make it a useful answer.
-          const records = fallbackRecords.map(entry => statementOf(entry.item.text!, [entry.short]));
+          // A record shows the text research read, cut to the bound the response holds for a record's text, as a gap is cut to its own.
+          const records = fallbackRecords.map(entry => statementOf(boundedBytes(entry.item.text!, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1), [entry.short]));
           draft = records.length > 0
             ? { status: "records_only", statements: [], records, gap: withGaps(RECORDS_GAP)! }
             : { status: "not_found", statements: [], gap: withGaps(drafts.length > 0
