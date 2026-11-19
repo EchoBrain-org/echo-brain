@@ -24,6 +24,7 @@ const fields = (item, names) => Object.fromEntries(names.filter((name) => Object
  * One case item as the desk releases it, its ids and fixtures named for the evaluation `fixture`: a follow-up through the
  * product's own projection, an approved decision record, or a Jira issue the asker reads through their own connection,
  * with its priority when it has one, created on its `created` day (2026-10-19 without one). Every value is synthetic.
+ * An item's `listed` is not read here: the desk lists such an item as a row (caseAsk's `hooks.listed`).
  */
 export function deskItem(fixture, caseId, index, item) {
   const key = `${caseId}:${index}`;
@@ -54,25 +55,46 @@ export function deskItem(fixture, caseId, index, item) {
 /** One case's items as the desk releases them (deskItem), in the case's order: the order search finds them and research opens them. */
 export const caseItems = (fixture, caseDefinition) => caseDefinition.items.map((item, index) => deskItem(fixture, caseDefinition.id, index, item));
 
-/** A desk over `items`, in a global Ask with Jira and follow-ups bound, checked at `askedAt`: any search finds them all, in order. */
-function caseDesk(items, askedAt) {
+/** An item as a list returns it: a row, its text removed and its citation's text digest that of no text. */
+function listRow(item) {
+  const { text: _text, ...row } = item;
+  return Object.freeze({ ...row, ...(item.citation.text_sha256 === undefined ? {} : { citation: Object.freeze({ ...item.citation, text_sha256: sha256Digest("") }) }) });
+}
+
+/**
+ * A desk over `items`, in a global Ask with Jira and follow-ups bound, checked at `askedAt`. Its list returns `listed` as
+ * rows, in order, for any source, read to their end; opening a row returns the item in full under the row's own id. Any
+ * search finds every item it does not list, in order, so a listed item is read only by opening it.
+ */
+function caseDesk(items, askedAt, listed = []) {
   const result = (values) => Object.freeze({ items: Object.freeze(values), truncated: false, receipt_digests: Object.freeze(values.map((value) => value.receipt_sha256)) });
+  const listedIds = new Set(listed.map((item) => item.id));
+  const rows = Object.freeze(listed.map(listRow));
   return Object.freeze({
     scope: Object.freeze({ kind: "global" }),
     live_sources: Object.freeze([TICKETS_SOURCE, FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]),
-    async search() { return result(items); },
+    async search() { return result(items.filter((item) => !listedIds.has(item.id))); },
     async open(input) { return result(items.filter((item) => item.id === input.item)); },
-    async list() { return result([]); },
+    async list() { return result(rows); },
     async revalidate() { return Object.freeze({ checked_at: askedAt }); },
   });
 }
 
 // ---- Ask -----------------------------------------------------------------------------------------------------------
 /**
- * The scripted research step for `round` (from 1): search, then open every item found (E1 to En, in the desk's order),
- * then finish with the one need found on all of them. A later round finishes again.
+ * The scripted research step for `round` (from 1). A case that gives `research.steps` is answered step by step, each
+ * step's needs written as the kernel's corpus writes them (research's own wording from `research.needs`, an id from the
+ * second step on), and a round past the last step repeats it (a finish). Otherwise: search, then open every item found
+ * (E1 to En, in the desk's order), then finish with the one need found on all of them; a later round finishes again.
  */
 export function researchStep(caseDefinition, round) {
+  const { steps } = caseDefinition.research;
+  if (steps !== undefined) {
+    const step = steps[Math.min(round, steps.length) - 1];
+    const needs = step.needs.map((need, n) => ({ ...(round === 1 ? {} : { id: `N${n + 1}` }), need: caseDefinition.research.needs[n],
+      ...(need.kind === undefined ? {} : { kind: need.kind }), status: need.status, evidence: need.evidence }));
+    return { parts: [{ question: caseDefinition.question, needs, notes: "" }], actions: step.actions };
+  }
   const ids = Array.from({ length: caseDefinition.items.length }, (_, index) => `E${index + 1}`);
   const need = (status) => ({ ...(round === 1 ? {} : { id: "N1" }), need: caseDefinition.research.need, kind: "content", status, evidence: status === "found" ? ids : [] });
   const part = (status, notes) => [{ question: caseDefinition.question, needs: [need(status)], notes }];
@@ -104,11 +126,13 @@ export function scriptedModel(caseDefinition, writer, refusal) {
 /**
  * Ask over a desk of `items` (caseItems), as the kernel runs it: asked at `askedAt` by the cases document's asker, in its
  * time zone and on its today, with `model`. With `followUps` (`{ request_id, sink }`), the request saves the follow-ups
- * its writer drafts (ADR-0053) through `sink`, as a request bound to the asker's list does.
+ * its writer drafts (ADR-0053) through `sink`, as a request bound to the asker's list does. `hooks.listed` are the items
+ * (of `items`) the desk's list returns, in order, as rows; `hooks.on_audit` is called with each audit entry the run writes,
+ * whose `fallbacks` counts the times code answered in the writer's place.
  */
-export function caseAsk(items, document, askedAt, model, generation, followUps) {
+export function caseAsk(items, document, askedAt, model, generation, followUps, hooks = {}) {
   return createAgenticAskV5({
-    desk: caseDesk(items, askedAt), model, generation, audit: { append: () => undefined },
+    desk: caseDesk(items, askedAt, hooks.listed), model, generation, audit: { append: (entry) => { hooks.on_audit?.(entry); } },
     asker: { display_name: document.asker }, time_context: { now: askedAt, time_zone: document.time_zone },
     today: () => document.today, wall_ms: () => Date.parse(askedAt),
     ...(followUps === undefined ? {} : { follow_ups: followUps }),
