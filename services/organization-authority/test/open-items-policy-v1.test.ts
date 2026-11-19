@@ -94,6 +94,54 @@ it.each(chatTable)('follow-up from a chat: %s', (_name, facts, expected) => {
   expect(openItemAccessV1({ ...chat, ...facts })).toMatchObject(expected);
 });
 
+// Every role on a follow-up from a chat in every stage, in full: what each may see and do, and whom it waits on.
+const STAGES = {
+  unsent: { state: 'unsent', sent_to_owner: false },
+  sent: { state: 'open', sent_to_owner: true },
+  'sent, then done': { state: 'done', sent_to_owner: true },
+  'sent, then not relevant': { state: 'not_relevant', sent_to_owner: true },
+  dismissed: { state: 'not_relevant', sent_to_owner: false },
+  'dismissed, then done': { state: 'done', sent_to_owner: false },
+  'dismissed, then open': { state: 'open', sent_to_owner: false },
+} as const;
+const none = { see_row: false, see_decision: false, see_outside: false, set_state: false, assign: false, edit: false, send: false, waits_on_viewer: false } as const;
+const creatorOnlySees = { ...none, see_row: true } as const;
+const sentAndClosed = { ...none, see_row: true, set_state: true, assign: true } as const;
+const chatMatrix: readonly (readonly [keyof typeof STAGES, 'creator' | 'owner' | 'stranger', Record<string, unknown>])[] = [
+  ['unsent', 'creator', { ...none, see_row: true, assign: true, edit: true, send: true, waits_on: 'approver', waits_on_viewer: true }],
+  ['unsent', 'owner', { ...none, waits_on: 'approver' }],
+  ['unsent', 'stranger', { ...none, waits_on: 'approver' }],
+  ['sent', 'creator', { ...none, see_row: true, set_state: true, assign: true, edit: true, waits_on: 'owner' }],
+  ['sent', 'owner', { ...none, see_row: true, set_state: true, assign: true, waits_on: 'owner', waits_on_viewer: true }],
+  ['sent', 'stranger', { ...none, waits_on: 'owner' }],
+  ['sent, then done', 'creator', { ...sentAndClosed, waits_on: 'owner' }],
+  ['sent, then done', 'owner', { ...sentAndClosed, waits_on: 'owner' }],
+  ['sent, then done', 'stranger', { ...none, waits_on: 'owner' }],
+  ['sent, then not relevant', 'creator', { ...sentAndClosed, waits_on: 'owner' }],
+  ['sent, then not relevant', 'owner', { ...sentAndClosed, waits_on: 'owner' }],
+  ['sent, then not relevant', 'stranger', { ...none, waits_on: 'owner' }],
+  ['dismissed', 'creator', { ...creatorOnlySees, waits_on: 'owner' }],
+  ['dismissed', 'owner', { ...none, waits_on: 'owner' }],
+  ['dismissed', 'stranger', { ...none, waits_on: 'owner' }],
+  ['dismissed, then done', 'creator', { ...creatorOnlySees, waits_on: 'owner' }],
+  ['dismissed, then done', 'owner', { ...none, waits_on: 'owner' }],
+  ['dismissed, then done', 'stranger', { ...none, waits_on: 'owner' }],
+  ['dismissed, then open', 'creator', { ...creatorOnlySees, waits_on: 'owner' }],
+  ['dismissed, then open', 'owner', { ...none, waits_on: 'owner' }],
+  ['dismissed, then open', 'stranger', { ...none, waits_on: 'owner' }],
+];
+const VIEWERS = { creator: 'mem_ari', owner: 'mem_mina', stranger: 'mem_x' } as const;
+
+it.each(chatMatrix)('follow-up from a chat, %s, as its %s', (stage, role, expected) => {
+  const access = openItemAccessV1({ ...chat, ...STAGES[stage], viewer: VIEWERS[role] });
+  expect(Object.fromEntries(Object.keys(expected).map(key => [key, access[key as keyof typeof access]]))).toEqual(expected);
+  // A decision reader or a project lead is never told more about it than a stranger is.
+  if (role === 'stranger') {
+    expect(openItemAccessV1({ ...chat, ...STAGES[stage], viewer: VIEWERS[role], reads_decision: true, leads_decision_project: true, opens_item: true }))
+      .toMatchObject({ see_row: false, see_decision: false, see_outside: false, set_state: false, assign: false, edit: false, send: false, waits_on_viewer: false });
+  }
+});
+
 it('lets only a reading approver send', () => {
   expect(openItemSendAccessV1({ viewer: 'mem_ari', approver: 'mem_ari', reads_decision: true })).toEqual({ send: true });
   expect(openItemSendAccessV1({ viewer: 'mem_ari', approver: 'mem_ari', reads_decision: false })).toEqual({ send: false });
