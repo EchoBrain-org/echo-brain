@@ -110,6 +110,9 @@ Options for asking the person whether they want a card:
 - **Edits.** The creator can change the task and the due date. The owner can
   hand the card on or close it.
 - **Send works on one card.**
+- **A meeting action's card carries its due date as a day.** The day is the
+  action's deadline in the meeting's own time zone, fixed like the card's
+  line, and the line is the action's words only.
 - **Research stays read only.** ADR-0042's rule holds for the loop. What
   changes is that an answer's release may also save not-sent cards for the
   person who asked.

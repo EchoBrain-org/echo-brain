@@ -10,6 +10,7 @@ import {
   type EvidenceDatesV1,
 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { localDateV1 } from "@echo-brain/organization-processing/core";
 import {
   canonicalJson,
   canonicalSha256,
@@ -296,6 +297,11 @@ export interface PersonRecordActionV1 {
   /** The action's approved text, released as a body is (releasableBodyV1). */
   readonly text: string;
   readonly due_at?: string;
+  /**
+   * The calendar day of `due_at` in the meeting's own time zone, the zone extraction normalised it in (UTC when the meeting
+   * names none, or one that is not a time zone). Present exactly with `due_at`.
+   */
+  readonly due_on?: string;
   /** The owner the approver confirmed on Approve (ADR-0021), else null; never the brief's own owner field. */
   readonly owner: string | null;
 }
@@ -1474,7 +1480,12 @@ export function createPersonRecordSearchRouteV1(
       const { admitted } = admit(input);
       const record = approvedRecord(admitted.position, admitted.record_sha256);
       const owners = confirmedOwners(record.reference);
-      return Object.freeze(record.brief.actions.map((action) => Object.freeze({ signal_id: action.id, text: releasableBodyV1(action.text), ...(action.due_at === null ? {} : { due_at: action.due_at }), owner: owners.get(action.id) ?? null })));
+      const zone = record.brief.meeting.time?.timezone;
+      return Object.freeze(record.brief.actions.map((action) => {
+        const due_on = action.due_at === null ? null : localDateV1(action.due_at, zone);
+        return Object.freeze({ signal_id: action.id, text: releasableBodyV1(action.text), ...(action.due_at === null ? {} : { due_at: action.due_at }),
+          ...(due_on === null ? {} : { due_on }), owner: owners.get(action.id) ?? null });
+      }));
     },
     recordProjects(input: Parameters<PersonRecordProjectsV1["recordProjects"]>[0]): readonly ProjectIdV1[] {
       const { projects, admitted } = admit(input);

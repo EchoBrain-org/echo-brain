@@ -377,9 +377,10 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
     const access = openItemAccessV1(read === undefined ? facts : { ...facts, opens_item: opened !== undefined });
     if (!access.see_row) return undefined;
     const live = opened !== undefined && access.see_outside && openItemCurrentV1(opened) !== undefined ? opened : undefined;
-    // A follow-up from a chat has its own due date (ADR-0053), never that of the item it is about; a run's item shows its tool's.
-    const chat = openItemIsFromChatV1(row);
-    const due = chat ? row.due_on ?? '' : live === undefined ? '' : openItemCurrentV1(live)?.due_at ?? '';
+    // A card's own due date (ADR-0053: a chat follow-up's, or a meeting action's day) is the row's. A follow-up from a chat
+    // never takes the due date of the item it is about; another run item with none shows its tool's, read live.
+    const own = row.due_on !== null || openItemIsFromChatV1(row);
+    const due = own ? row.due_on ?? '' : live === undefined ? '' : openItemCurrentV1(live)?.due_at ?? '';
     const liveTitle = live === undefined ? '' : impactCardLineV1(live.label, LIMITS.title_chars);
     const expected = impactCardLineV1(row.expected, LIMITS.expected_chars);
     const decision = decisionPart(entry);
@@ -391,7 +392,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
         item_id: row.item_id, kind: openItemKindV1(row.pointer), title, owner: ownerName(context.people, row), status: row.state,
         // ECHO's own dates, which the runs API shows whoever sees the row.
         created_at: row.created_at, ...(row.sent_at === null ? {} : { sent_at: row.sent_at }), ...(row.owner_set_at === null ? {} : { reassigned_at: row.owner_set_at }),
-        ...(due !== '' && (chat || (withLive && liveTitle !== '')) ? { due_at: due } : {}),
+        ...(due !== '' && (own || (withLive && liveTitle !== '')) ? { due_at: due } : {}),
         ...(withDecision && decision !== undefined ? { decision: {
           title: impactCardLineV1(decision.title, LIMITS.decision_title_chars) || 'Approved meeting',
           ...(decided === '' ? {} : { first_line: decided }), ref: `meeting:${row.record_sha256}`,

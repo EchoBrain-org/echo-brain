@@ -37,8 +37,10 @@ https://claude.ai/code/artifact/ffa8478f-578d-40d0-bc7a-578a66f4adb0.
 ## Approved meeting actions
 
 Every approved action with printable text gets an unsent draft when its impact
-run finishes. The short expected line includes any approved deadline, which
-the desktop shows as a day ("Due Nov 20"). A timeout or outage is retried up
+run finishes. Its expected line is the action's own words, and an approved
+deadline becomes the draft's due date (`due_on`), the deadline's calendar day
+in the meeting's own time zone (UTC when the meeting names none), which the
+desktop shows as a day ("Due Nov 20") (ADR-0053). A timeout or outage is retried up
 to the run's three attempts first. If research still fails while the approver
 has access, ECHO records impact as unassessed and keeps the meeting's own
 actions. Each Send request carries up
