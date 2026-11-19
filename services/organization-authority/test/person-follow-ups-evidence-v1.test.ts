@@ -662,6 +662,14 @@ describe('follow-ups from a chat as Ask evidence (ADR-0053)', () => {
     expect(found.items.find(item => item.id === `follow_up_${f.ticket.item_id}`)?.attributes).toMatchObject({ due_at: '2026-10-30' });
   });
 
+  it("states a meeting action's own day as its due date, with its line the action's words only", async () => {
+    const f = await sentFixture({ meetingActions: [{ signal_id: 'act-1', text: 'Send the vendor the plan', owner: 'Mina Patel', due_at: '2026-11-19T15:00:00.000Z', due_on: '2026-11-20' }] });
+    const found = (await list(askDesk(f, 'ari').desk)).items.find(item => item.label === 'Send the vendor the plan');
+    expect(found?.attributes).toMatchObject({ due_at: '2026-11-20' });
+    // The ticket the impact card found still shows its own tool's due date.
+    expect((await list(askDesk(f, 'ari').desk)).items.find(item => item.id === `follow_up_${f.ticket.item_id}`)?.attributes).toMatchObject({ due_at: '2026-10-30' });
+  });
+
   it('names no owner for a chat card that never reached one, whatever its state', async () => {
     const f = await sentFixture();
     const sinks = createAskFollowUpSinksV1({ items: f.items, people: f.directory });

@@ -71,7 +71,7 @@ function seededWithSources(): Database.Database {
 
 describe("Authority baseline V17", () => {
   it("is fresh-only and stamps the Authority application id", () => {
-    expect(authorityBaselineSha256()).toBe("sha256:e1231272776dcb256bfcec832c62cf4da96d277df246b098abb665d94f92c3f4");
+    expect(authorityBaselineSha256()).toBe("sha256:d037af1328e0719532506c732e13db649082aaf5c3a9c770dadc09265568a3cb");
     const database = seeded();
     expect(() => applyAuthorityBaseline(database)).toThrow("completely empty");
     expect(database.pragma("application_id", { simple: true })).toBe(AUTHORITY_BASELINE_APPLICATION_ID_V1);
@@ -167,6 +167,22 @@ describe("Authority baseline V17", () => {
       // Its creator is a member of the organization, as their own principal.
       expect(() => insert(database, chatRow({ approver_principal_id: OTHER_PRINCIPAL }))).toThrow("starts unsent with its creator");
       expect(database.prepare("SELECT count(*) FROM authority_impact_items_v1").pluck().get()).toBe(0);
+    });
+
+    it("lets a run's item carry a due date, fixed from its insert like its line", () => {
+      const database = withMember();
+      // An item from a run needs its finished impact run to be inserted; that trigger is the run's own provenance, not the
+      // due date's, so it is set aside here to reach the two rules about the due date.
+      database.exec("DROP TRIGGER authority_impact_item_insert_v1");
+      database.pragma("foreign_keys = OFF");
+      insert(database, chatRow({ run_id: "run_meeting0001", record_sha256: SHA, pointer_json: JSON.stringify({ kind: "meeting_action", record_sha256: SHA, signal_id: "a1" }),
+        owner_match: "name", owner_membership_id: OTHER, due_on: "2026-11-20" }));
+      expect(database.prepare("SELECT run_id, due_on FROM authority_impact_items_v1").get()).toEqual({ run_id: "run_meeting0001", due_on: "2026-11-20" });
+      const update = (set: string, ...values: unknown[]) => database.prepare(`UPDATE authority_impact_items_v1 SET ${set} WHERE item_id = ?`).run(...values, ITEM);
+      expect(() => update("due_on = ?", "2026-11-21")).toThrow("identity is immutable");
+      expect(() => update("due_on = NULL")).toThrow("identity is immutable");
+      expect(() => update("due_on = ?", "2026-02-30")).toThrow(/CHECK|immutable/u);
+      expect(database.prepare("SELECT due_on FROM authority_impact_items_v1").pluck().get()).toBe("2026-11-20");
     });
 
     it("lets a follow-up's line and due date change until it is closed, and nothing else of who or what it is", () => {

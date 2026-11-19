@@ -66,7 +66,7 @@ describe('follow-ups from a chat: the sink and the store', () => {
     expect(f.db.prepare('SELECT count(*) FROM authority_impact_items_v1').pluck().get()).toBe(0);
   });
 
-  it('keeps a run item\'s line fixed, gives it no due date, and never lets it lose its run', async () => {
+  it('keeps a run item\'s line and due date fixed, and never lets it lose its run', async () => {
     const f = await chatFollowUpsFixture();
     await f.finishImpactRun();
     const row = f.items.forRun(f.runId)[0]!;
@@ -76,7 +76,7 @@ describe('follow-ups from a chat: the sink and the store', () => {
     expect(() => update('run_id = NULL')).toThrow(/CHECK|immutable/u);
     expect(() => update('run_id = NULL, record_sha256 = NULL')).toThrow(/CHECK|identity is immutable/u);
     expect(() => update('record_sha256 = NULL')).toThrow(/CHECK|immutable/u);
-    // A run item cannot start without its run's record, nor be stored with a due date.
+    // The store never edits a run item's line or due date.
     expect(f.items.edit(row.item_id, { expected: 'other words' })).toBeUndefined();
     expect(f.items.read(row.item_id)).toEqual(row);
     // The store's send of one item ignores it, and the run's own Send ignores chat rows.

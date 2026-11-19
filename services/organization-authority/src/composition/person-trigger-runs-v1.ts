@@ -73,7 +73,8 @@ type ItemCandidateV1 = Omit<ImpactItemDraftV1, 'owner_membership_id' | 'owner_ma
  * details. Then one per action the approved meeting decided, in brief
  * order: it needs doing, its expected line is the action's own text on one
  * line of at most 120 characters, and its owner name is the one the approver
- * confirmed. Every approved action with printable text makes a draft.
+ * confirmed. Every approved action with printable text makes a draft, with the
+ * action's day as its due date when it has a deadline (ADR-0053).
  */
 function itemCandidates(record_sha256: Sha256Digest, siblings: readonly Sha256Digest[], card: PersonImpactCardV1, stored: StoredImpactCardV1,
   actions: readonly PersonRecordActionV1[]): readonly ItemCandidateV1[] {
@@ -106,10 +107,9 @@ function itemCandidates(record_sha256: Sha256Digest, siblings: readonly Sha256Di
       const pointer = Object.freeze({ kind: 'meeting_action', record_sha256, signal_id: action.signal_id });
       const item_key = fresh(pointer);
       if (item_key === undefined) return [];
-      // The expected line is the existing, recipient-visible contract. Reserve room for the entire approved deadline.
-      const deadline = action.due_at ? ` · Due ${action.due_at}` : '';
-      const line = deadline === '' ? expected : impactCardLineV1(action.text, PERSON_IMPACT_CARD_LIMITS_V1.expected_chars - deadline.length) + deadline;
-      return [{ item_key, pointer, relation: 'needs_updating', expected: line, ...(action.owner === null ? {} : { owner_name: action.owner }) }];
+      // Its deadline is the item's due date, the action's day in the meeting's time zone; the line is the action's own words.
+      return [{ item_key, pointer, relation: 'needs_updating', expected, ...(action.due_on === undefined ? {} : { due_on: action.due_on }),
+        ...(action.owner === null ? {} : { owner_name: action.owner }) }];
     });
   return [...affected, ...decided];
 }

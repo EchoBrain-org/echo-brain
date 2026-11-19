@@ -466,9 +466,10 @@ database. Old roots, retired databases, and mismatched schemas refuse before
 writable opening. Authority V16 removed the unused manual meeting-intake
 table and its triggers. Authority V17 lets an open item come from a chat answer
 (ADR-0053): `authority_impact_items_v1` makes `run_id` and `record_sha256`
-nullable together, adds an optional `due_on` calendar day that only such a
-row carries, and lets its creator change its one line and due date until it
-is closed; a row from an impact run keeps its V16 rules. V16 state cannot be
+nullable together, adds an optional `due_on` calendar day, and lets the
+creator of such a row change its one line and due date until it is closed. A
+row from an impact run keeps its V16 rules, and may carry a meeting action's
+day as its `due_on`, fixed from its insert. V16 state cannot be
 upgraded in place; use the
 [authorized fresh-state setup](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state)
 under the operator playbook.
