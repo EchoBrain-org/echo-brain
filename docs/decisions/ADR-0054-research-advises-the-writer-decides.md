@@ -8,7 +8,7 @@ component_ids:
 created_at: 2026-11-19
 reviewed_at: 2026-11-19
 reviewed_ref: a06da569a10effeb26c6c553c44cb70a17ea76b7
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -23,8 +23,10 @@ clear boundary, and research "should only find answers and put them in the
 evidence desk and tell how to use them but never enforce it". The founder
 chose the decisions below in the same conversation and asked for a Codex
 review (`gpt-6.2-astra`, 2026-11-19), whose findings are worked into this
-text. This record is proposed until the founder accepts it. Nothing here is
-built.
+text. The founder accepted this record on 2026-11-19, after the change was
+built and had passed its gate on the Claude account route. It is not merged,
+released or live-tested, and the OpenRouter half of the gate has not been
+run.
 
 ## Context and options
 
