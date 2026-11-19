@@ -5,8 +5,9 @@
  * first records the writer's exact prompts with no network call, then each trial runs Ask through the kernel end to end,
  * only the writer's call going to the model through the shipped generation bundle (or the personal Claude account
  * writer). The answer the kernel releases is graded deterministically: the block cases (cases.json) by grade.mjs, rules
- * 1 to 5, and the wording cases (wording-cases.json) by wording.mjs, its three rules. The report keeps full traces: all
- * data is synthetic.
+ * 1 to 5, the wording cases (wording-cases.json) by wording.mjs, its three rules, the follow-up cases by follow-ups.mjs,
+ * and the list cases (lists-cases.json) by lists.mjs, from the writer's own reply beside the released answer. A block or
+ * list run's report keeps full traces: all data is synthetic.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -17,38 +18,59 @@ import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, gen
 import { CASES_FILE, CASE_COUNT, TRIALS, decideGate, evidenceOf, gradeTrial, loadCases, readReleased, summarize } from "./grade.mjs";
 import { CASES_FILE as WORDING_CASES_FILE, GROUPS, gradeTrial as gradeWording, loadCases as loadWordingCases, summarizeRules } from "./wording.mjs";
 import { CASES_FILE as FOLLOW_UPS_CASES_FILE, CASE_IDS as FOLLOW_UP_CASE_IDS, gradeTrial as gradeFollowUps, loadCases as loadFollowUpCases, summarize as summarizeFollowUps } from "./follow-ups.mjs";
+import { CASES_FILE as LISTS_CASES_FILE, CASE_IDS as LIST_CASE_IDS, decide as decideLists, gradeTrial as gradeLists, loadCases as loadListCases, summarize as summarizeLists } from "./lists.mjs";
 
 export { researchStep } from "../shared/ask-cases.mjs";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(TOOL_DIRECTORY, "../../..");
 
+/** Each check's passes over a summary's trials, as "passed/trials". */
+const checkCounts = (checks) => Object.fromEntries(Object.entries(checks).map(([name, check]) => [name, `${check.passed}/${check.trials}`]));
+
 /**
- * The two pre-registered case sets (README.md): the cases a run loads, the fixture names their desk items carry, when
- * they are asked, the per-trial timeout (default and most), whether the report keeps full traces, how a trial is graded
- * and a run summarized and decided, and whether a run that does not pass exits 1.
+ * The pre-registered case sets (README.md): the cases a run loads, the fixture names their desk items carry, when they
+ * are asked, the per-trial timeout (default and most), whether the report keeps full traces, how a trial is graded and
+ * a run summarized and decided, whether a run that does not pass exits 1, the progress line each trial writes and what
+ * the command prints of the report.
  *
- * The block cases (`main`) keep full traces of every synthetic prompt and reply, from one capture of each case's writer
- * prompts. The wording cases keep, as their own evaluation did, case ids, each trial's statements, lead and grade, the
- * writer prompt's SHA-256 and model metadata: never a prompt or a raw reply, so they need no capture.
+ * The block cases (`main`) and the list cases keep full traces of every synthetic prompt and reply, from one capture of
+ * each case's writer prompts. The wording cases keep, as their own evaluation did, case ids, each trial's statements,
+ * lead and grade, the writer prompt's SHA-256 and model metadata: never a prompt or a raw reply, so they need no capture.
  */
 export const CASE_SETS = Object.freeze({
   main: Object.freeze({ file: CASES_FILE, count: CASE_COUNT, load: loadCases, fixture: "blocks", askedAt: (document) => document.asked_at,
     timeoutMs: 120_000, maxTimeoutMs: 180_000, traces: true, exitsOnFailure: false,
-    grade: (caseDefinition, { read, evidence }) => gradeTrial(caseDefinition, read ?? { valid: false }, evidence), summarize: (trials) => summarize(trials), decide: decideGate }),
+    grade: (caseDefinition, { read, evidence }) => gradeTrial(caseDefinition, read ?? { valid: false }, evidence), summarize: (trials) => summarize(trials), decide: decideGate,
+    progress: (result) => ({ kind: "echo-ask-blocks-evaluation-progress-v1", case_id: result.case_id, catalog: "built", trial: result.trial, valid: result.grade.valid, grounded: result.grade.grounded,
+      nothing_lost: result.grade.nothing_lost, fit: result.grade.fit, attempts: result.attempts.length }),
+    printed: ({ summary: s, decision }) => ({ summary: { valid: `${s.valid}/${s.trials}`, grounded: `${s.grounded}/${s.trials}`, nothing_lost: `${s.nothing_lost}/${s.trials}`, fit: `${s.fit}/${s.trials}`,
+      stable: `${s.stable}/${s.cases}`, valid_at_once: s.valid_at_once, repairs: s.repairs, output_tokens: s.output_tokens }, decision }) }),
   // The wording cases are asked mid-morning of their today, in their time zone; their wording ships only from a complete run.
   wording: Object.freeze({ file: WORDING_CASES_FILE, count: Object.values(GROUPS).reduce((total, count) => total + count, 0), load: loadWordingCases, fixture: "wording",
     askedAt: () => "2026-10-26T17:00:00.000Z", timeoutMs: 60_000, maxTimeoutMs: 85_000, traces: false, exitsOnFailure: true,
     grade: (caseDefinition, { response }) => gradeWording(caseDefinition, response),
     summarize: (trials, complete) => { const summary = summarizeRules(trials); return Object.freeze({ ...summary, wording_ships: complete && summary.wording_ships }); },
-    decide: (summary, complete) => Object.freeze({ complete, passes: complete ? summary.wording_ships : null, rules: summary.rules }) }),
+    decide: (summary, complete) => Object.freeze({ complete, passes: complete ? summary.wording_ships : null, rules: summary.rules }),
+    progress: (result) => ({ kind: "echo-ask-wording-evaluation-progress-v1", case_id: result.case_id, trial: result.trial, outcome: result.outcome, rules: result.grade.rules }),
+    printed: ({ summary: s }) => ({ wording_ships: s.wording_ships, rules: Object.fromEntries(Object.entries(s.rules).map(([name, rule]) => [name, `${rule.passed_trials}/${rule.trials}`])), measures: s.measures }) }),
   // The follow-up cases (ADR-0053): the request saves the follow-ups its writer drafts, so the writer is told to draft
   // them; a trial is graded on what the release saved. Like the wording cases they keep no prompt or raw reply.
   follow_ups: Object.freeze({ file: FOLLOW_UPS_CASES_FILE, count: FOLLOW_UP_CASE_IDS.length, load: loadFollowUpCases, fixture: "follow-ups",
     askedAt: (document) => document.asked_at, timeoutMs: 60_000, maxTimeoutMs: 85_000, traces: false, exitsOnFailure: true, drafts: true,
     grade: (caseDefinition, { response, drafts }) => gradeFollowUps(caseDefinition, response, drafts),
     summarize: (trials) => summarizeFollowUps(trials),
-    decide: (summary, complete) => Object.freeze({ complete, passes: complete ? summary.passes : null, drafted_on_ordinary_question: summary.drafted_on_ordinary_question }) }),
+    decide: (summary, complete) => Object.freeze({ complete, passes: complete ? summary.passes : null, drafted_on_ordinary_question: summary.drafted_on_ordinary_question }),
+    progress: (result) => ({ kind: "echo-ask-follow-ups-evaluation-progress-v1", case_id: result.case_id, trial: result.trial, outcome: result.outcome, checks: result.grade.checks }),
+    printed: ({ summary: s, decision }) => ({ passed: `${s.passed}/${s.trials}`, decision, checks: checkCounts(s.checks) }) }),
+  // The list cases (ADR-0054): research lists, so the desk returns a case's listed items as rows; a trial is graded on
+  // the writer's own reply together with the released answer, and a release from code's fallback fails. Full traces.
+  lists: Object.freeze({ file: LISTS_CASES_FILE, count: LIST_CASE_IDS.length, load: loadListCases, fixture: "lists", askedAt: (document) => document.asked_at,
+    timeoutMs: 120_000, maxTimeoutMs: 180_000, traces: true, exitsOnFailure: true,
+    grade: (caseDefinition, { reply, read, response, fallbacks }) => gradeLists(caseDefinition, { reply, read, response, fallbacks }),
+    summarize: (trials) => summarizeLists(trials), decide: decideLists,
+    progress: (result) => ({ kind: "echo-ask-lists-evaluation-progress-v1", case_id: result.case_id, trial: result.trial, checks: result.grade.checks, attempts: result.attempts.length }),
+    printed: ({ summary: s, decision }) => ({ passed: `${s.passed}/${s.trials}`, decision, checks: checkCounts(s.checks) }) }),
 });
 /** A trial makes at most two writer calls: its reply and the kernel's one repair or retry. */
 const maxModelCalls = (set) => set.count * TRIALS * 2;
@@ -60,13 +82,14 @@ export function help() {
     "  node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory [options]",
     "",
     "Options:",
-    `  --case-set SET      main (default: the ${CASE_SETS.main.count} block cases, rules 1 to 5), wording (the ${CASE_SETS.wording.count} wording cases, its three rules)`,
-    `                      or follow_ups (the ${CASE_SETS.follow_ups.count} follow-up cases: what the writer drafts, ADR-0053).`,
+    `  --case-set SET      main (default: the ${CASE_SETS.main.count} block cases, rules 1 to 5), wording (the ${CASE_SETS.wording.count} wording cases, its three rules),`,
+    `                      follow_ups (the ${CASE_SETS.follow_ups.count} follow-up cases: what the writer drafts, ADR-0053) or lists (the`,
+    `                      ${CASE_SETS.lists.count} list cases: the lists the writer places, ADR-0054).`,
     "  --cases id,id       Select cases of the set (default: all).",
     `  --trials N          Trials per case, 1 through ${TRIALS} (default: ${TRIALS}).`,
     "  --concurrency N     Model calls at once, 1 through 6 (default: 4).",
-    "  --timeout-ms N      Per-trial timeout of the whole Ask, 15000 through 180000 (default: 120000); for wording 15000",
-    "                      through 85000 (default: 60000).",
+    "  --timeout-ms N      Per-trial timeout of the whole Ask, 15000 through 180000 (default: 120000); for wording and",
+    "                      follow_ups 15000 through 85000 (default: 60000).",
     "  --writer ROUTE      openrouter (default) or claude-account: the product's personal Claude account writer, the",
     "                      same model through the Claude Agent SDK and your own signed-in claude binary.",
     "  --claude-executable PATH  With --writer claude-account: the signed-in claude binary.",
@@ -75,11 +98,11 @@ export function help() {
     "Each trial asks one synthetic question through the kernel, its answer in blocks (answer layout v2) as every Ask's is;",
     "only the writer's call goes to the model. Only a complete run decides its set's gate: every case, three trials.",
     "A smaller run is a diagnostic.",
-    "--out must be outside the repository and private; the report is written there with mode 0600. A block run keeps",
-    "full traces of every synthetic prompt and reply; a wording run keeps case ids, each trial's statements, lead and",
-    "grade, the writer prompt's digest and model metadata, never prompts or raw replies. Neither keeps a credential.",
-    "A wording run exits 0 when a complete run passes all three rules (the wording ships) and 1 otherwise; a block run",
-    "exits 0 when it completes. A usage error exits 2.",
+    "--out must be outside the repository and private; the report is written there with mode 0600. A block or list run",
+    "keeps full traces of every synthetic prompt and reply; a wording run keeps case ids, each trial's statements, lead",
+    "and grade, the writer prompt's digest and model metadata, never prompts or raw replies. None keeps a credential.",
+    "A wording, follow_ups or lists run exits 0 when a complete run passes its set and 1 otherwise; a block run exits 0",
+    "when it completes. A usage error exits 2.",
   ].join("\n");
 }
 
@@ -89,7 +112,7 @@ export function parseArgs(argv) {
   if (readFlags(argv, options, {
     "--credential-file": (value) => { options.credentialFile = value; },
     "--out": (value) => { options.out = value; },
-    "--case-set": (value) => { if (!Object.hasOwn(CASE_SETS, value)) throw new Error("--case-set must be main, wording or follow_ups"); options.caseSet = value; },
+    "--case-set": (value) => { if (!Object.hasOwn(CASE_SETS, value)) throw new Error("--case-set must be main, wording, follow_ups or lists"); options.caseSet = value; },
     "--cases": (value) => { options.caseIds = list(value); },
     "--trials": (value) => { options.trials = Number(value); },
     "--concurrency": (value) => { options.concurrency = Number(value); },
@@ -109,12 +132,12 @@ export function parseArgs(argv) {
 }
 
 /**
- * The files a report fingerprints, beside the commit and its uncommitted changes: both case sets, the pre-registration
+ * The files a report fingerprints, beside the commit and its uncommitted changes: every case set, the pre-registration
  * and every module the evaluation loads (its own, the kernel's writer, checks and shared modules, the answer contract and
  * the writer routes), found by following its imports.
  */
-const codeFiles = () => Object.freeze(["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/wording-cases.json", "tools/evals/ask-blocks/follow-ups-cases.json", "tools/evals/ask-blocks/README.md",
-  ...importedModules(ROOT, ["tools/evals/ask-blocks/run.mjs"])]);
+const codeFiles = () => Object.freeze(["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/wording-cases.json", "tools/evals/ask-blocks/follow-ups-cases.json", "tools/evals/ask-blocks/lists-cases.json",
+  "tools/evals/ask-blocks/README.md", ...importedModules(ROOT, ["tools/evals/ask-blocks/run.mjs"])]);
 
 /** One block case item as the desk releases it, with this evaluation's ids and fixtures (shared/ask-cases.mjs). */
 export const deskItem = (caseId, index, item) => releasedItem("blocks", caseId, index, item);
@@ -129,15 +152,20 @@ export function evidenceIdsOf(citations, items) {
   return Object.freeze(citations.map((entry, at) => byKey.get(personAnswerCitationKeyV8(entry.citation)) ?? `citation ${at + 1}`));
 }
 
-/** The writer's prompts and reply schema for one block case, recorded through the kernel with a writer that answers nothing. */
+/** The items of a case the desk's list returns, in order: those it marks `listed` (the list cases'). */
+const listedOf = (caseDefinition, items) => items.filter((_, at) => caseDefinition.items[at].listed === true);
+
+/** The writer's prompts and reply schema for one traced case, recorded through the kernel with a writer that answers nothing. */
 export async function captureWriterPrompts(caseDefinition, document, generation, set = CASE_SETS.main) {
   let captured = null;
   const { model } = scriptedModel(caseDefinition, (input) => {
     captured ??= Object.freeze({ system_prompt: input.system_prompt, user_prompt: input.user_prompt, schema: input.schema });
     // A reply that says nothing, in layout v2's shape.
-    return { value: { lists: [], blocks: [], not_found: [caseDefinition.research.need] }, finish_reason: "stop", usage: null, provider_latency_ms: null };
+    return { value: { lists: [], blocks: [], not_found: [caseDefinition.research.need ?? caseDefinition.research.needs[0]] }, finish_reason: "stop", usage: null, provider_latency_ms: null };
   }, "the capture runs only research and the Ask writer");
-  await caseAsk(caseItems(set.fixture, caseDefinition), document, set.askedAt(document), model, generation).answer({ question: caseDefinition.question, signal: AbortSignal.timeout(30_000) });
+  const items = caseItems(set.fixture, caseDefinition);
+  await caseAsk(items, document, set.askedAt(document), model, generation, undefined, { listed: listedOf(caseDefinition, items) })
+    .answer({ question: caseDefinition.question, signal: AbortSignal.timeout(30_000) });
   if (captured === null) throw new Error(`case ${caseDefinition.id}: research never reached the writer`);
   return captured;
 }
@@ -146,7 +174,8 @@ export async function captureWriterPrompts(caseDefinition, document, generation,
  * One trial (README.md, "Procedure"): Ask on one case of `set` through the kernel end to end with answer layout v2,
  * research scripted and each writer call sent to the route. The kernel reads, checks, repairs and releases; the harness
  * adds no repair, keeps each call's usage and its system prompt's digest, reads the released answer's blocks and grades
- * it as `set` does: a block case against `evidence`, what the writer was given. A block trial also keeps each call's raw
+ * it as `set` does: a block case against `evidence`, what the writer was given, and a list case on the writer's own
+ * last reply beside the release and the run's fallback count (its last audit entry's). A traced trial also keeps each call's raw
  * reply and prompts (those `prompts` recorded, or its own when the kernel asked with others, as for a repair) and the
  * released answer; a wording trial keeps only its outcome and gaps beside its grade (`prompts` is null).
  */
@@ -180,8 +209,11 @@ export async function runTrial(set, caseDefinition, trial, prompts, evidence, do
   // A follow-up trial's request saves what its writer drafts (ADR-0053): the release hands the checked drafts to this sink.
   const drafts = [];
   const followUps = set.drafts === true ? { request_id: `ask_eval-${caseDefinition.id}-${trial}`, sink: { save: (saved) => { drafts.push(...saved); } } } : undefined;
+  // The run's audit entries: the last one counts the times code answered in the writer's place.
+  const audits = [];
   try {
-    response = await caseAsk(items, document, set.askedAt(document), model, generation, followUps).answer({ question: caseDefinition.question, signal: AbortSignal.timeout(options.timeoutMs) });
+    response = await caseAsk(items, document, set.askedAt(document), model, generation, followUps, { listed: listedOf(caseDefinition, items), on_audit: (entry) => { audits.push(entry); } })
+      .answer({ question: caseDefinition.question, signal: AbortSignal.timeout(options.timeoutMs) });
   } catch (caught) {
     error = safeError(caught);
   }
@@ -192,7 +224,9 @@ export async function runTrial(set, caseDefinition, trial, prompts, evidence, do
     entry.valid = last && read?.valid === true;
     if (set.traces && last && entry.error === undefined && read !== null && !read.valid) entry.problems = read.problems;
   }
-  const grade = set.grade(caseDefinition, { read, response, evidence, drafts });
+  // The writer's own reply, for a traced set: its last call that did not fail.
+  const reply = set.traces ? attempts.filter((entry) => entry.error === undefined).at(-1)?.value ?? null : null;
+  const grade = set.grade(caseDefinition, { read, response, evidence, drafts, reply, fallbacks: audits.at(-1)?.fallbacks ?? null });
   const kept = set.traces ? { attempts, read, response }
     : { outcome: response?.outcome ?? null, gaps: Object.freeze((response?.parts ?? []).flatMap((part) => (part.gap === undefined ? [] : [part.gap]))), attempts };
   return Object.freeze({ case_id: caseDefinition.id, ...(caseDefinition.group === undefined ? {} : { group: caseDefinition.group }), trial, ...kept,
@@ -223,11 +257,7 @@ export async function run(options, dependencies = {}) {
       tasks.push(async () => {
         const own = prompts.get(caseDefinition.id) ?? null;
         const result = await runTrial(set, caseDefinition, trial, own, own === null ? null : evidenceOf(own.user_prompt), document, loaded.structured_output, loaded.generation, options);
-        progress(`${JSON.stringify(set.traces
-          ? { kind: "echo-ask-blocks-evaluation-progress-v1", case_id: result.case_id, catalog: "built", trial, valid: result.grade.valid, grounded: result.grade.grounded,
-            nothing_lost: result.grade.nothing_lost, fit: result.grade.fit, attempts: result.attempts.length }
-          : set.drafts === true ? { kind: "echo-ask-follow-ups-evaluation-progress-v1", case_id: result.case_id, trial, outcome: result.outcome, checks: result.grade.checks }
-          : { kind: "echo-ask-wording-evaluation-progress-v1", case_id: result.case_id, trial, outcome: result.outcome, rules: result.grade.rules })}\n`);
+        progress(`${JSON.stringify(set.progress(result))}\n`);
         return result;
       });
     }
@@ -282,17 +312,8 @@ if (invokedDirectly) {
     if (options.help) process.stdout.write(`${help()}\n`);
     else {
       const { reportPath, report } = await run(options);
-      const s = report.summary;
-      process.stdout.write(`${JSON.stringify(report.case_set === "follow_ups"
-        ? { report_path: reportPath, route: report.model.route, complete: report.complete, passed: `${s.passed}/${s.trials}`, decision: report.decision,
-          checks: Object.fromEntries(Object.entries(s.checks).map(([name, check]) => [name, `${check.passed}/${check.trials}`])) }
-        : report.case_set === "wording"
-        ? { report_path: reportPath, route: report.model.route, complete: report.complete, wording_ships: s.wording_ships,
-          rules: Object.fromEntries(Object.entries(s.rules).map(([name, rule]) => [name, `${rule.passed_trials}/${rule.trials}`])), measures: s.measures }
-        : { report_path: reportPath, route: report.model.route, complete: report.complete, summary: { valid: `${s.valid}/${s.trials}`, grounded: `${s.grounded}/${s.trials}`,
-          nothing_lost: `${s.nothing_lost}/${s.trials}`, fit: `${s.fit}/${s.trials}`, stable: `${s.stable}/${s.cases}`, valid_at_once: s.valid_at_once, repairs: s.repairs,
-          output_tokens: s.output_tokens }, decision: report.decision })}\n`);
-      // A wording run that does not ship its wording exits 1, as its own evaluation did; a block run exits 0.
+      process.stdout.write(`${JSON.stringify({ report_path: reportPath, route: report.model.route, complete: report.complete, ...CASE_SETS[report.case_set].printed(report) })}\n`);
+      // A wording, follow-up or list run that does not pass exits 1, as the wording evaluation did; a block run exits 0.
       if (CASE_SETS[report.case_set].exitsOnFailure && report.decision.passes !== true) process.exitCode = 1;
     }
   } catch (error) {

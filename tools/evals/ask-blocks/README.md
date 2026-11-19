@@ -1083,6 +1083,98 @@ node tools/evals/ask-blocks/run.mjs --run --case-set follow_ups \
   --credential-file /absolute/private/credential-file --out /absolute/private/report-directory
 ```
 
+## List cases (pre-registered), 2026-11-19
+
+[ADR-0054](../../../docs/decisions/ADR-0054-research-advises-the-writer-decides.md):
+research advises, the writer decides. The writer places a `list` block (the
+whole list, narrowed by one row fact with `where`, or hand-picked by
+`members`) and code fills it from the desk; code no longer states a list
+because research labelled a need. This set measures whether the writer
+places the lists a question needs, and only those. It is written before any
+run; nothing here is run yet.
+
+- Cases: `lists-cases.json`, seven, synthetic, one program (THERM), asked
+  on 2026-10-08 at 10:00 in America/Los_Angeles by Noor Haddad. Each lists
+  the Jira tickets created on October 4 (`L1`, two to nine tickets that
+  differ in status or owner, so a placed list is released as a captioned
+  table). They cover the six cases ADR-0054 names, its second as two:
+  - `which-items`: which tickets exist. The writer places `L1` whole.
+  - `part-by-fact`: the tickets Sam Roy owns. The writer narrows `L1` to
+    `E2` and `E5`, by `where` or by `members`.
+  - `part-by-meaning`: the tickets that mention the probe recall; research
+    read 6 of the 9 in full. The writer hand-picks `E1`, `E3` and `E6`, and
+    the answer says only 6 of the 9 were read.
+  - `one-named-item`: who owns one named ticket in the list. The writer
+    places no list, and the answer names Ana Silva.
+  - `note-not-found`: a question in two parts, research's note says one was
+    not found. The answer gives the date found, and both the reply's
+    `not_found` and the released gap say who approved the recall was not
+    found.
+  - `note-disagrees`: research marks a need `not_found` whose fact an
+    opened ticket states. The answer follows the ticket (Ana Silva) and
+    never says the sign-off was not found.
+  - `how-many`: how many tickets. The writer places `L1` whole, and the count
+    the reader sees is the list's (7).
+- Procedure: research is scripted (`research.steps`): it lists first, so the
+  listed tickets are `E1` to `En` in case order, then opens some of them or
+  searches, then finishes with needs of each kind and status. The desk's list
+  returns the listed tickets as rows without text, and opening one returns
+  its text under the same id. Only the writer is on the model, with the
+  kernel's own prompt, schema, checks and one repair. The report keeps full
+  traces; all data is synthetic.
+- Checks per trial (`lists.mjs`), each trial graded from the writer's own
+  reply (its last call that did not fail) together with the released answer:
+  - `released`: an answer was released and reads as valid blocks.
+  - `own_reply`: the writer replied and the run's fallback count (its last
+    audit entry's) is 0. A trial whose release came from code's fallback
+    fails here, so code's list cannot pass for the writer's choice.
+  - `placed`, from the reply: for a whole list, an entry for `L1` with no
+    narrowing or with `members` naming every member; for a part, an entry
+    for `L1` with `where` or `members` that is not the whole list; for none,
+    no list placed.
+  - `shown`, from the answer: for a whole list, one captioned table whose
+    rows cite every member and whose caption counts the whole list; for a
+    part, one captioned table whose rows cite exactly the case's members and
+    whose caption starts `<k> of the <N>`; for none, no captioned table.
+  - `says`: the answer writes one of each listed set of words.
+  - `not_found_mentions`: one of each set of words is in the reply's
+    `not_found` and in the released gap or `gap_details.not_found`.
+    `not_found_never_mentions`: none of the words is in either.
+  - `count`: the caption counts `expect.count`, and no statement outside the
+    table writes another number directly before the noun, or one word before
+    it ("8 Jira tickets").
+- Rule: **the set passes when at least 19 of its 21 trials pass every check
+  of their case, and no case passes fewer than 2 of its 3 trials. Only a
+  complete run (every case, three trials) decides; a run that does not pass
+  exits 1.**
+
+Run it (it needs a writer credential and costs money):
+
+```sh
+npm run build:workspaces
+node tools/evals/ask-blocks/run.mjs --run --case-set lists \
+  --credential-file /absolute/private/credential-file --out /absolute/private/report-directory
+```
+
+The same cases are run on `main` for the record, with the harness of the
+commit that registered them:
+
+```sh
+git worktree add /absolute/private/main-record main
+git -C /absolute/private/main-record checkout <commit that registered the list cases> -- tools/evals
+cd /absolute/private/main-record && npm ci && npm run build:workspaces
+node tools/evals/ask-blocks/run.mjs --run --case-set lists --credential-file /absolute/private/credential-file --out /absolute/private/report-directory
+```
+
+That runs the changed harness against `main`'s kernel with uncommitted files.
+`checkout -- tools/evals` stages them, so `git diff` and the report's
+`code.before.tracked_patch_sha256` do not show them; the report's
+`code.before.files_sha256` records each of them by its digest. On `main` the
+grader reads the reply's top-level `lists` as the writer's placements. There
+code states every list a `which_items` need cites whatever the writer
+replies, so `shown` passes for `which-items` and `how-many` while `placed`
+depends on the reply; the record shows each check on its own.
+
 ## Wording records
 
 The wording evaluation's dated records, as they were written and run; "this

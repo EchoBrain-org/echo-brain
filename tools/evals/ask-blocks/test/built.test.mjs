@@ -71,7 +71,7 @@ test("reads every block of a released answer into the common blocks, each claim 
     { kind: "answer", claims: [{ text: "Three things block the DVT gate.", evidence: ["E1", "E2"] }] },
     { kind: "prose", title: "Why", claims: [{ text: "The gate opens only when all three are done.", evidence: ["E1"] }] },
     { kind: "list", ordered: true, title: "Steps", claims: [{ text: "Fix the fan stall in firmware 2.3.", evidence: ["E2"] }, { text: "Run the 72-hour soak.", evidence: ["E4"] }] },
-    { kind: "table", title: "Blocking tickets", columns: ["Ticket", "Status"], rows: [{ cells: ["THERM-482", "In Progress"], evidence: ["E2"] }, { cells: ["THERM-488", "Blocked"], evidence: ["E3"] }] },
+    { kind: "table", title: "Blocking tickets", caption: "2 tickets block the gate", columns: ["Ticket", "Status"], rows: [{ cells: ["THERM-482", "In Progress"], evidence: ["E2"] }, { cells: ["THERM-488", "Blocked"], evidence: ["E3"] }] },
     { kind: "timeline", title: "Dates", events: [{ date: "2026-10-08", text: "THERM-482 was opened.", evidence: ["E2"] }, { date: "2026-10-27", text: "The soak was set.", who: "Priya Raman", evidence: ["E4"] }] },
     { kind: "card", title: "THERM-488", card_kind: "ticket", facts: [{ label: "Status", value: "Blocked", evidence: ["E3"] }, { label: "Owner", value: "Dev Mehta", evidence: ["E3"] }] },
     { kind: "quote", text: "The DVT gate opens only when THERM-482 is fixed", from: "DVT readiness review", evidence: ["E1"] },
