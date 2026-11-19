@@ -392,6 +392,28 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     if (state === "complete") expect(rendered.result.response.parts[0]!.gap_details).toEqual({ not_found: "Not found: tickets assigned to Casey." });
     else expect(rendered.result.response.parts[0]).not.toHaveProperty("gap_details");
   });
+  // A reply whose only content is that none is the writer's reply (ADR-0054): the fallback never states the list it said
+  // none of, and the answer says what a selection that matched nothing says, its absence typed only over a complete list.
+  it.each([["complete", {}], ["truncated", { ended: false, truncated: true }], ["untested dates", { unchecked: { count: 2, dates: ["updated" as const] } }]] as const)(
+    "keeps an explicit none with nothing else as the writer's reply, never stating the list: %s", async (state, extra) => {
+      const rendered = await alone({ bundle: listBundle(50, 0, [list("L1", ids(1, 50), extra)], [WI(["L1"])]), replies: [use({ id: "L1", members: [] })] })
+        .render("Which tickets are assigned to Casey?");
+      const part = rendered.result.response.parts[0]!;
+      expect([part.statements, part.blocks, rendered.result.response.citations, rendered.fallbacks]).toEqual([[], undefined, [], 0]);
+      expect(rendered.outcome).toBe(state === "complete" ? "not_found" : "partial");
+      if (state === "complete") expect(part).toMatchObject({ status: "not_found", gap: "I couldn't find this in the sources you can access.", gap_details: { not_found: "I couldn't find this in the sources you can access." } });
+      else expect(part).not.toHaveProperty("gap_details");
+      if (state === "truncated") expect(part.gap).toContain(LEG);
+    });
+  it("ignores a list block's title and never releases it: a list block has none (ADR-0054)", async () => {
+    const title = "Tickets mentioning the recall";
+    const reply = writerReply([REVIEW]);
+    const rendered = await alone({ bundle: eightAnd1([C(["E9"])]), replies: [{ ...reply, blocks: [...reply.blocks, { block: "list", list: "L1", members: ["E1", "E2"], title }] }] }).render("Which tickets mention the recall?");
+    const part = rendered.result.response.parts[0]!;
+    expect(part.statements.map(statement => statement.text)).toEqual([REVIEW.text, `2 of the 8 tickets created on October 4, 2026: ${facts(1)}; ${facts(2)}.`]);
+    expect(blocksOf(rendered).map(block => "title" in block)).toEqual([false, false]);
+    expect(JSON.stringify(rendered.result.response)).not.toMatch(/mentioning/iu);
+  });
   it("leaves an explicit none's absence untyped over an incomplete list no which_items need cites", async () => {
     const research = listBundle(50, 1, [list("L1", ids(1, 50), { unverified_end: true })], [C(["E51"])]);
     const rendered = await alone({ bundle: research, replies: [writerReply([{ text: "The review approved the plan.", evidence: ["E51"] }], { lists: [{ id: "L1", members: [] }], not_found: ["tickets assigned to Casey"] })] })

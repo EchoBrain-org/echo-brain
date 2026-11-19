@@ -927,9 +927,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           // Only an answer that drafted follow-ups lists them (ADR-0053), so any other keeps its earlier shape.
           ...followUpIds,
         });
-        // What of the reply survived the check, before byte fitting: a statement, a placed list's rows, something it did not
-        // find (its own or a selection that matched none), or a follow-up it drafted (ADR-0054).
-        const survived = reading.length > 0 || notFound.length > 0 || drafts.length > 0;
+        // What of the reply survived the check, before byte fitting: a statement, a list it placed that code filled (its rows,
+        // a selection that matched none, or a hand-pick of none: the writer saying no member answers), something it did not
+        // find, or a follow-up it drafted (ADR-0054).
+        const survived = reading.length > 0 || placedLists.size > 0 || notFound.length > 0 || drafts.length > 0;
         return { result, used, statements: reading.length, survived, dropped_lists: droppedLists };
       };
       // A reply is usable when something of it survives the check. Only one of which nothing survives takes the fallback
