@@ -188,6 +188,23 @@ describe('a project', () => {
   });
 });
 
+describe('a follow-up\'s own day on its row (ADR-0053)', () => {
+  it('reads two same-worded actions due on different days apart, and says nothing for one with no day', async () => {
+    const { ProjectLevel } = await import('../../src/renderer/screens/altitude.js');
+    const rows = [
+      item('d1', THERMAL, { expected: 'Send quote', due_on: '2026-11-03' }), item('d2', THERMAL, { expected: 'Send quote', due_on: '2026-11-05' }),
+      item('d3', THERMAL, { expected: 'Book the lab' }),
+    ];
+    const tree = render(ProjectLevel({ state: await stateWith({ level: 'project', project_id: THERMAL.project_id, reads: { [THERMAL.project_id]: read(rows) } }) }));
+    const row = (id: string) => byTestId(tree, 'alt-item').find(entry => entry.props['data-item'] === `itm_${id}`)!;
+    expect(byTestId(row('d1'), 'alt-item-due').map(text)).toEqual([' · Due Nov 3']);
+    expect(byTestId(row('d2'), 'alt-item-due').map(text)).toEqual([' · Due Nov 5']);
+    expect(text(row('d1'))).not.toBe(text(row('d2')));
+    expect(byTestId(row('d3'), 'alt-item-due')).toEqual([]);
+    expect(text(row('d3'))).not.toContain('Due');
+  });
+});
+
 describe('a person', () => {
   it('shows their follow-ups project by project, each project zooming in', async () => {
     const { PersonLevel } = await import('../../src/renderer/screens/altitude.js');

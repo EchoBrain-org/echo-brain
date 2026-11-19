@@ -533,3 +533,24 @@ describe('a meeting action with a due date, on its page', () => {
     }
   });
 });
+
+describe('a follow-ups row says its own day (ADR-0053)', () => {
+  it('reads two same-worded actions due on different days apart, and says nothing for one with no day', async () => {
+    const store = await startStore();
+    const { FollowUps } = await import('../../src/renderer/screens/follow-ups.js');
+    // The clock is pinned for the whole file (storeLifecycle) at Nov 18.
+    const rows = [followUp(1, { expected: 'Send quote', due_on: '2026-11-20' }), followUp(2, { expected: 'Send quote', due_on: '2026-11-19' }),
+      followUp(3, { expected: 'Book the lab' }), chatDraft(4, { due_on: '2026-11-18' })];
+    const list: FollowUpList = {
+      kind: 'list', seq: 1, scope: 'involved', title: null, loading: false, items: rows, live: {}, reading: false,
+      reads: [{ parts: ['active'], pages: [{ cursor: null, ids: rows.map(row => row.item_id) }], next: null }], summary: { ...EMPTY_SUMMARY, open: 3, unsent: 1 }, stage: null,
+      ticks: {}, sends: {}, expanded: {}, busy: false, said: null, picker: null, stale: false,
+    };
+    const tree = render(FollowUps({ state: store.getState(), list }));
+    const row = (id: string) => byTestId(tree, 'follow-up-row').find(entry => entry.props['data-item'] === id)!;
+    expect(byTestId(row(rows[0]!.item_id), 'follow-up-row-due').map(text)).toEqual(['Due Nov 20']);
+    expect(byTestId(row(rows[1]!.item_id), 'follow-up-row-due').map(text)).toEqual(['Due tomorrow']);
+    expect(byTestId(row(rows[2]!.item_id), 'follow-up-row-due')).toEqual([]);
+    expect(byTestId(row(rows[3]!.item_id), 'follow-up-row-due').map(text)).toEqual(['Due today']);
+  });
+});

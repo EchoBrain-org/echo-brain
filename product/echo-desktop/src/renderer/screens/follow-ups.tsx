@@ -188,6 +188,8 @@ function Row({ state, list, item, label, name, now, ticking }: {
         <span class={`follow-up-title${reading ? ' reading-title' : ''}`} data-reading={reading || undefined}>{label}</span>
         {item.kind !== 'action' && <span class="follow-up-kind" title={itemKind(item, state.tools?.items)}>{KIND_ICON[item.kind]()}</span>}
         {fromChat(item) && <span class="follow-up-from" data-testid="follow-up-from">{FROM_CHAT}</span>}
+        {/* Its own day (ADR-0053), faint like where it came from: two same-worded actions read apart. */}
+        {item.due_on !== null && <span class="follow-up-from" data-testid="follow-up-row-due">{dueOnWords(item.due_on, now)}</span>}
       </button>
       <Owner state={state} busy={list.busy} picking={list.picker?.item_id === item.item_id} item={item} name={name} flat />
       <span class="follow-up-tile" title={projects.length > 0 ? projects.map(project => project.name).join(', ') : undefined}>

@@ -4,6 +4,8 @@ import type { OpenItemView, ProjectSummary } from '../../shared/protocol.js';
 import { byDecision, byOwner, byProject, needsAttention, rollup, unowned, waitedDays, type Face, type Health } from '../altitude.js';
 import { identity, initial, initials } from '../format.js';
 import { itemKind, itemTitle, monthDay } from '../needs.js';
+// A follow-up's own day on its row (ADR-0053).
+import { dueOnWords } from '../needs.js';
 import {
   altitudeProjects, awaitingLive, loadProjects, openCategory, openFollowUp, openFollowUps, openNewProject, openProject, shownItem, zoomOut, zoomTo, type AltLevel,
   type NeedCategory, type ProjectRead, type State,
@@ -79,7 +81,9 @@ function ItemRow({ state, item, now, reading }: { state: State; item: OpenItemVi
       mark={<Ring fraction={shown.state === 'done' ? 1 : 0} tone={shown.state === 'done' ? 'done' : needs ? 'signal' : 'muted'} dashed={shown.state === 'unsent'} />}
       markTitle={waited === null ? words : `${words} · waiting ${days(waited)}`}
       who={<span class="alt-kind" data-kind={shown.kind} title={itemKind(shown, state.tools?.items)}>{KIND_ICON[shown.kind]()}</span>}
-      name={<span class={reading && awaitingLive(shown) ? 'reading-title' : undefined}>{itemTitle(shown)}</span>}
+      name={<><span class={reading && awaitingLive(shown) ? 'reading-title' : undefined}>{itemTitle(shown)}</span>
+        {/* Its own day (ADR-0053), faintly: two same-worded actions read apart. */}
+        {shown.due_on !== null && <span class="faint" data-testid="alt-item-due"> · {dueOnWords(shown.due_on, now)}</span>}</>}
       needs={needs ? '!' : null} needsTitle={unowned(shown) ? 'No owner' : waited === null ? undefined : `Waiting ${days(waited)}`}
       people={unowned(shown) ? <NoOwner /> : <FaceMark membership_id={shown.owner.membership_id} name={shown.owner.name} />}
       progress={waited === null ? null : `${waited}d`}
