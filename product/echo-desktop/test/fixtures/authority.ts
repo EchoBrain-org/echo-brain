@@ -92,7 +92,7 @@ interface OpenItem {
   item_id: string; run_id: string | null; kind: 'action' | 'ticket' | 'page';
   /** A follow-up from a chat has none: it is never `readable`, and its decision here is never shown. */
   decision: { approval_id: string; record_sha256: string; title: string; first_line: string | null; approved_at: string; project_ids: string[] };
-  /** ECHO's own due date, a calendar day: only a follow-up from a chat has one. */
+  /** ECHO's own due date, a calendar day: a follow-up from a chat's own, or a meeting action's day as its review states it. */
   due_on?: string | null;
   /** Ari can read its decision. */
   readable: boolean;
@@ -846,7 +846,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       { ...unsent, item_id: 'itm_00000000-0000-4000-8000-000000000032', kind: 'page', relation: 'needs_updating', expected: 'pilot starts next week',
         opens: true, live: { citation: PRD_PAGE, says_now: 'starts after freeze' }, owner: { ...ARI, match: 'approver' } },
       ...MEETING_ACTIONS.map((action, index): OpenItem => ({ ...unsent, item_id: `itm_00000000-0000-4000-8000-00000000003${8 + index}`, kind: 'action',
-        relation: 'needs_updating', expected: action.text, opens: false, live: {}, owner: ownerOf(action.signal_id) })),
+        // Its day is the one its review states (ADR-0053): read from the proposal's item, so the two cannot disagree.
+        relation: 'needs_updating', expected: action.text, due_on: PILOT_ITEMS.find(item => item.signal_id === action.signal_id)?.due_on ?? null,
+        opens: false, live: {}, owner: ownerOf(action.signal_id) })),
     );
   };
   /** A destination group's key: its projects, and whether they are kept for Ari alone (the route says `private: true`). */
