@@ -279,8 +279,8 @@ export function agenticListUncheckedNoticeV1(list: Pick<AgenticListEvidenceV1, "
 
 /**
  * Whether code reads a list for a need (ADR-0041), from its declared kind alone: a which_items need research has not
- * given up on (found, or open when research stopped), whose lists code states, or a which_say need of any status, whose
- * list code counts, since "k of N checked" qualifies "none of them" as much as "these". A content need's list ids, and
+ * given up on (found, or open when research stopped), whose lists code states, or a which_say need of any status, which
+ * must cite the list whose members it reads. A content need's list ids, and
  * a need without a kind, carry no meaning. The finish check and the answer read this one definition.
  */
 export function agenticNeedReadsListV1(need: Pick<AgenticResearchNeedV1, "kind" | "status">): boolean {
@@ -865,4 +865,3 @@ export function agenticListSelectionNotFoundV1(noun: AgenticListNounFormsV1, fil
 export function agenticListShownNoteV1(shown: number, selected: number): string | undefined {
   return shown < selected ? `(first ${shown} shown)` : undefined;
 }
-

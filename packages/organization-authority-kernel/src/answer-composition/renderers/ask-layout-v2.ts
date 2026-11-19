@@ -51,11 +51,10 @@ export function orderAskBlocksV2<L extends { readonly block?: number }, S extend
     : promoted ? [{ ...first, item: Object.freeze({ block: first.item.block, kind: "answer" as const }) }] : [];
   const rest = sentences.filter(sentence => sentence.item.kind !== "answer" && !(promoted && sentence === first));
   const day = (sentence: S) => sentence.item.kind === "event" ? sentence.item.date : "";
-  // Read by property, not `in`: a list may be any value, and one with no block is code's own.
-  const placedAt = (list: L): number | undefined => list.block;
-  const own = lists.filter(list => placedAt(list) === undefined);
-  const placed = lists.filter(list => placedAt(list) !== undefined);
-  const blocks = [...new Set([...rest.map(sentence => sentence.item.block), ...placed.map(list => placedAt(list)!)])]
+  // A list with no block is code's own.
+  const own = lists.filter(list => list.block === undefined);
+  const placed = lists.filter(list => list.block !== undefined);
+  const blocks = [...new Set([...rest.map(sentence => sentence.item.block), ...placed.map(list => list.block!)])]
     .sort((left, right) => left - right);
   return Object.freeze([
     ...answers, ...own,
@@ -63,7 +62,7 @@ export function orderAskBlocksV2<L extends { readonly block?: number }, S extend
       const items = rest.filter(sentence => sentence.item.block === block);
       // A stable sort, so events of one day keep the writer's order.
       const shown = items.filter(sentence => sentence.item.kind !== "text").sort((left, right) => day(left) < day(right) ? -1 : day(left) > day(right) ? 1 : 0);
-      return [...shown, ...items.filter(sentence => sentence.item.kind === "text"), ...placed.filter(list => placedAt(list) === block)];
+      return [...shown, ...items.filter(sentence => sentence.item.kind === "text"), ...placed.filter(list => list.block === block)];
     }),
   ]);
 }

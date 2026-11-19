@@ -235,7 +235,7 @@ function privateItem(item: Entry["item"]): boolean {
   return item.visibility === "only_me" || item.visibility === "approver_only";
 }
 
-/** Lowercase, each run of spaces one space: how a member's name is matched in a statement. */
+/** Lowercase, each run of spaces one space: how two follow-ups' tasks and owners are compared. */
 function folded(value: string): string { return value.toLowerCase().replace(/\s+/gu, " ").trim(); }
 /**
  * A completed answer can report source coverage separately from a requested
@@ -302,7 +302,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         return new Set([...recorded, ...written]);
       };
 
-      // ---- lists (ADR-0041): what the plan's declared kinds ask of them, and how the writer sees them ----
+      // ---- lists (ADR-0041, ADR-0054): how the writer sees them, and what code states of them with no usable reply ----
       const lists = bundle.lists ?? [];
       const listById = new Map(lists.map(list => [list.id, list]));
       /** Which list member an item is, or is part of: an opened page's section is its page. */
@@ -324,7 +324,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         return [{ cited, declares: cited.every(list => list.members.length === 0) }];
       });
       const viewOf = (list: (typeof lists)[number], cap?: number) => agenticWriterListV1(list, rows.get(list.id)!, cap);
-      /** Every list as code reads it: code states, notes and filters each list the plan's kinds read, past the writer's bound too. */
+      /** Every list as code reads it, past the writer's bound too: what code fills, states and reports the limits of. */
       const views = new Map(lists.map(list => [list.id, viewOf(list)]));
       // The writer sees at most 5 lists: those the plan's needs cite, in plan order, whatever kind of need cites them, then
       // the others in the order research read them (ADR-0054).
@@ -418,16 +418,16 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const researchNotes = bytes(JSON.stringify(notes)) <= noteRoom ? { research_notes: notes } : {};
 
       // ---- the writer's sentences rest on text (W1) -------------------------
-      /** A sentence resting on list rows or list ids: it cites one the writer saw, and no evidence text it read. */
       /**
        * The lists a sentence uses (ADR-0054): each the writer was shown whose id it cites, or a row of which it cites that the
        * writer saw as a row only. A sentence citing a member's text alone uses no list.
        */
-      const listsCitedBy = (evidence: readonly string[]): readonly AgenticListIdV1[] => [...new Set(evidence.flatMap(id => {
+      const listsCitedBy = (ids: readonly string[]): readonly AgenticListIdV1[] => [...new Set(ids.flatMap(id => {
         const list = parseAgenticListIdV1(id);
         if (list !== null) return writerById.has(list) ? [list] : [];
         return shownRows.has(id) ? writerLists.filter(view => view.members.some(member => member.id === id)).map(view => view.id) : [];
       }))];
+      /** A sentence resting on list rows or list ids: it cites one the writer saw, and no evidence text it read. */
       const restsOnRows = (sentence: AnswerSentence) => !sentence.evidence.some(short => textGiven.has(short)) &&
         sentence.evidence.some(id => shownRows.has(id) || writerById.has(parseAgenticListIdV1(id) ?? "L0"));
       // A sentence resting on rows or list ids takes the writer's one repair when a repair can still run; the repaired
@@ -530,6 +530,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       /** Whether a statement citing `shorts` would cite more items than one statement may, in blocks too (ADR-0051). */
       const overCited = (shorts: readonly string[]) => new Set(shorts.map(keyOf)).size > PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4;
       const question = partQuestion(askedQuestion);
+      /** The lists whose block a reply that takes the fallback placed and code dropped (ADR-0054): the fallback never states them. */
+      let withheld: ReadonlySet<AgenticListIdV1> = new Set();
       /**
        * The response `reply` (the writer's answer, or null) gives in blocks (ADR-0051), with an Ask again's `since`
        * (ADR-0047) or without it, and the items its citations cite, in order. With `keep`, an answer too large for its bytes
@@ -537,8 +539,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
        * the reply afresh; only the first counts the writer's corrections (`count`). `survived` says whether anything of the
        * reply survived the check, so a reply of which nothing did takes the fallback.
        */
-      /** The lists whose block a reply that takes the fallback placed and code dropped (ADR-0054): the fallback never states them. */
-      let withheld: ReadonlySet<AgenticListIdV1> = new Set();
       const respond = (reply: Answer | null, count: boolean, withSince: boolean, keep?: number) => {
         const correct = (correction: CoreRuntimeModelCorrectionV1, times?: number) => { if (count) observeCoreModelCorrectionV1(correction, times); };
         const used: Entry[] = [];
@@ -652,7 +652,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           return sentence;
         };
         /**
-         * A statement as code lays it out; a writer's item also keeps the ids it cites that the writer saw, text or rows.
+         * A statement as code lays it out; a writer's item also keeps the ids of the text it stands on (`read`).
          * `block` is the writer's block a placed list's statement reads at (orderAskBlocksV2); a list code states with no
          * usable writer reply has none.
          */
@@ -738,7 +738,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         }, naming.length + index, block));
 
         // List statements come first, then the writer's items (W6, W3). The answer (ADR-0051) reads what is kept answer first,
-        // then the lists, then the other items block by block. It has no count of statements or citations of its own: only its
+        // then the lists code states with no usable reply, then the writer's blocks in order, each placed list at its block. It has no count of statements or citations of its own: only its
         // byte bound, which cuts it from its end, and the 40 citations one statement may carry. A statement that would cite
         // more, through the private rows its list id brings, is left out whole, never cut short of them, and the statements
         // after it are kept.
