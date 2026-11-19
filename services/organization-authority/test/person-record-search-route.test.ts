@@ -1299,7 +1299,8 @@ describe("Person Layer 2 route: approved records carry their dates and their mee
       const r9 = of("r9");
       expect(r9.map((item) => [item.item_kind, item.dates, item.attributes])).toEqual([
         ["decision", { occurred: "2026-10-04T16:00:00.000Z", approved: "2026-10-05T23:30:00.000Z" }, { status: "decided", participants: "Ari Employee, Maya Chen", approved_by: "Olive Owner" }],
-        ["action", { occurred: "2026-10-04T16:00:00.000Z", approved: "2026-10-05T23:30:00.000Z", due: "2026-10-09T17:00:00.000Z" }, { due_at: "2026-10-09T17:00:00.000Z", participants: "Ari Employee, Maya Chen", approved_by: "Olive Owner" }],
+        // An action's due date is its day in the meeting's own time zone (UTC here: the meeting names none), never the instant (ADR-0053).
+        ["action", { occurred: "2026-10-04T16:00:00.000Z", approved: "2026-10-05T23:30:00.000Z", due: "2026-10-09" }, { due_at: "2026-10-09", participants: "Ari Employee, Maya Chen", approved_by: "Olive Owner" }],
       ]);
       // The open's names, "and more" past its 32, and no approver a record does not name.
       expect(of("crowd")[0]!.attributes).toEqual({ status: "decided", participants: `${people(32).map((person) => person.display_name).join(", ")}, and more` });

@@ -1,7 +1,7 @@
 -- Authority baseline V17: independent personal meeting-source progress, one approval proposal per meeting with one shared decision table,
 -- plus project context, raw Person uploads, and optional search enrichment.
--- An open item may come from a chat answer (ADR-0053): it has no run and no record, carries an optional due date, and its
--- creator may change its one line and its due date until it is closed.
+-- An open item may come from a chat answer (ADR-0053): it has no run and no record, and its creator may change its one
+-- line and its due date until it is closed. Any open item may carry a due date, a calendar day.
 -- Fresh initialization only; no V16-to-V17 transition or backfill exists, and
 -- this file is never an in-place upgrade.
 
@@ -891,8 +891,8 @@ BEGIN SELECT RAISE(ABORT, 'trigger run deletion is denied'); END;
 -- Open items (ADR-0033): one shared row per item an approved decision affects. Rows hold pointers,
 -- ECHO's own expected phrase, member ids and check verdicts; never a word read from outside ECHO.
 -- A follow-up from a chat answer (ADR-0053) has no run and no record: the approver columns name its creator, and it
--- alone may carry a due date and have its one line and due date changed. Its id is fixed by the Ask request, so the
--- primary key makes saving it twice one row.
+-- alone may have its one line and due date changed. A meeting action's item keeps the action's day, fixed like its line.
+-- A chat follow-up's id is fixed by the Ask request, so the primary key makes saving it twice one row.
 CREATE TABLE authority_impact_items_v1 (
   item_id TEXT PRIMARY KEY CHECK (item_id GLOB 'itm_*' AND length(item_id) BETWEEN 8 AND 64),
   run_id TEXT REFERENCES authority_trigger_runs_v1(run_id),
@@ -924,7 +924,6 @@ CREATE TABLE authority_impact_items_v1 (
   updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
   UNIQUE (run_id, item_key),
   CHECK ((run_id IS NULL) = (record_sha256 IS NULL)),
-  CHECK (run_id IS NULL OR due_on IS NULL),
   CHECK (run_id IS NOT NULL OR (relation = 'needs_updating' AND expected IS NOT NULL)),
   CHECK (relation IS NOT NULL OR expected IS NULL),
   CHECK ((state = 'unsent') = (sent_at IS NULL)),

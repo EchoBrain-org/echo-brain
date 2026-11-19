@@ -13,6 +13,7 @@ import { ownerProposalsV1, withoutProposedOwnersV1 } from '@echo-brain/organizat
 import { retainedMeetingSourceCoordinateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createApprovalPublisherV1, type AfterApprovedRecordHookV1, type ApprovalDecisionReceiptV1 } from './approval-publisher-v1.js';
+import { meetingActionDueOnV1 } from './person-meeting-items-v1.js';
 export {
   approvalDecisionReceiptJsonV1, createApprovalPublisherV1,
   type ApprovalDecisionReceiptV1, type ApprovalDecisionReceiptRecordV1, type AfterApprovedRecordEventV1, type AfterApprovedRecordHookV1,
@@ -236,6 +237,8 @@ interface ApprovalReviewItemV1 {
   readonly status: 'proposed' | 'decided' | 'unresolved' | null;
   /** An action's, as the meeting set it; null for a decision or when it set none. */
   readonly due_at: string | null;
+  /** The day a reader is shown for `due_at` (meetingActionDueOnV1); null without one, or when it cannot be written as a day. */
+  readonly due_on: string | null;
   /** The meeting's own words, one per cited span that quotes them. */
   readonly quotes: readonly string[];
 }
@@ -260,9 +263,9 @@ export function approvalReviewV1(snapshotJson: string): ApprovalReviewV1 {
     participants: Object.freeze([...new Set(brief.meeting.participants.map(person => person.display_name ?? person.id))]),
     items: Object.freeze([
       ...brief.decisions.map(signal => Object.freeze({ signal_id: signal.id, kind: 'decision' as const, text: signal.text, subject: signal.subject,
-        status: signal.status, due_at: null, quotes: quotes(signal) })),
+        status: signal.status, due_at: null, due_on: null, quotes: quotes(signal) })),
       ...brief.actions.map(signal => Object.freeze({ signal_id: signal.id, kind: 'action' as const, text: signal.text, subject: signal.subject,
-        status: null, due_at: signal.due_at, quotes: quotes(signal) })),
+        status: null, due_at: signal.due_at, due_on: meetingActionDueOnV1(signal.due_at, brief.meeting.time?.timezone), quotes: quotes(signal) })),
     ]),
     reasons: Object.freeze(brief.rationales.map(signal => Object.freeze({ signal_id: signal.id, text: signal.text,
       supports: Object.freeze([...signal.supports_signal_ids]), quotes: quotes(signal) }))),

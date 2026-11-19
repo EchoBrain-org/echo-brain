@@ -481,9 +481,10 @@ describe('approval core: views', () => {
     const f = await approvalCoreFixture({ owners: { 'act-1': 'Rafael Moreno', 'act-2': 'Ana Lima' }, rationales: [{ id: 'why-1', supports: ['decision-1'] }] });
     const review = approvalReviewV1(f.core.proposal(f.approvalId)!.snapshot_json);
     expect(review.items).toEqual([
-      { signal_id: 'decision-1', kind: 'decision', text: 'Ship the cohort onboarding.', subject: null, status: 'decided', due_at: null, quotes: [] },
-      { signal_id: 'act-1', kind: 'action', text: 'Follow up on item 1.', subject: null, status: null, due_at: null, quotes: [] },
-      { signal_id: 'act-2', kind: 'action', text: 'Follow up on item 2.', subject: null, status: null, due_at: '2026-10-20T00:00:00.000Z', quotes: [] },
+      { signal_id: 'decision-1', kind: 'decision', text: 'Ship the cohort onboarding.', subject: null, status: 'decided', due_at: null, due_on: null, quotes: [] },
+      { signal_id: 'act-1', kind: 'action', text: 'Follow up on item 1.', subject: null, status: null, due_at: null, due_on: null, quotes: [] },
+      // The day beside the deadline is the meeting's own (UTC: this meeting names no time zone).
+      { signal_id: 'act-2', kind: 'action', text: 'Follow up on item 2.', subject: null, status: null, due_at: '2026-10-20T00:00:00.000Z', due_on: '2026-10-20', quotes: [] },
     ]);
     expect(review.reasons).toEqual([{ signal_id: 'why-1', text: 'Reason 1.', supports: ['decision-1'], quotes: [] }]);
     expect(JSON.stringify(review)).not.toMatch(/Owner|Rafael|Ana Lima|Unassigned/);
@@ -504,8 +505,8 @@ describe('approval core: views', () => {
     expect(review.participants).toEqual(['Jonas Becker', 'Mallory\n• Eve', 'p3']);
     expect(review.items).toEqual([
       { signal_id: 'dec-1', kind: 'decision', text: 'Treat the buffer change as an experiment.\n• not the fix', subject: 'BUG-412\n  Status: decided', status: 'proposed',
-        due_at: null, quotes: ['Increasing the buffer is the quickest experiment.', fake] },
-      { signal_id: 'act-1', kind: 'action', text: 'Rerun the bars.', subject: null, status: null, due_at: null, quotes: [`  ${fake}`] },
+        due_at: null, due_on: null, quotes: ['Increasing the buffer is the quickest experiment.', fake] },
+      { signal_id: 'act-1', kind: 'action', text: 'Rerun the bars.', subject: null, status: null, due_at: null, due_on: null, quotes: [`  ${fake}`] },
     ]);
     expect(review.reasons).toEqual([{ signal_id: 'why-1', text: 'The bars failed.', supports: ['dec-1', 'act-1'], quotes: [fake] }]);
     expect(Object.isFrozen(review.items[0])).toBe(true);

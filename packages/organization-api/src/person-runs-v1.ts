@@ -163,7 +163,10 @@ export interface PersonOpenItemV1 {
   readonly current?: PersonOpenItemCurrentV1;
   readonly relation: 'conflicts' | 'needs_updating' | null;
   readonly expected: string | null;
-  /** ECHO's own due date for it, a calendar day, or null. Only a follow-up from a chat has one. */
+  /**
+   * ECHO's own due date for it, a calendar day, or null. A follow-up from a chat carries the day its creator set. A meeting's
+   * action carries the day of its approved deadline in the meeting's own time zone. The same day for every reader.
+   */
   readonly due_on: string | null;
   /** Who approved the decision; for a follow-up from a chat, who created it. */
   readonly approver: PersonOpenItemPersonV1;
@@ -542,12 +545,12 @@ function openItem(value: unknown): PersonOpenItemV1 {
   if (entry.send_included !== null && typeof entry.send_included !== 'boolean') fail('Open item send_included is invalid');
   // Send sets it, exactly as the item leaves unsent; nothing sets it before.
   if ((state === 'unsent') !== (entry.send_included === null)) fail('Open item send_included does not match its state');
-  // A follow-up from a chat has no run and no decision (ADR-0053); only one of those may be edited, sent on its own or be due.
+  // A follow-up from a chat has no run and no decision (ADR-0053); only one of those may be edited or sent on its own.
   const run_id = entry.run_id === null ? null : runId(entry.run_id, 'Open item run id');
   const permissions = can(entry.can);
   const due_on = dueOn(entry.due_on, 'Open item due date');
   if (run_id === null && Object.hasOwn(entry, 'decision')) fail('Open item from a chat names a decision');
-  if (run_id !== null && (permissions.edit || permissions.send || due_on !== null)) fail('Open item from a run cannot be edited, sent alone or be due');
+  if (run_id !== null && (permissions.edit || permissions.send)) fail('Open item from a run cannot be edited or sent alone');
   if (permissions.send && state !== 'unsent') fail('Open item send permission does not match its state');
   if (permissions.edit && (state === 'done' || state === 'not_relevant')) fail('Open item edit permission does not match its state');
   return Object.freeze({

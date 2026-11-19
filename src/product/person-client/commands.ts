@@ -256,6 +256,7 @@ Reviews belong to you, independently of connected source tools. Requests use sch
   review_open  open one approval_id
   review       decide with approval_id, command_id, snapshot_sha256, action (approve or reject), routes and owners
 Prints {ok:true,result:<operation result>}. Existing retained meetings remain reviewable after a source disconnects.
+An opened review's action says its deadline twice: due_at is the time the meeting set, and due_on is the day to show for it (YYYY-MM-DD), its calendar day in the meeting's own time zone (UTC when the meeting names none), the same day the action's follow-up carries. due_on is null with no deadline, or when the deadline cannot be written as a day.
 `,
   runs: `usage: echo-brain person runs --request <json>
 

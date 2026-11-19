@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
-  actionCount, activeTotal, expectedWords, followUpAge, followUpCount, followUpHover, followUpMark, followUpOrder, followUpProgress, followUpsWords, itemHistory, itemKind,
+  actionCount, activeTotal, followUpAge, followUpCount, followUpHover, followUpMark, followUpOrder, followUpProgress, followUpsWords, itemHistory, itemKind,
   itemLine, itemNames, itemTitle, liveFacts, markWords, meetingSuffix, monthDay, ownerAndStatus, ownerKey, ownerLine, ownerRows,
   ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
 } from '../../src/renderer/needs.js';
@@ -40,10 +40,6 @@ describe('the words Home and the follow-ups use', () => {
     expect(monthDay('2026-10-30')).toBe('Oct 30');
     expect(monthDay('2026-10-06T12:00:00.000Z')).toBe('Oct 6');
     expect(monthDay('next week')).toBeNull();
-    // A meeting action's approved deadline reads as a day; its own words, and any other line, stay as written.
-    expect(expectedWords('Prepare the document · Due 2026-11-20T17:00:00.000Z')).toBe('Prepare the document · Due Nov 20');
-    expect(expectedWords('Prepare the document')).toBe('Prepare the document');
-    expect(expectedWords('Due 2026-11-20T17:00:00.000Z is the cutoff')).toBe('Due 2026-11-20T17:00:00.000Z is the cutoff');
   });
 
   it('names a meeting\'s action by its own words, and any other item by how its live read went', () => {
@@ -443,5 +439,31 @@ describe('a follow-up from a chat (ADR-0053)', () => {
     expect(dueOnWords('2026-11-19', NOON)).toBe('Due tomorrow');
     expect(dueOnWords('2026-11-20', NOON)).toBe('Due Nov 20');
     expect(dueOnWords('2026-11-17', NOON)).toBe('Was due Nov 17');
+  });
+});
+
+describe('a meeting action with a due date (ADR-0053)', () => {
+  const NOON = Date.parse('2026-11-18T12:00:00');
+  const ari = { membership_id: 'mem_00000000-0000-4000-8000-000000000002', name: 'Ari', active: true };
+  /** Sent to Ari, due Nov 20: its words carry no deadline, its day is its own field. */
+  const due = (patch: Partial<OpenItemView> = {}) => action({ expected: 'Prepare the document', due_on: '2026-11-20', owner: { ...ari, match: 'name' }, ...patch });
+
+  it('is titled by its words alone, as written, whatever they say', () => {
+    expect(itemTitle(due())).toBe('Prepare the document');
+    // A line that happens to read like a deadline is left as written: there is no deadline in a line any more.
+    expect(itemTitle(due({ expected: 'Prepare the document · Due 2026-11-20T17:00:00.000Z' }))).toBe('Prepare the document · Due 2026-11-20T17:00:00.000Z');
+  });
+
+  it('says its day as a chat follow-up\'s is said, on its Update row and its hover, by this computer\'s calendar', () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: NOON });
+    try {
+      expect(itemLine(due(), ari.membership_id)).toBe('Due Nov 20');
+      expect(itemLine(due({ due_on: '2026-11-18' }), ari.membership_id)).toBe('Due today');
+      expect(itemLine(due({ due_on: '2026-11-19' }), ari.membership_id)).toBe('Due tomorrow');
+      expect(itemLine(due({ due_on: '2026-11-17' }), ari.membership_id)).toBe('Was due Nov 17');
+      // With no day, the row says what it is, as before.
+      expect(itemLine(due({ due_on: null }), ari.membership_id)).toBe('Meeting action');
+    } finally { vi.useRealTimers(); }
+    expect(followUpHover(due(), ari.membership_id, NOON)).toMatch(/^Meeting action · from Pilot planning · .* · Due Nov 20$/u);
   });
 });

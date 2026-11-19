@@ -2,7 +2,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PersonRunV1 } from '@echo-brain/organization-api';
 import type { DecisionState, State } from '../../src/renderer/store.js';
-import { byTestId, elements, EMPTY_SUMMARY, plainHooks, render, text, type Node } from './harness.js';
+import { dueOnWords } from '../../src/renderer/needs.js';
+import { byClass, byTestId, elements, EMPTY_SUMMARY, plainHooks, render, text, type Node } from './harness.js';
 
 vi.mock('../../src/renderer/api.js', () => ({ rpc: vi.fn(), dropFile: vi.fn() }));
 vi.mock('preact/hooks', original => plainHooks(original));
@@ -14,11 +15,11 @@ const ECHO = 'prj_22222222-2222-4222-8222-222222222222';
 const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
 const project = (project_id: string, name: string) => ({ project_id, name, role: 'member' as const, created_at: '2026-10-01T00:00:00.000Z', status: 'active' as const });
 const items = [
-  { signal_id: 'dec-1', kind: 'decision' as const, text: 'Launch the pilot next week.', subject: null, status: 'decided' as const, due_at: null,
+  { signal_id: 'dec-1', kind: 'decision' as const, text: 'Launch the pilot next week.', subject: null, status: 'decided' as const, due_at: null, due_on: null,
     quotes: ['[09:02] Ari: Let\'s launch it.'], owner: null, owner_editable: false, project_ids: [THERM] },
-  { signal_id: 'dec-2', kind: 'decision' as const, text: 'Keep the freeze.', subject: null, status: 'proposed' as const, due_at: null, quotes: [], owner: null, owner_editable: false,
+  { signal_id: 'dec-2', kind: 'decision' as const, text: 'Keep the freeze.', subject: null, status: 'proposed' as const, due_at: null, due_on: null, quotes: [], owner: null, owner_editable: false,
     project_ids: [THERM] },
-  { signal_id: 'act-1', kind: 'action' as const, text: 'Send the revised quote', subject: null, status: null, due_at: null, quotes: [], owner: 'Rafael Moreno', owner_editable: true,
+  { signal_id: 'act-1', kind: 'action' as const, text: 'Send the revised quote', subject: null, status: null, due_at: null, due_on: null, quotes: [], owner: 'Rafael Moreno', owner_editable: true,
     project_ids: [THERM] },
 ];
 const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning', project_ids: [], status: 'pending' as const, decided_on: null, first_line: null,
@@ -206,6 +207,33 @@ describe('the decision card', () => {
     expect([byTestId(tree, 'route-chip'), byTestId(tree, 'route-lock')]).toEqual([[], []]);
     // An approved meeting's words stay behind the same one button.
     expect(byTestId(tree, 'card-notes-toggle').map(node => text(node))).toEqual(['See the notes']);
+  });
+
+  // One deadline, one day (ADR-0053). The card draws the day the Authority sent, the meeting's own, and never the instant
+  // by this computer's clock: noon on November 20 in Tokyo is 19:00 on the 19th in Los Angeles.
+  it("says an action's deadline as the meeting's own day, in its follow-up's words, to a reader in Los Angeles: on the proposal and once approved", async () => {
+    const zone = process.env.TZ;
+    process.env.TZ = 'America/Los_Angeles';
+    // The words read this computer's calendar ("Due today", "Was due"), so the day is pinned: November 17 in Los Angeles.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-11-17T18:00:00.000Z') });
+    try {
+      const action = (signal_id: string, due_at: string | null, due_on: string | null) => ({ ...items[2]!, signal_id, text: `Action ${signal_id}`, due_at, due_on });
+      const dated = [items[0]!, action('tokyo', '2026-11-20T03:00:00.000Z', '2026-11-20'), action('today', '2026-11-17T03:00:00.000Z', '2026-11-17'),
+        action('past', '2026-11-16T03:00:00.000Z', '2026-11-16'),
+        // A deadline no calendar day can say, and no deadline at all: nothing beside either.
+        action('unwritable', '0999-11-20T03:00:00.000Z', null), action('none', null, null)];
+      const stated = [['Action tokyo', 'Due Nov 20'], ['Action today', 'Due today'], ['Action past', 'Was due Nov 16'], ['Action unwritable', null], ['Action none', null]];
+      const dues = (tree: Node) => byTestId(tree, 'card-signal').slice(1).map(row => [text(byClass(row, 'card-text')[0]), byClass(row, 'card-due').map(node => text(node))[0] ?? null]);
+      expect(dues(await page(decision({ open: { ...open, items: dated } })))).toEqual(stated);
+      const records = [{ approval_id: 'apr_' + '1'.repeat(64), project_ids: [THERM] }];
+      const approved = { ...open, review: { ...review, status: 'approved' as const, decided_on: 'desktop' as const, records }, records, items: dated.map(item => ({ ...item, owner_editable: false })) };
+      expect(dues(await page(decision({ open: approved })))).toEqual(stated);
+      // The follow-up made from the action says the same day in the same words.
+      expect(dueOnWords('2026-11-20')).toBe('Due Nov 20');
+    } finally {
+      vi.useRealTimers();
+      if (zone === undefined) delete process.env.TZ; else process.env.TZ = zone;
+    }
   });
 
   it('says of an approved item and its record when they were kept for you alone in a project', async () => {

@@ -176,7 +176,8 @@ it says "Nothing needs you". Each row is one of:
 
 - **Approve**: a meeting waiting for your decision. Its card shows what was
   decided, numbered (a decision still proposed or unresolved says so), and
-  what is to be done, with a due date when the meeting set one and an owner
+  what is to be done, with a due date when the meeting set one (the day in the
+  meeting's own time zone, in the words its follow-up says it) and an owner
   you can retype where ECHO proposed one; the reasons given open on demand,
   and **See the notes** in the card's head opens what was said in the
   meeting behind every item, each quote once, with who said it and when above

@@ -475,7 +475,6 @@ describe('runs API open-item results', () => {
       ['a due date with a time', { item: draft({ due_on: '2026-11-20T00:00:00.000Z' }) }],
       ['a run\'s item that may be edited', { item: openItem({ can: { set_state: true, assign: true, edit: true, send: false } }) }],
       ['a run\'s item that may be sent alone', { item: openItem({ can: { set_state: true, assign: true, edit: false, send: true } }) }],
-      ['a run\'s item with a due date', { item: openItem({ due_on: '2026-11-20' }) }],
       ['a sent follow-up that may be sent again', { item: draft({ state: 'open', sent_at: LATER, state_set_at: LATER, state_set_by: APPROVER, send_included: true }) }],
       ['a closed follow-up that may be edited', { item: draft({ state: 'done', sent_at: LATER, state_set_at: LATER, state_set_by: APPROVER, send_included: true, can: { set_state: true, assign: true, edit: true, send: false } }) }],
     ] as const) refused(() => validatePersonRunsResultV1('item', value), name);
@@ -483,6 +482,13 @@ describe('runs API open-item results', () => {
     refused(() => validatePersonRunsResultV1('home', home({ drafts: [draft({ state: 'open', sent_at: LATER, state_set_at: LATER, state_set_by: APPROVER, send_included: true, can: { set_state: true, assign: true, edit: true, send: false } })] })), 'a sent follow-up among the drafts');
     refused(() => validatePersonRunsResultV1('home', home({ drafts: Array.from({ length: 21 }, () => draft()) })), 'one draft too many');
     refused(() => validatePersonRunsResultV1('home', { send: [], items: [], waiting: 0 }), 'a home without its drafts');
+  });
+
+  it('carries a meeting action\'s own due date as a calendar day, like a follow-up from a chat, though its run still sends it', () => {
+    const action = openItem({ kind: 'action', relation: 'needs_updating', expected: 'Send the pilot plan to the vendor', due_on: '2026-11-20' });
+    expect(validatePersonRunsResultV1('item', { item: action }).item).toMatchObject({ run_id: RUN, due_on: '2026-11-20', can: { edit: false, send: false } });
+    // A day only, never an instant: every reader sees the same day.
+    refused(() => validatePersonRunsResultV1('item', { item: { ...action, due_on: '2026-11-20T17:00:00.000Z' } }), 'a run\'s item due at an instant');
   });
 
   it('sends or dismisses one follow-up from a chat, and edits its text and due date', () => {

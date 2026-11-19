@@ -15,6 +15,8 @@ export interface ImpactItemDraftV1 {
   readonly expected: string | null;
   readonly owner_membership_id: string;
   readonly owner_match: 'jira_account' | 'name' | 'approver';
+  /** A meeting action's day (ADR-0053); an item the impact card found has none. */
+  readonly due_on?: string;
 }
 /**
  * A follow-up an Ask answer drafted (ADR-0053), as its asker's sink saves it: no run and no record. Its id is fixed by the
@@ -136,12 +138,12 @@ export class SqliteImpactItemsV1 {
     const timestamp = this.timestamp();
     const insert = transaction.prepare(`INSERT INTO authority_impact_items_v1
       (item_id, run_id, item_key, pointer_json, record_sha256, organization_id, approver_principal_id, approver_membership_id,
-       relation, expected, owner_membership_id, owner_match, state, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unsent', ?, ?)`);
+       relation, expected, due_on, owner_membership_id, owner_match, state, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unsent', ?, ?)`);
     for (const draft of drafts) {
       insert.run(`itm_${randomUUID()}`, run.run_id, draft.item_key, canonicalJson(draft.pointer), run.record_sha256,
         run.actor.organization_id, run.actor.principal_id, run.actor.membership_id,
-        draft.relation, draft.expected, draft.owner_membership_id, draft.owner_match, timestamp, timestamp);
+        draft.relation, draft.expected, draft.due_on ?? null, draft.owner_membership_id, draft.owner_match, timestamp, timestamp);
     }
   }
 

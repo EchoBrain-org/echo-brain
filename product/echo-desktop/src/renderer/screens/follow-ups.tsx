@@ -5,7 +5,7 @@ import { externalSourceProvider } from '../answer.js';
 import { message } from '../messages.js';
 import {
   CLOSED_STATES, followUpAge, followUpHover, followUpMark, followUpOrder, followUpProgress, itemHistory, itemKind, itemNames, itemTitle,
-  expectedWords, liveFacts, markWords, monthDay, ownerLine, ownerRows, ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, STAGES,
+  liveFacts, markWords, monthDay, ownerLine, ownerRows, ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, STAGES,
   summaryTotal, type OwnerFace,
 } from '../needs.js';
 import {
@@ -188,6 +188,8 @@ function Row({ state, list, item, label, name, now, ticking }: {
         <span class={`follow-up-title${reading ? ' reading-title' : ''}`} data-reading={reading || undefined}>{label}</span>
         {item.kind !== 'action' && <span class="follow-up-kind" title={itemKind(item, state.tools?.items)}>{KIND_ICON[item.kind]()}</span>}
         {fromChat(item) && <span class="follow-up-from" data-testid="follow-up-from">{FROM_CHAT}</span>}
+        {/* Its own day (ADR-0053), faint like where it came from: two same-worded actions read apart. */}
+        {item.due_on !== null && <span class="follow-up-from" data-testid="follow-up-row-due">{dueOnWords(item.due_on, now)}</span>}
       </button>
       <Owner state={state} busy={list.busy} picking={list.picker?.item_id === item.item_id} item={item} name={name} flat />
       <span class="follow-up-tile" title={projects.length > 0 ? projects.map(project => project.name).join(', ') : undefined}>
@@ -381,7 +383,7 @@ function Why({ state, item, reading }: { state: State; item: OpenItemView; readi
           <span class={`card-delta-now${reading ? ' reading-title' : ''}`}>{reading ? 'Reading…' : saysNow(item)}</span>
           {facts && <span class="card-delta-facts faint" data-testid="follow-up-facts">{facts}</span>}
         </div>
-        {item.expected !== null && <div><span class="card-delta-label needs">{fromChat(item) ? 'Asked for' : 'Meeting decided'}</span><span>{item.kind === 'action' && !fromChat(item) ? expectedWords(item.expected) : item.expected}</span></div>}
+        {item.expected !== null && <div><span class="card-delta-label needs">{fromChat(item) ? 'Asked for' : 'Meeting decided'}</span><span>{item.expected}</span></div>}
       </div>
       <OpenInTool state={state} item={item} />
     </section>
