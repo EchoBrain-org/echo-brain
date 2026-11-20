@@ -421,14 +421,12 @@ describe("agentic Ask model protocol parity", () => {
       ["a task need's kind, which is never read", needs([content({ need: "A", kind: "Which Items" })]), task, {}],
       ["need ids in other spellings, or unreadable", needs([content({ id: " n2 ", need: "A" }), content({ id: 4, need: "B" }), content({ id: "E5", need: "C" })]), ask, { model_id_respelled: 2, model_entry_dropped: 1 }],
       ["evidence ids respelled, repeated or unreadable", needs([content({ need: "A", evidence: ["e4", "E4", "THERM-48"] })]), ask, { model_id_respelled: 1, model_repeat_dropped: 1, model_entry_dropped: 1 }],
-      ["many evidence ids in a need: no cap, nothing to correct", needs([content({ need: "A", evidence: items(1, 41) })]), ask, {}],
-      ["many evidence ids in a task need: no cap, nothing to correct", needs([content({ need: "A", evidence: items(1, 41) })]), task, {}],
+      // No count and no length: many parts, needs, evidence ids and actions, and long text, are read as written.
+      ...[ask, task].map(options => [`a wide step with long text, for ${options === ask ? "Ask" : "a task"}: nothing to correct`, step({
+        parts: Array.from({ length: 6 }, (_, at) => ({ question: `q${at} ${"q".repeat(401)}`, needs: Array.from({ length: 7 }, (_, index) => content({ need: `need ${index} ${"n".repeat(201)}`, evidence: items(1, 41) })), notes: "n".repeat(801) })),
+        actions: Array.from({ length: 30 }, (_, index) => ({ tool: "search", args: { query: `q${index} ${"x".repeat(241)}` } })),
+      }), options, {}] as const),
       ["a blank or repeated need", needs([content({ need: " " }), content({ need: "A" }), content({ need: "a" })]), ask, { model_entry_dropped: 1, model_repeat_dropped: 1 }],
-      ["seven needs in a part: no cap, nothing to correct", needs(Array.from({ length: 7 }, (_, index) => content({ need: `need ${index}` }))), ask, {}],
-      ["six parts in a step: no cap, nothing to correct", step({ parts: Array.from({ length: 6 }, (_, index) => ({ question: `q${index}`, needs: [], notes: "" })) }), ask, {}],
-      ["many actions in an Ask step: no cap, nothing to correct", actions(Array.from({ length: 30 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), ask, {}],
-      ["many actions in a task step: no cap, nothing to correct", actions(Array.from({ length: 12 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), task, {}],
-      ["long text, which no field cuts", step({ parts: [{ question: "q".repeat(401), needs: [content({ need: "n".repeat(201) })], notes: "n".repeat(801) }], actions: [{ tool: "search", args: { query: "x".repeat(241) } }] }), ask, {}],
       ["an argument with no text, or one its tool does not take", actions([{ tool: "search", args: { query: "OPS-17", since: "" } }, { tool: "open", args: { id: "E1", query: "OPS-17" } }]), ask, { model_entry_dropped: 2 }],
     ] as const)("in a step: %s", (_name, value, options, expected) => {
       expect(corrected(() => parseStep(value, options))).toEqual(expected);
@@ -649,21 +647,16 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(texts[0]).toBe(`${columns.map((column, at) => `${column}: ${row(`${"y".repeat(114)} ALLOW`).cells[at]}`).join("; ")}.`);
   });
 
-  it("keeps a long sentence and a long cell whole: neither has a length of its own", () => {
-    const long = `${"The vendor confirmed the thermal-pad retest finishes before the build review. ".repeat(13)}`.trim();
-    expect(long.length).toBeGreaterThan(1_000);
-    const parsed = parseBlocksAnswer(writerReply([{ text: long, evidence: ["E1"] }]));
-    expect(parsed.sentences[0]!.text).toBe(long);
-    const cell = "c".repeat(250);
-    const table = parseBlocksAnswer(reply([{ block: "table", columns: ["Item", "Note"], rows: [{ cells: ["Fix", cell], evidence: ["E1"] }, { cells: ["Run", "ok"], evidence: ["E1"] }] }]));
-    expect(table.sentences[0]!.text).toContain(cell);
-    expect(parseBlocksAnswer(writerReply([{ text: "語".repeat(4_000), evidence: ["E1"] }])).sentences[0]!.text).toBe("語".repeat(4_000));
-  });
-
-  it("reads a card's title once, as its name, whole however long", () => {
-    const card = (title: string) => reply([{ block: "card", title, kind: "ticket", facts: [{ label: "Status", value: "Open", evidence: ["E1"] }, { label: "Owner", value: "Ana", evidence: ["E1"] }] }]);
-    expect(corrected(() => parseBlocksAnswer(card("t".repeat(200))))).toEqual({});
-    expect(corrected(() => parseBlocksAnswer(card("t".repeat(2_001))))).toEqual({});
+  it("keeps a long sentence, cell and card title whole, correcting nothing: none has a length of its own", () => {
+    const long = "語".repeat(4_000);
+    const cell = "c".repeat(2_000);
+    const card = { block: "card", title: "t".repeat(2_001), kind: "ticket", facts: [{ label: "Status", value: "Open", evidence: ["E1"] }, { label: "Owner", value: "Ana", evidence: ["E1"] }] };
+    expect(corrected(() => {
+      expect(parseBlocksAnswer(writerReply([{ text: long, evidence: ["E1"] }])).sentences[0]!.text).toBe(long);
+      const table = parseBlocksAnswer(reply([{ block: "table", columns: ["Item", "Note"], rows: [{ cells: ["Fix", cell], evidence: ["E1"] }, { cells: ["Run", "ok"], evidence: ["E1"] }] }]));
+      expect(table.sentences[0]!.text).toContain(cell);
+      parseBlocksAnswer(reply([card]));
+    })).toEqual({});
   });
 
   it("reads an item its block cannot show as text in its block, and counts each reading", () => {

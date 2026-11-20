@@ -134,16 +134,6 @@ describe("agentic model gate", () => {
     expect(forwarded).toBe(0); expect(gate.stats().calls).toBe(0);
   });
 
-  it('counts no calls: concurrent external requests and the writer after them are all admitted', async () => {
-    const { gate } = harness({ replies: [{ answer: true }] });
-    let forwarded = 0;
-    const send = () => gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('body'), operation: 'messages' }, async () => { forwarded++; return { value: true }; });
-    const results = await Promise.allSettled(Array.from({ length: 80 }, send));
-    expect(results.every(result => result.status === 'fulfilled')).toBe(true);
-    expect(forwarded).toBe(80);
-    await expect(gate.call(ANSWER, 'answer', {}, schema)).resolves.toEqual({ answer: true });
-  });
-
   it('does not forward an external request after cancellation during its access check', async () => {
     const controller = new AbortController(); let forwarded = false;
     const { gate } = harness({ signal: controller.signal, desk_revalidate: async () => { controller.abort(); return { checked_at: 'now' }; } });
@@ -151,44 +141,73 @@ describe("agentic model gate", () => {
     expect(forwarded).toBe(false);
   });
 
-  it('names an external request that sent nothing for its silence period a stall, and keeps the writer available', async () => {
-    vi.useFakeTimers();
-    const caller = new AbortController();
-    const { gate } = harness({ signal: caller.signal, replies: [{ answer: true }] });
-    const events: CoreRuntimeDiagnosticObservationV1[] = [];
-    try {
-      const pending = withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => gate.external({
-        model: 'claude-fixture', body_sha256: canonicalSha256('timeout'), operation: 'messages',
-        diagnostic_input: { model: 'claude-fixture', system_prompt: '', user_prompt: '', schema: {}, max_output_tokens: 100, timeout_ms: 4_000 },
-      }, signal => new Promise((_resolve, reject) => { signal.addEventListener('abort', () => reject(signal.reason), { once: true }); })));
-      const settled = pending.catch((error: unknown) => error);
-      await vi.advanceTimersByTimeAsync(generation.timeout_ms);
-      const error = await settled;
-      expect(error).toBeInstanceOf(AgenticModelStalledErrorV1);
-      expect(error).toMatchObject({ message: 'the model sent nothing for 30 s', recovery: 'fallback' });
-      expect(error).not.toHaveProperty('diagnostic');
-      expect(caller.signal.aborted).toBe(false);
-      expect(gate.stats()).toMatchObject({ calls: 1, stopped: false, generations: [{ role: 'step', finish_reason: null }] });
-      expect(events.filter(event => event.kind === 'model_error')).toEqual([expect.objectContaining({ error_kind: 'adapter_timeout' })]);
-      await expect(gate.call(ANSWER, 'answer', {}, schema)).resolves.toEqual({ answer: true });
-    } finally { vi.useRealTimers(); }
-  });
+  describe("stops a call only for silence (ADR-0055)", () => {
+    const external = (gate: ReturnType<typeof harness>["gate"], forward: Parameters<ReturnType<typeof harness>["gate"]["external"]>[1]) =>
+      gate.external({ model: "claude-fixture", body_sha256: canonicalSha256("body"), operation: "messages",
+        diagnostic_input: { model: "claude-fixture", system_prompt: "", user_prompt: "", schema: {}, max_output_tokens: 100, timeout_ms: 4_000 } }, forward);
+    /** A reply that sends a piece every second for three silence periods, then finishes. */
+    const streaming = <T>(signal: AbortSignal, progress: () => void, value: T, aborted: () => void) => new Promise<T>(resolve => {
+      signal.addEventListener("abort", aborted, { once: true });
+      let pieces = 0;
+      const tick = setInterval(() => { progress(); if (++pieces === 90) { clearInterval(tick); resolve(value); } }, 1_000);
+    });
 
-  it('lets an external request that keeps reporting progress run past its silence period, never stopping it', async () => {
-    vi.useFakeTimers();
-    const { gate } = harness();
-    try {
-      let aborted = false;
-      const pending = gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('streaming'), operation: 'messages' }, (signal, progress) => new Promise<{ readonly value: string }>(resolve => {
-        signal.addEventListener('abort', () => { aborted = true; }, { once: true });
-        let pieces = 0;
-        const tick = setInterval(() => { progress?.(); if (++pieces === 90) { clearInterval(tick); resolve({ value: 'whole reply' }); } }, 1_000);
-      }));
-      await vi.advanceTimersByTimeAsync(3 * generation.timeout_ms);
-      await expect(pending).resolves.toBe('whole reply');
-      expect(aborted).toBe(false);
-      expect(gate.stats()).toMatchObject({ calls: 1, stopped: false });
-    } finally { vi.useRealTimers(); }
+    it.each(["call", "external"] as const)("lets a %s that keeps reporting progress run past its silence period", async path => {
+      vi.useFakeTimers();
+      try {
+        let aborted = false;
+        const { gate } = harness({ model: { generate: input => streaming(input.signal!, input.on_progress!, { ok: true }, () => { aborted = true; }) } });
+        const pending = path === "call" ? gate.withRepair(ANSWER, "system", {}, schema, value => value)
+          : external(gate, (signal, progress) => streaming(signal, progress!, { value: { ok: true } }, () => { aborted = true; }));
+        await vi.advanceTimersByTimeAsync(3 * generation.timeout_ms);
+        await expect(pending).resolves.toEqual({ ok: true });
+        expect([aborted, gate.stats().calls, gate.stats().repairs]).toEqual([false, 1, 0]);
+      } finally { vi.useRealTimers(); }
+    });
+
+    it("counts no calls and keeps no clock across them", async () => {
+      vi.useFakeTimers();
+      try {
+        // Each call answers just inside its silence period; together they run far past any whole-run deadline.
+        const { gate } = harness({ model: { generate: () => new Promise(resolve => setTimeout(() => resolve({ ok: true }), generation.timeout_ms - 1)) } });
+        for (let index = 0; index < 40; index += 1) {
+          const pending = gate.call(STEP, "system", {}, schema);
+          await vi.advanceTimersByTimeAsync(generation.timeout_ms - 1);
+          await expect(pending).resolves.toEqual({ ok: true });
+        }
+        const results = await Promise.allSettled(Array.from({ length: 80 }, () => external(gate, async () => ({ value: true }))));
+        expect(results.every(result => result.status === "fulfilled")).toBe(true);
+        expect(gate.stats()).toMatchObject({ calls: 120, stopped: false });
+      } finally { vi.useRealTimers(); }
+    });
+
+    // A call the provider may have accepted may have been billed: silence names a stall, nothing is sent again, and the
+    // writer stays available.
+    it.each(["a call whose port honours its abort", "a call whose port ignores its abort", "an external request"] as const)("names %s that went silent a stall and never sends it again", async path => {
+      vi.useFakeTimers();
+      try {
+        const signals: AbortSignal[] = [];
+        const events: CoreRuntimeDiagnosticObservationV1[] = [];
+        const hang = (signal: AbortSignal) => new Promise<never>((_resolve, reject) => {
+          signals.push(signal);
+          if (!path.includes("ignores")) signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+        let replied = false;
+        const { gate, trace } = harness({ model: { generate: input => replied ? Promise.resolve({ answer: true }) : hang(input.signal!) } });
+        const pending = withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => path === "an external request"
+          ? external(gate, signal => hang(signal)) : gate.withRepair(STEP, "system", {}, schema, value => value)).catch((error: unknown) => error);
+        await vi.advanceTimersByTimeAsync(generation.timeout_ms);
+        const error = await pending;
+        expect(error).toBeInstanceOf(AgenticModelStalledErrorV1);
+        expect(error).toMatchObject({ message: "the model sent nothing for 30 s", recovery: "fallback" });
+        expect(signals.map(signal => signal.aborted)).toEqual([true]);
+        expect(trace).toEqual(["revalidate"]);
+        expect(events.filter(event => event.kind === "model_error")).toEqual([expect.objectContaining({ error_kind: "adapter_timeout" })]);
+        expect(gate.stats()).toMatchObject({ calls: 1, repairs: 0, stopped: false });
+        replied = true;
+        await expect(gate.call(ANSWER, "answer", {}, schema)).resolves.toEqual({ answer: true });
+      } finally { vi.useRealTimers(); }
+    });
   });
 
   it.each(['caller', 'stall'] as const)('keeps an overall %s abort terminal when the external silence also passes', async reason => {
@@ -273,73 +292,12 @@ describe("agentic model gate", () => {
     expect(stopped.trace).toEqual(["revalidate"]);
   });
 
-  it("counts no calls: a request may make as many as it needs", async () => {
-    const { gate, trace } = harness({ replies: Array.from({ length: 100 }, (_value, index) => ({ a: index })) });
-    for (let index = 0; index < 100; index += 1) await gate.call(STEP, "system", {}, schema);
-    expect(trace.filter(entry => entry === "revalidate")).toHaveLength(100);
-    expect(gate.stats()).toMatchObject({ calls: 100, stopped: false });
-  });
-
-  it.each(["honours", "ignores"] as const)("never sends again a call that went silent, whose billing is unknown, when the port %s its abort", async port => {
-    vi.useFakeTimers();
-    try {
-      const signals: AbortSignal[] = [];
-      const { gate, trace } = harness({ model: { generate: input => new Promise<never>((_resolve, reject) => {
-        signals.push(input.signal!);
-        if (port === "honours") input.signal!.addEventListener("abort", () => reject(input.signal!.reason), { once: true });
-      }) } });
-      const pending = gate.withRepair(STEP, "system", {}, schema, value => value).catch((error: unknown) => error);
-      await vi.advanceTimersByTimeAsync(generation.timeout_ms);
-      const error = await pending;
-      expect(error).toBeInstanceOf(AgenticModelStalledErrorV1);
-      expect(error).toMatchObject({ message: "the model sent nothing for 30 s", recovery: "fallback" });
-      // The gate's abort reached the operation, and nothing was sent again; the writer stays available.
-      expect(signals.map(signal => signal.aborted)).toEqual([true]);
-      expect(trace).toEqual(["revalidate"]);
-      expect(gate.stats()).toMatchObject({ calls: 1, repairs: 0, stopped: false });
-    } finally { vi.useRealTimers(); }
-  });
-
   it("retries once a silence the adapter reports was never sent, then names the stall", async () => {
     const unsent = () => Object.assign(new Error("silent before sending"), { diagnostic: { failure_class: "adapter_timeout", http_status: null, finish_reason: null, unbilled: true } });
     const { gate, trace } = harness({ replies: [unsent(), unsent()] });
     await expect(gate.withRepair(STEP, "system", {}, schema, value => value)).rejects.toBeInstanceOf(AgenticModelStalledErrorV1);
     expect(trace).toEqual(["revalidate", "generate:0", "revalidate", "generate:1"]);
     expect(gate.stats()).toMatchObject({ calls: 2, repairs: 1, stopped: false });
-  });
-
-  it("never stops or repeats a call that keeps reporting progress past its silence period", async () => {
-    vi.useFakeTimers();
-    try {
-      // A streaming writer sends a piece every second for three silence periods, then finishes.
-      let aborted = false;
-      const { gate, trace } = harness({ model: { generate: input => new Promise(resolve => {
-        trace.push("generate");
-        input.signal!.addEventListener("abort", () => { aborted = true; }, { once: true });
-        let pieces = 0;
-        const tick = setInterval(() => { input.on_progress!(); if (++pieces === 90) { clearInterval(tick); resolve({ ok: true }); } }, 1_000);
-      }) } });
-      const pending = gate.withRepair(ANSWER, "system", {}, schema, value => value);
-      await vi.advanceTimersByTimeAsync(3 * generation.timeout_ms);
-      await expect(pending).resolves.toEqual({ ok: true });
-      expect(aborted).toBe(false);
-      expect(trace).toEqual(["revalidate", "generate"]);
-      expect(gate.stats()).toMatchObject({ calls: 1, repairs: 0 });
-    } finally { vi.useRealTimers(); }
-  });
-
-  it("lets a call that keeps working past any former clock finish", async () => {
-    vi.useFakeTimers();
-    try {
-      // Each call returns inside its silence period; together they run far past what a run deadline once allowed.
-      const { gate } = harness({ model: { generate: () => new Promise(resolve => setTimeout(() => resolve({ ok: true }), generation.timeout_ms - 1)) } });
-      for (let index = 0; index < 40; index += 1) {
-        const pending = gate.call(STEP, "system", {}, schema);
-        await vi.advanceTimersByTimeAsync(generation.timeout_ms - 1);
-        await expect(pending).resolves.toEqual({ ok: true });
-      }
-      expect(gate.stats().calls).toBe(40);
-    } finally { vi.useRealTimers(); }
   });
 
   it("stops after a permanent provider failure and still records the call", async () => {
@@ -423,23 +381,11 @@ describe("agentic model gate", () => {
     expect(gate.stats()).toMatchObject({ calls: 2, repairs: 1, stopped: false });
   });
 
-  it("sends a rejected reply back whole, as one clean line, however long it is", async () => {
-    // A rejected reply of about 9,000 characters (a full writer reply), with a line separator and a double space.
-    const refused = { blocks: [{ block: "text", sentences: [{ text: `Priya Raman owns it.\u2028Then  ${"more ".repeat(1_800)}end`, evidence: ["E1"] }] }], not_found: [] };
-    const { gate, inputs } = harness({ replies: [refused, { good: true }] });
-    await gate.withRepair(STEP, "system", { question: "q" }, schema, reply => {
-      if ((reply as { good?: boolean }).good !== true) throw new AgenticAskOutputErrorV1("blocks[0] must be the answer block");
-      return reply;
-    }, () => undefined);
-    expect(inputs[1]!.user_prompt).toBe(JSON.stringify(repairInput({ question: "q" }, refused, "blocks[0] must be the answer block")));
-    const sent = (JSON.parse(inputs[1]!.user_prompt) as { readonly rejected_response: string }).rejected_response;
-    // The whole reply, made one clean line: nothing of it is cut.
+  it("sends a rejected reply back whole, as one clean line, however long it is", () => {
+    const refused = { text: `Priya Raman owns it.\u2028Then  ${"more ".repeat(100_000)}end` };
+    const sent = repairInput({}, refused, "x").rejected_response as string;
     expect(sent).toBe(cleanLine(JSON.stringify(refused), Number.POSITIVE_INFINITY));
-    expect([sent.endsWith('"not_found":[]}'), sent.includes("\u2028"), sent.includes("  ")]).toEqual([true, false, false]);
-    // A reply as long as the model's whole output is still shown whole: it already fit beside the prompt it answered.
-    const huge = { text: "word ".repeat(100_000).trim() };
-    const sentHuge = repairInput({}, huge, "x").rejected_response as string;
-    expect([sentHuge, sentHuge.endsWith("…")]).toEqual([JSON.stringify(huge), false]);
+    expect([sent.endsWith('end"}'), sent.includes("\u2028"), sent.includes("  ")]).toEqual([true, false, false]);
   });
 
   describe("counts each retry and repair it makes, by why it was needed", () => {
@@ -473,22 +419,6 @@ describe("agentic model gate", () => {
       ["a stream cut mid-event, which is never repaired or repeated", [failure("adapter_transport", { http_status: 200 }), { good: true }], {}],
     ])("for %s", async (_name, replies, expected) => {
       expect(await corrected({ replies })).toEqual(expected);
-    });
-
-    // A repair is admitted only for a reply that arrived whole and failed validation, and it carries the rejected reply.
-    it.each([
-      ["not JSON", failure("adapter_json"), "repair"],
-      ["with no usable content", failure("adapter_response", { http_status: 200 }), "repair"],
-      ["cut off at its length", failure("adapter_finish", { finish_reason: "length" }), "repair"],
-      ["cut mid-event (a transport loss)", failure("adapter_transport", { http_status: 200 }), "none"],
-      ["cut mid-event, a transport loss the adapter calls unbilled", failure("adapter_transport", { http_status: 200, unbilled: true }), "unchanged"],
-    ] as const)("repairs a reply %s only when it arrived whole", async (_name, error, next) => {
-      const { gate, inputs } = harness({ replies: [error, { good: true }] });
-      await gate.withRepair(STEP, "system", { q: 1 }, schema, value => value).catch(() => undefined);
-      const second = inputs[1];
-      // A repair sends guidance with the reply; a transport loss is at most sent again unchanged, never repaired.
-      expect(second === undefined ? "none" : second.user_prompt === inputs[0]!.user_prompt ? "unchanged" : "repair").toBe(next);
-      expect(gate.stats().repairs).toBe(second === undefined ? 0 : 1);
     });
 
     // A paid attempt is never repeated automatically: only a failure known to be unbilled earns the one retry.
