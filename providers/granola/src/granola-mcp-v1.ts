@@ -155,8 +155,8 @@ function liveDate(value: string): string {
 }
 /**
  * A search's keywords: Granola takes at most 20 alternative entries of at most 100 characters each. A query that fits is
- * one entry, unchanged; a longer one is its distinct words of three characters or more, longest first, or failing
- * that, its first 100 characters.
+ * one entry, unchanged; a longer one is its distinct words as alternatives, the 20 most selective when it has more:
+ * short names with a capital or a digit ("Q3", "AI", "UX") first, then the longest words.
  */
 function keywords(query: string): readonly string[] {
   const characters = [...query];
@@ -164,10 +164,11 @@ function keywords(query: string): readonly string[] {
   const words = new Map<string, string>();
   for (const [word] of query.matchAll(/[\p{L}\p{N}]+/gu)) {
     const kept = [...word].slice(0, 100).join('');
-    if ([...kept].length >= 3 && !words.has(kept.toLowerCase())) words.set(kept.toLowerCase(), kept);
+    if (!words.has(kept.toLowerCase())) words.set(kept.toLowerCase(), kept);
   }
-  const entries = [...words.values()].sort((left, right) => [...right].length - [...left].length).slice(0, 20);
-  return entries.length > 0 ? entries : [characters.slice(0, 100).join('')];
+  const named = (word: string) => [...word].length <= 3 && /[\p{Lu}\p{N}]/u.test(word);
+  const rank = (word: string) => named(word) ? 101 : [...word].length;
+  return [...words.values()].map((word, index) => ({ word, index })).sort((left, right) => rank(right.word) - rank(left.word) || left.index - right.index).slice(0, 20).map(entry => entry.word);
 }
 
 /**

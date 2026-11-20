@@ -211,7 +211,7 @@ describe('verified Granola MCP contract', () => {
     await expect(fixture(meeting()).adapter.present([numbered(5), other])).rejects.toMatchObject({ code: 'invalid_output' });
     await expect(fixture(meeting()).adapter.present(Array.from({ length: 11 }, (_, index) => numbered(index + 10)))).rejects.toThrow();
   });
-  it('sends a query of at most 100 characters as one keyword, and a longer one as its distinct words, longest first', async () => {
+  it('sends a query of at most 100 characters as one keyword, and a longer one as its distinct words, short names and longest first', async () => {
     const found = JSON.stringify({ status: 'ok', completion_status: 'exhausted', meetings: [], next_cursor: null });
     const range = { from_date: '2026-10-01', to_date: '2026-10-31' };
     const short = 'pump test plan review decisions';
@@ -233,11 +233,15 @@ describe('verified Granola MCP contract', () => {
     const sent = capped.calls()[0].arguments.keywords as string[];
     expect(sent).toHaveLength(20);
     expect(Math.min(...sent.map(entry => entry.length))).toBeGreaterThanOrEqual(Math.max(...many.split(' ').filter(word => !sent.includes(word)).map(word => word.length)));
-    // Nothing of three characters or more: the query's first 100 characters.
+    // Short words are kept: one-letter words as themselves.
     const tiny = 'a b c '.repeat(30);
     const next = scripted(found);
     await next.adapter.searchTranscripts({ query: tiny, ...range, limit: 20 });
-    expect(next.calls()[0].arguments.keywords).toEqual([tiny.slice(0, 100)]);
+    expect(next.calls()[0].arguments.keywords).toEqual(['a', 'b', 'c']);
+    // Short names with a capital or a digit are the most selective words, kept ahead of long ones.
+    const named = `What did we decide on Q3 AI pricing and the UX review for the enterprise renewals ${'considerations '.repeat(20)}`, acronyms = scripted(found);
+    await acronyms.adapter.searchTranscripts({ query: named, ...range, limit: 20 });
+    expect((acronyms.calls()[0].arguments.keywords as string[]).slice(0, 3)).toEqual(['Q3', 'AI', 'UX']);
     // A single word over 100 characters is cut to 100.
     const word = 'x'.repeat(150), cut = scripted(found);
     await cut.adapter.searchTranscripts({ query: word, ...range, limit: 20 });
