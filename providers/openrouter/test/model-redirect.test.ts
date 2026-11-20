@@ -20,7 +20,7 @@ const redirected = (seen: RequestInit[]) => (async (_url: string, init: RequestI
 it('never lets fetch re-send an OpenRouter answer request by redirect, and fails a redirect with billing unknown', async () => {
   const seen: RequestInit[] = [];
   const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: 'fixture', credential_resolver: () => 'SECRET', fetch_impl: redirected(seen) });
-  const failure = await adapter.generate(request).catch((error: unknown) => error as { diagnostic: Record<string, unknown> });
+  const failure = await adapter.generate(request).then(() => { throw new Error('the redirected answer was accepted'); }, (error: unknown) => error as { diagnostic: Record<string, unknown> });
   expect(seen.map(init => init.redirect)).toEqual(['error']);
   expect(failure.diagnostic).toMatchObject({ failure_class: 'adapter_transport' });
   expect(failure.diagnostic).not.toHaveProperty('unbilled');
