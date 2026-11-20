@@ -38,8 +38,9 @@ describe("agentic Ask audit", () => {
     store.forRequest(requestContext).append(native);
     const row = database.prepare('SELECT body_json FROM authority_person_read_decision_audit_v2').get() as { body_json: string };
     expect(JSON.parse(row.body_json)).toMatchObject({ rounds: 13, model_calls: 13, generations: native.generations });
-    expect(() => store.forRequest({ ...requestContext, request_id: 'over' }).append({ ...native, rounds: 61, model_calls: 61, generations: Array.from({ length: 61 }, () => native.generations[0]!) })).toThrow('audit entry is invalid');
-    expect(() => store.forRequest({ ...requestContext, request_id: 'legacy' }).append({ ...native, rounds: 31, model_calls: 31, generations: Array.from({ length: 31 }, () => { const { engine: _engine, model: _model, ...legacy } = native.generations[0]!; return legacy; }) })).toThrow('audit entry is invalid');
+    // Past the call budget the run is still recorded as it ran; a native run never reports more rounds than calls.
+    store.forRequest({ ...requestContext, request_id: 'over' }).append({ ...native, rounds: 61, model_calls: 61, generations: Array.from({ length: 61 }, () => native.generations[0]!) });
+    expect(() => store.forRequest({ ...requestContext, request_id: 'more_rounds' }).append({ ...native, rounds: 14 })).toThrow('audit entry is invalid');
   });
 
   it("records a follow-up that asked which one as clarify, its resolver an answer generation, and never off_scope (ADR-0047)", () => {
@@ -73,10 +74,14 @@ describe("agentic Ask audit", () => {
     expect(row.body_json).not.toContain("question");
   });
 
-  it("records an Ask that cites more than forty items, as an answer in blocks may (ADR-0051)", () => {
-    const store = new SqlitePersonAgenticAskAuditV1(openedDatabase());
+  it("records an Ask whatever it cited, read and spent: those counts are the research loop's rule, not the audit's", () => {
+    const database = openedDatabase();
+    const store = new SqlitePersonAgenticAskAuditV1(database);
     store.forRequest({ ...requestContext, request_id: "ask_wide" }).append({ ...entry, rounds: 2, citation_count: 45 });
-    expect(() => store.forRequest({ ...requestContext, request_id: "ask_huge" }).append({ ...entry, rounds: 2, citation_count: 1_001 })).toThrow("Agentic Ask audit entry is invalid");
+    store.forRequest({ ...requestContext, request_id: "ask_huge" }).append({ ...entry, rounds: 200, citation_count: 5_000, fallbacks: 40 });
+    expect(database.prepare("SELECT count(*) AS count FROM authority_person_read_decision_audit_v2").get()).toEqual({ count: 2 });
+    // A count that is not a count is still refused.
+    expect(() => store.forRequest({ ...requestContext, request_id: "ask_bad" }).append({ ...entry, citation_count: -1 })).toThrow("Agentic Ask audit entry is invalid");
   });
 
   it("records a research-only trigger under the background limits and keeps Ask limits for Ask", () => {
@@ -85,10 +90,8 @@ describe("agentic Ask audit", () => {
     store.forRequest(requestContext).append({ ...entry, trigger: "approved_record" });
     const row = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2").get() as { body_json: string };
     expect(JSON.parse(row.body_json)).toMatchObject({ trigger: "approved_record", rounds: 20, outcome: "partial" });
-    // An Ask's answer may carry more citations than a background trigger's (1,000 against 360); rounds past either budget fail.
-    store.forRequest({ ...requestContext, request_id: "ask_2" }).append({ ...entry, citation_count: 361 });
-    expect(() => store.forRequest({ ...requestContext, request_id: "ask_3" }).append({ ...entry, trigger: "approved_record", citation_count: 361 })).toThrow("Agentic Ask audit entry is invalid");
-    expect(() => store.forRequest({ ...requestContext, request_id: "ask_6" }).append({ ...entry, rounds: 31 })).toThrow("Agentic Ask audit entry is invalid");
+    // A trigger's run is recorded at any size too.
+    store.forRequest({ ...requestContext, request_id: "ask_3" }).append({ ...entry, trigger: "approved_record", citation_count: 361 });
     // A background-budget Ask (the evaluation's diagnostic) carries its budget instead of a trigger.
     store.forRequest({ ...requestContext, request_id: "ask_4" }).append({ ...entry, budget: "background" });
     expect(() => store.forRequest({ ...requestContext, request_id: "ask_5" }).append({ ...entry, budget: "huge" as never })).toThrow("Agentic Ask audit entry is invalid");
