@@ -251,6 +251,16 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       .askV7WithProgress('bearer', 'What did we decide?', undefined, undefined, () => undefined)).resolves.toMatchObject({ result: answer() });
   });
 
+  it('reads to the answer after more heartbeats than the bound has bytes: only event payload lines count, as the Authority counts them', async () => {
+    // Each heartbeat is a comment line and a blank separator line: neither is an event payload line.
+    const count = PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1 + 1;
+    const body = `${PERSON_ASK_PROGRESS_HEARTBEAT_V1.repeat(count)}${frames([ANSWERED])}`;
+    let heartbeats = 0;
+    await expect(authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(body, 1024 * 1024)))
+      .askV7WithProgress('bearer', 'What did we decide?', undefined, undefined, () => undefined, undefined, () => { heartbeats += 1; })).resolves.toMatchObject({ result: answer() });
+    expect(heartbeats).toBe(count);
+  });
+
   it('reads to the answer a stream the Authority shortened at the bound: progress stops, and the answer still comes', async () => {
     // The stream as the Authority sends it once progress would crowd out the answer (its own test pins that it does):
     // steps up to the bound, one comment saying progress was shortened, a heartbeat, then the answer.
