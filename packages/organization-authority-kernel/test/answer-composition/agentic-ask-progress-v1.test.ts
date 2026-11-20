@@ -1,6 +1,7 @@
 import { canonicalJsonBytes, canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import {
   PERSON_ASK_PROGRESS_NAMED_MAX_V1,
+  PERSON_EVIDENCE_TEXT_MAX_BYTES_V1,
   PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1,
   PERSON_ASK_RECEIPT_MAX_BYTES_V1,
   validatePersonAnswerCitationV8,
@@ -44,7 +45,7 @@ const passage = (index: number, text: string, label: string): EvidenceDeskItemV2
   receipt_sha256: canonicalSha256(`prd receipt ${index}`), ref: `document:${documentId}`,
 });
 // Too long to be shown in full from a search: research must open it.
-const prd = passage(2, `The PRD sets launch on Tuesday. ${CANARY.body} ${"detail ".repeat(600)}`, "Launch PRD");
+const prd = passage(2, `The PRD sets launch on Tuesday. ${CANARY.body} ${"detail ".repeat(Math.ceil(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 / 7))}`, "Launch PRD");
 const before = passage(1, "Earlier context.", CANARY.neighbour);
 const after = passage(3, "Later context.", CANARY.neighbour);
 const ticketCitation = (id: string) => ({ kind: "ticket" as const, tool_id: "jira", external_scope_id: "11111111-1111-4111-8111-111111111111", ticket_id: id, permalink: `https://fixture.atlassian.net/browse/ECHO-${id}`, text_sha256: sha256Digest("") });

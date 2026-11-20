@@ -98,6 +98,8 @@ describe('Sonnet receives supported schemas for the real Ask protocol', () => {
 
   it('keeps local action bounds and the caller output ceiling enforced', async () => {
     expect(parseStep({ parts: [{ question: 'fixture', needs: [], notes: '' }], actions: Array.from({ length: 5 }, () => ({ tool: 'search', args: { query: 'fixture' } })) }).actions).toHaveLength(4);
-    await expect(wireRequest(answerBlocksSchema, 'anthropic/claude-sonnet-5.5', 4_097)).rejects.toThrow('output limit');
+    // The adapter's ceiling (32,000) sits under the model's own 64k output maximum.
+    expect((await wireRequest(answerBlocksSchema, 'anthropic/claude-sonnet-5.5', 32_000)).max_tokens).toBe(32_000 + 4_096);
+    await expect(wireRequest(answerBlocksSchema, 'anthropic/claude-sonnet-5.5', 32_001)).rejects.toThrow('output limit');
   });
 });

@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import { validatePersonAnswerResponseV8 } from "@echo-brain/organization-api";
+import { PERSON_EVIDENCE_TEXT_MAX_BYTES_V1, validatePersonAnswerResponseV8 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
 import {
   AGENTIC_ASK_DEADLINE_MS_V1,
@@ -402,7 +402,8 @@ describe("agentic Ask: research loop", () => {
   });
 
   it("keeps oversized search hits as previews until opened, and refuses to cite unread text", async () => {
-    const long = item("long", `${"Context. ".repeat(400)}Owner is Colin.`);
+    // Past the bound a released passage may carry whole, so search shows only a preview.
+    const long = item("long", `${"Context. ".repeat(Math.ceil(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 / 9))}Owner is Colin.`);
     const script = scripted([
       step([{ needs: [{ need: "owner" }] }], [search("owner")]),
       finish([found(["E1"], "owner")]),
@@ -506,26 +507,30 @@ describe("agentic Ask: research loop", () => {
   it("fits unopened search passages after cited and read evidence within the writer budget", async () => {
     const read = item("read", "Released background.");
     const cited = item("cited", "Launch is Tuesday.");
-    const unopened = Array.from({ length: 8 }, (_, index) => item(`unopened-${index}`, `Passage ${index}. ${"Detailed background. ".repeat(150)}`, { kind: "document_passage" }));
+    // Each passage is past the bound research reads whole from a search, so research sees only its preview.
+    const unopened = Array.from({ length: 8 }, (_, index) => item(`unopened-${index}`, `Passage ${index}. ${"Detailed background. ".repeat(Math.ceil(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 / 21))}`, { kind: "document_passage" }));
+    const context_tokens = 48_000;
     const script = scripted([
       step([{}], [search("launch")]),
       finish([found(["E2"])]),
       answer([{ text: "Launch is Tuesday.", evidence: ["E2"] }, { text: "Excluded passage.", evidence: ["E3"] }]),
     ]);
-    const result = await ask({ desk: desk({ search: () => [read, cited, ...unopened] }), model: script.model, context_tokens: 4_096 }).answer({ question: "When is launch?" });
+    const result = await ask({ desk: desk({ search: () => [read, cited, ...unopened] }), model: script.model, context_tokens }).answer({ question: "When is launch?" });
     const supplied = script.prompt(2).evidence as { id: string; text: string }[];
     expect(supplied.slice(0, 2).map(value => value.id)).toEqual(["E2", "E1"]);
     expect(supplied.length).toBeGreaterThan(2);
     expect(supplied.length).toBeLessThan(unopened.length + 2);
     expect(new Set(supplied.map(value => value.id)).size).toBe(supplied.length);
-    expect(supplied.reduce((total, value) => total + Buffer.byteLength(value.text) + 200, 0)).toBeLessThanOrEqual(16 * 1_024);
+    // Within the window less the writer's 16,000-token reply, at 3 bytes a token.
+    expect(supplied.reduce((total, value) => total + Buffer.byteLength(value.text) + 200, 0)).toBeLessThanOrEqual((context_tokens - 16_000) * 3);
     expect(supplied.some(value => value.id === "E3")).toBe(false);
     expect(result.parts[0]!.statements.map(value => value.text)).toEqual(["Launch is Tuesday."]);
   });
 
   it("previews a long search hit where the query matched, not only its head", async () => {
-    const transcript = item("transcript", `Transcript: Calibration\n${"Anika: We reviewed the pilot numbers. ".repeat(100)}Jules: I will publish the dashboard by September 11.\n\nZhen: Thanks.`, { kind: "note", label: "Transcript: Calibration" });
-    const unmatched = item("unmatched", `${"Nothing relevant here at all. ".repeat(120)}The end.`);
+    // Both hits are past the bound research reads whole from a search, so each shows as a preview.
+    const transcript = item("transcript", `Transcript: Calibration\n${"Anika: We reviewed the pilot numbers. ".repeat(Math.ceil(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 / 38))}Jules: I will publish the dashboard by September 11.\n\nZhen: Thanks.`, { kind: "note", label: "Transcript: Calibration" });
+    const unmatched = item("unmatched", `${"Nothing relevant here at all. ".repeat(Math.ceil(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 / 30))}The end.`);
     const script = scripted([
       step([{ needs: [{ need: "what Jules took on" }] }], [
         search([...Array.from({ length: 32 }, (_, index) => `tag${index}`), "Jules", "dashboard"].join(" ")),
@@ -1042,7 +1047,8 @@ describe("agentic Ask: failures never lose found evidence", () => {
   const unavailable = () => Object.assign(new Error("OpenRouter request failed"), { diagnostic: { failure_class: "adapter_timeout" } });
 
   it("does not dump unopened search passages when the writer fails or call that completed absence", async () => {
-    const passage = item("unread", "Potentially relevant launch background. ".repeat(100), { kind: "document_passage" });
+    // Past the bound research reads whole from a search: research saw only its preview.
+    const passage = item("unread", "Potentially relevant launch background. ".repeat(Math.ceil(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 / 40)), { kind: "document_passage" });
     const script = scripted([
       step([{}], [search("launch"), search("launch date")]),
       finish([missing()]),
@@ -1167,7 +1173,8 @@ describe("agentic Ask: failures never lose found evidence", () => {
       (input.schema.properties as Readonly<Record<string, unknown>>)?.blocks !== undefined
         ? { wrong: true }
         : step([{}], [search(`launch ${++queries}`)])) };
-    const evidence = desk({ search: query => [item(query, "Unread background. ".repeat(200))] });
+    // Each hit is past the bound research reads whole from a search, so research sees only previews.
+    const evidence = desk({ search: query => [item(query, "Unread background. ".repeat(Math.ceil(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 / 19)))] });
     const result = await ask({ desk: evidence, model }).answer({ question: "When is launch?" });
     expect(result.parts[0]!.gap).toContain("couldn't complete the search");
     expect(result.citations).toEqual([]);
