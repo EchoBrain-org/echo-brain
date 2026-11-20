@@ -15,6 +15,7 @@ import {
   PERSON_ANSWER_WHO_MAX_BYTES_V2,
   validatePersonQueryText,
   type PersonAnswerCardEntityV2,
+  PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4,
 } from "@echo-brain/organization-api";
 import { observeCoreModelCorrectionV1 } from "../shared/core-runtime-observation-v1.js";
 import { calendarDateV1, EVIDENCE_DATE_FIELDS_V1, type EvidenceDateFieldV1 } from "../shared/temporal-query-v1.js";
@@ -35,10 +36,13 @@ import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.
  */
 export const AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1 = 4;
 /** Ask looks at several sources at once (research tool contract v1); a task goal keeps four. */
-export const AGENTIC_ASK_MAX_ACTIONS_PER_ASK_STEP_V1 = 10;
-/** The most rows a list call with `limit` asks for: one list page. */
-export const AGENTIC_ASK_LIST_LIMIT_MAX_V1 = 25;
-export const AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 = 12;
+export const AGENTIC_ASK_MAX_ACTIONS_PER_ASK_STEP_V1 = 20;
+/** The most rows a list call with `limit` asks for: one list page, as many as one desk fetch returns. */
+export const AGENTIC_ASK_LIST_LIMIT_MAX_V1 = 50;
+/** Distinct items one need, or one writer entry, may cite: a statement's own citation bound (PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4). */
+export const AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 = PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4;
+/** Hits one search returns. */
+export const AGENTIC_ASK_SEARCH_LIMIT_V1 = 25;
 const QUESTION_CHARS = 400;
 const NEED_CHARS = 200;
 const NEED_ID_CHARS = 8;
@@ -151,7 +155,7 @@ const ARGUMENT_DESCRIPTIONS = Object.freeze({
   since: "Inclusive lower calendar-day bound, exactly YYYY-MM-DD in the request time_zone, without a time or UTC offset. Use equal since and until for one day.",
   until: "Inclusive upper calendar-day bound, exactly YYYY-MM-DD in the request time_zone, without a time or UTC offset. Use equal since and until for one day.",
   date_field: "One of the source's capabilities.dates. Leave it out with since or until to match any of an item's dates, where the source's capabilities.any_date is true. Search requires source when this is set.",
-  limit: "List only: return at most this many items (1 to 25), for a short look at a source.",
+  limit: `List only: return at most this many items (1 to ${AGENTIC_ASK_LIST_LIMIT_MAX_V1}), for a short look at a source.`,
 } as const satisfies Readonly<Record<keyof StepArgs, string>>);
 
 /**
@@ -917,7 +921,7 @@ function stepPrompt(list: boolean): string { return [
   "search, args {\"query\": \"<keywords or an exact identifier>\", optional \"source\": \"<source from source_catalog>\", \"since\", \"until\", \"date_field\"}",
   "  Purpose: search all available sources, or only source. Scope and permissions still apply.",
   `  When to use: start with concrete names, codes or features. Use since/until for source/event timestamps. A date mentioned inside document text may instead be a keyword; never substitute its upload date for that content date. For an exact identifier supplied by the asker or a result, search the identifier unchanged and on its own. Try different words while a need is open. Use open to read an item${list ? " and list to browse a source" : ""}.`,
-  `  Returns: the ids of up to 8 items, best match first. Read their details and bodies in seen or opened. A seen item with \"full\": true contains the complete released text in text, preserving its lines. This may be one matching passage, not the whole document or conversation. A preview is incomplete; no body means metadata only. Open those items before relying on them.`,
+  `  Returns: the ids of up to ${AGENTIC_ASK_SEARCH_LIMIT_V1} items, best match first. Read their details and bodies in seen or opened. A seen item with \"full\": true contains the complete released text in text, preserving its lines. This may be one matching passage, not the whole document or conversation. A preview is incomplete; no body means metadata only. Open those items before relying on them.`,
   `  Limits: keyword matching, not meaning. Keep identifiers intact; try synonyms. Truncated means incomplete; ${list ? "refine or list" : "refine the query"}. Repeats within one source return nothing new.`,
   `  Query recovery: some sources require every query word to match. Start with one exact identifier or one or two distinctive terms, not a whole question. Scope is applied separately; add a project name as a keyword only when the item's text is expected to contain it. After an empty search, try a known identifier or simpler terms once${list ? ", then list that source and open relevant candidates" : ""}. Empty keyword results do not prove the fact is absent.`,
   list ? "  Related: open reads a result in full; list shows everything of one kind." : "  Related: open reads a result in full.",
@@ -1010,7 +1014,7 @@ function askStepPrompt(): string { return [
   "search, args {\"query\": \"<keywords or an exact identifier>\", optional \"source\", \"since\", \"until\", \"date_field\"}",
   "  Purpose: find items whose title or text matches, ranked, in one source or across them. Without a source it searches meetings, documents, connected tools' items, follow-ups and projects; name people, tools, or a tool's projects or spaces as its source to search those. A search is never complete.",
   "  When to use: concrete names, codes, features and identifiers. For an exact identifier supplied by the asker or a result, search it unchanged and on its own. A date mentioned inside document text may instead be a keyword; never substitute its upload date for that content date.",
-  "  Returns: the ids of up to 8 items, best match first. Read their details and bodies in seen or opened. A seen item with \"full\": true contains the complete released text in text, preserving its lines; it may be one matching passage, not the whole document. A preview is incomplete; no body means metadata only. Open those items before relying on what they say; a list's members need no open to show which items exist.",
+  `  Returns: the ids of up to ${AGENTIC_ASK_SEARCH_LIMIT_V1} items, best match first. Read their details and bodies in seen or opened. A seen item with \"full\": true contains the complete released text in text, preserving its lines; it may be one matching passage, not the whole document. A preview is incomplete; no body means metadata only. Open those items before relying on what they say; a list's members need no open to show which items exist.`,
   "  Limits: keyword matching, not meaning. Approved meeting-record search indexes record text and category, not the parent meeting title. Some sources require every query word to match: prefer an exact identifier or a few distinctive terms over a whole question. If results are empty or irrelevant, useful alternatives include simpler terms, another source, a supported date/kind list, or opening relevant related evidence. Empty or irrelevant keyword results alone do not establish absence.",
   "  Examples: {\"query\": \"battery reserve\"}, {\"query\": \"THERM-48\"}, {\"query\": \"fixture vendor\", \"source\": \"meetings\", \"since\": \"2026-10-01\"}",
   "",

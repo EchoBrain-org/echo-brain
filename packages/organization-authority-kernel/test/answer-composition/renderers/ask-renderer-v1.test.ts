@@ -68,12 +68,15 @@ function bundle(entries: readonly { readonly item: EvidenceDeskItemV2; readonly 
 const records = (count: number, options: Parameters<typeof record>[2] = {}) => bundle(Array.from({ length: count }, (_, index) => ({ item: record(`r${index + 1}`, `Approved record ${index + 1}.`, options), full: true, touched: index + 1 })), Array.from({ length: count }, (_, index) => `E${index + 1}`));
 
 describe("Ask renderer", () => {
-  it("keeps the read-only explanation when a writer supplies a long missing-fact gap", async () => {
+  it("keeps the read-only explanation and every missing fact when a writer supplies a long missing-fact gap", async () => {
+    // Six missing facts of about 160 characters each: past 600 characters, inside the contract's 2 KiB gap.
+    const missing = Array.from({ length: 6 }, (_, at) => `missing detail ${at + 1}, ${"the vendor's signed approval ".repeat(5).trim()}`);
     const run = alone({ bundle: { ...records(1), stop: { reason: "finished", completed: true, unsupported_action: true } },
-      replies: [writerReply([{ text: "The rule applies.", evidence: ["E1"] }], { not_found: ["Missing detail. ".repeat(40)] })] });
+      replies: [writerReply([{ text: "The rule applies.", evidence: ["E1"] }], { not_found: missing })] });
     const rendered = await run.render("What is the rule? Change the status.");
-    expect(rendered.result.response.parts[0]!.gap).toMatch(/^Ask can read your sources, but it can't make changes or send messages\. Nothing was changed or sent\./u);
-    expect(rendered.result.response.parts[0]!.gap!.length).toBeLessThanOrEqual(600);
+    const gap = rendered.result.response.parts[0]!.gap!;
+    expect(gap).toMatch(/^Ask can read your sources, but it can't make changes or send messages\. Nothing was changed or sent\./u);
+    expect([gap.length > 600, Buffer.byteLength(gap, "utf8") <= 2 * 1024, gap.endsWith(`${missing[5]}.`)]).toEqual([true, true, true]);
     expect(rendered.result.response.parts[0]!.gap_details).toMatchObject({ unsupported_action: true, not_found: expect.stringMatching(/^Not found:/u) });
   });
 

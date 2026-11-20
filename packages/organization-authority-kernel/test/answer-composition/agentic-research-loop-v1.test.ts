@@ -365,14 +365,14 @@ describe("research loop: starting evidence", () => {
   });
 
   it("gives each starting item its own context budget", async () => {
-    const context = (key: string, index: number) => ticket(`${key}-CTX-${index}`, `${key} context ${index}: ${"x".repeat(10 * 1024)}`);
+    const context = (key: string, index: number) => ticket(`${key}-CTX-${index}`, `${key} context ${index}: ${"x".repeat(40 * 1024)}`);
     const openCitation = vi.fn(async (input: EvidenceDeskOpenCitationInputV2) => {
       const anchor = items.find(item => (item.citation as { readonly ticket_id: string }).ticket_id === keyOf(input))!;
       return result([anchor, ...[1, 2, 3].map(index => context(anchor.label.slice(0, 8), index))]);
     });
     const h = harness([found("E1", "E4")], { live_sources: [JIRA], openCitation });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Recheck ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)}.`, items.slice(0, 2).map(item => item.citation), {}, "report") });
-    // An anchor and the two 10 KB passages that fit its 24 KB, for each item; the third passage of each is left out.
+    // An anchor and the two 40 KB passages that fit its 96 KB, for each item; the third passage of each is left out.
     expect(h.prompt(0).task).toBe("Recheck E1 and E4.");
     expect(view.items.map(item => item.title)).toEqual([items[0]!.label, "THERM-48-CTX-1: Unrelated work", "THERM-48-CTX-2: Unrelated work", items[1]!.label, "THERM-46-CTX-1: Unrelated work", "THERM-46-CTX-2: Unrelated work"]);
   });

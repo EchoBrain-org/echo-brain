@@ -2,6 +2,7 @@ import { parseAgenticDriverFinishV1, type AgenticResearchDriverV1 } from './agen
 import { calendarDateV1, EVIDENCE_ANY_DATE_V1, evidenceDateFilterV1, matchedEvidenceDatesV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDateFieldV1, type EvidenceDateSelectionV1 } from "../shared/temporal-query-v1.js";
 import { askQuestionCompletionProblemsV1, askResearchCompletionProblemsV1, type AskResearchListV1, type AskResearchObservationV1 } from './agentic-ask-research-state-v1.js';
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
+import { PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 } from "@echo-brain/organization-api";
 import {
   evidenceDeskSourceV2,
   type EvidenceDeskItemV2,
@@ -16,6 +17,7 @@ import {
 import { followUpOwnerMatchesV1 } from "../shared/follow-up-evidence-v1.js";
 import {
   AGENTIC_ASK_LIST_LIMIT_MAX_V1,
+  AGENTIC_ASK_SEARCH_LIMIT_V1,
   AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1,
   AgenticAskOutputErrorV1,
   cleanId,
@@ -91,17 +93,19 @@ const STEP_TIMEOUT_MS = 60_000;
  * last step with 7.54 s after 6 to 8 s steps, timed out, and reported an unusable step instead of a budget stop.
  */
 const STEP_TIME_MARGIN = 1.25;
-const SEARCH_LIMIT = 8;
-const LIST_PAGE = 25;
+const SEARCH_LIMIT = AGENTIC_ASK_SEARCH_LIMIT_V1;
+/** One list page: as many rows as one desk fetch returns. */
+const LIST_PAGE = AGENTIC_ASK_LIST_LIMIT_MAX_V1;
 const LIST_FETCH = 50;
 const PREVIEW_CHARS = 240;
-/** Complete released packets admitted directly from search/list; larger bodies require open. */
-const PASSAGE_BYTES = 3 * 1024;
+/** Complete released packets admitted directly from search/list, as the Person protocol bounds a released text; larger bodies require open. */
+const PASSAGE_BYTES = PERSON_EVIDENCE_TEXT_MAX_BYTES_V1;
 /** Context items an `open` may admit beyond its anchor (a page's later sections, a meeting's other records). */
 const OPEN_EXTRA_ITEMS = 20;
 /** Document passages on each side of an opened passage (desk maximum). */
 const OPEN_NEIGHBOURS = 2;
-const OPEN_BYTES = 24 * 1024;
+/** Text one open admits: a long document's sections, or a meeting's records, in one read. */
+const OPEN_BYTES = 96 * 1024;
 /** The SDK hands a tool result over 50,000 characters to the model only as a file it cannot open. */
 const DRIVEN_RESULT_CHARS = 45_000;
 /** Starting reads in flight at once: as many as one planner step's reads, so a brief of many starting items never floods a source. */

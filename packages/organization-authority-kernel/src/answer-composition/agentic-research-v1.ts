@@ -17,8 +17,9 @@ export interface AgenticResearchBudgetV1 {
   /** Time research leaves for the consumer's writer call. */
   readonly writer_reserve_ms: number;
   /**
-   * Release receipts one request's audit row holds: the Authority's audit store refuses a row with more, so research
-   * stops reading, on every research path, before it would pass this.
+   * Release receipts one request's audit row holds. The audit store's check of the row repeats this number and nothing
+   * else bounds the row, so it is sized never to be what stops research (a read adds at most 51); research stops reading,
+   * on every research path, before it would pass it.
    */
   readonly max_receipts: number;
 }
@@ -28,7 +29,7 @@ export interface AgenticResearchBudgetV1 {
  * deadline is ECHO's own choice of how long a person waits. The writer's reserve lets a 16,000-token reply finish.
  */
 export const AGENTIC_RESEARCH_LIVE_BUDGET_V1: AgenticResearchBudgetV1 = Object.freeze({
-  deadline_ms: 300_000, max_rounds: 30, max_model_calls: 60, writer_reserve_ms: 120_000, max_receipts: 512,
+  deadline_ms: 300_000, max_rounds: 30, max_model_calls: 60, writer_reserve_ms: 120_000, max_receipts: 4_096,
 });
 
 /**
@@ -36,7 +37,7 @@ export const AGENTIC_RESEARCH_LIVE_BUDGET_V1: AgenticResearchBudgetV1 = Object.f
  * screen. A budget past the live one is what marks a run's audit row as background.
  */
 export const AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1: AgenticResearchBudgetV1 = Object.freeze({
-  deadline_ms: 600_000, max_rounds: 30, max_model_calls: 60, writer_reserve_ms: 120_000, max_receipts: 512,
+  deadline_ms: 600_000, max_rounds: 30, max_model_calls: 60, writer_reserve_ms: 120_000, max_receipts: 4_096,
 });
 
 /** The one place a budget profile's label becomes its limits: trigger definitions and the staging request's override both read it. */

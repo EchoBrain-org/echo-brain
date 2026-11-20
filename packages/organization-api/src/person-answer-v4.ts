@@ -65,6 +65,8 @@ export function validatePersonAskTimeContextV1(now: unknown, timeZone: unknown):
 }
 
 export const PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 = 64 * 1024;
+/** UTF-8 bytes of a part's gap, and of its not-found explanation: what was not found, said in full. */
+export const PERSON_ANSWER_PART_GAP_MAX_BYTES_V4 = 2 * 1024;
 export const PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 = 3 * 1024;
 /** UTF-8 bytes of one fallback record's text: a fallback answer shows a few records read in full, each cut to this. */
 export const PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4 = 3_072;
@@ -108,7 +110,7 @@ export function validatePersonAnswerGapDetailsV1(value: unknown): PersonAnswerGa
   assertExactKeys(input, keys, 'Ask gap details');
   if (keys.length === 0) fail('Ask gap details is empty');
   for (const flag of ['unsupported_action', 'interrupted']) if (Object.hasOwn(input, flag) && input[flag] !== true) fail('Ask gap flag must be true');
-  if (Object.hasOwn(input, 'not_found')) text(input.not_found, 'Ask not-found explanation', 2 * 1024, true);
+  if (Object.hasOwn(input, 'not_found')) text(input.not_found, 'Ask not-found explanation', PERSON_ANSWER_PART_GAP_MAX_BYTES_V4, true);
   return Object.freeze({ ...(input.unsupported_action === true ? { unsupported_action: true as const } : {}),
     ...(input.interrupted === true ? { interrupted: true as const } : {}), ...(Object.hasOwn(input, 'not_found') ? { not_found: input.not_found as string } : {}) });
 }
@@ -295,7 +297,7 @@ function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): Per
   text(input.question, 'Ask response part question', 1024);
   // A part's statements have no count of their own (ADR-0051): its blocks arrange them, and the answer's bytes bound them.
   if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements)) fail('Ask response part is invalid');
-  if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', 2 * 1024, true);
+  if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', PERSON_ANSWER_PART_GAP_MAX_BYTES_V4, true);
   if (Object.hasOwn(input, 'records') && (!Array.isArray(input.records) || input.records.length > 40)) fail('Ask response part records is invalid');
   const statements = Object.freeze(input.statements.map((item) => statement(item, citations, 'Ask response statement')));
   // Blocks arrange written statements (answer layout v2, ADR-0051): a part with statements has them, and one with none has nothing to arrange.
