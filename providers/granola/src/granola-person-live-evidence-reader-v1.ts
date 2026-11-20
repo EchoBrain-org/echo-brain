@@ -60,6 +60,8 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
     return options.transport.fetch(url, init);
   } });
   const issued = new Map<string, Value>(), handles = new Map<string, Value>();
+  /** A last slice shown's handle reads on: it reopens `ref` from the slice `from`. */
+  const continues = new Map<string, { readonly ref: PersonPageCitationV1; readonly from: PersonPageCitationV1 }>();
   const lists = createPersonLiveListV1<GranolaMeetingV1, ListState>('', fail);
   // Project members can see different Granola folders: the reader works over the mapped folders this asker sees.
   let shown = folders;
@@ -181,30 +183,37 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
     }
     return items;
   }
-  async function open(ref: PersonPageCitationV1, limit: number, signal?: AbortSignal): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
+  /**
+   * Opens `ref`: an inventory row's notes then summary, or a text from the slice cited on. When more slices follow those
+   * shown, the last one shown reads on: its handle reopens `ref` from the next slice (`from`). A slice that is no longer
+   * there (the text changed) reopens `ref` from the top, and says so.
+   */
+  async function open(ref: PersonPageCitationV1, limit: number, signal?: AbortSignal, from?: PersonPageCitationV1): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
     const allowed = await members(signal); scope(ref.page_id, allowed);
+    const meeting = await api.meeting(ref.page_id, signal), items: Value[] = [];
     if (ref.section_id !== 'inventory') {
-      const meeting = await api.meeting(ref.page_id, signal);
       const [kind, raw, part] = ref.section_id.split(':');
       const offset = Number(kind === 'transcript' ? part : raw);
       if (offset % SECTION !== 0) fail('invalid_request');
       const chunk = kind === 'transcript' ? await api.chunk(meeting.id, Number(raw), ref.version, signal) : undefined;
       const text = chunk?.text ?? (kind === 'notes' ? meeting.private_notes ?? '' : meeting.summary ?? '');
       const version = chunk?.version ?? canonicalSha256({ metadata: metadata(meeting), text });
-      const items = sections(meeting, kind === 'transcript' ? `transcript:${raw}` : kind!, text, version, offset);
-      await verify(signal);
-      // As many slices as were asked for and one result carries; the last one shown opens the rest.
-      const shownCount = fit(items, size(limit));
-      return { items: items.slice(0, shownCount), truncated: items.length > shownCount, anchor_truncated: items.length > shownCount };
-    }
-    const meeting = await api.meeting(ref.page_id, signal), items: Value[] = [];
-    for (const [kind, text] of [['notes', meeting.private_notes ?? ''], ['summary', meeting.summary ?? '']] as const) {
-      items.push(...sections(meeting, kind, text, canonicalSha256({ metadata: metadata(meeting), text })));
+      items.push(...sections(meeting, kind === 'transcript' ? `transcript:${raw}` : kind!, text, version, offset));
+    } else {
+      for (const [kind, text] of [['notes', meeting.private_notes ?? ''], ['summary', meeting.summary ?? '']] as const) {
+        items.push(...sections(meeting, kind, text, canonicalSha256({ metadata: metadata(meeting), text })));
+      }
     }
     await verify(signal);
-    const shownCount = fit(items, size(limit));
-    return { items: items.slice(0, shownCount), truncated: items.length > shownCount, anchor_truncated: items.length > shownCount,
-      notice: 'These are meeting notes and summaries. Search the transcript for what was said, decided, or assigned.' };
+    const found = from === undefined ? 0 : items.findIndex(item => canonicalSha256(item.citation) === canonicalSha256(from));
+    const rest = items.slice(Math.max(found, 0));
+    // As many slices as were asked for and one result carries.
+    const shown = rest.slice(0, fit(rest, size(limit)));
+    if (shown.length < rest.length) continues.set(shown.at(-1)!.handle, { ref, from: rest[shown.length]!.citation });
+    const more = shown.length < rest.length;
+    return { items: shown, truncated: more, anchor_truncated: more,
+      ...notice(found < 0 && 'The meeting changed since it was read; this is the current meeting from the top.',
+        ref.section_id === 'inventory' && 'These are meeting notes and summaries. Search the transcript for what was said, decided, or assigned.') };
   }
   return Object.freeze<PersonLiveEvidenceReaderV1<PersonPageCitationV1>>({ binding,
     validateCitation(value) {
@@ -294,7 +303,8 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
     },
     async open(input) {
       const item = handles.get(input.handle); if (item === undefined) fail('invalid_request');
-      return open(item.citation, input.limit, input.signal);
+      const next = continues.get(input.handle);
+      return next === undefined ? open(item.citation, input.limit, input.signal) : open(next.ref, input.limit, input.signal, next.from);
     },
     async openCitation(input) { return open(citation(input.citation), input.limit, input.signal); },
     async revalidate(input) {

@@ -139,6 +139,23 @@ describe('Granola external meeting evidence', () => {
     expect(result.notice).not.toContain('not visible to your Granola account');
     await expect(reader.revalidate({ citations: result.items.map(item => item.citation) })).resolves.toBeUndefined();
   });
+  it('reads a meeting whole at limit 1, each open of the last slice shown reading on from the next, none repeated or lost', async () => {
+    const f = fixture();
+    f.state.notes = Array.from({ length: 400 }, (_, index) => `n${index}`).join(' ');
+    const reader = await f.reader();
+    const listed = await reader.list({ limit: 1 });
+    let page = await reader.open({ handle: listed.items[0]!.handle, limit: 1 });
+    const read = [...page.items];
+    for (let opens = 0; page.truncated && opens < 20; opens += 1) {
+      page = await reader.open({ handle: page.items.at(-1)!.handle, limit: 1 });
+      read.push(...page.items);
+    }
+    expect(page.truncated).toBe(false);
+    const sections = read.map(item => item.citation.section_id);
+    expect(new Set(sections).size).toBe(sections.length);
+    expect(read.filter(item => item.citation.section_id.startsWith('notes:')).map(item => item.text).join('')).toBe(f.state.notes);
+    expect(read.at(-1)).toMatchObject({ citation: { section_id: 'summary:0' }, text: 'Pilot overview.' });
+  });
   it('reports notes-only coverage when the provider denies transcript search, without retrying transcript access', async () => {
     const f = fixture(); f.state.transcriptAllowed = false;
     const reader = await f.reader(), result = await reader.search({ query: 'pilot', limit: 5 });
