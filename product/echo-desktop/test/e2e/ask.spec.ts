@@ -187,11 +187,13 @@ test('Copy answer copies the answer as Markdown and says so, and main takes no m
   expect(await copied()).toBe(markdown);
   await expect(copy).toHaveText('Copy');
 
-  // Copy answer takes one whole answer (256 Ki characters); the broker refuses more.
+  // Copy answer takes one whole answer, as a saved turn holds one (4 Mi characters); the broker refuses more.
   const write = (text: string) => page.evaluate(value =>
     (window as unknown as { echo: { rpc(method: string, params: object): Promise<{ ok: boolean }> } }).echo.rpc('clipboard.writeText', { text: value }),
   text);
-  expect(await write('x'.repeat(256 * 1024 + 1))).toMatchObject({ ok: false });
+  expect(await write('x'.repeat(4 * 1024 * 1024 + 1))).toMatchObject({ ok: false });
+  expect((await write('x'.repeat(256 * 1024 + 1))).ok).toBe(true);
+  expect((await write(markdown)).ok).toBe(true);
   expect(await copied()).toBe(markdown);
   // Counted in characters: 20,000 that each take two UTF-16 units fit.
   expect((await write('𝄞'.repeat(20_000))).ok).toBe(true);

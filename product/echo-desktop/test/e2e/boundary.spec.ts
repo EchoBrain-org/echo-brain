@@ -64,7 +64,7 @@ test('the page can never name a file path', async () => {
   expect(log).not.toMatch(/script|drop\.accept|etc/);
 });
 
-test('a note that starts with a dash is sent as text, not read as an option; a long title is cut to what the API takes, and a long question is capped', async () => {
+test('a note that starts with a dash is sent as text, not read as an option; a long first line is its title whole, and a long question is kept whole', async () => {
   run = await launch();
   const { page } = run;
   const saved = () => run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates');
@@ -83,9 +83,9 @@ test('a note that starts with a dash is sent as text, not read as an option; a l
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('toast')).toHaveText('Saved for you');
   expect(saved()).toHaveLength(2);
-  const title = String(saved()[1]!.body?.title);
-  expect(Buffer.byteLength(title)).toBe(200);
+  // The title is the first line, whole: nothing cuts it, and its tab is a space.
+  expect(saved()[1]!.body?.title).toBe(`${'é'.repeat(150)} end`);
 
   await page.getByTestId('ask-field').fill('q'.repeat(400));
-  await expect(page.getByTestId('ask-field')).toHaveValue('q'.repeat(240));
+  await expect(page.getByTestId('ask-field')).toHaveValue('q'.repeat(400));
 });

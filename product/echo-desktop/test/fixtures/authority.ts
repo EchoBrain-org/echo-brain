@@ -1415,6 +1415,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const [kind, id] = [request.ref.slice(0, at), request.ref.slice(at + 1)];
       const open = (fields: Record<string, unknown>) => json(api.validatePersonOpenResponseV1({ schema_version: 1, kind: 'echo-person-open-v1', ref: request.ref, ...fields }));
       if (kind === 'note' && catalog.has(id) && readsNote(id)) {
+        // Each fixture note is one page, so no cursor was ever given for one: the Authority refuses a cursor it did not write.
+        if (request.cursor !== undefined) return failure('invalid_request', 400);
         return open({ item: noteRow(id), text: catalog.get(id)!.text, next_cursor: null });
       }
       const document = kind === 'document' ? documents.find(entry => entry.document_id === id) : undefined;
