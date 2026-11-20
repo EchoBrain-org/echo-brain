@@ -33,13 +33,10 @@ export interface ParsedJiraIssueV1 {
   readonly created_at: string;
   /** Direct provider references only; each is exact-read before its metadata is released. */
   readonly related_issue_ids: readonly string[];
-  /** True when optional link discovery inspected only its bounded prefix. */
-  readonly related_truncated: boolean;
   readonly value: Omit<PersonLiveEvidenceValueV1<PersonTicketCitationV1>, 'handle'>;
+  /** The row's label was cut to its bound; the text stays whole (ADR-0041). */
   readonly truncated: boolean;
-  /** The ticket text past its host-protection bound was left out; a label cut alone leaves the text whole (ADR-0041). */
-  readonly text_truncated: boolean;
-  /** Embedded content the text cannot represent (a screenshot, a macro) was omitted with a marker. */
+  /** Content the text cannot represent (a screenshot, a macro) was left out, with a marker where it was. */
   readonly incomplete: boolean;
   /** The ticket's whole text in sections of at most 3 KiB, the first being `value.text`; empty for an inventory read. */
   readonly sections: readonly string[];
@@ -50,13 +47,12 @@ export interface ParsedJiraIssueV1 {
  * trusted or released: a link contributes only an opaque issue ID, and the
  * reader exact-reads that ID under the current connection before release.
  */
-function relatedIssueIds(value: unknown, anchorId: string): { readonly ids: readonly string[]; readonly truncated: boolean } {
+function relatedIssueIds(value: unknown, anchorId: string): readonly string[] {
   // Every link is inspected: the provider transport's 1 MiB response bound
   // already bounds the list, while a malformed present array or link is refused.
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length !== 0) jiraFailure('invalid_output');
   const ids = new Set<string>();
-  const count = value.length;
-  for (let index = 0; index < count; index += 1) {
+  for (let index = 0; index < value.length; index += 1) {
     const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
     if (descriptor === undefined || !('value' in descriptor) || !descriptor.enumerable) jiraFailure('invalid_output');
     const raw = descriptor.value;
@@ -70,8 +66,7 @@ function relatedIssueIds(value: unknown, anchorId: string): { readonly ids: read
   }
   // Jira does not promise a useful link order. Numeric IDs are canonical,
   // non-zero decimal strings, so length then byte order is a stable order.
-  return Object.freeze({ ids: Object.freeze([...ids].sort((left, right) => left.length - right.length || (left < right ? -1 : left > right ? 1 : 0))),
-    truncated: false });
+  return Object.freeze([...ids].sort((left, right) => left.length - right.length || (left < right ? -1 : left > right ? 1 : 0)));
 }
 
 /** An issue's summary: one non-blank line, as long as the response that carried it. */
@@ -80,15 +75,11 @@ function issueSummary(fields: Record<string, unknown>): string {
   return fields.summary;
 }
 
-/**
- * An issue's description as text, empty when it has none. Embedded content it cannot read (a screenshot, a macro) is
- * omitted with a marker and `incomplete`, and a subtree nested deeper than the host's call stack is left out with
- * `cut`: the ticket still opens, and the reader says what it left out.
- */
-function issueDescription(fields: Record<string, unknown>): { readonly text: string; readonly incomplete: boolean; readonly cut: boolean } {
-  if (fields.description === null) return { text: '', incomplete: false, cut: false };
+/** An issue's description as text, empty when it has none; content it cannot represent is left out and `incomplete`. */
+function issueDescription(fields: Record<string, unknown>): { readonly text: string; readonly incomplete: boolean } {
+  if (fields.description === null) return { text: '', incomplete: false };
   const normalized = normalizeAtlassianDocumentTextV1(fields.description, JIRA_PERSON_PROVIDER_V1, { unsupported: 'omit' });
-  return { text: normalized.text.trim(), incomplete: normalized.incomplete, cut: normalized.cut };
+  return { text: normalized.text.trim(), incomplete: normalized.incomplete };
 }
 
 /** An issue's status name, its assignee's display name and its due day, when it has them. */
@@ -121,16 +112,15 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
   // Jira can omit this optional field when linking is disabled or unavailable.
   // That means no related context was discoverable, not that no link exists.
   // A field that is present must still have the expected safe array shape.
-  const relatedLinks = input.related && fields.issuelinks !== undefined ? relatedIssueIds(fields.issuelinks, id) : Object.freeze({ ids: Object.freeze([]), truncated: false });
+  const related_issue_ids = input.related && fields.issuelinks !== undefined ? relatedIssueIds(fields.issuelinks, id) : Object.freeze([]);
   const description = input.inventory ? undefined : issueDescription(fields);
   // The whole ticket text in lossless sections of the evidence text size, the way a Confluence page is read.
   const sections = description === undefined ? Object.freeze([]) : splitAtlassianTextV1(jiraBoundText(`${key}: ${summary}\n\n${description.text}`.trim(), Number.MAX_SAFE_INTEGER).text);
   const content = sections[0];
   const citation: PersonTicketCitationV1 = Object.freeze({ kind: 'ticket', tool_id: 'jira', external_scope_id: input.cloudid,
     ticket_id: id, permalink: `${input.origin}/browse/${key}`, text_sha256: sha256Digest(content ?? '') });
-  const cut = description?.cut ?? false;
-  return Object.freeze({ id, key, project_id: project.id, created_at: created.toISOString(), related_issue_ids: relatedLinks.ids, related_truncated: relatedLinks.truncated,
-    truncated: label.truncated || cut, text_truncated: cut, incomplete: description?.incomplete ?? false, sections,
+  return Object.freeze({ id, key, project_id: project.id, created_at: created.toISOString(), related_issue_ids,
+    truncated: label.truncated, incomplete: description?.incomplete ?? false, sections,
     value: Object.freeze({ citation, label: label.text, visibility: 'only_me', occurred_at, date_kind: 'created', dates: Object.freeze({ created: created.toISOString(), ...(updated === undefined ? {} : { updated: new Date(updated).toISOString() }), ...(due_at === undefined ? {} : { due: due_at }) }),
       attributes: Object.freeze({ status, ...(owner === undefined ? {} : { owner }), ...(due_at === undefined ? {} : { due_at }) }),
       ...(content === undefined ? {} : { text: content }) }) });

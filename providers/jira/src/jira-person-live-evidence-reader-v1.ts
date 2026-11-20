@@ -6,7 +6,7 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { observeCoreRuntimeDiagnosticV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { createAtlassianVerificationBatchV1, verifyAtlassianConnectionV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
-import { boundUtf8V1, guardedPersonProviderOperationV1, inBatchesOfFourV1, personLiveEvidencePageFitV1 } from '@echo-brain/provider-runtime/person-provider-v1';
+import { boundUtf8V1, createPersonLiveListV1, guardedPersonProviderOperationV1, inBatchesOfFourV1, personLiveEvidencePageFitV1 as fit } from '@echo-brain/provider-runtime/person-provider-v1';
 import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { jiraProjectMatches, parseJiraIssueV1, parseJiraProject, type ParsedJiraIssueV1 } from './jira-payload-v1.js';
 import { copyJiraBindingV1, JIRA_ID, JIRA_PERSON_PROVIDER_V1, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
@@ -16,10 +16,8 @@ const TEXT_FIELDS = `${INVENTORY_FIELDS},description`;
 const OPEN_FIELDS = `${TEXT_FIELDS},issuelinks`;
 /** Jira's bulk fetch reads at most 100 issues per call: one search or list page is read in one bulk call. */
 const JIRA_BULK_FETCH_MAX = 100;
-/** Said with an open whose ticket text left out embedded content (a screenshot, a macro), as Confluence says it for a page. */
+/** Said with an open whose ticket text left out content (a screenshot, a macro), as Confluence says it for a page. */
 const INCOMPLETE_NOTICE = 'Some Jira ticket content could not be fully represented as text.';
-/** Said with an open whose ticket text left out a subtree nested deeper than the host's call stack can walk. */
-const CUT_NOTICE = 'Part of this Jira ticket is nested too deeply to read as text and was left out.';
 /** Said with an open that resumed from a ticket that changed since it was read. */
 const CHANGED_NOTICE = 'The ticket changed since it was read; this is the current ticket from the top.';
 const EMPTY_DIGEST = sha256Digest('');
@@ -29,17 +27,12 @@ interface Opening { readonly id: string; readonly start: number; readonly digest
 /** One released text section of an opened ticket, numbered from 1, and what its handle opens. */
 interface Section { readonly id: string; readonly section: number; readonly opens: Opening; readonly value: Omit<PersonLiveEvidenceValueV1<PersonTicketCitationV1>, 'handle'> }
 
-interface ListCursor {
-  readonly selection: string;
-  /** Jira's next page token; absent once Jira's pages ended or passed the window. */
+/** Where a list's search stands: Jira's next page token, and the tokens and issues seen so far (a repeat is a cycle). */
+interface ListState {
   readonly token?: string;
   readonly projectId?: string;
   readonly tokens: ReadonlySet<string>;
   readonly ids: ReadonlySet<string>;
-  /** Rows already read that did not fit the last result; the next page releases them before reading on. */
-  readonly pending: readonly ParsedJiraIssueV1[];
-  /** Whether the read that found `pending` ended exactly full (ADR-0041). */
-  readonly full: boolean;
 }
 
 /** Any positive limit: a page holds as many as are asked for, up to Jira's page and what one result can carry. */
@@ -153,7 +146,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
   const handles = new Map<string, Opening>();
   /** Each released citation's ticket id and section number (0 for a row without text). */
   const issued = new Map<string, { readonly id: string; readonly section: number }>();
-  const cursors = new Map<string, ListCursor>();
+  const lists = createPersonLiveListV1<ParsedJiraIssueV1, ListState>('jira_cursor_', jiraFailure);
   let pinnedOrigin: string | undefined = options.expected_origin;
   let pinnedProject: ReturnType<typeof parseJiraProject> | undefined;
 
@@ -263,11 +256,6 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     }));
   }
 
-  /** How many of `items`, from the first, fit one result (the evidence response bound) within `maximum`. */
-  function fitting(items: readonly (ParsedJiraIssueV1 | Section)[], maximum: number): number {
-    return Math.min(maximum, personLiveEvidencePageFitV1(items.map(item => item.value)));
-  }
-
   /**
    * Up to `count` sections of an opened ticket from `start`. The first keeps the ticket's own row identity (a listed row
    * and its opened body are one item); later ones are labelled by number. When more sections follow, the last section
@@ -298,7 +286,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     return { items: Object.freeze(items), more };
   }
 
-  async function searchPage(input: { readonly jql: string; readonly maximum: number; readonly origin: string; readonly inventory: boolean; readonly cursor?: ListCursor; readonly projectId?: string; readonly signal?: AbortSignal }) {
+  async function searchPage(input: { readonly jql: string; readonly maximum: number; readonly origin: string; readonly inventory: boolean; readonly cursor?: ListState; readonly projectId?: string; readonly signal?: AbortSignal }) {
     observeCoreRuntimeDiagnosticV1({ kind: 'provider_query', provider: 'jira', operation: 'search', query: input.jql, max_results: input.maximum });
     const page = jiraRecord(await transport.request({ path: `${pathPrefix}/search/jql`, method: 'POST',
       body: { jql: input.jql, maxResults: input.maximum, fields: ['id'], ...(input.cursor === undefined ? {} : { nextPageToken: input.cursor.token }) }, signal: input.signal }));
@@ -385,11 +373,8 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       let selected: ParsedJiraIssueV1;
       let start = opening.start;
       let changed = false;
-      const related: ParsedJiraIssueV1[] = [];
-      /** Linked ids read so far, and whether one of them was hidden or out of scope. */
-      let relatedRead = 0;
-      let relatedHidden = false;
       let page: ReturnType<typeof sections>;
+      let related: readonly ParsedJiraIssueV1[] = [];
       try {
         selected = await issue(opening.id, origin, false, signal, expandRelated);
         if (cited !== undefined && cited !== EMPTY_DIGEST) {
@@ -403,39 +388,24 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         }
         // As many sections as the limit asks for and one result carries; the last section shown then opens the rest.
         page = sections(selected, start, maximum);
-        while (page.items.length > 1 && fitting(page.items, maximum) < page.items.length) page = sections(selected, start, fitting(page.items, maximum));
-        // Linked tickets come with the ticket's first read, in the room its sections leave, read four at a time until
-        // the limit or the result is full; the rest are left out with `truncated`.
+        while (page.items.length > 1 && fit(page.items.map(item => item.value)) < page.items.length) page = sections(selected, start, fit(page.items.map(item => item.value)));
+        // Linked tickets come with the ticket's first whole read, in the room the limit and the result leave.
         if (expandRelated && start === 0 && !page.more) {
-          const ids = selected.related_issue_ids;
-          let full = false;
-          while (!full && relatedRead < ids.length && page.items.length + related.length < maximum) {
-            const batch = ids.slice(relatedRead, relatedRead + Math.min(4, maximum - page.items.length - related.length));
-            const read = await inBatchesOfFourV1(batch, relatedId => relatedIssue(relatedId, origin, signal));
-            for (const item of read) {
-              if (item !== undefined && fitting([...page.items, ...related, item], Number.MAX_SAFE_INTEGER) < page.items.length + related.length + 1) { full = true; break; }
-              relatedRead += 1;
-              if (item === undefined) relatedHidden = true; else related.push(item);
-            }
-          }
+          const read = await inBatchesOfFourV1(selected.related_issue_ids.slice(0, maximum - page.items.length), id => relatedIssue(id, origin, signal));
+          const visible = read.filter((item): item is ParsedJiraIssueV1 => item !== undefined);
+          related = visible.slice(0, fit([...page.items, ...visible].map(item => item.value)) - page.items.length);
         }
       } finally {
         // A link target may be omitted, but every open still finishes with a
         // fresh account/resource/project fence before it can issue handles.
         await verifyConnection(signal);
       }
-      const notices = [
-        ...(changed ? [CHANGED_NOTICE] : []),
-        ...(selected.incomplete ? [INCOMPLETE_NOTICE] : []),
-        ...(selected.text_truncated && !page.more ? [CUT_NOTICE] : []),
-      ];
-      // Truncated covers what the open left out beside the ticket too (a link, a hidden link, a label cut). The ticket's
-      // own text is cut when sections follow those shown, which its last section shown opens, or when it passed its bound.
-      const values = remember([...page.items, ...related]);
-      const anchorCut = page.more || selected.text_truncated;
-      return Object.freeze({ items: values,
-        truncated: anchorCut || selected.truncated || selected.related_truncated || related.some(item => item.truncated) || relatedHidden || (expandRelated && start === 0 && relatedRead !== selected.related_issue_ids.length),
-        anchor_truncated: anchorCut, ...(notices.length === 0 ? {} : { notice: notices.join(' ') }) });
+      const notice = [...(changed ? [CHANGED_NOTICE] : []), ...(selected.incomplete ? [INCOMPLETE_NOTICE] : [])].join(' ');
+      // Truncated covers what the open left out beside the ticket too: a linked ticket hidden, out of scope or past the
+      // room, or a label cut. The ticket's own text is cut when sections follow those shown; its last section opens them.
+      return Object.freeze({ items: remember([...page.items, ...related]),
+        truncated: page.more || selected.truncated || related.some(item => item.truncated) || (expandRelated && start === 0 && related.length < selected.related_issue_ids.length),
+        anchor_truncated: page.more, ...(notice === '' ? {} : { notice }) });
     }, signal);
   }
 
@@ -485,12 +455,10 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         }
         const matches = [...byKey, ...found].filter(item => matchesEvidenceDateV1(item.value.dates ?? {}, input, "created"));
         // As many as were asked for and one result carries; the rest are reported with `truncated`.
-        const selected = matches.slice(0, fitting(matches, wanted));
-        const values = remember(selected);
-        const notices = relaxed && selected.length > 0 ? [RELAXED_NOTICE] : [];
-        return Object.freeze({ items: values,
+        const selected = matches.slice(0, fit(matches.map(item => item.value), wanted));
+        return Object.freeze({ items: remember(selected),
           truncated: byText?.token !== undefined || keys.length > named.length || matches.length > selected.length || selected.some(item => item.truncated),
-          ...(notices.length === 0 ? {} : { notice: notices.join(' ') }) });
+          ...(relaxed && selected.length > 0 ? { notice: RELAXED_NOTICE } : {}) });
       }, input.signal);
     },
     async open(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
@@ -519,48 +487,32 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       if (input.until !== undefined) jiraDay(input.until, 'invalid_request');
       if (input.since !== undefined && input.until !== undefined && input.since > input.until) jiraFailure('invalid_request');
       const selection = canonicalSha256({ container: input.container ?? null, since: input.since ?? null, until: input.until ?? null, ...evidenceDateFilterV1(input) });
-      const cursor = input.cursor === undefined ? undefined : cursors.get(input.cursor);
-      if (input.cursor !== undefined && (cursor === undefined || cursor.selection !== selection)) jiraFailure('invalid_request');
+      const previous = lists.resume(input.cursor, selection);
       return safe(async () => {
         const origin = await verifyConnection(input.signal);
-        let rows: readonly ParsedJiraIssueV1[];
-        let state: Pick<ListCursor, 'token' | 'projectId' | 'tokens' | 'ids' | 'full'>;
-        if (cursor !== undefined && cursor.pending.length > 0) {
-          // Rows read for the last page that did not fit its result come first, with no new provider read.
-          rows = cursor.pending;
-          state = cursor;
-        } else {
+        const page = await lists.page({ previous, selection, wanted, value: item => item.value, async read(state) {
           const project = pinnedProject ?? (input.container === undefined ? undefined : parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${input.container}`, query: { expand: 'projectKeys' }, signal: input.signal }), origin, apiPrefix));
           input.signal?.throwIfAborted();
           if (project !== undefined && input.container !== undefined && !jiraProjectMatches(project, input.container)) jiraFailure('invalid_output');
-          if (cursor !== undefined && cursor.projectId !== project?.id) jiraFailure('stale_access_state');
+          if (state !== undefined && state.projectId !== project?.id) jiraFailure('stale_access_state');
           const jql = listJql(project?.id, input.since, input.until, input);
-          const page = await searchPage({ jql, maximum, origin, inventory: true, cursor, projectId: project?.id, signal: input.signal });
-          // UTC inclusive calendar days; the JQL date bounds are only coarse.
-          rows = page.selected.filter(item => matchesEvidenceDateV1(item.value.dates ?? {}, input, "created"));
+          const found = await searchPage({ jql, maximum, origin, inventory: true, cursor: state, projectId: project?.id, signal: input.signal });
           // Pages run newest first: once a page's oldest issue predates since, no later page can match.
-          const oldest = page.selected.at(-1);
           // A window on any date has no single field the pages are ordered by, so it never stops early.
-          const oldestDay = input.date_field === "any" ? undefined : evidenceDayV1(oldest?.value.dates?.[input.date_field ?? "created"], input.time_zone);
+          const oldestDay = input.date_field === "any" ? undefined : evidenceDayV1(found.selected.at(-1)?.value.dates?.[input.date_field ?? "created"], input.time_zone);
           const passedSince = input.since !== undefined && oldestDay !== undefined && oldestDay < input.since;
-          // Jira's last page can be exactly full (ADR-0041): its end is confirmed only when the page held fewer issues
-          // than asked for, or when the newest-first order passed since. Counted before ECHO's own date filter.
-          state = { token: passedSince ? undefined : page.token, projectId: project?.id, tokens: page.tokens, ids: page.ids,
-            full: !passedSince && page.token === undefined && page.selected.length >= maximum };
-        }
+          const token = passedSince ? undefined : found.token;
+          // UTC inclusive calendar days; the JQL date bounds are only coarse. Jira's last page can be exactly full
+          // (ADR-0041): its end is confirmed only when the page held fewer issues than asked for, or when the newest-first
+          // order passed since. Counted before ECHO's own date filter.
+          return { rows: found.selected.filter(item => matchesEvidenceDateV1(item.value.dates ?? {}, input, "created")),
+            state: { ...(token === undefined ? {} : { token }), projectId: project?.id, tokens: found.tokens, ids: found.ids },
+            more: token !== undefined, full: !passedSince && found.token === undefined && found.selected.length >= maximum };
+        } });
         await verifyConnection(input.signal);
-        // As many rows as were asked for and one result carries; the rest wait in the cursor.
-        const shown = rows.slice(0, fitting(rows, wanted));
-        const pending = Object.freeze(rows.slice(shown.length));
-        const items = remember(shown);
-        let next_cursor: string | undefined;
-        if (pending.length > 0 || state.token !== undefined) {
-          next_cursor = `jira_cursor_${randomUUID()}`;
-          cursors.set(next_cursor, { selection, ...state, pending });
-        }
         // Only a next page means more items exist. A summary cut to its label bound is one row's title, never a sign
         // that the list did not reach its end (ADR-0041).
-        return Object.freeze({ items, truncated: next_cursor !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }), page_full: next_cursor === undefined && state.full });
+        return Object.freeze({ items: remember(page.rows), truncated: page.truncated, ...(page.next_cursor === undefined ? {} : { next_cursor: page.next_cursor }), page_full: page.page_full });
       }, input.signal);
     },
     async revalidate(input): Promise<void> {

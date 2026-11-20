@@ -5,15 +5,13 @@ const OMITTED = '[Unsupported embedded content omitted.]';
 type Validation = Pick<PersonProviderV1, 'record' | 'array' | 'string' | 'failure'>;
 
 /**
- * Native Atlassian Document Format only. No HTML parsing, media hydration or link fetching.
- *
- * A document's size and node count are bounded by the provider response that carried it; the text has no bound of its
- * own. Its nesting is bounded only by the host's call stack: a subtree nested deeper than the stack can walk is left out
- * and `cut` says so, so the caller can say what it left out.
+ * Native Atlassian Document Format only. No HTML parsing, media hydration or link fetching. A document is bounded by the
+ * provider response that carried it. Content the text cannot represent (with `unsupported: 'omit'`), or a subtree nested
+ * deeper than the host's call stack can walk, is left out and `incomplete` says so.
  */
 export function normalizeAtlassianDocumentTextV1(value: unknown, provider: Validation, options: {
   readonly unsupported?: 'reject' | 'omit';
-} = {}): Readonly<{ text: string; incomplete: boolean; cut: boolean }> {
+} = {}): Readonly<{ text: string; incomplete: boolean }> {
   const { record, array, string } = provider;
   const failure: Validation['failure'] = provider.failure;
   /** A field or list is as long as the provider response that carried it; the response bound is its only limit. */
@@ -21,7 +19,6 @@ export function normalizeAtlassianDocumentTextV1(value: unknown, provider: Valid
   const doc = record(value);
   if (doc.type !== 'doc' || doc.version !== 1) failure('invalid_output');
   let incomplete = false;
-  let cut = false;
   function unsupported(): string {
     if (options.unsupported !== 'omit') failure('invalid_output');
     incomplete = true;
@@ -31,17 +28,17 @@ export function normalizeAtlassianDocumentTextV1(value: unknown, provider: Valid
     if (typeof value !== 'string' || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\p{Cs}]/u.test(value)) failure('invalid_output');
     return value;
   }
-  function walk(value: unknown, depth: number): string {
+  function walk(value: unknown): string {
     try {
-      return node(value, depth);
+      return node(value);
     } catch (error) {
       // The host's call stack ran out: this subtree is nested deeper than it can walk.
       if (!(error instanceof RangeError)) throw error;
-      cut = true;
+      incomplete = true;
       return '';
     }
   }
-  function node(value: unknown, depth: number): string {
+  function node(value: unknown): string {
     const node = record(value);
     const type = string(node.type, CARRIED);
     if (type === 'text') {
@@ -71,7 +68,7 @@ export function normalizeAtlassianDocumentTextV1(value: unknown, provider: Valid
     if (type === 'taskItem') {
       const state = record(node.attrs).state;
       if (state !== 'TODO' && state !== 'DONE') failure('invalid_output');
-      return `[${state === 'DONE' ? 'x' : ' '}] ${array(node.content ?? [], CARRIED).map(child => walk(child, depth + 1)).join('')}\n`;
+      return `[${state === 'DONE' ? 'x' : ' '}] ${array(node.content ?? [], CARRIED).map(child => walk(child)).join('')}\n`;
     }
     if (!BLOCKS.has(type)) {
       // Includes legacy macro extensions. Neither parameters nor opaque child
@@ -79,7 +76,7 @@ export function normalizeAtlassianDocumentTextV1(value: unknown, provider: Valid
       return unsupported();
     }
     const content = array(type === 'doc' ? node.content : node.content ?? [], CARRIED);
-    const body = content.map(child => walk(child, depth + 1)).join('');
+    const body = content.map(child => walk(child)).join('');
     if (type === 'doc') return body;
     if (type === 'tableCell' || type === 'tableHeader') return ` | ${body.replace(/\n+$/g, '')}`;
     if (type === 'listItem') return `• ${body}`;
@@ -89,8 +86,8 @@ export function normalizeAtlassianDocumentTextV1(value: unknown, provider: Valid
     }
     return `${body}\n`;
   }
-  const result = walk(doc, 0).replace(/\r\n?/g, '\n').replace(/^\n+|\n+$/g, '').normalize('NFC');
-  return Object.freeze({ text: result, incomplete, cut });
+  const result = walk(doc).replace(/\r\n?/g, '\n').replace(/^\n+|\n+$/g, '').normalize('NFC');
+  return Object.freeze({ text: result, incomplete });
 }
 
 /** Lossless bounded chunks: code-point safe, with a nearby word boundary when available. */

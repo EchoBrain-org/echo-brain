@@ -8,6 +8,5 @@ export function normalizeConfluencePageDocumentV1(value: string): Readonly<{ sec
   let document: unknown;
   try { document = JSON.parse(value); } catch { confluenceFailure('invalid_output'); }
   const normalized = normalizeAtlassianDocumentTextV1(document, CONFLUENCE_PERSON_PROVIDER_V1, { unsupported: 'omit' });
-  // A subtree too deeply nested to walk is left out, and the page says some content could not be represented.
-  return Object.freeze({ sections: splitAtlassianTextV1(normalized.text), incomplete: normalized.incomplete || normalized.cut });
+  return Object.freeze({ sections: splitAtlassianTextV1(normalized.text), incomplete: normalized.incomplete });
 }
