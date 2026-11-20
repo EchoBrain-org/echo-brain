@@ -139,7 +139,7 @@ describe("OpenRouter stream ending", () => {
 
   it("fails an answer cut in the middle of an event as a transport loss with unknown billing, never a malformed reply to repair", async () => {
     const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: cutMidEvent() });
-    const failure = await adapter.generate(request).catch((error: unknown) => error as { diagnostic: Record<string, unknown> });
+    const failure = await adapter.generate(request).then(() => { throw new Error("the cut answer was accepted"); }, (error: unknown) => error as { diagnostic: Record<string, unknown> });
     expect(failure.diagnostic).toMatchObject({ failure_class: "adapter_transport" });
     expect(failure.diagnostic).not.toHaveProperty("unbilled");
   });

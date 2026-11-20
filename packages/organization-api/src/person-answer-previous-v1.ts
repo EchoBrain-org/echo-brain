@@ -6,8 +6,10 @@ import type { PersonAnswerCitationV8 } from './person-answer-v8.js';
  * `POST /v7/person/ask` may carry `previous`: the earlier turn's full
  * question, when it was asked, and the sentences of its answer the asker can
  * still read, with the citations that answer carried. It is the asker's own
- * context, like the question: the Authority neither verifies nor stores it,
- * and it is never evidence.
+ * context, like the question, and it is never evidence. The Authority does
+ * not store it. At request time it checks every citation in it for the
+ * asker, and a sentence that rests on a citation the asker cannot read any
+ * more is removed before any model sees it; the question always stays.
  *
  * - `follow_up`: before research, one resolver call works out what the
  *   question refers to. The answer then answers the full question it
