@@ -100,7 +100,7 @@ describe('person-owned review contract', () => {
     expect(validatePersonReviewRequestV1(request({ routes: routes(null, []) }))).toMatchObject({ routes: routes(null, []) });
     // Owners have no count of their own: one per action, as many as the meeting has.
     const many = Array.from({ length: 100 }, (_, index) => ({ signal_id: `act-${index}`, owner: 'Rafael Moreno' }));
-    expect(validatePersonReviewRequestV1(request({ routes: mixed, owners: many })).owners).toHaveLength(100);
+    expect(validatePersonReviewRequestV1(request({ routes: mixed, owners: many }))).toMatchObject({ owners: many });
   });
 
   it('accepts a review_open of items, reasons, names and records, with any line breaks in the meeting\'s words', () => {
