@@ -370,14 +370,14 @@ describe('llm decision processor extraction', () => {
     ]);
   });
 
-  it('rechecks action owners against the quotes that survive the meeting byte limit', async () => {
+  it('keeps an action\'s proposed owner when the meeting byte limit trims the quote that names them', async () => {
     const text = ['一', '二', '三', '四'].map(c => c.repeat(599)).concat('Maya ' + '五'.repeat(594)).join('\n');
     const wide: MeetingDocument = { ...meeting, content: [{ id: 'notes-1', kind: 'note', text }] };
     const result = await extractWith(modelOutput(Array.from({ length: 25 }, (_, i) =>
       modelSignal({ kind: 'action', text: `Task ${i}`, owner: 'Maya', evidence_units: ['N1', 'N2', 'N3', 'N4', 'N5'] }))), wide);
     const trimmed = result.signals.filter(signal => !signal.evidence.some(span => span.quote?.includes('Maya')));
     expect(trimmed.length).toBeGreaterThan(0);
-    expect(trimmed.every(signal => signal.kind === 'action' && signal.owner === null)).toBe(true);
+    expect(result.signals.every(signal => signal.kind === 'action' && signal.owner === 'Maya')).toBe(true);
   });
 
   it('trims the largest evidence lists, last span first, until the meeting fits 160,000 evidence bytes', async () => {
@@ -465,7 +465,7 @@ describe('llm decision processor extraction', () => {
     expect(() => assertCanonicalDecisionSet(result, dstMeeting, instance.identity)).not.toThrow();
   });
 
-  it('keeps a proposed owner only when a cited unit names them or they commit as its speaker', async () => {
+  it('keeps every well-formed proposed owner for the approver to judge, whatever the cited units say', async () => {
     const action = (text: string, owner: unknown, units: readonly string[]) =>
       modelSignal({ kind: 'action', text, owner, evidence_units: units });
     const output = modelOutput([
@@ -481,12 +481,13 @@ describe('llm decision processor extraction', () => {
     ]);
     const result = await extractWith(output);
 
+    // Ada only asks (T1) and Priya and Zhe are named nowhere: the approver confirms or clears each proposal (ADR-0021).
     expect(result.signals.map((signal) => signal.kind === 'action' ? signal.owner : 'no-owner-field')).toEqual([
-      'Zhen', 'Zhen', null, null, null, null, null, null, 'no-owner-field',
+      'Zhen', 'Zhen', 'Ada', 'Priya', 'Zhe', null, null, null, 'no-owner-field',
     ]);
     expect(result.signals[8]).not.toHaveProperty('owner');
-    // Only the three owners grounding cleared: a malformed proposal is no owner to ground.
-    expect(await correctionsWith(output)).toEqual({ extraction_owner_cleared: 3 });
+    // A malformed proposal is no owner; code corrects nothing else about owners.
+    expect(await correctionsWith(output)).toEqual({});
   });
 
   it('links rationales only to surviving decisions and sets aside one with none left', async () => {

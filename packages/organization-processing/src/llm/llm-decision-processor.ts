@@ -106,7 +106,7 @@ interface CheckedSignal {
   readonly kind: ExtractedSignal['kind'];
   readonly text: string;
   readonly status: 'proposed' | 'decided' | 'unresolved';
-  /** Proposed only: kept after grounding, and recorded only when an approver confirms it. */
+  /** Proposed only: recorded only when an approver confirms it. */
   readonly owner: string | null;
   readonly dueAt: string | null;
   readonly confidence: number | null;
@@ -509,10 +509,9 @@ function checkedSignal(
   // A choice cited only from questions was not made in the meeting.
   const downgraded = status === 'decided' && units.every((unit) => unit.question);
   if (downgraded) observeCoreModelCorrectionV1('extraction_decided_downgraded');
-  // A malformed owner proposal is dropped, never an extraction failure: the approver confirms owners.
-  const proposed = kind === 'action' ? canonicalProposedOwnerV1(record['owner']) : null;
-  const owner = groundedOwner(proposed, units);
-  if (proposed !== null && owner === null) observeCoreModelCorrectionV1('extraction_owner_cleared');
+  // A proposed owner is offered to the approver, who confirms or clears it (ADR-0021); it is never recorded unconfirmed.
+  // A malformed proposal is dropped, never an extraction failure.
+  const owner = kind === 'action' ? canonicalProposedOwnerV1(record['owner']) : null;
   const due = record['due_at'];
   const dueAt = kind === 'action' ? checkedDueAt(due, meeting, header) : null;
   if (kind === 'action' && due !== null) {
@@ -536,30 +535,6 @@ function checkedSignal(
 
 function comparable(value: string): string {
   return value.normalize('NFC').toLocaleLowerCase('en-US').replace(/\s+/gu, ' ').trim();
-}
-
-/** The whole name, at word boundaries, in the text. */
-function namesOwner(text: string, owner: string): boolean {
-  const escaped = comparable(owner).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-  return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escaped}(?:$|[^\\p{L}\\p{N}])`, 'u').test(comparable(text));
-}
-
-const FIRST_PERSON_COMMITMENT = /\b(?:i['’]ll|i will|i['’]m going to|i am going to|i can take|let me|i own)\b/iu;
-
-/**
- * Code keeps a proposed owner only when the cited units support it: the name
- * appears in a cited unit, or a cited unit's speaker, known by that name,
- * commits in the first person ("I'll send it"). The model's judgment alone
- * never sets an owner.
- */
-function groundedOwner(
-  owner: string | null,
-  units: readonly MeetingEvidenceUnitV1[],
-): string | null {
-  return owner !== null && units.some((unit) => namesOwner(unit.display, owner)
-    || (unit.speaker !== null && namesOwner(unit.speaker, owner) && FIRST_PERSON_COMMITMENT.test(unit.display)))
-    ? owner
-    : null;
 }
 
 function stableSignalId(
@@ -709,7 +684,7 @@ function groundedSignals(
         case 'decision':
           return { ...base, kind: 'decision', status: signal.status === 'decided' && retained.every(unit => unit.question) ? 'proposed' : signal.status };
         case 'action':
-          return { ...base, kind: 'action', owner: groundedOwner(signal.owner, retained), due_at: signal.dueAt };
+          return { ...base, kind: 'action', owner: signal.owner, due_at: signal.dueAt };
         case 'rationale': {
           const links = [...new Set(supports.map((decision) => ids.get(decision)!))];
           // Each of the model's links that is a repeat, or names no kept decision, is dropped.
