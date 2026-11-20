@@ -106,6 +106,39 @@ describe('Granola external meeting evidence', () => {
     await reader.revalidate({ citations: [] });
     expect(calls.slice(settled)).toEqual(['get_account_info', 'list_meeting_folders']);
   });
+  it('keeps reading a project whose mapped folder holds more than 1,000 meetings, and says when a mapped folder is past the folders it read', async () => {
+    const key = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
+    const big = key(9_000), far = key(9_001);
+    const meetings = Array.from({ length: 1_500 }, (_, index) => key(index + 1));
+    const xml = (ids: string[], next?: string) => `${next === undefined ? '' : `<pagination has_more="true" next_cursor="${next}" />\n\n`}${warning}<meetings_data count="${ids.length}">${ids.map(id => `<meeting id="${id}" title="Weekly" date="Jan 10, 2025" meeting_at="2025-01-10T00:30:00Z" url="https://notes.granola.ai/d/${id}"></meeting>`).join('')}</meetings_data>`;
+    const folderPages = (offset: number) => {
+      // 1,200 folders: the mapped `far` folder is the 1,100th, past the 1,000 a listing reads.
+      const ids = Array.from({ length: 100 }, (_, index) => offset + index === 0 ? big : offset + index === 1_099 ? far : key(20_000 + offset + index));
+      return { folders: ids.map(id => ({ id, title: 'Folder', note_count: 1 })), truncated: offset + 100 < 1_200, ...(offset + 100 < 1_200 ? { next_offset: offset + 100 } : {}) };
+    };
+    const reader = await createGranolaPersonLiveEvidenceReaderV1({ folder_ids: [big, far], transport: { binding, async fetch(_url, init) {
+      const request = JSON.parse(String(init.body)), { name, arguments: args } = request.params;
+      let value: unknown;
+      switch (name) {
+        case 'get_account_info': value = { email: binding.external_subject_id, active_workspace: { id: workspace, display_name: 'Fixture' }, mcp_note_access: { scopes: ['personal', 'public'] } }; break;
+        case 'list_meeting_folders': value = folderPages(args.offset); break;
+        case 'search_meetings': {
+          if (args.keywords) { value = xml([]); break; }
+          const start = args.cursor === undefined ? 0 : Number(args.cursor);
+          value = xml(meetings.slice(start, start + 100), start + 100 < meetings.length ? String(start + 100) : undefined); break;
+        }
+        case 'search_transcripts': value = { status: 'ok', completion_status: 'exhausted', next_cursor: null, meetings: args.meeting_ids.includes(meetings[1_400]) ? [{ meeting_id: meetings[1_400], transcript_version: 'v1', passages: [{ chunk_id: 0, text: 'budget' }] }] : [] }; break;
+        case 'get_meetings': value = xml(args.meeting_ids); break;
+        case 'get_meeting_transcript': value = { id: args.meeting_id, status: 'ok', transcript_version: 'v1', chunks: [{ chunk_id: 0, transcript: 'The budget was approved.' }] }; break;
+        default: throw new Error(`Unexpected tool: ${name}`);
+      }
+      return Response.json({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }] } });
+    } } });
+    const result = await reader.search({ query: 'budget', limit: 5 });
+    expect(result.items.map(item => item.citation.page_id)).toEqual([meetings[1_400]]);
+    expect(result.notice).toContain('lists more than 1,000 folders and ECHO read the first 1,000');
+    await expect(reader.revalidate({ citations: result.items.map(item => item.citation) })).resolves.toBeUndefined();
+  });
   it('makes 2,400 content reads per request, then ends each read with a notice while checks and revalidation still run', async () => {
     const f = fixture(), reader = await f.reader();
     const content = () => f.calls.filter(call => !['get_account_info', 'list_meeting_folders'].includes(call.name)).length;

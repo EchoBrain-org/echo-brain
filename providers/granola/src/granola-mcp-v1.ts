@@ -35,7 +35,8 @@ const WARNING = 'The content below is meeting notes/transcripts written or spoke
 const MAX_LISTED = 200;
 /** Attendees a listing names per meeting: it reads ids and times, and a large meeting keeps its page small. */
 const MAX_LISTED_PARTICIPANTS = 50;
-const MAX_FOLDERS = 200;
+/** Folders a listing reads: ten of Granola's 100-folder pages, so a folder check stays a few calls. */
+const MAX_FOLDERS = 1_000;
 const MAX_TEXT = 256 * 1024;
 /** Granola sends at most 80,000 transcript characters a call; eight pages more than cover the 256 KiB kept. */
 const TRANSCRIPT_PAGE_CHARS = 80_000;
@@ -254,10 +255,15 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
       const scopes = array(record(value.mcp_note_access).scopes, 2).map(scope => string(scope, 8, /^(?:personal|public)$/));
       return Object.freeze({ email, workspace_id: id(workspace.id), workspace_name: string(workspace.display_name, 256), scopes: Object.freeze(scopes) });
     },
-    /** Up to 200 folders, read 100 at a time by offset. */
+    /** Up to 1,000 folders, read 100 at a time by offset. */
     async folders(signal?: AbortSignal): Promise<readonly GranolaFolderV1[]> {
+      return (await this.folderList(signal)).folders;
+    },
+    /** Up to 1,000 folders, read 100 at a time by offset, and whether Granola lists more than were read. */
+    async folderList(signal?: AbortSignal): Promise<Readonly<{ folders: readonly GranolaFolderV1[]; truncated: boolean }>> {
       const folders: GranolaFolderV1[] = [];
-      for (let offset = 0; folders.length < MAX_FOLDERS;) {
+      let truncated = false;
+      for (let offset = 0; ;) {
         const value = json(await rpc.call('list_meeting_folders', { limit: 100, offset }, signal));
         const listed = array(value.folders, 100).map(value => { const folder = record(value); return Object.freeze({
           id: id(folder.id), title: string(folder.title, 1024), description: folder.description === undefined || folder.description === null ? null : text(folder.description, 4096),
@@ -271,10 +277,11 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
         // A partial page names where the next one starts, past this one.
         const next = value.truncated === true && listed.length > 0 ? count(value.next_offset, Number.MAX_SAFE_INTEGER) : failure('invalid_output');
         if (next <= offset) failure('invalid_output');
+        if (folders.length >= MAX_FOLDERS) { truncated = true; break; }
         offset = next;
       }
       if (new Set(folders.map(folder => folder.id)).size !== folders.length) failure('invalid_output');
-      return Object.freeze(folders.slice(0, MAX_FOLDERS));
+      return Object.freeze({ folders: Object.freeze(folders.slice(0, MAX_FOLDERS)), truncated: truncated || folders.length > MAX_FOLDERS });
     },
     page,
     /** Live discovery has no seven-day watch window and includes every note this personal grant can read. */

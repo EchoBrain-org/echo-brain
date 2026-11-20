@@ -12,6 +12,7 @@ const fail: typeof GRANOLA_PERSON_PROVIDER_V1.failure = GRANOLA_PERSON_PROVIDER_
 const SECTION = 600;
 const INDEX_NOTICE = 'Granola transcript search uses a live index that can lag. No matching passage does not prove a topic was never discussed.';
 const LEFT_OUT = 'Some Granola folders mapped to this project are not visible to your Granola account, so these results leave out their meetings.';
+const LIST_CUT = 'Your Granola account lists more than 1,000 folders and ECHO read the first 1,000; mapped folders not among them are left out of these results, with their meetings.';
 function notice(...parts: readonly (string | false)[]): { notice?: string } {
   const text = parts.filter(Boolean).join(' ');
   return text === '' ? {} : { notice: text };
@@ -41,6 +42,9 @@ function searchSize(limit: number) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 50) fail('invalid_request');
   return limit;
 }
+/** Meetings the mapped folders may hold, and continuation pages of 100 one folder may take to list them. */
+const MEMBERSHIP_MAX = 100_000;
+const MEMBERSHIP_PAGES_MAX = MEMBERSHIP_MAX / 100;
 /** Slices one transcript passage contributes, so one long chunk never crowds out other meetings' passages. */
 const SLICES_PER_PASSAGE = 2;
 /** Granola's largest transcript-search page. */
@@ -92,18 +96,22 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
   const issued = new Map<string, Value>(), handles = new Map<string, Value>(), cursors = new Map<string, Cursor>();
   // Project members can see different Granola folders: the reader works over the mapped folders this asker sees.
   let shown = folders;
+  /** Granola listed more folders than one listing reads, so a mapped folder left out may be past them rather than hidden. */
+  let listCut = false;
   async function verify(signal?: AbortSignal, initial = false) {
     const account = await fences.account(signal);
     if (account.workspace_id !== binding.external_scope_id || account.email !== binding.external_subject_id) fail('stale_access_state');
     if (folders !== undefined) {
-      const accessible = new Set((await fences.folders(signal)).map(folder => folder.id)), before = shown!;
+      const listed = await fences.folderList(signal), before = shown!;
+      const accessible = new Set(listed.folders.map(folder => folder.id));
       shown = folders.filter(id => accessible.has(id));
+      listCut = listed.truncated;
       // Results read from a folder that has since gone out of sight are not released.
       if (!initial && before.some(id => !accessible.has(id))) fail('unauthorized');
     }
   }
   await verify(options.signal, true);
-  const leftOut = () => shown !== undefined && shown.length < folders!.length && LEFT_OUT;
+  const leftOut = () => shown !== undefined && shown.length < folders!.length && (listCut ? LIST_CUT : LEFT_OUT);
   function remember(meeting: GranolaMeetingV1, section: string, version: string, text?: string): Value {
     const citation = validatePersonPageCitationV1({ kind: 'page', tool_id: 'granola', external_scope_id: binding.external_scope_id,
       page_id: meeting.id, section_id: section, version, permalink: meeting.url, text_sha256: sha256Digest(text ?? '') });
@@ -138,10 +146,11 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
       for (let cursor: string | undefined;;) {
         const page = await via.search({ folder_id, from_date: '1970-01-01', to_date: now, limit: 100, ...(cursor === undefined ? {} : { cursor }), signal });
         page.meetings.forEach(meeting => ids.add(meeting.id));
-        // A bounded read must never assert that a partial folder is its full contents.
-        if (ids.size > 1_000 || page.incomplete) fail('unavailable');
+        // A bounded read must never assert that a partial folder is its full contents. The bounds hold years of a
+        // busy team's meetings and stop a provider that pages forever.
+        if (ids.size > MEMBERSHIP_MAX || page.incomplete) fail('unavailable');
         if (page.next_cursor === null) break;
-        if (seen.has(page.next_cursor) || seen.size >= 20) fail('invalid_output');
+        if (seen.has(page.next_cursor) || seen.size >= MEMBERSHIP_PAGES_MAX) fail('invalid_output');
         seen.add(page.next_cursor); cursor = page.next_cursor;
       }
     }

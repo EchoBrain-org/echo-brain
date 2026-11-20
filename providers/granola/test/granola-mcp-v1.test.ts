@@ -425,15 +425,22 @@ describe('Granola list contract, as observed live', () => {
     const endless = scripted(...Array.from({ length: 11 }, (_, index) => listPage([], `<pagination has_more="true" next_cursor="page-${index}" />`)));
     await expect(endless.adapter.meetings(input)).rejects.toMatchObject({ code: 'unavailable' });
   });
-  it('pages folders by offset, up to 200, and ignores the fields it does not read', async () => {
+  it('pages folders by offset, up to 1,000, says when Granola lists more, and ignores the fields it does not read', async () => {
     const folders = (from: number, length: number) => Array.from({ length }, (_, index) => ({ id: numbered(from + index), title: `Folder ${from + index}`, description: null, note_count: 3,
       visibility: 'private', audience: 'only you', role: 'owner', parent_folder_id: null }));
-    const paged = scripted(JSON.stringify({ folders: folders(0, 100), truncated: true, total_count: 250, next_offset: 100 }),
-      JSON.stringify({ folders: folders(100, 100), truncated: true, total_count: 250, next_offset: 200 }));
-    const listed = await paged.adapter.folders();
-    expect(listed).toHaveLength(200);
-    expect(listed[199]).toEqual({ id: numbered(199), title: 'Folder 199', description: null, note_count: 3 });
-    expect(paged.calls()).toEqual([{ name: 'list_meeting_folders', arguments: { limit: 100, offset: 0 } }, { name: 'list_meeting_folders', arguments: { limit: 100, offset: 100 } }]);
+    const pages = (total: number) => Array.from({ length: Math.ceil(total / 100) }, (_, page) => JSON.stringify({ folders: folders(page * 100, Math.min(100, total - page * 100)),
+      truncated: (page + 1) * 100 < total, total_count: total, ...((page + 1) * 100 < total ? { next_offset: (page + 1) * 100 } : {}) }));
+    const whole = scripted(...pages(250));
+    const listed = await whole.adapter.folderList();
+    expect(listed.folders).toHaveLength(250);
+    expect(listed.truncated).toBe(false);
+    expect(listed.folders[249]).toEqual({ id: numbered(249), title: 'Folder 249', description: null, note_count: 3 });
+    expect(whole.calls().map(call => call.arguments)).toEqual([{ limit: 100, offset: 0 }, { limit: 100, offset: 100 }, { limit: 100, offset: 200 }]);
+    const cut = scripted(...pages(1_200));
+    const first = await cut.adapter.folderList();
+    expect(first.folders).toHaveLength(1_000);
+    expect(first.truncated).toBe(true);
+    expect(cut.calls()).toHaveLength(10);
     const { description: _description, ...undescribed } = folders(0, 1)[0]!;
     expect(await scripted(JSON.stringify({ count: 1, folders: [undescribed] })).adapter.folders()).toEqual([{ id: numbered(0), title: 'Folder 0', description: null, note_count: 3 }]);
     await expect(scripted(JSON.stringify({ folders: folders(0, 2), truncated: true, next_offset: 0 })).adapter.folders()).rejects.toMatchObject({ code: 'invalid_output' });
