@@ -106,6 +106,11 @@ const ROWS_REASON = "a sentence cites list rows or list ids but no evidence text
 /** The writer's one repair for a list block whose selection code cannot read (ADR-0054): it is never widened. */
 const LIST_REASON = "a \"list\" block's selection could not be read: give the whole list with only \"list\", or narrow it with \"where\" ({\"field\": owner or status with a \"value\", or a date field with \"since\" and \"until\" as YYYY-MM-DD}) or with \"members\" (an array of item ids it shows), and no other keys";
 const FIT_GAP = "Some evidence could not fit in this response.";
+/**
+ * A sentence left out whole because, with the private rows its lists carry, it cites more items than one statement may
+ * (ADR-0054): the response had room; the sentence could not stand with only some of its citations.
+ */
+const OVER_CITED_GAP = "Part of the answer was left out because it rests on more items than one sentence can cite.";
 /** A part's gap as one line, cut only at the Person protocol's own bound for it. */
 function gapLine(text: string): string { return boundedBytes(cleanLine(text, PERSON_ANSWER_PART_GAP_MAX_BYTES_V4), PERSON_ANSWER_PART_GAP_MAX_BYTES_V4); }
 /** UTF-8 bytes of the response's notice, as the Person protocol bounds it. */
@@ -779,6 +784,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const fitted: Laid[] = [];
         const fittedKeys = new Set<string>();
         let dropped = false;
+        let overCitedDropped = false;
         for (const sentence of [...listStatements, ...placedStatements, ...writerSentences] as readonly Laid[]) {
           // Temporary model guardrail (ADR-0041): only exact text with the same cited objects and privacy is a repeat.
           // Shared sources or planner kinds never establish that two sentences say the same thing.
@@ -789,7 +795,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             continue;
           }
           const fresh = new Set(sentence.shorts.map(keyOf).filter(key => !fittedKeys.has(key)));
-          if (overCited(sentence.shorts)) { dropped = true; continue; }
+          if (overCited(sentence.shorts)) { overCitedDropped = true; continue; }
           statementKeys.add(statementKey);
           for (const key of fresh) fittedKeys.add(key);
           fitted.push(sentence);
@@ -870,7 +876,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           : notFound.length === 0 ? undefined : gapLine(`Not found: ${notFound.join("; ")}.`);
         // What the lists add to the gap: a list the answer uses not read to its end or not fully tested by its filter, a list
         // kind with no list, a sentence left out for resting on rows, and what did not fit.
-        const extraGaps = [...new Set([...listGaps.map(gap => gap.text), ...(dropped ? [FIT_GAP] : [])])];
+        const extraGaps = [...new Set([...listGaps.map(gap => gap.text), ...(overCitedDropped ? [OVER_CITED_GAP] : []), ...(dropped ? [FIT_GAP] : [])])];
         const withGaps = (base: string | undefined) => {
           // Keep capability and unfinished-research explanations ahead of variable-length missing-fact text.
           const gaps = [...(unsupportedAction ? [READ_ONLY_GAP] : []),

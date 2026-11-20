@@ -372,6 +372,8 @@ describe("Ask renderer: lists (ADR-0041)", () => {
   const UNSUPPORTED = "Part of the answer was left out because no item's text supports it.";
   const RECORDS = "I found these records, but could not write a verified summary.";
   const FIT = "Some evidence could not fit in this response.";
+  /** The gap for a sentence left out because its list rows take it past a statement's 40 citations: true, unlike FIT. */
+  const OVER = "Part of the answer was left out because it rests on more items than one sentence can cite.";
   const LEG = "The list of tickets could not be read to its end, so more may exist.";
   const visibility = (...expected: readonly (readonly [string, string])[]) => (rendered: Rendered) => expect(rendered.result.response.citations.map(value => [value.kind, value.visibility])).toEqual(expected);
   it.each(["complete", "truncated", "unverified", "unchecked", "missing fact"] as const)("types a selected no-match only after verified complete coverage: %s", async state => {
@@ -557,7 +559,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     ], { not_found: ["the approver"] })] }).render("What did the review approve, and who approved it?");
     const part = rendered.result.response.parts[0]!;
     expect(part.gap_details).toEqual({ not_found: "Not found: the approver." });
-    expect(part.gap).toBe(`Not found: the approver. ${FIT}`);
+    expect(part.gap).toBe(`Not found: the approver. ${OVER}`);
     expect(part.gap).not.toBe(part.gap_details!.not_found);
   });
   type Rendered = Awaited<ReturnType<ReturnType<typeof alone>["render"]>>;
@@ -609,7 +611,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
         replies: [say({ text: REVIEW.text, evidence: ["E46"] }, { text: "The fixture work waits on the review.", evidence: ["L1", "E47"] }, { text: "The review closed.", evidence: ["E46"] })],
         q: "What did the review approve?", ...(team
           ? { status: "answered", check: (rendered: Rendered) => expect(rendered.result.response.parts[0]!.statements.map(value => value.citation_indexes)).toEqual([[0], [1], [0]]) }
-          : { status: "partial", gap: FIT, says: [st(REVIEW.text, 1, true), st("The review closed.", 1, true)], check: (_: Rendered, run: ReturnType<typeof alone>) => expect(run.prompt(0).lists[0].members).toHaveLength(45) }),
+          : { status: "partial", gap: OVER, says: [st(REVIEW.text, 1, true), st("The review closed.", 1, true)], check: (_: Rendered, run: ReturnType<typeof alone>) => expect(run.prompt(0).lists[0].members).toHaveLength(45) }),
       };
     }),
     // Eleven team records (E9..E19) and one only_me row (E1, of L2), with L1 (seven team rows) before, among or after them:
@@ -808,7 +810,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
         { block: "points", ordered: false, items: [WAITS_ON, { text: "The review closed.", evidence: ["E46"] }] },
       ] });
       expect(part.statements.map(value => value.text)).toEqual([REVIEW.text, "The review closed."]);
-      expect(part).toMatchObject({ status: "partial", gap: FIT });
+      expect(part).toMatchObject({ status: "partial", gap: OVER });
       expect(part.blocks).toEqual([{ kind: "answer", statements: [0] }, { kind: "text", statements: [1] }]);
     });
     it("leaves out whole an Ask again's since whose list id would cite more than a statement's 40 items", async () => {
