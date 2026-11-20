@@ -162,6 +162,21 @@ export class SqliteTriggerRunsV1 {
     });
   }
 
+  /**
+   * Liveness: extends a live lease the caller still owns to `leaseMs` from now, so a run that keeps making progress is
+   * never stopped by a clock, while a silent one still lapses. False when the lease was lost or had already lapsed.
+   */
+  renew(runId: string, leaseToken: string, leaseMs: number): boolean {
+    if (!Number.isSafeInteger(leaseMs) || leaseMs <= 0) throw new TypeError('Trigger run lease must be a positive integer');
+    return this.immediate(() => {
+      const currentTime = this.currentTime();
+      const timestamp = currentTime.toISOString();
+      return this.database.prepare(`UPDATE authority_trigger_runs_v1 SET lease_expires_at=?
+        WHERE run_id=? AND state='running' AND lease_token=? AND lease_expires_at>?`).run(
+        new Date(currentTime.getTime() + leaseMs).toISOString(), runId, leaseToken, timestamp).changes === 1;
+    });
+  }
+
   release(runId: string, leaseToken: string, attempt: { readonly counted: false } | { readonly counted: true; readonly exhausted: 'timed_out' | 'unavailable' }): void {
     this.immediate(() => {
       const timestamp = this.timestamp();

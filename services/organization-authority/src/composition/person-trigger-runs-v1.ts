@@ -54,6 +54,10 @@ interface CreatePersonTriggerRunsV1Options {
   readonly now?: () => Date;
 }
 
+/**
+ * Liveness, not a whole-run clock: a run holds its lease this long after its last desk read, and every read renews it.
+ * A run that keeps reading is never stopped; one silent this long is taken to have stopped, and its run reads as queued.
+ */
 const LEASE_MS = 600_000;
 const MAX_RUNNING = 4;
 /** A meeting action's own words on one line, never cut: an open item's line has no length of its own. */
@@ -208,13 +212,21 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
   const authenticates = (token: string) => { try { options.sessions.authenticateAccess({ access_token: token }); return true; } catch { return false; } };
   const launch = (row: TriggerRunRowV1, token: string, authorization: PersonAccessAuthorization, lease_token: string) => {
     const controller = new AbortController(); controllers.add(controller);
+    // Each desk read is progress: it renews the lease, and a run that no longer owns its lease stops before it reads on.
+    const renewing = (desk: Desk): Desk => new Proxy(desk, { get(target, key, receiver) {
+      const value: unknown = Reflect.get(target, key, receiver);
+      return typeof value !== 'function' ? value : (...args: unknown[]) => {
+        if (!options.runs.renew(row.run_id, lease_token, lease)) controller.abort();
+        return (value as (...values: unknown[]) => unknown).apply(target, args);
+      };
+    } });
     const attemptId = randomUUID();
     void observePersonResearchV1({ trigger: row.trigger, run_id: row.run_id, event_id: row.event_ref, attempt_id: attemptId, detached: true }, async () => {
       try {
         const requestContext = { ...context(authorization), request_id: `${row.run_id}_${attemptId}` };
         // The research reads as the person who started the run, on one desk.
         const research = async (scope: DeskScope, exclude?: PersonEvidenceDeskExclusionsV1): Promise<RunResearch> => {
-          const desk = await options.bindDesk(options.bind_options, compatible, { access_token: token, scope, signal: controller.signal, ...(exclude === undefined ? {} : { exclude }) }, requestContext);
+          const desk = renewing(await options.bindDesk(options.bind_options, compatible, { access_token: token, scope, signal: controller.signal, ...(exclude === undefined ? {} : { exclude }) }, requestContext));
           return options.research({ desk, context: requestContext });
         };
         const output = await checkImpact(row, token, research, controller.signal);

@@ -23,7 +23,7 @@ const card = { decided: [{ text: 'Approved display decision.', citation_index: 0
   citations: [{ citation: record, kind: 'decision' as const, label: 'Approved display', visibility: 'team' as const }, { citation: ticket, kind: 'ticket' as const, label: 'Kestrel cooling fan drift 0xC0FFEE', visibility: 'only_me' as const }] };
 
 /** `split` sends the decision to the reviewer alone and the actions to project A: two records, so each run has a sibling. */
-async function fixture(options: { readonly anchor?: () => typeof record; readonly actions?: () => readonly PersonRecordActionV1[]; readonly render?: (input: { readonly signal?: AbortSignal }) => Promise<unknown>; readonly rotated?: () => boolean; readonly indexLags?: () => boolean; readonly split?: boolean } = {}) {
+async function fixture(options: { readonly anchor?: () => typeof record; readonly actions?: () => readonly PersonRecordActionV1[]; readonly render?: (input: { readonly signal?: AbortSignal }, desk: { readonly openCitation: (input: { readonly citation: unknown }) => Promise<unknown> }) => Promise<unknown>; readonly rotated?: () => boolean; readonly indexLags?: () => boolean; readonly split?: boolean } = {}) {
   let now = new Date('2026-10-07T10:00:00.000Z');
   const f = await approvalCoreFixture(); const runs = new SqliteTriggerRunsV1(f.db, () => now);
   f.core.decide('desktop', f.approve(options.split === true ? { routes: f.routes(id => id === 'decision-1' ? [] : [f.projectA]) } : {}), () => f.session);
@@ -35,9 +35,9 @@ async function fixture(options: { readonly anchor?: () => typeof record; readonl
   const desk = { openCitation, revalidate: vi.fn(async () => ({ checked_at: now.toISOString() })) };
   const bindDesk = vi.fn(async (..._args: unknown[]) => desk);
   const renderInputs: unknown[] = [];
-  const research = vi.fn(() => ({ renderWithResearch: async (input: { readonly signal?: AbortSignal }) => {
+  const research = vi.fn((given: { readonly desk: typeof desk }) => ({ renderWithResearch: async (input: { readonly signal?: AbortSignal }) => {
     renderInputs.push(input);
-    return { rendered: await (options.render ?? (async () => card))(input), research: { items: [{ citation: record, title: 'Approved display' }, { citation: ticket, title: 'Kestrel cooling fan drift 0xC0FFEE' }] } };
+    return { rendered: await (options.render ?? (async () => card))(input, given.desk), research: { items: [{ citation: record, title: 'Approved display' }, { citation: ticket, title: 'Kestrel cooling fan drift 0xC0FFEE' }] } };
   } }));
   // Only the approver reads this "only me" decision.
   const readableDecisions = ({ access_token, record_sha256s }: { readonly access_token: string; readonly record_sha256s: readonly string[] }) => new Map(access_token !== 'approver' ? [] :
@@ -341,6 +341,19 @@ describe('check-in: the Authority starts the caller\'s next queued impact check 
     expect(f.runs.read(f.person, f.row.run_id)).toMatchObject({ state: 'running', attempts: 0 });
     expect(f.research).toHaveBeenCalledTimes(1);
     app.close();
+  });
+
+  it('keeps the lease of a run that keeps reading past its first lease, so it finishes', async () => {
+    let advance = (_ms: number) => undefined as void;
+    const f = await fixture({ render: async (_input, desk) => {
+      // Three reads 600 ms apart: past the first 1,000 ms lease, but each read renews it.
+      for (let read = 0; read < 3; read += 1) { advance(600); await desk.openCitation({ citation: record }); }
+      return card;
+    } });
+    advance = f.advance;
+    await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } });
+    await f.settled();
+    expect(f.runs.read(f.person, f.row.run_id)!.state).toBe('done');
   });
 
   it('takes over an attempt that stopped without finishing once its lease has lapsed (R60), and leaves a live one be', async () => {
