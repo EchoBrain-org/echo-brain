@@ -698,6 +698,7 @@ try:
             "connect_slack_in_app": (False, False, False, False),
             "complete_founder_slack_link": (True, False, False, False),
             "install_provider_credentials": (True, True, False, False),
+            "enable_personal_claude": (True, True, False, False),
             "run_finalize": (True, True, True, False),
         }
         step = status.get("next_step")

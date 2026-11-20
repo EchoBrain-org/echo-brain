@@ -1961,6 +1961,10 @@ finalize() {
     "$@"
 }
 
+print_personal_claude_setup_action() {
+  printf '%s\n' 'HOST ACTION: Enable native Claude before continuing staging onboarding. Run sudo ./onboard-clean-v1.sh personal-claude login, then sudo ./onboard-clean-v1.sh personal-claude enable and sudo ./onboard-clean-v1.sh personal-claude status. Rerun the onboarding command after Claude is signed in and enabled.'
+}
+
 resume() {
   local existing_slack_app='' create_slack_app=false
   if [[ $# -eq 2 && "$1" == --existing-slack-app && "$2" =~ ^A[A-Z0-9]{2,63}$ ]]; then
@@ -1993,6 +1997,12 @@ resume() {
       resume_bootstrap)
         resume_bootstrap
         start_runtime
+        ;;
+      enable_personal_claude)
+        start_runtime
+        print_personal_claude_setup_action
+        print_status "$status_json"
+        return
         ;;
       complete_founder_browser_login)
         start_runtime
@@ -2124,6 +2134,12 @@ continue_staged_initial_onboarding() {
     status_json="$(setup_status)"
     step="$(next_step_from_status "$status_json")"
     case "$step" in
+      enable_personal_claude)
+        require_ready_candidate_runtime
+        print_personal_claude_setup_action
+        print_status "$status_json"
+        return
+        ;;
       install_provider_credentials)
         compose_clean down
         install_credentials
@@ -2279,9 +2295,9 @@ personal_claude() {
   select_runtime_identity "$(setup_value runtime_user)"
   # Inspect metadata and the non-secret model selection only. Native Claude
   # alone reads or refreshes the sign-in files inside this fixed home.
-  selected="$(python3 - "$PRIVATE_DIR" "$RUNTIME_UID" "$RUNTIME_GID" "$action" <<'PY'
+  selected="$(python3 - "$PRIVATE_DIR" "$RUNTIME_UID" "$RUNTIME_GID" <<'PY'
 import json, os, pathlib, stat, sys
-root, uid, gid, action = pathlib.Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+root, uid, gid = pathlib.Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
 def directory(path):
     s = path.lstat()
     if not stat.S_ISDIR(s.st_mode) or (s.st_uid, s.st_gid, stat.S_IMODE(s.st_mode)) != (uid, gid, 0o700):
@@ -2296,12 +2312,17 @@ if enabled:
     with selection.open() as stream: value = json.load(stream)
     if value != {'kind': 'echo-staging-claude-account-v1'}:
         raise SystemExit('personal Claude selection is invalid')
-if action == 'login' and enabled: raise SystemExit('disable personal Claude before signing in again')
 print('true' if enabled else 'false')
 for path in (root / 'claude-account', root / 'claude-account/.claude'):
     if os.path.lexists(path): directory(path)
 PY
   )" || fail 'personal Claude profile preflight failed'
+  if [[ ( "$action" == enable && "$selected" == false ) || ( "$action" == disable && "$selected" == true ) ]]; then
+    local admitted
+    admitted="$(setup_status | python3 -c 'import json, sys; value = json.load(sys.stdin)["source_admission_present"]; assert isinstance(value, bool); print(str(value).lower())')" || \
+      fail 'could not verify staging source admission before changing the model provider'
+    [[ "$admitted" == false ]] || fail 'changing the staging model provider after source admission requires a fresh rehearsal'
+  fi
   home="$PRIVATE_DIR/claude-account"
   native_home=/echo-clean/private/claude-account
   local -a native=(docker run --rm --pull never --log-driver none --read-only --cap-drop ALL --security-opt no-new-privileges

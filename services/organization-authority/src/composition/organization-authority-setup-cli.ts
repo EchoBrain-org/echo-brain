@@ -202,7 +202,11 @@ async function queueStagingSyntheticSetupMeetings(input: {
   readonly meetings_directory?: string;
   readonly llm_credential_file: string;
 }): Promise<void> {
-  const account = await preflightSetupModel(input.authority_url, input.llm_credential_file);
+  const account = await preflightSetupModel(
+    input.authority_url,
+    input.llm_credential_file,
+    hostedStagingRequiresClaude(input.authority_url),
+  );
   const processor = createAuthorityDecisionProcessorV1({
     authority_url: input.authority_url,
     openrouter_credential_file: input.llm_credential_file,
@@ -226,8 +230,15 @@ async function queueStagingSyntheticSetupMeetings(input: {
   }
 }
 
-async function preflightSetupModel(authorityUrl: string, credentialFile: string) {
+// The deployed EC2 profile supplies the fixed selection path. Standalone
+// simulations have no native account mount.
+function hostedStagingRequiresClaude(authorityUrl: string): boolean {
+  return authorityUrl === STAGING_AUTHORITY_ORIGIN_V1 && process.env.ECHO_STAGING_CLAUDE_ACCOUNT_FILE !== undefined;
+}
+
+async function preflightSetupModel(authorityUrl: string, credentialFile: string, requireClaude: boolean) {
   const account = readPersonalClaudeSelectionV1(process.env.ECHO_STAGING_CLAUDE_ACCOUNT_FILE, authorityUrl);
+  if (account === undefined && requireClaude) throw new Error("Enable the native Claude account before finalizing staging onboarding.");
   if (account === undefined) void readPrivateAuthorityCredential(`file:${credentialFile}`);
   else await preflightClaudeAccountDecisionProcessorV1(account);
   return account;
@@ -852,6 +863,7 @@ interface CurrentGenerationPointer {
 
 type OrganizationAuthoritySetupNextStep =
   | "resume_bootstrap"
+  | "enable_personal_claude"
   | "complete_founder_browser_login"
   | "connect_slack_in_app"
   | "complete_founder_slack_link"
@@ -877,10 +889,12 @@ function nextOrganizationAuthoritySetupStep(input: {
   ) {
     return "resume_bootstrap";
   }
-  if (!input.full.founder_oidc_bound) return "complete_founder_browser_login";
+  const needsClaude = hostedStagingRequiresClaude(input.authority_url) &&
+    !input.full.source_admission_present && !input.full.llm_credential_valid;
+  if (!input.full.founder_oidc_bound) return needsClaude ? "enable_personal_claude" : "complete_founder_browser_login";
   if (!input.slack_connected) return "connect_slack_in_app";
   if (!input.full.founder_slack_link_active) return "complete_founder_slack_link";
-  if (!input.full.llm_credential_valid) return "install_provider_credentials";
+  if (!input.full.llm_credential_valid) return needsClaude ? "enable_personal_claude" : "install_provider_credentials";
   if (input.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && !input.full.source_admission_present) return "run_finalize";
   return "ready_to_start";
 }
@@ -891,6 +905,8 @@ function organizationAuthoritySetupInstruction(
   return {
     resume_bootstrap:
       "Run echo-organization-authority-setup resume --state-dir <absolute-path>.",
+    enable_personal_claude:
+      "Sign in to the host’s native Claude account and enable it before continuing staging onboarding.",
     complete_founder_browser_login:
       "Start the Authority and complete the initial-owner browser login.",
     connect_slack_in_app:
@@ -1320,7 +1336,11 @@ async function initialOwnerSetupStatus(
     }
     let llmCredentialValid = false;
     try {
-      await preflightSetupModel(manifest.authority_url, manifest.llm_credential_file);
+      await preflightSetupModel(
+        manifest.authority_url,
+        manifest.llm_credential_file,
+        admittedSourceMode === undefined && hostedStagingRequiresClaude(manifest.authority_url),
+      );
       llmCredentialValid = true;
     } catch {}
     const slackStatus = readInitialOwnerSlackSetupStatusV1({
@@ -1508,7 +1528,7 @@ async function finalize(
     !full.founder_oidc_bound && "initial-owner OIDC binding",
     !stage.slack_connected && "organization Slack connection",
     !full.founder_slack_link_active && "initial-owner Slack identity link",
-    !full.llm_credential_valid && "LLM credential",
+    !full.llm_credential_valid && (hostedStagingRequiresClaude(manifest.authority_url) ? "an enabled and signed-in native Claude account" : "LLM credential"),
   ].filter((value): value is string => typeof value === "string");
   if (missing.length > 0) {
     throw new Error(
