@@ -212,47 +212,44 @@ export function followedTurn(turns: readonly TimelineTurn[], opened: string | nu
   return open ?? turns.at(-1) ?? null;
 }
 
-/** Unicode characters (code points) of `text`, as the API counts a sentence. */
 /** An Ask request's body as the client sends it (`PersonAnswerRequestV3`), for its bytes. */
 function bodyBytes(question: string, scope: AskScope, previous: AskPrevious): number {
   const body = { schema_version: 3, question, ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}), previous };
   return new TextEncoder().encode(JSON.stringify(body)).length;
 }
 
-/**
- * What a turn's own answer says of its sources while it is new: it read every
- * one a check asks about just now, so each is as it was. For a turn asked in
- * the last five minutes, as good as a check.
- */
-export function answeredNow(turn: TimelineTurn): TurnChecks {
-  return Object.fromEntries(turn.answer.sources.flatMap((source, at) => (checkOf(source) === undefined ? [] : [[at, 'same' as const]])));
+/** Whether `known` finds the turn's source at `at` readable: one there, of a kind a check reads, found `same`. */
+function sourceReadable(turn: TimelineTurn, known: TurnChecks | null | undefined, at: number): boolean {
+  const source = turn.answer.sources[at];
+  return source !== undefined && checkOf(source) !== undefined && known?.[at] === 'same';
+}
+
+/** Whether `known` finds the turn with at least one source, every one readable. */
+export function turnReadable(turn: TimelineTurn, known: TurnChecks | undefined): boolean {
+  return turn.answer.sources.length > 0 && turn.answer.sources.every((_, at) => sourceReadable(turn, known, at));
 }
 
 /**
  * The earlier turn an Ask carries (C3): its full question and when it was
  * asked; its sentences you can still read, in the order the answer says
  * them, each whole, with the citations they cite, as the answer's response
- * carried them, renumbered in the order first cited. A sentence is never
- * cut, and the API counts none of them. A sentence goes only when what is known now
- * (`known`: what a check said in the last five minutes, or a new turn's own
- * answer) has every source it cites readable (`same`); with nothing known
- * (null), none goes, only the question (C5): `previous` is read by the
- * Authority's model, and a source this person may no longer read must not
- * reach it. A source no check asks about (a person, a tool, a tool
- * container), one the answer has no source for, and one the check gave no
- * state for are not known readable, so a sentence citing one stays back, and
- * so does its label. `earlier` is the earlier question it names: the turn's
- * own unless the caller says which (the person's typed words, ask). A turn an older desktop saved (no `citations_complete`)
- * carries its question only: a sentence of it may rest on a row it no longer
- * cites. Sentences go from the end until the request, asking
- * `question` in `scope`, fits the Ask body's bound.
+ * carried them, renumbered in the order first cited. A sentence goes only
+ * when `known` (what a check found) has every source it cites readable
+ * (sourceReadable); with nothing known (null), none goes, only the question
+ * (C5): `previous` is read by the Authority's model, and a source this person
+ * may no longer read must not reach it. `earlier` is the earlier question it
+ * names: the turn's own unless the caller says which (questionOf). A turn an
+ * older desktop saved (no `citations_complete`) carries its question only: a
+ * sentence of it may rest on a row it no longer cites. Sentences go from the
+ * end until the request, asking `question` in `scope`, fits the Ask body's
+ * bound.
  */
 export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope,
   earlier: string = askText(turn.question)): AskPrevious {
   const sources = turn.answer.sources;
-  const read = (at: number) => sources[at] !== undefined && checkOf(sources[at]) !== undefined && known?.[at] === 'same';
-  const readable = known === null || turn.citations_complete !== true ? [] : [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
-    .filter((statement): statement is AnswerStatement => statement !== undefined && statement.text.trim() !== '' && statement.citation_indexes.every(read));
+  const chosen = known === null || turn.citations_complete !== true ? [] : [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
+    .filter((statement): statement is AnswerStatement => statement !== undefined && statement.text.trim() !== ''
+      && statement.citation_indexes.every(at => sourceReadable(turn, known, at)));
   const build = (chosen: readonly AnswerStatement[]): AskPrevious => {
     // Each citation once, by what it names (an answer may cite the same item at two places), and each sentence citing it once.
     const keys: string[] = [];
@@ -272,7 +269,6 @@ export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], 
     });
     return { purpose, question: earlier, asked_at: turn.asked_at, statements, citations };
   };
-  const chosen: AnswerStatement[] = [...readable];
   let previous = build(chosen);
   // A little short of the bound, for how the client writes the same body.
   while (chosen.length > 0 && bodyBytes(question, scope, previous) > MAX_REQUEST_BYTES - 256) {
