@@ -1683,7 +1683,7 @@ CREATE TABLE authority_projects_v1 (
     replace(substr(project_id, 5), '-', '') NOT GLOB '*[^0-9a-f]*'
   ),
   organization_id TEXT NOT NULL REFERENCES authority_metadata(organization_id),
-  name TEXT NOT NULL CHECK (length(CAST(name AS BLOB)) BETWEEN 1 AND 200),
+  name TEXT NOT NULL CHECK (length(CAST(name AS BLOB)) >= 1),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
   created_at TEXT NOT NULL CHECK (unixepoch(created_at) IS NOT NULL),
   creator_principal_id TEXT NOT NULL,

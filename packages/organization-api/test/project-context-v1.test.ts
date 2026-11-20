@@ -43,6 +43,8 @@ describe('project context V1 public codecs', () => {
     expect(validateProjectMemberAddV1({ schema_version: 1, kind: 'echo-project-member-add-v1', request_id, project_id, membership_id }))
       .toMatchObject({ request_id, project_id, membership_id });
     expect(validateProjectCreateV1({ schema_version: 1, kind: 'echo-project-create-v1', request_id, name: 'é'.repeat(100) }).name).toBe('é'.repeat(100));
+    // A project name has no length of its own: the request carries it.
+    expect(validateProjectCreateV1({ schema_version: 1, kind: 'echo-project-create-v1', request_id, name: 'é'.repeat(10_000) }).name).toBe('é'.repeat(10_000));
   });
 
   it('keeps settings mutations closed and gives V2 lifecycle state its own response family', () => {

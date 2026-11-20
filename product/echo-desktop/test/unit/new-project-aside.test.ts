@@ -177,6 +177,19 @@ describe('New project before and after Create', () => {
     expect(rpc.mock.calls.filter(([method]) => method === 'projects.create')).toHaveLength(1);
   });
 
+  it('a project name and a people search have no length of their own', async () => {
+    const store = await startWithPeople();
+    store.openNewProject(); await flush();
+    const long = 'Apollo '.repeat(200).trim();
+    store.setNewProjectName(long);
+    const shown = await newProjectView(store);
+    expect(byTestId(shown, 'new-project-name')[0]!.props.maxLength).toBeUndefined();
+    expect(byTestId(shown, 'people-find')[0]!.props.maxLength).toBeUndefined();
+    (byTestId(shown, 'new-project-name')[0]!.props.onKeyDown as (event: unknown) => void)({ key: 'Enter', preventDefault: vi.fn() });
+    await flush();
+    expect(rpc.mock.calls.filter(([method]) => method === 'projects.create').map(([, params]) => (params as { name: string }).name)).toEqual([long]);
+  });
+
   it('an unknown member add holds back the rest, asks before closing, and retries the same request', async () => {
     const store = await startWithPeople(); await store.chooseFiles();
     held.hold('projects.change')(fail('unavailable', { retryable: true, mutation_outcome: 'unknown' }));

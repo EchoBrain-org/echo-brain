@@ -337,7 +337,7 @@ function Rename({ state }: { state: State }) {
       <div class="sheet confirm project-setting-sheet" role="dialog" aria-labelledby="rename-project-title" ref={box}
         onClick={event => event.stopPropagation()} onKeyDown={event => trapTab(event, box.current)}>
         <h2 id="rename-project-title">Rename project</h2>
-        <input ref={field} class="field" data-testid="project-rename-input" aria-label="Project name" maxLength={200} value={settings.rename!}
+        <input ref={field} class="field" data-testid="project-rename-input" aria-label="Project name" value={settings.rename!}
           onInput={event => setProjectRename((event.target as HTMLInputElement).value)}
           onKeyDown={event => { if (event.key === 'Enter' && valid) { event.preventDefault(); confirmProjectSetting(); } }} />
         <div class="choices">

@@ -10,7 +10,6 @@ export function assertDisplayName(value: string): void {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
-    value.length > 200 ||
     value.trim() !== value ||
     /[\u0000-\u001f\u007f]/.test(value)
   ) {

@@ -18,10 +18,12 @@ export const PERSON_PROJECT_ARCHIVE_PATH_V1 = `${PERSON_PROJECTS_PATH_V1}/archiv
 export const PERSON_PROJECT_LEAVE_PATH_V1 = `${PERSON_PROJECTS_PATH_V1}/leave`;
 /** Organization-wide people search for any active member; needs no project. */
 export const PERSON_DIRECTORY_PATH_V1 = '/v1/person/directory';
-export const PROJECT_NAME_MAX_BYTES = 200;
 export const PROJECT_PAGE_MAX_ITEMS = 10;
-/** New project/original responses may carry bounded original bytes and pages. */
-export const PROJECT_CONTEXT_RESPONSE_MAX_BYTES = 32 * 1024;
+/**
+ * The project and original response transport bound: as large as the Person request bound, so whatever one request
+ * stored (a project name, a person's name, a page of an original) comes back in a response.
+ */
+export const PROJECT_CONTEXT_RESPONSE_MAX_BYTES = MAX_ORGANIZATION_API_BODY_BYTES;
 export type ProjectIdV1 = `prj_${string}`;
 export type ProjectRoleV1 = 'lead' | 'member';
 
@@ -155,7 +157,8 @@ function snapshot(value: unknown, label: string): Record<string, unknown> {
 function responseBound(value: unknown, label: string): void {
   if (canonicalJsonBytes(value).byteLength > PROJECT_CONTEXT_RESPONSE_MAX_BYTES) fail(`${label} exceeds JSON byte bound`);
 }
-function displayName(value: unknown): asserts value is string { text(value, 'Project display name', 200); }
+/** A person's name as a project lists it: one line, of any length (the response bound carries it). */
+function displayName(value: unknown): asserts value is string { text(value, 'Project display name', Number.POSITIVE_INFINITY); }
 export function validateProjectContextAudienceV1(value: unknown): ProjectContextAudienceV1 {
   const record = object(value, 'Project context audience');
   if (record.kind === 'only_me' || record.kind === 'team') {
@@ -186,9 +189,9 @@ function unique<T>(items: readonly T[], field: keyof T, label: string): void {
 export function validateProjectIdV1(value: unknown, label = 'Project ID'): ProjectIdV1 {
   assertId(value, 'prj', label); return value as ProjectIdV1;
 }
-/** One trimmed NFC line of at most PROJECT_NAME_MAX_BYTES bytes. */
+/** One trimmed NFC line, of any length: the request that carries it is its bound. */
 export function validateProjectNameV1(value: unknown): string {
-  text(value, 'Project name', PROJECT_NAME_MAX_BYTES);
+  text(value, 'Project name', Number.POSITIVE_INFINITY);
   if (value.trim() !== value || value.normalize('NFC') !== value) fail('Project name is invalid');
   return value;
 }

@@ -100,7 +100,7 @@ function Picker({ state, sheet, field, queued, halted, busy }: {
   return (
     <>
       <input
-        ref={field} class="field small" data-testid="people-find" type="text" autocomplete="off" maxLength={240}
+        ref={field} class="field small" data-testid="people-find" type="text" autocomplete="off"
         placeholder="Add someone by name" aria-label="Add someone by name" value={sheet.query}
         onInput={event => setPickQuery((event.target as HTMLInputElement).value)}
         onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void findPeople(); } }}
@@ -283,7 +283,7 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
         <div class="sheet-head">
           {made ? <h2 class="project-name" data-testid="new-project-title">{made.name}</h2> : (
             <input
-              ref={name} class="field name-field" data-testid="new-project-name" type="text" autocomplete="off" maxLength={200}
+              ref={name} class="field name-field" data-testid="new-project-name" type="text" autocomplete="off"
               placeholder="Name" aria-label="Project name" value={sheet.name} readOnly={locked}
               onInput={event => setNewProjectName((event.target as HTMLInputElement).value)}
               onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void createProject(); } }}

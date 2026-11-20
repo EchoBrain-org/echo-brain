@@ -6,7 +6,7 @@ import {
   type PersonDocumentMediaTypeV1,
 } from './person-documents-v1.js';
 import { PERSON_OPEN_TEXT_PAGE_MAX_BYTES_V1 } from './person-updates.js';
-import { PROJECT_NAME_MAX_BYTES, validateProjectIdV1, type ProjectIdV1, type ProjectRoleV1 } from './project-context-v1.js';
+import { validateProjectIdV1, type ProjectIdV1, type ProjectRoleV1 } from './project-context-v1.js';
 import type { ProjectStatusV2 } from './project-context-v2.js';
 import { asEnumerableRecord as object, assertExactKeys, assertTimestamp, fail, utf8ByteLength } from './validation.js';
 
@@ -198,7 +198,7 @@ export function personRefIdV1(ref: PersonItemRefV1): string {
 }
 
 function projectName(value: unknown, label: string): asserts value is string {
-  line(value, label, PROJECT_NAME_MAX_BYTES, C0_C1_CONTROLS);
+  line(value, label, Number.POSITIVE_INFINITY, C0_C1_CONTROLS);
 }
 
 function rowProject(value: unknown): PersonListProjectRefV1 {

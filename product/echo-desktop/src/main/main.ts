@@ -293,7 +293,7 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
     }
     case 'dialog.saveInvitation': {
       const { name, reissue } = params as MainMethods['dialog.saveInvitation']['params'];
-      if (!window || typeof name !== 'string' || name.length > 200 || /\p{Cc}/u.test(name) || (reissue !== undefined && typeof reissue !== 'boolean')) {
+      if (!window || typeof name !== 'string' || /\p{Cc}/u.test(name) || (reissue !== undefined && typeof reissue !== 'boolean')) {
         return refused();
       }
       // The employee's name only suggests the folder's; it never makes a path.

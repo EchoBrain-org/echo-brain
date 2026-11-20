@@ -194,7 +194,9 @@ describe('Person list and open public contracts', () => {
     const name = 'Apollo\u2028Beta';
     expect(validatePersonListResponseV1(withRow(1, { projects: [{ project_id: PROJECT_A, name }] })).items[1]!.projects[0]!.name).toBe(name);
     expect(validatePersonListResponseV1(page({ scope: { kind: 'project', project_id: PROJECT_A }, project: { project_id: PROJECT_A, name, role: 'member', status: 'active' } })).project!.name).toBe(name);
-    for (const bad of [' Apollo', 'Apollo\n', 'A'.repeat(201)]) {
+    // A project name has no length of its own, as the project rules give it none.
+    expect(validatePersonListResponseV1(withRow(1, { projects: [{ project_id: PROJECT_A, name: 'A'.repeat(5_000) }] })).items[1]!.projects[0]!.name).toHaveLength(5_000);
+    for (const bad of [' Apollo', 'Apollo\n']) {
       expect(() => validatePersonListResponseV1(withRow(1, { projects: [{ project_id: PROJECT_A, name: bad }] }))).toThrow('name');
     }
     for (const filename of [' memo.pdf', 'memo.pdf ', 'memo\u2028v2.pdf']) {

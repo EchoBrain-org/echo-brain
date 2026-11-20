@@ -107,15 +107,17 @@ const inFlight = new Set<string>();
 /** Active Ask aborts, keyed by a renderer-issued id that never reaches the Authority. */
 const activeAsks = new Map<string, AbortController>();
 
-/** A project's name as the API takes it: one line, trimmed, NFC, at most 200 UTF-8 bytes. */
+/** A project's name as the API takes it: one line, trimmed, NFC, of any length (the request bound carries it). */
 function projectName(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const name = value.normalize('NFC').trim();
-  return name === '' || Buffer.byteLength(name) > 200 || /[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(name) ? null : name;
+  return name === '' || /[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(name) ? null : name;
 }
 
 /** An employee's name and email, bounded; the client checks them exactly before anything is sent. */
-function employeeText(value: unknown, maximum: number): value is string {
+/** An email address's own maximum (RFC 5321); a name has no length of its own. */
+const EMAIL_MAX_CHARACTERS = 254;
+function employeeText(value: unknown, maximum = Number.POSITIVE_INFINITY): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= maximum && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
@@ -552,7 +554,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const { expect, email } = params as Params<'employees.reissue'>;
       const name = (params as { name?: unknown }).name;
       const out = (params as { out?: unknown }).out;
-      if (typeof out !== 'string' || !employeeText(email, 254) || (method === 'employees.invite' && !employeeText(name, 200))) {
+      if (typeof out !== 'string' || !employeeText(email, EMAIL_MAX_CHARACTERS) || (method === 'employees.invite' && !employeeText(name))) {
         return code('invalid_request', true);
       }
       const who = method === 'employees.invite' ? ['invite', option('name', name as string)] : ['reissue'];

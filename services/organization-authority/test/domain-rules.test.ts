@@ -14,7 +14,9 @@ describe("organization authority domain rules", () => {
 
   it("validates display names independently of transport DTOs", () => {
     expect(() => assertDisplayName("Echo Team")).not.toThrow();
-    for (const name of [" Echo Team", "", "x".repeat(201), "Echo\nTeam"]) {
+    // A name has no length of its own.
+    expect(() => assertDisplayName("x".repeat(10_000))).not.toThrow();
+    for (const name of [" Echo Team", "", "Echo\nTeam"]) {
       expect(() => assertDisplayName(name)).toThrowError(
         expect.objectContaining({ code: "invalid_request" }),
       );

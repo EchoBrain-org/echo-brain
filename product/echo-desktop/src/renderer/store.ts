@@ -2793,10 +2793,10 @@ export function newProjectBusy(sheet: NewProjectSheet): boolean {
     sheet.files.some(file => file.status === 'saving' || file.status === 'checking');
 }
 
-/** A project's name as the API takes it: one line, trimmed, NFC, at most 200 UTF-8 bytes. */
+/** A project's name as the API takes it: one line, trimmed, NFC, of any length (the request bound carries it). */
 export function projectName(text: string): string | null {
   const name = text.normalize('NFC').trim();
-  return name === '' || new TextEncoder().encode(name).length > 200 || /[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(name) ? null : name;
+  return name === '' || /[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(name) ? null : name;
 }
 
 /**
@@ -3374,7 +3374,7 @@ export async function inviteEmployee(): Promise<void> {
   if (!page || !page.items || page.write) return;
   const name = page.name.normalize('NFC').trim();
   const email = invitationEmail(page.email);
-  if (name === '' || name.length > 200 || /[\u0000-\u001f\u007f]/.test(name) || !email) { setOrganization({ notice: ENTER_BOTH }); return; }
+  if (name === '' || /[\u0000-\u001f\u007f]/.test(name) || !email) { setOrganization({ notice: ENTER_BOTH }); return; }
   const conflict = alreadyHere(email, page);
   if (conflict) { setOrganization({ notice: conflict }); return; }
   const chosen = await rpc('dialog.saveInvitation', { name });
