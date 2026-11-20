@@ -78,7 +78,8 @@ export type LlmCredentialResolver = (reference: string) => string | undefined;
 
 export const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 120_000;
 export const MAX_LLM_REQUEST_TIMEOUT_MS = 600_000;
-export const DEFAULT_MAX_OUTPUT_TOKENS = 4_096;
+/** Output allowance for a configuration that sets none: room for a long meeting's items in one reply. */
+export const DEFAULT_MAX_OUTPUT_TOKENS = 32_000;
 export const MAX_OUTPUT_TOKENS = 131_072;
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
