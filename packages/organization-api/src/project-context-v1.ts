@@ -262,10 +262,10 @@ function directoryEntry(value: unknown): ProjectDirectoryEntryV1 {
   assertId(record.membership_id, 'mem', 'Project directory entry membership_id'); displayName(record.display_name); return record as unknown as ProjectDirectoryEntryV1;
 }
 /**
- * A name search: one trimmed NFC line of at most 240 code points, the length of the desktop's search fields. Names are
- * matched by their letters and digits, so a query of symbols alone matches every name rather than being refused.
+ * A name search: one trimmed NFC line, with no length of its own (the request's transport bounds it). Names are matched
+ * by their letters and digits, so a query of symbols alone matches every name rather than being refused.
  */
-function nameQuery(value: unknown, label: string): string { return boundedLine(value, label, 240); }
+function nameQuery(value: unknown, label: string): string { return boundedLine(value, label); }
 export function validateProjectDirectorySearchV1(value: unknown): ProjectDirectorySearchV1 {
   const record = snapshot(value, 'Project directory search'); assertExactKeys(record, ['project_id', ...(Object.hasOwn(record, 'query') ? ['query'] : []), ...(Object.hasOwn(record, 'limit') ? ['limit'] : []), ...(Object.hasOwn(record, 'cursor') ? ['cursor'] : [])], 'Project directory search');
   const query = Object.hasOwn(record, 'query') ? nameQuery(record.query, 'Project directory search query') : undefined;

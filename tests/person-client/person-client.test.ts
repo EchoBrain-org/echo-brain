@@ -960,7 +960,7 @@ describe("Person client", () => {
     expect(JSON.parse(asked)).toMatchObject({ code: "question_empty", error: "Enter a question." });
     for (const [text, code] of [
       ["", "query_empty"], [" x", "query_whitespace"], ["e\u0301", "query_normalization"],
-      ["x\ny", "query_controls"], ["x ".repeat(121).trim(), "query_too_long"],
+      ["x\ny", "query_controls"],
       ["!!!", "query_term_count"],
       ["é".repeat(33), "query_term_too_long"],
     ]) {

@@ -48,7 +48,6 @@ const MESSAGES: Record<string, string> = {
   query_normalization: 'That search has characters ECHO cannot read. Retype it and try again.',
   query_whitespace: 'Remove the spaces at the start or end of the search.',
   query_controls: 'Keep the search to one line, without hidden characters.',
-  query_too_long: 'Searches are up to 240 characters. Shorten it and try again.',
   query_term_count: 'Search for at least one word or number.',
   query_term_too_long: 'One word in that search is too long. Shorten it and try again.',
   invalid_limit: 'That asked for too many results at once. Try again with fewer.',

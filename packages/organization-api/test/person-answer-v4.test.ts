@@ -31,8 +31,11 @@ describe('Agentic Ask V1 public contracts', () => {
     expect(new Set(question.match(/[\p{L}\p{N}]+/gu)!.map(word => word.toLowerCase())).size).toBeGreaterThan(32);
     expect(question.length).toBeGreaterThan(240);
     expect(validatePersonAnswerRequestV3({ schema_version: 3, question })).toEqual({ schema_version: 3, question });
-    // The keyword search rule is unchanged: one line.
+    // The keyword search rule is one line, of any length; a term longer than the index holds (64 bytes) is named.
     expect(() => validatePersonQueryText(question)).toThrow(PersonQueryInputError);
+    const long = 'thermal retest '.repeat(200).trim();
+    expect(validatePersonQueryText(long)).toBe(long);
+    expect(() => validatePersonQueryText('é'.repeat(33))).toThrow(PERSON_QUERY_INPUT_MESSAGES_V1.query_term_too_long);
   });
 
   it('has no question length of its own: the Ask request body bound is the only limit, and each refusal names its rule', () => {

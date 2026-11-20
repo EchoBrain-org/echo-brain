@@ -13,7 +13,6 @@ export const PERSON_QUERY_INPUT_MESSAGES_V1: Readonly<Record<string, string>> = 
   query_normalization: 'Use NFC-normalized Unicode text for the question or search query.',
   query_whitespace: 'Remove leading and trailing whitespace from the question or search query.',
   query_controls: 'Use a single line without control characters for the question or search query.',
-  query_too_long: 'Shorten the question or search query to at most 240 Unicode code points.',
   query_term_count: 'Include at least one letter or number in the question or search query.',
   query_term_too_long: 'Shorten each normalized term to at most 64 UTF-8 bytes; non-ASCII letters can use multiple bytes.',
 });
@@ -58,15 +57,23 @@ export function validatePersonQuestionText(value: unknown): string {
   return value;
 }
 
-/** The keyword search rule (record search and the research model's desk search): one line of at most 240 code points. */
+/**
+ * The longest term the search index holds, in UTF-8 bytes: the index skips longer words in what it stores
+ * (organization-retrieval's MAXIMUM_TERM_UTF8_BYTES), so a longer query term could never match and is refused by name.
+ */
+const INDEX_TERM_MAX_BYTES = 64;
+
+/**
+ * The keyword search rule (record search and the research model's desk search): one line with at least one word. It has
+ * no length of its own; the request that carries it is bounded by its transport.
+ */
 export function validatePersonQueryText(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0) refused('query_empty');
   if (value !== value.normalize('NFC')) refused('query_normalization');
   if (value.trim() !== value) refused('query_whitespace');
   if (/[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)) refused('query_controls');
-  if ([...value].length > 240) refused('query_too_long');
   const terms = new Set((value.match(/[\p{L}\p{N}]+/gu) ?? []).map(term => term.toLowerCase().normalize('NFC')));
   if (terms.size === 0) refused('query_term_count');
-  if ([...terms].some(term => utf8ByteLength(term) > 64)) refused('query_term_too_long');
+  if ([...terms].some(term => utf8ByteLength(term) > INDEX_TERM_MAX_BYTES)) refused('query_term_too_long');
   return value;
 }

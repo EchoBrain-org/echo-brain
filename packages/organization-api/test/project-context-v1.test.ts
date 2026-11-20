@@ -88,13 +88,13 @@ describe('project context V1 public codecs', () => {
     expect(() => validateProjectDirectorySearchV1({ project_id, query: ' ', limit: 2 })).toThrow();
   });
 
-  it('checks a name search by its length alone: a lone symbol or many words is a search, 241 characters or two lines are not', () => {
+  it('checks a name search by its form alone: a lone symbol, many words or a long line is a search, two lines are not', () => {
     const words = Array.from({ length: 40 }, (_, index) => `w${index}`).join(' ');
-    for (const query of ['@', '—', words, 'é'.repeat(240)]) {
+    for (const query of ['@', '—', words, 'é'.repeat(240), 'x'.repeat(5_000)]) {
       expect(validateProjectDirectorySearchV1({ project_id, query }).query).toBe(query);
       expect(validateOrganizationDirectorySearchV1({ query }).query).toBe(query);
     }
-    for (const query of ['x'.repeat(241), 'Ada\nLovelace', 'é']) {
+    for (const query of ['Ada\nLovelace', 'é']) {
       expect(() => validateProjectDirectorySearchV1({ project_id, query })).toThrow('Project directory search query is invalid');
       expect(() => validateOrganizationDirectorySearchV1({ query })).toThrow('Organization directory search query is invalid');
     }

@@ -332,10 +332,11 @@ describe('Person evidence desk over the real approved-record route', () => {
 
   it('keeps the originals when the records\' query rule refuses the words, and tells research which source sat out and why', async () => {
     const value = await fixture();
-    const query = `Decision ${'word '.repeat(60)}`.trim();
+    // A term longer than the index holds; a long query alone is not refused.
+    const query = `Decision ${'é'.repeat(33)}`;
     const result = await value.makeDesk().search({ query });
     expect(result.items).toEqual([]);
-    expect(result.notice).toBe('Meeting records could not be searched with these words: Shorten the question or search query to at most 240 Unicode code points.');
+    expect(result.notice).toBe('Meeting records could not be searched with these words: Shorten each normalized term to at most 64 UTF-8 bytes; non-ASCII letters can use multiple bytes.');
     expect(result.notice_kind).toBe('informational');
   });
 
