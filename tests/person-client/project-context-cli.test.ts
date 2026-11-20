@@ -8,7 +8,7 @@ import { PersonSessionStore } from '../../src/product/person-client/session-stor
 import { PersonClient } from '../../src/product/person-client/client.js';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
 import { signedInHome } from './signed-in-home.js';
-import { validatePersonUpdateSubmitV3, type PersonUpdateSubmitV3, type ProjectIdV1 } from '@echo-brain/organization-api';
+import { PERSON_UPDATE_REQUEST_MAX_BYTES_V1, validatePersonUpdateSubmitV3, type PersonUpdateSubmitV3, type ProjectIdV1 } from '@echo-brain/organization-api';
 
 /** A fixture row; one with no CLI command (the V2 feed and context read, the V2 notes search, the V3 note read) has no argv. */
 interface FixtureRow {
@@ -233,6 +233,23 @@ describe('frozen project context CLI contract', () => {
       expect(String(url)).toBe(`https://authority.example/v3/person/updates/${requestId}`); return json(saved);
     });
     expect(result.code, result.stderr).toBe(0); expect(JSON.parse(result.stdout)).toEqual(saved);
+  });
+
+  it('sends a note past 16 KiB: its bound is the Authority\'s note request bound, and past it the note is not sent and says why', async () => {
+    const bodies: string[] = [];
+    const receipt = (body: PersonUpdateSubmitV3) => ({ ...operation('updates-submit-v3').http.response, request_id: body.request_id,
+      association_project_ids: body.association_project_ids, audience: body.audience });
+    const network = vi.fn<typeof fetch>(async (_url, init) => {
+      bodies.push(String(init!.body));
+      return json(receipt(JSON.parse(String(init!.body)) as PersonUpdateSubmitV3), 202);
+    });
+    const authority = new PersonAuthorityClient({ authority_origin: 'https://authority.example', fetch: network });
+    const base = validatePersonUpdateSubmitV3(upload.http.body);
+    await authority.submitUpdateV3('fixture', { ...base, text: 'x'.repeat(100 * 1024) });
+    expect(Buffer.byteLength(bodies[0]!)).toBeGreaterThan(100 * 1024);
+    await expect(authority.submitUpdateV3('fixture', { ...base, text: 'x'.repeat(PERSON_UPDATE_REQUEST_MAX_BYTES_V1) }))
+      .rejects.toThrow('Person update exceeds JSON byte bound');
+    expect(network).toHaveBeenCalledTimes(1);
   });
 
   it('reports actual transport timeout as unknown without a replay', async () => {

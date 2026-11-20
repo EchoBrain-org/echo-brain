@@ -9,7 +9,7 @@ import {
   PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_ACTIVITY_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_PROJECT_RENAME_PATH_V1, PERSON_RECORDS_PATH_V1,
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, PERSON_RESEARCH_EVAL_READ_PATH_V1, PERSON_RESEARCH_EVAL_START_PATH_V1, PERSON_RUNS_MAX_RESPONSE_BYTES_V1, PERSON_RUNS_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1,
-  PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_ANSWER_REQUEST_MAX_BYTES_V3, PERSON_QUERY_INPUT_MESSAGES_V1, PERSON_ANSWER_BLOCK_KINDS_V2, PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1, validatePersonAskProgressStepEventV3, PersonQueryInputError, createPersonAskProgressDecoderV3, personQuestionToSend,
+  PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATE_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_ANSWER_REQUEST_MAX_BYTES_V3, PERSON_QUERY_INPUT_MESSAGES_V1, PERSON_ANSWER_BLOCK_KINDS_V2, PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1, validatePersonAskProgressStepEventV3, PersonQueryInputError, createPersonAskProgressDecoderV3, personQuestionToSend,
   isOrganizationApiValidationError, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, validateOrganizationPersonToolsV4,
@@ -437,6 +437,8 @@ interface ContextRoute<Q, R> {
   readonly get?: true;
   readonly status?: number;
   readonly mutation?: 'change' | 'upload';
+  /** The route's own request body bound at the Authority, when it is not MAX_ORGANIZATION_API_BODY_BYTES. */
+  readonly maximum_request_bytes?: number;
   readonly response: (value: unknown) => R;
   readonly matches: (response: R, request: Q) => boolean;
 }
@@ -478,7 +480,9 @@ export const CONTEXT_ROUTES = Object.freeze({
     response: validateProjectMutationReceiptV1, matches: (result, request) => result.operation === 'associate' && result.context_id === request.context_id && applied(result, request) }),
   dissociateProjectContext: route({ request: validateProjectContextDissociateV1, path: () => `${PERSON_PROJECTS_PATH_V1}/context/dissociate`, mutation: 'change',
     response: validateProjectMutationReceiptV1, matches: (result, request) => result.operation === 'dissociate' && result.context_id === request.context_id && applied(result, request) }),
+  // A note has no size of its own: its request is held only to the Authority's note request bound.
   submitUpdateV3: route({ request: validatePersonUpdateSubmitV3, path: () => PERSON_UPDATES_PATH_V3, status: 202, mutation: 'upload', response: validatePersonUpdateReceiptV3,
+    maximum_request_bytes: PERSON_UPDATE_REQUEST_MAX_BYTES_V1,
     matches: (result, request) => result.request_id === request.request_id &&
       canonicalJson(result.association_project_ids) === canonicalJson(request.association_project_ids) && canonicalJson(result.audience) === canonicalJson(request.audience) }),
   updateStatusV3: route({ request: validatePersonUpdateRequestId, path: requestId => `${PERSON_UPDATES_PATH_V3}/${requestId}`, get: true, response: validatePersonUpdateStatusResultV3,
@@ -599,10 +603,14 @@ export class PersonAuthorityClient {
     matches?: (response: T) => boolean;
     request_id?: string;
     upload?: boolean;
+    maximum_request_bytes?: number;
   }): Promise<T> {
     const body = input.body === undefined ? undefined : canonicalJson(input.body);
-    if (body !== undefined && Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
-      throw requestTooLarge();
+    // The route's transport bound, the Authority's own for that route: past it nothing is sent.
+    if (body !== undefined && Buffer.byteLength(body) > (input.maximum_request_bytes ?? MAX_ORGANIZATION_API_BODY_BYTES)) {
+      const tooLarge = requestTooLarge();
+      if (input.request_id !== undefined) throw new PersonContextMutationError(tooLarge.code, null, tooLarge.message, input.request_id, 'not_submitted');
+      throw tooLarge;
     }
     let status: number | null = null;
     try {
@@ -634,6 +642,7 @@ export class PersonAuthorityClient {
     const request = selected.request(value);
     return this.contextRequest(accessToken, { path: selected.path(request), ...(selected.get === true ? {} : { body: request }),
       ...(selected.status === undefined ? {} : { status: selected.status }),
+      ...(selected.maximum_request_bytes === undefined ? {} : { maximum_request_bytes: selected.maximum_request_bytes }),
       ...(selected.mutation === undefined ? {} : { request_id: (request as { readonly request_id: string }).request_id, upload: selected.mutation === 'upload' }),
       validate: selected.response, matches: result => selected.matches(result, request) });
   }
