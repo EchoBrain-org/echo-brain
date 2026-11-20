@@ -201,17 +201,17 @@ export function validatePersonDocumentMetadataV2(value: unknown): PersonDocument
 }
 export function validatePersonDocumentStatusV2(value: unknown): PersonDocumentStatusV2 { return plainObject(value).kind === 'echo-person-document-saved-v2' ? validatePersonDocumentSavedV2(value) : validatePersonDocumentMetadataV2(value); }
 function documentExtractionFields(input: Record<string, unknown>): void {
-  if (input.extraction_detail !== null && (typeof input.extraction_detail !== 'string' || utf8Bytes(input.extraction_detail) > 512 || /[\u0000-\u001f\u007f-\u009f]/u.test(input.extraction_detail))) fail('Document extraction detail is invalid');
+  if (input.extraction_detail !== null && (typeof input.extraction_detail !== 'string' || /[\u0000-\u001f\u007f-\u009f]/u.test(input.extraction_detail))) fail('Document extraction detail is invalid');
   documentExtractor(input.extractor);
   if (!Number.isSafeInteger(input.extracted_text_bytes) || (input.extracted_text_bytes as number) < 0 || (input.extracted_text_bytes as number) > PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES) fail('Document extraction byte count is invalid');
   documentJsonBound(input);
 }
 function documentExtractor(value: unknown): void {
-  if (value !== null && (typeof value !== 'string' || utf8Bytes(value) < 1 || utf8Bytes(value) > 512)) fail('Document extractor is invalid');
+  if (value !== null && (typeof value !== 'string' || utf8Bytes(value) < 1)) fail('Document extractor is invalid');
 }
 function documentNextCursor(value: unknown): void { if(value!==null&&(typeof value!=='string'||value.length>1024||!/^[A-Za-z0-9_-]+$/.test(value)))fail('Document next cursor is invalid'); }
 export function validatePersonDocumentSearchResultV2(value: unknown): PersonDocumentSearchResultV2 {
-  const input = plainObject(value); exactDocumentKeys(input,['schema_version','kind','documents','next_cursor']); if(input.schema_version!==2||input.kind!=='echo-person-document-search-result-v2'||!Array.isArray(input.documents)||input.documents.length>20)fail('Document search result is invalid');
-  for(const value of input.documents){const item=plainObject(value);const {excerpt,anchor,...metadata}=item;validatePersonDocumentMetadataV2(metadata);if(excerpt!==null&&(typeof excerpt!=='string'||Array.from(excerpt).length>240))fail('Document excerpt is invalid');if(anchor!==null){const a=plainObject(anchor);exactDocumentKeys(a,['kind','start']);if(!['page','paragraph'].includes(a.kind as string)||!Number.isSafeInteger(a.start)||(a.start as number)<1)fail('Document search anchor is invalid');}}
+  const input = plainObject(value); exactDocumentKeys(input,['schema_version','kind','documents','next_cursor']); if(input.schema_version!==2||input.kind!=='echo-person-document-search-result-v2'||!Array.isArray(input.documents))fail('Document search result is invalid');
+  for(const value of input.documents){const item=plainObject(value);const {excerpt,anchor,...metadata}=item;validatePersonDocumentMetadataV2(metadata);if(excerpt!==null&&typeof excerpt!=='string')fail('Document excerpt is invalid');if(anchor!==null){const a=plainObject(anchor);exactDocumentKeys(a,['kind','start']);if(!['page','paragraph'].includes(a.kind as string)||!Number.isSafeInteger(a.start)||(a.start as number)<1)fail('Document search anchor is invalid');}}
   documentNextCursor(input.next_cursor);documentJsonBound(input);return input as unknown as PersonDocumentSearchResultV2;
 }

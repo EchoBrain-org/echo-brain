@@ -164,3 +164,10 @@ describe('Person session HTTP DTOs', () => {
     ).toThrow(/invalid/);
   });
 });
+
+describe('a session display name', () => {
+  it('is taken whole, however long', () => {
+    const named = { ...SESSION, display_name: 'D'.repeat(1_000) };
+    expect(validateOrganizationPersonSession(named).display_name).toBe('D'.repeat(1_000));
+  });
+});

@@ -14,9 +14,13 @@ describe('neutral Person tools v4', () => {
       expect(validateOrganizationPersonToolsV4(envelope([tool('calendar', organization_setup)])).tools).toHaveLength(1);
     }
   });
-  it('rejects duplicate identities, unbounded lists, stale state, provider wire extensions, an invalid organization setup status and a v3 document', () => {
+  it('admits any number of tools, each name whole', () => {
+    const many = Array.from({ length: 40 }, (_, index) => ({ ...tool(`tool-${index}`), display_name: 'N'.repeat(500) }));
+    expect(validateOrganizationPersonToolsV4(envelope(many)).tools).toHaveLength(40);
+  });
+  it('rejects duplicate identities, stale state, provider wire extensions, an invalid organization setup status and a v3 document', () => {
     for (const tools of [
-      [tool(), tool()], Array.from({ length: 33 }, (_, index) => tool(`tool-${index}`)),
+      [tool(), tool()],
       [{ ...tool(), availability: 'unavailable' }], [{ ...tool(), personal_status: 'unlinked' }],
       [{ ...tool(), slack_team_id: 'T123' }], [{ ...tool(), external_subject_id: '\n' }],
       [tool('calendar', 'done')],

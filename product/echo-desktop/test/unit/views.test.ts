@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  confluenceSpacesView, granolaFoldersView, projectConfluenceMappingView, projectGranolaMappingView,
   abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, listView, membersView,
   noteTitle, openItemsView, openItemView, openView, revokedView, projectActivityView, projectView, receiptView, recordRead, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
@@ -781,5 +782,18 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
     // Its bounds (each project once, a project id, a time or null, its keys, 500 at most) are the contract's to test
     // (organization-api person-project-activity-v1).
     expect(() => projectActivityView(activity([{ project_id: PROJECT, latest_at: AT }, { project_id: PROJECT, latest_at: null }]))).toThrow(ViewError);
+  });
+});
+
+describe('tool mappings and pickers', () => {
+  it('takes a mapping and a picker page of any length the Authority sends', () => {
+    const project = 'prj_11111111-1111-4111-8111-111111111111';
+    const revision = '11111111-1111-4111-8111-111111111112';
+    const folders = Array.from({ length: 25 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
+    const spaces = Array.from({ length: 25 }, (_, index) => String(index + 1));
+    expect(projectGranolaMappingView({ ok: true, result: { schema_version: 1, project_id: project, revision, mapping: { folder_ids: folders } } }, project).mapping?.folder_ids).toHaveLength(25);
+    expect(projectConfluenceMappingView({ ok: true, result: { schema_version: 1, project_id: project, revision, mapping: { space_ids: spaces } } }, project).mapping?.space_ids).toHaveLength(25);
+    expect(granolaFoldersView({ ok: true, result: { schema_version: 1, items: folders.map(id => ({ id, key: id, name: 'Folder' })), next_cursor: null } }).items).toHaveLength(25);
+    expect(confluenceSpacesView({ ok: true, result: { schema_version: 1, items: spaces.map(id => ({ id, key: `K${id}`, name: 'Space' })), next_cursor: null } }).items).toHaveLength(25);
   });
 });

@@ -107,7 +107,7 @@ function validateSourceMetadata(value: unknown): NonNullable<PersonRecordListIte
   const approver = asPlainRecord(metadata.record_approved_by, "source approver is invalid");
   exactKeys(approver, ["display_name"], "source approver is invalid");
   if (typeof approver.display_name !== "string" || approver.display_name.trim().length === 0 ||
-    approver.display_name.length > 200 || /[\p{Cc}\p{Cf}]/u.test(approver.display_name)) {
+    /[\p{Cc}\p{Cf}]/u.test(approver.display_name)) {
     throw new Error("source approver is invalid");
   }
   return Object.freeze({ record_approved_by: Object.freeze({ display_name: approver.display_name }) });

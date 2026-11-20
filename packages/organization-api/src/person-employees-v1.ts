@@ -64,7 +64,6 @@ export function validateEmployeeRosterV1(value: unknown): EmployeeRosterV1 {
       !isCanonicalPersonEmail(employee.email) ||
       typeof employee.display_name !== "string" ||
       employee.display_name.length < 1 ||
-      employee.display_name.length > 200 ||
       employee.display_name !== employee.display_name.trim() ||
       employee.display_name !== employee.display_name.normalize("NFC") ||
       /[\u0000-\u001f\u007f]/.test(employee.display_name) ||

@@ -70,4 +70,13 @@ describe('person meetings v2', () => {
     const { watch: _watch, ...unwatched } = home({}).sources[0]!;
     expect(() => validatePersonMeetingResultV2('home', { ...home({}), sources: [{ ...unwatched, folder_project_id: projectA }] })).toThrow();
   });
+  it('carries any number of folders, sources, pending imports and meetings, each title and preview whole', () => {
+    const many = { ...home({ pending_imports: Array.from({ length: 80 }, (_, index) => `m${index}`) }),
+      folders: Array.from({ length: 250 }, (_, index) => ({ id: `f${index}`, title: 'F'.repeat(300), count: index })) };
+    expect(validatePersonMeetingResultV2('home', many).folders).toHaveLength(250);
+    const meetings = Array.from({ length: 80 }, (_, index) => ({ id: `m${index}`, title: 'T'.repeat(400), date: '2026-11-19' }));
+    expect(validatePersonMeetingResultV2('browse', { meetings }).meetings).toHaveLength(80);
+    const open = { id: 'm1', title: 'T'.repeat(400), notes: 'n'.repeat(9_000), summary: 's'.repeat(9_000), truncated: false };
+    expect(validatePersonMeetingResultV2('open', open)).toEqual(open);
+  });
 });
