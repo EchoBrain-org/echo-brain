@@ -40,19 +40,16 @@ import {
 import type { DocumentSnapshot } from './document-file.js';
 
 /**
- * How long one unstreamed request may say nothing before it is treated as stalled. Such a request sends nothing until it
- * answers, so its whole wait is its silence.
+ * How long one unstreamed request may say nothing before it is treated as stalled (a cited passage's read included).
+ * Such a request sends nothing until it answers, so its whole wait is its silence.
  */
 export const DEFAULT_TIMEOUT_MS = 15_000;
 /**
- * An Ask is stalled once this long passes with no byte from the Authority: four of its heartbeats in a row
- * (PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1, written every 10 s while nothing else is sent) missed. The stream starts as soon
- * as the Ask is authenticated, so this covers the wait for its headers too. An Ask that keeps sending is never stopped
- * by a clock.
+ * An Ask is stalled once this long passes with no byte from the Authority: four of its 10 s heartbeats
+ * (PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1) missed in a row, its headers' wait included. An Ask that keeps sending is never
+ * stopped by a clock.
  */
 export const ASK_SILENCE_MS = 4 * PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1;
-/** A cited passage is one synchronous read of what the Authority holds: the ordinary silence. The desktop host waits longer. */
-export const ASK_SOURCE_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
 /**
  * The Ask source check, and a research evaluation's read, revalidate cited sources live at the tools before they answer,
  * so either may stay silent longer than an ordinary read: twice the ordinary silence.
@@ -240,11 +237,6 @@ function lostAskStream(): PersonAuthorityClientError {
   return new PersonAuthorityClientError("transport_failed", null, "Person Authority request failed");
 }
 
-/** An Ask that heard nothing from the Authority for ASK_SILENCE_MS: its own reason, so it reads as neither a refusal nor a lost connection. */
-function stalledAsk(): PersonAuthorityClientError {
-  return new PersonAuthorityClientError("stalled", null, `Person Authority sent nothing for ${ASK_SILENCE_MS / 1000} seconds`);
-}
-
 /**
  * Liveness for one streamed request: `signal` aborts once `silenceMs` passes without `alive()` (or the caller's own
  * signal aborts). There is no whole-run deadline: each sign of life starts the silence again.
@@ -293,7 +285,7 @@ function readableAnswer(response: unknown): unknown {
  * bytes, its newline included, to `onLine`, exactly what the Authority counts against the stream's bound. Comment lines
  * and the blank lines that separate events are counted by neither side.
  */
-function tolerantAskFrames(onComment: () => void = () => undefined, onLine: (bytes: number) => void = () => undefined): (text: string, end?: boolean) => string {
+function tolerantAskFrames(onComment: () => void, onLine: (bytes: number) => void): (text: string, end?: boolean) => string {
   let partial = "";
   const data = (json: string): string | null => {
     let value: unknown;
@@ -334,7 +326,7 @@ function tolerantAskFrames(onComment: () => void = () => undefined, onLine: (byt
  * `onHeartbeat`.
  */
 async function readAskProgressStream(response: Response, signal: AbortSignal, onProgress: PersonAskProgressSinkV3,
-  onBytes: () => void = () => undefined, onHeartbeat: () => void = () => undefined): Promise<PersonAskProgressTerminalEventV3> {
+  onBytes: () => void, onHeartbeat: () => void): Promise<PersonAskProgressTerminalEventV3> {
   if (response.status !== 200 || response.body === null) {
     throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a malformed progress stream");
   }
@@ -879,9 +871,10 @@ export class PersonAuthorityClient {
         await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
         throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority answered the Ask without its stream");
       }
-      terminal = await readAskProgressStream(response, watch.signal, onProgress, watch.alive, onHeartbeat);
+      terminal = await readAskProgressStream(response, watch.signal, onProgress, watch.alive, onHeartbeat ?? (() => undefined));
     } catch (error) {
-      if (watch.stalled()) throw stalledAsk();
+      // Its own reason, so a stall reads as neither a refusal nor a lost connection.
+      if (watch.stalled()) throw new PersonAuthorityClientError("stalled", null, `Person Authority sent nothing for ${ASK_SILENCE_MS / 1000} seconds`);
       throw error;
     } finally {
       watch.stop();
@@ -958,7 +951,7 @@ export class PersonAuthorityClient {
     const request = validatePersonSourceEvidenceReadRequestV1(value);
     const response = await this.json({ path: PERSON_SOURCE_EVIDENCE_PATH_V1, body: request,
       validate_request: validatePersonSourceEvidenceReadRequestV1, validate_response: validatePersonSourceEvidenceV1,
-      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_SOURCE_TIMEOUT_MS });
+      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: DEFAULT_TIMEOUT_MS });
     const { label: _label, ...citation } = response.citation;
     if (canonicalJson(response.scope) !== canonicalJson(request.scope) || canonicalJson(citation) !== canonicalJson(request.citation)) {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different source evidence coordinates');

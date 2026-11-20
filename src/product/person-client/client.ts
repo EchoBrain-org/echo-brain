@@ -13,7 +13,7 @@ import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots,
 import {
   CONTEXT_ROUTES,
   PersonAuthorityClient,
-  DEFAULT_TIMEOUT_MS, ASK_CHECK_TIMEOUT_MS, ASK_SOURCE_TIMEOUT_MS,
+  DEFAULT_TIMEOUT_MS, ASK_CHECK_TIMEOUT_MS,
   PersonAuthorityClientError,
   PersonContextMutationError,
   unknownContextMutation,
@@ -566,7 +566,7 @@ export class PersonClient {
 
   async askSourceEvidence(value: PersonSourceEvidenceReadRequestV1): Promise<PersonAskSourceEvidenceV1> {
     const request = validatePersonSourceEvidenceReadRequestV1(value);
-    return this.withReadSession((authority, token) => authority.askSourceEvidence(token, request), undefined, ASK_SOURCE_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
+    return this.withReadSession((authority, token) => authority.askSourceEvidence(token, request), undefined, 2 * DEFAULT_TIMEOUT_MS);
   }
 
   async withToolSession<T>(operation: (session: PersonToolSessionV1) => Promise<T>, signal?: AbortSignal): Promise<T> {

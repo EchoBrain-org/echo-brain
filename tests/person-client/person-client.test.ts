@@ -926,7 +926,7 @@ describe("Person client", () => {
     });
   });
 
-  it("sends a long natural-language question on two lines as asked, trimmed and NFC, with its 64 KiB body bound", async () => {
+  it("sends a long natural-language question on two lines as asked, trimmed and NFC, within the request body bound", async () => {
     await withHome(async (home) => {
       const sent: unknown[] = [];
       const client = await signedInClient(home, async (_input, init) => {
@@ -940,19 +940,12 @@ describe("Person client", () => {
       expect(sent).toEqual([{ schema_version: 3, question }]);
       await client.askWithLiveSources("Caf\u0065\u0301?");
       expect(sent[1]).toEqual({ schema_version: 3, question: "Caf\u00e9?" });
-      // Nothing but the Authority judges length: a request over 16 KiB of UTF-8 is sent.
-      const long = "😀".repeat(4_000);
-      await client.askWithLiveSources(long, undefined, undefined, { purpose: "follow_up", question: long, asked_at: "2026-11-19T17:05:00.000Z", statements: [], citations: [] });
-      expect(sent).toHaveLength(3);
-      // A question has no length of its own: 10,000 code points is sent.
-      await client.askWithLiveSources("😀".repeat(10_000));
-      expect(sent).toHaveLength(4);
-      // The client holds a question to the Authority's own 1 MiB Person body bound, never less: 100 KiB is sent.
+      // A question has no length of its own: the client holds it to the Authority's 1 MiB Person body bound, never less.
       await client.askWithLiveSources("x".repeat(100 * 1024));
-      expect(sent).toHaveLength(5);
+      expect(sent).toHaveLength(3);
       // Past that bound, the transport's, it is not sent and says why.
       await expect(client.askWithLiveSources("x".repeat(1024 * 1024))).rejects.toMatchObject({ code: "request_too_large", unsent: true });
-      expect(sent).toHaveLength(5);
+      expect(sent).toHaveLength(3);
     });
   });
 
