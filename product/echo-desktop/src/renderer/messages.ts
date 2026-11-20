@@ -27,7 +27,6 @@ const MESSAGES: Record<string, string> = {
   invitation_failed: 'Sign-in did not finish. Try again, or ask your organization owner for a new invitation.',
   signout_failed: 'Sign-out did not finish. Try again.',
   file_exists: 'A file with that name is already there. Choose a new name.',
-  too_many_files: 'Add up to 20 files.',
   invalid_email: 'Enter the employee’s name and email address.',
   invalid_name: 'Enter the employee’s name and email address.',
   invitation_output_invalid: 'The invitation could not be saved there. Choose another place and try again.',
