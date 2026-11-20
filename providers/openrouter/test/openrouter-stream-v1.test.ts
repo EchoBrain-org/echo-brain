@@ -131,6 +131,25 @@ describe("OpenRouter stream ending", () => {
     await expect(adapter.generate(request)).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_transport", finish_reason: null } });
   });
 
+  // A complete delta, then the connection closes cleanly halfway through the next event's JSON.
+  const cutMidEvent = () => stream(function* () {
+    yield 'data: {"id":"gen-1","choices":[{"delta":{"content":"{\\"signals\\":"}}]}\n\n';
+    yield 'data: {"id":"gen-1","choices":[{"delta":{"cont';
+  }, 0);
+
+  it("fails an answer cut in the middle of an event as a transport loss with unknown billing, never a malformed reply to repair", async () => {
+    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: cutMidEvent() });
+    const failure = await adapter.generate(request).catch((error: unknown) => error as { diagnostic: Record<string, unknown> });
+    expect(failure.diagnostic).toMatchObject({ failure_class: "adapter_transport" });
+    expect(failure.diagnostic).not.toHaveProperty("unbilled");
+  });
+
+  it("fails an extraction cut in the middle of an event as a possibly billed transport loss", async () => {
+    const client = new OpenRouterClient({ credentialRef: "openrouter", credentialResolver: () => "secret", fetchImpl: cutMidEvent() });
+    await expect(client.generateStructured(extraction)).rejects.toMatchObject({ code: "temporarily_unavailable", retryable: true, unbilled: false,
+      message: expect.stringContaining("middle of an event") });
+  });
+
   it("fails an extraction whose stream ended without a finish reason, as possibly billed", async () => {
     const client = new OpenRouterClient({ credentialRef: "openrouter", credentialResolver: () => "secret", fetchImpl: truncated() });
     await expect(client.generateStructured(extraction)).rejects.toMatchObject({ code: "temporarily_unavailable", retryable: true, unbilled: false, message: expect.stringContaining("before it finished") });

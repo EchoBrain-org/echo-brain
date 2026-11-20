@@ -39,6 +39,11 @@ export class OpenRouterReplyTooLargeErrorV1 extends Error {
   }
 }
 
+/** The stream closed cleanly in the middle of an event: a transport loss after the model may have run, never a reply. */
+export class OpenRouterStreamCutErrorV1 extends Error {
+  constructor() { super('OpenRouter stream closed in the middle of an event'); this.name = 'OpenRouterStreamCutErrorV1'; }
+}
+
 /** A streamed reply arrives assembled; any other reply arrives as its whole body text. */
 export type OpenRouterReplyV1 =
   | { readonly streamed: true; readonly payload: Record<string, unknown>; readonly bytes: number }
@@ -153,7 +158,13 @@ export async function readOpenRouterReplyV1(response: Response, options: {
       text = ''; comment = false;
     }
     hold(rest);
-    if (final && text !== '') { if (assembler.line(text)) produced = true; text = ''; }
+    if (final && text !== '') {
+      // The stream closed with an event line unfinished: if it does not parse, the connection was cut mid-event (a
+      // transport loss, billing unknown), not a malformed reply.
+      try { if (assembler.line(text.replace(/\r$/u, ''))) produced = true; }
+      catch (error) { if (error instanceof SyntaxError) throw new OpenRouterStreamCutErrorV1(); throw error; }
+      text = '';
+    }
     // Bytes of an event still arriving are progress too: one large event (a long tool argument) can take longer than
     // the silence period to arrive. A keep-alive comment never is.
     if (produced || (rest !== '' && text !== '')) options.progress();

@@ -18,7 +18,7 @@ import {
 } from "@echo-brain/organization-processing/llm/llm-provider";
 
 import { UNBILLED_REFUSAL_STATUSES_V1 } from '../unbilled-refusal-v1.js';
-import { openRouterReplyCapacityBytesV1, OpenRouterReplyTooLargeErrorV1, readOpenRouterReplyV1, type OpenRouterReplyV1 } from '../openrouter-stream-v1.js';
+import { openRouterReplyCapacityBytesV1, OpenRouterReplyTooLargeErrorV1, OpenRouterStreamCutErrorV1, readOpenRouterReplyV1, type OpenRouterReplyV1 } from '../openrouter-stream-v1.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -113,6 +113,8 @@ export class OpenRouterClient implements LlmProviderClient {
       } catch (error) {
         if (error instanceof OpenRouterReplyTooLargeErrorV1) throw invalidProviderResponse('OpenRouter', `reply passed its ${error.capacity_bytes}-byte transport capacity`);
         if (error instanceof SyntaxError) throw new AdapterError('temporarily_unavailable', 'OpenRouter returned a non-JSON response body', true);
+        // Cut mid-event after the model may have run: retryable, never unbilled, so the meeting cycle parks it.
+        if (error instanceof OpenRouterStreamCutErrorV1) throw new AdapterError('temporarily_unavailable', error.message, true);
         return stalled(error);
       }
       // A prompt past the model's own context window: the one real limit on how long a meeting one call can read.
