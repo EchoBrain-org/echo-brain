@@ -135,7 +135,7 @@ export interface ApprovalCoreV1 {
   readonly processing: ApprovalWorkflowProcessingV1;
   decide(surface: ApprovalSurfaceV1, request: ApprovalDecisionRequestV1, authorize: () => ApprovalAuthorizationV1): ApprovalDecideResultV1;
   proposal(approvalId: string): ApprovalProposalViewV1 | undefined;
-  /** Caller has authenticated `reviewer`. Undecided staged first, then newest; limit defaults to 100, clamped to 1..100. */
+  /** Caller has authenticated `reviewer`. Undecided staged first, then newest; every one, or the first `limit` a caller names. */
   proposals(reviewer: ApprovalActorV1, limit?: number): readonly ApprovalProposalViewV1[];
   /** `proposals`' ids and statuses alone, in the same order and bound, with no proposal content read (the change check, ADR-0036). */
   proposalStatuses(reviewer: ApprovalActorV1, limit?: number): readonly { readonly approval_id: string; readonly status: ApprovalStatusV1 }[];
@@ -508,9 +508,13 @@ export async function createApprovalCoreV1(database: Database.Database, context:
     const row = proposalRow(approvalId);
     return row === undefined ? undefined : view(row, readableCheck());
   }
-  /** The reviewer's frozen proposals, undecided staged first, then newest, at most 100: `columns` of each. */
-  function reviewerProposals<T>(columns: string, reviewer: ApprovalActorV1, limit: number): T[] {
-    const bounded = Number.isFinite(limit) ? Math.min(100, Math.max(1, Math.trunc(limit))) : 100;
+  /**
+   * The reviewer's frozen proposals, undecided staged first, then newest: every one, or the first `limit` a caller names.
+   * No count of its own: the reviews response's transport bound (PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1) carries them.
+   */
+  function reviewerProposals<T>(columns: string, reviewer: ApprovalActorV1, limit?: number): T[] {
+    // SQLite reads LIMIT -1 as no limit.
+    const bounded = limit !== undefined && Number.isSafeInteger(limit) && limit >= 1 ? limit : -1;
     return database.prepare(`SELECT ${columns} FROM authority_live_approval_outbox_v2 o
       JOIN authority_live_source_candidates_v2 c ON c.candidate_id=o.candidate_id
       JOIN authority_live_source_admission_v2 a ON a.semantic_input_sha256=c.admission_semantic_input_sha256
@@ -519,13 +523,13 @@ export async function createApprovalCoreV1(database: Database.Database, context:
       ORDER BY CASE WHEN d.approval_id IS NULL AND o.state='staged' THEN 0 ELSE 1 END, c.created_at DESC, o.approval_id
       LIMIT ?`).all(reviewer.organization_id, reviewer.principal_id, reviewer.membership_id, bounded) as T[];
   }
-  function proposalStatuses(reviewer: ApprovalActorV1, limit = 100): readonly { readonly approval_id: string; readonly status: ApprovalStatusV1 }[] {
+  function proposalStatuses(reviewer: ApprovalActorV1, limit?: number): readonly { readonly approval_id: string; readonly status: ApprovalStatusV1 }[] {
     // As `view` reads a proposal: only a frozen one, with its decision's status.
     return Object.freeze(reviewerProposals<Pick<ProposalRow, 'approval_id' | 'state' | 'approved_snapshot_sha256' | 'action' | 'receipt_json'>>(
       'o.approval_id, o.state, o.approved_snapshot_sha256, d.action, d.receipt_json', reviewer, limit)
       .flatMap(row => (row.approved_snapshot_sha256 === null ? [] : [Object.freeze({ approval_id: row.approval_id, status: statusOf(row) })])));
   }
-  function proposals(reviewer: ApprovalActorV1, limit = 100): readonly ApprovalProposalViewV1[] {
+  function proposals(reviewer: ApprovalActorV1, limit?: number): readonly ApprovalProposalViewV1[] {
     const ids = reviewerProposals<{ readonly approval_id: string }>('o.approval_id', reviewer, limit).map(row => row.approval_id);
     const readable = readableCheck();
     return Object.freeze(ids.flatMap(id => {

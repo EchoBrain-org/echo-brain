@@ -78,13 +78,13 @@ export class SqliteTriggerRunsV1 {
       event.reviewer.organization_id, event.reviewer.principal_id, event.reviewer.membership_id, event.record_sha256, timestamp, timestamp);
   }
 
-  /** The actor's newest runs, newest first. */
-  list(actor: ApprovalActorV1, limit: number): readonly TriggerRunRowV1[] {
-    if (!Number.isFinite(limit)) throw new TypeError('Trigger run limit must be finite');
-    const capped = Math.max(0, Math.min(100, Math.floor(limit)));
+  /** The actor's runs, newest first: every one, or the newest `limit` when a caller names a count. */
+  list(actor: ApprovalActorV1, limit?: number): readonly TriggerRunRowV1[] {
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 0)) throw new TypeError('Trigger run limit must be a whole number');
+    // SQLite reads LIMIT -1 as no limit.
     return (this.database.prepare(`${selectRows} AND organization_id=? AND principal_id=? AND membership_id=?
       ORDER BY created_at DESC, run_id DESC LIMIT ?`)
-      .all(actor.organization_id, actor.principal_id, actor.membership_id, capped) as StoredRowV1[]).map(publicRow);
+      .all(actor.organization_id, actor.principal_id, actor.membership_id, limit ?? -1) as StoredRowV1[]).map(publicRow);
   }
 
   /**

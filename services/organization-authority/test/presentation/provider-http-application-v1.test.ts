@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { PERSON_RESEARCH_EVAL_READ_PATH_V1, PERSON_RESEARCH_EVAL_START_PATH_V1 } from "@echo-brain/organization-api";
+import { PERSON_RESEARCH_EVAL_READ_PATH_V1, PERSON_RESEARCH_EVAL_START_PATH_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 } from "@echo-brain/organization-api";
 import { createOrganizationAuthorityHttpServer } from "../../src/presentation/organization-authority-http-server.js";
 import { PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1, type PrivateSlackApprovalInteractionHttpPortV1 } from "../../../../providers/slack/server/src/presentation/private-slack-approval-interaction-http-port-v1.js";
 import { createPrivateSlackApprovalHttpAdapterV1 } from "../../../../providers/slack/server/src/private-approval/private-slack-approval-http-adapter-v1.js";
@@ -288,7 +288,7 @@ describe("provider identity and approval HTTP transport V1", () => {
   });
 
   it.each([
-    { name: "JSON UTF-8 bytes", response: { status: 200, body: "é".repeat(64 * 1024) } },
+    { name: "JSON UTF-8 bytes", response: { status: 200, body: "é".repeat(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 / 2) } },
     { name: "HTML UTF-8 bytes", response: { status: 200, body: "é".repeat(8193), content_type: "text/html" } },
     { name: "raw bytes", response: { status: 200, raw_body: new Uint8Array(64 * 1024 + 1), content_type: "application/octet-stream" } },
     { name: "untyped nonempty bytes", response: { status: 200, raw_body: new Uint8Array([65]) } },

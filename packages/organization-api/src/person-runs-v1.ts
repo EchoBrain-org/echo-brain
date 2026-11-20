@@ -247,8 +247,6 @@ export interface PersonRunsResultsV1 {
 
 /** Transport: the one bound on what a runs response carries. */
 export const PERSON_RUNS_MAX_RESPONSE_BYTES_V1 = 1024 * 1024;
-/** The newest runs one list returns. It has no next page: see the sweep report. No validator checks it. */
-export const PERSON_RUNS_LIST_LIMIT_V1 = 100;
 /** Transport: the open items one `items` page returns; `next_cursor` reads on. No validator checks it. */
 export const PERSON_OPEN_ITEMS_PAGE_V1 = 50;
 /**

@@ -36,7 +36,7 @@ components, provider bundles and Person services. Two host rules sit here:
   `packages/organization-authority-kernel/src/application/ports/`. The host mounts
   exact routes, preserves raw request bytes, permits queries only by opt-in,
   and owns response headers and limits: 64 KiB request bodies and raw response
-  bytes, 128 KiB JSON responses, 8 KiB query strings, and 16 KiB fixed HTML
+  bytes, 1 MiB JSON responses, 8 KiB query strings, and 16 KiB fixed HTML
   pages. Providers select JSON, bounded
   response bytes, or an empty acknowledgment and retain verification and
   durable acceptance. HTML pages never reflect request fields; query-token

@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import { canonicalJson, sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { PERSON_CHANGES_CHECK_SECONDS_V1, PERSON_CHANGES_KIND_V1, PERSON_RUNS_LIST_LIMIT_V1, validatePersonChangesV1, type PersonChangesV1 } from '@echo-brain/organization-api';
+import { PERSON_CHANGES_CHECK_SECONDS_V1, PERSON_CHANGES_KIND_V1, validatePersonChangesV1, type PersonChangesV1 } from '@echo-brain/organization-api';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
@@ -101,7 +101,7 @@ export function createPersonChangesV1(options: CreatePersonChangesV1Options): Pe
         const reviews = reviewTuples(reviewsOf, authorization);
         // The caller's own impact checks, as `runs` `list` shows them (the store lists no leftover sweep): a lapsed attempt reads pending.
         const at = now().toISOString();
-        const checks = (options.runs?.list(authorization, PERSON_RUNS_LIST_LIMIT_V1) ?? []).map(run => [run.run_id, triggerRunStateAtV1(run, at)] as const);
+        const checks = (options.runs?.list(authorization) ?? []).map(run => [run.run_id, triggerRunStateAtV1(run, at)] as const);
         return {
           areas: {
             projects: fingerprint(view.projects.map(project => [project.project_id, project.name, project.status, project.role])),

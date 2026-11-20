@@ -443,10 +443,10 @@ describe('approval core: views', () => {
     expect(statuses(1)).toEqual(listed(1));
     expect(f.core.proposalStatuses({ ...f.person, membership_id: 'mem_00000000-0000-4000-8000-0000000000e2' })).toEqual([]);
   });
-  it('clamps the list limit to 1..100', async () => {
+  it('lists every proposal with no count of its own; a count a caller names takes the first that many', async () => {
     const f = await approvalCoreFixture();
     await f.otherProposal();
-    expect(f.core.proposals(f.person, 0)).toHaveLength(1);
+    expect(f.core.proposals(f.person)).toHaveLength(2);
     expect(f.core.proposals(f.person, 1)).toHaveLength(1);
     expect(f.core.proposals(f.person, 1000)).toHaveLength(2);
   });

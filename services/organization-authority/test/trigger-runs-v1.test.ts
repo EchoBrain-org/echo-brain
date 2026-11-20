@@ -96,6 +96,14 @@ describe('SQLite trigger runs v1', () => {
       .run(f.person.organization_id, f.person.principal_id, f.person.membership_id, digest)).toThrow('needs its published approval');
   });
 
+  it('lists every run and every review past a hundred: neither list has a count of its own', async () => {
+    const f = await approvedRunFixture({ runs: 105 });
+    expect(f.runs.list(f.owner)).toHaveLength(105);
+    expect(f.core.proposals(f.person)).toHaveLength(105);
+    expect(f.core.proposalStatuses(f.person)).toHaveLength(105);
+    expect(f.runs.list(f.owner, 3)).toHaveLength(3);
+  }, 60_000);
+
   it('keeps lease, result and error fields confined to their matching states', async () => {
     const f = await approvedRunFixture();
     const run = f.runs.list(f.owner, 1)[0]!;
