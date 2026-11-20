@@ -73,6 +73,13 @@ describe("follow-up resolution: reading a reply (ADR-0047)", () => {
     ] });
   });
 
+  it("keeps a resolved question with more than 32 distinct terms", () => {
+    const question = Array.from({ length: 33 }, (_, index) => `w${index}`).join(" ");
+    expect(parseFollowUpResolutionV1({ ...RESOLVED, question }, 2)).toEqual({
+      resolution: "resolved", question, about: [0],
+    });
+  });
+
   it("normalizes only what cannot change the meaning: a resolution's spelling, a source as a string, a repeated source, a long label", async () => {
     const { value, corrections } = await observed(async () => [
       parseFollowUpResolutionV1({ ...RESOLVED, resolution: " Resolved ", about: ["2", 2, "S1"] }, 2),
@@ -90,7 +97,7 @@ describe("follow-up resolution: reading a reply (ADR-0047)", () => {
     ["resolved with choices", { ...RESOLVED, choices: [{ label: "A", question: "What is A?" }, { label: "B", question: "What is B?" }] }, /offers no choices/u],
     ["resolved with no question", { resolution: "resolved", about: [1] }, /full question/u],
     ["resolved with a question too long", { ...RESOLVED, question: `What ${"x".repeat(240)}?` }, /at most 240/u],
-    ["resolved with a question of too many words", { ...RESOLVED, question: Array.from({ length: 33 }, (_, index) => `w${index}`).join(" ") }, /1 to 32/u],
+    ["resolved with an overlong term", { ...RESOLVED, question: "é".repeat(33) }, /at most 64 UTF-8 bytes/u],
     ["resolved about a source not shown", { ...RESOLVED, about: [3] }, /from 1 to 2/u],
     ["resolved about no list", { ...RESOLVED, about: 1 }, /list of source numbers/u],
     ["clarify with one choice", { resolution: "clarify", choices: [{ label: "A", question: "What is A?" }] }, /2 to 4/u],

@@ -453,7 +453,8 @@ describe("agentic Ask model protocol parity", () => {
   it("validates bounded queries without rewriting their meaning", () => {
     expect(normalizeQuery("\"launch date\"")).toBe("launch date");
     expect(normalizeQuery("What is the launch date, and who owns it?")).toBe("What is the launch date, and who owns it?");
-    expect(normalizeQuery(Array.from({ length: 40 }, (_, index) => `t${index}`).join(" "))).toBeNull();
+    const query = Array.from({ length: 40 }, (_, index) => `t${index}`).join(" ");
+    expect(normalizeQuery(query)).toBe(query);
     expect(normalizeQuery("?!")).toBeNull();
   });
 
@@ -462,7 +463,8 @@ describe("agentic Ask model protocol parity", () => {
     for (const query of ['echo-123', 'HW_DVT-27 status', 'USB-C readiness', 'org/repo#123', 'person@example.test', 'C++ readiness', 'KAN-8 kan-8']) {
       expect(normalizeQuery(query), query).toBe(query);
     }
-    expect(normalizeQuery(Array.from({ length: 20 }, (_, i) => `HW${i}-${i}`).join(' '))).toBeNull();
+    const identifiers = Array.from({ length: 20 }, (_, i) => `HW${i}-${i}`).join(' ');
+    expect(normalizeQuery(identifiers)).toBe(identifiers);
   });
 });
 

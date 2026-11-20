@@ -6,10 +6,10 @@ import { createHash } from "node:crypto";
  * This module deliberately has no import from a candidate package.  The
  * analyzer/ranking contract it independently implements is taken from
  * packages/organization-retrieval/src/application/analyzer.ts at:
- * 340d7f303a96bfb59b9661ce998a6b12b7cfd4947322eae7cd9a794451415d91
+ * 192230e4e783d12e0c87dcafcec5ddb71bf09b252db5664f1a45a99164565056
  */
 export const ANALYZER_SOURCE_SHA256 =
-  "340d7f303a96bfb59b9661ce998a6b12b7cfd4947322eae7cd9a794451415d91";
+  "192230e4e783d12e0c87dcafcec5ddb71bf09b252db5664f1a45a99164565056";
 const VOCABULARY_SIZE = 4096;
 const ZIPF_EXPONENT = 1.1;
 export const POLICY_ORGANIZATION_MEMBER = "organization-member-readable-person-v2";
@@ -250,7 +250,7 @@ export function analyzeQuery(query) {
       terms.push(term);
     }
   }
-  if (terms.length === 0 || terms.length > 32) throw new Error("query must contain one through 32 unique terms");
+  if (terms.length === 0) throw new Error("query must contain at least one letter or number");
   if (terms.some((term) => DECISION_FAMILY.includes(term))) {
     for (const term of DECISION_FAMILY) {
       if (!observed.has(term)) terms.push(term);

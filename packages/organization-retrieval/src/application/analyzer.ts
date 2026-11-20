@@ -1,6 +1,5 @@
 import { ReadableSearchValidationError } from './readable-search-contracts.js';
 
-export const MAXIMUM_QUERY_TERMS = 32;
 export const MAXIMUM_TERM_UTF8_BYTES = 64;
 
 /**
@@ -41,21 +40,12 @@ export function analyzeReadableSearchQuery(query: string): readonly string[] {
       unique.push(term);
     }
   }
-  if (unique.length === 0 || unique.length > MAXIMUM_QUERY_TERMS) {
-    throw new ReadableSearchValidationError('query must contain from one through thirty-two unique terms');
+  if (unique.length === 0) {
+    throw new ReadableSearchValidationError('query must contain at least one letter or number');
   }
   if (unique.some((term) => DECISION_TERM_FAMILY.has(term))) {
-    const missingFamilyTerms = READABLE_SEARCH_DECISION_TERM_FAMILY.filter(
-      (term) => !observed.has(term),
-    );
-    // The public ceiling applies to caller-supplied terms. These fixed,
-    // reviewable aliases are internal recall behavior and must not turn an
-    // otherwise valid query into a server-side validation failure.
-    for (const term of missingFamilyTerms) {
-      if (!observed.has(term)) {
-        observed.add(term);
-        unique.push(term);
-      }
+    for (const term of READABLE_SEARCH_DECISION_TERM_FAMILY) {
+      if (!observed.has(term)) unique.push(term);
     }
   }
   return Object.freeze(unique);

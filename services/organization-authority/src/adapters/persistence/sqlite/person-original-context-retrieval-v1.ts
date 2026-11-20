@@ -169,7 +169,7 @@ function queryTerms(query: string): readonly string[] {
   // lowercase forms are common function words in a natural question.
   const acronyms = new Set(runs.filter(term => /^[A-Z]{2,}$/.test(term)).map(term => term.toLowerCase()));
   const terms = [...new Set(runs.map(term => term.toLowerCase().normalize("NFC")))];
-  if (terms.length === 0 || terms.length > 32) {
+  if (terms.length === 0) {
     throw new AuthorityOperationError("invalid_request", "request is invalid");
   }
   return terms.filter(term => !PERSON_QUERY_FUNCTION_WORDS_V1.has(term) || acronyms.has(term));

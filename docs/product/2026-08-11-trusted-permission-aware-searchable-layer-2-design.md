@@ -769,6 +769,10 @@ state, not elapsed request age.
 
 ### Analyzer and query semantics
 
+The analyzer V5 release removes the distinct-term ceiling from query admission.
+Person requests are bounded by 240 Unicode code points and 64 UTF-8 bytes per
+normalized term. The contract below describes the original V1 baseline.
+
 The analyzer is implemented in-repository and versioned as
 `echo-unicode-alnum-frequency-v1`. Query and document analysis share these
 first three steps:

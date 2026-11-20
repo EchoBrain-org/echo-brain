@@ -43,7 +43,7 @@ Known gaps the baseline is expected to show (verified at `b108ad3`):
 
 | Gap | Where |
 | --- | --- |
-| Questions over 240 code points or 32 distinct terms are rejected before research | `packages/organization-api/src/person-query.ts:24`, desktop `ask.tsx:94` |
+| The baseline rejected questions over 240 code points or 32 distinct terms before research. Current Ask uses the 240-code-point bound without a distinct-term ceiling. | `packages/organization-api/src/person-query.ts:24`, desktop `ask.tsx:94` |
 | Round 1 sees no item counts, keys or labels; wrong needs can only be retired as `not_found` after two searches | `agentic-ask-v1.ts:1018`, `agentic-ask-research-state-v1.ts:34` |
 | Ticket and page search/list return metadata only; each body needs its own `open`, four actions per round | `agentic-ask-v1-model-protocol.ts:15` |
 | A Jira open returns summary and description up to 3 KB: no comments, history, links or updated date | `providers/jira/src/jira-payload-v1.ts:65` |

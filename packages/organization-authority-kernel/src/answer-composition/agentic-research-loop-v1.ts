@@ -300,7 +300,7 @@ function queryPreview(text: string, query: string | undefined): string {
   if (query === undefined) return head;
   const line = cleanLine(text, Number.MAX_SAFE_INTEGER);
   // Terms are letters and digits only, so they need no escaping.
-  const terms = [...new Set(query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(term => [...term].length >= 3))].slice(0, 32);
+  const terms = [...new Set(query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(term => [...term].length >= 3))];
   const hits: { readonly at: number; readonly term: number }[] = [];
   terms.forEach((term, index) => {
     for (const match of line.matchAll(new RegExp(`(?<![\\p{L}\\p{N}])${term}`, "giu"))) hits.push({ at: match.index, term: index });
@@ -668,7 +668,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   };
   const search = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
     const query = normalizeQuery(args.query);
-    if (query === null) return { tool: "search", args, error: "query must be 1 to 32 keywords" };
+    if (query === null) return { tool: "search", args, error: "query must include a letter or number and fit on one line of at most 240 Unicode code points, with at most 64 UTF-8 bytes per term" };
     const source = sourceOf(args);
     if (args.source !== undefined && source === undefined) return { tool: 'search', args, error: `source must be ${sourceCatalog.map(value => value.source).join(', ')}; omit it to search all available sources` };
     // Ask checks a dated search against the source's capabilities (research tool contract v1): a date it does not record
