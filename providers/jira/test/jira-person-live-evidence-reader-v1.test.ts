@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
+import { PERSON_EVIDENCE_LABEL_MAX_BYTES_V1, type PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticToolV1, type CoreRuntimeDiagnosticObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
@@ -141,7 +141,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const reads = f.request.mock.calls.map(([request]) => request).filter(request => request.path.includes('/issue/'));
     expect(reads).toEqual([expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, method: 'POST',
       body: { issueIdsOrKeys: ids, fields: ['summary', 'project', 'created', 'updated', 'status', 'assignee', 'duedate'] } })]);
-    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ maxResults: 25, fields: ['id'] }) }));
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ maxResults: 50, fields: ['id'] }) }));
     expect(f.audit.record).toHaveBeenCalledTimes(1);
   });
 
@@ -152,20 +152,20 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     // isLast with all 25 asked for, isLast with fewer, and a page with a next token.
     f.state.pages = [page(ids), page(ids.slice(0, 24)), page(ids, 'next')];
     const { source } = await f.make();
-    expect(await source.list({ limit: 50 })).toMatchObject({ truncated: false, page_full: true });
-    expect(await source.list({ limit: 50 })).toMatchObject({ truncated: false, page_full: false });
-    const continued = await source.list({ limit: 50 });
+    expect(await source.list({ limit: 25 })).toMatchObject({ truncated: false, page_full: true });
+    expect(await source.list({ limit: 25 })).toMatchObject({ truncated: false, page_full: false });
+    const continued = await source.list({ limit: 25 });
     expect(continued).toMatchObject({ truncated: true, page_full: false, next_cursor: expect.any(String) });
     // Newest first, a full page whose oldest issue predates since confirms the end without its token.
     for (const id of ids.slice(-1)) f.state.tickets.set(id, withFields({ created: '2026-10-01T12:00:00Z' }, ticket(id)));
     f.state.pages = [page(ids, 'next')];
-    const dated = await source.list({ limit: 50, since: '2026-10-03' });
+    const dated = await source.list({ limit: 25, since: '2026-10-03' });
     expect(dated).toMatchObject({ truncated: false, page_full: false });
     expect(dated).not.toHaveProperty('next_cursor');
     expect(dated.items).toHaveLength(24);
     // So does an exactly full last page: its oldest issue predates since, so no later issue can match.
     f.state.pages = [page(ids)];
-    expect(await source.list({ limit: 50, since: '2026-10-03' })).toMatchObject({ truncated: false, page_full: false });
+    expect(await source.list({ limit: 25, since: '2026-10-03' })).toMatchObject({ truncated: false, page_full: false });
     // The audit never records it.
     expect(JSON.stringify(f.releases)).not.toContain('page_full');
   });
@@ -174,15 +174,15 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const f = fixture();
     const ids = ['10006', '10005', '10004', '10003', '10002', '10001'];
     for (const id of ids) f.state.tickets.set(id, ticket(id));
-    // 85 CJK characters are 255 bytes: the "ECHO-6: ..." label passes its 256-byte bound and is cut.
-    f.state.tickets.set('10006', withFields({ summary: '温度计固件校准流程'.repeat(10).slice(0, 85) }, ticket('10006')));
+    // 341 CJK characters are 1,023 bytes: the "ECHO-6: ..." label passes the evidence label bound and is cut.
+    f.state.tickets.set('10006', withFields({ summary: '温度计固件校准流程'.repeat(40).slice(0, 341) }, ticket('10006')));
     f.state.pages = [page(ids)];
     const { source } = await f.make();
     const result = await source.list({ limit: 50 });
     expect(result.items).toHaveLength(6);
-    const summary = '温度计固件校准流程'.repeat(10).slice(0, 85);
+    const summary = '温度计固件校准流程'.repeat(40).slice(0, 341);
     expect(result.items[0]!.label.startsWith('ECHO-6: ')).toBe(true);
-    expect(Buffer.byteLength(result.items[0]!.label, 'utf8')).toBeLessThanOrEqual(256);
+    expect(Buffer.byteLength(result.items[0]!.label, 'utf8')).toBeLessThanOrEqual(PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
     expect(result.items[0]!.label.length).toBeLessThan(`ECHO-6: ${summary}`.length);
     // The page has no next token and is not full: the list ended, so a cut title says nothing about more items.
     expect(result).toMatchObject({ truncated: false, page_full: false });
@@ -291,31 +291,41 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
   });
 
   it('says an open truncated beside the ticket left its own text whole, and that a cut body cut it (ADR-0041)', async () => {
-    // Twenty-six links, one past the 25 an open admits: truncated, yet the anchor's text is whole.
+    // Sixty links, more than the 50 asked for: truncated, yet the anchor's text is whole.
     const links = fixture();
-    const linkIds = Array.from({ length: 26 }, (_, index) => String(10002 + index));
+    const linkIds = Array.from({ length: 60 }, (_, index) => String(10002 + index));
     for (const id of linkIds) links.state.tickets.set(id, ticket(id, `Linked ${id}`));
     links.state.tickets.set('10001', withFields({ issuelinks: linkIds.map(id => ({ outwardIssue: { id } })) }));
     const linked = await links.make('ECHO');
     const anchor = (await linked.source.search({ query: 'ship' })).items[0]!;
     const withLinks = await linked.source.open({ item: anchor.id, limit: 50 });
-    expect(withLinks.items).toHaveLength(26);
+    expect(withLinks.items).toHaveLength(50);
     expect(withLinks).toMatchObject({ truncated: true, anchor_truncated: false });
-    // A summary cut to its 256-byte label bound, no links: the label is cut, the text is whole.
+    // A summary cut to the evidence label bound, no links: the label is cut, the text is whole.
     const label = fixture();
-    label.state.tickets.set('10001', withFields({ summary: '温度计固件校准流程'.repeat(10).slice(0, 85) }));
+    label.state.tickets.set('10001', withFields({ summary: '温度计固件校准流程'.repeat(40).slice(0, 341) }));
     const labelled = await label.make('ECHO');
     const cut = await labelled.source.open({ item: (await labelled.source.search({ query: 'ship' })).items[0]!.id });
-    expect(cut.items[0]!.text).toContain('温度计固件校准流程'.repeat(10).slice(0, 85));
+    expect(cut.items[0]!.text).toContain('温度计固件校准流程'.repeat(40).slice(0, 341));
     expect(cut).toMatchObject({ truncated: true, anchor_truncated: false });
-    // A description past the host-protection node bound: the ticket keeps its start and says its text was cut.
+    // A description of 30,000 paragraphs has no bound of its own: it is read in full, section after section.
     const body = fixture();
     body.state.tickets.set('10001', withFields({ description: { type: 'doc', version: 1, content: Array.from({ length: 30_000 }, (_, index) => ({ type: 'paragraph', content: [{ type: 'text', text: `p${index}` }] })) } }));
     const long = await body.make('ECHO');
     let page = await long.source.open({ item: (await long.source.search({ query: 'ship' })).items[0]!.id });
-    for (let reads = 0; page.notice === undefined && reads < 100; reads += 1) page = await long.source.open({ item: page.items.at(-1)!.id });
-    expect(page).toMatchObject({ truncated: true, anchor_truncated: true, notice: 'This Jira ticket is longer than ECHO reads; its text after the last section shown was left out.' });
-    expect(page.items.at(-1)!.text).not.toContain('p29999');
+    for (let reads = 0; page.anchor_truncated === true && reads < 100; reads += 1) page = await long.source.open({ item: page.items.at(-1)!.id });
+    expect(page).toMatchObject({ truncated: false, anchor_truncated: false });
+    expect(page.items.at(-1)!.text).toContain('p29999');
+    // A subtree nested deeper than the host's call stack can walk is left out, and the open says the text was cut.
+    const deep = fixture();
+    let nested: Record<string, unknown> = { type: 'paragraph', content: [{ type: 'text', text: 'too deep' }] };
+    for (let level = 0; level < 200_000; level += 1) nested = { type: 'blockquote', content: [nested] };
+    deep.state.tickets.set('10001', withFields({ description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Kept start' }] }, nested] } }));
+    const nestedReader = await deep.make('ECHO');
+    const nestedOpen = await nestedReader.source.open({ item: (await nestedReader.source.search({ query: 'ship' })).items[0]!.id });
+    expect(nestedOpen).toMatchObject({ truncated: true, anchor_truncated: true, notice: 'Part of this Jira ticket is nested too deeply to read as text and was left out.' });
+    expect(nestedOpen.items[0]!.text).toContain('Kept start');
+    expect(nestedOpen.items.map(item => item.text).join('')).not.toContain('too deep');
   });
 
   it('reads a ticket whose sections repeat word for word, one citation per page each, losing nothing', async () => {
@@ -335,29 +345,36 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
 
   it('reads a long ticket in full: sections with a continuation, as a Confluence page is read', async () => {
     const f = fixture();
-    const paragraphs = Array.from({ length: 12 }, (_, index) => `Section ${index} ${'detail '.repeat(420)}`.trim());
+    const paragraphs = Array.from({ length: 40 }, (_, index) => `Section ${index} ${'detail '.repeat(420)}`.trim());
     f.state.tickets.set('10001', withFields({ description: { type: 'doc', version: 1, content: paragraphs.map(text => ({ type: 'paragraph', content: [{ type: 'text', text }] })) } }));
     const { source } = await f.make('ECHO');
-    const first = await source.open({ item: (await source.search({ query: 'ship' })).items[0]!.id });
-    expect(first.items).toHaveLength(8);
+    // As many sections as one result carries: more than a fixed handful, never past the result bound.
+    const first = await source.open({ item: (await source.search({ query: 'ship' })).items[0]!.id, limit: 50 });
+    const shown = first.items.length;
+    expect(shown).toBeGreaterThan(8);
+    expect(shown).toBeLessThan(40);
+    expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThan(65536);
     expect(first).toMatchObject({ truncated: true, anchor_truncated: true });
     expect(first.items[0]!.label).toMatch(/^ECHO-1: Ship connector · section 1 of \d+$/);
-    expect(first.items[7]!.label).toMatch(/section 8 of \d+; open it to read on$/);
+    expect(first.items[shown - 1]!.label).toMatch(new RegExp(`section ${shown} of \\d+; open it to read on$`));
     for (const item of first.items) {
       expect(Buffer.byteLength(item.text!, 'utf8')).toBeLessThanOrEqual(3072);
       expect(item.citation.text_sha256).toBe(digest(item.text!));
     }
     // Opening the last section shown reads on from the next one, until the whole text has been read once.
-    const rest = await source.open({ item: first.items[7]!.id });
+    const items = [...first.items];
+    let rest = await source.open({ item: first.items[shown - 1]!.id, limit: 50 });
+    items.push(...rest.items);
+    while (rest.anchor_truncated === true) { rest = await source.open({ item: rest.items.at(-1)!.id, limit: 50 }); items.push(...rest.items); }
     expect(rest).toMatchObject({ truncated: false, anchor_truncated: false });
     expect(rest.notice).toBeUndefined();
-    expect([...first.items, ...rest.items].map(item => item.text).join('')).toBe(`ECHO-1: Ship connector\n\n${paragraphs.join('\n')}`);
+    expect(items.map(item => item.text).join('')).toBe(`ECHO-1: Ship connector\n\n${paragraphs.join('\n')}`);
     // A cited later section reopens at that section.
     const cited = await source.openCitation!({ citation: rest.items[0]!.citation });
     expect(cited.items[0]!.text).toBe(rest.items[0]!.text);
     // A ticket edited since it was read resumes from the top, and says so.
     f.state.tickets.set('10001', withFields({ description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Rewritten' }] }] } }));
-    const changed = await source.open({ item: first.items[7]!.id });
+    const changed = await source.open({ item: first.items[shown - 1]!.id });
     expect(changed).toMatchObject({ notice: 'The ticket changed since it was read; this is the current ticket from the top.' });
     expect(changed.items[0]!.text).toBe('ECHO-1: Ship connector\n\nRewritten');
   });
@@ -394,7 +411,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
 
     f.request.mockClear();
     const expanded = await source.open({ item: anchor.id, limit: 50 });
-    expect(expanded.items.map(item => item.citation.ticket_id)).toEqual(['10001', ...linkIds.slice(0, 25)]);
+    expect(expanded.items.map(item => item.citation.ticket_id)).toEqual(['10001', ...linkIds.slice(0, 49)]);
     expect(expanded.truncated).toBe(true);
   });
 
@@ -901,7 +918,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(f.jqls()).toHaveLength(1);
   });
 
-  it('lists past 512 items, and at the run budget ends the list with what it found and a notice, never a failure', async () => {
+  it('lists every item a list holds, past any run budget, to its end', async () => {
     const f = fixture();
     const pages = 210;
     for (let index = 0; index < pages * 25; index += 1) f.state.tickets.set(String(20000 + index), ticket(String(20000 + index)));
@@ -914,8 +931,9 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
       result = await reader.list({ limit: 25, cursor: result.next_cursor });
       released += result.items.length;
     }
-    expect(released).toBe(5_120);
-    expect(result).toMatchObject({ truncated: true, page_full: false, notice: 'This research run has read as many Jira items as one run can hold; Jira results past them were left out.' });
+    expect(released).toBe(pages * 25);
+    expect(result).toMatchObject({ truncated: false });
+    expect(result.notice).toBeUndefined();
   });
 
   it('relaxes a long empty search to any one word, keeps named keys, and ranks tickets by how many words their titles name', async () => {
@@ -941,23 +959,48 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(keyed.jqls()[1]).toBe(`${literal('ECHO\\\\-404')} AND (${['one', 'two', 'three', 'four', 'five', 'six', 'seven'].map(literal).join(' OR ')}) ORDER BY created DESC, id DESC`);
   });
 
-  it('accepts a query of any number of words, up to the 1 KiB query bound', async () => {
+  it('accepts a query of any number of words and any length', async () => {
     const f = fixture(); f.state.pages = [page(['10001'])];
-    const { source } = await f.make();
-    const query = Array.from({ length: 40 }, (_, index) => `w${index}`).join(' ');
-    expect((await source.search({ query })).items.map(item => item.citation.ticket_id)).toEqual(['10001']);
+    const { reader } = await f.make();
+    const query = Array.from({ length: 400 }, (_, index) => `w${index}`).join(' ');
+    expect(Buffer.byteLength(query)).toBeGreaterThan(1024);
+    expect((await reader.search({ query, limit: 10 })).items.map(item => item.citation.ticket_id)).toEqual(['10001']);
   });
 
-  it('returns up to 25 search matches and says when more matched', async () => {
+  it('returns as many search matches as asked for and says when more matched', async () => {
     const f = fixture();
-    const ids = Array.from({ length: 25 }, (_, index) => String(10030 - index));
+    const ids = Array.from({ length: 50 }, (_, index) => String(10060 - index));
     for (const id of ids) f.state.tickets.set(id, ticket(id));
     f.state.pages = [page(ids, 'next')];
     const { source } = await f.make();
     const result = await source.search({ query: 'connector', limit: 50 });
     expect(result.items.map(item => item.citation.ticket_id)).toEqual(ids);
     expect(result.truncated).toBe(true);
-    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ maxResults: 25 }) }));
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ maxResults: 50 }) }));
+  });
+
+  it('asks Jira for at most its bulk-fetch page and keeps a page of large rows inside the result bound, losing none', async () => {
+    const f = fixture();
+    const ids = Array.from({ length: 100 }, (_, index) => String(10100 - index));
+    // Long titles: a page of 100 such rows is larger than one result carries.
+    for (const id of ids) f.state.tickets.set(id, ticket(id, `${'Long title '.repeat(90)}${id}`));
+    f.state.pages = [page(ids)];
+    const { reader } = await f.make();
+    let result = await reader.list({ limit: 500 });
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ maxResults: 100 }) }));
+    const seen = result.items.map(item => item.citation.ticket_id);
+    expect(seen.length).toBeLessThan(100);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(65536);
+    expect(result).toMatchObject({ truncated: true, page_full: false });
+    // The rows that did not fit come next, with no second search.
+    const searches = f.jqls().length;
+    while (result.next_cursor !== undefined) {
+      result = await reader.list({ limit: 500, cursor: result.next_cursor });
+      seen.push(...result.items.map(item => item.citation.ticket_id));
+    }
+    expect(f.jqls()).toHaveLength(searches);
+    expect(seen).toEqual(ids);
+    expect(result).toMatchObject({ truncated: false, page_full: true });
   });
 
   it('compiles keyword search as independent terms within the pinned project', async () => {
@@ -1183,7 +1226,8 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     f.request.mockClear();
     await source.revalidate({});
     const batches = f.request.mock.calls.map(([request]) => request).filter(request => request.path === `${prefix}/issue/bulkfetch`);
-    expect(batches.map(request => (request.body!.issueIdsOrKeys as string[]).length)).toEqual([50, 50, 7]);
+    // Jira's bulk fetch takes at most 100 issues per call.
+    expect(batches.map(request => (request.body!.issueIdsOrKeys as string[]).length)).toEqual([100, 7]);
     expect(batches.flatMap(request => request.body!.issueIdsOrKeys)).toEqual(ids);
     expect(batches.every(request => request.method === 'POST' && !(request.body!.fields as string[]).includes('description'))).toBe(true);
   });
@@ -1234,8 +1278,8 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
   it('bounds caller input and refuses URL/JQL containers before transport', async () => {
     const f = fixture(); const { reader } = await f.make(); f.request.mockClear();
     for (const input of [{ container: 'ECHO OR project = SECRET', limit: 1 }, { container: `${origin}/browse/ECHO-1`, limit: 1 },
-      { since: '2026-02-30', limit: 1 }, { since: '2026-10-01', until: '2026-09-01', limit: 1 }, { limit: 51 }, { limit: 0 }]) await expect(reader.list(input)).rejects.toMatchObject({ code: 'invalid_request' });
-    for (const query of ['', 'x'.repeat(1025), 'bad\nquery']) await expect(reader.search({ query, limit: 1 })).rejects.toMatchObject({ code: 'invalid_request' });
+      { since: '2026-02-30', limit: 1 }, { since: '2026-10-01', until: '2026-09-01', limit: 1 }, { limit: 1.5 }, { limit: 0 }]) await expect(reader.list(input)).rejects.toMatchObject({ code: 'invalid_request' });
+    for (const query of ['', ' ', 'bad\nquery']) await expect(reader.search({ query, limit: 1 })).rejects.toMatchObject({ code: 'invalid_request' });
     expect(f.request).not.toHaveBeenCalled();
   });
 });
