@@ -380,13 +380,13 @@ describe('the cited evidence as it reads now', () => {
     expect(calls('ask.source')).toHaveLength(2);
   });
 
-  it('shows at most 2,000 characters of a passage', async () => {
+  it('shows a passage as the host gave it: the host cuts it once', async () => {
     rpc.mockImplementation(rpcFor(held, { 'ask.source': () => ok({ label: note.label, text: 'x'.repeat(3_000) }) }, () => ({ active: [], archived: [] })));
     const { store, release, pane } = await asking();
     release(ok({ ...answer(), sources: [note] }));
     await flush();
     store.chooseSource(0, null, paneTurn(store));
     await flush();
-    expect(text(byTestId(pane(), 'evidence-text'))).toBe(`${'x'.repeat(2_000)}…`);
+    expect(text(byTestId(pane(), 'evidence-text'))).toBe('x'.repeat(3_000));
   });
 });

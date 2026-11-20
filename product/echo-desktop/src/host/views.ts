@@ -455,6 +455,12 @@ export function openItemsView(result: PersonRunsResultsV1['items']): OpenItemsVi
 /** Longest text the source pane shows, in characters; longer is cut and marked. The reader shows each whole. */
 const MAX_SOURCE_TEXT = 2_000;
 
+/** `text` in at most `maximum` characters (code points), cut and marked when longer: the source pane's one cut. */
+function clipped(text: string, maximum: number): string {
+  const characters = [...text];
+  return characters.length > maximum ? `${characters.slice(0, maximum - 1).join('')}… (truncated)` : text;
+}
+
 /**
  * Text as the source pane or the reader may show it: control and format
  * characters made spaces, trimmed, and at most `maximum` characters. Nothing
@@ -464,8 +470,7 @@ function sourceText(value: unknown, maximum = MAX_SOURCE_TEXT): string | undefin
   if (typeof value !== 'string') return undefined;
   const cleaned = value.replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim();
   if (cleaned === '') return undefined;
-  const characters = [...cleaned];
-  return characters.length > maximum ? `${characters.slice(0, maximum - 1).join('')}… (truncated)` : cleaned;
+  return clipped(cleaned, maximum);
 }
 
 /** An ISO 8601 time the renderer can format, or none. */
@@ -514,7 +519,8 @@ export function evidenceView(raw: unknown): SourceEvidence {
   // Imported v1 packets keep their historical first-line heading for citation identity. The pane
   // presents the current server label separately; it never interprets the heading as review state.
   const review = evidence.imported_meeting_review;
-  return { label: evidence.citation.label, text: review === undefined ? evidence.text : evidence.text.slice(evidence.text.indexOf('\n') + 1),
+  const text = review === undefined ? evidence.text : evidence.text.slice(evidence.text.indexOf('\n') + 1);
+  return { label: evidence.citation.label, text: clipped(text, MAX_SOURCE_TEXT),
     ...(review === undefined ? {} : { imported_meeting_review: review }) };
 }
 

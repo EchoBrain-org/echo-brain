@@ -26,9 +26,6 @@ import {
 import { AskFollowUps } from './ask-follow-ups.js';
 import { Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
 
-/** What an original source may show: 2,000 characters. */
-const MAX_EVIDENCE = 2_000;
-
 /**
  * "Try asking": the empty bar's suggestions, over the page just above the bar.
  * The caret stays in the bar: the arrow keys light one, and Return or a click
@@ -1071,7 +1068,8 @@ function OriginalSource({ state, target, source }: { state: State; target: PaneT
       {places.map((index, at) => {
         const read = all[at]!;
         if (read.loading || !('value' in read)) return null;
-        const text = read.value.text.length > MAX_EVIDENCE ? `${read.value.text.slice(0, MAX_EVIDENCE)}…` : read.value.text;
+        // Cut once, by the host (evidenceView), as the pane shows any text.
+        const text = read.value.text;
         return (
           <Fragment key={index}>
             {sharedReview === undefined && read.value.imported_meeting_review !== undefined && <SourceReviewBadge review={read.value.imported_meeting_review} />}
