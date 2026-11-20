@@ -1,12 +1,12 @@
 import { evidenceDateFilterV1, evidenceDayV1, matchesEvidenceDateV1, validateEvidenceDateFilterV1, EVIDENCE_ANY_DATE_V1, type EvidenceDateFieldV1, type EvidenceDateFilterV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { randomUUID } from 'node:crypto';
-import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonTicketCitationV1, type PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { observeCoreRuntimeDiagnosticV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { createAtlassianVerificationBatchV1, verifyAtlassianConnectionV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
-import { guardedPersonProviderOperationV1 } from '@echo-brain/provider-runtime/person-provider-v1';
+import { boundUtf8V1, guardedPersonProviderOperationV1, inBatchesOfFourV1 } from '@echo-brain/provider-runtime/person-provider-v1';
 import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { jiraProjectMatches, parseJiraIssueV1, parseJiraProject, type ParsedJiraIssueV1 } from './jira-payload-v1.js';
 import { copyJiraBindingV1, JIRA_ID, JIRA_PERSON_PROVIDER_V1, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
@@ -24,8 +24,20 @@ const REVALIDATION_BATCH_SIZE = 50;
 const LIST_MAX_ITEMS = 25;
 /** Said with an open whose ticket text left out embedded content (a screenshot, a macro), as Confluence says it for a page. */
 const INCOMPLETE_NOTICE = 'Some Jira ticket content could not be fully represented as text.';
-/** One-hop expansion is deliberately bounded; deeper traversal requires an explicit existing open. */
-const OPEN_RELATED_MAX_ITEMS = 4;
+/** Said with an open whose ticket text passed its host-protection bound. */
+const CUT_NOTICE = 'This Jira ticket is longer than ECHO reads; its text after the last section shown was left out.';
+/** Said with an open that resumed from a ticket that changed since it was read. */
+const CHANGED_NOTICE = 'The ticket changed since it was read; this is the current ticket from the top.';
+/** Linked tickets one open lists beside the ticket, as inventory rows: a list page's size. Deeper traversal opens a linked row. */
+const OPEN_RELATED_MAX_ITEMS = 25;
+/** Text sections one open releases, as a Confluence open does; a longer ticket's last section shown opens the rest. */
+const OPEN_SECTIONS_MAX = 8;
+const EMPTY_DIGEST = sha256Digest('');
+
+/** What a released item's handle opens: its ticket from section `start` on, while the ticket text still has `digest`. */
+interface Opening { readonly id: string; readonly start: number; readonly digest?: string }
+/** One released text section of an opened ticket, numbered from 1, and what its handle opens. */
+interface Section { readonly id: string; readonly section: number; readonly opens: Opening; readonly value: Omit<PersonLiveEvidenceValueV1<PersonTicketCitationV1>, 'handle'> }
 
 interface ListCursor {
   readonly selection: string;
@@ -132,8 +144,9 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
   const cloudid = binding.external_scope_id!;
   const apiPrefix = `https://api.atlassian.com/ex/jira/${cloudid}`;
   const pathPrefix = `/ex/jira/${cloudid}/rest/api/3`;
-  const handles = new Map<string, string>();
-  const issued = new Map<string, string>();
+  const handles = new Map<string, Opening>();
+  /** Each released citation's ticket id and section number (0 for a row without text). */
+  const issued = new Map<string, { readonly id: string; readonly section: number }>();
   const cursors = new Map<string, ListCursor>();
   let pinnedOrigin: string | undefined = options.expected_origin;
   let pinnedProject: ReturnType<typeof parseJiraProject> | undefined;
@@ -233,14 +246,44 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     }
   }
 
-  function remember(items: readonly ParsedJiraIssueV1[]): readonly PersonLiveEvidenceValueV1<PersonTicketCitationV1>[] {
+  /** Released rows and sections. A row without text opens its ticket from the top; a section's handle opens what `opens` says. */
+  function remember(items: readonly (ParsedJiraIssueV1 | Section)[]): readonly PersonLiveEvidenceValueV1<PersonTicketCitationV1>[] {
     if (handles.size + items.length > REQUEST_MAX_HANDLES) jiraFailure('unavailable');
     return Object.freeze(items.map(item => {
       const handle = `jira_item_${randomUUID()}`;
-      handles.set(handle, item.id);
-      issued.set(canonicalSha256(item.value.citation), item.id);
+      const section = 'opens' in item ? item.section : 0;
+      handles.set(handle, 'opens' in item ? item.opens : { id: item.id, start: 0 });
+      issued.set(canonicalSha256(item.value.citation), { id: item.id, section });
       return Object.freeze({ ...item.value, handle });
     }));
+  }
+
+  /**
+   * Up to `count` sections of an opened ticket from `start`. The first keeps the ticket's own row identity (a listed row
+   * and its opened body are one item); later ones are labelled by number. When more sections follow, the last section
+   * shown opens the rest; every other section opens the ticket from itself on. A section whose text repeats one already
+   * in the page would be the same citation, so the page ends before it and the next open starts there.
+   */
+  function sections(parsed: ParsedJiraIssueV1, start: number, count: number): { readonly items: readonly Section[]; readonly more: boolean } {
+    const digest = sha256Digest(parsed.sections.join(''));
+    const seen = new Set<string>();
+    let end = Math.min(start + count, parsed.sections.length);
+    for (let index = start; index < end; index += 1) {
+      const sha = sha256Digest(parsed.sections[index]!);
+      if (seen.has(sha)) end = index;
+      seen.add(sha);
+    }
+    const more = end < parsed.sections.length;
+    const items: Section[] = [];
+    for (let index = start; index < end; index += 1) {
+      const text = parsed.sections[index]!;
+      const last = more && index === end - 1;
+      const label = parsed.sections.length === 1 ? parsed.value.label
+        : `${boundUtf8V1(parsed.value.label, 256)} · section ${index + 1} of ${parsed.sections.length}${last ? '; open it to read on' : ''}`;
+      items.push(Object.freeze({ id: parsed.id, section: index + 1, opens: Object.freeze({ id: parsed.id, start: last ? index + 1 : index, digest }),
+        value: Object.freeze({ ...parsed.value, label, text, citation: Object.freeze({ ...parsed.value.citation, text_sha256: sha256Digest(text) }) }) }));
+    }
+    return { items: Object.freeze(items), more };
   }
 
   async function searchPage(input: { readonly jql: string; readonly maximum: number; readonly origin: string; readonly inventory: boolean; readonly cursor?: ListCursor; readonly projectId?: string; readonly signal?: AbortSignal }) {
@@ -324,27 +367,49 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
    * issue receives its own current exact read before metadata is released;
    * linked bodies remain unavailable until the caller opens that item ref.
    */
-  function openIssue(id: string, maximum: number, signal?: AbortSignal, expandRelated = true): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
+  function openIssue(opening: Opening, maximum: number, signal?: AbortSignal, expandRelated = true, cited?: string): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
     return safe(async () => {
       const origin = await verifyConnection(signal);
       let selected: ParsedJiraIssueV1;
-      let relatedIds: readonly string[];
-      let related: readonly (ParsedJiraIssueV1 | undefined)[];
+      let start = opening.start;
+      let changed = false;
+      let relatedIds: readonly string[] = Object.freeze([]);
+      let related: readonly (ParsedJiraIssueV1 | undefined)[] = Object.freeze([]);
+      let page: ReturnType<typeof sections>;
       try {
-        selected = await issue(id, origin, false, signal, expandRelated);
-        relatedIds = expandRelated ? selected.related_issue_ids.slice(0, Math.min(OPEN_RELATED_MAX_ITEMS, Math.max(0, maximum - 1))) : Object.freeze([]);
-        related = await Promise.all(relatedIds.map(relatedId => relatedIssue(relatedId, origin, signal)));
+        selected = await issue(opening.id, origin, false, signal, expandRelated);
+        if (cited !== undefined && cited !== EMPTY_DIGEST) {
+          // A cited section is found by its text, so an edit above it does not lose it; a changed one shows the ticket from the top.
+          const found = selected.sections.findIndex(text => sha256Digest(text) === cited);
+          start = Math.max(found, 0);
+          changed = found < 0;
+        } else if (start > 0 && (opening.digest !== sha256Digest(selected.sections.join('')) || start >= selected.sections.length)) {
+          start = 0;
+          changed = true;
+        }
+        page = sections(selected, start, Math.min(OPEN_SECTIONS_MAX, maximum));
+        // Linked tickets come with the ticket's first read, in the slots its sections leave.
+        if (expandRelated && start === 0) {
+          relatedIds = selected.related_issue_ids.slice(0, Math.min(OPEN_RELATED_MAX_ITEMS, Math.max(0, maximum - page.items.length)));
+          related = await inBatchesOfFourV1(relatedIds, relatedId => relatedIssue(relatedId, origin, signal));
+        }
       } finally {
         // A link target may be omitted, but every open still finishes with a
         // fresh account/resource/project fence before it can issue handles.
         await verifyConnection(signal);
       }
       const visibleRelated = related.filter((item): item is ParsedJiraIssueV1 => item !== undefined);
-      // Truncated covers what the open left out beside the ticket too (a link, a hidden link, a label cut); the
-      // ticket's own text was cut only when its released text was (ADR-0041).
-      return Object.freeze({ items: remember([selected, ...visibleRelated]),
-        truncated: selected.truncated || selected.related_truncated || visibleRelated.some(item => item.truncated) || visibleRelated.length !== relatedIds.length || relatedIds.length !== selected.related_issue_ids.length,
-        anchor_truncated: selected.text_truncated, ...(selected.incomplete ? { notice: INCOMPLETE_NOTICE } : {}) });
+      const notices = [
+        ...(changed ? [CHANGED_NOTICE] : []),
+        ...(selected.incomplete ? [INCOMPLETE_NOTICE] : []),
+        ...(selected.text_truncated && !page.more ? [CUT_NOTICE] : []),
+      ];
+      // Truncated covers what the open left out beside the ticket too (a link, a hidden link, a label cut). The ticket's
+      // own text is cut when sections follow those shown, which its last section shown opens, or when it passed its bound.
+      const anchorCut = page.more || selected.text_truncated;
+      return Object.freeze({ items: remember([...page.items, ...visibleRelated]),
+        truncated: anchorCut || selected.truncated || selected.related_truncated || visibleRelated.some(item => item.truncated) || visibleRelated.length !== relatedIds.length || (expandRelated && start === 0 && relatedIds.length !== selected.related_issue_ids.length),
+        anchor_truncated: anchorCut, ...(notices.length === 0 ? {} : { notice: notices.join(' ') }) });
     }, signal);
   }
 
@@ -354,8 +419,10 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     binding,
     validateCitation(value: unknown) {
       const citation = validatePersonTicketCitationV1(value);
-      if (issued.get(canonicalSha256(citation)) !== citation.ticket_id || citation.tool_id !== 'jira' || citation.external_scope_id !== cloudid || !citation.permalink.startsWith(`${pinnedOrigin}/browse/`) || !JIRA_TICKET_KEY.test(new URL(citation.permalink).pathname.slice(8))) jiraFailure('invalid_output');
-      return Object.freeze({ citation, tool_id: 'jira', external_scope_id: cloudid, coordinates: Object.freeze({ object_id: citation.ticket_id }) });
+      const released = issued.get(canonicalSha256(citation));
+      if (released?.id !== citation.ticket_id || citation.tool_id !== 'jira' || citation.external_scope_id !== cloudid || !citation.permalink.startsWith(`${pinnedOrigin}/browse/`) || !JIRA_TICKET_KEY.test(new URL(citation.permalink).pathname.slice(8))) jiraFailure('invalid_output');
+      // A ticket's row and its first section are one item; a later section is its own.
+      return Object.freeze({ citation, tool_id: 'jira', external_scope_id: cloudid, coordinates: Object.freeze({ object_id: released.section <= 1 ? citation.ticket_id : `${citation.ticket_id}:s${released.section}` }) });
     },
     async search(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
@@ -389,9 +456,9 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     },
     async open(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       const maximum = limit(input.limit);
-      const id = handles.get(input.handle);
-      if (id === undefined) jiraFailure('not_found');
-      return openIssue(id, maximum, input.signal);
+      const opening = handles.get(input.handle);
+      if (opening === undefined) jiraFailure('not_found');
+      return openIssue(opening, maximum, input.signal);
     },
     async openCitation(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       const maximum = limit(input.limit);
@@ -400,7 +467,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       if (citation.tool_id !== binding.tool_id || citation.external_scope_id !== cloudid || !JIRA_ID.test(citation.ticket_id)) jiraFailure('unauthorized');
       // A citation refresh proves the cited anchor remains readable. It does
       // not need to discover new neighboring metadata or pay link-read costs.
-      return openIssue(citation.ticket_id, maximum, input.signal, false);
+      return openIssue({ id: citation.ticket_id, start: 0 }, maximum, input.signal, false, citation.text_sha256);
     },
     async list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
@@ -456,7 +523,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         for (const raw of jiraArray(input.citations, REQUEST_MAX_HANDLES)) {
           let citation: PersonTicketCitationV1;
           try { citation = validatePersonTicketCitationV1(raw); } catch { jiraFailure('invalid_request'); }
-          const id = issued.get(canonicalSha256(citation));
+          const id = issued.get(canonicalSha256(citation))?.id;
           if (citation.tool_id !== binding.tool_id || citation.external_scope_id !== cloudid || id === undefined) jiraFailure('unauthorized');
           ids.add(id);
         }
