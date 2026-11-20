@@ -1,4 +1,3 @@
-import { PERSON_RUN_ITEMS_MAX_V1 } from '@echo-brain/organization-api/person-runs-limits-v1';
 import type {
   PersonImpactStageV1, PersonMeetingOperationV2, PersonMeetingResultsV2, PersonMeetingReviewV2, PersonReviewOperationV1, PersonReviewResultsV1, PersonOpenItemStateV1, PersonRunV1, PersonRunsRequestV1,
 } from '@echo-brain/organization-api';
@@ -11,7 +10,7 @@ import type {
   ProjectChange, ProjectGranolaMapping, ProjectConfluenceMapping, ConfluenceSpace, GranolaFolder, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_NOTE_REQUEST_BYTES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
+import { ACCOUNT_GONE, isWriteCall, MAX_COPY_CHARACTERS, MAX_NOTE_REQUEST_BYTES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
@@ -21,7 +20,7 @@ import {
 } from './timeline.js';
 import { openerOf } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
-import { PERSON_LIVE_MAX, PROJECT_READS_AT_ONCE, unowned } from './altitude.js';
+import { PROJECT_READS_AT_ONCE, unowned } from './altitude.js';
 import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
 import { askedWhen } from './format.js';
@@ -3576,7 +3575,7 @@ async function loadTimeline(): Promise<void> {
   const read = result.value.turns;
   const kept = state.timeline.turns.filter(turn => !read.some(other => other.id === turn.id));
   forgetChecks();
-  setTimeline({ turns: [...read, ...kept].slice(-MAX_TIMELINE_TURNS), checks: {} });
+  setTimeline({ turns: [...read, ...kept], checks: {} });
 }
 
 /** Nothing of the account's timeline stays on screen or in memory: signed out, or another account. Its file is the host's. */
@@ -3622,7 +3621,7 @@ function keepTurn(turn: TimelineTurn): void {
   if (!account) return;
   const turns = state.timeline.turns;
   const kept = turns.some(other => other.id === turn.id) ? turns.map(other => (other.id === turn.id ? turn : other)) : [...turns, turn];
-  setTimeline({ ...state.timeline, turns: kept.slice(-MAX_TIMELINE_TURNS) });
+  setTimeline({ ...state.timeline, turns: kept });
   // Said only while the same account is signed in: another's page never hears of it.
   const same = () => expect()?.membership_id === account.membership_id && expect()?.authority === account.authority;
   void rpc('timeline.put', { expect: account, turn }).then(result => {
@@ -3762,8 +3761,8 @@ export function fullTurns(view: AskState): readonly string[] {
 /**
  * Asks, on the timeline (ADR-0047). One question at a time: a second never
  * replaces one on its way. Typed with Ask open, it continues the conversation:
- * it carries the earlier turn opened, or else the latest when it was asked in
- * the last hour (`previous`), unless `how` says how it is asked; Ask again
+ * it carries the earlier turn opened, or else the latest, however long ago
+ * (`previous`), unless `how` says how it is asked; Ask again
  * carries the turn it asks again. Either carries that turn's sentences only
  * once what they cite is known now: a check of the last five minutes, waited
  * for or made while the question shows on its way; none when no check can
@@ -3782,7 +3781,7 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const againOf = how?.againOf;
   // The turn it carries, unless `how` brings it built: the one it asks again, or the one a follow-up continues.
   const from = how?.previous !== undefined ? null : againOf !== undefined ? turnOf(againOf) ?? null
-    : open && how === undefined ? followedTurn(threadOf(state.timeline.turns, scope), continued, Date.now()) : null;
+    : open && how === undefined ? followedTurn(threadOf(state.timeline.turns, scope), continued) : null;
   const view = open ?? { ...newAsk(), forQuestion: true };
   const mine = ++seq;
   const cancelId = crypto.randomUUID();
@@ -4595,12 +4594,11 @@ export function openProjects(): void {
   setCompose({ ...compose, picking: { place: compose.place, projects: compose.projects } });
 }
 
-/** Ticks a project in the place list, or unticks it: either way the place is a project choice. No more than the API takes. */
+/** Ticks a project in the place list, or unticks it: either way the place is a project choice. */
 export function tickProject(project: ProjectSummary): void {
   const compose = state.compose;
   if (!compose?.picking || project.status !== 'active') return;
   const ticked = compose.projects.some(entry => entry.project_id === project.project_id);
-  if (!ticked && compose.projects.length >= MAX_CAPTURE_PROJECTS) return;
   editCompose({ place: 'projects', projects: ticked ? compose.projects.filter(entry => entry.project_id !== project.project_id) : [...compose.projects, project] });
 }
 
@@ -5360,8 +5358,8 @@ function settle(): void {
  * person's live; never joined to a load on its way, whose reads may predate
  * the change. Otherwise (a zoom), only what is new: projects not read yet,
  * and the project zoomed into. A project zoomed into reads all its follow-ups,
- * then its waiting ones live; a person's are read live one by one, at most
- * PERSON_LIVE_MAX, from projects still on your list. When the sidebar shows
+ * then its waiting ones live; a person's are read live one by one, every
+ * one, a few at a time, from projects still on your list. When the sidebar shows
  * only its first pages, Home reads every page. A newer load, or another
  * account, stops an older one at its next project.
  */
@@ -5421,8 +5419,8 @@ export function loadAltitude(fresh = true): Promise<void> {
     if (state.altitude.level === 'person' && membership_id !== null) {
       const theirs = listed.flatMap(id => state.altitude.reads[id]?.active ?? [])
         .filter(item => item.owner.membership_id === membership_id && !unowned(item) && item.kind !== 'action');
-      // The same first PERSON_LIVE_MAX of theirs each time, however often Home zooms on them; the rest keep stored words.
-      const unread = [...new Map(theirs.map(item => [item.item_id, item])).values()].slice(0, PERSON_LIVE_MAX)
+      // Every one of theirs, once, however often Home zooms on them.
+      const unread = [...new Map(theirs.map(item => [item.item_id, item])).values()]
         .filter(item => again || !state.altitude.live[item.item_id]);
       set({ altitude: { ...state.altitude, reading: unread.length > 0 } });
       await inTurns(unread, PROJECT_READS_AT_ONCE, async item => {
@@ -5734,21 +5732,13 @@ function routedItems(decision: DecisionState): readonly ReviewOpen['items'][numb
 export function keptItems(decision: DecisionState): readonly ReviewOpen['items'][number][] {
   return routedItems(decision).filter(item => (decision.routes[item.signal_id] ?? null) !== null);
 }
-/** Every project the routes name, each once, locked or not: what counts toward the meeting's MAX_CAPTURE_PROJECTS. */
-export function routedProjects(routes: Readonly<Record<string, Destination>>): Set<string> {
-  return new Set(Object.values(routes).flatMap(destination => destination?.projects ?? []));
-}
-/** Routes the card may send: at most MAX_CAPTURE_PROJECTS projects in all, as at most so many in one item. */
-function withinProjects(routes: Readonly<Record<string, Destination>>): boolean {
-  return routedProjects(routes).size <= MAX_CAPTURE_PROJECTS;
-}
 
 /** One item's destination: not kept (null), Only me, or exactly these projects, locked or not. */
 export function setDecisionRoute(signalId: string, destination: Destination): void {
   const decision = state.decision;
   if (!decision) return;
   const routes = { ...decision.routes, [signalId]: destination === null ? null : destinationOf(destination.projects, destination.private) };
-  if (withinProjects(routes)) editChoices({ routes });
+  editChoices({ routes });
 }
 /**
  * A project ticked or unticked on one item. The lock stays as it was while projects stay ticked; the first project ticked
@@ -5779,7 +5769,7 @@ export function setDecisionRoutes(destination: Destination): void {
   const targets = destination === null || keptItems(decision).length === 0 ? items : keptItems(decision);
   const value = destination === null ? null : destinationOf(destination.projects, destination.private);
   const routes = { ...decision.routes, ...Object.fromEntries(targets.map(item => [item.signal_id, value])) };
-  if (withinProjects(routes)) editChoices({ routes });
+  editChoices({ routes });
 }
 /**
  * A project ticked or unticked on every kept item at once (on every item when none is kept), each keeping its other projects
@@ -5796,7 +5786,7 @@ export function tickDecisionRoutes(projectId: string): void {
     const others = (now?.projects ?? []).filter(id => id !== projectId);
     return [item.signal_id, destinationOf(off ? others : [...others, projectId], keptPrivate(now))];
   })) };
-  if (withinProjects(routes)) editChoices({ routes });
+  editChoices({ routes });
 }
 /**
  * The Only me lock on every kept item filed in projects at once: each locked, or unlocked when each already is. An item in
@@ -6592,17 +6582,14 @@ export async function sendTicked(include: boolean): Promise<void> {
   setView({ ...list, busy: true, said: null, picker: null });
   const sends: Record<string, SendCommand> = { ...list.sends };
   const tried = new Map<string, Failure | undefined>();
-  batches: for (const batch of new Set(ticked.map(sendBatch))) {
-    const rows = ticked.filter(item => sendBatch(item) === batch);
-    // One Send lists at most so many of a run's items, so a long meeting goes in parts; a follow-up from a chat is a batch of its own.
-    for (let start = 0; start < rows.length; start += PERSON_RUN_ITEMS_MAX_V1) {
-      if (!viewOf('list', list.seq) || !sameAccount(account)) break batches;
-      const part = rows.slice(start, start + PERSON_RUN_ITEMS_MAX_V1);
-      const sent = await sendRows(part, include, sends[batch]);
-      if (sent.unknown) sends[batch] = sent.command; else delete sends[batch];
-      for (const item of part) tried.set(item.item_id, sent.failure);
-      if (sent.failure) break batches;
-    }
+  for (const batch of new Set(ticked.map(sendBatch))) {
+    // One Send takes all of a run's ticked items; a follow-up from a chat is a batch of its own.
+    const part = ticked.filter(item => sendBatch(item) === batch);
+    if (!viewOf('list', list.seq) || !sameAccount(account)) break;
+    const sent = await sendRows(part, include, sends[batch]);
+    if (sent.unknown) sends[batch] = sent.command; else delete sends[batch];
+    for (const item of part) tried.set(item.item_id, sent.failure);
+    if (sent.failure) break;
   }
   if (!viewOf('list', list.seq) || !sameAccount(account)) return;
   await readList(list.seq, 'again');

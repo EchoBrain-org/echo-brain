@@ -299,8 +299,6 @@ export type AskStep = { readonly type: 'stage'; readonly stage: AskStage; readon
  */
 export interface AskReceipt {
   readonly looked_through: number;
-  /** The count reached the progress contract's bound on a count (1,000): at least that many, said "1,000+". */
-  readonly at_least?: true;
 }
 
 /** A cited statement in the Agentic Ask response. Citation indexes address Answer.sources. */
@@ -406,9 +404,6 @@ export interface TimelineTurn {
   readonly unreadable?: readonly number[];
 }
 
-/** The most turns a timeline keeps, and for how long: older ones go on every put. */
-export const MAX_TIMELINE_TURNS = 200;
-export const TIMELINE_DAYS = 90;
 /**
  * The most a put may send: one turn, whose answer is at most the API's 256 KiB
  * (PERSON_ANSWER_RESPONSE_MAX_BYTES_V4) with its sources' citations kept
@@ -424,8 +419,7 @@ export type AskCheckState = PersonAskCheckStateV1;
 export type AskCheckItem = PersonAskCheckRequestItemV1;
 /** What the check said of one item, in the request's order. */
 export type AskCheckResult = Pick<PersonAskCheckItemV1, 'state'>;
-/** The most items one check asks about, and its body's bound (C1). */
-export const MAX_CHECK_ITEMS = 100;
+/** Transport: a check's body bound (C1), its one bound; a check takes any number of items within it. */
 export const MAX_CHECK_REQUEST_BYTES = 64 * 1024;
 
 /**
@@ -482,7 +476,7 @@ export interface ApprovedRecord {
   readonly timezone?: string;
   readonly all_day: boolean;
   readonly approved_by?: string;
-  /** At most 32 names; `participants_more` says others were left out. */
+  /** Every name the record holds; `participants_more` is true only from an older Authority that left some out. */
   readonly participants: readonly string[];
   readonly participants_more: boolean;
   readonly visibility: 'project' | 'approver';
@@ -505,11 +499,6 @@ export type Audience =
   | { readonly kind: 'projects'; readonly project_ids: readonly string[] }
   | { readonly kind: 'team' };
 
-/**
- * The most projects a capture is filed in, and the most whose members can
- * read it: the API's own bound (PERSON_UPLOAD_PROJECT_SET_MAX).
- */
-export const MAX_CAPTURE_PROJECTS = 20;
 /**
  * Copy answer takes one whole answer, as a saved turn holds one: up to the
  * bound of a timeline put, in characters. It bounds what the page may hand
@@ -721,7 +710,7 @@ export interface HostMethods {
   'employees.reissue': { params: { expect: Expect; email: string; invitation_handle: string }; result: InvitationSaved };
   /** Revoke access: ends the employee's membership at once. */
   'employees.revoke': { params: { expect: Expect; email: string }; result: null };
-  /** `project_ids`: the projects it is filed in, at most MAX_CAPTURE_PROJECTS, in any order. */
+  /** `project_ids`: the projects it is filed in, any number, in any order. */
   'notes.submit': { params: { expect: Expect; request_id: string; text: string; audience: Audience; project_ids: readonly string[] }; result: Receipt };
   /** The renderer names a file only by a handle main issued; main swaps in the path. */
   'documents.upload': {
@@ -982,13 +971,11 @@ export function externalSourcePermalink(kind: unknown, raw: unknown): string | n
 export const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
 /** A project's id, as the API writes one. */
 const NOTICE_PROJECT_ID = /^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-/** A name or a title a notification shows: as long as the API lets either be, in characters. */
+/** Presentation: a name or a title a notification line shows, in characters; a click opens the whole item. */
 export const NOTICE_TEXT_MAX = 200;
 /** A notification's whole line: two titles or names and the words between them, in characters. */
 const NOTICE_LINE_MAX = 2 * NOTICE_TEXT_MAX + 120;
 
-/** The most follow-ups one notification counts, and opens. */
-export const NOTICE_ITEMS_MAX = 100;
 
 /** What a notification opens: one follow-up's page, a list of exactly the follow-ups it counted, or a project. */
 export type NoticeTarget = { readonly kind: 'item'; readonly item_id: string } | { readonly kind: 'items'; readonly item_ids: readonly string[] }
@@ -1003,7 +990,7 @@ export interface Notice {
 /**
  * A notification as main shows it, or null for anything else: exactly a text
  * and a target, the text one non-empty line of at most NOTICE_LINE_MAX
- * characters, and the target an item, two to NOTICE_ITEMS_MAX distinct items,
+ * characters, and the target an item, two or more distinct items,
  * or a project, by their ids.
  */
 export function noticeOf(params: unknown): Notice | null {
@@ -1013,7 +1000,7 @@ export function noticeOf(params: unknown): Notice | null {
   if (typeof text !== 'string' || text.trim() === '' || [...text].length > NOTICE_LINE_MAX || /\p{Cc}/u.test(text) || !record(target)) return null;
   const keys = Object.keys(target).sort().join();
   const ids = target.item_ids;
-  if (target.kind === 'items' && keys === 'item_ids,kind' && Array.isArray(ids) && ids.length >= 2 && ids.length <= NOTICE_ITEMS_MAX
+  if (target.kind === 'items' && keys === 'item_ids,kind' && Array.isArray(ids) && ids.length >= 2
       && ids.every(id => typeof id === 'string' && ITEM_ID.test(id)) && new Set(ids).size === ids.length) {
     return { text: text.trim(), target: { kind: 'items', item_ids: [...ids as string[]] } };
   }

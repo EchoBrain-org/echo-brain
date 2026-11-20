@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   PERSON_PROJECT_ACTIVITY_KIND_V1,
-  PERSON_PROJECT_ACTIVITY_LIMITS_V1,
   PERSON_PROJECT_ACTIVITY_PATH_V1,
   validatePersonProjectActivityV1,
 } from '../src/index.js';
@@ -17,11 +16,9 @@ const items = [
 const activity = (fields: Record<string, unknown> = {}) => ({ schema_version: 1, kind: PERSON_PROJECT_ACTIVITY_KIND_V1, items, ...fields });
 
 describe('Person project activity (Ask timeline v1, C2)', () => {
-  it('names its route and kind, and bounds its items', () => {
+  it('names its route and kind', () => {
     expect(PERSON_PROJECT_ACTIVITY_PATH_V1).toBe('/v1/person/project-activity');
     expect(PERSON_PROJECT_ACTIVITY_KIND_V1).toBe('echo-person-project-activity-v1');
-    expect(PERSON_PROJECT_ACTIVITY_LIMITS_V1).toEqual({ items: 500 });
-    expect(Object.isFrozen(PERSON_PROJECT_ACTIVITY_LIMITS_V1)).toBe(true);
   });
 
   it('accepts exactly its keys and returns a frozen copy', () => {
@@ -30,10 +27,10 @@ describe('Person project activity (Ask timeline v1, C2)', () => {
     expect(Object.isFrozen(validated)).toBe(true);
     expect(Object.isFrozen(validated.items)).toBe(true);
     expect(validated.items.every(item => Object.isFrozen(item))).toBe(true);
-    // No project at all, and as many as the bound allows.
+    // No project at all, and every active project however many.
     expect(validatePersonProjectActivityV1(activity({ items: [] })).items).toEqual([]);
-    const most = Array.from({ length: PERSON_PROJECT_ACTIVITY_LIMITS_V1.items }, (_, index) => ({ project_id: project(index + 1), latest_at: null }));
-    expect(validatePersonProjectActivityV1(activity({ items: most })).items).toHaveLength(500);
+    const many = Array.from({ length: 600 }, (_, index) => ({ project_id: project(index + 1), latest_at: null }));
+    expect(validatePersonProjectActivityV1(activity({ items: many })).items).toHaveLength(600);
   });
 
   it.each([
@@ -45,7 +42,6 @@ describe('Person project activity (Ask timeline v1, C2)', () => {
     ['missing items', (() => { const { items: _items, ...rest } = activity(); return rest; })()],
     ['items that are not a list', activity({ items: { [project(1)]: null } })],
     ['items that are null', activity({ items: null })],
-    ['more than 500 items', activity({ items: Array.from({ length: 501 }, (_, index) => ({ project_id: project(index + 1), latest_at: null })) })],
     ['a project twice', activity({ items: [items[0], { ...items[0], latest_at: null }] })],
     ['an item with an extra key', activity({ items: [{ ...items[0], name: 'Pilot' }] })],
     ['an item without latest_at', activity({ items: [{ project_id: project(1) }] })],

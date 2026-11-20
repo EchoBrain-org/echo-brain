@@ -58,7 +58,7 @@ describe('one approved record as Ask cites it', () => {
       title: 'Tuesday sync', approved_at: '2026-09-15T18:30:00.000Z', started_at: '2026-09-15T17:00:00Z', timezone: 'America/Los_Angeles', all_day: false,
       approved_by: 'Maya Chen', participants: ['Maya Chen', 'Ari'], participants_more: false,
       decisions: { items: [{ atom_id: atom('d1'), text: 'Ship annual plans first.', status: 'proposed', quotes: [
-        { quote: 'Annual first.', started_at: '2026-09-15T17:12:00Z' }, { quote: 'Two' }, { quote: 'Three' },
+        { quote: 'Annual first.', started_at: '2026-09-15T17:12:00Z' }, { quote: 'Two' }, { quote: 'Three' }, { quote: 'Four' },
       ] }] },
       actions: { items: [{ atom_id: atom('a1'), text: 'Update pricing.', quotes: [] }] },
       rationales: { items: [{ atom_id: atom('r1'), text: 'It funds the launch.', quotes: [] }] },
@@ -76,6 +76,7 @@ describe('one approved record as Ask cites it', () => {
     }, record => {
       body(record).human_act_resolution_ref = { action_owners: [{ signal_id: 'a2', owner: 'Priya Shah' }, { signal_id: 'd9', owner: 'Nobody' }, { signal_id: 'a1', owner: 'x'.repeat(10_000) }] };
     }));
+    // A confirmed owner is named whole, however long; an owner only proposed in the brief is not named.
     expect(cited.actions.items).toEqual([
       { atom_id: atom('a1'), text: 'Send the quote.', owner: 'x'.repeat(10_000), quotes: [] },
       { atom_id: atom('a2'), text: 'Book the venue.', owner: 'Priya Shah', quotes: [] },
@@ -90,15 +91,17 @@ describe('one approved record as Ask cites it', () => {
     expect(cited.actions.items.map(entry => entry.owner)).toEqual(actions.map((_, index) => `Owner ${index}`));
   });
 
-  it('keeps every item of a section, each text whole, and 32 participants, saying more were left out', () => {
-    const decisions = Array.from({ length: 40 }, (_, index) => item('decision', `d${index}`, index === 0 ? 'x'.repeat(2_001) : `Decision ${index}`));
+  it('keeps every item of a section, each text whole, every participant and every distinct quote', () => {
+    const evidence = Array.from({ length: 50 }, (_, index) => ({ quote: `Quote ${index}` }));
+    const decisions = Array.from({ length: 40 }, (_, index) => item('decision', `d${index}`, index === 0 ? 'x'.repeat(300_000) : `Decision ${index}`, index === 0 ? { evidence } : {}));
     const participants = Array.from({ length: 40 }, (_, index) => ({ id: `p${index}`, display_name: `Person ${index}` }));
     const cited = personCitedRecordV1(listed({ meeting: { id: 'm1', participants }, decisions }));
     expect(cited.title).toBeUndefined();
     expect(cited.decisions.items.map(entry => entry.atom_id)).toEqual(decisions.map(entry => atom(entry.id)));
-    expect(cited.decisions.items[0]!.text).toBe('x'.repeat(2_001));
-    expect(cited.participants).toHaveLength(32);
-    expect(cited.participants_more).toBe(true);
+    expect(cited.decisions.items[0]!.text).toBe('x'.repeat(300_000));
+    expect(cited.decisions.items[0]!.quotes).toHaveLength(50);
+    expect(cited.participants).toHaveLength(40);
+    expect(cited.participants_more).toBe(false);
     expect(validatePersonCitedRecordV1(JSON.parse(JSON.stringify(cited)))).toEqual(cited);
   });
 
@@ -143,14 +146,13 @@ describe('one approved record as Ask cites it', () => {
       variant(copy => { copy.approved_at = 'yesterday'; }),
       variant(copy => { copy.timezone = 'Not a zone!'; }),
       variant(copy => { copy.participants = ['Ari', 'Ari']; }),
-      variant(copy => { copy.participants = Array.from({ length: 33 }, (_, index) => `Person ${index}`); }),
       variant(copy => { copy.decisions.items[0]!.atom_id = 'd1'; }),
       variant(copy => { copy.decisions.items[0]!.text = ' Ship it.'; }),
       variant(copy => { copy.decisions.items[0]!.status = 'maybe'; }),
       variant(copy => { copy.decisions.items[0]!.owner = 'Priya Shah'; }),
       variant(copy => { copy.decisions.items[0]!.signal_id = 'd1'; }),
       variant(copy => { copy.actions.items[0]!.status = 'decided'; }),
-      variant(copy => { copy.decisions.items[0]!.quotes = [{ quote: 'One' }, { quote: 'Two' }, { quote: 'Three' }, { quote: 'Four' }]; }),
+      variant(copy => { copy.actions.items[0]!.owner = ' Priya'; }),
       variant(copy => { copy.decisions.items[0]!.quotes = [{ quote: 'One' }, { quote: 'One' }]; }),
       variant(copy => { copy.decisions.items[0]!.quotes = [{ quote: 'One', started_at: 'yesterday' }]; }),
       // A section lists each item once, and says nothing of items left out: it leaves none out.

@@ -113,7 +113,13 @@ describe('document V2 shared validation', () => {
       { extraction_detail: '\u0000' }, { extractor: '' }, { extracted_text_bytes: -1 },
       { request_id: 'wrong' }, { received_at: 'not-a-time' },
     ]) expect(() => validatePersonDocumentMetadataV2({ ...document, ...invalid })).toThrow(apiError);
-    for (const invalid of [{ excerpt: 'x'.repeat(241) }, { anchor: { kind: 'paragraph', start: 0 } }]) {
+    // A page holds any number of documents, an excerpt is carried whole, and so are an extractor and its detail.
+    // The document family's 32 KiB response bound is the one bound.
+    const many = { ...results, documents: Array.from({ length: 25 }, () => ({ ...document, excerpt: null, anchor: null })) };
+    expect(validatePersonDocumentSearchResultV2(many)).toBe(many);
+    const longer = { ...results, documents: [{ ...document, extraction_detail: 'd'.repeat(600), extractor: 'e'.repeat(600), excerpt: 'x'.repeat(2_000), anchor: null }] };
+    expect(validatePersonDocumentSearchResultV2(longer)).toBe(longer);
+    for (const invalid of [{ anchor: { kind: 'paragraph', start: 0 } }]) {
       expect(() => validatePersonDocumentSearchResultV2({ ...results, documents: [{ ...results.documents[0], ...invalid }] })).toThrow(apiError);
     }
     expect(() => validatePersonDocumentSearchResultV2({ ...results, next_cursor: 'bad=' })).toThrow(apiError);

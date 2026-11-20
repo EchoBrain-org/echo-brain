@@ -1,6 +1,6 @@
 import { canonicalJson, canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import {
-  PERSON_IMPACT_CARD_LIMITS_V1 as LIMITS,
+  PERSON_IMPACT_CARD_PREVIEW_CHARS_V1,
   validatePersonImpactCardV1,
   type PersonAnswerCitationV6,
   type PersonImpactAffectedV1,
@@ -57,7 +57,7 @@ const LABEL_PREFIX_CHARS = 200;
 export interface OutsideLabelScreenV1 {
   /** The line names an outside item. */
   readonly names: (line: string) => boolean;
-  /** The line with each named title replaced by "a cited item", within `maximum` characters (a card line's by default). */
+  /** The line with each named title replaced by "a cited item", whole unless a caller passes `maximum` characters. */
   readonly scrub: (line: string, maximum?: number) => string;
 }
 
@@ -91,7 +91,7 @@ export function outsideLabelScreenV1(labels: readonly string[]): OutsideLabelScr
   const every = new RegExp(source, "giu");
   return {
     names: line => find.test(line.normalize("NFC")),
-    scrub: (line, maximum = LIMITS.line_chars) => {
+    scrub: (line, maximum = Number.POSITIVE_INFINITY) => {
       const text = line.normalize("NFC");
       return find.test(text) ? cleanLine(text.replace(every, CITED_ITEM), maximum) : line;
     },
@@ -120,8 +120,8 @@ export function storableImpactCardV1(input: PersonImpactCardV1, outsideLabels: r
     affected: Object.freeze(card.affected.map(entry => Object.freeze({
       citation_index: at[entry.citation_index]!,
       ...(entry.relation === undefined ? {} : { relation: entry.relation }),
-      // What the record requires is ECHO's own phrase; a title it names grows into "a cited item", still within its limit.
-      ...(entry.expected === undefined ? {} : { expected: screen.scrub(entry.expected, LIMITS.expected_chars) }),
+      // What the record requires is ECHO's own phrase; a title it names becomes "a cited item".
+      ...(entry.expected === undefined ? {} : { expected: screen.scrub(entry.expected) }),
       // A milestone that names an outside item loses its date; the row stays.
       ...(entry.date_at_risk === undefined || screen.names(entry.date_at_risk.milestone) ? {} : { date_at_risk: Object.freeze({ date: entry.date_at_risk.date, milestone: entry.date_at_risk.milestone }) }),
       // What an outside item says is read again on every view; only ECHO's own text is kept.
@@ -175,18 +175,22 @@ export function impactItemKeyV1(pointer: unknown): Sha256Digest | undefined {
 
 /**
  * A value as one line in the card's own form: NFC, control and line-break
- * characters as spaces, whitespace runs as one space, trimmed, and cut at
- * `maximum` characters with "…". Empty when nothing printable remains. Open
+ * characters as spaces, whitespace runs as one space, trimmed, and whole
+ * unless a caller passes `maximum` characters. Empty when nothing printable remains. Open
  * items shape names and an item's live details with it, so one odd value
  * never fails a response's line checks.
  */
-export function impactCardLineV1(value: unknown, maximum: number): string {
+export function impactCardLineV1(value: unknown, maximum = Number.POSITIVE_INFINITY): string {
   return cleanLine(value, maximum);
 }
 
-/** What an outside item says now: the first characters of its current text on one line, else its title and details. */
+/**
+ * What an outside item says now: a preview of its current text on one line
+ * (presentation: the whole text opens through its citation), else its title
+ * and details.
+ */
 export function currentImpactLineV1(item: FreshImpactItemV1): string {
-  const text = cleanLine(item.text, LIMITS.line_chars);
+  const text = cleanLine(item.text, PERSON_IMPACT_CARD_PREVIEW_CHARS_V1);
   return text.length > 0 ? text : detailsOfImpactItemV1(item);
 }
 

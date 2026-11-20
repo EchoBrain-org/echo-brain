@@ -3,7 +3,6 @@ import { asEnumerableRecord, assertExactKeys, assertToolId, fail } from './valid
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const FOLDER_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
-const MEETING_PROJECT_MAX_FOLDERS_V1 = 20;
 
 interface PersonMeetingProjectReadV1 { readonly schema_version: 1; readonly project_id: string }
 export interface PersonMeetingProjectSetV1 extends PersonMeetingProjectReadV1 {
@@ -25,7 +24,7 @@ function base(record: Record<string, unknown>): PersonMeetingProjectReadV1 {
   return { schema_version: 1, project_id: validateProjectIdV1(record.project_id) };
 }
 function folders(value: unknown, label: string): readonly string[] {
-  if (!Array.isArray(value) || value.length < 1 || value.length > MEETING_PROJECT_MAX_FOLDERS_V1 ||
+  if (!Array.isArray(value) || value.length < 1 ||
       !value.every(id => typeof id === 'string' && FOLDER_ID.test(id)) || new Set(value).size !== value.length) fail(`${label} is invalid`);
   return Object.freeze([...value] as string[]);
 }
@@ -58,7 +57,7 @@ interface PersonMeetingFolderV1 { readonly id: string; readonly key: string; rea
 export interface PersonMeetingFoldersPageV1 { readonly schema_version: 1; readonly items: readonly PersonMeetingFolderV1[]; readonly next_cursor: string | null }
 const CURSOR = /^[A-Za-z0-9_-]{1,4096}$/;
 function folderText(value: unknown, label: string): string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 256 || value !== value.normalize('NFC') || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)) fail(`${label} is invalid`);
+  if (typeof value !== 'string' || value.length === 0 || value !== value.normalize('NFC') || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)) fail(`${label} is invalid`);
   return value;
 }
 export function validatePersonMeetingFolderListV1(value: unknown): PersonMeetingFolderListV1 {
@@ -70,7 +69,7 @@ export function validatePersonMeetingFolderListV1(value: unknown): PersonMeeting
 export function validatePersonMeetingFoldersPageV1(value: unknown): PersonMeetingFoldersPageV1 {
   const record = asEnumerableRecord(value, 'Meeting folders page');
   assertExactKeys(record, ['schema_version', 'items', 'next_cursor'], 'Meeting folders page');
-  if (record.schema_version !== 1 || !Array.isArray(record.items) || record.items.length > 20 || (record.next_cursor !== null && (typeof record.next_cursor !== 'string' || !CURSOR.test(record.next_cursor)))) fail('Meeting folders page is invalid');
+  if (record.schema_version !== 1 || !Array.isArray(record.items) || (record.next_cursor !== null && (typeof record.next_cursor !== 'string' || !CURSOR.test(record.next_cursor)))) fail('Meeting folders page is invalid');
   const items = Object.freeze(record.items.map(item => {
     const folder = asEnumerableRecord(item, 'Meeting folder');
     assertExactKeys(folder, ['id', 'key', 'name'], 'Meeting folder');

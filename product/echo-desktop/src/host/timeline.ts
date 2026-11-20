@@ -1,8 +1,10 @@
 // The Ask timeline's file (ADR-0047): one per account, beside the person
 // session, readable by its owner only. The Authority never sees it. A put
-// keeps one turn (a new one at the end, an old one in its place), then drops
-// turns past 90 days and all but the newest 200; it writes a private temporary
-// file and renames it over the old one, so a reader never meets half a file.
+// keeps one turn (a new one at the end, an old one in its place). Every turn
+// stays, however old and however many, until the file would pass what this
+// computer can read back as one file; only then do the oldest go. A put writes
+// a private temporary file and renames it over the old one, so a reader never
+// meets half a file.
 // A file that cannot be read at all, or is not a timeline file, reads as empty
 // and is replaced by the next put. Inside a timeline file, one turn the page
 // cannot show is skipped on read and the others show; a put keeps it in the
@@ -13,20 +15,27 @@
 // the last one here. Kept apart from host.ts so all of it is tested on a real
 // folder.
 import { validatePersonAnswerGapDetailsV1, validateProjectIdV1 } from '@echo-brain/organization-api';
+import { constants as buffer } from 'node:buffer';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  ITEM_ID, MAX_TIMELINE_PUT_BYTES, MAX_TIMELINE_TURNS, TIMELINE_DAYS, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect,
+  ITEM_ID, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect,
   type TimelineAnswer, type TimelineTurn,
 } from '../shared/protocol.js';
 
 /** The folder's name, inside the person client's own data folder. */
 const TIMELINE_FOLDER = 'ask-timeline-v1';
 const KIND = 'echo-desktop-ask-timeline-v1';
-/** More than 200 turns of the largest answers: anything bigger is not a file a put wrote. */
-const MAX_FILE_BYTES = MAX_TIMELINE_TURNS * MAX_TIMELINE_PUT_BYTES;
-const DAY_MS = 24 * 60 * 60_000;
+/**
+ * Storage capacity: the file is read back whole as one string, and no string
+ * here can be longer than the runtime's MAX_STRING_LENGTH. A UTF-8 file of at
+ * most that many bytes always decodes into one, so a put keeps the file within
+ * it, and a bigger file is not one a put wrote.
+ */
+export const MAX_TIMELINE_FILE_BYTES = buffer.MAX_STRING_LENGTH;
+/** The file's own bytes around its turns: `{"schema_version":1,"kind":"…","turns":[]}`. */
+export const TIMELINE_FILE_FRAME_BYTES = Buffer.byteLength(JSON.stringify({ schema_version: 1, kind: KIND, turns: [] }));
 
 /** Where an account's timeline is: `<person data dir>/ask-timeline-v1/<hex sha256 of "<authority> <membership_id>">.json`. */
 export function timelinePath(personDirectory: string, account: Expect): string {
@@ -72,7 +81,7 @@ function storedTurns(personDirectory: string, account: Expect): StoredTurn[] {
   const path = timelinePath(personDirectory, account);
   try {
     const found = lstatSync(path);
-    if (!found.isFile() || found.size > MAX_FILE_BYTES) return [];
+    if (!found.isFile() || found.size > MAX_TIMELINE_FILE_BYTES) return [];
     const value = JSON.parse(readFileSync(path, 'utf8')) as unknown;
     const file = value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
     if (Object.keys(file).sort().join() !== 'kind,schema_version,turns' || file.schema_version !== 1 || file.kind !== KIND || !Array.isArray(file.turns)) return [];
@@ -92,12 +101,16 @@ export function readTimeline(personDirectory: string, account: Expect): Timeline
 }
 
 /**
- * The turns a timeline keeps at `now`: none asked more than 90 days ago, and
- * the newest 200 of the rest, in their order.
+ * The turns a timeline keeps, in their order: all of them while the file holds
+ * them in `bytes`, else the newest that fit, and always the newest one.
  */
-export function pruneTurns<T extends { readonly asked_at: string }>(turns: readonly T[], now: number): T[] {
-  const kept = turns.filter(turn => now - Date.parse(turn.asked_at) <= TIMELINE_DAYS * DAY_MS);
-  return kept.slice(Math.max(0, kept.length - MAX_TIMELINE_TURNS));
+export function pruneTurns<T>(turns: readonly T[], bytes = MAX_TIMELINE_FILE_BYTES): T[] {
+  // Each turn with the comma after it.
+  const sizes = turns.map(turn => Buffer.byteLength(JSON.stringify(turn)) + 1);
+  let total = sizes.reduce((sum, size) => sum + size, TIMELINE_FILE_FRAME_BYTES);
+  let from = 0;
+  while (from < turns.length - 1 && total > bytes) total -= sizes[from++]!;
+  return turns.slice(from);
 }
 
 /**
@@ -106,7 +119,7 @@ export function pruneTurns<T extends { readonly asked_at: string }>(turns: reado
  * store writes its own: every byte and then the new name on disk before it
  * returns, so a crash leaves the old file or the new one, never part of one.
  */
-export function putTimeline(personDirectory: string, account: Expect, turn: TimelineTurn, now: number): void {
+export function putTimeline(personDirectory: string, account: Expect, turn: TimelineTurn): void {
   const directory = folder(personDirectory, 'write');
   if (directory === null) throw new Error('The Ask timeline folder is not private');
   // Every turn the file holds stays, a turn this page cannot show included.
@@ -114,7 +127,7 @@ export function putTimeline(personDirectory: string, account: Expect, turn: Time
   const at = turns.findIndex(kept => kept.id === turn.id);
   const put = turn as unknown as StoredTurn;
   if (at >= 0) turns[at] = put; else turns.push(put);
-  const bytes = Buffer.from(JSON.stringify({ schema_version: 1, kind: KIND, turns: pruneTurns(turns, now) }), 'utf8');
+  const bytes = Buffer.from(JSON.stringify({ schema_version: 1, kind: KIND, turns: pruneTurns(turns) }), 'utf8');
   const path = timelinePath(personDirectory, account);
   const temporary = join(directory, `.${randomBytes(12).toString('hex')}.tmp`);
   // Created here, owner-only, never through a link: then its bytes on disk before it takes the name.
@@ -286,8 +299,7 @@ function answer(value: unknown): value is TimelineAnswer {
  * the rest of its file stays: one asked in Mine (ADR-0049), or one with a part
  * whose statements have no blocks, plain or laid out by answer layout v1
  * (ADR-0045, ADR-0051). Release 1441d68 still keeps and rewrites Mine turns
- * asked around 2026-10-26 to 10-31. Remove after about 2027-01-25, once 90
- * days of turn retention have passed every such turn (noted 2026-11-11).
+ * asked around 2026-10-26 to 10-31; the first put after them leaves them out.
  */
 function retired(turn: unknown): boolean {
   const parts = record(turn) && record(turn.answer) && Array.isArray(turn.answer.parts) ? turn.answer.parts : [];

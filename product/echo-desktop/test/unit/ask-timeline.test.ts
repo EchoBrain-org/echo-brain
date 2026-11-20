@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, AskScope, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
-import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_COPY_CHARACTERS, PREVIOUS_LIMITS } from '../../src/shared/protocol.js';
+import { MAX_ASK_BODY_BYTES, MAX_CHECK_REQUEST_BYTES, MAX_COPY_CHARACTERS, PREVIOUS_LIMITS } from '../../src/shared/protocol.js';
 import {
   allOmitted, answeredNow, askedSuggestions, checkedOf, checkPlan, followedTurn, knownStates, previousOf, shownInFull, showsOf, threadOf, turnGroups,
   unreadableAfter, visibleTurns,
@@ -123,12 +123,12 @@ describe('the timeline\'s rules', () => {
     expect(turns.map(each => shownInFull(each, turns, [one!.id]))).toEqual([true, false, true]);
   });
 
-  it('continues the turn opened, or else the latest asked in the last hour, and nothing else', () => {
-    const [old, recent] = [turn('Old?', 2 * DAY, status()), turn('Recent?', 59 * 60_000, status())];
-    expect(followedTurn([old!, recent!], null, NOW.getTime())).toBe(recent);
-    expect(followedTurn([old!, recent!], old!.id, NOW.getTime())).toBe(old);
-    expect(followedTurn([old!, recent!], null, NOW.getTime() + 2 * 60_000)).toBeNull();
-    expect(followedTurn([], null, NOW.getTime())).toBeNull();
+  it('continues the turn opened, or else the latest, however long ago it was asked', () => {
+    const [old, recent] = [turn('Old?', 30 * DAY, status()), turn('Recent?', 2 * DAY, status())];
+    expect(followedTurn([old!, recent!], null)).toBe(recent);
+    expect(followedTurn([old!, recent!], old!.id)).toBe(old);
+    expect(followedTurn([old!], null)).toBe(old);
+    expect(followedTurn([], null)).toBeNull();
   });
 
   it('says when a turn was asked as its row does: the time for today, the day before that, and the year of another year', () => {
@@ -180,13 +180,18 @@ describe('what a check asks, and what it says of a turn', () => {
     expect(plan.requests[0]!.items.map(item => Object.keys(item).sort())).toEqual(Array(5).fill(['asked_at', 'citation']));
     expect(plan.requests[0]!.places).toEqual([{ turn: newer!.id, sources: [0, 1] }, { turn: newer!.id, sources: [3] }, { turn: older!.id, sources: [0] },
       { turn: older!.id, sources: [1] }, { turn: older!.id, sources: [2] }]);
-    // At most 100 items a request, every source asked about: a turn the first request cuts short goes on in the next.
+    // No count a request: 150 items go in one, every source asked about.
     const wide = answerOf('Wide?', Array.from({ length: 30 }, (_, at) => ticket(`T-${at}`, String(1000 + at))), [['All of them.', [0]]]);
     const turns = Array.from({ length: 5 }, (_, at) => turn(`W${at}?`, at * HOUR, wide));
     const split = checkPlan(turns);
-    expect(split.requests.map(request => request.items.length)).toEqual([MAX_CHECK_ITEMS, 50]);
-    expect(split.requests[1]!.places[0]).toEqual({ turn: turns[3]!.id, sources: [10] });
+    expect(split.requests.map(request => request.items.length)).toEqual([150]);
     expect(split.turns).toEqual(turns.map(value => value.id));
+    // Only the request body's bound splits them: a turn one request cuts short goes on in the next.
+    const many = Array.from({ length: 20 }, (_, at) => turn(`M${at}?`, at * HOUR, wide));
+    const parts = checkPlan(many).requests;
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.reduce((total, request) => total + request.items.length, 0)).toBe(600);
+    for (const request of parts) expect(new TextEncoder().encode(JSON.stringify({ schema_version: 1, kind: 'echo-person-ask-check-request-v1', items: request.items })).length).toBeLessThanOrEqual(MAX_CHECK_REQUEST_BYTES);
   });
 
   it('turns the results into each turn\'s sources\' states', () => {
@@ -812,7 +817,7 @@ describe('Ask on the timeline', () => {
 });
 
 describe('follow-ups, "Which one?" and Ask again (C3)', () => {
-  it('carries the latest turn asked in the last hour while Ask is open, the turn opened over it, and nothing from a page', async () => {
+  it('carries the latest turn while Ask is open, however long ago it was asked, the turn opened over it, and nothing from a page', async () => {
     const [old, recent] = [turn('Old?', 2 * DAY, status()), turn('Recent?', 30 * 60_000, status())];
     seed(old, recent);
     const store = await startStore();
@@ -830,11 +835,11 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     await store.ask('and when is it due?');
     expect(calls('ask.run')[3]!.previous).toMatchObject({ purpose: 'follow_up', question: 'and that one?' });
     expect(store.getState().ask?.opened).toBe(old.id);
-    // The latest asked over an hour ago, nothing opened: asked on its own.
+    // The latest asked hours ago, nothing opened: a question typed with Ask open is still a follow-up of it.
     store.toggleTurn(old.id);
     vi.setSystemTime(NOW.getTime() + 2 * HOUR);
     await store.ask('Something new?');
-    expect(calls('ask.run')[4]).not.toHaveProperty('previous');
+    expect(calls('ask.run')[4]!.previous).toMatchObject({ purpose: 'follow_up', question: 'and when is it due?' });
   });
 
   it('continues a turn chosen from the bar\'s suggestions, the latest included, which stays in full', async () => {

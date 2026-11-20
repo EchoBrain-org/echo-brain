@@ -90,6 +90,7 @@ function line(value: unknown, message: string): asserts value is string {
   if (typeof value !== 'string' || value.length === 0 || /[\u0000-\u001f\u007f]/.test(value)) fail(message);
 }
 function digest(value: unknown): asserts value is string { text(value); if (!/^sha256:[a-f0-9]{64}$/.test(value)) fail('Invalid meeting digest'); }
+/** Any number of projects, sorted and unique. */
 function projectIds(value: unknown): asserts value is readonly string[] {
   if (!Array.isArray(value)) fail(label);
   let previous: string | undefined;

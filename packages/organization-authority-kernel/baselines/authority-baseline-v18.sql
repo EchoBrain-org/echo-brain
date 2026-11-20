@@ -1626,7 +1626,7 @@ CREATE TABLE authority_person_updates_v1 (
   request_id TEXT NOT NULL,
   context_id TEXT NOT NULL UNIQUE,
   payload_sha256 TEXT NOT NULL CHECK (payload_sha256 LIKE 'sha256:%'),
-  title TEXT NOT NULL CHECK (length(CAST(title AS BLOB)) BETWEEN 1 AND 200),
+  title TEXT NOT NULL CHECK (length(CAST(title AS BLOB)) >= 1),
   text TEXT NOT NULL CHECK (length(CAST(text AS BLOB)) >= 1),
   visibility TEXT NOT NULL CHECK (visibility IN ('only_me', 'team')),
   received_at TEXT NOT NULL CHECK (unixepoch(received_at) IS NOT NULL),
@@ -1733,14 +1733,14 @@ CREATE TABLE authority_person_updates_v2 (
   request_version INTEGER NOT NULL CHECK(request_version IN (2,3)),
   context_id TEXT NOT NULL UNIQUE,
   payload_sha256 TEXT NOT NULL CHECK (payload_sha256 LIKE 'sha256:%'),
-  title TEXT NOT NULL CHECK (length(CAST(title AS BLOB)) BETWEEN 1 AND 200),
+  title TEXT NOT NULL CHECK (length(CAST(title AS BLOB)) >= 1),
   text TEXT NOT NULL CHECK (length(CAST(text AS BLOB)) >= 1),
   audience_kind TEXT NOT NULL CHECK (audience_kind IN ('only_me', 'team', 'project', 'projects')),
   audience_project_id TEXT,
   -- Canonical JSON arrays are checked by the admission adapter. These snapshots
   -- bind immutable request custody; current associations live in their own table.
-  submitted_association_project_ids_json TEXT NOT NULL CHECK(json_valid(submitted_association_project_ids_json) AND json_type(submitted_association_project_ids_json) = 'array' AND json_array_length(submitted_association_project_ids_json) BETWEEN 0 AND 20),
-  audience_project_ids_json TEXT NOT NULL CHECK(json_valid(audience_project_ids_json) AND json_type(audience_project_ids_json) = 'array' AND json_array_length(audience_project_ids_json) BETWEEN 0 AND 20),
+  submitted_association_project_ids_json TEXT NOT NULL CHECK(json_valid(submitted_association_project_ids_json) AND json_type(submitted_association_project_ids_json) = 'array'),
+  audience_project_ids_json TEXT NOT NULL CHECK(json_valid(audience_project_ids_json) AND json_type(audience_project_ids_json) = 'array'),
   project_id TEXT,
   received_at TEXT NOT NULL CHECK (unixepoch(received_at) IS NOT NULL),
   PRIMARY KEY (organization_id, membership_id, request_id),
@@ -1763,7 +1763,7 @@ CREATE TABLE authority_person_updates_v2 (
       AND json_array_length(audience_project_ids_json) = 1
       AND json_extract(audience_project_ids_json, '$[0]') = audience_project_id) OR
     (request_version = 3 AND audience_kind = 'projects' AND audience_project_id IS NULL AND project_id IS NULL
-      AND json_array_length(audience_project_ids_json) BETWEEN 1 AND 20)
+      AND json_array_length(audience_project_ids_json) >= 1)
   ),
   FOREIGN KEY (membership_id, organization_id, principal_id, membership_type)
     REFERENCES authority_memberships(membership_id, organization_id, principal_id, membership_type),
@@ -2056,7 +2056,7 @@ CREATE TABLE authority_person_documents_v1 (
   request_id TEXT NOT NULL,
   request_version INTEGER NOT NULL CHECK(request_version IN (1,2)),
   filename TEXT NOT NULL CHECK(length(CAST(filename AS BLOB)) BETWEEN 1 AND 255),
-  title TEXT NOT NULL CHECK(length(CAST(title AS BLOB)) BETWEEN 1 AND 200),
+  title TEXT NOT NULL CHECK(length(CAST(title AS BLOB)) >= 1),
   detected_media_type TEXT NOT NULL CHECK(detected_media_type IN ('text/plain','text/markdown','application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document')),
   original_size INTEGER NOT NULL CHECK(original_size BETWEEN 1 AND 26214400),
   original_sha256 TEXT NOT NULL CHECK(length(original_sha256) = 71 AND substr(original_sha256, 1, 7) = 'sha256:' AND substr(original_sha256, 8) NOT GLOB '*[^0-9a-f]*'),
@@ -2064,8 +2064,8 @@ CREATE TABLE authority_person_documents_v1 (
   audience_kind TEXT NOT NULL CHECK(audience_kind IN ('only_me','team','project','projects')),
   audience_project_id TEXT,
   -- Immutable initial association; the current association has its own table.
-  submitted_association_project_ids_json TEXT NOT NULL CHECK(json_valid(submitted_association_project_ids_json) AND json_type(submitted_association_project_ids_json) = 'array' AND json_array_length(submitted_association_project_ids_json) BETWEEN 0 AND 20),
-  audience_project_ids_json TEXT NOT NULL CHECK(json_valid(audience_project_ids_json) AND json_type(audience_project_ids_json) = 'array' AND json_array_length(audience_project_ids_json) BETWEEN 0 AND 20),
+  submitted_association_project_ids_json TEXT NOT NULL CHECK(json_valid(submitted_association_project_ids_json) AND json_type(submitted_association_project_ids_json) = 'array'),
+  audience_project_ids_json TEXT NOT NULL CHECK(json_valid(audience_project_ids_json) AND json_type(audience_project_ids_json) = 'array'),
   project_id TEXT,
   received_at TEXT NOT NULL CHECK(unixepoch(received_at) IS NOT NULL),
   UNIQUE(organization_id, membership_id, request_id),
@@ -2092,7 +2092,7 @@ CREATE TABLE authority_person_documents_v1 (
       AND json_array_length(audience_project_ids_json) = 1
       AND json_extract(audience_project_ids_json, '$[0]') = audience_project_id) OR
     (request_version = 2 AND audience_kind = 'projects' AND audience_project_id IS NULL AND project_id IS NULL
-      AND json_array_length(audience_project_ids_json) BETWEEN 1 AND 20)
+      AND json_array_length(audience_project_ids_json) >= 1)
   )
 ) STRICT;
 CREATE INDEX authority_person_documents_feed_v1 ON authority_person_documents_v1(organization_id, received_at DESC, document_id);

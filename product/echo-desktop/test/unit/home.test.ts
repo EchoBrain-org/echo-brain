@@ -524,11 +524,12 @@ describe('Home decisions and impact checks', () => {
     store.setDecisionRoute('dec-1', null);
     store.setDecisionRoutes(store.ONLY_ME);
     expect(store.getState().decision?.routes).toEqual({ 'dec-1': null, 'act-1': store.ONLY_ME });
-    // No more than 20 projects in all.
+    // Any number of projects in all.
     const many = Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
     store.setDecisionRoute('act-1', to(...many.slice(0, 20)));
     store.setDecisionRoute('dec-1', to(...many.slice(20)));
-    expect(store.getState().decision?.routes).toEqual({ 'dec-1': null, 'act-1': to(...many.slice(0, 20)) });
+    expect(store.getState().decision?.routes).toEqual({ 'dec-1': to(...many.slice(20)), 'act-1': to(...many.slice(0, 20)) });
+    store.setDecisionRoute('dec-1', null);
     store.setDecisionOwner('act-1', ' R. Moreno ');
     rpc.mockImplementationOnce(async () => ok({ status: 'publishing', decided_on: 'desktop' }));
     await store.decide('approve');
@@ -559,12 +560,13 @@ describe('Home decisions and impact checks', () => {
     store.tickDecisionRoutes(therm);
     store.tickDecisionRoutes(supplier);
     expect(routes()).toEqual({ 'dec-1': store.ONLY_ME, 'act-1': null });
-    // At most 20 projects in all: a 21st goes on no item, and one the meeting names already goes on every kept item.
+    // Any number of projects in all: a 21st goes on every kept item like any other.
     const many = Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
     store.setDecisionRoute('dec-1', to(...many.slice(0, 19)));
     store.setDecisionRoute('act-1', to(...many.slice(19, 20)));
     store.tickDecisionRoutes(many[20]!);
-    expect(routes()).toEqual({ 'dec-1': to(...many.slice(0, 19)), 'act-1': to(...many.slice(19, 20)) });
+    expect(routes()).toEqual({ 'dec-1': to(...many.slice(0, 19), many[20]!), 'act-1': to(...many.slice(19, 21)) });
+    store.tickDecisionRoutes(many[20]!);
     store.tickDecisionRoutes(many[19]!);
     expect(routes()).toEqual({ 'dec-1': to(...many.slice(0, 20)), 'act-1': to(...many.slice(19, 20)) });
   });
@@ -885,41 +887,36 @@ describe('Follow-up lists and item pages', () => {
     expect(store.followUpShown()).toBeNull();
   });
 
-  it('sends a large approved meeting in bounded batches with distinct commands', async () => {
-    const ids = Array.from({ length: 45 }, (_, i) => String(i + 1));
+  it('sends a large approved meeting in one Send, however many items it has', async () => {
+    const ids = Array.from({ length: 145 }, (_, i) => String(i + 1));
     fx.page = listPage(ids.map(id => unsent(id)));
     const store = await start();
     await store.openYourFollowUps();
     for (const row of list(store).items) store.tickFollowUp(row.item_id);
     fx.page = listPage(ids.map(id => item(id)));
     await store.sendTicked(true);
-    const sent = requests('send');
-    expect(sent.map(request => (request.items as unknown[]).length)).toEqual([40, 5]);
-    expect(new Set(sent.map(request => request.command_id)).size).toBe(2);
+    expect(requests('send').map(request => (request.items as unknown[]).length)).toEqual([145]);
   });
 
-  it('keeps the command of a later part whose outcome is unknown when an earlier part of the same meeting went', async () => {
-    const ids = Array.from({ length: 45 }, (_, i) => String(i + 1));
+  it('keeps the command of a large Send whose outcome is unknown, and replays it whole', async () => {
+    const ids = Array.from({ length: 145 }, (_, i) => String(i + 1));
     fx.page = listPage(ids.map(id => unsent(id)));
     const store = await start();
     await store.openYourFollowUps();
     for (const row of list(store).items) store.tickFollowUp(row.item_id);
-    // The first part goes; the second part's reply is lost, and its rows read again are still not sent.
+    // The reply is lost, and its rows read again are still not sent.
     fx.sendFailure = { code: 'timeout', retryable: true, mutation_outcome: 'unknown' };
-    fx.sendsThatGo = 1;
-    fx.page = listPage(ids.map((id, at) => (at < 40 ? item(id) : unsent(id))));
     await store.sendTicked(true);
-    const [, second] = requests('send');
-    expect((second!.items as unknown[]).length).toBe(5);
-    // What went is said, and what did not is still to send, with its command kept to replay.
+    const [first] = requests('send');
+    expect((first!.items as unknown[]).length).toBe(145);
     expect(said(store)?.error).toBe(true);
-    expect(Object.values(list(store).sends).map(kept => kept.command)).toEqual([second!.command_id]);
-    // Send again replays that part with the same command, so a send that did land is not sent twice.
+    expect(Object.values(list(store).sends).map(kept => kept.command)).toEqual([first!.command_id]);
+    // Send again replays it with the same command, so a send that did land is not sent twice.
     fx.sendFailure = null;
     fx.page = listPage(ids.map(id => item(id)));
     await store.sendTicked(true);
-    expect(requests('send')).toHaveLength(3);
-    expect(requests('send')[2]).toEqual(second);
+    expect(requests('send')).toHaveLength(2);
+    expect(requests('send')[1]).toEqual(first);
     expect(list(store).sends).toEqual({});
   });
 

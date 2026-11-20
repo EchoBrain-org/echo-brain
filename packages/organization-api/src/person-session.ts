@@ -215,7 +215,7 @@ export function validateOrganizationPersonSession(
   assertId(record.organization_id, 'org', `${label} organization_id`);
   assertId(record.principal_id, 'prn', `${label} principal_id`);
   assertId(record.membership_id, 'mem', `${label} membership_id`);
-  assertString(record.display_name, `${label} display_name`, 200);
+  assertString(record.display_name, `${label} display_name`, Number.POSITIVE_INFINITY);
   if (record.membership_type !== 'owner' && record.membership_type !== 'employee') {
     fail(`${label} membership_type is unsupported`);
   }

@@ -1,6 +1,5 @@
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import {
-  PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1 as LIMITS,
   validatePersonFollowUpEvidenceV1,
   type PersonFollowUpEvidenceV1,
 } from '@echo-brain/organization-api';
@@ -391,21 +390,21 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
     // never takes the due date of the item it is about; another run item with none shows its tool's, read live.
     const own = row.due_on !== null || openItemIsFromChatV1(row);
     const due = own ? row.due_on ?? '' : live === undefined ? '' : openItemCurrentV1(live)?.due_at ?? '';
-    const liveTitle = live === undefined ? '' : impactCardLineV1(live.label, LIMITS.title_chars);
+    const liveTitle = live === undefined ? '' : impactCardLineV1(live.label);
     // An open item's line has no length of its own, so evidence carries it whole.
-    const expected = impactCardLineV1(row.expected, Number.POSITIVE_INFINITY);
+    const expected = impactCardLineV1(row.expected);
     const decision = decisionPart(entry);
     const readable = decision === undefined || row.record_sha256 === null ? undefined : context.decisions.get(row.record_sha256);
     const evidence = (withLive: boolean, withDecision: boolean): PersonFollowUpEvidenceV1 => {
       const title = (withLive ? liveTitle : '') || expected || DEFAULT_TITLE;
-      const decided = decision?.first_line === null || decision?.first_line === undefined ? '' : impactCardLineV1(decision.first_line, LIMITS.first_line_chars);
+      const decided = decision?.first_line === null || decision?.first_line === undefined ? '' : impactCardLineV1(decision.first_line);
       return validatePersonFollowUpEvidenceV1({
         item_id: row.item_id, kind: openItemKindV1(row.pointer), title, owner: ownerName(context.people, row), status: row.state,
         // ECHO's own dates, which the runs API shows whoever sees the row.
         created_at: row.created_at, ...(row.sent_at === null ? {} : { sent_at: row.sent_at }), ...(row.owner_set_at === null ? {} : { reassigned_at: row.owner_set_at }),
         ...(due !== '' && (own || (withLive && liveTitle !== '')) ? { due_at: due } : {}),
         ...(withDecision && decision !== undefined ? { decision: {
-          title: impactCardLineV1(decision.title, LIMITS.decision_title_chars) || 'Approved meeting',
+          title: impactCardLineV1(decision.title) || 'Approved meeting',
           ...(decided === '' ? {} : { first_line: decided }), ref: `meeting:${row.record_sha256}`,
         } } : {}),
         ...(expected !== '' && expected !== title ? { expected } : {}),

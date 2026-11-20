@@ -4,9 +4,6 @@ import {
   PERSON_ASK_PROGRESS_CONTENT_TYPE_V1,
   PERSON_ASK_PROGRESS_HEARTBEAT_V1,
   PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1,
-  PERSON_ASK_PROGRESS_NAMED_MAX_V1,
-  PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1,
-  PERSON_ASK_PROGRESS_SOURCES_MAX_V3,
   createPersonAskProgressDecoderV3,
   formatPersonAskProgressEventV3,
   validatePersonAskProgressLineV3,
@@ -88,7 +85,10 @@ describe('Ask progress V3 wire contract (/v7, ADR-0039, research tool contract v
     expect(() => validatePersonAskProgressStepEventV3({ type: 'searched', sources: [{ kind: 'meetings' }], found: 1, hidden: 3 })).toThrow('unexpected shape');
     expect(() => validatePersonAskProgressStepEventV3({ type: 'read', items: [] })).toThrow();
     expect(() => validatePersonAskProgressStepEventV3({ type: 'read', items: [decision, decision] })).toThrow('names an item twice');
-    expect(() => validatePersonAskProgressStepEventV3({ type: 'read', items: Array.from({ length: PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1 + 1 }, (_, n) => passage(n)) })).toThrow();
+    // A read event names any number of items, and a count has no ceiling of its own.
+    const many = Array.from({ length: 300 }, (_, n) => passage(n));
+    expect(validatePersonAskProgressStepEventV3({ type: 'read', items: many })).toEqual({ type: 'read', items: many });
+    expect(validatePersonAskProgressStepEventV3({ type: 'searched', sources: [{ kind: 'meetings' }], found: 25_000 })).toMatchObject({ found: 25_000 });
     expect(() => validatePersonAskProgressStepEventV3({ type: 'read', items: [{ ...decision, ref: `meeting:${canonicalSha256('other')}` }] })).toThrow('ref is inconsistent');
   });
 
@@ -118,13 +118,12 @@ describe('Ask progress V3 wire contract (/v7, ADR-0039, research tool contract v
     expect(() => validatePersonAskProgressStepEventV3({ type: 'searched', sources: [{ kind: 'containers', tool_id: 'jira' }, { kind: 'containers', tool_id: 'jira' }], found: 1 })).toThrow('duplicates');
   });
 
-  it('names up to sixteen sources in one row', () => {
-    expect(PERSON_ASK_PROGRESS_SOURCES_MAX_V3).toBe(16);
+  it('names every source a row searched, sixteen or more', () => {
     const many = ['jira', 'confluence', 'github', 'linear', 'notion'].flatMap(tool_id => [{ kind: 'containers', tool_id }, { kind: 'tickets', tool_id }]);
     const sixteen = [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'follow_ups' }, { kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, ...many];
     expect(sixteen).toHaveLength(16);
     expect(validatePersonAskProgressStepEventV3({ type: 'searched', sources: sixteen, found: 3 }).type).toBe('searched');
-    expect(() => validatePersonAskProgressStepEventV3({ type: 'searched', sources: [...sixteen, { kind: 'pages', tool_id: 'confluence' }], found: 3 })).toThrow('sources is invalid');
+    expect(validatePersonAskProgressStepEventV3({ type: 'searched', sources: [...sixteen, { kind: 'pages', tool_id: 'confluence' }], found: 3 }).type).toBe('searched');
   });
 
   it('names a workspace item read as its V8 citation: a project and a tool with their refs, a container with its key', () => {
@@ -148,13 +147,12 @@ describe('Ask progress V3 wire contract (/v7, ADR-0039, research tool contract v
     expect(() => validatePersonAskReceiptV3({ ...decidedReceipt(), rows: [{ type: 'read', items: [decision] }, decidedReceipt().rows[0], { type: 'read', items: [decision] }] })).toThrow('names an item twice');
     expect(() => validatePersonAskReceiptV3({ ...decidedReceipt(), looked_through: 1 })).toThrow('less than the items');
     expect(() => validatePersonAskReceiptV3({ ...decidedReceipt(), elapsed_ms: -1 })).toThrow();
-    expect(() => validatePersonAskReceiptV3({ ...decidedReceipt(), elapsed_ms: 300_001 })).toThrow();
+    // A run that keeps making progress has no clock: any elapsed time is carried.
+    expect(validatePersonAskReceiptV3({ ...decidedReceipt(), elapsed_ms: 3_600_000 }).elapsed_ms).toBe(3_600_000);
     expect(() => validatePersonAskReceiptV3({ ...decidedReceipt(), items: [] })).toThrow('unexpected shape');
-    // A merged read row may hold more than one event's items, up to the named bound.
-    const many = Array.from({ length: PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1 + 5 }, (_, n) => passage(n));
-    expect(validatePersonAskReceiptV3({ looked_through: many.length, elapsed_ms: 1, rows: [{ type: 'read', items: many }] }).rows[0]).toEqual({ type: 'read', items: many });
-    const tooMany = Array.from({ length: PERSON_ASK_PROGRESS_NAMED_MAX_V1 + 1 }, (_, n) => passage(n));
-    expect(() => validatePersonAskReceiptV3({ looked_through: tooMany.length, elapsed_ms: 1, rows: [{ type: 'read', items: tooMany }] })).toThrow();
+    // A merged read row names every item read, with no count of its own; the receipt's byte bound is its one bound.
+    const many = Array.from({ length: 60 }, (_, n) => passage(n));
+    expect(validatePersonAskReceiptV3({ looked_through: 5_000, elapsed_ms: 1, rows: [{ type: 'read', items: many }] }).rows[0]).toEqual({ type: 'read', items: many });
     // Its rows may name follow-ups too.
     expect(validatePersonAskReceiptV3({ looked_through: 1, elapsed_ms: 12_000, rows: [{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 4 }, { type: 'read', items: [followUp] }] }).rows).toHaveLength(2);
   });

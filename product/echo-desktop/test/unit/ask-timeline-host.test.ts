@@ -1,11 +1,12 @@
 // The Ask timeline on the host (ADR-0047): its file, on a real folder (one per
-// account, owner-only, written whole through a temporary file, at most 200
-// turns and 90 days, a bad file read as empty, a turn an older desktop saved
+// account, owner-only, written whole through a temporary file, every turn kept
+// until the file would pass what it can hold, a bad file read as empty, a turn an older desktop saved
 // dropped on its own, our sign-out deleting it and an account change deleting
 // the last one's), and the checks of what the page
 // sends with an Ask and a source check before the client sees it.
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { constants } from 'node:buffer';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,7 +28,9 @@ import { ASK_RUN_SILENCE_MS, HOST_TIMEOUT_MS, PREVIOUS_LIMITS } from '../../src/
 import { PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1 } from '@echo-brain/organization-api';
 import { askArgv, askCheckArgv, askCheckRequest, askPrevious } from '../../src/host/ask.js';
 import { askText } from '../../src/shared/query.js';
-import { deleteOtherTimelines, deleteTimeline, pruneTurns, putTimeline, readTimeline, timelinePath, timelineTurn } from '../../src/host/timeline.js';
+import {
+  deleteOtherTimelines, deleteTimeline, MAX_TIMELINE_FILE_BYTES, pruneTurns, putTimeline, readTimeline, TIMELINE_FILE_FRAME_BYTES, timelinePath, timelineTurn,
+} from '../../src/host/timeline.js';
 import { answerView } from '../../src/host/views.js';
 import { blocksAnswer } from '../fixtures/authority.js';
 import { askLine } from './ask-line.js';
@@ -65,7 +68,7 @@ const mode = (path: string) => statSync(path).mode & 0o777;
 describe('the timeline file (C5)', () => {
   it('is one owner-only file per account, by the hash of who it is, in an owner-only folder beside the session', () => {
     const first = turn();
-    putTimeline(person, ARI, first, NOW);
+    putTimeline(person, ARI, first);
     const path = timelinePath(person, ARI);
     expect(path).toBe(join(folder(), `${createHash('sha256').update(`${ARI.authority} ${ARI.membership_id}`).digest('hex')}.json`));
     expect(mode(folder())).toBe(0o700);
@@ -79,22 +82,22 @@ describe('the timeline file (C5)', () => {
 
   it('keeps a new turn at the end and one already kept in its place, writing the file whole and leaving no temporary file', () => {
     const [first, second] = [turn(2), turn(1)];
-    putTimeline(person, ARI, first, NOW);
-    putTimeline(person, ARI, second, NOW);
+    putTimeline(person, ARI, first);
+    putTimeline(person, ARI, second);
     const marked = { ...first, unreadable: [0] };
-    putTimeline(person, ARI, marked, NOW);
+    putTimeline(person, ARI, marked);
     expect(readTimeline(person, ARI)).toEqual([marked, second]);
     expect(readdirSync(folder()).filter(name => name.endsWith('.tmp'))).toEqual([]);
   });
 
   it('writes every byte however little a write takes, and has the file and its new name on disk before a put returns', () => {
     const [first, second] = [turn(2), turn(1)];
-    putTimeline(person, ARI, first, NOW);
+    putTimeline(person, ARI, first);
     vi.mocked(fsyncSync).mockClear();
     vi.mocked(renameSync).mockClear();
     disk.short = true;
     try {
-      putTimeline(person, ARI, second, NOW);
+      putTimeline(person, ARI, second);
     } finally {
       disk.short = false;
     }
@@ -108,18 +111,28 @@ describe('the timeline file (C5)', () => {
     expect(synced.filter(order => order > renamed[0]!)).toHaveLength(1);
   });
 
-  it('keeps at most 200 turns and none older than 90 days, the newest, on every put', () => {
-    const old = turn(91);
-    putTimeline(person, ARI, old, NOW);
+  it('keeps every turn, however old and however many, while the file holds them', () => {
+    const old = turn(400);
+    putTimeline(person, ARI, old);
     const recent = turn(89);
-    putTimeline(person, ARI, recent, NOW);
-    expect(readTimeline(person, ARI)).toEqual([recent]);
+    putTimeline(person, ARI, recent);
+    expect(readTimeline(person, ARI)).toEqual([old, recent]);
     const many = Array.from({ length: 205 }, (_, at) => turn(0, { asked_at: new Date(NOW - (205 - at) * 60_000).toISOString() }));
-    expect(pruneTurns(many, NOW)).toEqual(many.slice(5));
-    for (const each of many) putTimeline(person, ARI, each, NOW);
+    expect(pruneTurns(many)).toEqual(many);
+    for (const each of many) putTimeline(person, ARI, each);
     const kept = readTimeline(person, ARI);
-    expect(kept).toHaveLength(200);
+    expect(kept).toHaveLength(207);
     expect(kept.at(-1)).toEqual(many.at(-1));
+  });
+
+  it('lets the oldest turns go only when the file would pass what it can hold, never the newest', () => {
+    const many = Array.from({ length: 10 }, (_, at) => turn(10 - at));
+    const one = Buffer.byteLength(JSON.stringify(many[0]));
+    const room = TIMELINE_FILE_FRAME_BYTES + 4 * (one + 1);
+    expect(pruneTurns(many, room)).toEqual(many.slice(6));
+    expect(pruneTurns(many, 1)).toEqual(many.slice(9));
+    // The bound is what this computer can read back as one file.
+    expect(MAX_TIMELINE_FILE_BYTES).toBe(constants.MAX_STRING_LENGTH);
   });
 
   it('reads a file that is not a timeline file as empty, and the next put replaces it', () => {
@@ -130,7 +143,7 @@ describe('the timeline file (C5)', () => {
       expect(readTimeline(person, ARI)).toEqual([]);
     }
     const fresh = turn();
-    putTimeline(person, ARI, fresh, NOW);
+    putTimeline(person, ARI, fresh);
     expect(readTimeline(person, ARI)).toEqual([fresh]);
   });
 
@@ -145,7 +158,7 @@ describe('the timeline file (C5)', () => {
     expect(readTimeline(person, ARI)).toEqual([first, second]);
     // Saving a new turn rewrites the file with every turn it held, the ones this page cannot show as they were.
     const fresh = turn();
-    putTimeline(person, ARI, fresh, NOW);
+    putTimeline(person, ARI, fresh);
     expect((JSON.parse(readFileSync(path, 'utf8')) as { turns: unknown[] }).turns).toEqual([first, unshown, nameless, second, fresh]);
     expect(readTimeline(person, ARI)).toEqual([first, second, fresh]);
   });
@@ -162,7 +175,7 @@ describe('the timeline file (C5)', () => {
     }
     // The next put writes the file without it.
     const fresh = turn();
-    putTimeline(person, ARI, fresh, NOW);
+    putTimeline(person, ARI, fresh);
     expect((JSON.parse(readFileSync(path, 'utf8')) as { turns: TimelineTurn[] }).turns).toEqual([current, fresh]);
   });
 
@@ -170,7 +183,7 @@ describe('the timeline file (C5)', () => {
     const elsewhere = mkdtempSync(join(tmpdir(), 'echo-elsewhere-'));
     try {
       symlinkSync(elsewhere, folder());
-      expect(() => putTimeline(person, ARI, turn(), NOW)).toThrow();
+      expect(() => putTimeline(person, ARI, turn())).toThrow();
       expect(readdirSync(elsewhere)).toEqual([]);
       expect(readTimeline(person, ARI)).toEqual([]);
     } finally {
@@ -178,17 +191,17 @@ describe('the timeline file (C5)', () => {
       rmSync(elsewhere, { recursive: true, force: true });
     }
     const first = turn();
-    putTimeline(person, ARI, first, NOW);
+    putTimeline(person, ARI, first);
     chmodSync(folder(), 0o755);
     expect(readTimeline(person, ARI)).toEqual([]);
-    putTimeline(person, ARI, turn(), NOW);
+    putTimeline(person, ARI, turn());
     expect(mode(folder())).toBe(0o700);
     expect(readTimeline(person, ARI)).toHaveLength(2);
   });
 
   it('goes with our own sign-out; an account change leaves nothing of the last account, nor a write left half done', () => {
-    putTimeline(person, ARI, turn(), NOW);
-    putTimeline(person, MINA, turn(), NOW);
+    putTimeline(person, ARI, turn());
+    putTimeline(person, MINA, turn());
     writeFileSync(join(folder(), `.${'0'.repeat(24)}.tmp`), 'half', { mode: 0o600 });
     deleteOtherTimelines(person, MINA);
     expect(existsSync(timelinePath(person, ARI))).toBe(false);
@@ -201,8 +214,8 @@ describe('the timeline file (C5)', () => {
   });
 
   it('deletes from a folder open to others all the same, but never through a link or from a folder that is not yours to use', () => {
-    putTimeline(person, ARI, turn(), NOW);
-    putTimeline(person, MINA, turn(), NOW);
+    putTimeline(person, ARI, turn());
+    putTimeline(person, MINA, turn());
     chmodSync(folder(), 0o755);
     // Reads stay strict; deletion does not wait on the folder's mode.
     expect(readTimeline(person, MINA)).toEqual([]);
@@ -250,7 +263,7 @@ describe('the timeline file (C5)', () => {
     const answer = { ...original.answer, outcome: 'partial' as const, parts: [{ ...original.answer.parts[0]!, status: 'partial' as const,
       gap: 'Not found: the owner. Some list rows did not fit.', gap_details: { not_found: 'Not found: the owner.', unsupported_action: true as const } }] };
     const kept = { ...original, answer };
-    putTimeline(person, ARI, kept, NOW);
+    putTimeline(person, ARI, kept);
     expect(readTimeline(person, ARI)).toEqual([kept]);
     for (const gap_details of [{}, { unsupported_action: false }, { interrupted: 'true' }, { not_found: '' }, { not_found: 'x'.repeat(2049) }, { technical: true }]) {
       expect(timelineTurn({ ...kept, answer: { ...answer, parts: [{ ...answer.parts[0], gap_details }] } })).toBeNull();
@@ -260,7 +273,7 @@ describe('the timeline file (C5)', () => {
   it('keeps the ids of the follow-ups an answer drafted, and never a card itself (ADR-0053)', () => {
     const original = turn();
     const kept = { ...original, answer: { ...original.answer, follow_ups: ['itm_chat-0001', 'itm_chat-0002'] } };
-    putTimeline(person, ARI, kept, NOW);
+    putTimeline(person, ARI, kept);
     expect(readTimeline(person, ARI)).toEqual([kept]);
     for (const follow_ups of [[], ['itm_chat-0001', 'itm_chat-0001'], ['run_1'], [{ item_id: 'itm_chat-0001', expected: 'Update the pricing page' }], 'itm_chat-0001']) {
       expect(timelineTurn({ ...kept, answer: { ...kept.answer, follow_ups } })).toBeNull();
@@ -278,7 +291,7 @@ describe('the timeline file (C5)', () => {
       return answer;
     };
     const arranged = turn(1, { answer: kept(blocksAnswer('Can THERM start PVT?', scope)) });
-    putTimeline(person, ARI, arranged, NOW);
+    putTimeline(person, ARI, arranged);
     const [readArranged] = readTimeline(person, ARI);
     expect(readArranged).toEqual(arranged);
     expect(readArranged!.answer.parts[0]!.blocks!.map(block => block.kind)).toEqual(['answer', 'table', 'timeline', 'card', 'points', 'text', 'quote']);
@@ -286,7 +299,7 @@ describe('the timeline file (C5)', () => {
     const wide = arranged.answer.parts[0]!;
     const seventy = Array.from({ length: 70 }, (_, at) => ({ text: `Step ${at + 1}.`, citation_indexes: [0], private: wide.statements[0]!.private }));
     const long = turn(2, { answer: { ...arranged.answer, parts: [{ ...wide, statements: seventy, blocks: [{ kind: 'answer', statements: [0] }, { kind: 'points', ordered: true, statements: seventy.slice(1).map((_, at) => at + 1) }] }] } });
-    putTimeline(person, ARI, long, NOW);
+    putTimeline(person, ARI, long);
     expect(readTimeline(person, ARI).find(entry => entry.id === long.id)?.answer.parts[0]!.statements).toHaveLength(70);
     const part = arranged.answer.parts[0]!;
     const blocks = part.blocks! as unknown as Record<string, unknown>[];
@@ -372,7 +385,9 @@ describe('what the page sends with an Ask and a check', () => {
     const request = askCheckRequest([item, record, followUp]);
     expect(JSON.parse(request!)).toEqual({ schema_version: 1, kind: 'echo-person-ask-check-request-v1', items: [item, record, followUp] });
     expect(askCheckArgv(request!)).toEqual(['ask-check', `--request=${request}`]);
-    for (const bad of [[], Array.from({ length: 101 }, () => item), [{ ...item, asked_at: 'now' }],
+    // Any number of items within the body's bound.
+    expect(JSON.parse(askCheckRequest(Array.from({ length: 101 }, () => item))!).items).toHaveLength(101);
+    for (const bad of [[], [{ ...item, asked_at: 'now' }],
       [{ asked_at: item.asked_at, citation: { kind: 'person', membership_id: ARI.membership_id } }], [{ ...followUp, citation: { kind: 'follow_up', item_id: 'x' } }],
       [{ ...item, extra: 1 }], 'items']) expect(askCheckRequest(bad)).toBeNull();
     const long = { ...ticketCitation, permalink: `https://example.atlassian.net/browse/${'T'.repeat(1_900)}` };

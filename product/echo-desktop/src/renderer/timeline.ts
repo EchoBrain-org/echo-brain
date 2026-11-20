@@ -6,12 +6,10 @@
 import type {
   Answer, AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskScope, CheckCitation, TimelineTurn,
 } from '../shared/protocol.js';
-import { checkOf, MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
+import { checkOf, MAX_ASK_BODY_BYTES, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerSentences, sourceGroups, type Sentence, type Shows, type SourceGroup } from './answer.js';
 
-/** A follow-up continues the latest turn while it was asked this recently, and Ask is open. */
-const FOLLOW_UP_MS = 60 * 60_000;
 /** Opening Ask checks the sources of this many of the newest turns, and a check is good for five minutes. */
 export const CHECK_TURNS = 10;
 export const CHECK_FRESH_MS = 5 * 60_000;
@@ -122,7 +120,7 @@ export function checkPlan(turns: readonly TimelineTurn[]): CheckPlan {
       const item: AskCheckItem = { asked_at: turn.asked_at, citation };
       const size = new TextEncoder().encode(JSON.stringify(item)).length + 1;
       const last = requests.at(-1);
-      if (last === undefined || last.items.length === MAX_CHECK_ITEMS || bytes + size > MAX_CHECK_REQUEST_BYTES - 1024) {
+      if (last === undefined || bytes + size > MAX_CHECK_REQUEST_BYTES - 1024) {
         requests.push({ items: [], places: [] });
         bytes = 96;
       }
@@ -208,13 +206,11 @@ export function behindEarlierLine(turns: readonly TimelineTurn[], full: readonly
 
 /**
  * The turn a follow-up continues: the turn opened (from its line, or chosen from the bar's suggestions, the latest included),
- * or else the latest when it was asked in the last hour.
+ * or else the latest, however long ago it was asked. A question typed with Ask open is a follow-up because the person asks it there.
  */
-export function followedTurn(turns: readonly TimelineTurn[], opened: string | null, now: number): TimelineTurn | null {
+export function followedTurn(turns: readonly TimelineTurn[], opened: string | null): TimelineTurn | null {
   const open = opened === null ? undefined : turns.find(turn => turn.id === opened);
-  if (open) return open;
-  const latest = turns.at(-1);
-  return latest && now - Date.parse(latest.asked_at) <= FOLLOW_UP_MS ? latest : null;
+  return open ?? turns.at(-1) ?? null;
 }
 
 /** Unicode characters (code points) of `text`, as the API counts a sentence. */

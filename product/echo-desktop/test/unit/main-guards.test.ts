@@ -87,6 +87,9 @@ describe('a notification', () => {
     expect(noticeOf({ text: '3 follow-ups changed', target: several })).toEqual({ text: '3 follow-ups changed', target: several });
     expect(noticeOf({ text: 'You were added to Comet', target: { kind: 'project', project_id: project } }))
       .toEqual({ text: 'You were added to Comet', target: { kind: 'project', project_id: project } });
+    // A count opens every follow-up it counted, however many.
+    const many = { kind: 'items', item_ids: Array.from({ length: 250 }, (_, n) => `itm_0000-${String(n).padStart(4, '0')}`) };
+    expect(noticeOf({ text: '250 follow-ups changed', target: many })).toEqual({ text: '250 follow-ups changed', target: many });
     // Two titles of 200 characters fit: "Mina handed <title> to <name>".
     expect(noticeOf({ text: `Mina handed ${'😀'.repeat(200)} to ${'x'.repeat(200)}`, target: { kind: 'item', item_id: item } })).not.toBeNull();
   });
@@ -102,7 +105,6 @@ describe('a notification', () => {
     ['the old Follow-ups target', { text: 'Hi', target: { kind: 'follow-ups' } }],
     ['one item as several', { text: 'Hi', target: { kind: 'items', item_ids: [item] } }],
     ['the same item twice', { text: 'Hi', target: { kind: 'items', item_ids: [item, item] } }],
-    ['more than a hundred items', { text: 'Hi', target: { kind: 'items', item_ids: Array.from({ length: 101 }, (_, n) => `itm_0000-${String(n).padStart(4, '0')}`) } }],
     ['several with an id not an item\'s', { text: 'Hi', target: { kind: 'items', item_ids: [item, '../etc'] } }],
     ['an id not an item\'s', { text: 'Hi', target: { kind: 'item', item_id: '../etc/passwd' } }],
     ['an id not a project\'s', { text: 'Hi', target: { kind: 'project', project_id: 'prj_x' } }],

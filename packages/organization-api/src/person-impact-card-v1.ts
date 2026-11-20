@@ -54,14 +54,15 @@ export interface PersonImpactCardV1 {
 }
 
 /**
- * Entry counts, and text lengths in characters. The counts keep one card,
- * with its citations, well inside the runs response's 1 MiB; a decision that
- * affects more items than research reads in one run is not a card's concern.
- * `milestone_chars` and `expected_chars` bound only the model's own reply
- * schema in the kernel: the card, the API and stored open items give a
- * follow-up line and a milestone no length of their own.
+ * Presentation only: how many characters of an item's own text a card or an
+ * open item shows as what it says now, ending "…" when cut. The whole text
+ * opens through the item's citation. No validator checks it: a card has no
+ * count or length of its own, and the response that carries it bounds it.
  */
-export const PERSON_IMPACT_CARD_LIMITS_V1 = Object.freeze({ decided: 100, affected: 100, unconfirmed: 100, line_chars: 300, name_chars: 200, milestone_chars: 120, expected_chars: 120 });
+export const PERSON_IMPACT_CARD_PREVIEW_CHARS_V1 = 300;
+
+/** No count of its own: the response that carries the card bounds it. */
+const ANY = Number.POSITIVE_INFINITY;
 
 const RELATIONS: readonly string[] = ['confirms', 'conflicts', 'needs_updating'];
 
@@ -69,24 +70,23 @@ const RELATIONS: readonly string[] = ['confirms', 'conflicts', 'needs_updating']
 export const isPersonImpactCardDateV1 = isCalendarDay;
 
 export function validatePersonImpactCardV1(value: unknown): PersonImpactCardV1 {
-  const limits = PERSON_IMPACT_CARD_LIMITS_V1;
   const input = object(value, 'Impact card');
   assertExactKeys(input, ['decided', 'affected', 'unconfirmed', 'people', 'status', 'citations'], 'Impact card');
   if (input.status !== 'assessed' && input.status !== 'not_assessed') fail('Impact card status is invalid');
   const assessed = input.status === 'assessed';
-  const citations = list(input.citations, 'Impact card citations', limits.decided + limits.affected).map(validatePersonAnswerCitationV6);
+  const citations = list(input.citations, 'Impact card citations', ANY).map(validatePersonAnswerCitationV6);
   unique(citations.map(entry => canonicalJson(entry.citation)), 'Impact card citations');
   const index = (raw: unknown, label: string): number => {
     if (!Number.isSafeInteger(raw) || (raw as number) < 0 || (raw as number) >= citations.length) fail(`${label} is invalid`);
     return raw as number;
   };
 
-  const decided = list(input.decided, 'Impact card decided', limits.decided).map(raw => {
+  const decided = list(input.decided, 'Impact card decided', ANY).map(raw => {
     const entry = object(raw, 'Impact card decision');
     assertExactKeys(entry, ['text', 'citation_index'], 'Impact card decision');
-    return Object.freeze({ text: line(entry.text, 'Impact card decision text', limits.line_chars), citation_index: index(entry.citation_index, 'Impact card decision citation_index') });
+    return Object.freeze({ text: line(entry.text, 'Impact card decision text'), citation_index: index(entry.citation_index, 'Impact card decision citation_index') });
   });
-  const affected = list(input.affected, 'Impact card affected', limits.affected).map(raw => {
+  const affected = list(input.affected, 'Impact card affected', ANY).map(raw => {
     const entry = object(raw, 'Impact card affected item');
     assertExactKeys(entry, ['citation_index', 'says_now', ...['relation', 'expected', 'owner', 'date_at_risk'].filter(key => Object.hasOwn(entry, key))], 'Impact card affected item');
     if (Object.hasOwn(entry, 'relation') && !RELATIONS.includes(entry.relation as string)) fail('Impact card relation is invalid');
@@ -98,19 +98,19 @@ export function validatePersonImpactCardV1(value: unknown): PersonImpactCardV1 {
       dateAtRisk = Object.freeze({ date: risk.date, milestone: line(risk.milestone, 'Impact card milestone') });
     }
     return Object.freeze({
-      citation_index: index(entry.citation_index, 'Impact card affected citation_index'), says_now: line(entry.says_now, 'Impact card says_now', limits.line_chars),
+      citation_index: index(entry.citation_index, 'Impact card affected citation_index'), says_now: line(entry.says_now, 'Impact card says_now'),
       ...(Object.hasOwn(entry, 'relation') ? { relation: entry.relation as PersonImpactRelationV1 } : {}),
       ...(Object.hasOwn(entry, 'expected') ? { expected: line(entry.expected, 'Impact card expected') } : {}),
-      ...(Object.hasOwn(entry, 'owner') ? { owner: line(entry.owner, 'Impact card owner', limits.name_chars) } : {}),
+      ...(Object.hasOwn(entry, 'owner') ? { owner: line(entry.owner, 'Impact card owner') } : {}),
       ...(dateAtRisk === undefined ? {} : { date_at_risk: dateAtRisk }),
     });
   });
-  const unconfirmed = list(input.unconfirmed, 'Impact card unconfirmed', limits.unconfirmed).map(raw => line(raw, 'Impact card unconfirmed note', limits.line_chars));
+  const unconfirmed = list(input.unconfirmed, 'Impact card unconfirmed', ANY).map(raw => line(raw, 'Impact card unconfirmed note'));
   unique(unconfirmed, 'Impact card unconfirmed');
-  const people = list(input.people, 'Impact card people', limits.affected).map(raw => {
+  const people = list(input.people, 'Impact card people', ANY).map(raw => {
     const entry = object(raw, 'Impact card person');
     assertExactKeys(entry, ['name', 'items'], 'Impact card person');
-    return Object.freeze({ name: line(entry.name, 'Impact card person name', limits.name_chars), items: Object.freeze(list(entry.items, 'Impact card person items', limits.affected).map(item => index(item, 'Impact card person item'))) });
+    return Object.freeze({ name: line(entry.name, 'Impact card person name'), items: Object.freeze(list(entry.items, 'Impact card person items', ANY).map(item => index(item, 'Impact card person item'))) });
   });
 
   // Only a model's assessment carries relations and dates. What was decided may be the record's own text on either card.

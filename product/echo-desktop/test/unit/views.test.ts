@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  confluenceSpacesView, granolaFoldersView, projectConfluenceMappingView, projectGranolaMappingView,
   abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, listView, membersView,
   noteTitle, openItemsView, openItemView, openView, revokedView, projectActivityView, projectView, receiptView, recordRead, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
@@ -36,10 +37,9 @@ describe('view models copy only what the renderer may see', () => {
     }
     // The same words in an ordinary note are content; its title cannot imply a review badge or strip a line.
     expect(evidenceView({ ok: true, result: packet })).toEqual({ label, text });
-    // The pane's one cut, here and nowhere else: 2,000 characters as the API counts them, marked, its lines kept.
-    const long = `Line one.\n${'x'.repeat(2_500)}`;
-    const cut = evidenceView({ ok: true, result: { ...packet, text: long } }).text;
-    expect(cut).toBe(`Line one.\n${'x'.repeat(2_000 - 'Line one.\n'.length - 1)}… (truncated)`);
+    // The pane shows the passage whole, its lines kept: it scrolls.
+    const long = `Line one.\n${'x'.repeat(10_000)}`;
+    expect(evidenceView({ ok: true, result: { ...packet, text: long } }).text).toBe(long);
   });
   it.each(['confluence', 'notion', 'knowledge-base'])('preserves %s page identity without provider coordinates', tool_id => {
     const permalink = 'https://wiki.example.test/pages/view?pageId=12345';
@@ -357,8 +357,9 @@ describe('text the API accepts', () => {
   it('titles are the first non-empty line, tabs and controls made spaces, at most 200 bytes', () => {
     expect(noteTitle('\n\n  Northwind call  \nsecond')).toBe('Northwind call');
     expect(noteTitle('a\tb\u0007c\r\nnext')).toBe('a b c');
-    expect(Buffer.byteLength(noteTitle('é'.repeat(200)))).toBe(200);
-    expect(noteTitle('x' + '😀'.repeat(60))).toBe('x' + '😀'.repeat(49)); // never half a character
+    // The first line whole, however long.
+    expect(noteTitle('é'.repeat(2_000))).toBe('é'.repeat(2_000));
+    expect(noteTitle('x' + '😀'.repeat(600) + '\nnext')).toBe('x' + '😀'.repeat(600));
     expect(noteTitle('   \n  ')).toBe('');
   });
 
@@ -428,15 +429,15 @@ describe('an approved record shows only what the source pane or the reader needs
     expect(JSON.stringify(view)).not.toContain('private@example.test');
   });
 
-  it('in the pane shows at most 2,000 characters of any text, every item, and what the record says of more participants', () => {
-    const decisions = Array.from({ length: 40 }, (_, index) => item('decision', `d${index}`, index === 0 ? 'x'.repeat(2_001) : `Decision ${index}`));
+  it('in the pane shows every text whole, every item and every participant', () => {
+    const decisions = Array.from({ length: 40 }, (_, index) => item('decision', `d${index}`, index === 0 ? 'x'.repeat(25_000) : `Decision ${index}`));
     const participants = Array.from({ length: 40 }, (_, index) => ({ id: `p${index}`, display_name: `Person ${index}` }));
     const view = recordView(reply({ meeting: { id: 'm1', participants }, decisions }), asked);
     expect(view.title).toBeUndefined();
     expect(view.decisions.items.map(entry => entry.atom_id)).toEqual(decisions.map(entry => atom(entry.id)));
-    expect(view.decisions.items[0]!.text).toBe(`${'x'.repeat(1_999)}… (truncated)`);
-    expect(view.participants).toHaveLength(32);
-    expect(view.participants_more).toBe(true);
+    expect(view.decisions.items[0]!.text).toBe('x'.repeat(25_000));
+    expect(view.participants).toHaveLength(40);
+    expect(view.participants_more).toBe(false);
   });
 
   it('for the reader, asked by its digest alone, under either policy: every item, each text whole, its approval time, and no quote (ADR-0024)', () => {
@@ -781,5 +782,18 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
     // Its bounds (each project once, a project id, a time or null, its keys, 500 at most) are the contract's to test
     // (organization-api person-project-activity-v1).
     expect(() => projectActivityView(activity([{ project_id: PROJECT, latest_at: AT }, { project_id: PROJECT, latest_at: null }]))).toThrow(ViewError);
+  });
+});
+
+describe('tool mappings and pickers', () => {
+  it('takes a mapping and a picker page of any length the Authority sends', () => {
+    const project = 'prj_11111111-1111-4111-8111-111111111111';
+    const revision = '11111111-1111-4111-8111-111111111112';
+    const folders = Array.from({ length: 25 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
+    const spaces = Array.from({ length: 25 }, (_, index) => String(index + 1));
+    expect(projectGranolaMappingView({ ok: true, result: { schema_version: 1, project_id: project, revision, mapping: { folder_ids: folders } } }, project).mapping?.folder_ids).toHaveLength(25);
+    expect(projectConfluenceMappingView({ ok: true, result: { schema_version: 1, project_id: project, revision, mapping: { space_ids: spaces } } }, project).mapping?.space_ids).toHaveLength(25);
+    expect(granolaFoldersView({ ok: true, result: { schema_version: 1, items: folders.map(id => ({ id, key: id, name: 'Folder' })), next_cursor: null } }).items).toHaveLength(25);
+    expect(confluenceSpacesView({ ok: true, result: { schema_version: 1, items: spaces.map(id => ({ id, key: `K${id}`, name: 'Space' })), next_cursor: null } }).items).toHaveLength(25);
   });
 });

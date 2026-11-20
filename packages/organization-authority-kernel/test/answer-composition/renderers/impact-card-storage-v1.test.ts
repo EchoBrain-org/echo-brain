@@ -243,14 +243,11 @@ describe("storable impact card: every line a model wrote is screened for outside
     expect(stored.affected[0]!.expected).toBe("a cited item shows two decimals");
   });
 
-  it("keeps a stored expected phrase within its 120 characters when a short title grows into 'a cited item'", () => {
-    const expected = `Home and ${"two decimals ".repeat(8)}on Home`;
-    expect([...expected].length).toBe(120);
+  it("keeps a stored expected phrase whole when a short title grows into 'a cited item'", () => {
+    const expected = `Home and ${"two decimals ".repeat(80)}on Home`;
     const card = cardWith({ rows: [{ citation: pageCitation("1441793", "Home"), says_now: "x", relation: "needs_updating", expected }] });
     const kept = storableImpactCardV1(card, []).affected[0]!.expected!;
-    expect([...kept].length).toBeLessThanOrEqual(120);
-    expect(kept.startsWith("a cited item and two decimals")).toBe(true);
-    expect(kept).not.toMatch(/home/iu);
+    expect(kept).toBe(`a cited item and ${"two decimals ".repeat(80)}on a cited item`);
   });
 });
 

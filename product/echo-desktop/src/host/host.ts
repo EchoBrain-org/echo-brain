@@ -11,7 +11,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, HOST_TIMEOUT_MS, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type Audience, type Expect, type Failure, type HostMethods,
+  externalUrl, HOST_TIMEOUT_MS, isWriteCall, WRITE_METHODS, type AppStatus, type Audience, type Expect, type Failure, type HostMethods,
   type HostMethodName, type HostRequest, type ItemRef, type ListScope, type ProjectChange, type Result,
 } from '../shared/protocol.js';
 import { sameFolder } from '../shared/folders.js';
@@ -310,10 +310,10 @@ async function login(identity: string[], fallback: string): Promise<Result<AppSt
 
 /**
  * A set of projects as the client takes it: canonical JSON, the IDs sorted
- * and unique, at most MAX_CAPTURE_PROJECTS. Null for anything else.
+ * and unique, any number. Null for anything else.
  */
 function projectSet(value: unknown, minimum: number): string | null {
-  if (!Array.isArray(value) || value.length < minimum || value.length > MAX_CAPTURE_PROJECTS) return null;
+  if (!Array.isArray(value) || value.length < minimum) return null;
   if (!value.every(id => valid(validateProjectIdV1, id))) return null;
   const sorted = [...value as string[]].sort();
   return sorted.some((id, index) => index > 0 && id === sorted[index - 1]) ? null : JSON.stringify(sorted);
@@ -635,7 +635,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const turn = timelineTurn(given);
       if (turn === null) return code('invalid_request');
       // Pruned by this computer's clock, the one the page asked by.
-      return onDevice(expect, directory => { putTimeline(directory, expect, turn, Date.now()); return {}; });
+      return onDevice(expect, directory => { putTimeline(directory, expect, turn); return {}; });
     }
     case 'ask.check': {
       // The person client prints the check as its last line.

@@ -13,7 +13,7 @@ import type { PersonChangesAreaV1, PersonChangesV1 } from '@echo-brain/organizat
 // in, so the Authority starts your oldest queued impact check (DSK-1). The
 // store keeps its loaders; this module only says when they run.
 import type { Expect, Failure, Notice, NoticeTarget, OpenItemView, ProjectSummary } from '../shared/protocol.js';
-import { ACCOUNT_GONE, CHANGE_AREAS, NOTICE_ITEMS_MAX, NOTICE_TEXT_MAX, sameExpect } from '../shared/protocol.js';
+import { ACCOUNT_GONE, CHANGE_AREAS, NOTICE_TEXT_MAX, sameExpect } from '../shared/protocol.js';
 import { rpc } from './api.js';
 import { clip } from './format.js';
 import { CLOSED_STATES, firstName, followUpCount, itemTitle } from './needs.js';
@@ -25,8 +25,8 @@ export type ScreenArea = Exclude<PersonChangesAreaV1, 'projects'>;
 const BACKOFF_MAX_MS = 5 * 60_000;
 /** Opening pages asks at most once in this long (R2). */
 const NAVIGATION_MS = 10_000;
-/** The follow-ups that left your open ones that one check reads by their ids, side by side. */
-const LEFT_READS_MAX = 20;
+/** Host capacity: how many follow-ups that left your open ones one check reads by their ids side by side. */
+const LEFT_READS_AT_ONCE = 20;
 /** Notifications this account may still click: main keeps twenty on screen. */
 const TOLD_KEPT = 20;
 /** Reads of an item that say you can no longer see it. */
@@ -429,10 +429,15 @@ async function followUpsMoved(run: Loop): Promise<FollowUpEvent[] | null> {
     else if (!run.boundary.has(seenKey(row))) tellOf(followUpEvent(null, row, me, since));
   }
   const unexplained = [...left.values()].filter(was => !closed.has(was.item_id));
-  const asked = unexplained.slice(0, LEFT_READS_MAX);
-  const reads = await Promise.all(asked.map(was => surfaces.readItem(account, was.item_id)));
+  // Every one, this check, a few side by side.
+  const asked = unexplained;
+  const reads: Awaited<ReturnType<typeof surfaces.readItem>>[] = [];
+  for (let start = 0; start < asked.length; start += LEFT_READS_AT_ONCE) {
+    reads.push(...await Promise.all(asked.slice(start, start + LEFT_READS_AT_ONCE).map(was => surfaces.readItem(account, was.item_id))));
+    if (loop !== run) return null;
+  }
   if (loop !== run) return null;
-  const pending = new Map(unexplained.slice(LEFT_READS_MAX).map(was => [was.item_id, was]));
+  const pending = new Map<string, typeof asked[number]>();
   const readRows: OpenItemView[] = [];
   reads.forEach((read, index) => {
     const was = asked[index]!;
@@ -466,12 +471,12 @@ function eventText(event: FollowUpEvent): string {
 /**
  * One check's one notification (N4, N5), or null for nothing to tell. One
  * follow-up says what happened and opens its page; several are counted and
- * open a list of exactly those (at most a hundred). One project add names the
+ * open a list of exactly those, however many. One project add names the
  * project and opens it; several are counted and open the first. Both in one
  * check are counted together and open what the follow-ups would.
  */
 function noticeFor(events: readonly FollowUpEvent[], adds: readonly ProjectSummary[]): Notice | null {
-  const items = [...new Set(events.map(event => event.item.item_id))].slice(0, NOTICE_ITEMS_MAX);
+  const items = [...new Set(events.map(event => event.item.item_id))];
   const followUps: NoticeTarget | null = items.length === 0 ? null
     : items.length === 1 ? { kind: 'item', item_id: items[0]! } : { kind: 'items', item_ids: items };
   const changed = `${followUpCount(items.length)} changed`;

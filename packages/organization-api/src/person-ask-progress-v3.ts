@@ -35,17 +35,20 @@ export const PERSON_ASK_PROGRESS_CONTENT_TYPE_V1 = 'text/event-stream';
 /** How often the Authority writes the heartbeat comment while nothing else is sent. */
 export const PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1 = 10_000;
 export const PERSON_ASK_PROGRESS_HEARTBEAT_V1 = ': keep-alive\n\n';
-/** Items named in one run; reads beyond it still count in `looked_through` but are not named. */
+/**
+ * Read only by the kernel's progress recorder, which still clamps and slices
+ * with them; no validator here checks them, and they go once it stops. An
+ * event's counts, sources, items, rows and elapsed time have no number of
+ * their own: the event, line and stream byte bounds below are the bounds.
+ */
 export const PERSON_ASK_PROGRESS_NAMED_MAX_V1 = 100;
-/** Items in one `read` event; a larger batch is sent as consecutive `read` events. */
 export const PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1 = 25;
-/** Distinct sources one searched row names. */
 export const PERSON_ASK_PROGRESS_SOURCES_MAX_V3 = 16;
-/** Bound on every count an event carries. */
 export const PERSON_ASK_PROGRESS_COUNT_MAX_V1 = 1000;
 export const PERSON_ASK_RECEIPT_ROWS_MAX_V1 = 64;
-export const PERSON_ASK_RECEIPT_MAX_BYTES_V1 = 64 * 1024;
 export const PERSON_ASK_RECEIPT_ELAPSED_MAX_MS_V1 = 300_000;
+/** Transport: a receipt's share of its answer event's byte bound. */
+export const PERSON_ASK_RECEIPT_MAX_BYTES_V1 = 64 * 1024;
 /**
  * Canonical JSON bytes of any one event, the answer event included: above a whole answer (256 KiB) and its receipt
  * (64 KiB), with 64 KiB for the event's own keys, so a valid answer always fits its event (384 KiB).
@@ -188,7 +191,7 @@ const TOOL_SOURCES: readonly string[] = ['tickets', 'pages', 'containers'];
 const ERROR_STATUSES: readonly number[] = [400, 401, 404, 409, 429, 500, 502, 503];
 
 function count(value: unknown, label: string, minimum = 0): number {
-  if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > PERSON_ASK_PROGRESS_COUNT_MAX_V1) fail(`${label} is invalid`);
+  if (!Number.isSafeInteger(value) || (value as number) < minimum) fail(`${label} is invalid`);
   return value as number;
 }
 
@@ -206,16 +209,16 @@ function source(value: unknown): PersonAskProgressSourceV3 {
 
 function searched(input: Record<string, unknown>, label: string): PersonAskProgressSearchedEventV3 {
   assertExactKeys(input, ['type', 'sources', 'found'], label);
-  if (!Array.isArray(input.sources) || input.sources.length === 0 || input.sources.length > PERSON_ASK_PROGRESS_SOURCES_MAX_V3) fail(`${label} sources is invalid`);
+  if (!Array.isArray(input.sources) || input.sources.length === 0) fail(`${label} sources is invalid`);
   const sources = input.sources.map(source);
   if (new Set(sources.map(value => canonicalJson(value))).size !== sources.length) fail(`${label} sources contains duplicates`);
   return Object.freeze({ type: 'searched', sources: Object.freeze(sources), found: count(input.found, `${label} found`) });
 }
 
 /** Items of one read event or receipt row; `seen` spans a whole receipt so an item is named once. */
-function read(input: Record<string, unknown>, label: string, maximum: number, seen: Set<string> = new Set()): PersonAskProgressReadEventV3 {
+function read(input: Record<string, unknown>, label: string, seen: Set<string> = new Set()): PersonAskProgressReadEventV3 {
   assertExactKeys(input, ['type', 'items'], label);
-  if (!Array.isArray(input.items) || input.items.length === 0 || input.items.length > maximum) fail(`${label} items is invalid`);
+  if (!Array.isArray(input.items) || input.items.length === 0) fail(`${label} items is invalid`);
   const items = input.items.map(item => validatePersonAnswerCitationV8(item));
   for (const item of items) {
     const key = canonicalJson(item.citation);
@@ -233,7 +236,7 @@ function stepEvent(input: Record<string, unknown>): PersonAskProgressStepEventV3
     return Object.freeze({ type: 'stage', stage: input.stage as PersonAskProgressStageV1, ...(Object.hasOwn(input, 'pending') ? { pending: count(input.pending, 'Ask progress pending', 1) } : {}) });
   }
   if (input.type === 'searched') return searched(input, 'Ask progress searched');
-  if (input.type === 'read') return read(input, 'Ask progress read', PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1);
+  if (input.type === 'read') return read(input, 'Ask progress read');
   fail('Ask progress event type is invalid');
 }
 
@@ -251,17 +254,16 @@ export function validatePersonAskReceiptV3(value: unknown): PersonAskReceiptV3 {
   const input = object(value, 'Ask receipt');
   assertExactKeys(input, ['looked_through', 'elapsed_ms', 'rows'], 'Ask receipt');
   const lookedThrough = count(input.looked_through, 'Ask receipt looked_through');
-  if (!Number.isSafeInteger(input.elapsed_ms) || (input.elapsed_ms as number) < 0 || (input.elapsed_ms as number) > PERSON_ASK_RECEIPT_ELAPSED_MAX_MS_V1) fail('Ask receipt elapsed_ms is invalid');
-  if (!Array.isArray(input.rows) || input.rows.length > PERSON_ASK_RECEIPT_ROWS_MAX_V1) fail('Ask receipt rows is invalid');
+  if (!Number.isSafeInteger(input.elapsed_ms) || (input.elapsed_ms as number) < 0) fail('Ask receipt elapsed_ms is invalid');
+  if (!Array.isArray(input.rows)) fail('Ask receipt rows is invalid');
   const seen = new Set<string>();
   const rows = input.rows.map((value: unknown): PersonAskReceiptRowV3 => {
     const row = object(value, 'Ask receipt row');
     if (row.type === 'searched') return searched(row, 'Ask receipt row');
-    if (row.type === 'read') return read(row, 'Ask receipt row', PERSON_ASK_PROGRESS_NAMED_MAX_V1, seen);
+    if (row.type === 'read') return read(row, 'Ask receipt row', seen);
     fail('Ask receipt row type is invalid');
   });
   for (let index = 1; index < rows.length; index += 1) if (rows[index]!.type === rows[index - 1]!.type) fail('Ask receipt rows are not merged');
-  if (seen.size > PERSON_ASK_PROGRESS_NAMED_MAX_V1) fail('Ask receipt names too many items');
   if (lookedThrough < seen.size) fail('Ask receipt looked_through is less than the items it names');
   return bounded(Object.freeze({ looked_through: lookedThrough, elapsed_ms: input.elapsed_ms as number, rows: Object.freeze(rows) }), PERSON_ASK_RECEIPT_MAX_BYTES_V1, 'Ask receipt');
 }

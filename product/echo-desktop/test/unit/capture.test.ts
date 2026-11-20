@@ -142,7 +142,7 @@ describe('where a capture goes and who can read it', () => {
     expect(store.getState().toast).toBe('Saved for you');
   });
 
-  it('pages the picker and accepts at most twenty projects, releasing a place when unticked', async () => {
+  it('pages the picker and files a capture in every project ticked, however many', async () => {
     active = numbered(22);
     const store = await startStore();
     store.openCompose(); store.setComposeText('Quarterly numbers'); store.openProjects();
@@ -154,13 +154,15 @@ describe('where a capture goes and who can read it', () => {
     expect(store.getState().projects.items).toHaveLength(22);
     expect(byTestId(await sheet(store), 'projects-more')).toHaveLength(0);
     for (const entry of active) store.tickProject(entry);
-    expect(store.getState().compose?.projects).toEqual(active.slice(0, 20));
-    expect(text(byTestId(await sheet(store), 'projects-limit'))).toBe('Up to 20 projects.');
+    expect(store.getState().compose?.projects).toEqual(active);
+    expect(byTestId(await sheet(store), 'projects-limit')).toEqual([]);
     const disabled = async () => elements(byTestId(await sheet(store), 'projects-row')).filter(node => node.type === 'input').map(node => node.props.disabled);
-    expect((await disabled()).slice(19)).toEqual([false, true, true]);
-    store.tickProject(active[0]!); store.tickProject(active[20]!);
+    expect((await disabled()).every(off => !off)).toBe(true);
+    // Unticking one releases it.
+    store.tickProject(active[0]!);
     await store.sendCompose();
-    expect(sent('notes.submit')[0]).toMatchObject({ audience: { kind: 'projects', project_ids: active.slice(1, 21).map(row => row.project_id).sort() }, project_ids: active.slice(1, 21).map(row => row.project_id).sort() });
+    const ids = active.slice(1).map(row => row.project_id).sort();
+    expect(sent('notes.submit')[0]).toMatchObject({ audience: { kind: 'projects', project_ids: ids }, project_ids: ids });
   });
 });
 

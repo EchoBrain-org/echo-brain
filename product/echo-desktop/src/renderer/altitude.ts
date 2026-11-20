@@ -14,9 +14,7 @@ const OPEN_DAYS = 3;
 const OFF_TRACK_DAYS = 7;
 /** This many needing attention puts a project off track. */
 const OFF_TRACK_COUNT = 3;
-/** The most of one person's follow-ups their altitude reads live, one by one. */
-export const PERSON_LIVE_MAX = 20;
-/** How many projects My projects reads at once. */
+/** Host capacity: how many reads (projects, or a person's follow-ups) Home has on their way at once. */
 export const PROJECT_READS_AT_ONCE = 4;
 
 const DAY_MS = 86_400_000;

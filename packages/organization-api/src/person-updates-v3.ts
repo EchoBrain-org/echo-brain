@@ -2,7 +2,7 @@ import { object, text, timestamp, requestBound, responseBound } from './person-u
 import { type ProjectIdV1 } from './project-context-v1.js';
 import { validateAssociationProjectIdsV1, validatePersonUploadAudienceV3, type PersonUploadAudienceV3 as UploadAudienceV3 } from './person-upload-audience-v3.js';
 import { assertExactKeys, fail } from './validation.js';
-import { PERSON_UPDATE_REQUEST_MAX_BYTES_V1, PERSON_UPDATE_TITLE_MAX_BYTES, validatePersonUpdateRequestId, validatePersonUploadContextId, type PersonUploadMetadataStateV1 } from './person-updates.js';
+import { PERSON_UPDATE_REQUEST_MAX_BYTES_V1, validatePersonUpdateRequestId, validatePersonUploadContextId, type PersonUploadMetadataStateV1 } from './person-updates.js';
 
 export const PERSON_UPDATES_PATH_V3 = '/v3/person/updates';
 export interface PersonUpdateSubmitV3 {
@@ -21,7 +21,7 @@ function coordinates(record: Record<string, unknown>): { readonly association_pr
 export function validatePersonUpdateSubmitV3(value: unknown): PersonUpdateSubmitV3 {
   const record = object(value, 'Person update'); assertExactKeys(record, ['schema_version','kind','request_id','title','text','association_project_ids','audience'], 'Person update');
   if (record.schema_version !== 3 || record.kind !== 'echo-person-update-submit-v3') fail('Person update version or kind is unsupported');
-  validatePersonUpdateRequestId(record.request_id); text(record.title, 'Person update title', PERSON_UPDATE_TITLE_MAX_BYTES, false); text(record.text, 'Person update text', Number.POSITIVE_INFINITY, true);
+  validatePersonUpdateRequestId(record.request_id); text(record.title, 'Person update title', Number.POSITIVE_INFINITY, false); text(record.text, 'Person update text', Number.POSITIVE_INFINITY, true);
   const result = Object.freeze({ schema_version: 3 as const, kind: 'echo-person-update-submit-v3' as const, request_id: record.request_id as string, title: record.title as string, text: record.text as string, ...coordinates(record) }); requestBound(result, 'Person update', PERSON_UPDATE_REQUEST_MAX_BYTES_V1); return result;
 }
 export function validatePersonUpdateReceiptV3(value: unknown): PersonUpdateReceiptV3 {

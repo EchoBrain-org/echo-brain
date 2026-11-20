@@ -12,7 +12,7 @@ import type {
 import {
   validateEmployeeRosterV1, validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
-  validateProjectCreateReceiptV1, validateProjectListV2, PERSON_ANSWER_BLOCK_KINDS_V2, PERSON_ASK_PROGRESS_COUNT_MAX_V1,
+  validateProjectCreateReceiptV1, validateProjectListV2, PERSON_ANSWER_BLOCK_KINDS_V2,
   validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1,
   type PersonAnswerCitationV8, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
   type PersonOpenItemV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
@@ -296,8 +296,7 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
   const { direct, parts, outcome } = result;
   const sources = result.citations.map(citedSource);
   // A count is bounded by the progress contract: one at its bound is at least that many.
-  const atLeast = receipt.looked_through >= PERSON_ASK_PROGRESS_COUNT_MAX_V1 ? { at_least: true as const } : {};
-  return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome, receipt: { looked_through: receipt.looked_through, ...atLeast },
+  return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome, receipt: { looked_through: receipt.looked_through },
     ...(result.question === undefined ? {} : { question: result.question }),
     ...(result.since === undefined ? {} : { since: result.since.statements }),
     ...(result.choices === undefined ? {} : { choices: result.choices }),
@@ -451,25 +450,14 @@ export function openItemsView(result: PersonRunsResultsV1['items']): OpenItemsVi
   return { items: result.items.map(openItemView), next_cursor: result.next_cursor, summary: result.summary, stages: result.stages };
 }
 
-/** Longest text the source pane shows, in characters; longer is cut and marked. The reader shows each whole. */
-const MAX_SOURCE_TEXT = 2_000;
-
-/** `text` in at most `maximum` characters (code points), cut and marked when longer: the source pane's one cut. */
-function clipped(text: string, maximum: number): string {
-  const characters = [...text];
-  return characters.length > maximum ? `${characters.slice(0, maximum - 1).join('')}… (truncated)` : text;
-}
-
 /**
- * Text as the source pane or the reader may show it: control and format
- * characters made spaces, trimmed, and at most `maximum` characters. Nothing
- * left is none.
+ * Text as the source pane or the reader shows it, whole: control and format
+ * characters made spaces, trimmed. Nothing left is none.
  */
-function sourceText(value: unknown, maximum = MAX_SOURCE_TEXT): string | undefined {
+function sourceText(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const cleaned = value.replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim();
-  if (cleaned === '') return undefined;
-  return clipped(cleaned, maximum);
+  return cleaned === '' ? undefined : cleaned;
 }
 
 /** An ISO 8601 time the renderer can format, or none. */
@@ -486,7 +474,7 @@ const RECORD_VISIBILITY: Readonly<Record<RecordPolicy, ApprovedRecord['visibilit
  * The one approved record asked for, as `person records --record-sha256
  * --brief` prints it (organization-api's cited record), only that record: one
  * an answer cites, only under the policy it cited, as the source pane shows
- * it, each text at most 2,000 characters; or, asked with no policy, a meeting
+ * it, each text whole; or, asked with no policy, a meeting
  * opened by its ref, as the reader shows it, every text whole and without the
  * quotes the reader never shows (ADR-0024). Only a decision still open says
  * so, and each item keeps the atom id its citations carry.
@@ -495,7 +483,7 @@ export function recordView(raw: unknown, asked: RecordRead): ApprovedRecord {
   const record = validated(validatePersonCitedRecordV1, unwrap(raw));
   const pane = asked.policy_id !== undefined;
   if (record.record_sha256 !== asked.record_sha256 || (pane && record.policy_id !== asked.policy_id)) throw new ViewError();
-  const shown = (value: string) => sourceText(value, pane ? MAX_SOURCE_TEXT : Number.POSITIVE_INFINITY)!;
+  const shown = (value: string) => sourceText(value)!;
   const section = ({ items }: PersonCitedRecordSectionV1): RecordSection => ({ items: items.map(({ atom_id, text: itemText, status, owner, quotes }) => ({
     text: shown(itemText), ...(status === 'proposed' || status === 'unresolved' ? { status } : {}), ...(owner === undefined ? {} : { owner }),
     excerpts: pane ? quotes.map(({ quote, started_at }) => ({ quote: shown(quote), ...(started_at === undefined ? {} : { at: started_at }) })) : [], atom_id,
@@ -519,7 +507,7 @@ export function evidenceView(raw: unknown): SourceEvidence {
   // presents the current server label separately; it never interprets the heading as review state.
   const review = evidence.imported_meeting_review;
   const text = review === undefined ? evidence.text : evidence.text.slice(evidence.text.indexOf('\n') + 1);
-  return { label: evidence.citation.label, text: clipped(text, MAX_SOURCE_TEXT),
+  return { label: evidence.citation.label, text,
     ...(review === undefined ? {} : { imported_meeting_review: review }) };
 }
 
@@ -613,21 +601,12 @@ export function failureView(raw: unknown, fallback: string, write: boolean, requ
 }
 
 /**
- * A title the API accepts: the first non-empty line, controls and tabs made
- * spaces, at most 200 UTF-8 bytes, cut only between whole characters.
+ * A note's title: its first non-empty line, whole, controls and tabs made
+ * spaces, lone surrogates left out.
  */
 export function noteTitle(body: string): string {
   const line = body.split(/\r?\n/).map(part => part.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim()).find(part => part.length > 0) ?? '';
-  let bytes = 0;
-  let title = '';
-  for (const character of line) {
-    if (/[\uD800-\uDFFF]/.test(character) && character.length === 1) continue; // lone surrogate
-    const size = Buffer.byteLength(character);
-    if (bytes + size > 200) break;
-    bytes += size;
-    title += character;
-  }
-  return title.trim();
+  return line.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '').trim();
 }
 
 /** The CLI validates provider coordinates; only the project key and opaque revision reach the UI. */
@@ -644,11 +623,11 @@ export function projectConfluenceMappingView(raw: unknown, projectId: string): P
   const value = object(unwrap(raw));
   if (value.schema_version !== 1 || value.project_id !== projectId || (value.revision !== null && !REVISION.test(text(value.revision)))) throw new ViewError();
   const mapping = value.mapping === null ? null : object(value.mapping);
-  if (mapping !== null && (value.revision === null || !Array.isArray(mapping.space_ids) || mapping.space_ids.length < 1 || mapping.space_ids.length > 20 || !mapping.space_ids.every(id => typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id)))) throw new ViewError();
+  if (mapping !== null && (value.revision === null || !Array.isArray(mapping.space_ids) || mapping.space_ids.length < 1 || !mapping.space_ids.every(id => typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id)))) throw new ViewError();
   return { project_id: projectId, revision: value.revision as string | null, mapping: mapping === null ? null : { space_ids: [...(mapping.space_ids as string[])] } };
 }
 export function confluenceSpacesView(raw: unknown): ConfluenceSpacesPage {
-  const value = object(unwrap(raw)); if (value.schema_version !== 1 || !Array.isArray(value.items) || value.items.length > 20 || (value.next_cursor !== null && (typeof value.next_cursor !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(value.next_cursor)))) throw new ViewError();
+  const value = object(unwrap(raw)); if (value.schema_version !== 1 || !Array.isArray(value.items) || (value.next_cursor !== null && (typeof value.next_cursor !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(value.next_cursor)))) throw new ViewError();
   const items = value.items.map(raw => { const item = object(raw); if (!/^[1-9][0-9]{0,19}$/.test(text(item.id))) throw new ViewError(); return { id: item.id as string, key: text(item.key), name: text(item.name) }; });
   if (new Set(items.map(item => item.id)).size !== items.length) throw new ViewError(); return { items, next_cursor: value.next_cursor as string | null };
 }
@@ -657,11 +636,11 @@ export function projectGranolaMappingView(raw: unknown, projectId: string): Proj
   const value = object(unwrap(raw));
   if (value.schema_version !== 1 || value.project_id !== projectId || (value.revision !== null && !REVISION.test(text(value.revision)))) throw new ViewError();
   const mapping = value.mapping === null ? null : object(value.mapping);
-  if (mapping !== null && (value.revision === null || !Array.isArray(mapping.folder_ids) || mapping.folder_ids.length < 1 || mapping.folder_ids.length > 20 || !mapping.folder_ids.every(id => typeof id === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id)))) throw new ViewError();
+  if (mapping !== null && (value.revision === null || !Array.isArray(mapping.folder_ids) || mapping.folder_ids.length < 1 || !mapping.folder_ids.every(id => typeof id === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id)))) throw new ViewError();
   return { project_id: projectId, revision: value.revision as string | null, mapping: mapping === null ? null : { folder_ids: [...(mapping.folder_ids as string[])] } };
 }
 export function granolaFoldersView(raw: unknown): GranolaFoldersPage {
-  const value = object(unwrap(raw)); if (value.schema_version !== 1 || !Array.isArray(value.items) || value.items.length > 20 || (value.next_cursor !== null && (typeof value.next_cursor !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(value.next_cursor)))) throw new ViewError();
+  const value = object(unwrap(raw)); if (value.schema_version !== 1 || !Array.isArray(value.items) || (value.next_cursor !== null && (typeof value.next_cursor !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(value.next_cursor)))) throw new ViewError();
   const items = value.items.map(raw => { const item = object(raw); if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(text(item.id))) throw new ViewError(); return { id: item.id as string, key: text(item.key), name: text(item.name) }; });
   if (new Set(items.map(item => item.id)).size !== items.length) throw new ViewError(); return { items, next_cursor: value.next_cursor as string | null };
 }
