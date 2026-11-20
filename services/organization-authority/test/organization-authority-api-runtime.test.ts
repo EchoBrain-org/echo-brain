@@ -944,7 +944,7 @@ describe("Organization Authority API runtime", () => {
             projects: canonicalSha256([[project_id, create.name, "active", "lead"]]), follow_ups: canonicalSha256([]), reviews: canonicalSha256([[REVIEW, "pending"]]),
           });
           expect(checksRead.mock.calls).toEqual([[expect.objectContaining({ organization_id: initialized.organization_id, principal_id: initialized.owner_principal_id,
-            membership_id: initialized.owner_membership_id }), 100]]);
+            membership_id: initialized.owner_membership_id })]]);
         } finally { checksRead.mockRestore(); }
         // Project activity (Ask timeline v1, C2) is composed beside it: the owner's own note is no news to the owner.
         expect(await get("/v1/person/project-activity")).toEqual({ schema_version: 1, kind: "echo-person-project-activity-v1", items: [{ project_id, latest_at: null }] });
