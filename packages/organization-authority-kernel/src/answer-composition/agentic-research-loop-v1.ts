@@ -86,7 +86,7 @@ import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
  */
 
 /** One research step's model call; a stalled host fails fast and research goes on. */
-const STEP_TIMEOUT_MS = 25_000;
+const STEP_TIMEOUT_MS = 60_000;
 /**
  * A step starts only with this many times the longest step call so far (or a whole step's time): 2233bad1 started its
  * last step with 7.54 s after 6 to 8 s steps, timed out, and reported an unusable step instead of a budget stop.
@@ -108,6 +108,13 @@ const DRIVEN_RESULT_CHARS = 45_000;
 /** Starting reads in flight at once: as many as one planner step's reads, so a brief of many starting items never floods a source. */
 const STARTING_READS_AT_ONCE = AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1;
 const MAX_SEEN_ENTRIES = 300;
+/**
+ * The most release receipts one read can add: a list fetch's items, a search's hits or an open's items, and the read's own
+ * receipt. A read starts only while this much room is left under the audit row's receipt bound (the budget's max_receipts).
+ */
+const READ_RECEIPTS_MAX = Math.max(LIST_FETCH, SEARCH_LIMIT, OPEN_EXTRA_ITEMS + 1 + 2 * OPEN_NEIGHBOURS) + 1;
+/** What a read refused because the audit row's receipt bound is near says. It is not an availability failure. */
+const READ_BUDGET_SPENT = 'The read budget is used up; finish with the evidence already gathered.';
 /** What a search-only brief's planner is told when it proposes list. */
 const LIST_UNAVAILABLE = "list is unavailable in this run; use search and open";
 
@@ -1005,6 +1012,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
    * ids, receipts and the next prompt stay deterministic. Only repeated
    * lists with the same normalized selection depend on an earlier read.
    */
+  /** Whether a read fits under the audit row's receipt bound with `ahead` reads of the same batch before it. */
+  const readFits = (ahead: number) => receipts.length + (ahead + 1) * READ_RECEIPTS_MAX <= budget.max_receipts;
   const runReads = async (actions: readonly StepAction[]): Promise<readonly ToolResult[]> => {
     const batchAbort = new AbortController();
     const signal = AbortSignal.any([activeSignal, batchAbort.signal]);
@@ -1045,7 +1054,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const listTasks = new Map<string, Promise<ToolResult>>();
     // Ask: the same read twice in one step waits for the first, so a refusal is remembered before its copy runs.
     const readTasks = new Map<string, Promise<ToolResult>>();
+    // Reads that would not fit under the audit row's receipt bound are refused unsent, the same on every research path.
+    const fitting = actions.findIndex((_action, index) => !readFits(index));
     const tasks = actions.map((action, index) => {
+      if (fitting !== -1 && index >= fitting) {
+        skip(index);
+        return Promise.resolve<ToolResult>(Object.freeze({ tool: action.tool, error: READ_BUDGET_SPENT }));
+      }
       let key: string | undefined;
       if (action.tool === 'list') {
         const normalized = normalizeListArgs(action.args, requestDay, sourcesById, readSource, ask);
@@ -1614,11 +1629,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
               const action = parsed.actions[0]!;
               if (tool === 'open' && entryOf(action.args.id ?? '') === undefined) throw new AgenticAskOutputErrorV1('Open only a returned E id');
               // A read adds at most one release receipt per item it returns; stop before the audit row would overflow.
-              // Research its read budget stopped short could not read what it still needed: an availability failure.
-              if (receipts.length + OPEN_EXTRA_ITEMS + 1 > budget.max_receipts) {
-                availabilityFailures += 1;
-                throw new AgenticAskOutputErrorV1('The read budget is used up; finish with the evidence already gathered.');
-              }
+              if (!readFits(0)) throw new AgenticAskOutputErrorV1(READ_BUDGET_SPENT);
               report?.reads(tool !== 'open');
               const observationsBefore = researchObservations.length;
               let raw: ToolResult;

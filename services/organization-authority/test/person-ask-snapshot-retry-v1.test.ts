@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import { AGENTIC_ASK_DEADLINE_MS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { PERSON_ASK_TERMINAL_GRACE_MS_V1, withPersonAskSnapshotRetryV1 } from '../src/composition/person-ask-snapshot-retry-v1.js';
 import { PersonRecordSearchSnapshotChangedV1 } from '../src/composition/person-record-search-route.js';
 
@@ -26,7 +27,7 @@ describe('Ask snapshot restart', () => {
     try {
       const run = vi.fn(() => new Promise<never>(() => {}));
       const checked = expect(withPersonAskSnapshotRetryV1({ run })).rejects.toMatchObject({ name: 'AgenticAskDeadlineErrorV1' });
-      await vi.advanceTimersByTimeAsync(90_000 + PERSON_ASK_TERMINAL_GRACE_MS_V1);
+      await vi.advanceTimersByTimeAsync(AGENTIC_ASK_DEADLINE_MS_V1 + PERSON_ASK_TERMINAL_GRACE_MS_V1);
       await checked;
       expect(run).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }
@@ -41,7 +42,7 @@ describe('Ask snapshot restart', () => {
         return await new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
       } });
       const checked = expect(pending).rejects.toMatchObject({ name: 'AgenticAskDeadlineErrorV1' });
-      await vi.advanceTimersByTimeAsync(90_000);
+      await vi.advanceTimersByTimeAsync(AGENTIC_ASK_DEADLINE_MS_V1);
       await checked;
       expect(count).toBe(2);
       const controller = new AbortController();

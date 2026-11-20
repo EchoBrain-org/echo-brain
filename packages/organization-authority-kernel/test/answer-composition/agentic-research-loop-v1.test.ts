@@ -648,46 +648,58 @@ describe("research loop: need ids", () => {
   });
 });
 
+describe("research loop: the audit row's receipt bound", () => {
+  it("refuses, unsent, the reads of a step that would not fit under the receipt bound, as the SDK path does", async () => {
+    // A read may add up to 51 receipts: with 102, two reads of this step fit and the third is refused.
+    const budgeted: AgenticBriefV1 = { ...brief("Find what changed.", []), budget: { ...AGENTIC_RESEARCH_LIVE_BUDGET_V1, max_receipts: 102 } };
+    const search = vi.fn(async (input: { readonly query?: string }) => result([record(`hit-${input.query ?? ""}`)]));
+    const h = harness([reads("open", [1, 2, 3].map(n => ({ tool: "search", args: { query: `term ${n}` } }))), reads("open", [])], { search });
+    await h.research.research({ trigger: "approved_record", brief: budgeted }).catch(() => undefined);
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(h.inputs[1]!.user_prompt).last_results[2]).toMatchObject({ tool: "search", error: expect.stringContaining("read budget") });
+  });
+});
+
 describe("research loop: step time", () => {
-  /** Ask's 90 s deadline with room for 20 rounds, so only time stops research. */
-  const timed: AgenticBriefV1 = { ...brief("Find what changed.", []), budget: { deadline_ms: 90_000, max_rounds: 20, max_model_calls: 48, writer_reserve_ms: 25_000, max_receipts: 512 } };
+  /** Ask's 300 s deadline and 120 s writer reserve, with room for 40 rounds, so only time stops research: 178 s of research. */
+  const timed: AgenticBriefV1 = { ...brief("Find what changed.", []), budget: { deadline_ms: 300_000, max_rounds: 40, max_model_calls: 80, writer_reserve_ms: 120_000, max_receipts: 512 } };
   const searching = (index: number) => reads("open", [{ tool: "search", args: { query: `term ${index}` } }]);
   const search = async (input: { readonly query?: string }) => result([record(`hit-${input.query ?? ""}`)]);
 
   it("does not start a step with less than 1.25 times the longest step call so far, and stops for budget (2233bad1)", async () => {
     let time = 0;
-    // Each step call takes 8 s of the request's time: the eighth would start with 7 s, where it used to start (and time out).
-    const h = harness((_input, index) => { time += 8_000; return searching(index); }, { search }, { now_ms: () => time });
+    // Each step call takes 20 s of the request's time: the tenth would start with 18 s, under the 25 s it needs.
+    const h = harness((_input, index) => { time += 20_000; return searching(index); }, { search }, { now_ms: () => time });
     const view = await h.research.research({ trigger: "approved_record", brief: timed });
-    expect(h.inputs.map(input => input.timeout_ms)).toEqual([25_000, 25_000, 25_000, 25_000, 25_000, 23_000, 15_000]);
+    expect(h.inputs.map(input => input.timeout_ms)).toEqual([60_000, 60_000, 60_000, 60_000, 60_000, 60_000, 58_000, 38_000]);
     expect(view.stop).toEqual({ reason: "budget", completed: false });
-    expect(view.cost).toMatchObject({ rounds: 7, fallbacks: 0 });
+    expect(view.cost).toMatchObject({ rounds: 8, fallbacks: 0 });
   });
 
   it("still starts a step that has a whole step's time after a slower step", async () => {
     let time = 0;
-    const h = harness((_input, index) => { time += 22_000; return searching(index); }, { search }, { now_ms: () => time });
+    const h = harness((_input, index) => { time += 55_000; return searching(index); }, { search }, { now_ms: () => time });
     const view = await h.research.research({ trigger: "approved_record", brief: timed });
-    // 1.25 times 22 s is more than a whole step: the second step starts with its whole 25 s; the third, with 19 s, does not.
-    expect(h.inputs.map(input => input.timeout_ms)).toEqual([25_000, 25_000]);
+    // 1.25 times 55 s is more than a whole step: the third step starts with its whole 60 s; the fourth, with 13 s, does not.
+    expect(h.inputs.map(input => input.timeout_ms)).toEqual([60_000, 60_000, 60_000]);
     expect(view.stop).toEqual({ reason: "budget", completed: false });
   });
 
   it("stops for budget, not with an unusable step, when a retried access check leaves a step less than it needs", async () => {
     let time = 0; let checks = 0;
-    const h = harness((_input, index) => { time += 8_000; return searching(index); }, {
+    const h = harness((_input, index) => { time += 20_000; return searching(index); }, {
       search,
       revalidate: async () => {
         checks += 1;
-        // The seventh step starts with 15 s, over its 10 s need. Its check fails after 3 s, and the retry takes 2.5 s more: 9.5 s.
-        if (checks === 7) { time += 3_000; throw new AuthorityOperationError("unavailable", "Jira briefly unavailable"); }
-        if (checks === 8) time += 2_500;
+        // The eighth step starts with 38 s, over its 25 s need. Its check fails after 3 s, and the retry takes 11 s more: 24 s.
+        if (checks === 8) { time += 3_000; throw new AuthorityOperationError("unavailable", "Jira briefly unavailable"); }
+        if (checks === 9) time += 11_000;
         return { checked_at: "2026-10-06T00:00:00.000Z" };
       },
     }, { now_ms: () => time });
     const view = await h.research.research({ trigger: "approved_record", brief: timed });
-    // No seventh model call goes out with 9.5 s, where one as slow as the others would time out and leave no time to repair.
-    expect(h.inputs.map(input => input.timeout_ms)).toEqual([25_000, 25_000, 25_000, 25_000, 25_000, 23_000]);
+    // No eighth model call goes out with 24 s, where one as slow as the others would leave no time to repair.
+    expect(h.inputs.map(input => input.timeout_ms)).toEqual([60_000, 60_000, 60_000, 60_000, 60_000, 60_000, 58_000]);
     expect(view.stop).toEqual({ reason: "budget", completed: false, admission: "post_revalidation_no_time" });
     expect(view.cost).toMatchObject({ fallbacks: 0 });
   });

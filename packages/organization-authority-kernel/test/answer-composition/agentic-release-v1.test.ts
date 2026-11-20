@@ -132,8 +132,8 @@ describe("release step: request terminals", () => {
   it("writes a timed_out witness naming the trigger and its background budget when research outlives the deadline", async () => {
     const events: CoreRuntimeDiagnosticObservationV1[] = [];
     let clock = 0;
-    // The first step's reply lands after the five-minute background deadline.
-    const h = researchHarness(() => { clock += 301_000; return step([part("Dashboard", [need("dashboard published", "open")])], [{ tool: "search", args: { query: "dashboard" } }]); }, {}, { now_ms: () => clock });
+    // The first step's reply lands after the ten-minute background deadline.
+    const h = researchHarness(() => { clock += 601_000; return step([part("Dashboard", [need("dashboard published", "open")])], [{ tool: "search", args: { query: "dashboard" } }]); }, {}, { now_ms: () => clock });
     const brief = { goal: { kind: "task" as const, task: "Recheck the dashboard." }, starting: [], budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: {} };
     await expect(withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => h.research.research({ trigger: "approved_record", brief }))).rejects.toMatchObject({ name: "AgenticAskDeadlineErrorV1" });
     // The witness binds the access check before the late step call.

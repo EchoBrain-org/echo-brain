@@ -85,7 +85,7 @@ describe("Agentic Ask and OpenRouter timeout contract", () => {
     const startedAt = 100.125;
     let clock = startedAt;
     // Steps short enough that a third still starts: a step needs 1.25 times the longest step call so far.
-    const elapsed = [19_200.25, 19_200.125, 22_600.25, 0];
+    const elapsed = [40_000.25, 40_000.125, 40_000.25, 0];
     const replies = [
       {
         parts: [{ question: "When is launch?", notes: "", needs: [{ need: "launch date", status: "open", evidence: [] }] }],
@@ -128,7 +128,7 @@ describe("Agentic Ask and OpenRouter timeout contract", () => {
           generation_adapter_id: "openrouter",
           planner_model: "openai/gpt-4.1-mini",
           answer_model: "openai/gpt-4.1-mini",
-          timeout_ms: 30_000,
+          timeout_ms: 180_000,
         },
         audit: { append: entry => { audit.push(entry); } },
         now_ms: () => clock,
@@ -137,7 +137,7 @@ describe("Agentic Ask and OpenRouter timeout contract", () => {
 
       expect(answer).toMatchObject({ outcome: "answered", citations: [{ citation: launchEvidence().citation }] });
       expect(fetch).toHaveBeenCalledTimes(4);
-      expect(timeouts).toEqual([25_000, 25_000, 24_599, 26_999]);
+      expect(timeouts).toEqual([60_000, 60_000, 60_000, 177_999]);
       expect(audit).toEqual([expect.objectContaining({ outcome: "answered", model_calls: 4, repairs: 0, fallbacks: 0, citation_count: 1 })]);
       expect(audit[0]!.checked_at).toBe(checkedAt);
     } finally {

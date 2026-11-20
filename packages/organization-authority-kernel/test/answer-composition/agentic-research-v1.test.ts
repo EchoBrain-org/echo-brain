@@ -313,7 +313,7 @@ describe("research-only triggers", () => {
     const view = await h.research.research({ trigger: "approved_record", brief: taskBrief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(view.rounds).toHaveLength(AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1.max_rounds);
     expect(view.stop).toEqual({ reason: "step_limit", completed: false });
-    expect(h.audit[0]).toMatchObject({ trigger: "approved_record", rounds: 20, model_calls: 20, outcome: "partial" });
+    expect(h.audit[0]).toMatchObject({ trigger: "approved_record", rounds: 30, model_calls: 30, outcome: "partial" });
   });
 });
 

@@ -65,11 +65,10 @@ export { createAgenticAskProgressRequestV1 } from "./agentic-ask-progress-record
 export { resolveAgenticFollowUpOnceV1, type AgenticFollowUpResolutionV1, type AgenticFollowUpResolvedV1 } from "./agentic-follow-up-resolver-v1.js";
 
 /**
- * The whole request, research through audit (ADR-0022). The Authority is
- * reached through Cloudflare, whose proxy drops an origin response that takes
- * more than 100 s (HTTP 524), so a longer loop could never return. 90 s
- * leaves room for the network; per-call time is also capped by the
- * generation profile.
+ * The whole request, research through audit. Ask streams its progress with a
+ * heartbeat from the first byte (ADR-0039), so the bound is ECHO's own choice
+ * of how long a person waits; per-call time is also capped by the generation
+ * profile.
  */
 export const AGENTIC_ASK_DEADLINE_MS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.deadline_ms;
 /** Context window assumed when the generation profile does not state one. */

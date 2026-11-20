@@ -114,7 +114,7 @@ const SCENARIOS: Readonly<Record<string, Scenario>> = {
   },
   // Research runs out of time with a need still open; the card is still written, and says research stopped early.
   research_stopped_on_budget: {
-    desk: () => desk(), model_call_ms: [140_000, 140_000, 1_000],
+    desk: () => desk(), model_call_ms: [220_000, 220_000, 1_000],
     replies: [RESEARCH[0], RESEARCH[1], { decided: CARD.decided, affected: [CARD.affected[1]] }],
   },
 };

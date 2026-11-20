@@ -89,7 +89,7 @@ describe('shared research diagnostics lifecycle', () => {
     let time = 0; let checks = 0;
     const body = record('budget');
     const h = researchHarness([step([part('Current state', [need('current state', 'open')])], [{ tool: 'search', args: { query: 'state' } }])], {
-      openCitation: async () => result([body]), revalidate: async () => { if (++checks === 2) time = 86_001; return checked; },
+      openCitation: async () => result([body]), revalidate: async () => { if (++checks === 2) time = 176_001; return checked; },
     }, { now_ms: () => time });
     await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => observeCoreRuntimeV1('research_run', () => h.research.research({
       trigger: 'approved_record', brief: { goal: { kind: 'task', task: 'Recheck current state.' }, starting: [{ citation: body.citation, if_unreadable: 'fail' }], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: {} },
