@@ -25,8 +25,6 @@ import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.
  */
 /** Rows one list page holds: as many as one desk fetch returns (the desk's page). A longer list says more and continues on the next call. */
 export const AGENTIC_ASK_LIST_PAGE_ROWS_V1 = 50;
-/** What a step writes in its part questions, needs, queries and arguments has no length of its own (the reply's bound carries it). */
-const ANY_LENGTH = Number.POSITIVE_INFINITY;
 /** A need's id is a short label the step mints (N1, N2...): its shape, not a cap on what it says. */
 const NEED_ID_CHARS = 8;
 /**
@@ -286,13 +284,13 @@ function oneLine(value: unknown): string {
   return value.normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/gu, " ").trim();
 }
 
-/** Single-line, NFC, trimmed, bounded. Non-strings become "". */
-export function cleanLine(value: unknown, maximumChars: number): string {
+/** Single-line, NFC, trimmed, and cut to `maximumChars` only where one is given: a model-written field has no length of its own. Non-strings become "". */
+export function cleanLine(value: unknown, maximumChars = Number.POSITIVE_INFINITY): string {
   return truncate(oneLine(value), maximumChars);
 }
 
 /** cleanLine for a field a model wrote: a cut to its cap is counted. */
-export function cleanModelLine(value: unknown, maximumChars: number): string {
+export function cleanModelLine(value: unknown, maximumChars = Number.POSITIVE_INFINITY): string {
   const line = oneLine(value);
   if ([...line].length > maximumChars) observeCoreModelCorrectionV1("model_text_truncated");
   return truncate(line, maximumChars);
@@ -313,7 +311,7 @@ function modelLine(value: unknown): string {
 
 /** A response part's question: one line, whole (the answer's response bound carries it). */
 export function partQuestion(value: string): string {
-  const text = cleanLine(value, ANY_LENGTH);
+  const text = cleanLine(value);
   return text.length === 0 ? "Question" : text;
 }
 
@@ -406,7 +404,7 @@ function args(name: StepTool, entry: Record<string, unknown>, ask = false): Step
     for (const key of names) {
       const value = raw[key];
       if (value === undefined) continue;
-      const text = typeof value === "number" ? String(value) : cleanModelLine(value, ANY_LENGTH);
+      const text = typeof value === "number" ? String(value) : cleanModelLine(value);
       if (text.length > 0) result[key] = text;
       else observeCoreModelCorrectionV1("model_entry_dropped");
     }
@@ -415,7 +413,7 @@ function args(name: StepTool, entry: Record<string, unknown>, ask = false): Step
   }
   const bare = typeof entry.args === "string" ? entry.args : typeof entry.input === "string" ? entry.input : undefined;
   if (bare !== undefined) {
-    const text = cleanModelLine(bare, ANY_LENGTH);
+    const text = cleanModelLine(bare);
     if (text.length > 0 && primary !== undefined && result[primary] === undefined) {
       result[primary] = text;
       observeCoreModelCorrectionV1("model_bare_string");
@@ -430,7 +428,7 @@ export function normalizeQuery(value: unknown): string | null {
   try { return validatePersonQueryText(queryLine(value)); } catch { return null; }
 }
 /** A search's query as the model wrote it, its quotes and spacing cleaned. */
-function queryLine(value: unknown): string { return cleanLine(value, ANY_LENGTH).replace(/^["'“”]+|["'“”]+$/gu, "").trim(); }
+function queryLine(value: unknown): string { return cleanLine(value).replace(/^["'“”]+|["'“”]+$/gu, "").trim(); }
 /** Why a search's query was refused, in the query rule's own words (PersonQueryInputError); null when it is valid. */
 export function queryRefusal(value: unknown): string | null {
   try { validatePersonQueryText(queryLine(value)); return null; } catch (error) { return error instanceof Error ? error.message : "query is invalid"; }
@@ -447,7 +445,7 @@ function needs(value: unknown, lists: boolean): readonly StepNeed[] {
   const result: StepNeed[] = [];
   for (const raw of value) {
     const entry = object(raw);
-    const need = entry === null ? cleanModelLine(raw, ANY_LENGTH) : cleanModelLine(entry.need, ANY_LENGTH);
+    const need = entry === null ? cleanModelLine(raw) : cleanModelLine(entry.need);
     const id = entry === null ? undefined : needId(entry.id);
     if (need.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
     if (result.some(existing => existing.need.toLowerCase() === need.toLowerCase() || (id !== undefined && existing.id === id))) { observeCoreModelCorrectionV1("model_repeat_dropped"); continue; }
@@ -477,9 +475,9 @@ export function parseStep(value: unknown, options: { readonly lists?: boolean } 
   for (const raw of body.parts) {
     const entry = object(raw);
     if (entry === null) throw new AgenticAskOutputErrorV1("each item in \"parts\" must be an object with question, needs, notes");
-    const question = cleanModelLine(entry.question, ANY_LENGTH);
+    const question = cleanModelLine(entry.question);
     if (question.length === 0) throw new AgenticAskOutputErrorV1("each part needs a non-empty \"question\"");
-    parts.push(Object.freeze({ question, needs: needs(entry.needs, options.lists === true), notes: cleanModelLine(entry.notes, Number.POSITIVE_INFINITY) }));
+    parts.push(Object.freeze({ question, needs: needs(entry.needs, options.lists === true), notes: cleanModelLine(entry.notes) }));
   }
   const actions: StepAction[] = [];
   // A step may make as many reads as it needs; each is a read the person could make.
@@ -533,7 +531,7 @@ function selectionOf(where: Record<string, unknown> | null): AgenticListSelectio
   if (where === null || !(AGENTIC_LIST_SELECTION_FIELDS_V1 as readonly string[]).includes(field)) return null;
   respelled(where.field, field);
   if (field === "owner" || field === "status") {
-    const value = cleanModelLine(where.value, Number.POSITIVE_INFINITY);
+    const value = cleanModelLine(where.value);
     return value.length === 0 ? null : Object.freeze({ field, value });
   }
   const bounds: { since?: string; until?: string } = {};
@@ -598,7 +596,7 @@ function notFoundOf(body: Record<string, unknown>): readonly string[] {
   const notFound: string[] = [];
   const missing: readonly unknown[] = Array.isArray(body.not_found) ? body.not_found : [];
   for (const raw of missing) {
-    const text = cleanModelLine(raw, Number.POSITIVE_INFINITY);
+    const text = cleanModelLine(raw);
     if (text.length === 0) observeCoreModelCorrectionV1("model_entry_dropped");
     else if (notFound.includes(text)) observeCoreModelCorrectionV1("model_repeat_dropped");
     else notFound.push(text);
@@ -760,7 +758,7 @@ function followUpsOf(body: Record<string, unknown>): readonly AnswerFollowUp[] {
   for (const raw of given) {
     const entry = object(raw);
     // A task of any length: the item it is saved as stores the writer's whole line.
-    const task = entry === null ? "" : cleanModelLine(entry.task, Number.POSITIVE_INFINITY);
+    const task = entry === null ? "" : cleanModelLine(entry.task);
     if (task.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
     const field = (value: unknown, maximum: number) => { const line = cleanModelLine(value, maximum); return line.length === 0 ? undefined : line; };
     const [owner, due, about] = [field(entry!.owner, Number.POSITIVE_INFINITY), field(entry!.due_on, 64), field(entry!.about, 16)];

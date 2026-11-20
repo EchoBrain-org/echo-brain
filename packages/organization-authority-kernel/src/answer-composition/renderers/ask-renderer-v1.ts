@@ -98,12 +98,6 @@ const UNRECORDED_GAP = "Some list items do not record the fact used to select th
 /** The writer's one repair for a list block whose selection code cannot read (ADR-0054): it is never widened. */
 const LIST_REASON = "a \"list\" block's selection could not be read: give the whole list with only \"list\", or narrow it with \"where\" ({\"field\": owner or status with a \"value\", or a date field with \"since\" and \"until\" as YYYY-MM-DD}) or with \"members\" (an array of item ids it shows), and no other keys";
 const FIT_GAP = "Some evidence could not fit in this response.";
-/**
- * A sentence left out whole because, with the private rows its lists carry, it cites more items than one statement may
- * (ADR-0054): the response had room; the sentence could not stand with only some of its citations.
- */
-/** A part's gap as one line, whole: a gap has no length of its own. */
-function gapLine(text: string): string { return cleanLine(text, Number.POSITIVE_INFINITY); }
 /** What an answer that drafted follow-ups (ADR-0053) and found nothing about them says, after it says what it drafted. */
 const FOLLOW_UP_NOT_FOUND_GAP = "I couldn't find anything more about it in the sources you can access.";
 /** What an answer says it drafted: the drafts are the question, so it never asks. */
@@ -845,8 +839,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const coverageLimited = coverageIsLimitedFor(bundle, keptReads.filter(entry => usedKeys.has(keyOf(entry.short))));
         const incomplete = (reply === null && writerRuns) || (researchIncomplete && (statements.length === 0 || notFound.length > 0));
         const gapText = incomplete
-          ? gapLine(`${INCOMPLETE_SEARCH_GAP}${notFound.length === 0 ? "" : ` Missing context: ${notFound.join("; ")}.`}`)
-          : notFound.length === 0 ? undefined : gapLine(`Not found: ${notFound.join("; ")}.`);
+          ? cleanLine(`${INCOMPLETE_SEARCH_GAP}${notFound.length === 0 ? "" : ` Missing context: ${notFound.join("; ")}.`}`)
+          : notFound.length === 0 ? undefined : cleanLine(`Not found: ${notFound.join("; ")}.`);
         // What the lists add to the gap: a list the answer uses not read to its end or not fully tested by its filter, a list
         // kind with no list, a sentence left out for resting on rows, and what did not fit.
         const extraGaps = [...new Set([...listGaps.map(gap => gap.text), ...(dropped ? [FIT_GAP] : [])])];
@@ -855,7 +849,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const gaps = [...(unsupportedAction ? [READ_ONLY_GAP] : []),
             ...(unsupportedAction && researchIncomplete && !base?.startsWith(INCOMPLETE_SEARCH_GAP) ? [INCOMPLETE_SEARCH_NOTICE] : []),
             ...(base === undefined ? [] : [base]), ...extraGaps];
-          return gaps.length === 0 ? undefined : gapLine(gaps.join(" "));
+          return gaps.length === 0 ? undefined : cleanLine(gaps.join(" "));
         };
         type Draft = { status: PersonAnswerPartV4["status"]; statements: Statement[]; gap?: string; records?: Statement[] };
         let draft: Draft;
@@ -904,7 +898,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // Only finished research confirms the writer's missing text: an interrupted search keeps its retry reason alone.
         const confirmedMissing = [...(researchIncomplete || absenceUnconfirmed || selectionNotFound.some(gap => !gap.confirmed) ? [] : reply?.not_found ?? []),
           ...selectionNotFound.filter(gap => gap.confirmed).map(gap => gap.text)];
-        const missing = confirmedMissing.length > 0 ? gapLine(`Not found: ${confirmedMissing.join("; ")}.`)
+        const missing = confirmedMissing.length > 0 ? cleanLine(`Not found: ${confirmedMissing.join("; ")}.`)
           : outcome === "not_found" || (unsupportedAction && !anyEvidence && !incomplete && !absenceUnconfirmed && !listGaps.some(gap => gap.partial)
             && needs.length > 0 && needs.every(need => need.status === "not_found")) ? NOT_FOUND_GAP : undefined;
         const gapDetails = { ...(unsupportedAction ? { unsupported_action: true as const } : {}),

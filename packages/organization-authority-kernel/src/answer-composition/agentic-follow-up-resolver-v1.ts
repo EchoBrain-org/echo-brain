@@ -158,7 +158,7 @@ export function parseFollowUpResolutionV1(value: unknown, sources: number): Agen
   if (offered.length === 0) throw new AgenticAskOutputErrorV1(`"clarify" needs "choices", one for each thing that could fit`);
   const choices = offered.map((raw, index): PersonAnswerChoiceV1 => {
     const entry = object(raw);
-    const label = entry === null ? "" : cleanModelLine(entry.label, Number.POSITIVE_INFINITY);
+    const label = entry === null ? "" : cleanModelLine(entry.label);
     if (label.length === 0) throw new AgenticAskOutputErrorV1(`choice ${index + 1} needs a "label" naming the thing it is about`);
     return Object.freeze({ label, question: fullQuestion(entry!.question, `choice ${index + 1}'s "question"`) });
   });
