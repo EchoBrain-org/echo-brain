@@ -262,12 +262,39 @@ function coverageIsLimitedFor(bundle: AgenticEvidenceBundleV1, used: readonly En
 }
 
 type Cited = readonly { readonly citation_indexes: readonly number[] }[];
+/** A block read as text: its statements, in its place, and its title where it has one. Blocks add no claim. */
+function asText(block: PersonAnswerBlockV2): PersonAnswerBlockV2 {
+  return Object.freeze({ kind: "text" as const, ...("title" in block && block.title !== undefined && block.kind !== "card" ? { title: block.title } : {}), statements: block.statements });
+}
+/** Which contract rule a refused block broke, as the runtime counts it: content-free, from the contract's own message. */
+function layoutRule(error: unknown): "writer_block_shape_repaired" | "writer_block_text_repaired" | "writer_block_citations_repaired" | "writer_block_order_repaired" {
+  const message = error instanceof Error ? error.message : "";
+  if (/citation/u.test(message)) return "writer_block_citations_repaired";
+  if (/order|misplaced|leave a statement out/u.test(message)) return "writer_block_order_repaired";
+  if (/title|text|who|label|value|from|column|cell|caption/u.test(message)) return "writer_block_text_repaired";
+  return "writer_block_shape_repaired";
+}
 /**
- * Blocks that pass the contract against the part's statements, or one text block of them all: blocks add no claim, so an
- * answer whose blocks code could not build reads as text rather than failing.
+ * Blocks that pass the contract against the part's statements. A block the contract refuses is read as text in its
+ * place, alone, and the rule it broke is counted; only when that still fails is the part one text block. Blocks add no
+ * claim, so an answer whose blocks code could not build reads as text rather than failing.
  */
-function contracted(blocks: readonly PersonAnswerBlockV2[], statements: Cited, citations: number): readonly PersonAnswerBlockV2[] {
-  try { return validatePersonAnswerBlocksV2(blocks, statements, citations); } catch { return Object.freeze([Object.freeze({ kind: "text" as const, statements: Object.freeze(statements.map((_, at) => at)) })]); }
+export function contracted(blocks: readonly PersonAnswerBlockV2[], statements: Cited, citations: number): readonly PersonAnswerBlockV2[] {
+  const valid = (value: readonly PersonAnswerBlockV2[]) => { try { return validatePersonAnswerBlocksV2(value, statements, citations); } catch (error) { return error as Error; } };
+  const whole = valid(blocks);
+  if (!(whole instanceof Error)) return whole;
+  // Each block against the others read as text: the blocks that fail alone are the ones at fault.
+  const repaired = blocks.map((block, at) => {
+    if (block.kind === "text") return block;
+    const alone = valid(blocks.map((other, place) => place === at ? other : asText(other)));
+    if (!(alone instanceof Error)) return block;
+    observeCoreModelCorrectionV1(layoutRule(alone));
+    return asText(block);
+  });
+  const kept = valid(repaired);
+  if (!(kept instanceof Error)) return kept;
+  observeCoreModelCorrectionV1("writer_layout_collapsed");
+  return Object.freeze([Object.freeze({ kind: "text" as const, statements: Object.freeze(statements.map((_, at) => at)) })]);
 }
 
 export function createAskRendererV1(options: CreateAskRendererV1Options): AgenticRendererV1<AskRendererInputV1, AskRenderedV1> {

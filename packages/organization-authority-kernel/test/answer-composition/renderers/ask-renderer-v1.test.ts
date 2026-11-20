@@ -9,7 +9,7 @@ import type { AgenticEvidenceBundleV1 } from "../../../src/answer-composition/ag
 import { createAgenticListEvidenceV1, type AgenticListEvidenceV1 } from "../../../src/answer-composition/agentic-list-evidence-v1.js";
 import { AGENTIC_MODEL_OUTPUT_TOKENS_V1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
 import { AGENTIC_RESEARCH_NOTES_ABOUT_V1 } from "../../../src/answer-composition/agentic-research-notes-v1.js";
-import { createAskRendererV1 } from "../../../src/answer-composition/renderers/ask-renderer-v1.js";
+import { contracted, createAskRendererV1 } from "../../../src/answer-composition/renderers/ask-renderer-v1.js";
 import type { EvidenceDeskItemV2 } from "../../../src/shared/evidence-desk-v2.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../../src/shared/core-runtime-observation-v1.js";
 import { ids } from "../fixtures/agentic-lists.js";
@@ -1220,6 +1220,31 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
     expect(blocksOf(right).map(block => block.kind)).toEqual(["answer", "timeline"]);
     const wrong = await alone({ bundle: research, replies: [reply({ block: "answer", sentences: [{ text: "It ships Nov 3.", evidence: ["E1"] }] }, events("2026"))] }).render("When does it ship?");
     expect(blocksOf(wrong).map(block => block.kind)).toEqual(["answer", "text"]);
+  });
+
+  it("keeps a newest-first timeline", async () => {
+    const note = record("note", "Approved: the review on Oct 30, the soak on Oct 31, and it ships on Nov 3.", { label: "Release note", occurred_at: "2026-10-27" });
+    const research = bundle([{ item: note, full: true, touched: 1 }], ["E1"]);
+    const day = (date: string, text: string) => ({ date, text, evidence: ["E1"] });
+    const points = { block: "points", ordered: false, items: [{ text: "The review approved it.", evidence: ["E1"] }, { text: "The soak passed.", evidence: ["E1"] }] };
+    const answer = { block: "answer", sentences: [{ text: "It ships Nov 3.", evidence: ["E1"] }] };
+    const newest = await alone({ bundle: research, replies: [reply(answer, { block: "timeline", events: [day("2026-11-03", "It ships."), day("2026-10-30", "The review met.")] }, points)] }).render("When does it ship?");
+    expect(blocksOf(newest).map(block => block.kind)).toEqual(["answer", "timeline", "points"]);
+  });
+
+  it("reads only the block the contract refuses as text, in its place, and counts the rule it broke", async () => {
+    const statements = [0, 1, 2, 3, 4].map(() => ({ citation_indexes: [0] }));
+    const answer = { kind: "answer" as const, statements: [0] };
+    const points = { kind: "points" as const, ordered: false, statements: [3, 4] };
+    // A timeline oldest first or newest first passes as it is.
+    const newestFirst = { kind: "timeline" as const, title: "The soak", statements: [1, 2], events: [{ date: "2026-10-30", text: "Met." }, { date: "2026-10-29", text: "Ran." }] };
+    const ok = contracted([answer, newestFirst, points], statements, 1);
+    expect(ok.map(block => block.kind)).toEqual(["answer", "timeline", "points"]);
+    const bad = { kind: "card" as const, title: "THERM-48", entity: "Not a word", statements: [1, 2], facts: [{ label: "Status", value: "Open" }, { label: "Owner", value: "Ana" }] };
+    const events: CoreRuntimeObservationV1[] = [];
+    const kept = await observeCoreRuntimeV1("research_output", async () => contracted([answer, bad, points], statements, 1), { observer: event => { events.push(event); } });
+    expect(kept).toEqual([answer, { kind: "text", statements: [1, 2] }, points]);
+    expect(events.find(event => event.phase === "research_output" && event.event !== "started")!.model_corrections).toEqual({ writer_block_shape_repaired: 1 });
   });
 
   it("reads an answer block the writer put after another block as the answer, the context before it as text", async () => {

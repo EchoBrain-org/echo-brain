@@ -17,6 +17,7 @@ import {
   type PersonAnswerCardEntityV2,
   PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4,
   PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1,
+  PERSON_ANSWER_CARD_ENTITY_PATTERN_V2,
 } from "@echo-brain/organization-api";
 import { observeCoreModelCorrectionV1 } from "../shared/core-runtime-observation-v1.js";
 import { calendarDateV1, EVIDENCE_DATE_FIELDS_V1, type EvidenceDateFieldV1 } from "../shared/temporal-query-v1.js";
@@ -272,7 +273,7 @@ export const answerBlocksSchema: StructuredGenerationJsonSchema = Object.freeze(
         properties: { date: eventDate, text: { type: "string", maxLength: EVENT_CHARS }, who: { type: "string", maxLength: WHO_CHARS, description: EVENT_ACTOR }, evidence: ids },
       } } }),
       blockShape("card", ["title", "kind", "facts"], {
-        title: { type: "string", maxLength: CARD_TITLE_CHARS }, kind: closedString(PERSON_ANSWER_CARD_ENTITIES_V2),
+        title: { type: "string", maxLength: CARD_TITLE_CHARS }, kind: { type: "string", description: `What the card is about, one lowercase word: ${PERSON_ANSWER_CARD_ENTITIES_V2.join(", ")}, or another such as document, meeting or customer.` },
         facts: { type: "array", minItems: 1, items: {
           type: "object", additionalProperties: false, required: ["label", "value", "evidence"],
           properties: { label: { type: "string", maxLength: LABEL_CHARS }, value: { type: "string", maxLength: VALUE_CHARS }, evidence: ids },
@@ -666,7 +667,16 @@ function notFoundOf(body: Record<string, unknown>): readonly string[] {
 }
 
 /** How a card's kind reads in its facts' statements ("Ticket: THERM-48; Status: In review."). */
-const ENTITY_WORDS: Readonly<Record<PersonAnswerCardEntityV2, string>> = Object.freeze({ person: "Person", project: "Project", ticket: "Ticket", decision: "Decision" });
+const ENTITY_WORDS: Readonly<Record<string, string>> = Object.freeze({ person: "Person", project: "Project", ticket: "Ticket", decision: "Decision" });
+/** A card kind's word in its facts' statements: the known word, or the kind itself, capitalized, its underscores spaces. */
+function entityWord(entity: string): string { return ENTITY_WORDS[entity] ?? `${entity[0]!.toUpperCase()}${entity.slice(1).replaceAll("_", " ")}`; }
+/** A card's kind: a known kind as respelled, or any other one lowercase word; none when it is not a word. */
+function cardEntity(value: unknown): PersonAnswerCardEntityV2 | undefined {
+  const known = closedValue(value, PERSON_ANSWER_CARD_ENTITIES_V2);
+  if (known !== undefined) return known;
+  const word = typeof value === "string" ? value.trim().toLowerCase().replace(/[\s-]+/gu, "_") : "";
+  return PERSON_ANSWER_CARD_ENTITY_PATTERN_V2.test(word) ? word : undefined;
+}
 /** Quotation marks a writer put around a quote's words, which the block sets itself. */
 const QUOTE_MARKS = /^["“”'‘’]+|["“”'‘’]+$/gu;
 
@@ -782,7 +792,7 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
       }
     } else if (name === "card") {
       const named = boundedModelLine(entry.title, CARD_TITLE_CHARS, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2);
-      const entity = closedValue(entry.kind, PERSON_ANSWER_CARD_ENTITIES_V2);
+      const entity = cardEntity(entry.kind);
       if (named.length === 0 || entity === undefined) observeCoreModelCorrectionV1("model_enum_respelled");
       // Every fact names its card, so each is a whole claim, however the others fare (W1, a repeat, a note).
       for (const fact of entries(entry.facts)) {
@@ -790,7 +800,7 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
         const said = writtenLine(fact.value, VALUE_CHARS, PERSON_ANSWER_FACT_VALUE_MAX_BYTES_V2);
         if (label.length === 0 || said.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
         if (named.length === 0 || entity === undefined) add(sentenceOf(`${label}: ${said}`), fact.evidence, { block, kind: "text", ...(named.length === 0 ? {} : { title: named }) });
-        else add(sentenceOf(`${ENTITY_WORDS[entity]}: ${named}; ${label}: ${said}`), fact.evidence, { block, kind: "fact", title: named, entity, label, value: said });
+        else add(sentenceOf(`${entityWord(entity)}: ${named}; ${label}: ${said}`), fact.evidence, { block, kind: "fact", title: named, entity, label, value: said });
       }
     } else if (name === "quote") {
       const text = writtenLine(entry.text, QUOTE_CHARS, PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2).replace(QUOTE_MARKS, "").trim();

@@ -667,10 +667,10 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     ];
     expect(read(blocks)).toEqual([
       ["Fix BUG-412.", "text"], ["Action: Run DVT-R2; Owner: QA.", "row"], ["One.", "text"], ["Two.", "text"],
-      ["Ana: Not a day.", "text"], ["Written.", "text"], ["Status: Done.", "text"], ["Role: Lead.", "text"],
+      ["Ana: Not a day.", "text"], ["Written.", "text"], ["Status: Done.", "text"], ["Team: Ana; Role: Lead.", "fact"],
     ]);
-    // Two rows and both of a one-column table, two events, and two cards are read again; an empty row, event and value are dropped.
-    expect(corrected(() => parseBlocksAnswer(reply(blocks)))).toEqual({ model_enum_respelled: 8, model_entry_dropped: 3 });
+    // Two rows and both of a one-column table, two events, and the untitled card are read again; a team card is a card of its own kind; an empty row, event and value are dropped.
+    expect(corrected(() => parseBlocksAnswer(reply(blocks)))).toEqual({ model_enum_respelled: 7, model_entry_dropped: 3 });
   });
 
   it("drops a block it cannot read, and caps no count of blocks or items: the part's bounds decide what is kept", () => {
