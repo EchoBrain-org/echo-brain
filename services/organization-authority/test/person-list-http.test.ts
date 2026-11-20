@@ -50,7 +50,8 @@ async function failure(response: Response, status: number, code: string): Promis
   expect(response.status).toBe(status);
   expect(response.headers.get("cache-control")).toBe("no-store");
   const text = await response.text();
-  expect(JSON.parse(text)).toEqual({ error: { code, message: "request failed" } });
+  // A refused request names the rule it broke; any other failure stays generic.
+  expect(JSON.parse(text)).toEqual({ error: { code, message: code === "invalid_request" ? expect.any(String) : "request failed" } });
   return text;
 }
 

@@ -497,7 +497,8 @@ describe('Ask source check HTTP route', () => {
     ]) {
       const refused = await post('Bearer ari', invalid);
       expect(refused.status, JSON.stringify(invalid)).toBe(400);
-      expect(await refused.json()).toEqual({ error: { code: 'invalid_request', message: 'request failed' } });
+      // The validator's own static message names what is wrong.
+      expect(await refused.json()).toEqual({ error: { code: 'invalid_request', message: expect.any(String) } });
     }
     expect((await post('Bearer ari', body, `${PERSON_ASK_CHECK_PATH_V1}?since=1`)).status).toBe(404);
     expect((await post('Bearer ari', `${JSON.stringify(body)}${' '.repeat(64 * 1024)}`)).status).toBe(400);

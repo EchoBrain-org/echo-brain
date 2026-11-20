@@ -58,10 +58,11 @@ async function send(origin: string, row: Fixture, override: RequestInit = {}) {
     ...(row.http.body === undefined ? {} : { body: JSON.stringify(row.http.body) }), ...override,
   });
 }
-async function failure(response: Response, status = 400, code = 'invalid_request') {
+async function failure(response: Response, status = 400, code = 'invalid_request', message: unknown = code === 'invalid_request' ? expect.any(String) : 'request failed') {
   expect(response.status).toBe(status);
   expect(response.headers.get('cache-control')).toBe('no-store');
-  expect(await response.json()).toEqual({ error: { code, message: 'request failed' } });
+  // A refused request names the rule it broke; any other failure stays generic.
+  expect(await response.json()).toEqual({ error: { code, message } });
 }
 
 describe('frozen project/V2 HTTP transport', () => {
@@ -116,7 +117,7 @@ describe('frozen project/V2 HTTP transport', () => {
     expect((await fetch(`${origin}/v2/person/projects`, { headers })).status).toBe(200);
     expect(calls.map(call => call.args[1])).toEqual([{ limit: 10, status: 'active' }]);
     expect((await send(origin, { ...fixture('projects-directory'), http: { ...fixture('projects-directory').http, body: { project_id: fixture('projects-directory').http.body!.project_id } } })).status).toBe(200);
-    await failure(await send(origin, fixture('projects-directory'), { body: JSON.stringify({ ...fixture('projects-directory').http.body, query: '' }) }));
+    await failure(await send(origin, fixture('projects-directory'), { body: JSON.stringify({ ...fixture('projects-directory').http.body, query: '' }) }), 400, 'invalid_request', 'Project directory search query is invalid');
     expect(calls.map(call => call.operation)).toEqual(['listProjectsV2', 'searchDirectory']);
   });
 
