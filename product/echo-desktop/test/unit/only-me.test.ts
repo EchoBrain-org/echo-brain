@@ -32,6 +32,16 @@ const override = (method: string, reply: (params: Record<string, unknown>) => un
 };
 
 describe('Only me reads and changes', () => {
+  it('reads a long note page by page, each page added to the last', async () => {
+    override('open.ref', params => ok({ kind: 'note', content: { context_id: note.ref.id, title: note.title, text: params.cursor ? ' second page' : 'first page',
+      received_at: note.added_at, audience: 'only-me', project_ids: [] }, next_cursor: params.cursor ? null : 'p2' }));
+    const store = await startStore(); await store.openOnlyMe(); await store.openListItem(note); await flush();
+    expect(store.getState().reader).toMatchObject({ content: { text: 'first page' }, importedNext: 'p2' });
+    store.moreImportedMeeting(); await flush();
+    expect(calls('open.ref')[1]).toMatchObject({ ref: note.ref, cursor: 'p2' });
+    expect(store.getState().reader).toMatchObject({ content: { text: 'first page second page' }, importedNext: null });
+  });
+
   it('renames a project in every loaded row without dropping the rows More read', async () => {
     const rows = Array.from({ length: 11 }, (_, index) => row(`Note ${index}`, { added_at: new Date(Date.parse('2026-10-20T10:00:00Z') - index * 3600000).toISOString(), projects: index === 2 || index === 10 ? ['Apollo'] : [] }));
     override('projects.change', () => {

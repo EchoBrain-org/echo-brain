@@ -1,7 +1,7 @@
 import {
   validatePersonEvidenceOpenRequestV1,
   validatePersonPageCitationV1,
-  validatePersonQueryText,
+  validatePersonQuestionText,
   validatePersonTicketCitationV1,
 } from "@echo-brain/organization-api";
 import { AuthorityOperationError } from "../domain/errors.js";
@@ -28,7 +28,7 @@ export interface AgenticTriggerDefinitionV1<Event> {
    * exist only once the loop has read them; the loop fills them in one pass.
    */
   brief(event: Event, scope: AgenticTriggerScopeV1): AgenticBriefV1;
-  /** The budget profile its brief runs on; `brief` always carries this profile's limits. */
+  /** Who waits on its runs (live or background); `brief` always carries this profile. It sets no limit. */
   readonly budget: keyof typeof AGENTIC_RESEARCH_BUDGETS_V1;
   /**
    * Turns the bundle and the trigger's event into the trigger's result. Ask's
@@ -80,8 +80,8 @@ const ask = define<AskEventV1>({
   name: "ask", budget: "live", scope: "requested",
   parseEvent(input: unknown): AskEventV1 {
     const event = fields(input, ["question"], "Ask");
-    // The product's question limits, so the evaluation sees what people see.
-    try { return Object.freeze({ question: validatePersonQueryText(event.question) }); }
+    // The product's question rule, so the evaluation sees what people see.
+    try { return Object.freeze({ question: validatePersonQuestionText(event.question) }); }
     catch (error) { return invalid(error instanceof Error ? error.message : "Ask question is invalid"); }
   },
   brief: (event: AskEventV1) => ({ goal: { kind: "question", question: event.question }, starting: [], options: {} }),

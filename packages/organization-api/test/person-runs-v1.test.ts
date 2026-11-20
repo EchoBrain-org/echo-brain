@@ -144,10 +144,9 @@ describe('runs API list result', () => {
     expect(Object.isFrozen(list({ runs }))).toBe(true);
   });
 
-  it('accepts at most 100 runs', () => {
+  it('accepts any number of runs the response carries', () => {
     const many = (count: number) => ({ runs: Array.from({ length: count }, (_, at) => run({ run_id: `run_${String(at).padStart(6, '0')}` })) });
-    expect(list(many(100)).runs).toHaveLength(100);
-    refused(() => list(many(101)), 'one run too many');
+    expect(list(many(250)).runs).toHaveLength(250);
   });
 
   it.each([
@@ -261,12 +260,18 @@ describe('runs API open items', () => {
     expect(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'send', run_id: RUN, command_id: 'c1', items: [{ item_id: ITEM, include: false, owner_membership_id: MINA }] })).toThrow();
     expect(() => validatePersonRunsRequestV1({ schema_version: 1, operation: 'set_state', item_id: ITEM, state: 'unsent' })).toThrow();
   });
+  it('takes an open item\'s names, lines and details at any length', () => {
+    const long = (letter: string) => letter.repeat(5_000);
+    const item = openItem({ approver: { ...APPROVER, name: long('A') }, decision: { ...DECISION, title: long('T'), first_line: long('f') },
+      current: { ...CURRENT, says_now: long('s'), assignee: long('M'), status: long('S'), due_at: long('d') } });
+    expect(validatePersonRunsResultV1('item', { item }).item).toEqual(item);
+  });
   it('validates an open item with and without the parts a viewer may not see', () => {
     const seen = openItem({ decision: DECISION, current: CURRENT });
     expect(validatePersonRunsResultV1('item', { item: seen }).item.current?.says_now).toBe(CURRENT.says_now);
     expect(validatePersonRunsResultV1('item', { item: openItem({}) }).item).not.toHaveProperty('current');
     expect(() => validatePersonRunsResultV1('item', { item: { ...seen, pointer: {} } })).toThrow();      // no extra key ever
-    expect(() => validatePersonRunsResultV1('home', { send: [], items: Array.from({ length: 21 }, () => seen), waiting: 0, drafts: [] })).toThrow();
+    expect(validatePersonRunsResultV1('home', { send: [], items: Array.from({ length: 21 }, () => seen), waiting: 0, drafts: [] }).items).toHaveLength(21);
   });
   it('accepts read counts on items only and never with a cursor, and requires reach', () => {
     // Counts and stages only: a line that shows how many items there are opens none of them.
@@ -359,7 +364,8 @@ describe('runs API open-item requests', () => {
       { schema_version: 1, operation: 'item', item_id: `itm_${'Z-9'.repeat(20)}` },
       itemsRequest({ scope: 'mine', cursor: 'c'.repeat(256) }),
       send({ command_id: `${'A_b-9'.repeat(25)}xyz` }),
-      send({ items: numbered(40, at => at % 2 === 0) }),
+      // A send takes every item of a run, however many.
+      send({ items: numbered(400, at => at % 2 === 0) }),
     ]) expect(() => validatePersonRunsRequestV1(request), JSON.stringify(request).slice(0, 80)).not.toThrow();
   });
 
@@ -382,7 +388,6 @@ describe('runs API open-item requests', () => {
     ['an item id that is too long', { schema_version: 1, operation: 'item', item_id: `itm_${'a'.repeat(61)}` }],
     ['an item id with a forbidden character', { schema_version: 1, operation: 'item', item_id: 'itm_abcd_efgh' }],
     ['a send without items', send({ items: [] })],
-    ['a send of 41 items', send({ items: numbered(41, () => true) })],
     ['a send that repeats an item', send({ items: [{ item_id: ITEM, include: true }, { item_id: ITEM, include: false }] })],
     ['a send with an include that is not a boolean', send({ items: [{ item_id: ITEM, include: 'yes' }] })],
     ['a send item without include', send({ items: [{ item_id: ITEM }] })],
@@ -451,7 +456,9 @@ describe('runs API open-item results', () => {
     const kinds = ['action', 'ticket', 'page', 'record', 'document'];
     expect(validatePersonRunsResultV1('home', { send: [sendRow({ kinds, items: 40, owners: Array.from({ length: 40 }, (_, at) => `Owner ${at}`) })], items: [], waiting: 0, drafts: [] })
       .send[0]!.kinds).toEqual(kinds);
-    refused(() => validatePersonRunsResultV1('home', { send: [sendRow({ owners: Array.from({ length: 41 }, (_, at) => `Owner ${at}`) })], items: [], waiting: 0, drafts: [] }), 'one owner too many');
+    // A send row names every owner it has.
+    expect(validatePersonRunsResultV1('home', { send: [sendRow({ items: 120, owners: Array.from({ length: 120 }, (_, at) => `Owner ${at}`) })], items: [], waiting: 0, drafts: [] })
+      .send[0]!.owners).toHaveLength(120);
   });
 
   it('carries a follow-up from a chat: no run, no decision, a due date, and its creator may edit and send it', () => {
@@ -480,7 +487,7 @@ describe('runs API open-item results', () => {
     ] as const) refused(() => validatePersonRunsResultV1('item', value), name);
     refused(() => validatePersonRunsResultV1('home', home({ drafts: [seen] })), 'a run\'s item among the drafts');
     refused(() => validatePersonRunsResultV1('home', home({ drafts: [draft({ state: 'open', sent_at: LATER, state_set_at: LATER, state_set_by: APPROVER, send_included: true, can: { set_state: true, assign: true, edit: true, send: false } })] })), 'a sent follow-up among the drafts');
-    refused(() => validatePersonRunsResultV1('home', home({ drafts: Array.from({ length: 21 }, () => draft()) })), 'one draft too many');
+    expect(validatePersonRunsResultV1('home', home({ drafts: Array.from({ length: 21 }, () => draft()) })).drafts).toHaveLength(21);
     refused(() => validatePersonRunsResultV1('home', { send: [], items: [], waiting: 0 }), 'a home without its drafts');
   });
 
@@ -512,10 +519,13 @@ describe('runs API open-item results', () => {
     expect(validatePersonRunsRequestV1(edit({ due_on: '2026-11-20' }))).toEqual(edit({ due_on: '2026-11-20' }));
     expect(validatePersonRunsRequestV1(edit({ due_on: null }))).toEqual(edit({ due_on: null }));
     expect(validatePersonRunsRequestV1(edit({ expected: 'Call the vendor', due_on: null }))).toEqual(edit({ expected: 'Call the vendor', due_on: null }));
+    // A line has no length of its own: the request body that carries it is its bound.
+    const long = 'e'.repeat(5_000);
+    expect(validatePersonRunsRequestV1(edit({ expected: long }))).toEqual(edit({ expected: long }));
+    expect(validatePersonRunsResultV1('edit', { expected: long, due_on: null })).toEqual({ expected: long, due_on: null });
     for (const [name, value] of [
       ['an edit that changes nothing', edit({})],
       ['an edit with empty text', edit({ expected: '' })],
-      ['an edit with text over 120 characters', edit({ expected: 'e'.repeat(121) })],
       ['an edit with two lines', edit({ expected: 'Call\nthe vendor' })],
       ['an edit with a day that does not exist', edit({ due_on: '2026-02-30' })],
       ['an edit that names an owner', edit({ expected: 'Call the vendor', owner_membership_id: MINA })],
@@ -524,20 +534,20 @@ describe('runs API open-item results', () => {
     refused(() => validatePersonRunsResultV1('edit', { expected: 'Call the vendor' }), 'an edit result without its due date');
   });
 
-  it('accepts a home and an items page up to their bounds', () => {
+  it('accepts a home and an items page of any length the response carries', () => {
     const fullHome = home({ send: Array.from({ length: 20 }, () => sendRow()), items: Array.from({ length: 20 }, () => seen) });
     expect(validatePersonRunsResultV1('home', fullHome)).toEqual(fullHome);
     const empty = { send: [], items: [], waiting: 0, drafts: [] };
     expect(validatePersonRunsResultV1('home', empty)).toEqual(empty);
-    refused(() => validatePersonRunsResultV1('home', home({ send: Array.from({ length: 21 }, () => sendRow()) })), 'one send row too many');
+    expect(validatePersonRunsResultV1('home', home({ send: Array.from({ length: 21 }, () => sendRow()) })).send).toHaveLength(21);
     const fullPage = page({
       items: Array.from({ length: 50 }, () => seen), next_cursor: 'MjAyNi0xMC0wN3xpdG1fYWJjZA',
       summary: summary({ by_decision: Array.from({ length: 100 }, () => decisionCount) }), stages: Array.from({ length: 100 }, () => stage()),
     });
     expect(validatePersonRunsResultV1('items', fullPage)).toEqual(fullPage);
-    refused(() => validatePersonRunsResultV1('items', page({ items: Array.from({ length: 51 }, () => seen) })), 'one item too many');
-    refused(() => validatePersonRunsResultV1('items', page({ summary: summary({ by_decision: Array.from({ length: 101 }, () => decisionCount) }) })), 'one decision count too many');
-    refused(() => validatePersonRunsResultV1('items', page({ stages: Array.from({ length: 101 }, () => stage()) })), 'one stage too many');
+    const longer = page({ items: Array.from({ length: 51 }, () => seen),
+      summary: summary({ by_decision: Array.from({ length: 101 }, () => decisionCount) }), stages: Array.from({ length: 101 }, () => stage()) });
+    expect(validatePersonRunsResultV1('items', longer)).toEqual(longer);
   });
 
   it('accepts the send, set_state and assign results', () => {
@@ -554,11 +564,9 @@ describe('runs API open-item results', () => {
     ['a run id that is an item id', withItem({ run_id: ITEM })],
     ['an unknown kind', withItem({ kind: 'issue' })],
     ['a confirms relation', withItem({ relation: 'confirms' })],
-    ['an expected phrase over 120 characters', withItem({ expected: 'e'.repeat(121) })],
     ['an expected phrase on two lines', withItem({ expected: 'launch\nnext week' })],
     ['an expected phrase with a trailing space', withItem({ expected: 'launch next week ' })],
     ['an empty expected phrase', withItem({ expected: '' })],
-    ['an approver name over 200 characters', withItem({ approver: { ...APPROVER, name: 'A'.repeat(201) } })],
     ['an empty owner name', withItem({ owner: { ...OWNER, name: '' } })],
     ['an owner name with a line separator', withItem({ owner: { ...OWNER, name: 'Mina Patel' } })],
     ['an approver membership id that is not canonical', withItem({ approver: { ...APPROVER, membership_id: 'mem_ari' } })],
@@ -592,19 +600,14 @@ describe('runs API open-item results', () => {
     ['permissions without the edit and send flags', withItem({ can: { set_state: true, assign: true } })],
     ['a permission that is not a boolean', withItem({ can: { set_state: 'yes', assign: true, edit: false, send: false } })],
     ['a decision with a bad record id', withItem({ decision: { ...DECISION, record_sha256: 'sha256:abc' } })],
-    ['a decision title over 200 characters', withItem({ decision: { ...DECISION, title: 'T'.repeat(201) } })],
-    ['a decision first line over 300 characters', withItem({ decision: { ...DECISION, first_line: 'f'.repeat(301) } })],
     ['a decision with an empty approval id', withItem({ decision: { ...DECISION, approval_id: '' } })],
     ['a decision with a project id that is not canonical', withItem({ decision: { ...DECISION, project_ids: ['prj_pilot'] } })],
     ['a decision that carries its card', withItem({ decision: { ...DECISION, card } })],
     ['a decision that is null', withItem({ decision: null })],
     ['a current part with an inconsistent citation', withItem({ current: { ...CURRENT, citation: { ...echo12, kind: 'page' } } })],
-    ['a says_now over 300 characters', withItem({ current: { ...CURRENT, says_now: 's'.repeat(301) } })],
     ['a current part that keeps the item text', withItem({ current: { ...CURRENT, text: 'ECHO-12 full description' } })],
     ['a current part without says_now', withItem({ current: without(CURRENT, 'says_now') })],
-    ['an assignee over 200 characters', withItem({ current: { ...CURRENT, assignee: 'M'.repeat(201) } })],
     ['a status on two lines', withItem({ current: { ...CURRENT, status: 'In\nProgress' } })],
-    ['a due date over 128 characters', withItem({ current: { ...CURRENT, due_at: 'd'.repeat(129) } })],
     ['a current part that is null', withItem({ current: null })],
   ])('refuses an item with %s', (_label, value) => {
     refused(() => validatePersonRunsResultV1('item', value), _label);

@@ -3,7 +3,7 @@
  * trial is measured from the follow-ups the kernel checked and the release saved, beside the released answer's ids.
  */
 import { readFileSync } from "node:fs";
-import { validatePersonQueryText } from "@echo-brain/organization-api";
+import { validatePersonQuestionText } from "@echo-brain/organization-api";
 import { ITEM_KINDS, nonEmptyStrings, says } from "../shared/grading.mjs";
 
 export const CASES_FILE = new URL("./follow-ups-cases.json", import.meta.url);
@@ -24,7 +24,7 @@ export function caseProblems(document) {
   if (JSON.stringify(ids) !== JSON.stringify(CASE_IDS)) problems.push(`the cases are ${ids.join(", ")}, not ${CASE_IDS.join(", ")}`);
   for (const entry of cases) {
     const where = `case ${entry?.id}`;
-    try { validatePersonQueryText(entry.question); } catch { problems.push(`${where}: the question is not a valid Ask question`); continue; }
+    try { validatePersonQuestionText(entry.question); } catch { problems.push(`${where}: the question is not a valid Ask question`); continue; }
     const items = Array.isArray(entry.items) ? entry.items : [];
     if (items.length === 0 || !items.every((item) => ITEM_KINDS.has(item?.kind))) problems.push(`${where}: items must be follow-ups, decisions or tickets`);
     if (typeof entry.research?.query !== "string" || typeof entry.research?.need !== "string") problems.push(`${where}: research needs a query and a need`);

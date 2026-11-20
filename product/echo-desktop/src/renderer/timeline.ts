@@ -6,14 +6,11 @@
 import type {
   Answer, AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskScope, CheckCitation, TimelineTurn,
 } from '../shared/protocol.js';
-import { checkOf, MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
+import { checkOf, MAX_REQUEST_BYTES } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerSentences, sourceGroups, type Sentence, type Shows, type SourceGroup } from './answer.js';
 
-/** A follow-up continues the latest turn while it was asked this recently, and Ask is open. */
-const FOLLOW_UP_MS = 60 * 60_000;
-/** Opening Ask checks the sources of this many of the newest turns, and a check is good for five minutes. */
-export const CHECK_TURNS = 10;
+/** A check is good for five minutes: opening Ask then checks every turn of its place's thread again. */
 export const CHECK_FRESH_MS = 5 * 60_000;
 
 /** What a check said of one turn's sources, by their place among its answer's sources. */
@@ -122,7 +119,7 @@ export function checkPlan(turns: readonly TimelineTurn[]): CheckPlan {
       const item: AskCheckItem = { asked_at: turn.asked_at, citation };
       const size = new TextEncoder().encode(JSON.stringify(item)).length + 1;
       const last = requests.at(-1);
-      if (last === undefined || last.items.length === MAX_CHECK_ITEMS || bytes + size > MAX_CHECK_REQUEST_BYTES - 1024) {
+      if (last === undefined || bytes + size > MAX_REQUEST_BYTES - 1024) {
         requests.push({ items: [], places: [] });
         bytes = 96;
       }
@@ -208,24 +205,11 @@ export function behindEarlierLine(turns: readonly TimelineTurn[], full: readonly
 
 /**
  * The turn a follow-up continues: the turn opened (from its line, or chosen from the bar's suggestions, the latest included),
- * or else the latest when it was asked in the last hour.
+ * or else the latest, however long ago it was asked. A question typed with Ask open is a follow-up because the person asks it there.
  */
-export function followedTurn(turns: readonly TimelineTurn[], opened: string | null, now: number): TimelineTurn | null {
+export function followedTurn(turns: readonly TimelineTurn[], opened: string | null): TimelineTurn | null {
   const open = opened === null ? undefined : turns.find(turn => turn.id === opened);
-  if (open) return open;
-  const latest = turns.at(-1);
-  return latest && now - Date.parse(latest.asked_at) <= FOLLOW_UP_MS ? latest : null;
-}
-
-/** `text` in at most `max` characters, as both a page (UTF-16) and the API (code points) count them: cut with "…" when longer. */
-function within(text: string, max: number): string {
-  if (text.length <= max) return text;
-  let cut = '';
-  for (const character of text) {
-    if (cut.length + character.length > max - 1) break;
-    cut += character;
-  }
-  return `${cut.trimEnd()}…`;
+  return open ?? turns.at(-1) ?? null;
 }
 
 /** An Ask request's body as the client sends it (`PersonAnswerRequestV3`), for its bytes. */
@@ -234,32 +218,38 @@ function bodyBytes(question: string, scope: AskScope, previous: AskPrevious): nu
   return new TextEncoder().encode(JSON.stringify(body)).length;
 }
 
-/**
- * What a turn's own answer says of its sources while it is new: it read every
- * one a check asks about just now, so each is as it was. For a turn asked in
- * the last five minutes, as good as a check.
- */
-export function answeredNow(turn: TimelineTurn): TurnChecks {
-  return Object.fromEntries(turn.answer.sources.flatMap((source, at) => (checkOf(source) === undefined ? [] : [[at, 'same' as const]])));
+/** Whether `known` finds the turn's source at `at` readable: one there, of a kind a check reads, found `same`. */
+function sourceReadable(turn: TimelineTurn, known: TurnChecks | null | undefined, at: number): boolean {
+  const source = turn.answer.sources[at];
+  return source !== undefined && checkOf(source) !== undefined && known?.[at] === 'same';
+}
+
+/** Whether `known` finds the turn with at least one source, every one readable. */
+export function turnReadable(turn: TimelineTurn, known: TurnChecks | undefined): boolean {
+  return turn.answer.sources.length > 0 && turn.answer.sources.every((_, at) => sourceReadable(turn, known, at));
 }
 
 /**
  * The earlier turn an Ask carries (C3): its full question and when it was
  * asked; its sentences you can still read, in the order the answer says
- * them, at most eight, each at most 400 characters and four citations; and
- * the citations they cite, at most twelve, as the answer's response carried
- * them, renumbered in the order first cited. A sentence goes only when what
- * is known now (`known`: what a check said in the last five minutes, or a new
- * turn's own answer) has each source it cites that a check asks about
- * readable; with nothing known (null), none goes, only
- * the question (C5). Sentences go from the end until the request, asking
- * `question` in `scope`, fits the Ask body's 16 KiB.
+ * them, each whole, with the citations they cite, as the answer's response
+ * carried them, renumbered in the order first cited. A sentence goes only
+ * when `known` (what a check found) has every source it cites readable
+ * (sourceReadable); with nothing known (null), none goes, only the question
+ * (C5): `previous` is read by the Authority's model, and a source this person
+ * may no longer read must not reach it. `earlier` is the earlier question it
+ * names: the turn's own unless the caller says which (questionOf). A turn an
+ * older desktop saved (no `citations_complete`) carries its question only: a
+ * sentence of it may rest on a row it no longer cites. Sentences go from the
+ * end until the request, asking `question` in `scope`, fits the Ask body's
+ * bound.
  */
-export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope): AskPrevious {
+export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope,
+  earlier: string = askText(turn.question)): AskPrevious {
   const sources = turn.answer.sources;
-  const read = (at: number) => sources[at] === undefined || checkOf(sources[at]) === undefined || known?.[at] === 'same';
-  const readable = known === null ? [] : [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
-    .filter((statement): statement is AnswerStatement => statement !== undefined && statement.text.trim() !== '' && statement.citation_indexes.every(read));
+  const chosen = known === null || turn.citations_complete !== true ? [] : [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
+    .filter((statement): statement is AnswerStatement => statement !== undefined && statement.text.trim() !== ''
+      && statement.citation_indexes.every(at => sourceReadable(turn, known, at)));
   const build = (chosen: readonly AnswerStatement[]): AskPrevious => {
     // Each citation once, by what it names (an answer may cite the same item at two places), and each sentence citing it once.
     const keys: string[] = [];
@@ -272,23 +262,16 @@ export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], 
         const key = JSON.stringify(cited);
         if (!keys.includes(key)) { keys.push(key); citations.push(cited); }
         const place = keys.indexOf(key);
-        if (!places.includes(place) && places.length < PREVIOUS_LIMITS.statement_citations) places.push(place);
+        if (!places.includes(place)) places.push(place);
       }
-      // Trimmed and NFC, as C3 takes a sentence; cut with "…" past 400 characters.
-      return { text: within(statement.text.trim(), PREVIOUS_LIMITS.statement_chars).normalize('NFC'), citation_indexes: places };
+      // Trimmed and NFC, as C3 takes a sentence.
+      return { text: statement.text.trim().normalize('NFC'), citation_indexes: places };
     });
-    return { purpose, question: askText(turn.question), asked_at: turn.asked_at, statements, citations };
+    return { purpose, question: earlier, asked_at: turn.asked_at, statements, citations };
   };
-  // At most eight sentences, and only as many as keep their citations within twelve.
-  const chosen: AnswerStatement[] = [];
-  for (const statement of readable) {
-    if (chosen.length === PREVIOUS_LIMITS.statements) break;
-    if (build([...chosen, statement]).citations.length > PREVIOUS_LIMITS.citations) break;
-    chosen.push(statement);
-  }
   let previous = build(chosen);
   // A little short of the bound, for how the client writes the same body.
-  while (chosen.length > 0 && bodyBytes(question, scope, previous) > MAX_ASK_BODY_BYTES - 256) {
+  while (chosen.length > 0 && bodyBytes(question, scope, previous) > MAX_REQUEST_BYTES - 256) {
     chosen.pop();
     previous = build(chosen);
   }

@@ -177,6 +177,19 @@ describe('New project before and after Create', () => {
     expect(rpc.mock.calls.filter(([method]) => method === 'projects.create')).toHaveLength(1);
   });
 
+  it('a project name and a people search have no length of their own', async () => {
+    const store = await startWithPeople();
+    store.openNewProject(); await flush();
+    const long = 'Apollo '.repeat(200).trim();
+    store.setNewProjectName(long);
+    const shown = await newProjectView(store);
+    expect(byTestId(shown, 'new-project-name')[0]!.props.maxLength).toBeUndefined();
+    expect(byTestId(shown, 'people-find')[0]!.props.maxLength).toBeUndefined();
+    (byTestId(shown, 'new-project-name')[0]!.props.onKeyDown as (event: unknown) => void)({ key: 'Enter', preventDefault: vi.fn() });
+    await flush();
+    expect(rpc.mock.calls.filter(([method]) => method === 'projects.create').map(([, params]) => (params as { name: string }).name)).toEqual([long]);
+  });
+
   it('an unknown member add holds back the rest, asks before closing, and retries the same request', async () => {
     const store = await startWithPeople(); await store.chooseFiles();
     held.hold('projects.change')(fail('unavailable', { retryable: true, mutation_outcome: 'unknown' }));
@@ -214,5 +227,18 @@ describe('New project before and after Create', () => {
     store.closeSheet(); expect(store.getState().sheet).toMatchObject({ confirmClose: true }); store.keepNewProject();
     await store.checkFile(sheet.files[0]!.id); await flush();
     expect(uploads()).toHaveLength(4); expect(store.getState().sheet).toBeNull(); expect(store.getState().toast).toBe('Fresh is ready · 4 files');
+  });
+
+  it('takes a whole folder of files, each saved on its own: no count of its own', async () => {
+    const store = await startWithFiles();
+    dropFile.mockImplementation(async (file: File) => ok({ handle: `h-${file.name}`, name: file.name }));
+    await store.dropFiles(Array.from({ length: 30 }, (_, at) => new File(['a'], `Spec ${at}.md`)));
+    await store.chooseFiles();
+    const sheet = store.getState().sheet;
+    if (sheet?.kind !== 'new-project') throw new Error('Missing New project sheet');
+    expect(sheet.files).toHaveLength(36);
+    expect(sheet.notice).toBeUndefined();
+    const shown = await newProjectView(store);
+    expect(byTestId(shown, 'new-project-add-files')[0]!.props.disabled).toBeFalsy();
   });
 });

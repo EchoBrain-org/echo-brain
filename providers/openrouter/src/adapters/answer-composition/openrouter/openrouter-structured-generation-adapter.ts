@@ -1,5 +1,7 @@
 import { observeCoreModelCorrectionV1, observeCoreModelMetadataV1, annotateCoreRuntimeV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { callOpenRouterV1, OpenRouterCallFailureV1, type OpenRouterReplyV1 } from "../../../openrouter-stream-v1.js";
 import { claudeGrammarHolds, claudeStructuredSchema } from "./claude-structured-schema.js";
+import { UNBILLED_REFUSAL_STATUSES_V1 } from "../../../unbilled-refusal-v1.js";
 import {
   type StructuredGenerationFailureClassV1,
   type StructuredGenerationFailureDiagnosticV1,
@@ -10,7 +12,6 @@ import {
   type StructuredGenerationUsageV1,
 } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 
-const OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS = 120_000;
 
 type OpenRouterFailureClass = StructuredGenerationFailureClassV1;
 
@@ -41,14 +42,12 @@ interface OpenRouterObservedResult extends StructuredGenerationObservedResultV1 
   readonly generation_id: string | null;
 }
 
-/**
+/*
  * Claude Sonnet 5.5 requires reasoning and does not advertise temperature
  * support (ADR-0037). Medium effort shares the completion budget with the
- * visible JSON. Reserve 4,096 extra tokens even for small background calls, at
- * most 8,192 combined. This is headroom, not a separate provider-enforced
- * reasoning-token budget.
+ * visible JSON: the caller's allowance is the model's own maximum output, so
+ * reasoning and reply share all of it.
  */
-const REASONING_HEADROOM_TOKENS = 4_096;
 
 /**
  * A schema too large for Claude's strict grammar travels the way the Claude Agent SDK sends every output schema, and
@@ -113,8 +112,9 @@ function model(value: string): void {
   }
 }
 
-function boundedInteger(value: number, label: string, maximum: number): void {
-  if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+/** A whole positive number: the caller's profile, not this adapter, states the model's own maximums. */
+function positiveInteger(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value < 1) {
     throw new OpenRouterStructuredGenerationError(`${label} is invalid`);
   }
 }
@@ -247,8 +247,9 @@ export function parseModelJson(content: string): unknown {
   }
 }
 
-function isTimeoutFailure(value: unknown): boolean {
-  return value instanceof Error && value.name === "TimeoutError";
+/** Known unbilled: a refusal the provider documents as made before generation. Any other 5xx can follow a generation. */
+function unbilledRefusal(response: Response | undefined): boolean {
+  return response !== undefined && UNBILLED_REFUSAL_STATUSES_V1.has(response.status);
 }
 
 interface OpenRouterFailureInput {
@@ -258,6 +259,8 @@ interface OpenRouterFailureInput {
   readonly finish_reason?: OpenRouterFinishReason | null;
   readonly usage?: StructuredGenerationUsageV1;
   readonly provider_latency_ms?: number | null;
+  /** The request failed before OpenRouter could accept it. */
+  readonly unbilled?: true;
 }
 
 function failureDiagnostic(
@@ -269,6 +272,8 @@ function failureDiagnostic(
     adapter_id: "openrouter",
     finish_reason: input.finish_reason ?? null,
     adapter_request_id: responseGenerationId(input.response, input.root ?? null),
+    // Where the model gate reads it: only a failure known to cost nothing earns its one retry.
+    ...(input.unbilled === true || unbilledRefusal(input.response) ? { unbilled: true as const } : {}),
   });
 }
 
@@ -321,12 +326,8 @@ export function createOpenRouterStructuredGenerationAdapter(
   ): Promise<OpenRouterObservedResult> {
     observeCoreModelMetadataV1({ provider: "openrouter", model: input.model });
     model(input.model);
-    boundedInteger(
-      input.timeout_ms,
-      "OpenRouter timeout",
-      OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS,
-    );
-    boundedInteger(input.max_output_tokens, "OpenRouter output limit", 4_096);
+    positiveInteger(input.timeout_ms, "OpenRouter timeout");
+    positiveInteger(input.max_output_tokens, "OpenRouter output limit");
     if (!nonEmpty(input.system_prompt) || !nonEmpty(input.user_prompt)) {
       throw new OpenRouterStructuredGenerationError(
         "OpenRouter request is invalid",
@@ -346,9 +347,6 @@ export function createOpenRouterStructuredGenerationAdapter(
       );
     }
     const strict = claudeGrammarHolds(input.schema);
-    const timeoutSignal = AbortSignal.timeout(input.timeout_ms);
-    const signals: AbortSignal[] = [timeoutSignal];
-    if (input.signal !== undefined) signals.push(input.signal);
     const request: RequestInit = {
       method: "POST",
       headers: {
@@ -357,15 +355,15 @@ export function createOpenRouterStructuredGenerationAdapter(
         // Documented routing metadata names the endpoint that served the call.
         "x-openrouter-metadata": "enabled",
       },
-      signal: AbortSignal.any(signals),
       body: JSON.stringify({
         model: input.model,
         messages: [
           { role: "system", content: input.system_prompt },
           { role: "user", content: input.user_prompt },
         ],
-        stream: false,
-        max_tokens: input.max_output_tokens + REASONING_HEADROOM_TOKENS,
+        // Streamed, so a long reply shows it is alive as it arrives, and a large max_tokens never meets an HTTP timeout.
+        stream: true,
+        max_tokens: input.max_output_tokens,
         reasoning: { effort: "medium" },
         ...(strict ? {
           response_format: {
@@ -392,44 +390,33 @@ export function createOpenRouterStructuredGenerationAdapter(
     annotateCoreRuntimeV1({ counts: { input_bytes: Buffer.byteLength(request.body as string), input_tokens: null, output_tokens: null, total_tokens: null } });
     const providerStartedAt = safeNow(nowMs);
     let response: Response;
+    let reply: OpenRouterReplyV1;
     try {
-      response = await fetchImpl(OPENROUTER_CHAT_COMPLETIONS_URL, request);
+      // Streamed: the call stalls only when the model sends nothing for `timeout_ms`, so a reply that keeps arriving
+      // runs as long as it needs. Model output is reported to the caller, whose gate times silence too.
+      ({ response, reply } = await callOpenRouterV1({ fetch: fetchImpl, url: OPENROUTER_CHAT_COMPLETIONS_URL, init: request,
+        ...(input.signal === undefined ? {} : { signal: input.signal }), silence_ms: input.timeout_ms,
+        max_output_tokens: input.max_output_tokens, ...(input.on_progress === undefined ? {} : { on_progress: input.on_progress }) }));
     } catch (error) {
-      fail("OpenRouter request failed", {
-        // The call's own timeout can surface as an AbortError through
-        // AbortSignal.any; the timeout signal itself is the reliable witness.
-        failure_class: isTimeoutFailure(error) || timeoutSignal.aborted
-          ? "adapter_timeout"
-          : "adapter_transport",
+      if (!(error instanceof OpenRouterCallFailureV1)) throw error;
+      // A reply past its capacity or with an invalid event is an invalid reply; a redirect, a cut stream or a lost
+      // connection is a transport failure whose billing is unknown unless the request was never sent.
+      const invalid = error.kind === "too_large" || error.kind === "not_json";
+      const failureClass: OpenRouterFailureClass = error.kind === "timeout" ? "adapter_timeout"
+        : error.kind !== "redirect" && error.response !== undefined && !error.response.ok ? "adapter_http"
+          : invalid ? "adapter_response" : "adapter_transport";
+      fail(failureClass === "adapter_response" ? "OpenRouter response is invalid" : "OpenRouter request failed", {
+        failure_class: failureClass,
+        ...(error.response === undefined ? {} : { response: error.response }),
         provider_latency_ms: elapsed(providerStartedAt, nowMs),
+        ...(error.unsent ? { unbilled: true as const } : {}),
       });
     }
-    let providerLatency: number | null = null;
-    let payloadText: string;
-    try {
-      annotateCoreRuntimeV1({ counts: { http_status: response.status } });
-      payloadText = await response.text();
-      annotateCoreRuntimeV1({ counts: { output_bytes: Buffer.byteLength(payloadText) } });
-      providerLatency = elapsed(providerStartedAt, nowMs);
-    } catch (error) {
-      fail(
-        response.ok
-          ? "OpenRouter response is invalid"
-          : "OpenRouter request failed",
-        {
-          failure_class: isTimeoutFailure(error) || timeoutSignal.aborted
-            ? "adapter_timeout"
-            : response.ok
-              ? "adapter_transport"
-              : "adapter_http",
-          response,
-          provider_latency_ms: elapsed(providerStartedAt, nowMs),
-        },
-      );
-    }
+    annotateCoreRuntimeV1({ counts: { output_bytes: reply.bytes } });
+    const providerLatency = elapsed(providerStartedAt, nowMs);
     let payload: unknown;
     try {
-      payload = JSON.parse(payloadText);
+      payload = reply.streamed ? reply.payload : JSON.parse(reply.text);
     } catch {
       fail(
         response.ok
@@ -483,6 +470,17 @@ export function createOpenRouterStructuredGenerationAdapter(
         response,
         root,
         finish_reason: finishReason(first.finish_reason),
+        usage: generationUsage,
+        provider_latency_ms: providerLatency,
+      });
+    }
+    // A stream that closed before the provider's terminal outcome (its finish reason) was cut off in transit: whatever
+    // content arrived is not a finished reply, however complete it looks.
+    if (reply.streamed && (first.finish_reason === undefined || first.finish_reason === null)) {
+      fail("OpenRouter request failed", {
+        failure_class: "adapter_transport",
+        response,
+        root,
         usage: generationUsage,
         provider_latency_ms: providerLatency,
       });

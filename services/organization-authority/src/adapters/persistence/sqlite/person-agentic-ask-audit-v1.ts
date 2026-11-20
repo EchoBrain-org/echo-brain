@@ -3,9 +3,9 @@ import type { WorkspaceSourceDescriptorV1, WorkspaceSourceIdV1 } from '@echo-bra
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 import { appendAuditRowV1 } from "./audit-row-v1.js";
-import { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticAskAuditEntryV1, type AgenticAskAuditPortV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
+import type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { AGENTIC_TRIGGER_NAMES_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
-import { PERSON_ANSWER_OUTCOMES_V8, PERSON_ASK_PROGRESS_NAMED_MAX_V1, validatePersonWorkspaceCitationV1 } from "@echo-brain/organization-api";
+import { PERSON_ANSWER_OUTCOMES_V8, validatePersonWorkspaceCitationV1 } from "@echo-brain/organization-api";
 
 export interface AgenticAskAuditRequestContextV1 {
   readonly authority_id: string;
@@ -50,8 +50,6 @@ const OPERATIONS: readonly string[] = ['search', 'list', 'open'];
 const WORKSPACE_SOURCES: readonly string[] = ['projects', 'people', 'tools'];
 /** Each workspace item kind's id, as its citation names it. */
 const WORKSPACE_ID_FIELDS: Readonly<Record<string, string>> = Object.freeze({ project: 'project_id', person: 'membership_id', tool: 'tool_id' });
-/** A page of rows and the workspace items released beside them. */
-const WORKSPACE_RELEASE_ITEMS_MAX = 200;
 
 /** A workspace item named only by the id its citation would carry, and a digest of what was released. */
 function workspaceItem(value: unknown): boolean {
@@ -83,7 +81,7 @@ export class SqlitePersonAgenticAskAuditV1 {
     return Object.freeze<PersonLiveEvidenceAuditV1<C>>({ record: async (release) => {
       if (release.schema_version !== 1 || !['search', 'open', 'list'].includes(release.operation) ||
           release.binding.organization_id !== bound.organization_id || release.binding.principal_id !== bound.principal_id ||
-          release.binding.membership_id !== bound.membership_id || release.citations.length > 50 || release.coordinates.length !== release.citations.length || release.value_digests.length !== release.citations.length || !release.value_digests.every(digest => /^sha256:[a-f0-9]{64}$/.test(digest))) throw new Error('Live release audit binding is invalid');
+          release.binding.membership_id !== bound.membership_id || release.coordinates.length !== release.citations.length || release.value_digests.length !== release.citations.length || !release.value_digests.every(digest => /^sha256:[a-f0-9]{64}$/.test(digest))) throw new Error('Live release audit binding is invalid');
       // Copy an explicit allowlist. Never serialize adapter extras, handles or evidence bodies.
       const binding = release.binding;
       const read_binding = { organization_id: binding.organization_id, principal_id: binding.principal_id, membership_id: binding.membership_id,
@@ -103,7 +101,7 @@ export class SqlitePersonAgenticAskAuditV1 {
   /** A content-free witness of each follow-ups release (ADR-0040): the operation, and each follow-up's id and digest. */
   forFollowUpRequest(context: AgenticAskAuditRequestContextV1): PersonFollowUpReleaseAuditV1 {
     return Object.freeze<PersonFollowUpReleaseAuditV1>({ record: this.itemWitness(context, 'echo-person-follow-up', 'Follow-up release audit is invalid', release =>
-      release.items.length <= 50 && new Set(release.items.map(item => item.item_id)).size === release.items.length &&
+      new Set(release.items.map(item => item.item_id)).size === release.items.length &&
         release.items.every(item => typeof item.item_id === 'string' && FOLLOW_UP_ITEM_ID.test(item.item_id) && typeof item.released_fields_sha256 === 'string' && DIGEST.test(item.released_fields_sha256)),
     release => ({ selected: { operation: release.operation }, items: release.items.map(item => ({ item_id: item.item_id, released_fields_sha256: item.released_fields_sha256 })) })) });
   }
@@ -114,7 +112,7 @@ export class SqlitePersonAgenticAskAuditV1 {
    */
   forWorkspaceRequest(context: AgenticAskAuditRequestContextV1): PersonWorkspaceReleaseAuditV1 {
     return Object.freeze<PersonWorkspaceReleaseAuditV1>({ record: this.itemWitness(context, 'echo-person-workspace', 'Workspace release audit is invalid', release =>
-      WORKSPACE_SOURCES.includes(release.source) && release.items.length <= WORKSPACE_RELEASE_ITEMS_MAX && release.items.every(workspaceItem) &&
+      WORKSPACE_SOURCES.includes(release.source) && release.items.every(workspaceItem) &&
         new Set(release.items.map(item => `${item.kind}:${item.item_id}`)).size === release.items.length,
     release => ({ selected: { source: release.source, operation: release.operation },
       items: release.items.map(item => ({ kind: item.kind, item_id: item.item_id, linked: item.linked, released_fields_sha256: item.released_fields_sha256 })) })) });
@@ -161,27 +159,22 @@ export class SqlitePersonAgenticAskAuditV1 {
   }
 
   private appendBound(context: AgenticAskAuditRequestContextV1, entry: AgenticAskAuditEntryV1): Sha256Digest {
-    // Research-only triggers and background-budget Ask runs (research loop evaluation v1).
-    const background = entry.trigger !== undefined || entry.budget !== undefined;
-    const budget = AGENTIC_RESEARCH_BUDGETS_V1[background ? "background" : "live"];
-    // A question's answer arranged in blocks (ADR-0051) has no count of citations of its own: its 64 KiB holds far fewer than 1,000.
-    const limits = { rounds: budget.max_rounds, model_calls: budget.max_model_calls, receipts: budget.max_receipts, citations: background ? 360 : 1_000 };
-    // A native harness has no ECHO planner-step counter; it reports its outbound
-    // research calls, already bounded by the shared request's call budget.
+    // Research has no round, call or receipt budget, so the row carries counts, not limits: each is checked for its shape
+    // and for agreement with the others, and the row is as large as the run made it.
+    // A native harness has no ECHO planner-step counter; it reports its outbound research calls as rounds.
     const external = Array.isArray(entry.generations) && entry.generations.some(value => value.engine === 'external_research');
-    const roundLimit = external ? limits.model_calls : limits.rounds;
     if (
       entry.kind !== "echo-agentic-ask-audit-v1" ||
       (entry.trigger !== undefined && !AGENTIC_TRIGGER_NAMES_V1.includes(entry.trigger)) ||
       (entry.budget !== undefined && entry.budget !== "background") ||
       // A follow-up that asked which one is released as `clarify` (ADR-0047).
       ![...PERSON_ANSWER_OUTCOMES_V8, "cancelled", "timed_out"].includes(entry.outcome) ||
-      !Array.isArray(entry.receipt_digests) || entry.receipt_digests.length > limits.receipts ||
+      !Array.isArray(entry.receipt_digests) ||
       new Set(entry.receipt_digests).size !== entry.receipt_digests.length ||
       !entry.receipt_digests.every((digest) => /^sha256:[a-f0-9]{64}$/.test(digest)) ||
       ![entry.rounds, entry.model_calls, entry.repairs, entry.fallbacks, entry.citation_count]
         .every((value) => Number.isSafeInteger(value) && value >= 0) ||
-      entry.rounds > roundLimit || (external && entry.rounds > entry.model_calls) || entry.model_calls > limits.model_calls || entry.repairs > limits.model_calls || entry.fallbacks > 16 || entry.citation_count > limits.citations ||
+      (external && entry.rounds > entry.model_calls) || entry.repairs > entry.model_calls ||
       (entry.checked_at !== null && new Date(entry.checked_at).toISOString() !== entry.checked_at) ||
       ![entry.prompt_sha256, entry.answer_sha256, entry.response_sha256]
         .every((digest) => digest === null || /^sha256:[a-f0-9]{64}$/.test(digest)) ||
@@ -190,7 +183,7 @@ export class SqlitePersonAgenticAskAuditV1 {
       entry.generations.some((generation) => !["step", "answer"].includes(generation.role) ||
         (generation.engine !== undefined && !['external_research', 'external_writer'].includes(generation.engine)) ||
         (generation.engine !== undefined && (generation.role !== (generation.engine === 'external_research' ? 'step' : 'answer') || typeof generation.model !== 'string' || !/^[a-zA-Z0-9_.:/-]{1,200}$/u.test(generation.model))) ||
-        (generation.finish_reason !== null && (typeof generation.finish_reason !== "string" || generation.finish_reason.length > 128)) ||
+        (generation.finish_reason !== null && typeof generation.finish_reason !== "string") ||
         (generation.usage !== null && ![generation.usage.input_tokens, generation.usage.output_tokens, generation.usage.total_tokens]
           .every((value) => value === null || (Number.isSafeInteger(value) && value >= 0)))) ||
       ![entry.generation_usage.input_tokens, entry.generation_usage.output_tokens, entry.generation_usage.total_tokens]
@@ -198,7 +191,7 @@ export class SqlitePersonAgenticAskAuditV1 {
       Object.entries(entry.finish_reason_counts).some(([reason, count]) => reason.length === 0 || reason.length > 128 || !Number.isSafeInteger(count) || count < 1 || count > entry.model_calls) ||
       // A streamed request's named items (ADR-0039): distinct citation commitments, never labels.
       (entry.named_citation_digests !== undefined && (!Array.isArray(entry.named_citation_digests) ||
-        entry.named_citation_digests.length > PERSON_ASK_PROGRESS_NAMED_MAX_V1 || new Set(entry.named_citation_digests).size !== entry.named_citation_digests.length ||
+        new Set(entry.named_citation_digests).size !== entry.named_citation_digests.length ||
         !entry.named_citation_digests.every((digest) => typeof digest === "string" && /^sha256:[a-f0-9]{64}$/.test(digest))))
     ) throw new Error("Agentic Ask audit entry is invalid");
 

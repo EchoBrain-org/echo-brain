@@ -9,7 +9,7 @@ import type {
   ExtractionAttemptOutcomeV1,
 } from "@echo-brain/organization-processing/admitted-meeting-processing/extraction-attempt-store-v1";
 
-const USAGE = "usage: extraction-attempts status --state-dir <absolute-path> [--limit <1..100>] | " +
+const USAGE = "usage: extraction-attempts status --state-dir <absolute-path> [--limit <count>] | " +
   "retry --state-dir <absolute-path> --admission-sha256 <sha256:digest> --review-lineage-id <rli_digest> " +
   "--review-input-sha256 <sha256:digest> --expected-attempt <number> --expected-outcome <failed|succeeded|pending> " +
   "--confirm-new-model-call [--recover-pending]";
@@ -23,7 +23,7 @@ const SWITCHES = new Set(["--confirm-new-model-call", "--recover-pending"]);
 interface Io { stdout(value: string): void; stderr(value: string): void }
 const PROCESS_IO: Io = { stdout: value => process.stdout.write(value), stderr: value => process.stderr.write(value) };
 type Command = { readonly state: string } & (
-  | { readonly action: "status"; readonly limit: number }
+  | { readonly action: "status"; readonly limit?: number }
   | { readonly action: "retry"; readonly key: ExtractionAttemptKeyV1; readonly attempt: number;
     readonly outcome: ExtractionAttemptOutcomeV1; readonly recoverPending: boolean }
 );
@@ -41,10 +41,11 @@ function parse(arguments_: readonly string[]): Command {
   const state = values.get("--state-dir");
   if (state === undefined || !isAbsolute(state)) throw new Error(USAGE);
   if (action === "status") {
-    const limit = values.get("--limit") ?? "100";
+    // Every attempt, or the newest `--limit` of them.
+    const limit = values.get("--limit");
     if ([...values.keys()].some(flag => flag !== "--state-dir" && flag !== "--limit") ||
-      !INTEGER.test(limit) || Number(limit) > 100) throw new Error(USAGE);
-    return { action, state, limit: Number(limit) };
+      (limit !== undefined && (!INTEGER.test(limit) || !Number.isSafeInteger(Number(limit))))) throw new Error(USAGE);
+    return { action, state, ...(limit === undefined ? {} : { limit: Number(limit) }) };
   }
   const attempt = values.get("--expected-attempt") ?? "";
   const outcome = values.get("--expected-outcome");

@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import type { StructuredGenerationInput, StructuredGenerationRequestV1 } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { createClaudeAccountStructuredGenerationV1 } from '../src/claude-research/structured-generation.js';
-import { ClaudeModelResponseErrorV1 } from '../src/claude-research/model-transport.js';
+import { ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1 } from '../src/claude-research/model-transport.js';
 import { ClaudeResearchResultErrorV1 } from '../src/claude-research/sdk-client.js';
 
 const model = 'claude-sonnet-5-5';
@@ -16,6 +16,7 @@ it('uses native account writing with the original evidence/schema and fresh admi
   const port = createClaudeAccountStructuredGenerationV1({ account, model,
     forward: async ({ res }) => { expect(admitted).toBe(++forwarded); res.end('{}'); return { content: [{ type: 'text', text: 'synthetic' }], finish_reason: 'stop' }; },
     run: async request => {
+      // The caller's allowance is the model's whole output, thinking included: nothing is added to it.
       expect(request).toMatchObject({ account, schema: input.schema, prompt: input.user_prompt, system: input.system_prompt, max_output_tokens: 1500 });
       for (const path of ['messages', 'messages/count_tokens', 'messages']) {
         const response = await fetch(`${request.base_url}/v1/${path}`, { method: 'POST', body });
@@ -38,7 +39,7 @@ it('refuses an SDK request exceeding the admitted writer allowance', async () =>
   const forward = vi.fn();
   const port = createClaudeAccountStructuredGenerationV1({ account, model, forward,
     run: async request => {
-      await fetch(`${request.base_url}/v1/messages`, { method: 'POST', body: body.replace('1500', '32000') }).catch(() => undefined);
+      await fetch(`${request.base_url}/v1/messages`, { method: 'POST', body: body.replace('1500', '5597') }).catch(() => undefined);
       return {};
     },
   });
@@ -66,7 +67,22 @@ it('preserves a native provider failure instead of switching to a shared account
       throw new ClaudeResearchResultErrorV1();
     },
   });
-  await expect(port.generate_with_admission!(input, async (_request, send) => (await send(new AbortController().signal)).value)).rejects.toMatchObject({ diagnostic: { http_status: 429 } });
+  await expect(port.generate_with_admission!(input, async (_request, send) => (await send(new AbortController().signal)).value)).rejects.toMatchObject({ diagnostic: { http_status: 429, unbilled: true } });
+});
+
+it('never admits the SDK\'s retry of a writer request whose billing is unknown, and reports the original failure', async () => {
+  let admissions = 0;
+  const port = createClaudeAccountStructuredGenerationV1({ account, model,
+    forward: async () => { throw new ClaudeModelTransportErrorV1(); },
+    run: async request => {
+      expect((await fetch(`${request.base_url}/v1/messages`, { method: 'POST', body })).status).toBe(502);
+      expect((await fetch(`${request.base_url}/v1/messages`, { method: 'POST', body })).status).toBe(403);
+      throw new ClaudeResearchResultErrorV1();
+    },
+  });
+  await expect(port.generate_with_admission!(input, async (_request, send) => { admissions++; return (await send(new AbortController().signal)).value; }))
+    .rejects.toMatchObject({ diagnostic: { failure_class: 'adapter_transport' } });
+  expect(admissions).toBe(1);
 });
 
 it('cannot succeed without any admitted model request', async () => {
@@ -113,4 +129,36 @@ it('does not forward hidden token-count requests for extraction', async () => {
   await expect(port.generate_with_admission!(input, async (_request, send) => (await send(new AbortController().signal)).value))
     .rejects.toThrow('single generation');
   expect(forward).not.toHaveBeenCalled();
+});
+
+it('turns a native writer stopped at its output allowance into an unfinished reply the gate repairs, naming the SDK result', async () => {
+  const port = createClaudeAccountStructuredGenerationV1({ account, model,
+    forward: async ({ res }) => { res.end('{}'); return { content: [], finish_reason: 'length' }; },
+    run: async request => {
+      await (await fetch(`${request.base_url}/v1/messages`, { method: 'POST', body })).text();
+      throw new ClaudeResearchResultErrorV1({ subtype: 'error_max_structured_output_retries', stop_reason: 'max_tokens' });
+    },
+  });
+  await expect(port.generate_with_admission!(input, async (_request, send) => (await send(new AbortController().signal)).value)).rejects.toMatchObject({
+    diagnostic: { failure_class: 'adapter_finish', finish_reason: 'length', http_status: 200, sdk_subtype: 'error_max_structured_output_retries', sdk_stop_reason: 'max_tokens' },
+  });
+});
+
+it('passes model output to the admitting gate per request and to the caller, and honours the gate\'s abort', async () => {
+  let callerProgress = 0, gateProgress = 0, seenSignal: AbortSignal | undefined;
+  const gateAbort = new AbortController();
+  const port = createClaudeAccountStructuredGenerationV1({ account, model,
+    forward: async ({ res, alive, signal }) => {
+      seenSignal = signal;
+      for (let piece = 0; piece < 3; piece += 1) alive?.();
+      res.end('{}');
+      return { content: [], finish_reason: 'stop' };
+    },
+    run: async request => { await (await fetch(`${request.base_url}/v1/messages`, { method: 'POST', body })).text(); return { answer: 'x' }; },
+  });
+  await port.generate_with_admission!({ ...input, on_progress: () => { callerProgress += 1; } },
+    async (_request, forward) => (await forward(gateAbort.signal, () => { gateProgress += 1; })).value);
+  expect([callerProgress, gateProgress]).toEqual([3, 3]);
+  gateAbort.abort();
+  expect(seenSignal?.aborted).toBe(true);
 });

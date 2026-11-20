@@ -103,9 +103,9 @@ audience also uses `--audience-project-ids-json`. Document retry selects the
 retained snapshot's version automatically. In the desktop app, only **Save**
 submits the request.
 
-Existing capacity limits remain **100 retained originals per membership** and
-**1,000 per organization**, shared by notes and files. Linking one original to
-several projects counts it once. Files remain bounded at 25 MiB; document byte
+Capacity is a storage bound in bytes, not a count: notes and files each hold at
+most **250 MiB per membership** and **25 GiB per organization**, and a person may
+keep any number of either. Linking one original to several projects counts it once. Files remain bounded at 25 MiB; document byte
 quotas, supported formats and extraction limits are documented in
 [Project documents V1](project-documents-v1.md). Editor notes retain their current
 8 KiB UTF-8 bound. Link/video capture, OCR, changing an accepted audience and

@@ -8,9 +8,8 @@ import {
  * read is current or archived; a trashed or deleted one is gone for them.
  */
 const READABLE_STATUSES = Object.freeze(['current', 'archived']);
-/** Two metadata calls of 50 ids. */
-const VERSIONS_BATCH = 50;
-const VERSIONS_MAX_IDS = 100;
+/** Confluence filters a page list by at most 250 ids, and pages 250 at a time: one call per 250 ids. */
+const VERSIONS_BATCH = 250;
 
 /**
  * Each readable page's current version by its id, for distinct valid page ids. `GET /pages` applies the asker's current
@@ -18,7 +17,6 @@ const VERSIONS_MAX_IDS = 100;
  * left out readable pages, so it fails the read rather than answer them as unreadable.
  */
 export async function readConfluencePageVersionsV1(transport: ConfluenceCloudTransportV1, input: { readonly cloud_id: string; readonly page_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string>> {
-  if (input.page_ids.length > VERSIONS_MAX_IDS) confluenceFailure('invalid_request');
   const found = new Map<string, string>();
   for (let offset = 0; offset < input.page_ids.length; offset += VERSIONS_BATCH) {
     const batch = input.page_ids.slice(offset, offset + VERSIONS_BATCH);

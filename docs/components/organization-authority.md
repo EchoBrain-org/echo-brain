@@ -11,6 +11,7 @@ created_at: 2026-08-13
 reviewed_at: 2026-09-27
 reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
+  - ADR-0055
   - ADR-0054
   - ADR-0053
   - ADR-0052
@@ -192,7 +193,7 @@ protected Authority custody/backups; they are not appended as approved decision
 records. See the [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md)
 for provisional transport limits and indefinite retention.
 The [PC-01 persistence handoff](../product/2026-09-21-project-context-pc01-persistence.md)
-describes the original V7 project storage. The current Authority is V17, which
+describes the original V7 project storage. The current Authority is V18, which
 accepts only fresh state, and its project routes and client operations are live.
 
 Ask is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md) as

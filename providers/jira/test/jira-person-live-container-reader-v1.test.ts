@@ -95,7 +95,7 @@ describe('Jira projects as a tool container source (research tool contract v1)',
     expect((await source.search({ query: 'launch' })).items.map(item => item.label)).toEqual(['Launch Readiness']);
     // Launchscope names only the ECHO project: the mapped Jira project is read exactly, as the asker.
     expect((await source.search({ query: 'Launchscope Jira project' })).items.map(item => item.label)).toEqual(['Launch Readiness']);
-    expect(f.searches().at(-1)).toEqual({ query: 'launchscope', maxResults: '50', orderBy: 'key', action: 'browse' });
+    expect(f.searches().at(-1)).toEqual({ query: 'launchscope', startAt: '0', maxResults: '50', orderBy: 'key', action: 'browse' });
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/project/10001` }));
     // Words that only name the collection read its first page.
     const all = await source.search({ query: 'jira projects', limit: 2 });

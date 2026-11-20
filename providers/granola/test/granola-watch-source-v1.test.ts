@@ -67,7 +67,7 @@ describe('Granola watch over a rolling window, through the shared source cursor'
     f.list(f.row(a, ago(60)));
     const baseline = await source.pull({ cursor: granolaWatchInitialCursorV1(MINE) });
     expect(baseline.meetings).toEqual([]);
-    expect(f.windows).toEqual([{ mode: 'mine', folder: null, from_date: '2026-10-17', to_date: '2026-10-25' }]);
+    expect(f.windows).toEqual([{ mode: 'mine', folder: null, from_date: '2026-09-24', to_date: '2026-10-25' }]);
     expect(readGranolaCheckpointV1(baseline.next_cursor!)).toEqual({ mode: 'mine', folder: null, baseline: true, since: null, seen: { [a]: ago(60) }, manual: [] });
     // The list's updated_at is enough: nothing was read in detail, and no meeting text is in the cursor.
     expect(f.reads).toEqual([]); expect(baseline.next_cursor).not.toContain('Decided');
@@ -128,7 +128,7 @@ describe('Granola watch over a rolling window, through the shared source cursor'
   it('watches one folder, and refuses a cursor written for another watch', async () => {
     const f = fixture(), watch: GranolaWatchV1 = { watch: 'folder', folder_id: folderId };
     await f.source(watch).pull({});
-    expect(f.windows).toEqual([{ mode: 'folder', folder: folderId, from_date: '2026-10-17', to_date: '2026-10-25' }]);
+    expect(f.windows).toEqual([{ mode: 'folder', folder: folderId, from_date: '2026-09-24', to_date: '2026-10-25' }]);
     await expect(f.source(watch).pull({ cursor: granolaWatchInitialCursorV1(MINE) })).rejects.toMatchObject({ code: 'stale_access_state' });
     await expect(f.source().pull({ cursor: granolaWatchInitialCursorV1(watch) })).rejects.toMatchObject({ code: 'stale_access_state' });
     expect(() => f.source({ watch: 'folder', folder_id: null })).toThrow();
@@ -174,7 +174,7 @@ describe('Granola watch over a rolling window, through the shared source cursor'
       expect(ids(await source.pull({ cursor: baseline.next_cursor }))).toEqual([c]);
     }
   });
-  it('passes over at most five unreadable meetings in one pull, and the next pull goes on from there', async () => {
+  it('passes over every unreadable meeting in one pull, with no count of its own, and imports the next readable one', async () => {
     const f = fixture(), source = f.source(), unusable = await granolaFailure('<meetings_data count="2"></meetings_data>');
     const meetings = Array.from({ length: 7 }, (_, index) => `00000000-0000-4000-8000-0000000002${String(index).padStart(2, '0')}`);
     const baseline = await source.pull({});
@@ -182,12 +182,9 @@ describe('Granola watch over a rolling window, through the shared source cursor'
     f.list(...meetings.map((meeting, index) => f.row(meeting, ago(100 - index))).reverse());
     for (const meeting of meetings.slice(0, 6)) f.fail(meeting, unusable);
     const first = await source.pull({ cursor: baseline.next_cursor });
-    expect(first.meetings).toEqual([]);
-    expect(f.reads).toEqual(meetings.slice(0, 5));
-    expect(Object.keys(readGranolaCheckpointV1(first.next_cursor!).retry_after!)).toEqual(meetings.slice(0, 5));
-    const second = await source.pull({ cursor: first.next_cursor });
-    expect(ids(second)).toEqual([meetings[6]]);
+    expect(ids(first)).toEqual([meetings[6]]);
     expect(f.reads).toEqual(meetings);
+    expect(Object.keys(readGranolaCheckpointV1(first.next_cursor!).retry_after!)).toEqual(meetings.slice(0, 6));
   });
   it('baselines the first readable version of an unavailable historical meeting and imports its later edit', async () => {
     const f = fixture(), source = f.source();
@@ -292,19 +289,36 @@ describe('Granola watch over a rolling window, through the shared source cursor'
     f.edit(d, 'Decided to wait.');
     expect(ids(await source.pull({ cursor: baseline.next_cursor }))).toEqual([d]);
   });
-  it('restarts change detection on a watch change and keeps a full checkpoint within the cursor column', () => {
-    const seen = Object.fromEntries(Array.from({ length: 200 }, (_, index) => [`00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, canonicalSha256({ index })]));
+  it('imports no history on the first pass after a change, however many meetings the 30-day window holds (ADR-0030)', async () => {
+    const f = fixture(), source = f.source();
+    const days = (count: number) => count * 24 * 60;
+    // 1,200 meetings across the window, the oldest 29 days back: the first pass records them all and imports none.
+    const history = Array.from({ length: 1_200 }, (_, index) => f.row(`00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, ago(days(29) - index * 30)));
+    f.list(...history);
+    const changed = GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1.watch(readGranolaCheckpointV1(granolaWatchInitialCursorV1(MINE)), MINE, ago(1));
+    const first = await source.pull({ cursor: writeGranolaCheckpointV1(changed) });
+    expect(first.meetings).toEqual([]);
+    expect(Object.keys(readGranolaCheckpointV1(first.next_cursor!).seen)).toHaveLength(1_200);
+    // The next pass finds nothing new in that history either; only a meeting after the change is imported.
+    expect((await source.pull({ cursor: first.next_cursor })).meetings).toEqual([]);
+    f.list(f.row(a, ago(15)), ...history);
+    expect(ids(await source.pull({ cursor: first.next_cursor }))).toEqual([a]);
+    expect(f.reads).toEqual([a]);
+  });
+  it('restarts change detection on a watch change and keeps a checkpoint of any number of meetings', () => {
+    // No meeting count of its own: a 30-day window of 2,000 meetings is one checkpoint, past the old 65,536-character column.
+    const seen = Object.fromEntries(Array.from({ length: 2_000 }, (_, index) => [`00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, canonicalSha256({ index })]));
     const manual = Array.from({ length: 50 }, (_, index) => `00000000-0000-4000-9000-${String(index).padStart(12, '0')}`);
     const full = writeGranolaCheckpointV1({ mode: 'folder', folder: folderId, baseline: true, since: ago(600), seen, manual });
-    expect(full.length).toBeLessThanOrEqual(65_536);
+    expect(full.length).toBeGreaterThan(65_536);
+    expect(Object.keys(readGranolaCheckpointV1(full).seen)).toHaveLength(2_000);
     // The change is stamped, so the first pass after it can tell what changed since.
     const moved = GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1.watch(readGranolaCheckpointV1(full), MINE, ago(1));
     expect(moved).toEqual({ mode: 'mine', folder: null, baseline: false, since: ago(1), seen: {}, manual });
     expect(GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1.ready(moved)).toBe(false);
     expect(GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1.ready(readGranolaCheckpointV1(full))).toBe(true);
-    expect(granolaWatchWindowV1(NOW)).toEqual({ from_date: '2026-10-17', to_date: '2026-10-25' });
+    expect(granolaWatchWindowV1(NOW)).toEqual({ from_date: '2026-09-24', to_date: '2026-10-25' });
     for (const invalid of [
-      { mode: 'folder', folder: folderId, baseline: true, since: null, seen: { ...seen, [d]: canonicalSha256('one more') }, manual: [] },
       { mode: 'off', folder: null, baseline: true, since: null, seen: {}, manual: [] },
       { mode: 'folder', folder: null, baseline: false, since: null, seen: {}, manual: [] },
       { mode: 'mine', folder: folderId, baseline: false, since: null, seen: {}, manual: [] },

@@ -75,9 +75,6 @@ function metadata(value: unknown, label: string): void {
   if (value === undefined) return;
   object(value, label);
   jsonValue(value, label);
-  if (Buffer.byteLength(JSON.stringify(value), 'utf8') > 1024 * 1024) {
-    throw new Error(`${label} exceeds the safety limit`);
-  }
 }
 
 function optionalNonEmptyString(value: unknown, label: string): void {
@@ -94,9 +91,9 @@ function optionalTimestamp(value: unknown, label: string): void {
   if (value !== undefined) timestamp(value, label);
 }
 
-function array(value: unknown, label: string, maximum: number): unknown[] {
+/** A dense array. Lists have no count of their own: a source sends what the meeting has, bounded by its transport. */
+function array(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
-  if (value.length > maximum) throw new Error(`${label} exceeds the safety limit`);
   for (let index = 0; index < value.length; index += 1) {
     if (!(index in value)) throw new Error(`${label} must be dense`);
   }
@@ -143,10 +140,10 @@ function among(...allowed: string[]): (value: unknown, label: string) => void {
  * A dense array of at most `maximum` items, each checked as `<label>[<index>]`;
  * with `key`, an item whose key repeats an earlier one's is refused at once.
  */
-function list<T>(maximum: number, check: (item: unknown, label: string) => void, key?: (item: T) => unknown): Check {
+function list<T>(check: (item: unknown, label: string) => void, key?: (item: T) => unknown): Check {
   return (value, label) => {
     const seen = new Set<unknown>();
-    for (const [index, item] of array(value, label, maximum).entries()) {
+    for (const [index, item] of array(value, label).entries()) {
       check(item, `${label}[${index}]`);
       if (key === undefined) continue;
       const id = key(item as T);
@@ -165,9 +162,9 @@ function record(checks: Readonly<Record<string, Check>>): (value: unknown, label
 const PARTICIPANT: Readonly<Record<string, Check>> = {
   id: text,
   display_name: optionalText,
-  identities: optional(list(100, record({ kind: among('source', 'email', 'phone', 'other'), value: text }),
+  identities: optional(list(record({ kind: among('source', 'email', 'phone', 'other'), value: text }),
     (identity: MeetingParticipantIdentity) => `${identity.kind}:${identity.value}`)),
-  roles: optional(list(20, among('organizer', 'host', 'invitee', 'attendee', 'speaker', 'note_taker', 'bot'), (role: string) => role)),
+  roles: optional(list(among('organizer', 'host', 'invitee', 'attendee', 'speaker', 'note_taker', 'bot'), (role: string) => role)),
   response_status: optional(among('accepted', 'declined', 'tentative', 'unknown')),
   attendance: optional(among('attended', 'no_show', 'unknown')),
   organization: optional(record({ name: optionalText, domain: optionalText })),
@@ -177,13 +174,13 @@ const PARTICIPANT: Readonly<Record<string, Check>> = {
 
 const CAPTURE: Readonly<Record<string, Check>> = {
   state: among('complete', 'partial', 'processing', 'unavailable', 'deleted'),
-  components: list(100, record({
+  components: list(record({
     kind: among('metadata', 'participants', 'agenda', 'summary', 'notes', 'transcript', 'chat', 'recording', 'attachments', 'artifacts', 'other'),
     state: among('available', 'empty', 'pending', 'not_provided', 'forbidden', 'failed'),
     reason: optionalText,
     metadata: json,
   })),
-  warnings: optional(list(1_000, (warning, label) => nonEmptyString(warning, label))),
+  warnings: optional(list((warning, label) => nonEmptyString(warning, label))),
 };
 
 const TIMES = ['scheduled_start_at', 'scheduled_end_at', 'actual_start_at', 'actual_end_at'] as const;
@@ -208,8 +205,8 @@ const NON_NEGATIVE_INTEGER: Check = (value, label) => {
   }
 };
 
-/** A content block, against the meeting's participant ids and its running text total. */
-function contentBlock(participants: ReadonlyMap<string, MeetingParticipant>, blockIds: Set<string>, total: { bytes: number }): Readonly<Record<string, Check>> {
+/** A content block, against the meeting's participant ids. */
+function contentBlock(participants: ReadonlyMap<string, MeetingParticipant>, blockIds: Set<string>): Readonly<Record<string, Check>> {
   const block = (label: string) => label.slice(0, label.lastIndexOf('.'));
   return {
     id: (value, label) => {
@@ -219,11 +216,8 @@ function contentBlock(participants: ReadonlyMap<string, MeetingParticipant>, blo
     },
     kind: among('summary', 'note', 'agenda', 'transcript', 'caption', 'chat_message', 'chapter', 'provider_action_item', 'provider_decision', 'artifact_text', 'other'),
     text: (value, label) => {
+      // A block's text has no size of its own; how much one extraction call can read is the model's window.
       nonEmptyString(value, label);
-      const bytes = Buffer.byteLength(value, 'utf8');
-      if (bytes > 4 * 1024 * 1024) throw new Error(`${label} exceeds the safety limit`);
-      total.bytes += bytes;
-      if (total.bytes > 16 * 1024 * 1024) throw new Error('meeting content text exceeds the aggregate safety limit');
     },
     speaker_participant_id: optional((value, label) => {
       nonEmptyString(value, label);
@@ -308,12 +302,12 @@ function context(participantsById: ReadonlyMap<string, MeetingParticipant>): Rea
       }),
     })),
     location: optional(record({ kind: optional(among('virtual', 'physical', 'hybrid')), name: optionalText, join_reference: optionalText })),
-    scopes: optional(list(1_000, record({
+    scopes: optional(list(record({
       kind: among('domain', 'team', 'project', 'customer', 'topic'),
       value: text,
       origin: among('source', 'adapter_config'),
     }))),
-    labels: optional(list(1_000, (label_, label) => nonEmptyString(label_, label))),
+    labels: optional(list((label_, label) => nonEmptyString(label_, label))),
     language: optionalText,
     meeting_type: optionalText,
     metadata: json,
@@ -322,7 +316,7 @@ function context(participantsById: ReadonlyMap<string, MeetingParticipant>): Rea
 
 const GOVERNANCE: Readonly<Record<string, Check>> = {
   sensitivity: optional(among('public', 'internal', 'confidential', 'restricted')),
-  consent: optional(list(100, record({
+  consent: optional(list(record({
     purpose: among('recording', 'transcription', 'analysis', 'distribution'),
     status: among('granted', 'denied', 'unknown', 'not_required'),
     recorded_at: optionalAt,
@@ -339,7 +333,6 @@ export function assertCanonicalMeetingDocument(
 ): asserts value is MeetingDocument {
   const participantsById = new Map<string, MeetingParticipant>();
   const blockIds = new Set<string>();
-  const total = { bytes: 0 };
   fields(value, 'meeting', {
     schema_version: (version, label) => {
       if (version !== 1) throw new Error(`${label} must be 1`);
@@ -350,7 +343,7 @@ export function assertCanonicalMeetingDocument(
     lifecycle: optional(among('scheduled', 'active', 'completed', 'cancelled', 'deleted', 'unknown')),
     time: optional(meetingTime),
     capture: record(CAPTURE),
-    participants: list(10_000, (item, label) => {
+    participants: list((item, label) => {
       fields(item, label, PARTICIPANT);
       const participant = item as MeetingParticipant;
       if (participantsById.has(participant.id)) throw new Error('meeting participant ids must be unique');
@@ -358,9 +351,9 @@ export function assertCanonicalMeetingDocument(
     }),
     // No source sends an artifact: every document carries the empty array.
     artifacts: (artifacts, label) => {
-      if (array(artifacts, label, 10_000).length !== 0) throw new Error(`${label} must be empty`);
+      if (array(artifacts, label).length !== 0) throw new Error(`${label} must be empty`);
     },
-    content: list(10_000, record(contentBlock(participantsById, blockIds, total))),
+    content: list(record(contentBlock(participantsById, blockIds))),
     provenance: provenance(expectedSource),
     context: optional(record(context(participantsById))),
     governance: optional(record(GOVERNANCE)),
@@ -376,9 +369,6 @@ export function assertCanonicalMeetingBatch(
   if (!Array.isArray(batch['meetings'])) {
     throw new Error('meeting_batch.meetings must be an array');
   }
-  if (batch['meetings'].length > 10_000) {
-    throw new Error('meeting_batch.meetings exceeds the safety limit');
-  }
   for (let index = 0; index < batch['meetings'].length; index += 1) {
     if (!(index in batch['meetings'])) {
       throw new Error('meeting_batch.meetings must be dense');
@@ -386,10 +376,8 @@ export function assertCanonicalMeetingBatch(
     assertCanonicalMeetingDocument(batch['meetings'][index]);
   }
   if (batch['next_cursor'] !== undefined) {
+    // A source's checkpoint has no length of its own; the adapter's codec checks its shape.
     nonEmptyString(batch['next_cursor'], 'meeting_batch.next_cursor');
-    if (batch['next_cursor'].length > 65_536) {
-      throw new Error('meeting_batch.next_cursor exceeds the safety limit');
-    }
   }
 }
 

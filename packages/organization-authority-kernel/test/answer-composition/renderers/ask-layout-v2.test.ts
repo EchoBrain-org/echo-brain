@@ -44,11 +44,11 @@ describe("Ask answer layout v2 (ADR-0051)", () => {
     ]);
   });
 
-  it("reads a points, table, timeline or card block left with one item as text, keeping its title", () => {
-    expect(arranged([at(ANSWER()), at(point(1, false, "Blockers"))])).toEqual([{ kind: "answer", statements: [0] }, { kind: "text", title: "Blockers", statements: [1] }]);
-    expect(arranged([at(row(1, ["Fix BUG-412", "Tomas Okafor"]))])).toEqual([{ kind: "text", title: "Open actions", statements: [0] }]);
-    expect(arranged([at(event(1, "2026-10-20", "Started the soak."))])).toEqual([{ kind: "text", title: "This week", statements: [0] }]);
-    expect(arranged([at(fact(1, "Status", "In review"))])).toEqual([{ kind: "text", title: "THERM-48", statements: [0] }]);
+  it("keeps a points, table, timeline or card block of one item as that block: no count forces it into text", () => {
+    expect(arranged([at(ANSWER()), at(point(1, false, "Blockers"))])).toEqual([{ kind: "answer", statements: [0] }, { kind: "points", title: "Blockers", ordered: false, statements: [1] }]);
+    expect(arranged([at(row(1, ["Fix BUG-412", "Tomas Okafor"]))])[0]).toMatchObject({ kind: "table", title: "Open actions", statements: [0] });
+    expect(arranged([at(event(1, "2026-10-20", "Started the soak."))])[0]).toMatchObject({ kind: "timeline", title: "This week", statements: [0] });
+    expect(arranged([at(fact(1, "Status", "In review"))])[0]).toMatchObject({ kind: "card", title: "THERM-48", statements: [0] });
   });
 
   it("reads consecutive untitled text as one block, and gives a block's title to its first run only", () => {
@@ -68,15 +68,17 @@ describe("Ask answer layout v2 (ADR-0051)", () => {
     expect(arranged([quote(1), quote(2)]).map(block => block.kind)).toEqual(["quote", "quote"]);
   });
 
-  it("keeps every text a table shows within the contract's bytes, and a cell per column", () => {
+  it("keeps every text a table shows whole, and a cell per column", () => {
     const wide = "𝔸".repeat(120);
     const tables = arranged([
       at({ kind: "list", caption: "𝔸".repeat(200), columns: ["Item", "Owner"], rows: [{ cells: [wide, "Dana"], citation_indexes: [0] }, { cells: ["x", ""], citation_indexes: [0] }] }),
       at({ block: 1, kind: "row", title: wide, columns: ["𝔸".repeat(40), "B"], cells: [wide] }), at({ block: 1, kind: "row", title: wide, columns: ["𝔸".repeat(40), "B"], cells: ["y"] }),
     ]);
     const bytes = (value: string) => Buffer.byteLength(value, "utf8");
-    expect(tables.map(block => block.kind === "table" && bytes(block.title ?? "") <= 200 && bytes(block.caption ?? "") <= 600 && block.columns.every(column => bytes(column) <= 100)
-      && block.rows.every(value => value.cells.length === block.columns.length && value.cells.every(cell => bytes(cell) <= 300)))).toEqual([true, true]);
+    expect(tables.map(block => block.kind === "table" && block.rows.every(value => value.cells.length === block.columns.length))).toEqual([true, true]);
+    expect(tables[0]).toMatchObject({ caption: "𝔸".repeat(200), rows: [{ cells: [wide, "Dana"] }, { cells: ["x", ""] }] });
+    expect(tables[1]).toMatchObject({ title: wide, columns: ["𝔸".repeat(40), "B"] });
+    expect(bytes(wide)).toBeGreaterThan(300);
   });
 
   describe("reading order", () => {
@@ -123,6 +125,11 @@ describe("Ask answer layout v2 (ADR-0051)", () => {
       expect([...daysWrittenV2("Moved from 2026-10-12 to Oct 16, then to October 20th, 2025, and Sept. 3.", ["2026-10-01"])]).toEqual(["2026-10-12", "2026-10-16", "2025-10-20", "2026-09-03"]);
       expect([...daysWrittenV2("Room 12, may be late; DVT-R2 runs 3 times.", ["2026-10-01"])]).toEqual([]);
       expect([...daysWrittenV2("Ship by Nov 3.", ["2025-10-27"])]).toEqual(["2025-11-03"]);
+      // Day first, numeric year first, a numeric day with only one possible reading, and a Chinese or Japanese day.
+      expect([...daysWrittenV2("Met on 4 November 2026, the 5th of Nov, 2026/11/06, 17/11/2026, 11/18/2026 and 2026年11月20日; then 11月21日.", ["2026-11-01"])])
+        .toEqual(["2026-11-04", "2026-11-05", "2026-11-06", "2026-11-20", "2026-11-21", "2026-11-17", "2026-11-18"]);
+      // 04/11/2026 is April 11 or November 4: never read, so an event it would date stays undated.
+      expect([...daysWrittenV2("Due 04/11/2026.", ["2026-10-01"])]).toEqual([]);
       // Across a year's end, in both directions.
       expect([...daysWrittenV2("Ship by Jan 4.", ["2026-12-28"])]).toEqual(["2027-01-04"]);
       expect([...daysWrittenV2("Reviewed on Dec 30.", ["2027-01-02"])]).toEqual(["2026-12-30"]);

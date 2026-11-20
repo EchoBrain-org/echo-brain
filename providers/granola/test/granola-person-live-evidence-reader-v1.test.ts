@@ -70,15 +70,27 @@ describe('Granola external meeting evidence', () => {
     } } });
     return { reader, calls };
   }
-  it('stops transcript reads when the answer is full across 1,000 mapped meetings, leaving budget for revalidation', async () => {
+  it('spreads passages across meetings, taking the matching slices of each chunk in turns, and stops transcript reads when the answer is full across 1,000 mapped meetings', async () => {
     const { reader, calls } = await mapped();
     const result = await reader.search({ query: 'access', limit: 20 });
     expect(result.items).toHaveLength(20);
     expect(result.truncated).toBe(true);
+    // Each long chunk has many matching slices; the first slice of each passage comes before any passage's second.
+    expect(new Set(result.items.map(item => item.citation.page_id)).size).toBe(20);
     expect(calls.filter(name => name === 'search_transcripts')).toHaveLength(1);
-    expect(calls.filter(name => name === 'get_meetings')).toHaveLength(1);
-    expect(calls.filter(name => name === 'get_meeting_transcript')).toHaveLength(1);
+    expect(calls.filter(name => name === 'get_meetings')).toHaveLength(20);
+    expect(calls.filter(name => name === 'get_meeting_transcript')).toHaveLength(20);
     await reader.revalidate({ citations: result.items.map(item => item.citation) });
+  });
+  it('honours a search limit over 20, keeping the page within the shared result size the audited boundary accepts', async () => {
+    const { reader } = await mapped();
+    const source = createAuditedPersonLiveEvidenceSourceV1({ actor: binding, reader, read_grant_sha256: binding.read_grant_sha256,
+      access: { tool_id: 'granola', external_scope_id: workspace, external_subject_id: binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] },
+      authorization: { assertCurrent() {} }, audit: { async record(value) { return canonicalSha256(value); } } });
+    const result = await source.search({ query: 'access', limit: 50 });
+    expect(result.items.length).toBeGreaterThan(20);
+    expect(new Set(result.items.map(item => item.citation.page_id)).size).toBeGreaterThan(10);
+    expect(result.truncated).toBe(true);
   });
   it('reads folder membership once per reader and each meeting and chunk once per revalidation', async () => {
     const { reader, calls } = await mapped();
@@ -86,13 +98,63 @@ describe('Granola external meeting evidence', () => {
     const opened = await reader.open({ handle: first.items[0]!.handle, limit: 20 });
     const before = calls.length;
     await reader.revalidate({ citations: [...first.items, ...second.items, ...opened.items].map(item => item.citation) });
-    expect(calls.slice(before).filter(name => name === 'get_meetings')).toHaveLength(1);
-    expect(calls.slice(before).filter(name => name === 'get_meeting_transcript')).toHaveLength(1);
+    expect(calls.slice(before).filter(name => name === 'get_meetings')).toHaveLength(new Set([...first.items, ...second.items, ...opened.items].map(item => item.citation.page_id)).size);
+    expect(calls.slice(before).filter(name => name === 'get_meeting_transcript')).toHaveLength(new Set([...first.items, ...second.items, ...opened.items].map(item => item.citation.page_id)).size);
     expect(calls.slice(before).filter(name => name === 'search_meetings')).toHaveLength(20);
-    expect(calls.length).toBeLessThanOrEqual(110);
+    expect(calls.length).toBeLessThanOrEqual(250);
     const settled = calls.length;
     await reader.revalidate({ citations: [] });
     expect(calls.slice(settled)).toEqual(['get_account_info', 'list_meeting_folders']);
+  });
+  it('keeps reading a project whose mapped folder holds more than 1,000 meetings, and finds a mapped folder past the first 1,000 folders', async () => {
+    const key = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
+    const big = key(9_000), far = key(9_001);
+    const meetings = Array.from({ length: 1_500 }, (_, index) => key(index + 1));
+    const xml = (ids: string[], next?: string) => `${next === undefined ? '' : `<pagination has_more="true" next_cursor="${next}" />\n\n`}${warning}<meetings_data count="${ids.length}">${ids.map(id => `<meeting id="${id}" title="Weekly" date="Jan 10, 2025" meeting_at="2025-01-10T00:30:00Z" url="https://notes.granola.ai/d/${id}"></meeting>`).join('')}</meetings_data>`;
+    const folderPages = (offset: number) => {
+      // 1,200 folders: the mapped `far` folder is the 1,100th; every page of folders is read.
+      const ids = Array.from({ length: 100 }, (_, index) => offset + index === 0 ? big : offset + index === 1_099 ? far : key(20_000 + offset + index));
+      return { folders: ids.map(id => ({ id, title: 'Folder', note_count: 1 })), truncated: offset + 100 < 1_200, ...(offset + 100 < 1_200 ? { next_offset: offset + 100 } : {}) };
+    };
+    const reader = await createGranolaPersonLiveEvidenceReaderV1({ folder_ids: [big, far], transport: { binding, async fetch(_url, init) {
+      const request = JSON.parse(String(init.body)), { name, arguments: args } = request.params;
+      let value: unknown;
+      switch (name) {
+        case 'get_account_info': value = { email: binding.external_subject_id, active_workspace: { id: workspace, display_name: 'Fixture' }, mcp_note_access: { scopes: ['personal', 'public'] } }; break;
+        case 'list_meeting_folders': value = folderPages(args.offset); break;
+        case 'search_meetings': {
+          if (args.keywords) { value = xml([]); break; }
+          const start = args.cursor === undefined ? 0 : Number(args.cursor);
+          value = xml(meetings.slice(start, start + 100), start + 100 < meetings.length ? String(start + 100) : undefined); break;
+        }
+        case 'search_transcripts': value = { status: 'ok', completion_status: 'exhausted', next_cursor: null, meetings: args.meeting_ids.includes(meetings[1_400]) ? [{ meeting_id: meetings[1_400], transcript_version: 'v1', passages: [{ chunk_id: 0, text: 'budget' }] }] : [] }; break;
+        case 'get_meetings': value = xml(args.meeting_ids); break;
+        case 'get_meeting_transcript': value = { id: args.meeting_id, status: 'ok', transcript_version: 'v1', chunks: [{ chunk_id: 0, transcript: 'The budget was approved.' }] }; break;
+        default: throw new Error(`Unexpected tool: ${name}`);
+      }
+      return Response.json({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }] } });
+    } } });
+    const result = await reader.search({ query: 'budget', limit: 5 });
+    expect(result.items.map(item => item.citation.page_id)).toEqual([meetings[1_400]]);
+    expect(result.notice).not.toContain('not visible to your Granola account');
+    await expect(reader.revalidate({ citations: result.items.map(item => item.citation) })).resolves.toBeUndefined();
+  });
+  it('reads a meeting whole at limit 1, each open of the last slice shown reading on from the next, none repeated or lost', async () => {
+    const f = fixture();
+    f.state.notes = Array.from({ length: 400 }, (_, index) => `n${index}`).join(' ');
+    const reader = await f.reader();
+    const listed = await reader.list({ limit: 1 });
+    let page = await reader.open({ handle: listed.items[0]!.handle, limit: 1 });
+    const read = [...page.items];
+    for (let opens = 0; page.truncated && opens < 20; opens += 1) {
+      page = await reader.open({ handle: page.items.at(-1)!.handle, limit: 1 });
+      read.push(...page.items);
+    }
+    expect(page.truncated).toBe(false);
+    const sections = read.map(item => item.citation.section_id);
+    expect(new Set(sections).size).toBe(sections.length);
+    expect(read.filter(item => item.citation.section_id.startsWith('notes:')).map(item => item.text).join('')).toBe(f.state.notes);
+    expect(read.at(-1)).toMatchObject({ citation: { section_id: 'summary:0' }, text: 'Pilot overview.' });
   });
   it('reports notes-only coverage when the provider denies transcript search, without retrying transcript access', async () => {
     const f = fixture(); f.state.transcriptAllowed = false;
@@ -124,7 +186,9 @@ describe('Granola external meeting evidence', () => {
       authorization: { assertCurrent() {} }, audit: { async record(value) { receipts.push(value); return canonicalSha256(value); } } });
     const result = await source.search({ query: 'access check', limit: 2 });
     expect(result.items[0]!.text).toContain('access check failed');
-    expect(result.truncated).toBe(true);
+    // Only the slice that names a term is a search passage; the rest of the chunk is read by opening it.
+    expect(result.items.map(item => item.citation.section_id)).toEqual(['transcript:2:2400', 'inventory']);
+    expect(result.truncated).toBe(false);
     for (const item of result.items) expect(Buffer.byteLength(item.text ?? '', 'utf8')).toBeLessThanOrEqual(3_072);
     expect(new Set(result.items.map(item => item.id)).size).toBe(result.items.length);
     await source.open({ item: result.items[0]!.id, limit: 10 });

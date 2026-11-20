@@ -7,14 +7,6 @@ import type { DecisionBrief } from "../contracts/delivery.js";
  * provider-neutral so every approval surface offers the same proposals.
  */
 
-/** Longest owner a proposal offers, in characters. */
-const OWNER_MAX_CHARACTERS_V1 = 120;
-/**
- * At most this many owner proposals are offered. A brief with more offers
- * none, so nothing is recorded for any of its actions.
- */
-export const OWNER_PROPOSALS_MAX_V1 = 40;
-
 /** One action whose owner extraction proposed; `action_index` is its place in the brief's actions. */
 export interface OwnerProposalV1 {
   readonly action_index: number;
@@ -32,8 +24,8 @@ function isExactDisplayText(value: unknown): value is string {
 }
 
 /**
- * An owner as offered: one line, NFC, single spaces, trimmed, at most 120
- * characters, with no control or format characters. Empty or invalid is no
+ * An owner as offered: one line, NFC, single spaces, trimmed, with no control
+ * or format characters, and no length of its own. Empty or invalid is no
  * owner, and so is anything but text. Every offered owner satisfies the shared
  * confirmed-owner rule (isApprovalOwnerTextV1 in organization-protocol, which
  * this package cannot import); a services test pins that.
@@ -42,7 +34,7 @@ export function canonicalProposedOwnerV1(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const owner = value.normalize("NFC").replace(/\s+/gu, " ").trim();
   if (owner.length === 0) return null;
-  if (owner.length > OWNER_MAX_CHARACTERS_V1 || /[\p{Cc}\p{Cf}]/u.test(owner)) return null;
+  if (/[\p{Cc}\p{Cf}]/u.test(owner)) return null;
   return owner;
 }
 
@@ -61,7 +53,8 @@ export function withoutProposedOwnersV1(brief: DecisionBrief): DecisionBrief {
 /**
  * The actions of an uncleared brief whose owner extraction proposed, in brief
  * order. An action is offered only with displayable text and a canonical
- * owner; more than `OWNER_PROPOSALS_MAX_V1` proposals offer none.
+ * owner. Every such action is offered; a surface with a real limit of its own
+ * (Slack's blocks) shows what fits and says how many more there are.
  */
 export function ownerProposalsV1(brief: DecisionBrief): readonly OwnerProposalV1[] {
   const proposals: OwnerProposalV1[] = [];
@@ -70,5 +63,5 @@ export function ownerProposalsV1(brief: DecisionBrief): readonly OwnerProposalV1
     const owner = canonicalProposedOwnerV1(action.owner);
     if (owner !== null) proposals.push(Object.freeze({ action_index, action_text: action.text, owner }));
   }
-  return Object.freeze(proposals.length > OWNER_PROPOSALS_MAX_V1 ? [] : proposals);
+  return Object.freeze(proposals);
 }

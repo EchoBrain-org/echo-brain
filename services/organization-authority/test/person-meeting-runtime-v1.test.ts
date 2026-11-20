@@ -28,7 +28,7 @@ import { GRANOLA_MEETING_NORMALIZER_VERSION_V1 } from '@echo-brain/provider-gran
 import { GranolaWatchSourceV1, readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_WATCH_CURSOR_POLICY_V1, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 } from '@echo-brain/provider-granola/granola-watch-source-v1';
 import { SqliteExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
 import { AdapterError } from '@echo-brain/organization-processing/core/contracts/adapter';
-import { providerStatusError } from '@echo-brain/organization-processing/llm/llm-provider';
+import { ExtractionInputTooLongError, providerStatusError } from '@echo-brain/organization-processing/llm/llm-provider';
 import { LlmDecisionProcessor } from '@echo-brain/organization-processing/llm/llm-decision-processor';
 import type { DecisionProcessorBundleV1 } from '@echo-brain/organization-processing/ports/decision-processor-bundle-v1';
 import { createLangSmithRuntimeV1 } from '../src/composition/observability/langsmith-runtime-v1.js';
@@ -83,7 +83,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
       return { identity: { kind: 'meeting-source', adapter_id, instance_id: `${tool_id}-${canonicalSha256(actor).slice(7)}`, version: '1.0.0' },
         custodian: { actor }, email: 'fixture@example.test', workspace: 'Fixture', current() { guard(); current(); },
         async folders() { return [{ id: folder, title: 'ECHO', count: 0 }]; }, async browse(value) { browsed.push(value); return { meetings: [] }; },
-        async watchable(value) { watched.push(value); if (windowFull) throw new AuthorityOperationError('quota_exceeded', 'Granola lists more than 200 meetings to watch'); },
+        async watchable(value) { watched.push(value); if (windowFull) throw new AuthorityOperationError('unavailable', 'Granola operation could not be completed'); },
         async preview(value) { return { id: value, title: 'Test meeting', notes: 'Ship pilot.', summary: '', truncated: false }; },
       };
     },
@@ -930,6 +930,19 @@ describe('personal meeting intake uses the shared processing path', () => {
       expect(f.ledger.inspect(attempt!)).toMatchObject({ attempt: 2, outcome: failsAgain ? 'failed' : 'succeeded', retry_authorized: false });
     } finally { later.mockRestore(); }
   });
+  it('holds a meeting refused as past the model\'s context window as input_too_long at once: unbilled, but never retried', async () => {
+    const f = await fixture(), runtime = f.create();
+    const poll = async () => { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal); return (await f.call(runtime, { operation: 'home' })).sources[0]!; };
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    f.failNextExtraction(new ExtractionInputTooLongError('OpenRouter'));
+    // The same meeting would be refused again: parked now, with no retry grant and no second model call.
+    expect((await poll()).pending_imports).toEqual([]);
+    const [attempt] = f.ledger.listLatest();
+    expect([f.held(), attempt]).toEqual([[expect.objectContaining({ external_id: id, failure_stage: 'input_too_long' })],
+      expect.objectContaining({ attempt: 1, outcome: 'failed', failure_code: 'permanently_rejected', retry_authorized: false })]);
+    const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+    try { await poll(); expect(f.extracted()).toBe(1); } finally { later.mockRestore(); }
+  });
   it('consumes an import whose extraction failed and records its project choice, as for a staged one', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
@@ -1185,24 +1198,21 @@ describe('personal meeting intake uses the shared processing path', () => {
     await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([projectB]);
   });
-  it('refuses at Save a watch whose window holds more than 200 meetings, and names the cap when the worker meets it later', async () => {
+  it('refuses at Save a watch whose window cannot be listed completely, and names no meeting cap when the worker fails later', async () => {
     const f = await fixture(), runtime = f.create();
     const home = await f.call(runtime, { operation: 'home' });
     const mine = { operation: 'watch' as const, watch: 'mine' as const, folder_id: null, project_id: null, retain: true as const, settings_sha256: home.settings_sha256 };
     f.fullWindow();
-    await expect(f.call(runtime, mine)).rejects.toMatchObject({ code: 'quota_exceeded' });
+    await expect(f.call(runtime, mine)).rejects.toMatchObject({ code: 'unavailable' });
     expect((await f.call(runtime, { operation: 'home' })).sources).toEqual([]);
     f.fullWindow(false);
     await expect(f.call(runtime, mine)).resolves.toEqual({ status: 'saved' });
     expect(f.watched).toEqual([{ watch: 'mine', folder_id: null }, { watch: 'mine', folder_id: null }]);
-    // The window grew past the cap after Save: the status says so, rather than blaming the connection.
-    f.duringPull(() => { throw new AuthorityOperationError('quota_exceeded', 'Granola lists more than 200 meetings to watch'); });
-    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
-    const [full] = (await f.call(runtime, { operation: 'home' })).sources;
-    expect(full).toMatchObject({ baseline: false, error: 'More than 200 meetings in 7 days. Choose one folder.' });
+    // A window has no meeting count of its own; a listing that fails later is a connection matter.
     f.duringPull(() => { throw new AuthorityOperationError('unavailable', 'Granola operation could not be completed'); });
-    await runtime.pollAndStageSource(full!.source_key, new AbortController().signal);
-    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ error: 'Meeting intake needs attention. Check the connection and folder access.' });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    const [failing] = (await f.call(runtime, { operation: 'home' })).sources;
+    expect(failing).toMatchObject({ baseline: false, error: 'Meeting intake needs attention. Check the connection and folder access.' });
   });
   it('leaves no status behind when the person stops a failing watch', async () => {
     const f = await fixture(), runtime = f.create();

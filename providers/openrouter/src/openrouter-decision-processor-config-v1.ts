@@ -1,10 +1,22 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type { AdapterConfig } from "@echo-brain/organization-processing/core/contracts/adapter";
+import { EXTRACTION_MODEL_CONTEXT_TOKENS_V1, EXTRACTION_MODEL_MAX_OUTPUT_TOKENS_V1 } from "@echo-brain/organization-processing/llm/extraction-model-v1";
 import { LLM_DECISION_PROCESSOR_PROMPT_VERSION, LLM_DECISION_PROCESSOR_SCHEMA_VERSION } from "@echo-brain/organization-processing/llm/llm-decision-processor";
 import { credentialReferenceSha256V1 } from "./fixed-decision-processor-bundle-v1.js";
 import { openrouterProcessingVersion } from "./llm/openrouter-decision-processor.js";
 
 export const OPENROUTER_DECISION_PROCESSOR_MODEL_V1 = "anthropic/claude-sonnet-4.6";
+/**
+ * Extraction may write as much as the model can: the extraction model's own maximum output
+ * (EXTRACTION_MODEL_MAX_OUTPUT_TOKENS_V1, 128,000 tokens). Both fixed processors run a Sonnet model.
+ */
+export const DECISION_PROCESSOR_MAX_OUTPUT_TOKENS_V1 = EXTRACTION_MODEL_MAX_OUTPUT_TOKENS_V1;
+/**
+ * The extraction model's own context window (EXTRACTION_MODEL_CONTEXT_TOKENS_V1). A meeting is too long for one
+ * extraction call only when its prompt and this processor's output allowance together pass this window; the
+ * provider's own refusal decides it.
+ */
+export const DECISION_PROCESSOR_CONTEXT_TOKENS_V1 = EXTRACTION_MODEL_CONTEXT_TOKENS_V1;
 
 export function fixedOpenRouterDecisionProcessorConfigV1(
   instanceId: string,
@@ -19,7 +31,8 @@ export function fixedOpenRouterDecisionProcessorConfigV1(
     settings: {
       provider: "openrouter",
       model: OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
-      max_output_tokens: 8192,
+      max_output_tokens: DECISION_PROCESSOR_MAX_OUTPUT_TOKENS_V1,
+      // A silence period, not a whole-call deadline: the streamed reply is stalled only when nothing arrives this long.
       request_timeout_ms: 600_000,
     },
   };

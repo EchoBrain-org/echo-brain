@@ -126,7 +126,7 @@ export async function allSourceAskFixture(owned: string[], options: { readonly n
       { ...CONFLUENCE_LIVE_CONNECTOR_V1, open: sessions => openConfluencePersonLiveRuntimeV1({ state_directory: f.initialized.state_directory, sessions,
         configuration: { enabled: true, cloud_id: FIXTURE_CONFLUENCE_CLOUD_V1, integration_id: 'confluence', nango_authorization: () => 'synthetic-only-nango-authorization' }, seams: { nango: live.confluence.nango, fetch: live.confluenceFetch } }) },
     ],
-    answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 25_000 } },
+    answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 25_000, context_tokens: 32_768, max_output_tokens: 8_000 } },
   });
   const origin = `http://127.0.0.1:${runtime.address.port}`;
   const session = await f.signIn(origin);

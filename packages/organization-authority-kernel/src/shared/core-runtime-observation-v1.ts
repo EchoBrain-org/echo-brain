@@ -47,8 +47,7 @@ const CORE_RUNTIME_GROUNDING_STAGES_V1 = ["evidence_id", "evidence_duplicate", "
 const CORE_RUNTIME_UPSTREAM_SERVICES_V1 = ["nango", "jira", "confluence", "granola", "other"] as const;
 const CORE_RUNTIME_UPSTREAM_OPERATIONS_V1 = ["connection_read", "connection_list", "connect_session", "connection_delete", "provider_read"] as const;
 const CORE_RUNTIME_UPSTREAM_RATE_LIMIT_REASONS_V1 = ["burst", "global_quota", "tenant_quota", "per_issue_write", "other"] as const;
-const CORE_RUNTIME_RESEARCH_STOP_REASONS_V1 = Object.freeze(['finished', 'empty_catalog', 'no_progress', 'step_limit', 'budget', 'unusable_step'] as const);
-const CORE_RUNTIME_RESEARCH_ADMISSIONS_V1 = Object.freeze(['post_revalidation_no_time'] as const);
+const CORE_RUNTIME_RESEARCH_STOP_REASONS_V1 = Object.freeze(['finished', 'empty_catalog', 'no_progress', 'stalled', 'unusable_step'] as const);
 /**
  * Code's corrections of model output: each name counts how often code changed, dropped or answered for what a model
  * returned, so a correction can go once it stops firing on the current models (RB-OPERATIONS-001 defines each name).
@@ -56,7 +55,7 @@ const CORE_RUNTIME_RESEARCH_ADMISSIONS_V1 = Object.freeze(['post_revalidation_no
  */
 export const CORE_RUNTIME_MODEL_CORRECTIONS_V1 = Object.freeze([
   // Meeting extraction (organization-processing llm-decision-processor.ts).
-  "extraction_item_set_aside", "extraction_repeat_dropped", "extraction_owner_cleared", "extraction_due_cleared", "extraction_due_coerced",
+  "extraction_item_set_aside", "extraction_repeat_dropped", "extraction_due_cleared", "extraction_due_coerced",
   "extraction_decided_downgraded", "extraction_unit_id_respelled", "extraction_parent_unit_cited", "extraction_unknown_unit_dropped",
   "extraction_confidence_cleared", "extraction_rationale_link_dropped",
   // A research step's reads as the research loop runs them, and the loop's own guards and stops.
@@ -73,6 +72,9 @@ export const CORE_RUNTIME_MODEL_CORRECTIONS_V1 = Object.freeze([
   // Renderers: Ask's writer and the impact card.
   "writer_repeat_dropped", "writer_unknown_id_dropped", "writer_uncited_sentence_dropped", "writer_fallback",
   "writer_quote_unquoted", "writer_event_undated",
+  // A block of a writer's answer the layout contract refused, read as text in its place, by the rule it broke; and a part
+  // whose blocks still failed, read as one text block.
+  "writer_block_shape_repaired", "writer_block_text_repaired", "writer_block_citations_repaired", "writer_block_order_repaired", "writer_layout_collapsed",
   // The follow-ups Ask's writer drafts (ADR-0053).
   "follow_up_dropped", "follow_up_task_screened", "follow_up_owner_dropped", "follow_up_date_dropped", "follow_up_link_dropped",
   "card_line_screened", "card_unknown_id_dropped", "card_date_dropped", "card_fallback",
@@ -103,7 +105,6 @@ export interface CoreRuntimeDetailV1 extends CoreRuntimeCorrelationV1 {
   readonly counts: CoreRuntimeCountsV1;
   readonly result: (typeof CORE_RUNTIME_RESULTS_V1)[number] | null;
   readonly research_stop_reason?: (typeof CORE_RUNTIME_RESEARCH_STOP_REASONS_V1)[number];
-  readonly research_admission?: (typeof CORE_RUNTIME_RESEARCH_ADMISSIONS_V1)[number];
   readonly grounding_stage?: (typeof CORE_RUNTIME_GROUNDING_STAGES_V1)[number];
   /** Corrections of model output this span made, by name; absent when it made none. */
   readonly model_corrections?: CoreRuntimeModelCorrectionsV1;
@@ -169,7 +170,7 @@ function failureResult(error: unknown, detail: CoreRuntimeDetailV1): CoreRuntime
     const failure = diagnostic?.failure_class;
     const status = detail.counts.http_status ?? diagnostic?.http_status;
     if (name === "AbortError" || failure === "cancelled") return "cancelled";
-    if (name === "AgenticAskDeadlineErrorV1" || name === "TimeoutError" || code === "timeout" || failure === "adapter_timeout" || status === 408) return "timeout";
+    if (name === "AgenticAskStalledErrorV1" || name === "TimeoutError" || code === "timeout" || failure === "adapter_timeout" || status === 408) return "timeout";
     if (code === "unauthorized" || code === "stale_access_state" || status === 401 || status === 403) return "authorization";
     if (code === "rate_limited" || status === 429) return "rate_limited";
     if (code === "unavailable" || failure === "adapter_transport" || failure === "audit_failure" || (typeof status === "number" && status >= 500 && status <= 599)) return "unavailable";
@@ -182,13 +183,13 @@ function failureResult(error: unknown, detail: CoreRuntimeDetailV1): CoreRuntime
   } catch { /* A hostile error must not suppress the terminal observation. */ }
   return detail.result ?? "failed";
 }
-export function annotateCoreRuntimeV1(input: { counts?: CoreRuntimeCountsV1; result?: CoreRuntimeDetailV1["result"]; generation?: string; linked_journey_ids?: readonly string[] } & CoreRuntimeCorrelationV1 & Partial<Pick<CoreRuntimeDetailV1, "grounding_stage" | "approval_surface" | "delivery_step" | "source_revision" | "cursor" | "action" | "provider" | "model" | "finish_reason" | "provider_request" | "evidence_source" | "upstream_service" | "upstream_operation" | "upstream_rate_limit_reason" | "research_stop_reason" | "research_admission">>): void {
+export function annotateCoreRuntimeV1(input: { counts?: CoreRuntimeCountsV1; result?: CoreRuntimeDetailV1["result"]; generation?: string; linked_journey_ids?: readonly string[] } & CoreRuntimeCorrelationV1 & Partial<Pick<CoreRuntimeDetailV1, "grounding_stage" | "approval_surface" | "delivery_step" | "source_revision" | "cursor" | "action" | "provider" | "model" | "finish_reason" | "provider_request" | "evidence_source" | "upstream_service" | "upstream_operation" | "upstream_rate_limit_reason" | "research_stop_reason">>): void {
   const current = context.getStore();
   const detail = current?.detail;
   if (!detail) return;
   safe(() => {
     Object.assign(detail.counts, input.counts);
-    for (const key of ["grounding_stage", "approval_surface", "delivery_step", "source_revision", "cursor", "action", "provider", "model", "finish_reason", "provider_request", "evidence_source", "upstream_service", "upstream_operation", "upstream_rate_limit_reason", "research_stop_reason", "research_admission"] as const) { if (input[key] !== undefined) Object.assign(detail, { [key]: input[key] }); }
+    for (const key of ["grounding_stage", "approval_surface", "delivery_step", "source_revision", "cursor", "action", "provider", "model", "finish_reason", "provider_request", "evidence_source", "upstream_service", "upstream_operation", "upstream_rate_limit_reason", "research_stop_reason"] as const) { if (input[key] !== undefined) Object.assign(detail, { [key]: input[key] }); }
     Object.assign(detail, correlation(input, current?.vocabulary));
     if (input.result !== undefined) Object.assign(detail, { result: input.result });
     if (input.generation !== undefined) Object.assign(detail, { generation: input.generation });
@@ -302,7 +303,6 @@ export function normalizeCoreRuntimeDetailV1(input: CoreRuntimeDetailV1, vocabul
       !Array.isArray(input.linked_journey_ids) || input.linked_journey_ids.length > 1000 || input.linked_journey_ids.some((id) => !uuid.test(id)) ||
       (input.result !== null && !CORE_RUNTIME_RESULTS_V1.includes(input.result)) ||
       (input.research_stop_reason !== undefined && !CORE_RUNTIME_RESEARCH_STOP_REASONS_V1.includes(input.research_stop_reason)) ||
-      (input.research_admission !== undefined && !CORE_RUNTIME_RESEARCH_ADMISSIONS_V1.includes(input.research_admission)) ||
       (input.grounding_stage !== undefined && !CORE_RUNTIME_GROUNDING_STAGES_V1.includes(input.grounding_stage)) ||
       (input.approval_surface !== undefined && !["desktop", "slack"].includes(input.approval_surface)) ||
       (input.delivery_step !== undefined && !["open_dm", "post_marker", "reconcile_marker", "publish_card"].includes(input.delivery_step)) ||
@@ -325,7 +325,6 @@ export function normalizeCoreRuntimeDetailV1(input: CoreRuntimeDetailV1, vocabul
     phase: input.phase, purpose: input.purpose, root: input.root, linked_journey_ids: Object.freeze([...input.linked_journey_ids]), counts: Object.freeze(counts),
     result: input.result, generation: input.generation,
     ...(input.research_stop_reason === undefined ? {} : { research_stop_reason: input.research_stop_reason }),
-    ...(input.research_admission === undefined ? {} : { research_admission: input.research_admission }),
     ...(input.grounding_stage === undefined ? {} : { grounding_stage: input.grounding_stage }),
     ...(modelCorrections === undefined ? {} : { model_corrections: modelCorrections }),
     ...(input.approval_surface === undefined ? {} : { approval_surface: input.approval_surface }),

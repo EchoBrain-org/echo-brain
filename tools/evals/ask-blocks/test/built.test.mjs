@@ -9,7 +9,7 @@ import { sha256 } from "../../shared/runner.mjs";
 import { decideGate, evidenceOf, gradeTrial, loadCases, readReleased } from "../grade.mjs";
 import { captureWriterPrompts, deskItem, evidenceIdsOf, run } from "../run.mjs";
 
-const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072 };
+const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072, max_output_tokens: 16_000 };
 const document = loadCases();
 const caseOf = (id) => document.cases.find((entry) => entry.id === id);
 const itemsOf = (caseDefinition) => caseDefinition.items.map((item, index) => deskItem(caseDefinition.id, index, item));
@@ -134,14 +134,14 @@ test("runs the built writer through the kernel end to end, keeping each call and
   assert.equal(writer.inputs.length, 1);
   const [input] = writer.inputs;
   assert.ok(input.system_prompt.startsWith("You write Echo's final answer") && input.system_prompt.endsWith(`\n\n${ANSWER_BLOCKS_PROMPT}`));
-  assert.deepEqual([JSON.parse(input.user_prompt).block_catalog, input.schema, input.max_output_tokens], [ANSWER_BLOCK_CATALOG, answerBlocksSchema, 2_000]);
+  assert.deepEqual([JSON.parse(input.user_prompt).block_catalog, input.schema, input.max_output_tokens], [ANSWER_BLOCK_CATALOG, answerBlocksSchema, 16_000]);
   // The writer was asked exactly as the capture recorded it, so its call keeps the prompts the report holds.
   const prompts = report.prompts["ticket-profile"];
   assert.deepEqual([prompts.user_prompt, prompts.system_prompt_sha256, report.system_prompts[prompts.system_prompt_sha256]], [input.user_prompt, sha256(input.system_prompt), input.system_prompt]);
   const [trial] = report.trials;
   const { elapsed_ms: elapsed, ...attempt } = trial.attempts[0];
   assert.ok(Number.isSafeInteger(elapsed));
-  assert.deepEqual(attempt, { attempt: 1, kind: "first", system_prompt_sha256: prompts.system_prompt_sha256, max_output_tokens: 2_000, value: TICKET_REPLY, finish_reason: "stop",
+  assert.deepEqual(attempt, { attempt: 1, kind: "first", system_prompt_sha256: prompts.system_prompt_sha256, max_output_tokens: 16_000, value: TICKET_REPLY, finish_reason: "stop",
     usage: { input_tokens: 900, output_tokens: 120, total_tokens: 1020 }, provider_latency_ms: 3, valid: true });
   // The released answer is kept and graded: its citations in first-use order, the follow-up first, map back to E2 and E1.
   assert.deepEqual(trial.response.citations.map((entry) => entry.kind), ["follow_up", "ticket"]);
@@ -169,9 +169,10 @@ test("lets the kernel's own reading, repair and downgrades decide what is releas
   assert.match(trial.attempts[0].problems[0], /"blocks" must be an array/u);
   const repair = JSON.parse(trial.attempts[1].user_prompt);
   assert.deepEqual([repair.validation_error, JSON.parse(repair.rejected_response)], [trial.attempts[0].problems[0], { not_found: [] }]);
-  // Downgraded, the quote and both events read as text after the answer: no quote, and no timeline of one event.
-  assert.deepEqual(trial.read.blocks.map((block) => block.kind), ["answer", "prose"]);
-  assert.deepEqual(trial.read.blocks[1].claims.map((claim) => claim.text), ["DVT readiness review: Priya owns the soak from now on.", "2026-10-27: The soak was assigned.", "The chamber was ordered."]);
+  // Downgraded, the quote and the undated event read as text; the event E1 dates stays a timeline of one event.
+  assert.deepEqual(trial.read.blocks.map((block) => block.kind), ["answer", "prose", "timeline", "prose"]);
+  assert.deepEqual(trial.read.blocks[1].claims.map((claim) => claim.text), ["DVT readiness review: Priya owns the soak from now on."]);
+  assert.deepEqual(trial.read.blocks[3].claims.map((claim) => claim.text), ["The chamber was ordered."]);
   assert.deepEqual([report.summary.repairs, report.summary.valid_at_once, report.summary.valid], [1, 0, 1]);
 });
 

@@ -34,13 +34,13 @@ export function validateOrganizationPersonToolsV4(value: unknown): OrganizationP
   if (r.schema_version !== 4 || r.kind !== 'echo-organization-person-tools') fail('Person tools version is unsupported');
   assertId(r.organization_id, 'org', 'organization_id');
   assertId(r.membership_id, 'mem', 'membership_id');
-  if (!Array.isArray(r.tools) || r.tools.length > 32) fail('Person tools list is invalid');
+  if (!Array.isArray(r.tools)) fail('Person tools list is invalid');
   const seen = new Set<string>();
   for (const value of r.tools as unknown[]) {
     const tool = asRecord(value, 'Person tool');
     assertExactKeys(tool, ['tool_id', 'display_name', 'availability', 'personal_status', 'external_scope_id', 'external_subject_id', 'organization_setup'], 'Person tool');
     assertToolId(tool.tool_id);
-    assertPatternString(tool.display_name, 'display_name', 128, /^[^\u0000-\u001f\u007f]+$/);
+    assertPatternString(tool.display_name, 'display_name', Number.POSITIVE_INFINITY, /^[^\u0000-\u001f\u007f]+$/);
     if (seen.has(String(tool.tool_id))) fail('Person tool identity is duplicated');
     seen.add(String(tool.tool_id));
     if (!['enabled', 'unavailable'].includes(String(tool.availability)) ||

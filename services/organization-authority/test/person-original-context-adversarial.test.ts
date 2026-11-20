@@ -273,15 +273,15 @@ describe("adversarial original-context retrieval", () => {
     expect(reopened.items[0]?.text).toContain("rareterm rareterm rareterm");
   });
 
-  it("keeps deterministic packet ties and the three-per-document diversity cap", () => {
+  it("keeps deterministic packet ties and returns every matching passage of a document", () => {
     const f = fixture();
     const documentId = f.uploadChunks("Diversity", Array.from({ length: 5 }, () => "stabletie"));
     f.upload("Second source", "stabletie");
     const first = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "stabletie", limit: 10 });
     const second = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "stabletie", limit: 10 });
     expect(first.items.map(item => item.citation.anchor_sha256)).toEqual(second.items.map(item => item.citation.anchor_sha256));
-    expect(first.items.filter(item => item.citation.document_id === documentId)).toHaveLength(3);
-    expect(first.items).toHaveLength(4);
+    expect(first.items.filter(item => item.citation.document_id === documentId)).toHaveLength(5);
+    expect(first.items).toHaveLength(6);
   });
 
   it("does not let unreadable or off-project packets alter readable BM25 statistics", () => {
@@ -754,5 +754,76 @@ describe("adversarial original-context retrieval", () => {
     expect(inventory.items).toHaveLength(1);
     expect(inventory.truncated).toBe(false);
     expect(inventory.items.every(item => item.text === undefined)).toBe(true);
+  });
+});
+
+describe("Person original context: an open reads the whole source", () => {
+  const global = { kind: "global" as const };
+
+  it("opens a note or a document whole, and pages it only when the caller names neighbours, every packet reachable by the offers", async () => {
+    const f = fixture();
+    // A note of several 3 KiB packets, and a document of sixty chunks, one longer than a packet.
+    await f.admitTeamNote("Long sync", Array.from({ length: 16 }, (_, index) => `paragraph-${index}-marker ${"word ".repeat(90)}`).join("\n"));
+    const chunks = Array.from({ length: 60 }, (_, index) => `chunk-${index}-marker `.padEnd(3_000, "y"));
+    chunks[30] = `chunk-30-marker ${"z ".repeat(1_500)}chunk-30-tail-marker`;
+    f.uploadChunks("Whole proof", chunks);
+    const open = (citation: Parameters<typeof f.retrieval.deskOpen>[0]["citation"], neighbours?: number) =>
+      f.retrieval.deskOpen({ access_token: "member", scope: global, citation, ...(neighbours === undefined ? {} : { neighbours }) });
+    for (const [first, last] of [["paragraph-0-marker", "paragraph-15-marker"], ["chunk-0-marker", "chunk-30-tail-marker"]] as const) {
+      const anchor = f.retrieval.deskSearch({ access_token: "member", scope: global, query: first }).items.find(item => item.text?.includes(`${first} `))!;
+      // No neighbours named: the whole source, the cited packet first, nothing offered.
+      const whole = open(anchor.citation);
+      expect(whole.items[0]!.citation.anchor_sha256).toBe(anchor.citation.anchor_sha256);
+      expect(whole.items.length).toBeGreaterThanOrEqual(3);
+      expect(whole.items.every(item => item.text !== undefined)).toBe(true);
+      expect(whole.items.some(item => item.text!.includes(last))).toBe(true);
+      expect(whole.truncated).toBe(false);
+      expect(f.retrieval.revalidateDeskRelease({ access_token: "member", release: whole })).toEqual({ checked_at: expect.any(String) });
+      // A named count is the caller's page: the anchor and one neighbour read, the next packet offered without text.
+      let page = open(anchor.citation, 1);
+      expect(page.items.filter(item => item.text !== undefined)).toHaveLength(2);
+      expect(page.items.filter(item => item.text === undefined)).toHaveLength(1);
+      // Following the offers reads every packet the whole open read.
+      const read = new Set<string>();
+      for (;;) {
+        for (const item of page.items) if (item.text !== undefined) read.add(item.citation.anchor_sha256);
+        const next = page.items.find(item => item.text === undefined && !read.has(item.citation.anchor_sha256));
+        if (next === undefined) break;
+        page = open(next.citation, 1);
+      }
+      expect(read).toEqual(new Set(whole.items.map(item => item.citation.anchor_sha256)));
+    }
+    const anchor = f.retrieval.deskSearch({ access_token: "member", scope: global, query: "chunk-0-marker" }).items[0]!;
+    expect(() => open(anchor.citation, -1)).toThrow(expect.objectContaining({ code: "invalid_request", message: expect.stringContaining("neighbours") }));
+  });
+
+  it("opens and checks a nearly 2 MiB extraction whole without parsing it once per packet", () => {
+    const f = fixture();
+    const chunks = Array.from({ length: 640 }, (_, index) => `whole-${index}-marker `.padEnd(3072, "x"));
+    f.uploadChunks("Large whole", chunks);
+    const extractedBytes = chunks.reduce((total, chunk) => total + Buffer.byteLength(chunk), 0);
+    const meter = meteredReads(f.database, extractedBytes * 16);
+    const retrieval = new SqlitePersonOriginalContextRetrievalV1(meter.database, {
+      authenticateAccess: () => authorization(MEMBER),
+    }, OWNER.organization_id);
+    const found = retrieval.deskSearch({ access_token: "member", scope: global, query: "whole-0-marker", limit: 1 });
+    meter.reset();
+    const opened = retrieval.deskOpen({ access_token: "member", scope: global, citation: found.items[0]!.citation });
+    expect(opened.items.filter(item => item.text !== undefined).length).toBeGreaterThanOrEqual(640);
+    retrieval.revalidateDeskRelease({ access_token: "member", release: opened });
+    expect(meter.bytes()).toBeLessThan(extractedBytes * 16);
+  });
+
+  it("searches and lists every match when no limit is named, and a page of any size when one is", () => {
+    const f = fixture();
+    for (let index = 0; index < 90; index += 1) f.upload(`Hit ${index}`, `clampmarker document ${index}`);
+    for (const query of ["clampmarker", undefined]) {
+      const search = (limit?: number) => f.retrieval.deskSearch({ access_token: "member", scope: global, ...(query === undefined ? {} : { query }), ...(limit === undefined ? {} : { limit }) });
+      expect(search()).toMatchObject({ truncated: false });
+      expect(search().items).toHaveLength(90);
+      expect(search(500).items).toHaveLength(90);
+      expect(search(80)).toMatchObject({ truncated: true });
+      expect(search(80).items).toHaveLength(80);
+    }
   });
 });

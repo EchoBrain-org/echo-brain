@@ -15,6 +15,8 @@ import {
   llmProcessingVersion as processingVersion,
 } from "../../src/llm/llm-decision-processor.js";
 import {
+  ExtractionInputTooLongError,
+  StructuredGenerationAttemptError,
   type LlmProviderClient,
   type LlmProviderId,
   type StructuredGenerationRequest,
@@ -212,6 +214,8 @@ describe('llm decision processor extraction', () => {
       "[T2] Zhen: I'll send the signed copy tonight.",
     ].join('\n'));
     expect(request.model).toBe('fixture-model');
+    // A configuration without its own allowance gets the extraction model's own maximum output.
+    expect(request.maxOutputTokens).toBe(128_000);
     expect(request.systemPrompt).toContain('For each signal, list in evidence_units the IDs of every unit that supports it');
     expect(request.systemPrompt).toContain('Never infer an owner from who spoke');
     expect(request.schema).toMatchObject({
@@ -342,44 +346,51 @@ describe('llm decision processor extraction', () => {
   ] };
   const citedQuotes = (signal: { evidence: readonly { quote?: string }[] }) => signal.evidence.map((span) => span.quote?.split(' covers')[0]);
 
-  it('keeps cited units in citation order until their text would exceed 3,000 characters', async () => {
+  it('keeps every cited unit, in citation order, with no character budget of its own', async () => {
     const short = await extractWith(modelOutput([modelSignal({ evidence_units: ['N10', 'N9', 'N8', 'N7', 'N6', 'N5', 'N4', 'N3', 'N2', 'N1'] })]), manyUnits);
     expect(short.signals.map(citedQuotes)).toEqual([
       ['Point 10', 'Point 9', 'Point 8', 'Point 7', 'Point 6', 'Point 5', 'Point 4', 'Point 3', 'Point 2', 'Point 1'],
     ]);
 
-    // N1–N7 are note lines of exactly 600 characters; N8 and N9 are short.
+    // N1–N26 are note lines of exactly 600 characters (15,600 in all); N27 and N28 are short.
     const longUnits: MeetingDocument = { ...meeting, content: [
       { id: 'notes-1', kind: 'note', text: [
-        ...Array.from({ length: 7 }, (_, n) => `Long point ${n + 1}: `.padEnd(600, 'z')), 'Short point 8', 'Short point 9',
+        ...Array.from({ length: 26 }, (_, n) => `Long point ${n + 1}: `.padEnd(600, 'z')), 'Short point 27', 'Short point 28',
       ].join('\n') },
     ] };
     const heads = (signal: { evidence: readonly { quote?: string }[] }) => signal.evidence.map((span) => span.quote?.split(':')[0]);
-    const long = await extractWith(modelOutput([
-      // Five fit the budget exactly; a sixth would exceed it.
-      modelSignal({ evidence_units: ['N7', 'N6', 'N5', 'N4', 'N3', 'N2', 'N1'] }),
-      // 13 + 4 × 600 characters leaves room for N9, but N3 does not fit: the budget stops there instead of skipping ahead.
-      modelSignal({ text: 'Ship the launch', evidence_units: ['N8', 'N7', 'N6', 'N5', 'N4', 'N3', 'N9'] }),
-    ]), longUnits);
-    expect(long.signals[0]!.evidence.map((span) => span.quote?.length)).toEqual([600, 600, 600, 600, 600]);
-    expect(long.signals.map(heads)).toEqual([
-      ['Long point 7', 'Long point 6', 'Long point 5', 'Long point 4', 'Long point 3'],
-      ['Short point 8', 'Long point 7', 'Long point 6', 'Long point 5', 'Long point 4'],
+    const descending = (from: number, to: number) => Array.from({ length: from - to + 1 }, (_, n) => from - n);
+    const output = modelOutput([
+      modelSignal({ evidence_units: descending(26, 1).map((n) => `N${n}`) }),
+      modelSignal({ text: 'Ship the launch', evidence_units: ['N27', ...descending(26, 2).map((n) => `N${n}`), 'N28'] }),
     ]);
+    const long = await extractWith(output, longUnits);
+    expect(long.signals[0]!.evidence.map((span) => span.quote?.length)).toEqual(Array.from({ length: 26 }, () => 600));
+    expect(long.signals.map(heads)).toEqual([
+      descending(26, 1).map((n) => `Long point ${n}`),
+      ['Short point 27', ...descending(26, 2).map((n) => `Long point ${n}`), 'Short point 28'],
+    ]);
+    // Nothing is left out, so nothing is counted as trimmed.
+    expect(await correctionsWith(output, longUnits)).toEqual({});
   });
 
-  it('rechecks action owners against the quotes that survive the meeting byte limit', async () => {
-    const text = ['一', '二', '三', '四'].map(c => c.repeat(599)).concat('Maya ' + '五'.repeat(594)).join('\n');
-    const wide: MeetingDocument = { ...meeting, content: [{ id: 'notes-1', kind: 'note', text }] };
-    const result = await extractWith(modelOutput(Array.from({ length: 25 }, (_, i) =>
-      modelSignal({ kind: 'action', text: `Task ${i}`, owner: 'Maya', evidence_units: ['N1', 'N2', 'N3', 'N4', 'N5'] }))), wide);
-    const trimmed = result.signals.filter(signal => !signal.evidence.some(span => span.quote?.includes('Maya')));
-    expect(trimmed.length).toBeGreaterThan(0);
-    expect(trimmed.every(signal => signal.kind === 'action' && signal.owner === null)).toBe(true);
+  it('judges a decided decision against all its cited units and keeps them all', async () => {
+    // N1–N25 are 600-character questions; N26 states the choice.
+    const questions: MeetingDocument = { ...meeting, content: [
+      { id: 'notes-1', kind: 'note', text: [
+        ...Array.from({ length: 25 }, (_, n) => `Should we keep option ${n + 1} `.padEnd(599, 'z') + '?'), 'We chose option 1.',
+      ].join('\n') },
+    ] };
+    const all = Array.from({ length: 26 }, (_, n) => `N${n + 1}`);
+    const output = modelOutput([modelSignal({ status: 'decided', evidence_units: all })]);
+    const result = await extractWith(output, questions);
+    expect(result.signals).toMatchObject([{ kind: 'decision', status: 'decided' }]);
+    expect(result.signals[0]!.evidence).toHaveLength(26);
+    expect(await correctionsWith(output, questions)).toEqual({});
   });
 
-  it('trims the largest evidence lists, last span first, until the meeting fits 160,000 evidence bytes', async () => {
-    // N1–N5 are 600 CJK characters each, so every span is 1,862 bytes of JSON and at most 85 spans fit.
+  it('keeps every cited span of a meeting whose evidence passes 160,000 bytes', async () => {
+    // N1–N5 are 600 CJK characters each, so every span is 1,862 bytes of JSON: 94 spans are about 175,000 bytes.
     const wide: MeetingDocument = { ...meeting, content: [
       { id: 'notes-1', kind: 'note', text: ['一', '二', '三', '四', '五'].map((character) => character.repeat(600)).join('\n') },
     ] };
@@ -388,27 +399,25 @@ describe('llm decision processor extraction', () => {
       modelSignal({ text: 'Item 0', evidence_units: ['N1'] }),
       modelSignal({ text: 'Item 1', evidence_units: ['N1', 'N2', 'N3'] }),
       modelSignal({ text: 'Repeat', evidence_units: all }),
-      // Differs from item 2 until item 2 loses its last span, then repeats it.
       modelSignal({ text: 'Repeat', evidence_units: ['N1', 'N2', 'N3', 'N4'] }),
       modelSignal({ kind: 'rationale', text: 'Because', evidence_units: ['N2'], supports_decision_indexes: [3] }),
       ...Array.from({ length: 16 }, (_, n) => modelSignal({ text: `Item ${n + 5}`, evidence_units: all })),
+      modelSignal({ kind: 'action', text: 'Send the quote', owner: 'Maya', evidence_units: all }),
     ]);
     const instance = processor(new FakeLlmClient(output));
     const result = await instance.extract(wide, extractionContext(instance));
 
     const bytes = result.signals.flatMap((signal) => signal.evidence).reduce((sum, span) => sum + Buffer.byteLength(JSON.stringify(span)), 0);
-    expect(bytes).toBeLessThanOrEqual(160_000);
-    // 94 spans before: the nine five-span lists with the lowest indexes (items 2, 5–12) each lost one; items 0, 1 and the rationale kept theirs.
+    expect(bytes).toBeGreaterThan(160_000);
     expect(result.signals.map((signal) => [signal.text, signal.evidence.length])).toEqual([
-      ['Item 0', 1], ['Item 1', 3], ['Repeat', 4], ['Because', 1],
-      ...Array.from({ length: 8 }, (_, n) => [`Item ${n + 5}`, 4]),
-      ...Array.from({ length: 8 }, (_, n) => [`Item ${n + 13}`, 5]),
+      ['Item 0', 1], ['Item 1', 3], ['Repeat', 5], ['Repeat', 4], ['Because', 1],
+      ...Array.from({ length: 16 }, (_, n) => [`Item ${n + 5}`, 5]),
+      ['Send the quote', 5],
     ]);
-    expect(result.signals[2]!.evidence.map((span) => span.quote?.charAt(0))).toEqual(['一', '二', '三', '四']);
-    // Item 3 now repeats item 2 and is dropped; the rationale linked to it follows item 2.
-    expect(result.signals[3]).toMatchObject({ kind: 'rationale', supports_signal_ids: [result.signals[2]!.id] });
+    expect(result.signals[4]).toMatchObject({ kind: 'rationale', supports_signal_ids: [result.signals[3]!.id] });
+    expect(result.signals.at(-1)).toMatchObject({ kind: 'action', owner: 'Maya' });
     expect(() => assertCanonicalDecisionSet(result, wide, instance.identity)).not.toThrow();
-    expect(await correctionsWith(output, wide)).toEqual({ extraction_repeat_dropped: 1 });
+    expect(await correctionsWith(output, wide)).toEqual({});
   });
 
   it('reads cited IDs in any case and a split turn\'s parent ID as its parts', async () => {
@@ -463,7 +472,7 @@ describe('llm decision processor extraction', () => {
     expect(() => assertCanonicalDecisionSet(result, dstMeeting, instance.identity)).not.toThrow();
   });
 
-  it('keeps a proposed owner only when a cited unit names them or they commit as its speaker', async () => {
+  it('keeps every well-formed proposed owner for the approver to judge, whatever the cited units say', async () => {
     const action = (text: string, owner: unknown, units: readonly string[]) =>
       modelSignal({ kind: 'action', text, owner, evidence_units: units });
     const output = modelOutput([
@@ -473,21 +482,22 @@ describe('llm decision processor extraction', () => {
       action('Send the quote', 'Priya', ['N2']),
       action('Send the draft', 'Zhe', ['N2']),
       action('Send the memo', 7, ['N2']),
-      action('Send the deck', 'x'.repeat(121), ['N2']),
+      action('Send the deck', 'x'.repeat(10_000), ['N2']),
       action('Send the notes', null, ['N2']),
       modelSignal({ owner: 'Zhen', evidence_units: ['N2'] }),
     ]);
     const result = await extractWith(output);
 
+    // Ada only asks (T1) and Priya and Zhe are named nowhere: the approver confirms or clears each proposal (ADR-0021).
     expect(result.signals.map((signal) => signal.kind === 'action' ? signal.owner : 'no-owner-field')).toEqual([
-      'Zhen', 'Zhen', null, null, null, null, null, null, 'no-owner-field',
+      'Zhen', 'Zhen', 'Ada', 'Priya', 'Zhe', null, 'x'.repeat(10_000), null, 'no-owner-field',
     ]);
     expect(result.signals[8]).not.toHaveProperty('owner');
-    // Only the three owners grounding cleared: a malformed proposal is no owner to ground.
-    expect(await correctionsWith(output)).toEqual({ extraction_owner_cleared: 3 });
+    // A malformed proposal is no owner; code corrects nothing else about owners.
+    expect(await correctionsWith(output)).toEqual({});
   });
 
-  it('links rationales only to surviving decisions and sets aside one with none left', async () => {
+  it('links rationales only to surviving decisions and keeps one with none left unlinked', async () => {
     const output = modelOutput([
       modelSignal({ kind: 'rationale', text: 'Vendor X was cheaper and faster', evidence_units: ['S1'], supports_decision_indexes: [2, 2, 1, 3, 99, -1, 0.5] }),
       modelSignal({ text: 'Adopt vendor Y', evidence_units: ['T999'] }),
@@ -498,17 +508,29 @@ describe('llm decision processor extraction', () => {
     const instance = processor(new FakeLlmClient(output));
     const result = await instance.extract(meeting, extractionContext(instance));
 
-    expect(result.signals.map((signal) => signal.text)).toEqual(['Vendor X was cheaper and faster', 'Use vendor X for hosting']);
+    expect(result.signals.map((signal) => signal.text)).toEqual([
+      'Vendor X was cheaper and faster', 'Use vendor X for hosting', 'Vendor Y was cheaper', 'Vendor X was faster',
+    ]);
     expect(result.signals[0]).toMatchObject({ kind: 'rationale', supports_signal_ids: [result.signals[1]!.id] });
+    // A rationale whose decision did not survive, or that names none, is kept unlinked.
+    expect(result.signals.slice(2)).toMatchObject([
+      { kind: 'rationale', supports_signal_ids: [] }, { kind: 'rationale', supports_signal_ids: [] },
+    ]);
     expect(() => assertCanonicalDecisionSet(result, meeting, instance.identity)).not.toThrow();
-    // The kept rationale's six links other than its one to item 2 are dropped; three items are set aside.
-    expect(await correctionsWith(output)).toEqual({ extraction_item_set_aside: 3, extraction_rationale_link_dropped: 6 });
+    // The first rationale's six links other than its one to item 2 and the fourth item's link to item 1 are dropped;
+    // only item 1, which cites no known unit, is set aside.
+    expect(await correctionsWith(output)).toEqual({ extraction_item_set_aside: 1, extraction_rationale_link_dropped: 7 });
+    const orphan = await extractWith(modelOutput([
+      modelSignal({ kind: 'rationale', evidence_units: ['S1'], supports_decision_indexes: [1] }),
+      modelSignal({ evidence_units: ['T999'] }),
+    ]));
+    expect(orphan.signals).toMatchObject([{ kind: 'rationale', supports_signal_ids: [] }]);
   });
 
   it('fails the meeting with the first set-aside reason when no item survives', async () => {
     const instance = processor(new FakeLlmClient(modelOutput([
       modelSignal({ evidence_units: ['T999'] }),
-      modelSignal({ kind: 'rationale', text: 'Vendor X was cheaper', evidence_units: ['S1'], supports_decision_indexes: [0] }),
+      modelSignal({ kind: 'rationale', text: 'Vendor X was cheaper', evidence_units: ['S9'], supports_decision_indexes: [0] }),
     ])));
     const metadata: CoreRuntimeObservationV1[] = [];
     const failure = await observeCoreRuntimeV1('extraction', () => instance.extract(meeting, extractionContext(instance)), {
@@ -524,10 +546,6 @@ describe('llm decision processor extraction', () => {
     })]));
     await expect(extractWith(modelOutput([modelSignal({ kind: 'bogus' }), modelSignal({ evidence_units: ['T999'] })])))
       .rejects.toMatchObject({ message: `${SCHEMA}kind` });
-    await expect(extractWith(modelOutput([
-      modelSignal({ kind: 'rationale', evidence_units: ['S1'], supports_decision_indexes: [1] }),
-      modelSignal({ evidence_units: ['T999'] }),
-    ]))).rejects.toMatchObject({ message: `${GROUNDING}rationale_supports` });
   });
 
   it('returns an empty set without calling the model when the meeting has no units', async () => {
@@ -657,6 +675,12 @@ describe('llm decision processor extraction', () => {
     const notJson = await extractWith('not json at all').catch((caught: unknown) => caught);
     expect(notJson).toMatchObject({ code: 'temporarily_unavailable', retryable: true, message: EXTRACTION_OUTPUT_JSON_FAILURE_MESSAGE });
     expect(classifyExtractionFailureStageV1(notJson, modelFailure)).toBe('output_json');
+    // A reply stopped at the model's own output limit holds as too long for one pass, never as a transient failure.
+    const tooLong = new StructuredGenerationAttemptError('permanently_rejected', 'reached the output-token limit', false, { stopReason: 'length' });
+    expect(classifyExtractionFailureStageV1(tooLong, modelFailure)).toBe('output_too_long');
+    // A prompt past the model's own context window holds as a meeting too long for one extraction call.
+    expect(classifyExtractionFailureStageV1(new ExtractionInputTooLongError('OpenRouter'), modelFailure)).toBe('input_too_long');
+    expect(classifyExtractionFailureStageV1(new StructuredGenerationAttemptError('permanently_rejected', 'refused', false, { stopReason: 'content_filter' }), modelFailure)).toBe('permanently_rejected');
     expect(extractionSchemaFailureStage(new AdapterError('temporarily_unavailable', `${SCHEMA}untrusted-value`, true))).toBeUndefined();
     expect(extractionGroundingFailureStage(new AdapterError('temporarily_unavailable', `${GROUNDING}${modelValue}`, true))).toBeUndefined();
   });

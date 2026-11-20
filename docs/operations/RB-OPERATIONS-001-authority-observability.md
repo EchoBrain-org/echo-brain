@@ -415,6 +415,10 @@ worker passes and review requests reuse. `attempt` on extraction is the durable
 attempt ledger ordinal. A parked meeting ends its worker pass with `result=held`;
 a scheduled extraction retry reports `retry_pending`. Grounding failures carry
 an allowlisted `grounding_stage`, such as `evidence_id`, without the cited IDs.
+Two held stages name a meeting one extraction call cannot take: `output_too_long`
+(the reply stopped at the model's own output maximum) and `input_too_long` (the
+provider refused a prompt past the model's context window). Neither is retried
+automatically; an operator may authorize one more attempt.
 The attempt ledger remains authoritative for holds and retry authorization.
 
 | Evidence | What it proves |
@@ -652,12 +656,11 @@ Ask journey, so it is listed, counted and alarmed like any Ask:
 | `ask_response` | `answered`, `partial`, `not_found` or `clarify` (a follow-up that asked which one, ADR-0047). |
 
 The retrieval summary also records `research_stop_reason`: `finished`,
-`empty_catalog`, `no_progress`, `step_limit`, `budget`, or `unusable_step`.
-When a required access revalidation leaves too little time to admit the next
-planner call, the stop is `budget` and `research_admission` is
-`post_revalidation_no_time`. This does not count as an unusable model reply;
-the writer can still use evidence already released within its reserved time.
-These fields contain only fixed diagnostic values, never queries or evidence.
+`empty_catalog`, `no_progress`, `stalled`, or `unusable_step`. Research has
+no round, call or time budget: `stalled` means a research model call sent
+nothing for its silence period, twice. The writer still answers from evidence
+already released. These fields contain only fixed diagnostic values, never
+queries or evidence.
 
 An Ask (a question, never a background task) also records five counts on the
 span that carries its `planned_query_count`, for the research tool contract
@@ -718,7 +721,6 @@ Meeting extraction (`llm-decision-processor.ts`):
 | --- | --- |
 | `extraction_item_set_aside` | Set aside a malformed or ungrounded item; its reason and cited units reach only the extraction's LangSmith trace, while staging tracing is on |
 | `extraction_repeat_dropped` | Dropped a repeated item: the same kind, text and units, or the same id after evidence trimming |
-| `extraction_owner_cleared` | Cleared a proposed action owner that no cited unit names |
 | `extraction_due_cleared` | Cleared a due date that is not a date or falls before the meeting |
 | `extraction_due_coerced` | Stored a date-only due date as the meeting's local noon |
 | `extraction_decided_downgraded` | Stored a decided decision that cites only questions as proposed |

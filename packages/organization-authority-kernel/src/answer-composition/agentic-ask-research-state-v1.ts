@@ -5,7 +5,7 @@ import type { AgenticResearchNeedKindV1 } from "./agentic-research-v1.js";
 export interface AskResearchObservationV1 {
   readonly operation: 'search' | 'list';
   readonly fingerprint: string;
-  /** False for an error, availability notice, truncated search or unfinished list. */
+  /** False for an error, availability notice, truncated search, search with untested (unchecked) items or unfinished list. */
   readonly complete: boolean;
   /** A completed search's source, or null for a search across the catalog. */
   readonly source?: string | null;
@@ -98,10 +98,11 @@ function completionProblems(
       const label = `part ${index + 1} need ${need.id === undefined ? "" : `${need.id} `}"${need.need}"`;
       if (need.status === 'open') { problems.push(`${label} is still open`); continue; }
       if (need.status === 'not_found') {
+        // Absence needs one completed read: a search or list that finished. An error, an availability notice or an unfinished
+        // page is never complete, so it never counts (a truth check). Searching again in other words is the prompt's advice.
         const completed = observations.slice(need.observations_before).filter(value => value.complete);
-        const searches = new Set(completed.filter(value => value.operation === 'search').map(value => value.fingerprint));
-        if (searches.size < 2 && !completed.some(value => value.operation === 'list')) {
-          problems.push(`${label} is not_found after fewer than two completed searches${list ? " or a completed list" : ""}`);
+        if (!completed.some(value => value.operation === 'search' || value.operation === 'list')) {
+          problems.push(`${label} is not_found before any completed search${list ? " or list" : ""}`);
         }
       }
       problems.push(...settled(need, label));

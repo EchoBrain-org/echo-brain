@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PERSON_DIRECTORY_PATH_V1,
+  PERSON_UPDATE_REQUEST_MAX_BYTES_V1,
   validateOrganizationDirectorySearchV1,
   validateOrganizationDirectoryV1,
   validatePersonUpdateSubmitV3,
@@ -42,6 +43,8 @@ describe('project context V1 public codecs', () => {
     expect(validateProjectMemberAddV1({ schema_version: 1, kind: 'echo-project-member-add-v1', request_id, project_id, membership_id }))
       .toMatchObject({ request_id, project_id, membership_id });
     expect(validateProjectCreateV1({ schema_version: 1, kind: 'echo-project-create-v1', request_id, name: 'é'.repeat(100) }).name).toBe('é'.repeat(100));
+    // A project name has no length of its own: the request carries it.
+    expect(validateProjectCreateV1({ schema_version: 1, kind: 'echo-project-create-v1', request_id, name: 'é'.repeat(10_000) }).name).toBe('é'.repeat(10_000));
   });
 
   it('keeps settings mutations closed and gives V2 lifecycle state its own response family', () => {
@@ -87,6 +90,18 @@ describe('project context V1 public codecs', () => {
     expect(() => validateProjectDirectorySearchV1({ project_id, query: ' ', limit: 2 })).toThrow();
   });
 
+  it('checks a name search by its form alone: a lone symbol, many words or a long line is a search, two lines are not', () => {
+    const words = Array.from({ length: 40 }, (_, index) => `w${index}`).join(' ');
+    for (const query of ['@', '—', words, 'é'.repeat(240), 'x'.repeat(5_000)]) {
+      expect(validateProjectDirectorySearchV1({ project_id, query }).query).toBe(query);
+      expect(validateOrganizationDirectorySearchV1({ query }).query).toBe(query);
+    }
+    for (const query of ['Ada\nLovelace', 'é']) {
+      expect(() => validateProjectDirectorySearchV1({ project_id, query })).toThrow('Project directory search query is invalid');
+      expect(() => validateOrganizationDirectorySearchV1({ query })).toThrow('Organization directory search query is invalid');
+    }
+  });
+
   it('keeps the organization directory to query and paging, with the project directory bounds', () => {
     expect(PERSON_DIRECTORY_PATH_V1).toBe('/v1/person/directory');
     expect(validateOrganizationDirectorySearchV1({})).toEqual({ limit: 10 });
@@ -127,7 +142,11 @@ describe('project context V1 public codecs', () => {
     expect(validatePersonUpdateSubmitV3(common)).toEqual(common);
     expect(validatePersonUpdateSubmitV3({ ...common, audience: { kind: 'team' } }).audience).toEqual({ kind: 'team' });
     expect(validatePersonUpdateSubmitV3({ ...common, title: 'é'.repeat(100), text: '😀'.repeat(2048) }).text).toBe('😀'.repeat(2048));
-    expect(() => validatePersonUpdateSubmitV3({ ...common, text: '"'.repeat(8192) })).toThrow();
+    // A note has no size of its own: only the 1 MiB request body bound applies.
+    expect(validatePersonUpdateSubmitV3({ ...common, text: 'x'.repeat(256 * 1024) }).text).toHaveLength(256 * 1024);
+    expect(validatePersonUpdateSubmitV3({ ...common, text: '"'.repeat(8192) }).text).toHaveLength(8192);
+    expect(() => validatePersonUpdateSubmitV3({ ...common, text: 'x'.repeat(PERSON_UPDATE_REQUEST_MAX_BYTES_V1) })).toThrow('byte bound');
+    expect(PERSON_UPDATE_REQUEST_MAX_BYTES_V1).toBe(1024 * 1024);
   });
 
   it('rejects hostile recursive input before any project contract can observe a different shape', () => {

@@ -61,7 +61,7 @@ it('keeps staging Jira connections in the state directory and reuses each Person
     jira_person_live: { enabled: true, cloud_id: FIXTURE_CLOUD, integration_id: 'jira', nango_authorization: () => 'synthetic-nango-key-0000000000000000' },
     openrouter_credential_file: manifest.llm_credential_file,
   }, { api: { oidc_provider: seams.oidc_provider,
-    answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 } },
+    answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000, context_tokens: 32_768, max_output_tokens: 8_000 } },
   }, slack: seams.slack, jira_person_live_seams: seams.jira_person_live_seams });
   let runtime = await open();
   let owner = '';

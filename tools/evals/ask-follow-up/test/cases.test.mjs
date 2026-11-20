@@ -48,3 +48,19 @@ test("refuses a set that is not the registered one", () => {
   assert.match(altered((copy) => { copy.cases[1].id = copy.cases[0].id; }).join(), /missing or repeated/u);
   assert.deepEqual(altered((copy) => { copy.kind = "other"; }), ["the cases document kind is invalid"]);
 });
+
+test("takes a long natural-language question on two lines, as the product's question rule does", () => {
+  const long = (copy) => {
+    const entry = copy.cases.find((item) => item.group === "standalone");
+    entry.question = `${entry.expect.terms.join(" ")} — what did the hardware and firmware teams decide about the thermal fix, who owns each follow-up, `
+      + "what's still blocked on supplier samples, and what changed since last Tuesday's review?\nAnd which of those are due before Friday's build review?";
+    return entry.question;
+  };
+  const copy = JSON.parse(readFileSync(CASES_FILE, "utf8"));
+  const question = long(copy);
+  assert.ok(question.length > 240 && new Set(question.toLowerCase().match(/[\p{L}\p{N}]+/gu)).size > 32);
+  assert.deepEqual(caseProblems(copy), []);
+  const over = JSON.parse(readFileSync(CASES_FILE, "utf8"));
+  over.cases.find((item) => item.group === "standalone").question = "What\u0007 changed?";
+  assert.match(caseProblems(over).join(), /Remove control characters from the question/u);
+});

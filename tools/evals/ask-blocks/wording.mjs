@@ -3,7 +3,7 @@
  * measured from the laid-out V8 answer alone, and the three rules are counts over trials.
  */
 import { readFileSync } from "node:fs";
-import { validatePersonQueryText } from "@echo-brain/organization-api";
+import { validatePersonQuestionText } from "@echo-brain/organization-api";
 import { ITEM_KINDS, nonEmptyStrings, says, words } from "../shared/grading.mjs";
 
 export const CASES_FILE = new URL("./wording-cases.json", import.meta.url);
@@ -55,7 +55,7 @@ export function caseProblems(document) {
     if (typeof entry?.id !== "string" || !/^[a-z0-9-]{3,80}$/u.test(entry.id) || ids.has(entry.id)) problems.push(`${where}: id is missing or repeated`);
     ids.add(entry?.id);
     if (!Object.hasOwn(GROUPS, entry?.group)) { problems.push(`${where}: group is invalid`); continue; }
-    try { validatePersonQueryText(entry.question); } catch { problems.push(`${where}: the question is not a valid Ask question`); continue; }
+    try { validatePersonQuestionText(entry.question); } catch { problems.push(`${where}: the question is not a valid Ask question`); continue; }
     const items = Array.isArray(entry.items) ? entry.items : [];
     if (items.length === 0 || !items.every((item) => ITEM_KINDS.has(item?.kind))) problems.push(`${where}: items must be follow-ups, decisions or tickets`);
     if (typeof entry.research?.query !== "string" || typeof entry.research?.need !== "string") problems.push(`${where}: research needs a query and a need`);

@@ -78,13 +78,13 @@ export class SqliteTriggerRunsV1 {
       event.reviewer.organization_id, event.reviewer.principal_id, event.reviewer.membership_id, event.record_sha256, timestamp, timestamp);
   }
 
-  /** The actor's newest runs, newest first. */
-  list(actor: ApprovalActorV1, limit: number): readonly TriggerRunRowV1[] {
-    if (!Number.isFinite(limit)) throw new TypeError('Trigger run limit must be finite');
-    const capped = Math.max(0, Math.min(100, Math.floor(limit)));
+  /** The actor's runs, newest first: every one, or the newest `limit` when a caller names a count. */
+  list(actor: ApprovalActorV1, limit?: number): readonly TriggerRunRowV1[] {
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 0)) throw new TypeError('Trigger run limit must be a whole number');
+    // SQLite reads LIMIT -1 as no limit.
     return (this.database.prepare(`${selectRows} AND organization_id=? AND principal_id=? AND membership_id=?
       ORDER BY created_at DESC, run_id DESC LIMIT ?`)
-      .all(actor.organization_id, actor.principal_id, actor.membership_id, capped) as StoredRowV1[]).map(publicRow);
+      .all(actor.organization_id, actor.principal_id, actor.membership_id, limit ?? -1) as StoredRowV1[]).map(publicRow);
   }
 
   /**
@@ -159,6 +159,21 @@ export class SqliteTriggerRunsV1 {
           AND (state='pending' OR (state='running' AND lease_expires_at<=?))`).run(
         lease_token, lease_expires_at, timestamp, runId, actor.organization_id, actor.principal_id, actor.membership_id, timestamp).changes;
       return changed === 1 ? { kind: 'claimed', lease_token } : { kind: 'running' };
+    });
+  }
+
+  /**
+   * Liveness: extends a live lease the caller still owns to `leaseMs` from now, so a run that keeps making progress is
+   * never stopped by a clock, while a silent one still lapses. False when the lease was lost or had already lapsed.
+   */
+  renew(runId: string, leaseToken: string, leaseMs: number): boolean {
+    if (!Number.isSafeInteger(leaseMs) || leaseMs <= 0) throw new TypeError('Trigger run lease must be a positive integer');
+    return this.immediate(() => {
+      const currentTime = this.currentTime();
+      const timestamp = currentTime.toISOString();
+      return this.database.prepare(`UPDATE authority_trigger_runs_v1 SET lease_expires_at=?
+        WHERE run_id=? AND state='running' AND lease_token=? AND lease_expires_at>?`).run(
+        new Date(currentTime.getTime() + leaseMs).toISOString(), runId, leaseToken, timestamp).changes === 1;
     });
   }
 

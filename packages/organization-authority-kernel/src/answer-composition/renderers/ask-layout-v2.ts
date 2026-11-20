@@ -1,13 +1,8 @@
 import {
-  PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2,
-  PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2,
-  PERSON_ANSWER_CAPTION_MAX_BYTES_V1,
-  PERSON_ANSWER_CELL_MAX_BYTES_V1,
-  PERSON_ANSWER_COLUMN_MAX_BYTES_V1,
   type PersonAnswerBlockV2,
   type PersonAnswerTableRowV1,
 } from "@echo-brain/organization-api";
-import { boundedBytes, type AnswerItem } from "../agentic-ask-v1-model-protocol.js";
+import type { AnswerItem } from "../agentic-ask-v1-model-protocol.js";
 
 /**
  * How Ask lays out a V8 answer part with answer layout v2 (ADR-0051). The
@@ -67,26 +62,26 @@ export function orderAskBlocksV2<L extends { readonly block?: number }, S extend
   ]);
 }
 
-/** A table's columns, each within the contract's bytes. */
+/** A table's columns, whole. */
 function columnsOf(columns: readonly string[]): string[] {
-  return columns.map(column => boundedBytes(column, PERSON_ANSWER_COLUMN_MAX_BYTES_V1));
+  return [...columns];
 }
 
-/** A table's cells, one per column, each within the contract's bytes. */
+/** A table's cells, one per column, whole. */
 function cellsOf(cells: readonly string[], columns: readonly string[]): readonly string[] {
-  return Object.freeze(columns.map((_, at) => boundedBytes(cells[at] ?? "", PERSON_ANSWER_CELL_MAX_BYTES_V1)));
+  return Object.freeze(columns.map((_, at) => cells[at] ?? ""));
 }
 
-/** A list statement's table (ADR-0041): its columns, its rows and its caption, when it has one, each within the contract's bytes. */
+/** A list statement's table (ADR-0041): its columns, its rows and its caption, when it has one, whole. */
 function listTable(shape: AskListShapeV2): { readonly columns: string[]; readonly rows: PersonAnswerTableRowV1[]; readonly caption?: string } {
   const columns = columnsOf(shape.columns);
-  const caption = boundedBytes(shape.caption, PERSON_ANSWER_CAPTION_MAX_BYTES_V1);
+  const caption = shape.caption;
   return { columns, rows: shape.rows.map(row => Object.freeze({ cells: cellsOf(row.cells, columns), citation_indexes: Object.freeze([...row.citation_indexes]) })), ...(caption.length === 0 ? {} : { caption }) };
 }
 
 type Run = { readonly shape: AskBlockShapeV2; readonly statements: number[] };
 const blockOf = (shape: AskBlockShapeV2) => "block" in shape ? shape.block : undefined;
-const titleOf = (shape: AskBlockShapeV2) => "title" in shape && shape.title !== undefined ? { title: boundedBytes(shape.title, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2) } : {};
+const titleOf = (shape: AskBlockShapeV2) => "title" in shape && shape.title !== undefined ? { title: shape.title } : {};
 
 /**
  * The blocks of the statements a v2 answer kept, in their order: the answer; each list statement as its own table, or
@@ -120,7 +115,8 @@ export function buildAskBlocksV2(statements: readonly AskBlockStatementV2[]): re
     const title = opens ? titleOf(shape) : {};
     // A run's statements are all of its kind.
     const items = run.statements.map(at => statements[at]!);
-    const enough = run.statements.length >= PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2;
+    // A block may show one item: no count forces it into text.
+    const enough = run.statements.length >= 1;
     if (shape.kind === "answer") blocks.push({ kind: "answer", statements: run.statements });
     else if (shape.kind === "list") blocks.push({ kind: "table", statements: run.statements, ...listTable({ ...shape,
       rows: items.flatMap(({ shape: item }) => item.kind === "list" ? item.rows : []),
@@ -135,7 +131,7 @@ export function buildAskBlocksV2(statements: readonly AskBlockStatementV2[]): re
       blocks.push({ kind: "timeline", ...title, statements: run.statements, events: items.flatMap(({ shape: event }) => event.kind !== "event" ? []
         : [Object.freeze({ date: event.date, text: event.text, ...(event.who === undefined ? {} : { who: event.who }) })]) });
     } else if (shape.kind === "fact" && enough) {
-      blocks.push({ kind: "card", title: boundedBytes(shape.title, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2), entity: shape.entity, statements: run.statements,
+      blocks.push({ kind: "card", title: shape.title, entity: shape.entity, statements: run.statements,
         facts: items.flatMap(({ shape: fact }) => fact.kind !== "fact" ? [] : [Object.freeze({ label: fact.label, value: fact.value })]) });
     } else text(run, title);
   }
@@ -159,29 +155,51 @@ export function quoteIsWordForWordV2(quote: string, sources: readonly string[]):
 
 const MONTHS: Readonly<Record<string, number>> = Object.freeze({ jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 });
 const ISO_DAY = /\b(\d{4})-(\d{2})-(\d{2})\b/gu;
-const NAMED_DAY = /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s+(\d{4}))?/gu;
+const MONTH_NAME = String.raw`(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)`;
+const NAMED_DAY = new RegExp(String.raw`\b${MONTH_NAME}\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s+(\d{4}))?`, "gu");
+/** A day before its month's name: "4 November 2026", "4th of Nov". */
+const DAY_FIRST = new RegExp(String.raw`\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?${MONTH_NAME}\b\.?(?:,?\s+(\d{4}))?`, "gu");
+/** A numeric day: year first (2026/11/04, 2026.11.04), or day and month either way round with a year (04/11/2026). */
+const YEAR_FIRST_DAY = /\b(\d{4})[/.](\d{1,2})[/.](\d{1,2})\b/gu;
+const NUMERIC_DAY = /\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})\b/gu;
+/** A day written in Chinese or Japanese: 2026年11月4日, or 11月4日. */
+const CJK_DAY = /(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日/gu;
 
 const dayOf = (year: number, month: number, day: number) => `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 const daysApart = (left: string, right: string) => Math.abs(Date.parse(`${left}T00:00:00Z`) - Date.parse(`${right}T00:00:00Z`));
 
 /**
- * Every day a text writes, as YYYY-MM-DD: an ISO day, a month's name with a day and a year, and a month's name with a
- * day alone read as the nearest such day to each of `anchors` (YYYY-MM-DD days, such as the days its item records), so
- * "Nov 3" in a note of Oct 27, 2025 is 2025-11-03, and "Jan 4" in one of Dec 28 is the next January's.
+ * Every day a text writes, as YYYY-MM-DD: an ISO day; a month's name with a day, either order ("Nov 3", "3 November");
+ * a numeric day year first or, where only one reading is possible, day and month either way round; and a Chinese or
+ * Japanese day (11月4日). A day with no year is read as the nearest such day to each of `anchors` (YYYY-MM-DD days, such as
+ * the days its item records), so "Nov 3" in a note of Oct 27, 2025 is 2025-11-03, and "Jan 4" in one of Dec 28 is the
+ * next January's. A day it cannot read leaves an event undated, never wrongly dated.
  */
 export function daysWrittenV2(text: string, anchors: readonly string[]): ReadonlySet<string> {
   const days = new Set<string>();
-  for (const found of text.matchAll(ISO_DAY)) days.add(`${found[1]}-${found[2]}-${found[3]}`);
-  for (const found of text.matchAll(NAMED_DAY)) {
-    const month = MONTHS[found[1]!.slice(0, 3).toLowerCase()];
-    const day = Number(found[2]);
-    if (month === undefined || day < 1 || day > 31) continue;
-    if (found[3] !== undefined) { days.add(dayOf(Number(found[3]), month, day)); continue; }
+  /** A month and day, with a year or else the nearest such day to each anchor. */
+  const add = (month: number | undefined, day: number, year?: string) => {
+    if (month === undefined || month < 1 || month > 12 || day < 1 || day > 31) return;
+    if (year !== undefined) { days.add(dayOf(Number(year), month, day)); return; }
     for (const anchor of anchors) {
-      const year = Number(anchor.slice(0, 4));
-      const nearest = [year - 1, year, year + 1].map(candidate => dayOf(candidate, month, day)).sort((left, right) => daysApart(left, anchor) - daysApart(right, anchor))[0]!;
+      const anchorYear = Number(anchor.slice(0, 4));
+      const nearest = [anchorYear - 1, anchorYear, anchorYear + 1].map(candidate => dayOf(candidate, month, day)).sort((left, right) => daysApart(left, anchor) - daysApart(right, anchor))[0]!;
       days.add(nearest);
     }
+  };
+  const named = (name: string) => MONTHS[name.slice(0, 3).toLowerCase()];
+  for (const found of text.matchAll(ISO_DAY)) days.add(`${found[1]}-${found[2]}-${found[3]}`);
+  for (const found of text.matchAll(NAMED_DAY)) add(named(found[1]!), Number(found[2]), found[3]);
+  for (const found of text.matchAll(DAY_FIRST)) add(named(found[2]!), Number(found[1]), found[3]);
+  for (const found of text.matchAll(YEAR_FIRST_DAY)) add(Number(found[2]), Number(found[3]), found[1]);
+  for (const found of text.matchAll(CJK_DAY)) add(Number(found[2]), Number(found[3]), found[1]);
+  // 04/11/2026 is April 11 or November 4: read only when one reading is impossible or both are the same day, so an event
+  // is never dated by a guess.
+  for (const found of text.matchAll(NUMERIC_DAY)) {
+    const [first, second] = [Number(found[1]), Number(found[2])];
+    if (first > 12 && second <= 12) add(second, first, found[3]);
+    else if (second > 12 && first <= 12) add(first, second, found[3]);
+    else if (first === second) add(first, second, found[3]);
   }
   return days;
 }

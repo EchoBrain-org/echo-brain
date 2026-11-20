@@ -211,10 +211,15 @@ describe("approval decision record input v2", () => {
     ["name an unknown signal", [{ signal_id: "act-99", owner: "A" }]],
     ["name a decision", [{ signal_id: "dec-1", owner: "A" }]],
     ["are out of brief order", [{ signal_id: "act-2", owner: "A" }, { signal_id: "act-1", owner: "B" }]],
-    ["number 41", Array.from({ length: 41 }, (_, index) => ({ signal_id: `act-${index + 1}`, owner: "A" }))],
+    ["name one action twice", [{ signal_id: "act-1", owner: "A" }, { signal_id: "act-1", owner: "B" }]],
   ])("refuses owners that %s", (_label, owners) => {
     const actions = Array.from({ length: 41 }, (_, index) => ({ id: `act-${index + 1}` }));
     refuses(validInput({ owners, actions }));
+  });
+  it("accepts an owner for every action, however many there are", () => {
+    const actions = Array.from({ length: 120 }, (_, index) => ({ id: `act-${String(index + 1).padStart(3, "0")}` }));
+    const owners = actions.map((action) => ({ signal_id: action.id, owner: "A" }));
+    expect(validateApprovalDecisionRecordInputV2(validInput({ owners, actions })).approval_decision_ref_v2.action_owners).toHaveLength(120);
   });
   it("refuses an owner of an action this record does not hold", () => {
     refuses(validInput({ actions: [{ id: "act-1" }], owners: [{ signal_id: "act-2", owner: "Ana" }] }), "owners");

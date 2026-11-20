@@ -1,6 +1,6 @@
-import { normalizeAtlassianDocumentTextV1 } from '@echo-brain/provider-runtime/atlassian-document-text-v1';
+import { normalizeAtlassianDocumentTextV1, splitAtlassianTextV1 } from '@echo-brain/provider-runtime/atlassian-document-text-v1';
 import { sha256Digest } from '@echo-brain/federation-protocol';
-import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
+import { PERSON_EVIDENCE_LABEL_MAX_BYTES_V1, type PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import type { PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { JIRA_PERSON_PROVIDER_V1, JIRA_ID, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraBoundText, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
@@ -33,12 +33,13 @@ export interface ParsedJiraIssueV1 {
   readonly created_at: string;
   /** Direct provider references only; each is exact-read before its metadata is released. */
   readonly related_issue_ids: readonly string[];
-  /** True when optional link discovery inspected only its bounded prefix. */
-  readonly related_truncated: boolean;
   readonly value: Omit<PersonLiveEvidenceValueV1<PersonTicketCitationV1>, 'handle'>;
+  /** The row's label was cut to its bound; the text stays whole (ADR-0041). */
   readonly truncated: boolean;
-  /** The released text itself was cut to its bound; a label cut alone leaves the text whole (ADR-0041). */
-  readonly text_truncated: boolean;
+  /** Content the text cannot represent (a screenshot, a macro) was left out, with a marker where it was. */
+  readonly incomplete: boolean;
+  /** The ticket's whole text in sections of at most 3 KiB, the first being `value.text`; empty for an inventory read. */
+  readonly sections: readonly string[];
 }
 
 /**
@@ -46,16 +47,12 @@ export interface ParsedJiraIssueV1 {
  * trusted or released: a link contributes only an opaque issue ID, and the
  * reader exact-reads that ID under the current connection before release.
  */
-const RELATED_LINK_SCAN_MAX = 64;
-
-function relatedIssueIds(value: unknown, anchorId: string): { readonly ids: readonly string[]; readonly truncated: boolean } {
-  // The provider transport bounds JSON response bytes. Inspecting a fixed
-  // prefix avoids turning a large but valid link list into a failed anchor
-  // read, while still rejecting a malformed present array or inspected link.
+function relatedIssueIds(value: unknown, anchorId: string): readonly string[] {
+  // Every link is inspected: the provider transport's 1 MiB response bound
+  // already bounds the list, while a malformed present array or link is refused.
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length !== 0) jiraFailure('invalid_output');
   const ids = new Set<string>();
-  const count = Math.min(value.length, RELATED_LINK_SCAN_MAX);
-  for (let index = 0; index < count; index += 1) {
+  for (let index = 0; index < value.length; index += 1) {
     const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
     if (descriptor === undefined || !('value' in descriptor) || !descriptor.enumerable) jiraFailure('invalid_output');
     const raw = descriptor.value;
@@ -69,19 +66,20 @@ function relatedIssueIds(value: unknown, anchorId: string): { readonly ids: read
   }
   // Jira does not promise a useful link order. Numeric IDs are canonical,
   // non-zero decimal strings, so length then byte order is a stable order.
-  return Object.freeze({ ids: Object.freeze([...ids].sort((left, right) => left.length - right.length || (left < right ? -1 : left > right ? 1 : 0))),
-    truncated: value.length > count });
+  return Object.freeze([...ids].sort((left, right) => left.length - right.length || (left < right ? -1 : left > right ? 1 : 0)));
 }
 
-/** An issue's summary: one non-blank line of at most 256 KiB. */
+/** An issue's summary: one non-blank line, as long as the response that carried it. */
 function issueSummary(fields: Record<string, unknown>): string {
-  if (typeof fields.summary !== 'string' || fields.summary.trim() === '' || Buffer.byteLength(fields.summary, 'utf8') > 256 * 1024 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(fields.summary)) jiraFailure('invalid_output');
+  if (typeof fields.summary !== 'string' || fields.summary.trim() === '' || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(fields.summary)) jiraFailure('invalid_output');
   return fields.summary;
 }
 
-/** An issue's description as text, empty when it has none; embedded content it cannot read is refused. */
-function issueDescription(fields: Record<string, unknown>): string {
-  return fields.description === null ? '' : normalizeAtlassianDocumentTextV1(fields.description, JIRA_PERSON_PROVIDER_V1, { unsupported: 'reject' }).text.trim();
+/** An issue's description as text, empty when it has none; content it cannot represent is left out and `incomplete`. */
+function issueDescription(fields: Record<string, unknown>): { readonly text: string; readonly incomplete: boolean } {
+  if (fields.description === null) return { text: '', incomplete: false };
+  const normalized = normalizeAtlassianDocumentTextV1(fields.description, JIRA_PERSON_PROVIDER_V1, { unsupported: 'omit' });
+  return { text: normalized.text.trim(), incomplete: normalized.incomplete };
 }
 
 /** An issue's status name, its assignee's display name and its due day, when it has them. */
@@ -101,7 +99,8 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
   const project = parseJiraProject(fields.project, input.origin, apiPrefix);
   if (!key.startsWith(`${project.key}-`)) jiraFailure('invalid_output');
   const summary = issueSummary(fields);
-  const label = jiraBoundText(`${key}: ${summary}`, 256);
+  // The row's title within the evidence label bound; the whole summary stays in the ticket's text.
+  const label = jiraBoundText(`${key}: ${summary}`, PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
   const rawCreated = jiraString(fields.created, 64, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})$/);
   jiraDay(rawCreated.slice(0, 10));
   const created = new Date(rawCreated);
@@ -113,15 +112,18 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
   // Jira can omit this optional field when linking is disabled or unavailable.
   // That means no related context was discoverable, not that no link exists.
   // A field that is present must still have the expected safe array shape.
-  const relatedLinks = input.related && fields.issuelinks !== undefined ? relatedIssueIds(fields.issuelinks, id) : Object.freeze({ ids: Object.freeze([]), truncated: false });
-  const content = input.inventory ? undefined : jiraBoundText(`${key}: ${summary}\n\n${issueDescription(fields)}`.trim(), 3072);
+  const related_issue_ids = input.related && fields.issuelinks !== undefined ? relatedIssueIds(fields.issuelinks, id) : Object.freeze([]);
+  const description = input.inventory ? undefined : issueDescription(fields);
+  // The whole ticket text in lossless sections of the evidence text size, the way a Confluence page is read.
+  const sections = description === undefined ? Object.freeze([]) : splitAtlassianTextV1(jiraBoundText(`${key}: ${summary}\n\n${description.text}`.trim(), Number.MAX_SAFE_INTEGER).text);
+  const content = sections[0];
   const citation: PersonTicketCitationV1 = Object.freeze({ kind: 'ticket', tool_id: 'jira', external_scope_id: input.cloudid,
-    ticket_id: id, permalink: `${input.origin}/browse/${key}`, text_sha256: sha256Digest(content?.text ?? '') });
-  return Object.freeze({ id, key, project_id: project.id, created_at: created.toISOString(), related_issue_ids: relatedLinks.ids, related_truncated: relatedLinks.truncated,
-    truncated: label.truncated || (content?.truncated ?? false), text_truncated: content?.truncated ?? false,
+    ticket_id: id, permalink: `${input.origin}/browse/${key}`, text_sha256: sha256Digest(content ?? '') });
+  return Object.freeze({ id, key, project_id: project.id, created_at: created.toISOString(), related_issue_ids,
+    truncated: label.truncated, incomplete: description?.incomplete ?? false, sections,
     value: Object.freeze({ citation, label: label.text, visibility: 'only_me', occurred_at, date_kind: 'created', dates: Object.freeze({ created: created.toISOString(), ...(updated === undefined ? {} : { updated: new Date(updated).toISOString() }), ...(due_at === undefined ? {} : { due: due_at }) }),
       attributes: Object.freeze({ status, ...(owner === undefined ? {} : { owner }), ...(due_at === undefined ? {} : { due_at }) }),
-      ...(content === undefined ? {} : { text: content.text }) }) });
+      ...(content === undefined ? {} : { text: content }) }) });
 }
 
 /**
@@ -149,9 +151,8 @@ async function* jiraBulkIssues(transport: JiraCloudTransportV1, input: { readonl
   }
 }
 
-/** The Ask source check reads 50 issues per bulk call (Jira allows 100), in at most two calls. */
-const TICKET_CHECK_BATCH = 50;
-const TICKET_CHECK_MAX_IDS = 100;
+/** Jira's bulk fetch reads at most 100 issues per call; the Ask source check and assignee read take that many at a time. */
+const JIRA_BULK_FETCH_MAX_IDS = 100;
 /** Readability only: one small field, never read. */
 const TICKET_CHECK_FIELDS = Object.freeze(['status']);
 
@@ -161,14 +162,11 @@ const TICKET_CHECK_FIELDS = Object.freeze(['status']);
  * Jira could not return just now (issueErrors) or a malformed page fails the whole read, never a partial answer.
  */
 export async function readJiraReadableTicketsV1(transport: JiraCloudTransportV1, input: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlySet<string>> {
-  if (input.ticket_ids.length > TICKET_CHECK_MAX_IDS) jiraFailure('invalid_request');
   const found = new Set<string>();
-  for await (const issue of jiraBulkIssues(transport, input, { batch: TICKET_CHECK_BATCH, fields: TICKET_CHECK_FIELDS, issue_errors: true, abort: true })) found.add(issue.id);
+  for await (const issue of jiraBulkIssues(transport, input, { batch: JIRA_BULK_FETCH_MAX_IDS, fields: TICKET_CHECK_FIELDS, issue_errors: true, abort: true })) found.add(issue.id);
   return found;
 }
 
-/** Jira's bulk fetch reads at most 100 issues per call. */
-const ASSIGNEE_BULK_FETCH_MAX_IDS = 100;
 const JIRA_ACCOUNT_ID = /^[A-Za-z0-9:_-]{1,128}$/;
 
 /**
@@ -178,7 +176,7 @@ const JIRA_ACCOUNT_ID = /^[A-Za-z0-9:_-]{1,128}$/;
  */
 export async function readJiraAssigneeAccountsV1(transport: JiraCloudTransportV1, input: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string>> {
   const found = new Map<string, string>();
-  for await (const issue of jiraBulkIssues(transport, input, { batch: ASSIGNEE_BULK_FETCH_MAX_IDS, fields: ['assignee'], issue_errors: false, abort: false })) {
+  for await (const issue of jiraBulkIssues(transport, input, { batch: JIRA_BULK_FETCH_MAX_IDS, fields: ['assignee'], issue_errors: false, abort: false })) {
     const assignee = jiraRecord(issue.fields).assignee;
     if (assignee !== null && assignee !== undefined) found.set(issue.id, jiraString(jiraRecord(assignee).accountId, 128, JIRA_ACCOUNT_ID));
   }

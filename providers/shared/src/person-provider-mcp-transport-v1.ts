@@ -19,7 +19,7 @@ export function createPersonProviderMcpTransportV1(
     binding: transport.binding,
     async call(name: string, args: Readonly<Record<string, unknown>>, signal?: AbortSignal): Promise<string> {
       const id = randomUUID();
-      const envelopes = provider.array(await transport.request({ name, arguments: args, id, signal }), 32).map(provider.record);
+      const envelopes = provider.array(await transport.request({ name, arguments: args, id, signal }), Number.MAX_SAFE_INTEGER).map(provider.record);
       const responses = envelopes.filter(value => value.id === id);
       if (responses.length !== 1 || envelopes.some(value => value.id !== undefined && value.id !== id)) provider.failure('invalid_output');
       const response = responses[0]!;
@@ -43,7 +43,7 @@ async function decodeMcpResponse(response: Response, options: BoundedResponseOpt
     if (type === 'application/json') return [JSON.parse(text)];
     const events: unknown[] = [];
     const parser = createParser({ maxBufferSize: options.maxBytes,
-      onEvent(event) { if (events.length >= 32) throw new Error(); events.push(JSON.parse(event.data)); },
+      onEvent(event) { events.push(JSON.parse(event.data)); },
       onError() { throw new Error(); },
     });
     parser.feed(text);

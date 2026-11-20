@@ -21,7 +21,7 @@ import { writerReply } from './fixtures/agentic-scenarios.js';
  */
 
 const JIRA = { source_id: 'jira', kind: 'ticket', selector: 'tickets', description: 'Live work items.', metadata_only_list: true, tool_id: 'jira' } as const;
-const generation = { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 };
+const generation = { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000, context_tokens: 32_768, max_output_tokens: 8_000 };
 const checked = { checked_at: '2026-10-16T00:00:00.000Z' };
 const question = 'What are my open tasks?';
 const decision = { title: 'THERM DVT recovery sync', first_line: 'Ship fan curve v2 before DVT.', ref: `meeting:sha256:${'a'.repeat(64)}` } as const;

@@ -7,8 +7,13 @@ import type {
   OrganizationAuthorityDescriptorResponseV1,
 } from './contracts.js';
 
-export const MAX_ORGANIZATION_API_BODY_BYTES = 16 * 1024;
-const MAX_ORGANIZATION_API_CURSOR_CHARACTERS = 512;
+/**
+ * The Person API request body bound, one for every authenticated Person and project route (an Ask with its previous
+ * turn, a source check, a note, a project change): what the Authority's HTTP server reads for one JSON request. A
+ * transport bound against abuse, and the only limit on how much a person sends; the server, the CLI client and the
+ * desktop all hold a request to this one figure, so no client refuses what the server accepts.
+ */
+export const MAX_ORGANIZATION_API_BODY_BYTES = 1024 * 1024;
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const UUID_V4_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -209,8 +214,12 @@ export function openItemId(value: unknown, label: string): string {
   return value;
 }
 
-/** One trimmed NFC line of 1 to `maximum` characters (code points). */
-export function boundedLine(value: unknown, label: string, maximum: number): string {
+/**
+ * One trimmed NFC line of 1 to `maximum` characters (code points). With no
+ * `maximum`, the line has no length of its own and the message carrying it is
+ * its bound.
+ */
+export function boundedLine(value: unknown, label: string, maximum = Number.POSITIVE_INFINITY): string {
   if (typeof value !== 'string' || value.length === 0 || value.trim() !== value || value !== value.normalize('NFC') ||
       /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value) || [...value].length > maximum) fail(`${label} is invalid`);
   return value;
@@ -236,9 +245,9 @@ export function assertEvidenceText(value: unknown, label: string, maximumBytes: 
   }
 }
 
-/** A page cursor: canonical unpadded base64url of at most MAX_ORGANIZATION_API_CURSOR_CHARACTERS. */
+/** A page cursor: canonical unpadded base64url. The Authority writes it; the request that carries it bounds its length. */
 export function pageCursor(value: unknown, label: string): string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_ORGANIZATION_API_CURSOR_CHARACTERS || !/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) fail(`${label} is invalid`);
+  if (typeof value !== 'string' || value.length === 0 || !/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) fail(`${label} is invalid`);
   const last = value.at(-1)!; const remainder = value.length % 4;
   if ((remainder === 2 && !/^[AQgw]$/.test(last)) || (remainder === 3 && !/^[AEIMQUYcgkosw048]$/.test(last))) fail(`${label} is invalid`);
   return value;

@@ -1,8 +1,8 @@
 import { calendarDateV1, evidenceDateFilterV1, validateEvidenceDateFilterV1, EVIDENCE_ANY_DATE_V1, EVIDENCE_DATE_FIELDS_V1, type EvidenceDateFieldV1, type EvidenceDateSelectionV1, type EvidenceDatesV1 } from "./temporal-query-v1.js";
 import { createHash, randomBytes } from 'node:crypto';
-import { canonicalJsonBytes, canonicalSha256 } from '@echo-brain/federation-protocol';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PERSON_EVIDENCE_LABEL_MAX_BYTES_V1, PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1,
+  PERSON_EVIDENCE_LABEL_MAX_BYTES_V1,
   validatePersonConnectorAccessV1,
 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '../domain/errors.js';
@@ -12,12 +12,10 @@ import type {
   PersonLiveEvidenceResultV1, PersonLiveEvidenceSourceV1, PersonLiveEvidenceValueV1, PersonLiveEvidenceCoordinatesV1,
 } from './person-live-evidence-v1.js';
 
-const PERSON_LIVE_EVIDENCE_MAX_ITEMS_V1 = 50;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const ERROR_CODES = new Set(['conflict', 'invalid_request', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable']);
-/** Each attribute a live item may carry, with its UTF-8 bound: a tool item's owner, due date and status, a container's key and tool. */
-const ATTRIBUTE_BYTES: Readonly<Record<keyof PersonLiveEvidenceAttributesV1, number>> = Object.freeze({ owner: 512, due_at: 128, status: 128, key: 256, tool: 64 });
-const ATTRIBUTES = Object.freeze(Object.keys(ATTRIBUTE_BYTES) as (keyof PersonLiveEvidenceAttributesV1)[]);
+/** Each attribute a live item may carry: a tool item's owner, due date and status, a container's key and tool. */
+const ATTRIBUTES: readonly (keyof PersonLiveEvidenceAttributesV1)[] = Object.freeze(['owner', 'due_at', 'status', 'key', 'tool']);
 /**
  * Every date field, and `any`, passes this boundary in shape: the reader applies the one asked for or refuses it
  * (research tool contract v1). Its source's capabilities, not this boundary, say which it can apply.
@@ -33,7 +31,8 @@ function closedRecord(value: unknown, required: readonly string[], optional: rea
   if (required.some(key => !Object.hasOwn(descriptors, key)) ||
       Object.entries(descriptors).some(([key, descriptor]) => !('value' in descriptor) || !descriptor.enumerable || (!required.includes(key) && !optional.includes(key)))) invalidOutput();
 }
-function boundedString(value: unknown, bytes: number, multiline = false): asserts value is string {
+/** Non-empty NFC text without control characters (line breaks allowed when multiline). A byte bound applies only when given. */
+function boundedString(value: unknown, bytes = Number.POSITIVE_INFINITY, multiline = false): asserts value is string {
   if (typeof value !== 'string' || value.trim().length === 0 || value !== value.normalize('NFC') ||
       Buffer.byteLength(value, 'utf8') > bytes ||
       (multiline ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u : /[\p{Cc}\p{Zl}\p{Zp}]/u).test(value)) invalidOutput();
@@ -41,10 +40,14 @@ function boundedString(value: unknown, bytes: number, multiline = false): assert
 function day(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) !== value) invalidOutput();
 }
+/**
+ * What one reader call asks for: the caller's count, passed through whole; everything when it names none. Each reader
+ * (providers/*) fills one page to its provider's own page maximum and what one result carries, and the rest follows
+ * through its cursor or `truncated`. Never a refusal of a positive count.
+ */
 function limit(value: number | undefined): number {
-  const result = value ?? 10;
-  if (!Number.isInteger(result) || result < 1 || result > PERSON_LIVE_EVIDENCE_MAX_ITEMS_V1) invalid('Live evidence limit must be between 1 and 50');
-  return result;
+  if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) invalid('Live evidence limit must be a positive whole number');
+  return value ?? Number.MAX_SAFE_INTEGER;
 }
 
 /** Never propagate provider exception messages, causes, URLs or raw response bodies. */
@@ -85,12 +88,6 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
   /** Citation keys a successful check of this source has covered; request-local, like `released`. */
   const checked = new Set<string>();
   const cursors = new Map<string, { readonly provider: string; readonly selection: string }>();
-  // Audit is asynchronous. Reserve request-owned identifiers before it starts
-  // so concurrent releases cannot each admit themselves against the same stale
-  // capacity snapshot.
-  const reservedStored = new Map<string, number>();
-  const reservedReleased = new Map<string, number>();
-  let reservedCursors = 0;
   let cursorSequence = 0;
   const requestId = randomBytes(16).toString('hex');
   const current = (signal?: AbortSignal): void => {
@@ -127,7 +124,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       boundedString(value.handle, 512);
       boundedString(value.label, PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
       if (value.visibility !== 'only_me' && value.visibility !== 'team') invalidOutput();
-      if (value.text !== undefined) boundedString(value.text, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1, true);
+      if (value.text !== undefined) boundedString(value.text, undefined, true);
       // Every citation commits to exactly the text released (none for an inventory item), except a tool container's,
       // which commits to no text (research tool contract v1); the audit below still commits the container's text.
       if (citation.kind !== 'tool_container' && citation.text_sha256 !== `sha256:${createHash('sha256').update(value.text ?? '', 'utf8').digest('hex')}`) invalidOutput();
@@ -153,7 +150,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
         const copied: { -readonly [K in keyof PersonLiveEvidenceAttributesV1]?: string } = {};
         for (const field of ATTRIBUTES) {
           if (Object.hasOwn(value.attributes, field)) {
-            boundedString(value.attributes[field], ATTRIBUTE_BYTES[field]);
+            boundedString(value.attributes[field]);
             copied[field] = value.attributes[field];
           }
         }
@@ -173,42 +170,22 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       const descriptor = Object.getOwnPropertyDescriptor(page.items, String(index));
       if (descriptor === undefined || !('value' in descriptor) || !descriptor.enumerable) invalidOutput();
     }
-    if (page.next_cursor !== undefined && (operation !== 'list' || typeof page.next_cursor !== 'string' || page.next_cursor.length === 0 || page.next_cursor.length > 4096)) invalidOutput();
+    if (page.next_cursor !== undefined && (operation !== 'list' || typeof page.next_cursor !== 'string' || page.next_cursor.length === 0)) invalidOutput();
     if (page.page_full !== undefined && (operation !== 'list' || typeof page.page_full !== 'boolean')) invalidOutput();
     // An open's own cut is part of what it left out: a reader never reports one without `truncated`.
     if (page.anchor_truncated !== undefined && (operation !== 'open' || typeof page.anchor_truncated !== 'boolean' || (page.anchor_truncated && !page.truncated))) invalidOutput();
     if (page.notice !== undefined) {
-      boundedString(page.notice, 1024);
+      boundedString(page.notice);
       if (page.notice.trim() !== page.notice) invalidOutput();
     }
     const prepared = page.items.map(prepare);
     const ids = prepared.map(value => `live_${canonicalSha256({ request_id: requestId, binding, kind: value.citation.kind, coordinates: value.coordinates }).slice(7)}`);
     if (new Set(ids).size !== ids.length) invalidOutput();
     const citationKeys = prepared.map(value => canonicalSha256(value.citation));
-    const reserve = () => {
-      if (new Set([...released.keys(), ...reservedReleased.keys(), ...citationKeys]).size > 512 ||
-          new Set([...stored.keys(), ...reservedStored.keys(), ...ids]).size > 512 ||
-          cursors.size + reservedCursors >= 512) invalidOutput();
-      const heldStored = ids.filter(id => !stored.has(id));
-      const heldReleased = citationKeys.filter(key => !released.has(key));
-      for (const id of heldStored) reservedStored.set(id, (reservedStored.get(id) ?? 0) + 1);
-      for (const key of heldReleased) reservedReleased.set(key, (reservedReleased.get(key) ?? 0) + 1);
-      if (nextCursor !== undefined) reservedCursors += 1;
-      return () => {
-        for (const id of heldStored) {
-          const remaining = reservedStored.get(id)! - 1;
-          if (remaining === 0) reservedStored.delete(id); else reservedStored.set(id, remaining);
-        }
-        for (const key of heldReleased) {
-          const remaining = reservedReleased.get(key)! - 1;
-          if (remaining === 0) reservedReleased.delete(key); else reservedReleased.set(key, remaining);
-        }
-        if (nextCursor !== undefined) reservedCursors -= 1;
-      };
-    };
     const nextProviderCursor = page.next_cursor;
     const truncated = page.truncated || nextProviderCursor !== undefined;
     const nextCursor = nextProviderCursor === undefined ? undefined : `live_cursor_${requestId}_${++cursorSequence}`;
+    const { notice, anchor_truncated: anchorTruncated } = page;
     const withReceipt = (receipt: `sha256:${string}`): PersonLiveEvidenceResultV1<C> => Object.freeze({
       items: Object.freeze(prepared.map((value, index) => Object.freeze({
         id: ids[index]!, kind: value.citation.kind as C['kind'], citation: value.citation, label: value.label, visibility: value.visibility,
@@ -216,35 +193,30 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
         ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at }), ...(value.date_kind === undefined ? {} : { date_kind: value.date_kind }), ...(value.dates === undefined ? {} : { dates: value.dates }), receipt_sha256: receipt,
       }))),
       truncated, receipt_digests: Object.freeze([receipt]), ...(nextCursor === undefined ? {} : { next_cursor: nextCursor }),
-      ...(page.notice === undefined ? {} : { notice: page.notice }), ...(page.page_full === undefined ? {} : { page_full: page.page_full }),
-      ...(page.anchor_truncated === undefined ? {} : { anchor_truncated: page.anchor_truncated }),
+      ...(notice === undefined ? {} : { notice }), ...(page.page_full === undefined ? {} : { page_full: page.page_full }),
+      ...(anchorTruncated === undefined ? {} : { anchor_truncated: anchorTruncated }),
     });
-    if (canonicalJsonBytes(withReceipt(`sha256:${'0'.repeat(64)}`)).byteLength > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1) invalidOutput();
     current(signal);
-    const releaseReservation = reserve();
-    try {
-      const receipt = await safeCall(() => audit.record(Object.freeze({ schema_version: 1, binding, operation, coordinates: Object.freeze(prepared.map(value => value.coordinates)), value_digests: Object.freeze(prepared.map(({ handle: _handle, coordinates: _coordinates, ...value }) => canonicalSha256(value))), citations: Object.freeze(prepared.map(value => value.citation)) })), signal);
-      if (typeof receipt !== 'string' || !DIGEST.test(receipt)) throw new AuthorityOperationError('unavailable', 'Live evidence release receipt is invalid');
-      current(signal);
-      const result = withReceipt(receipt);
-      // All audited citations remain tracked, including overwritten inventory
-      // items and pages later omitted by a composing desk's result limit.
-      for (let i = 0; i < prepared.length; i += 1) {
-        stored.set(ids[i]!, { handle: prepared[i]!.handle, citation: prepared[i]!.citation });
-        released.set(citationKeys[i]!, prepared[i]!.citation);
-      }
-      if (nextCursor !== undefined) cursors.set(nextCursor, { provider: nextProviderCursor!, selection: selection! });
-      return result;
-    } finally {
-      releaseReservation();
+    const receipt = await safeCall(() => audit.record(Object.freeze({ schema_version: 1, binding, operation, coordinates: Object.freeze(prepared.map(value => value.coordinates)), value_digests: Object.freeze(prepared.map(({ handle: _handle, coordinates: _coordinates, ...value }) => canonicalSha256(value))), citations: Object.freeze(prepared.map(value => value.citation)) })), signal);
+    if (typeof receipt !== 'string' || !DIGEST.test(receipt)) throw new AuthorityOperationError('unavailable', 'Live evidence release receipt is invalid');
+    current(signal);
+    const result = withReceipt(receipt);
+    // All audited citations remain tracked, including overwritten inventory
+    // items and pages later omitted by a composing desk's result limit.
+    for (let i = 0; i < prepared.length; i += 1) {
+      stored.set(ids[i]!, { handle: prepared[i]!.handle, citation: prepared[i]!.citation });
+      released.set(citationKeys[i]!, prepared[i]!.citation);
     }
+    if (nextCursor !== undefined) cursors.set(nextCursor, { provider: nextProviderCursor!, selection: selection! });
+    return result;
   };
 
   return Object.freeze({
     tool_id: binding.tool_id,
     async search(input) {
       const maximum = limit(input.limit);
-      if (typeof input.query !== 'string' || input.query.trim().length === 0 || Buffer.byteLength(input.query, 'utf8') > 1024 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(input.query)) invalid('Live evidence query is invalid');
+      // The query's own rule is the shared validator's, applied where research builds it; here only its shape.
+      if (typeof input.query !== 'string' || input.query.trim().length === 0 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(input.query)) invalid('Live evidence query is invalid');
       current(input.signal);
       validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
       const page = await safeCall(() => reader.search({ ...evidenceDateFilterV1(input), query: input.query, limit: maximum, ...(input.signal === undefined ? {} : { signal: input.signal }) }), input.signal);
@@ -270,7 +242,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
     },
     async list(input) {
       const maximum = limit(input.limit);
-      if (input.container !== undefined && (typeof input.container !== 'string' || input.container.trim().length === 0 || Buffer.byteLength(input.container, 'utf8') > 256 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(input.container))) invalid('Live evidence container is invalid');
+      if (input.container !== undefined && (typeof input.container !== 'string' || input.container.trim().length === 0 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(input.container))) invalid('Live evidence container is invalid');
       validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
       const selection = canonicalSha256({ container: input.container ?? null, since: input.since ?? null, until: input.until ?? null, date_field: input.date_field ?? null, time_zone: input.time_zone ?? null });
       const cursor = input.cursor === undefined ? undefined : cursors.get(input.cursor);

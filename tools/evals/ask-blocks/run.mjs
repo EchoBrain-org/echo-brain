@@ -30,7 +30,7 @@ const checkCounts = (checks) => Object.fromEntries(Object.entries(checks).map(([
 
 /**
  * The pre-registered case sets (README.md): the cases a run loads, the fixture names their desk items carry, when they
- * are asked, the per-trial timeout (default and most), whether the report keeps full traces, how a trial is graded and
+ * are asked, whether the report keeps full traces, how a trial is graded and
  * a run summarized and decided, whether a run that does not pass exits 1, the progress line each trial writes and what
  * the command prints of the report.
  *
@@ -40,7 +40,7 @@ const checkCounts = (checks) => Object.fromEntries(Object.entries(checks).map(([
  */
 export const CASE_SETS = Object.freeze({
   main: Object.freeze({ file: CASES_FILE, count: CASE_COUNT, load: loadCases, fixture: "blocks", askedAt: (document) => document.asked_at,
-    timeoutMs: 120_000, maxTimeoutMs: 180_000, traces: true, exitsOnFailure: false,
+    traces: true, exitsOnFailure: false,
     grade: (caseDefinition, { read, evidence }) => gradeTrial(caseDefinition, read ?? { valid: false }, evidence), summarize: (trials) => summarize(trials), decide: decideGate,
     progress: (result) => ({ kind: "echo-ask-blocks-evaluation-progress-v1", case_id: result.case_id, catalog: "built", trial: result.trial, valid: result.grade.valid, grounded: result.grade.grounded,
       nothing_lost: result.grade.nothing_lost, fit: result.grade.fit, attempts: result.attempts.length }),
@@ -48,7 +48,7 @@ export const CASE_SETS = Object.freeze({
       stable: `${s.stable}/${s.cases}`, valid_at_once: s.valid_at_once, repairs: s.repairs, output_tokens: s.output_tokens }, decision }) }),
   // The wording cases are asked mid-morning of their today, in their time zone; their wording ships only from a complete run.
   wording: Object.freeze({ file: WORDING_CASES_FILE, count: Object.values(GROUPS).reduce((total, count) => total + count, 0), load: loadWordingCases, fixture: "wording",
-    askedAt: () => "2026-10-26T17:00:00.000Z", timeoutMs: 60_000, maxTimeoutMs: 85_000, traces: false, exitsOnFailure: true,
+    askedAt: () => "2026-10-26T17:00:00.000Z", traces: false, exitsOnFailure: true,
     grade: (caseDefinition, { response }) => gradeWording(caseDefinition, response),
     summarize: (trials, complete) => { const summary = summarizeRules(trials); return Object.freeze({ ...summary, wording_ships: complete && summary.wording_ships }); },
     decide: (summary, complete) => Object.freeze({ complete, passes: complete ? summary.wording_ships : null, rules: summary.rules }),
@@ -57,7 +57,7 @@ export const CASE_SETS = Object.freeze({
   // The follow-up cases (ADR-0053): the request saves the follow-ups its writer drafts, so the writer is told to draft
   // them; a trial is graded on what the release saved. Like the wording cases they keep no prompt or raw reply.
   follow_ups: Object.freeze({ file: FOLLOW_UPS_CASES_FILE, count: FOLLOW_UP_CASE_IDS.length, load: loadFollowUpCases, fixture: "follow-ups",
-    askedAt: (document) => document.asked_at, timeoutMs: 60_000, maxTimeoutMs: 85_000, traces: false, exitsOnFailure: true, drafts: true,
+    askedAt: (document) => document.asked_at, traces: false, exitsOnFailure: true, drafts: true,
     grade: (caseDefinition, { response, drafts }) => gradeFollowUps(caseDefinition, response, drafts),
     summarize: (trials) => summarizeFollowUps(trials),
     decide: (summary, complete) => Object.freeze({ complete, passes: complete ? summary.passes : null, drafted_on_ordinary_question: summary.drafted_on_ordinary_question }),
@@ -66,7 +66,7 @@ export const CASE_SETS = Object.freeze({
   // The list cases (ADR-0054): research lists, so the desk returns a case's listed items as rows; a trial is graded on
   // the writer's own reply together with the released answer, and a release from code's fallback fails. Full traces.
   lists: Object.freeze({ file: LISTS_CASES_FILE, count: LIST_CASE_IDS.length, load: loadListCases, fixture: "lists", askedAt: (document) => document.asked_at,
-    timeoutMs: 120_000, maxTimeoutMs: 180_000, traces: true, exitsOnFailure: true,
+    traces: true, exitsOnFailure: true,
     grade: (caseDefinition, { reply, read, response, fallbacks, oldReplyShape }) => gradeLists(caseDefinition, { reply, read, response, fallbacks, oldReplyShape }),
     summarize: (trials) => summarizeLists(trials), decide: decideLists,
     progress: (result) => ({ kind: "echo-ask-lists-evaluation-progress-v1", case_id: result.case_id, trial: result.trial, checks: result.grade.checks, attempts: result.attempts.length }),
@@ -88,8 +88,6 @@ export function help() {
     "  --cases id,id       Select cases of the set (default: all).",
     `  --trials N          Trials per case, 1 through ${TRIALS} (default: ${TRIALS}).`,
     "  --concurrency N     Model calls at once, 1 through 6 (default: 4).",
-    "  --timeout-ms N      Per-trial timeout of the whole Ask, 15000 through 180000 (default: 120000); for wording and",
-    "                      follow_ups 15000 through 85000 (default: 60000).",
     "  --reply-shape SHAPE With --case-set lists: list-blocks (default) or before-adr-0054, which also credits a reply's",
     "                      top-level \"lists\" as placed lists; only for the record run on main.",
     "  --writer ROUTE      openrouter (default) or claude-account: the product's personal Claude account writer, the",
@@ -109,7 +107,7 @@ export function help() {
 }
 
 export function parseArgs(argv) {
-  const options = { run: false, credentialFile: null, out: null, caseSet: "main", caseIds: null, trials: TRIALS, concurrency: 4, timeoutMs: null, writer: "openrouter", claudeExecutable: null, oldReplyShape: false };
+  const options = { run: false, credentialFile: null, out: null, caseSet: "main", caseIds: null, trials: TRIALS, concurrency: 4, writer: "openrouter", claudeExecutable: null, oldReplyShape: false };
   const list = (value) => value.split(",").map((part) => part.trim()).filter(Boolean);
   if (readFlags(argv, options, {
     "--credential-file": (value) => { options.credentialFile = value; },
@@ -118,7 +116,6 @@ export function parseArgs(argv) {
     "--cases": (value) => { options.caseIds = list(value); },
     "--trials": (value) => { options.trials = Number(value); },
     "--concurrency": (value) => { options.concurrency = Number(value); },
-    "--timeout-ms": (value) => { options.timeoutMs = Number(value); },
     "--reply-shape": (value) => { if (value !== "list-blocks" && value !== "before-adr-0054") throw new Error("--reply-shape must be list-blocks or before-adr-0054"); options.oldReplyShape = value === "before-adr-0054"; },
     ...writerFlags(options),
   })) return { help: true };
@@ -128,7 +125,6 @@ export function parseArgs(argv) {
   options.trials = boundedInteger(options.trials, "--trials", 1, TRIALS);
   options.concurrency = boundedInteger(options.concurrency, "--concurrency", 1, 6);
   const set = CASE_SETS[options.caseSet];
-  options.timeoutMs = boundedInteger(options.timeoutMs ?? set.timeoutMs, "--timeout-ms", 15_000, set.maxTimeoutMs);
   const known = new Set(set.load().cases.map((entry) => entry.id));
   if (options.caseIds !== null && (options.caseIds.length === 0 || new Set(options.caseIds).size !== options.caseIds.length || options.caseIds.some((id) => !known.has(id)))) throw new Error("--cases must select known cases, each once");
   options.out = outputDirectory(ROOT, options.out);
@@ -217,7 +213,8 @@ export async function runTrial(set, caseDefinition, trial, prompts, evidence, do
   const audits = [];
   try {
     response = await caseAsk(items, document, set.askedAt(document), model, generation, followUps, { listed: listedOf(caseDefinition, items), on_audit: (entry) => { audits.push(entry); } })
-      .answer({ question: caseDefinition.question, signal: AbortSignal.timeout(options.timeoutMs) });
+      // No clock of the trial's own: as in the product, only a model call or read that goes silent stops an Ask.
+      .answer({ question: caseDefinition.question });
   } catch (caught) {
     error = safeError(caught);
   }
@@ -298,7 +295,7 @@ export async function run(options, dependencies = {}) {
     model,
     errors: Object.freeze({ writer_calls: trials.reduce((sum, trial) => sum + trial.attempts.filter((attempt) => attempt.error !== undefined).length, 0),
       trials_without_reply: trials.filter(withoutReply).length }),
-    limits: Object.freeze({ cases: cases.length, trials: options.trials, timeout_ms: options.timeoutMs, concurrency: options.concurrency, max_total_model_calls: maxModelCalls(set) }),
+    limits: Object.freeze({ cases: cases.length, trials: options.trials, concurrency: options.concurrency, max_total_model_calls: maxModelCalls(set) }),
     ...traces,
     summary,
     decision: set.decide(summary, complete),

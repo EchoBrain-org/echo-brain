@@ -1,26 +1,18 @@
 import { validatePersonTicketCitationV1 } from './person-ticket-citation-v1.js';
 import { validatePersonPageCitationV1 } from './person-page-citation-v1.js';
 import {
-  PERSON_ANSWER_FOLLOW_UPS_MAX_V1, PERSON_ANSWER_OUTCOMES_V8, validatePersonWorkspaceRefV1, type PersonAnswerCitationV8, type PersonAnswerEvidenceCitationV8, type PersonAnswerOpenRefV8, type PersonAnswerResponseV8,
+  PERSON_ANSWER_OUTCOMES_V8, validatePersonWorkspaceRefV1, type PersonAnswerCitationV8, type PersonAnswerEvidenceCitationV8, type PersonAnswerOpenRefV8, type PersonAnswerResponseV8,
   type PersonAnswerCitationV6, type PersonEvidenceKindV5,
 } from './person-answer-v8.js';
 import { validatePersonFollowUpCitationV1, validatePersonFollowUpRefV1 } from './person-follow-up-evidence-v1.js';
 import { validatePersonWorkspaceCitationV1 } from './person-workspace-citation-v1.js';
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
-import { validatePersonQueryText } from './person-query.js';
+import { validatePersonQuestionText } from './person-query.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import { validatePersonAnswerScopeV3, validatePersonSourceRevisionCitationV1, type PersonAnswerCitationV3, type PersonAnswerScopeV3 } from './person-answer-v3.js';
 import { validatePersonItemRefV1, type PersonItemRefV1 } from './person-list-v1.js';
 import { validatePersonAnswerBlocksV2, type PersonAnswerBlockV2 } from './person-answer-layout-v2.js';
 import {
-  PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1,
-  PERSON_ANSWER_CHOICES_MAX_V1,
-  PERSON_ANSWER_CHOICES_MIN_V1,
-  PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1,
-  PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1,
-  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1,
-  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
-  PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1,
   type PersonAnswerChoiceV1,
   type PersonAnswerPreviousStatementV1,
   type PersonAnswerPreviousV1,
@@ -42,10 +34,6 @@ import {
   utf8ByteLength,
 } from './validation.js';
 
-/** A statement's text: one claim, within 4 KiB. */
-export const PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 = 4 * 1024;
-/** The citations one statement may carry, in an answer of any length (ADR-0051 lifts only an answer's own count). */
-export const PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4 = 40;
 
 /** Optional Ask headers; older Authorities ignore them, preserving client-first upgrades. */
 export const PERSON_ASK_CLIENT_NOW_HEADER_V1 = 'x-echo-client-now';
@@ -65,8 +53,15 @@ export function validatePersonAskTimeContextV1(now: unknown, timeZone: unknown):
   return Object.freeze({ now, time_zone: timeZone });
 }
 
-export const PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 = 64 * 1024;
-export const PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 = 3 * 1024;
+/**
+ * Transport: canonical JSON bytes of one whole answer, the one bound on what an answer carries. Sized above the model's
+ * own maximum reply (128,000 tokens, at about four bytes a token, about 512 KB) with its citations, so no answer the
+ * writer can write is refused for size. Every bound above it in the chain (the Ask progress answer event, line and
+ * stream, the desktop's CLI output, timeline put and copy) is sized from this one.
+ */
+export const PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 = 1024 * 1024;
+/** A released answer's fallback record: the evidence's own words, cut to a short quotation (evidence text in transit is `PERSON_EVIDENCE_TEXT_MAX_BYTES_V1`). */
+export const PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4 = 3 * 1024;
 export const PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1 = 64 * 1024;
 export const PERSON_EVIDENCE_LABEL_MAX_BYTES_V1 = 1024;
 
@@ -107,7 +102,7 @@ export function validatePersonAnswerGapDetailsV1(value: unknown): PersonAnswerGa
   assertExactKeys(input, keys, 'Ask gap details');
   if (keys.length === 0) fail('Ask gap details is empty');
   for (const flag of ['unsupported_action', 'interrupted']) if (Object.hasOwn(input, flag) && input[flag] !== true) fail('Ask gap flag must be true');
-  if (Object.hasOwn(input, 'not_found')) text(input.not_found, 'Ask not-found explanation', 2 * 1024, true);
+  if (Object.hasOwn(input, 'not_found')) text(input.not_found, 'Ask not-found explanation', Number.MAX_SAFE_INTEGER, true);
   return Object.freeze({ ...(input.unsupported_action === true ? { unsupported_action: true as const } : {}),
     ...(input.interrupted === true ? { interrupted: true as const } : {}), ...(Object.hasOwn(input, 'not_found') ? { not_found: input.not_found as string } : {}) });
 }
@@ -136,7 +131,8 @@ export interface PersonAnswerCitationV4 {
 export interface PersonEvidenceOpenRequestV1 {
   readonly schema_version: 1;
   readonly citation: PersonAnswerCitationV3;
-  readonly neighbours?: 0 | 1 | 2;
+  /** How many neighbouring passages to read around the cited one; the desk reads as many as one open's byte budget holds. */
+  readonly neighbours?: number;
   readonly project_id?: ProjectIdV1;
 }
 
@@ -252,10 +248,11 @@ function visibility(value: unknown, label: string): asserts value is PersonEvide
 function statement(value: unknown, citations: readonly PersonAnswerCitationV8[], label: string, fallback = false): PersonAnswerStatementV4 {
   const input = object(value, label);
   assertExactKeys(input, ['text', 'citation_indexes', 'private'], label);
-  if (fallback) evidenceText(input.text, `${label} text`, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
-  else text(input.text, `${label} text`, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4, true);
-  if (!Array.isArray(input.citation_indexes) || input.citation_indexes.length === 0 || input.citation_indexes.length > PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4 || typeof input.private !== 'boolean') fail(`${label} is invalid`);
-  const indexes = citationIndexes(input.citation_indexes, `${label} citation_indexes`, citations.length, PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4);
+  if (fallback) evidenceText(input.text, `${label} text`, PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4);
+  else text(input.text, `${label} text`, Number.MAX_SAFE_INTEGER, true);
+  // A statement cites at least one item, and every item it rests on: its visibility follows all of them.
+  if (!Array.isArray(input.citation_indexes) || input.citation_indexes.length === 0 || typeof input.private !== 'boolean') fail(`${label} is invalid`);
+  const indexes = citationIndexes(input.citation_indexes, `${label} citation_indexes`, citations.length);
   const expectedPrivate = indexes.some((index) => ['only_me', 'approver_only'].includes(citations[index]!.visibility));
   if (input.private !== expectedPrivate) fail(`${label} private is inconsistent with cited visibility`);
   return Object.freeze({ text: input.text as string, citation_indexes: indexes, private: input.private });
@@ -291,10 +288,10 @@ function answerCitation(value: unknown, version: 6 | 8): PersonAnswerCitationV8 
 function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): PersonAnswerPartV4 {
   const input = object(value, 'Ask response part');
   assertExactKeys(input, ['question', 'status', 'statements', ...['gap', 'gap_details', 'records', 'blocks'].filter(key => Object.hasOwn(input, key))], 'Ask response part');
-  text(input.question, 'Ask response part question', 1024);
+  text(input.question, 'Ask response part question', Number.POSITIVE_INFINITY);
   // A part's statements have no count of their own (ADR-0051): its blocks arrange them, and the answer's bytes bound them.
   if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements)) fail('Ask response part is invalid');
-  if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', 2 * 1024, true);
+  if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', Number.MAX_SAFE_INTEGER, true);
   if (Object.hasOwn(input, 'records') && (!Array.isArray(input.records) || input.records.length > 40)) fail('Ask response part records is invalid');
   const statements = Object.freeze(input.statements.map((item) => statement(item, citations, 'Ask response statement')));
   // Blocks arrange written statements (answer layout v2, ADR-0051): a part with statements has them, and one with none has nothing to arrange.
@@ -310,8 +307,14 @@ function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): Per
   });
 }
 
-function boundedRequest<T>(result: T, label: string): T {
-  if (canonicalJsonBytes(result).byteLength > MAX_ORGANIZATION_API_BODY_BYTES) fail(`${label} exceeds JSON byte bound`);
+/**
+ * The Ask request's body bound: the Authority's own HTTP body bound (MAX_ORGANIZATION_API_BODY_BYTES), the only limit on
+ * a question and the earlier turn it follows up together.
+ */
+export const PERSON_ANSWER_REQUEST_MAX_BYTES_V3 = MAX_ORGANIZATION_API_BODY_BYTES;
+
+function boundedRequest<T>(result: T, label: string, maximumBytes = MAX_ORGANIZATION_API_BODY_BYTES): T {
+  if (canonicalJsonBytes(result).byteLength > maximumBytes) fail(`${label} exceeds JSON byte bound`);
   return Object.freeze(result);
 }
 
@@ -319,20 +322,29 @@ export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerReque
   const input = object(value, 'Ask request');
   assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'previous') ? ['previous'] : [])], 'Ask request');
   if (input.schema_version !== 3) fail('Ask request schema_version is unsupported');
-  const request = boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'previous') ? { previous: previousTurn(input.previous) } : {}) }, 'Ask request');
-  // Ask again asks the earlier question itself (ADR-0047), and its answer names that question: one of another is refused.
-  if (request.previous?.purpose === 'ask_again' && request.previous.question !== request.question) fail('Ask previous question is not the question asked again');
-  return request;
+  const question = validatePersonQuestionText(input.question);
+  return boundedRequest({ schema_version: 3 as const, question, ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'previous') ? { previous: validatePersonAnswerPreviousV1(input.previous, question) } : {}) }, 'Ask request', PERSON_ANSWER_REQUEST_MAX_BYTES_V3);
 }
 
-/** A question an Ask request or answer carries beside its own: it passes the question rules, refused here as this contract's own failure. */
+/**
+ * The previous turn an Ask of `question` carries (ADR-0047), checked on its own, as a client checks it before sending.
+ * Ask again asks the earlier question itself, and its answer names that question: one of another is refused.
+ */
+export function validatePersonAnswerPreviousV1(value: unknown, question: string): PersonAnswerPreviousV1 {
+  const previous = previousTurn(value);
+  if (previous.purpose === 'ask_again' && previous.question !== question) fail('Ask previous question is not the question asked again');
+  return previous;
+}
+
+/** A question an Ask request or answer carries beside its own: it passes the question rule, refused here as this contract's own failure. */
 function fullQuestion(value: unknown, label: string): string {
-  try { return validatePersonQueryText(value); } catch { return fail(`${label} is invalid`); }
+  try { return validatePersonQuestionText(value); } catch { return fail(`${label} is invalid`); }
 }
 
 /** Distinct whole indexes below `bound`, at most `maximum` of them. */
-function citationIndexes(value: unknown, label: string, bound: number, maximum: number): readonly number[] {
-  const indexes = boundedList(value, label, maximum).map((index) => {
+/** Indexes into `bound` citations, each once; as many as the statement cites. */
+function citationIndexes(value: unknown, label: string, bound: number): readonly number[] {
+  const indexes = boundedList(value, label, Number.MAX_SAFE_INTEGER).map((index) => {
     if (!Number.isSafeInteger(index) || (index as number) < 0 || (index as number) >= bound) fail(`${label} is invalid`);
     return index as number;
   });
@@ -341,9 +353,9 @@ function citationIndexes(value: unknown, label: string, bound: number, maximum: 
 }
 
 /**
- * The asker's previous turn (ADR-0047): its purpose, full question and time, 0 to 8 of its answer's sentences of at
- * most 400 characters, and 0 to 12 of its citations, each once, as that answer carried them, which each sentence cites
- * by index (at most 4). The whole request keeps its 16 KiB bound.
+ * The asker's previous turn (ADR-0047): its purpose, full question and time, its answer's sentences as released (each
+ * within a statement's bytes), and its citations, each once, as that answer carried them, which each sentence cites by
+ * index. There is no count of sentences or citations: the request's transport bound is what limits it.
  */
 function previousTurn(value: unknown): PersonAnswerPreviousV1 {
   const input = object(value, 'Ask previous');
@@ -351,30 +363,29 @@ function previousTurn(value: unknown): PersonAnswerPreviousV1 {
   const purpose = oneOf(input.purpose, ['follow_up', 'ask_again'], 'Ask previous purpose');
   const question = fullQuestion(input.question, 'Ask previous question');
   assertTimestamp(input.asked_at, 'Ask previous asked_at');
-  const citations = Object.freeze(boundedList(input.citations, 'Ask previous citations', PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1).map(item => answerCitation(item, 8)));
+  const citations = Object.freeze(boundedList(input.citations, 'Ask previous citations', Number.MAX_SAFE_INTEGER).map(item => answerCitation(item, 8)));
   const keys = new Set(citations.map(item => personAnswerCitationKeyV8(item.citation)));
   if (keys.size !== citations.length) fail('Ask previous contains duplicate citations');
-  const statements = Object.freeze(boundedList(input.statements, 'Ask previous statements', PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1).map((raw): PersonAnswerPreviousStatementV1 => {
+  const statements = Object.freeze(boundedList(input.statements, 'Ask previous statements', Number.MAX_SAFE_INTEGER).map((raw): PersonAnswerPreviousStatementV1 => {
     const item = object(raw, 'Ask previous statement');
     assertExactKeys(item, ['text', 'citation_indexes'], 'Ask previous statement');
     // An answer's sentence as it was released: trimmed NFC text, line breaks allowed.
-    text(item.text, 'Ask previous statement text', 4 * PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1, true);
-    if ([...item.text as string].length > PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1) fail('Ask previous statement text is invalid');
+    text(item.text, 'Ask previous statement text', Number.MAX_SAFE_INTEGER, true);
     return Object.freeze({
       text: item.text as string,
-      citation_indexes: citationIndexes(item.citation_indexes, 'Ask previous statement citation_indexes', citations.length, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1),
+      citation_indexes: citationIndexes(item.citation_indexes, 'Ask previous statement citation_indexes', citations.length),
     });
   }));
   return Object.freeze({ purpose, question, asked_at: input.asked_at as string, statements, citations });
 }
 
-/** A clarify answer's choices (ADR-0047): 2 to 4, each a label of at most 60 characters and a full question, each different. */
+/** A clarify answer's choices (ADR-0047): at least one, each a one-line label and a full question, each different. */
 function answerChoices(value: unknown): readonly PersonAnswerChoiceV1[] {
-  const choices = Object.freeze(boundedList(value, 'Ask response choices', PERSON_ANSWER_CHOICES_MAX_V1, PERSON_ANSWER_CHOICES_MIN_V1).map((raw) => {
+  const choices = Object.freeze(boundedList(value, 'Ask response choices', Number.MAX_SAFE_INTEGER, 1).map((raw) => {
     const input = object(raw, 'Ask response choice');
     assertExactKeys(input, ['label', 'question'], 'Ask response choice');
     return Object.freeze({
-      label: boundedLine(input.label, 'Ask response choice label', PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1),
+      label: boundedLine(input.label, 'Ask response choice label', Number.MAX_SAFE_INTEGER),
       question: fullQuestion(input.question, 'Ask response choice question'),
     });
   }));
@@ -382,11 +393,11 @@ function answerChoices(value: unknown): readonly PersonAnswerChoiceV1[] {
   return choices;
 }
 
-/** What is different since the earlier answer (ADR-0047): 0 to 6 statements, each citing the answer's citations. */
+/** What is different since the earlier answer (ADR-0047): its statements, each citing the answer's citations; the response's bytes bound them. */
 function answerSince(value: unknown, citations: readonly PersonAnswerCitationV8[]): PersonAnswerSinceV1 {
   const input = object(value, 'Ask response since');
   assertExactKeys(input, ['statements'], 'Ask response since');
-  return Object.freeze({ statements: Object.freeze(boundedList(input.statements, 'Ask response since', PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1).map(item => statement(item, citations, 'Ask response since statement'))) });
+  return Object.freeze({ statements: Object.freeze(boundedList(input.statements, 'Ask response since', Number.MAX_SAFE_INTEGER).map(item => statement(item, citations, 'Ask response since statement'))) });
 }
 
 /** One V6 response citation, as the impact card (person-impact-card-v1.ts) cites items: never a follow-up or a workspace item. */
@@ -399,7 +410,7 @@ export function validatePersonAnswerCitationV6(value: unknown): PersonAnswerCita
 export function validatePersonAnswerCitationV8(value: unknown): PersonAnswerCitationV8 { return answerCitation(value, 8); }
 /** The ids of the follow-ups an answer drafted, in the writer's order: at least one, each once. */
 function answerFollowUps(value: unknown): readonly string[] {
-  const ids = boundedList(value, 'Ask response follow-up list', PERSON_ANSWER_FOLLOW_UPS_MAX_V1, 1).map(id => openItemId(id, 'Ask response follow-up id'));
+  const ids = boundedList(value, 'Ask response follow-up list', Number.MAX_SAFE_INTEGER, 1).map(id => openItemId(id, 'Ask response follow-up id'));
   assertUnique(ids, 'Ask response follow-up list');
   return Object.freeze(ids);
 }
@@ -416,8 +427,8 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   // A clarify outcome (ADR-0047) asks which one instead of answering: no part and no citation.
   const clarify = input.outcome === 'clarify';
   // An answer has no count of citations of its own (ADR-0051): its bytes bound it.
-  if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
-  if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', 2 * 1024, true);
+  if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1)) fail('Ask response is invalid');
+  if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', Number.MAX_SAFE_INTEGER, true);
   const citations = input.citations.map(item => answerCitation(item, 8));
   const citationKeys = new Set<string>();
   for (const item of citations) { const key = personAnswerCitationKeyV8(item.citation); if (citationKeys.has(key)) fail('Ask response contains duplicate citations'); citationKeys.add(key); }
@@ -454,6 +465,6 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
 export function validatePersonEvidenceOpenRequestV1(value: unknown): PersonEvidenceOpenRequestV1 {
   const input = object(value, 'Evidence open request');
   assertExactKeys(input, ['schema_version', 'citation', ...(Object.hasOwn(input, 'neighbours') ? ['neighbours'] : []), ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : [])], 'Evidence open request');
-  if (input.schema_version !== 1 || (Object.hasOwn(input, 'neighbours') && (!Number.isSafeInteger(input.neighbours) || (input.neighbours as number) < 0 || (input.neighbours as number) > 2))) fail('Evidence open request is invalid');
-  return boundedRequest({ schema_version: 1 as const, citation: evidenceCitation(input.citation) as PersonAnswerCitationV3, ...(Object.hasOwn(input, 'neighbours') ? { neighbours: input.neighbours as 0 | 1 | 2 } : {}), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Evidence open request project_id') } : {}) }, 'Evidence open request');
+  if (input.schema_version !== 1 || (Object.hasOwn(input, 'neighbours') && (!Number.isSafeInteger(input.neighbours) || (input.neighbours as number) < 0))) fail('Evidence open request is invalid');
+  return boundedRequest({ schema_version: 1 as const, citation: evidenceCitation(input.citation) as PersonAnswerCitationV3, ...(Object.hasOwn(input, 'neighbours') ? { neighbours: input.neighbours as number } : {}), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Evidence open request project_id') } : {}) }, 'Evidence open request');
 }

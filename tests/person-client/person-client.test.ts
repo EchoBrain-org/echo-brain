@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { canonicalJson, p256KeyId } from "@echo-brain/federation-protocol";
-import { type OrganizationPersonSessionV2, type PersonSourceEvidenceCitationV1 } from "@echo-brain/organization-api";
+import { type OrganizationPersonSessionV2, type PersonSourceEvidenceCitationV1, validatePersonRecordSearchRequestV2 } from "@echo-brain/organization-api";
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -596,6 +596,19 @@ describe("Person client", () => {
     });
   });
 
+  it("lists and searches any number of Person records: neither has a count of its own", async () => {
+    await withHome(async (home) => {
+      const records = Array.from({ length: 150 }, (_, index) => ({ position: 150 - index, approval_id: fixtureId("apr", index + 1),
+        record_sha256: `sha256:${index.toString(16).padStart(64, "0")}`, envelope: { kind: "approved" } }));
+      const client = await signedInClient(home, async (input) => {
+        expect(new URL(String(input)).search).toBe("?limit=150");
+        return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records });
+      });
+      await expect(client.records(150)).resolves.toMatchObject({ records: expect.arrayContaining([expect.objectContaining({ position: 1 })]) });
+      expect(validatePersonRecordSearchRequestV2({ query: "pricing", limit: 500 })).toEqual({ query: "pricing", limit: 500 });
+    });
+  });
+
   it("lists Person records for the installed Person without an identity input", async () => {
     await withHome(async (home) => {
       const client = await signedInClient(home, async (input, init) => {
@@ -861,7 +874,8 @@ describe("Person client", () => {
         return askStream(v8Answer({ text: "Use simple pricing.", citations: [{ ...RECORD_CITATION, citation: { ...RECORD_CITATION.citation, unexpected: true } }] }));
       });
 
-      await expect(client.askWithLiveSources(" pricing")).rejects.toMatchObject({ code: "query_whitespace" });
+      // Not empty is the client's only check of a question; the Authority judges the rest.
+      await expect(client.askWithLiveSources(" \n ")).rejects.toMatchObject({ code: "question_empty" });
       expect(asks).toBe(0);
       await expect(client.askWithLiveSources("pricing")).rejects.toThrow(
           "malformed progress stream",
@@ -912,15 +926,54 @@ describe("Person client", () => {
     });
   });
 
+  it("sends a long natural-language question on two lines as asked, trimmed and NFC, within the request body bound", async () => {
+    await withHome(async (home) => {
+      const sent: unknown[] = [];
+      const client = await signedInClient(home, async (_input, init) => {
+        sent.push(JSON.parse(String(init?.body)));
+        return askStream(v8Answer());
+      });
+      const question = "Can you summarize what the hardware and firmware teams decided about the thermal fix, who owns each follow-up, "
+        + "what's still blocked on supplier samples, and what changed since last Tuesday's review?\nAnd which of those are due before Friday's build review?";
+      expect(question.length).toBeGreaterThan(240);
+      await client.askWithLiveSources(`  ${question}\n`);
+      expect(sent).toEqual([{ schema_version: 3, question }]);
+      await client.askWithLiveSources("Caf\u0065\u0301?");
+      expect(sent[1]).toEqual({ schema_version: 3, question: "Caf\u00e9?" });
+      // A question has no length of its own: the client holds it to the Authority's 1 MiB Person body bound, never less.
+      await client.askWithLiveSources("x".repeat(100 * 1024));
+      expect(sent).toHaveLength(3);
+      // Past that bound, the transport's, it is not sent and says why.
+      await expect(client.askWithLiveSources("x".repeat(1024 * 1024))).rejects.toMatchObject({ code: "request_too_large", unsent: true });
+      expect(sent).toHaveLength(3);
+    });
+  });
+
+  it("names the question rule an Authority refusal broke, by its code, and never shows the Authority's text", async () => {
+    await withHome(async (home) => {
+      const client = await signedInClient(home, async () => json({ error: { code: "question_controls", message: "private diagnostic" } }, 400));
+      await expect(client.askWithLiveSources("Who\u0007 owns it?")).rejects.toMatchObject({
+        code: "question_controls", status: 400, message: "Remove control characters from the question; line breaks and tabs are fine.",
+      });
+    });
+  });
+
   it("reports actionable bounded query rules without echoing input or calling transport", async () => {
     await withHome(async home => {
+    let asked = "";
+    const empty = await runPersonClientCli(["ask", "--question", " \n "], {
+      home_directory: home, stderr: { write: value => ((asked += String(value)), true) },
+      stdout: { write: () => { throw new Error("no success output expected"); } }, fetch: async () => { throw new Error("must not reach transport"); },
+    });
+    expect(empty).toBe(1);
+    expect(JSON.parse(asked)).toMatchObject({ code: "question_empty", error: "Enter a question." });
     for (const [text, code] of [
       ["", "query_empty"], [" x", "query_whitespace"], ["e\u0301", "query_normalization"],
-      ["x\ny", "query_controls"], ["x ".repeat(121).trim(), "query_too_long"],
+      ["x\ny", "query_controls"],
       ["!!!", "query_term_count"],
       ["é".repeat(33), "query_term_too_long"],
     ]) {
-      for (const argv of [["ask", "--question", text], ["records", "--query", text]]) {
+      for (const argv of [["records", "--query", text]]) {
         let stderr = "";
         const status = await runPersonClientCli(argv, {
           home_directory: home,
@@ -932,7 +985,7 @@ describe("Person client", () => {
         expect(JSON.parse(stderr)).toMatchObject({ code });
       }
     }
-    for (const limit of ["-1", "0", "101"]) {
+    for (const limit of ["-1", "0", "1.5"]) {
       const { code: status, stdout, stderr } = await runCli(["records", "--limit", limit], {
         home_directory: home,
       });
@@ -942,7 +995,7 @@ describe("Person client", () => {
         ok: false,
         action: "records",
         code: "invalid_limit",
-        error: "--limit must be an integer from 1 to 100",
+        error: "--limit must be a positive integer",
       });
     }
     });

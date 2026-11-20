@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { OpenRouterClient } from "../../src/llm/openrouter-client.js";
 import {
+  ExtractionInputTooLongError,
   StructuredGenerationAttemptError,
   type StructuredGenerationRequest,
 } from "@echo-brain/organization-processing/llm/llm-provider";
@@ -126,6 +127,25 @@ describe('OpenRouter provider client', () => {
     });
   });
 
+  it('streams the reply, and a reply that keeps arriving is never cut off by a clock', async () => {
+    const events = [': OPENROUTER PROCESSING', 'data: {"id":"gen_9","choices":[{"delta":{"content":"{\\"signals\\""}}]}',
+      'data: {"id":"gen_9","choices":[{"delta":{"content":":[]}"},"finish_reason":"stop"}]}', `data: ${JSON.stringify({ id: 'gen_9', choices: [], usage: USAGE })}`, 'data: [DONE]'];
+    const sent: RequestInit[] = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      sent.push(init);
+      const encoder = new TextEncoder();
+      // Each event 40 ms apart: 200 ms in all, past the 100 ms silence period, never silent that long.
+      const body = new ReadableStream<Uint8Array>({ async start(controller) {
+        for (const event of events) { await new Promise(resolve => setTimeout(resolve, 40)); controller.enqueue(encoder.encode(`${event}\n\n`)); }
+        controller.close();
+      } });
+      return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+    }) as unknown as typeof fetch;
+    const streaming = new OpenRouterClient({ credentialRef: 'openrouter', credentialResolver: () => 'openrouter-secret', requestTimeoutMs: 100, fetchImpl });
+    await expect(streaming.generateStructured(generationRequest)).resolves.toEqual({ content: '{"signals":[]}', requestId: 'gen_9', ...OBSERVED, stopReason: 'stop' });
+    expect(JSON.parse(String(sent[0]!.body))).toMatchObject({ stream: true });
+  });
+
   it('checks model identity and structured-output support', async () => {
     const modelClient = client(
       {
@@ -146,10 +166,11 @@ describe('OpenRouter provider client', () => {
 
   it.each([
     {
+      // Stopped at the model's own output limit: billed, and it would stop there again, so never retried.
       finishReason: 'length',
       reply: 'content',
-      code: 'temporarily_unavailable',
-      retryable: true,
+      code: 'permanently_rejected',
+      retryable: false,
     },
     {
       finishReason: 'content_filter',
@@ -200,7 +221,9 @@ describe('OpenRouter provider client', () => {
     },
   );
 
-  it.each([[402, true], [429, true], [503, true], [400, false], [401, false]])(
+  // Only a status the provider documents as refused before generation is known unbilled; a 5xx such as a gateway 504
+  // can arrive after the model ran.
+  it.each([[429, true], [503, true], [529, true], [402, false], [500, false], [504, false], [400, false], [401, false]])(
     'declares a %i refusal unbilled: %s',
     async (status, unbilled) => {
       const refusal = new OpenRouterClient({
@@ -211,6 +234,29 @@ describe('OpenRouter provider client', () => {
       await expect(refusal).rejects.toMatchObject({ http_status: status, unbilled, ...(status === 402 ? { code: 'temporarily_unavailable', retryable: true } : {}) });
     },
   );
+
+  it.each([
+    "This endpoint's maximum context length is 1000000 tokens. However, you requested about 1200000 tokens.",
+    'prompt is too long: 1200000 tokens > 1000000 maximum',
+  ])('reports a prompt past the model\'s context window as a meeting too long for one call: %s', async (message) => {
+    const refusal = new OpenRouterClient({
+      credentialRef: 'env:OPENROUTER_API_KEY',
+      credentialResolver: () => 'openrouter-secret',
+      fetchImpl: async () => new Response(JSON.stringify({ error: { code: 400, message } }), { status: 400 }),
+    }).generateStructured(generationRequest);
+    await expect(refusal).rejects.toBeInstanceOf(ExtractionInputTooLongError);
+    await expect(refusal).rejects.toMatchObject({ code: 'permanently_rejected', retryable: false, unbilled: true });
+  });
+
+  it('keeps any other 400 an ordinary refusal', async () => {
+    const refusal = new OpenRouterClient({
+      credentialRef: 'env:OPENROUTER_API_KEY',
+      credentialResolver: () => 'openrouter-secret',
+      fetchImpl: async () => new Response(JSON.stringify({ error: { code: 400, message: 'invalid schema' } }), { status: 400 }),
+    }).generateStructured(generationRequest);
+    await expect(refusal).rejects.not.toBeInstanceOf(ExtractionInputTooLongError);
+    await expect(refusal).rejects.toMatchObject({ http_status: 400, unbilled: false });
+  });
 
   it('treats HTTP 200 provider errors as failures', async () => {
     await expect(

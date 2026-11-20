@@ -194,11 +194,11 @@ describe("journey EMF metrics v1", () => {
 
   it("counts each correction of model output by its name alone, on the span's terminal event", () => {
     const corrected = (event: Record<string, unknown>) => formatJourneyTelemetryMetricsV1(journey({
-      ...event, diagnostic: detail({ root: false, phase: "model_grounding", purpose: "model_grounding", result: null, model_corrections: { extraction_repeat_dropped: 2, extraction_owner_cleared: 1 } }),
+      ...event, diagnostic: detail({ root: false, phase: "model_grounding", purpose: "model_grounding", result: null, model_corrections: { extraction_repeat_dropped: 2, extraction_due_cleared: 1 } }),
     })).filter(record => "ModelCorrections" in record);
     expect(corrected({})).toEqual([
       expect.objectContaining({ correction: "extraction_repeat_dropped", ModelCorrections: 2 }),
-      expect.objectContaining({ correction: "extraction_owner_cleared", ModelCorrections: 1 }),
+      expect.objectContaining({ correction: "extraction_due_cleared", ModelCorrections: 1 }),
     ]);
     // The name is the record's only dimension: never the span, the workflow or anything the model wrote.
     for (const record of corrected({})) {

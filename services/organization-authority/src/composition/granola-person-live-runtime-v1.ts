@@ -45,12 +45,14 @@ export function openGranolaPersonMeetingProviderV1(options: {
         const session = await application.open(person, current, signal);
         return { identity: session.identity, custodian: { email: session.account.email, workspace: session.account.workspace_id },
           email: session.account.email, workspace: session.account.workspace_name, current: session.current,
-          async folders() { const folders = await session.api.folders(signal); await session.verify(); return folders.map(f => ({ id: f.id, title: f.title.slice(0, 128), count: f.note_count })); },
-          async browse(folder) { return { meetings: (await session.recent(folder)).map(m => ({ id: m.id, title: (m.title ?? UNTITLED).slice(0, 256), date: m.date })) }; },
+          // Folder and meeting titles come whole: the response bound carries them. A preview shows the first 8,000
+          // characters of notes and summary and says, by `truncated`, that there is more.
+          async folders() { const folders = await session.api.folders(signal); await session.verify(); return folders.map(f => ({ id: f.id, title: f.title, count: f.note_count })); },
+          async browse(folder) { return { meetings: (await session.recent(folder)).map(m => ({ id: m.id, title: m.title ?? UNTITLED, date: m.date })) }; },
           watchable: watch => session.watchable(watch),
           async preview(meeting) { const detail = await session.api.meeting(meeting, signal); await session.verify();
             const notes = detail.private_notes ?? '', summary = detail.summary ?? '';
-            return { id: detail.id, title: (detail.title ?? UNTITLED).slice(0, 256), notes: notes.slice(0, 8_000), summary: summary.slice(0, 8_000), truncated: notes.length > 8_000 || summary.length > 8_000 };
+            return { id: detail.id, title: detail.title ?? UNTITLED, notes: notes.slice(0, 8_000), summary: summary.slice(0, 8_000), truncated: notes.length > 8_000 || summary.length > 8_000 };
           },
         };
       },

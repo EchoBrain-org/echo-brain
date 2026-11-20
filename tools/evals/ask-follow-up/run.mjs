@@ -25,8 +25,8 @@ const MAX_TRIALS = 3;
 const ALL_CASES = Object.values(GROUPS).reduce((total, count) => total + count, 0);
 /** One call and its one repair per trial. */
 const MAX_TOTAL_MODEL_CALLS = ALL_CASES * MAX_TRIALS * 2;
+/** The resolver's own call waits up to 15 s, so a shorter trial could never finish. There is no upper bound: the operator chooses. */
 const MIN_TIMEOUT_MS = 15_000;
-const MAX_TIMEOUT_MS = 85_000;
 
 export function help() {
   return [
@@ -37,7 +37,7 @@ export function help() {
     "Options:",
     `  --cases id,id     Select cases (default: all ${ALL_CASES}); only the whole set decides whether follow-ups ship.`,
     `  --trials N        Trials per case, 1 through ${MAX_TRIALS} (default: ${MAX_TRIALS}, as pre-registered).`,
-    "  --timeout-ms N    Per-trial timeout, 15000 through 85000 (default: 60000).",
+    "  --timeout-ms N    Per-trial timeout, at least 15000 (default: 60000).",
     "  --help            Show this text without reading a credential or making a request.",
     "",
     "Each trial runs the kernel's follow-up resolver once (one call and at most one repair) on a synthetic previous",
@@ -61,7 +61,7 @@ export function parseArgs(argv) {
   })) return { help: true };
   assertExplicitRun(options);
   options.trials = boundedInteger(options.trials, "--trials", 1, MAX_TRIALS);
-  options.timeoutMs = boundedInteger(options.timeoutMs, "--timeout-ms", MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
+  options.timeoutMs = boundedInteger(options.timeoutMs, "--timeout-ms", MIN_TIMEOUT_MS, Number.MAX_SAFE_INTEGER);
   const known = new Set(loadCases().cases.map((entry) => entry.id));
   if (options.caseIds !== null && (options.caseIds.length === 0 || options.caseIds.some((id) => !known.has(id)))) throw new Error("--cases must select known cases");
   if ((options.caseIds?.length ?? known.size) * options.trials * 2 > MAX_TOTAL_MODEL_CALLS) throw new Error(`requested model-call budget exceeds ${MAX_TOTAL_MODEL_CALLS}`);

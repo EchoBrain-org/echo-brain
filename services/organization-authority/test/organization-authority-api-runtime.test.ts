@@ -872,7 +872,18 @@ describe("Organization Authority API runtime", () => {
       // No search metadata is made any more: released clients still read the exact-key `metadata`, now always ready.
       expect(await get(`/v3/person/updates/${upload.request_id}`)).toMatchObject({ status: "stored", metadata: "ready" });
       const open = { schema_version: 1, ref: `note:${context_id}` };
-      expect(await post("/v1/person/open", open)).toMatchObject({ text: upload.text, item: { visibility: "project", projects: [{ project_id }] } });
+      expect(await post("/v1/person/open", open)).toMatchObject({ text: upload.text, item: { visibility: "project", projects: [{ project_id }] }, next_cursor: null });
+      // A note has no size of its own: a 300 KiB note is stored whole and read back page by page.
+      const long = { ...upload, request_id: "00000000-0000-4000-8000-0000000000aa", title: "Long original", text: `${"Plan line.\n".repeat(28_000)}`, association_project_ids: [], audience: { kind: "only_me" } };
+      expect(Buffer.byteLength(long.text)).toBeGreaterThan(300 * 1024);
+      const longReceipt = await post("/v3/person/updates", long, 202);
+      let read = ""; let cursor: string | null | undefined; let pages = 0;
+      do {
+        const page = await post("/v1/person/open", { schema_version: 1, ref: `note:${longReceipt.context_id as string}`, ...(cursor ? { cursor } : {}) });
+        read += page.text as string; cursor = page.next_cursor as string | null; pages += 1;
+      } while (cursor !== null && pages < 100);
+      expect(read).toBe(long.text);
+      expect(pages).toBeGreaterThan(30);
       // The retired reads and writes answer as routes that never existed (ADR-0048).
       for (const path of ["/v1/person/projects", `/v1/person/projects/${project_id}`, `/v1/person/projects/${project_id}/context/${context_id}`,
         `/v2/person/projects/${project_id}/context/${context_id}`, `/v2/person/updates/${upload.request_id}`, `/v2/person/updates/content/${context_id}`,
@@ -887,7 +898,7 @@ describe("Organization Authority API runtime", () => {
       expect(members).toMatchObject({ items: [{ membership_id: initialized.owner_membership_id, role: "lead" }] });
       expect(await post("/v1/person/projects/directory", { project_id, query: "Founder" })).toMatchObject({ items: [{ membership_id: initialized.owner_membership_id }] });
       expect(await post("/v1/person/directory", { query: "Founder" })).toEqual({ schema_version: 1, kind: "echo-organization-directory-v1", items: [{ membership_id: initialized.owner_membership_id, display_name: expect.any(String) }], next_cursor: null });
-      expect(await post("/v1/person/directory", { project_id }, 400)).toEqual({ error: { code: "invalid_request", message: "request failed" } });
+      expect(await post("/v1/person/directory", { project_id }, 400)).toEqual({ error: { code: "invalid_request", message: "Organization directory search has an unexpected shape" } });
       await post("/v1/person/projects/members/set", { schema_version: 1, kind: "echo-project-member-set-v1", request_id: "00000000-0000-4000-8000-000000000003", project_id, membership_id: initialized.owner_membership_id, role: "lead" });
       expect(await post("/v1/person/projects/members/remove", { schema_version: 1, kind: "echo-project-member-remove-v1", request_id: "00000000-0000-4000-8000-000000000004", project_id, membership_id: initialized.owner_membership_id }, 409)).toEqual({ error: { code: "conflict", message: "request failed" } });
       await post("/v1/person/projects/context/dissociate", { schema_version: 1, kind: "echo-project-context-dissociate-v1", request_id: "00000000-0000-4000-8000-000000000005", project_id, context_id });
@@ -933,7 +944,7 @@ describe("Organization Authority API runtime", () => {
             projects: canonicalSha256([[project_id, create.name, "active", "lead"]]), follow_ups: canonicalSha256([]), reviews: canonicalSha256([[REVIEW, "pending"]]),
           });
           expect(checksRead.mock.calls).toEqual([[expect.objectContaining({ organization_id: initialized.organization_id, principal_id: initialized.owner_principal_id,
-            membership_id: initialized.owner_membership_id }), 100]]);
+            membership_id: initialized.owner_membership_id })]]);
         } finally { checksRead.mockRestore(); }
         // Project activity (Ask timeline v1, C2) is composed beside it: the owner's own note is no news to the owner.
         expect(await get("/v1/person/project-activity")).toEqual({ schema_version: 1, kind: "echo-person-project-activity-v1", items: [{ project_id, latest_at: null }] });
@@ -954,12 +965,12 @@ describe("Organization Authority API runtime", () => {
         next_cursor: null,
       });
       // The list has no global or mine scope: a request names a project or only me.
-      for (const body of [{ schema_version: 1 }, { schema_version: 1, mine: true }]) {
-        expect(await post("/v1/person/list", body, 400)).toEqual({ error: { code: "invalid_request", message: "request failed" } });
+      for (const [body, message] of [[{ schema_version: 1 }, "Person list request scope is invalid"], [{ schema_version: 1, mine: true }, "Person list request has an unexpected shape"]] as const) {
+        expect(await post("/v1/person/list", body, 400)).toEqual({ error: { code: "invalid_request", message } });
       }
       expect(await post("/v1/person/open", { schema_version: 1, ref: `note:${context_id}` })).toMatchObject({ kind: "echo-person-open-v1", text: upload.text, next_cursor: null });
       // A listed meeting is read as its record, never opened (2026-11-11).
-      expect(await post("/v1/person/open", { schema_version: 1, ref: `meeting:sha256:${"0".repeat(64)}` }, 400)).toEqual({ error: { code: "invalid_request", message: "request failed" } });
+      expect(await post("/v1/person/open", { schema_version: 1, ref: `meeting:sha256:${"0".repeat(64)}` }, 400)).toEqual({ error: { code: "invalid_request", message: "Person open request ref is invalid" } });
 
       const searchBeforeGeneration = await fetch(
         `${origin}/v1/person/records`,

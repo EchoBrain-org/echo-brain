@@ -7,10 +7,12 @@ import {
   type PersonAnswerStatementV4,
 } from "@echo-brain/organization-api";
 import { AgenticAskOutputErrorV1 } from "./agentic-ask-v1-model-protocol.js";
+import { observeCoreModelCorrectionV1 } from "../shared/core-runtime-observation-v1.js";
 import type { AskFollowUpDraftV1 } from "./ask-follow-ups-v1.js";
 
 type AnswerItem = PersonAnswerStatementV4 | PersonAnswerEvidenceFallbackV4;
-type Part = { question: string; status: PersonAnswerResponseV8["parts"][number]["status"]; statements: PersonAnswerStatementV4[]; gap?: string; gap_details?: PersonAnswerResponseV8["parts"][number]["gap_details"]; records?: PersonAnswerEvidenceFallbackV4[] };
+type Block = NonNullable<PersonAnswerResponseV8["parts"][number]["blocks"]>[number];
+type Part = { question: string; status: PersonAnswerResponseV8["parts"][number]["status"]; statements: PersonAnswerStatementV4[]; gap?: string; gap_details?: PersonAnswerResponseV8["parts"][number]["gap_details"]; records?: PersonAnswerEvidenceFallbackV4[]; blocks?: readonly Block[] };
 
 /** Whether an Ask response fits its JSON byte bound. */
 export function agenticAskResponseFitsV1(response: unknown): boolean {
@@ -18,31 +20,59 @@ export function agenticAskResponseFitsV1(response: unknown): boolean {
 }
 
 /**
+ * A part's blocks once its statements are cut to `kept` (always from the end): a block whose statements all remain is kept
+ * as written, its table rows' citations renumbered; the block cut part way, and any whose rows lose every citation, reads
+ * as one text block of what remains of it (`collapsed` is told). Null when the part has no blocks to keep.
+ */
+function keptBlocks(blocks: readonly Block[] | undefined, kept: number, remap: ReadonlyMap<number, number>, collapsed: () => void): readonly Block[] | null {
+  if (blocks === undefined || kept === 0) return null;
+  const out: Block[] = [];
+  for (const block of blocks) {
+    const remaining = block.statements.filter(index => index < kept);
+    if (remaining.length === 0) continue;
+    const rows = block.kind === "table" ? block.rows.map(row => ({ ...row, citation_indexes: row.citation_indexes.map(index => remap.get(index)).filter((index): index is number => index !== undefined) })) : undefined;
+    if (remaining.length === block.statements.length && (rows === undefined || rows.every(row => row.citation_indexes.length > 0))) {
+      out.push(Object.freeze(rows === undefined ? block : { ...block, rows: Object.freeze(rows.map(row => Object.freeze(row))) }) as Block);
+      continue;
+    }
+    collapsed();
+    out.push(Object.freeze({ kind: "text", statements: Object.freeze(remaining) }));
+  }
+  return Object.freeze(out);
+}
+
+/**
  * `candidate` with these parts and outcome, and only the citations they cite, renumbered in their order. Every other field
  * is kept, except the two others that index the citations: a direct statement, and an Ask again's `since` (ADR-0047),
- * whose citations dropping it frees. A part with statements reads as one text block (ADR-0051): cut, they no longer hold
- * the blocks they were arranged in.
+ * whose citations dropping it frees. A part keeps the blocks its remaining statements were arranged in (ADR-0051); where
+ * a cut leaves a block unable to stand, what remains of it reads as text, and the collapse is counted.
  */
-function withParts(candidate: PersonAnswerResponseV8, parts: readonly Part[], outcome: PersonAnswerResponseV8["outcome"]): PersonAnswerResponseV8 {
+function withParts(candidate: PersonAnswerResponseV8, parts: readonly Part[], outcome: PersonAnswerResponseV8["outcome"], collapsed: () => void): PersonAnswerResponseV8 {
   const usedIndexes = new Set(parts.flatMap(part => [...part.statements.flatMap(statement => statement.citation_indexes), ...(part.records?.flatMap(record => record.citation_indexes) ?? [])]));
   const remap = new Map<number, number>();
   const citations = candidate.citations.filter((_, index) => {
     if (!usedIndexes.has(index)) return false;
     remap.set(index, remap.size); return true;
   });
+  parts = parts.map((part, at) => ({ ...part, blocks: keptBlocks(candidate.parts[at]?.blocks, part.statements.length, remap, collapsed) ?? undefined }));
   const remapItem = <T extends AnswerItem>(item: T): T => Object.freeze({ ...item, citation_indexes: Object.freeze(item.citation_indexes.map(index => remap.get(index)).filter((index): index is number => index !== undefined)) }) as T;
   const { outcome: _outcome, citations: _citations, parts: _parts, direct: _direct, since: _since, ...kept } = candidate;
   return Object.freeze({ ...kept, outcome, citations: Object.freeze(citations), parts: Object.freeze(parts.map(part => Object.freeze({ question: part.question, status: part.status, statements: Object.freeze(part.statements.map(remapItem)), ...(part.gap === undefined ? {} : { gap: part.gap }), ...(part.gap_details === undefined ? {} : { gap_details: part.gap_details }), ...(part.records === undefined ? {} : { records: Object.freeze(part.records.map(remapItem)) }),
-    ...(part.statements.length === 0 ? {} : { blocks: Object.freeze([Object.freeze({ kind: "text", statements: Object.freeze(part.statements.map((_, at) => at)) })]) }) }))) }) as PersonAnswerResponseV8;
+    ...(part.statements.length === 0 ? {} : { blocks: part.blocks ?? Object.freeze([Object.freeze({ kind: "text", statements: Object.freeze(part.statements.map((_, at) => at)) })]) }) }))) }) as PersonAnswerResponseV8;
 }
 
-/** Removes whole least-priority evidence records until the packet fits. */
+/**
+ * Removes whole least-priority evidence records until the packet fits the response's transport bound. A layout the cut
+ * changed is counted once, as `writer_layout_collapsed`.
+ */
 export function compactAndValidateAgenticAskResponseV1(result: PersonAnswerResponseV8): PersonAnswerResponseV8 {
   let candidate = result;
+  let layoutCollapsed = false;
+  const collapsed = () => { layoutCollapsed = true; };
   const copy = (value: PersonAnswerResponseV8): Part[] => value.parts.map(part => ({ question: part.question, status: part.status, statements: [...part.statements], ...(part.gap === undefined ? {} : { gap: part.gap }), ...(part.gap_details === undefined ? {} : { gap_details: part.gap_details }), ...(part.records === undefined ? {} : { records: [...part.records] }) }));
   // An Ask again's `since` (ADR-0047) goes first, and whole: cut short, it would say less changed than did. The answer
   // itself is unchanged, so its outcome stands.
-  if (candidate.since !== undefined && !agenticAskResponseFitsV1(candidate)) candidate = withParts(candidate, copy(candidate), candidate.outcome);
+  if (candidate.since !== undefined && !agenticAskResponseFitsV1(candidate)) candidate = withParts(candidate, copy(candidate), candidate.outcome, collapsed);
   while (!agenticAskResponseFitsV1(candidate)) {
     const parts = copy(candidate);
     let removed = false;
@@ -65,9 +95,19 @@ export function compactAndValidateAgenticAskResponseV1(result: PersonAnswerRespo
     }
     if (!removed) throw new AgenticAskOutputErrorV1("agentic Ask response cannot fit its byte bound");
     // Losing evidence to the byte bound is partial output, never proof that a completed search found nothing.
-    candidate = withParts(candidate, parts, "partial");
+    candidate = withParts(candidate, parts, "partial", collapsed);
   }
-  return validatePersonAnswerResponseV8(candidate);
+  if (candidate === result) return validatePersonAnswerResponseV8(candidate);
+  try {
+    const validated = validatePersonAnswerResponseV8(candidate);
+    if (layoutCollapsed) observeCoreModelCorrectionV1("writer_layout_collapsed");
+    return validated;
+  } catch {
+    // A kept block the layout contract refuses once its neighbours were cut: every part then reads as one text block.
+    observeCoreModelCorrectionV1("writer_layout_collapsed");
+    return validatePersonAnswerResponseV8(Object.freeze({ ...candidate, parts: Object.freeze(candidate.parts.map(part => part.statements.length === 0 ? part
+      : Object.freeze({ ...part, blocks: Object.freeze([Object.freeze({ kind: "text" as const, statements: Object.freeze(part.statements.map((_, at) => at)) })]) }))) }) as PersonAnswerResponseV8);
+  }
 }
 
 /**

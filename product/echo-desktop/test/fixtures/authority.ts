@@ -194,8 +194,6 @@ function found(query: unknown, name: string): boolean {
 const LIST_PAGES = new Set(['many-projects']);
 /** A project ID, as the API writes one. */
 const PROJECT_ID = /^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-/** The most projects a capture is filed in, or read by (PERSON_UPLOAD_PROJECT_SET_MAX). */
-const MAX_PROJECT_SET = 20;
 
 /** A digest, as the Authority writes one, of any text. */
 const digestOf = (text: string) => `sha256:${createHash('sha256').update(text).digest('hex')}`;
@@ -590,7 +588,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
    */
   const refusedProjects = (body: Record<string, unknown> | undefined): Response | null => {
     const canonical = (value: unknown, minimum: number): value is string[] => Array.isArray(value) &&
-      value.length >= minimum && value.length <= MAX_PROJECT_SET &&
+      value.length >= minimum &&
       value.every((id: unknown, index) => typeof id === 'string' && PROJECT_ID.test(id) && (index === 0 || value[index - 1] < id));
     const audience = (body?.audience ?? {}) as Record<string, unknown>;
     const keys = Object.keys(audience).sort().join(',');
@@ -1417,6 +1415,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const [kind, id] = [request.ref.slice(0, at), request.ref.slice(at + 1)];
       const open = (fields: Record<string, unknown>) => json(api.validatePersonOpenResponseV1({ schema_version: 1, kind: 'echo-person-open-v1', ref: request.ref, ...fields }));
       if (kind === 'note' && catalog.has(id) && readsNote(id)) {
+        // Each fixture note is one page, so no cursor was ever given for one: the Authority refuses a cursor it did not write.
+        if (request.cursor !== undefined) return failure('invalid_request', 400);
         return open({ item: noteRow(id), text: catalog.get(id)!.text, next_cursor: null });
       }
       const document = kind === 'document' ? documents.find(entry => entry.document_id === id) : undefined;

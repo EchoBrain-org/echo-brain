@@ -24,8 +24,8 @@ function requiredText(value: unknown, label: string): string {
 
 function projectIds(value: unknown, required: boolean, label: string): readonly string[] {
   if (value === undefined && !required) return Object.freeze([]);
-  if (!Array.isArray(value) || value.length > 20 || (required && value.length < 1)) {
-    throw new Error(`${label} must contain ${required ? "1 to 20" : "0 to 20"} projects`);
+  if (!Array.isArray(value) || (required && value.length < 1)) {
+    throw new Error(`${label} must contain ${required ? "at least one project" : "a list of projects"}`);
   }
   const ids = value.map((item) => requiredText(item, "record selected project ID"));
   if (new Set(ids).size !== ids.length || [...ids].sort().some((id, index) => id !== ids[index])) {

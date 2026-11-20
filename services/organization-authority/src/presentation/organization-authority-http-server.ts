@@ -21,8 +21,9 @@ import type { ProjectContextApplicationV1 } from '../application/ports/project-c
 import type { PersonDocumentApplicationV1 } from '../application/ports/document-v1.js';
 import type { PersonDocumentUploadStagingV1 } from '../application/ports/document-upload-staging-v1.js';
 import { createPersonDocumentsHttpHandlerV1, uniqueMemberJsonV1 } from './person-documents-http-route-v1.js';
-import { PERSON_DOCUMENTS_PATH_V2, MAX_ORGANIZATION_API_BODY_BYTES } from '@echo-brain/organization-api';
+import { PERSON_DOCUMENTS_PATH_V2, MAX_ORGANIZATION_API_BODY_BYTES, PERSON_UPDATE_REQUEST_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 import { PERSON_EMPLOYEES_PATH_V1, PERSON_RECORDS_PATH_V1, validatePersonRecordSearchRequestV2 } from "@echo-brain/organization-api";
+import { PersonQueryInputError, isOrganizationApiValidationError } from "@echo-brain/organization-api";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
@@ -75,14 +76,27 @@ import {
   validatePersonOpenRequestV1,
 } from "@echo-brain/organization-api";
 import type { PersonListHttpApplicationV1 } from "./person-list-http-application-v1.js";
-import { PERSON_CHANGES_ROUTE_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
+import { PERSON_CHANGES_ROUTE_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_REQUEST_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 import type { PersonChangesHttpApplicationV1 } from "./person-changes-http-application.js";
 import { PERSON_PROJECT_ACTIVITY_PATH_V1 } from '@echo-brain/organization-api';
 import type { PersonProjectActivityHttpApplicationV1 } from "./person-project-activity-http-application.js";
 
-const MAXIMUM_BODY_BYTES = 64 * 1024;
+/**
+ * Request body bounds, one per route family. They are transport bounds: the most one request may carry, refused whole
+ * with "request body is too large" before it is buffered further, and the only limit on how much a person sends.
+ * - Person and project JSON (Ask with its previous turns, source checks, reads, sign-in, employees, record search,
+ *   notes, project and settings bodies): the organization API's one bound, `MAX_ORGANIZATION_API_BODY_BYTES` (1 MiB),
+ *   which the CLI client and the desktop hold a request to as well.
+ * - Provider routes (webhooks and sign-in callbacks from a provider, before any person is known, and a Person tool's
+ *   requests): `PERSON_TOOL_REQUEST_MAX_BYTES_V1` (64 KiB), which the client's tool transport holds a request to, with
+ *   its query string at 8 KiB. Reachable unauthenticated, so it stays small against abuse.
+ */
+const PERSON_REQUEST_BODY_MAX_BYTES = MAX_ORGANIZATION_API_BODY_BYTES;
+const PROVIDER_REQUEST_BODY_MAX_BYTES = PERSON_TOOL_REQUEST_MAX_BYTES_V1;
 const MAXIMUM_PROVIDER_QUERY_BYTES = 8 * 1024;
+/** Response bounds for provider ingress, by kind: a JSON answer, raw bytes, and a provider's sign-in callback page. */
 const MAXIMUM_PROVIDER_RESPONSE_BYTES = 64 * 1024;
+const PROVIDER_CALLBACK_PAGE_MAX_BYTES = 16_384;
 const OIDC_BEGIN_CLIENT_WINDOW_MS = 60 * 1000;
 const OIDC_BEGIN_CLIENT_LIMIT = 10;
 const MAXIMUM_TRACKED_OIDC_BEGIN_CLIENTS = 1024;
@@ -285,7 +299,7 @@ function providerResponse(response: ServerResponse, result: ProviderHttpResponse
     contentType = result.content_type;
   } else if (result.content_type === "text/html") {
     if (typeof result.body !== "string") throw new Error("invalid provider callback page");
-    maximum = 16_384;
+    maximum = PROVIDER_CALLBACK_PAGE_MAX_BYTES;
     if (Buffer.byteLength(result.body, "utf8") > maximum) throw new Error("provider response is too large");
     bytes = Buffer.from(result.body, "utf8");
     contentType = "text/html; charset=utf-8";
@@ -375,13 +389,41 @@ function expiredHandoffHtml(response: ServerResponse): void {
   html(response, page, "default-src 'none'; base-uri 'none'");
 }
 
-function fail(response: ServerResponse, status: number, code: string): void {
-  json(response, status, { error: { code, message: "request failed" } });
+function fail(response: ServerResponse, status: number, code: string, message = "request failed"): void {
+  json(response, status, { error: { code, message } });
 }
 
-/** The status and code a failed request answers with, in a JSON body or as a streamed Ask's error event. */
-function failureOf(error: unknown): { readonly status: PersonAskProgressErrorStatusV1; readonly code: string } {
-  if (!(error instanceof AuthorityOperationError)) return { status: 500, code: "internal" };
+/**
+ * A request its validator refused, answered with the validator's own code and message so the person learns which rule
+ * it broke. Only the API's validation errors become one: their messages are static, name a field or rule, and never
+ * echo the request's content. It is an `invalid_request` wherever an Authority error is passed on.
+ */
+class RequestRefusal extends AuthorityOperationError {
+  constructor(readonly wire_code: string, message: string) {
+    super("invalid_request", message);
+    this.name = "RequestRefusal";
+  }
+}
+
+/** What an error envelope may say: a short, trimmed line with no control character. */
+const SAYABLE = (message: string): boolean => message.length > 0 && message.length <= 1000 && message.trim() === message && !/[\u0000-\u001f\u007f]/u.test(message);
+
+/** The refusal a validator's error becomes. Any other error is a generic refusal: its message may not be static. */
+function requestRefusal(error: unknown, codes: "own" | "invalid_request" = "own"): Error {
+  if (error instanceof PersonQueryInputError && /^[a-z][a-z0-9_]*$/u.test(error.code) && SAYABLE(error.message)) {
+    return new RequestRefusal(codes === "own" ? error.code : "invalid_request", error.message);
+  }
+  if (isOrganizationApiValidationError(error)) {
+    const message = error.message.replace(/^organization API: /u, "");
+    if (SAYABLE(message)) return new RequestRefusal("invalid_request", message);
+  }
+  return new AuthorityOperationError("invalid_request", "request is invalid");
+}
+
+/** The status, code and message a failed request answers with, in a JSON body or as a streamed Ask's error event. */
+function failureOf(error: unknown): { readonly status: PersonAskProgressErrorStatusV1; readonly code: string; readonly message: string } {
+  if (error instanceof RequestRefusal) return { status: 400, code: error.wire_code, message: error.message };
+  if (!(error instanceof AuthorityOperationError)) return { status: 500, code: "internal", message: "request failed" };
   const status =
     error.code === "unauthorized"
       ? 401
@@ -396,10 +438,10 @@ function failureOf(error: unknown): { readonly status: PersonAskProgressErrorSta
               : error.code === "rate_limited"
                 ? 429
                 : 400;
-  return { status, code: error.code };
+  return { status, code: error.code, message: "request failed" };
 }
 
-async function rawBody(request: IncomingMessage, maximum = MAXIMUM_BODY_BYTES): Promise<Buffer> {
+async function rawBody(request: IncomingMessage, maximum = PERSON_REQUEST_BODY_MAX_BYTES): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
@@ -426,8 +468,10 @@ function singletonHeaders(
 }
 
 async function body(request: IncomingMessage): Promise<unknown> {
+  // A body past the transport bound keeps rawBody's own reason; only one that is not JSON is "invalid".
+  const raw = await rawBody(request);
   try {
-    return JSON.parse((await rawBody(request)).toString("utf8")) as unknown;
+    return JSON.parse(raw.toString("utf8")) as unknown;
   } catch {
     throw new AuthorityOperationError(
       "invalid_request",
@@ -436,10 +480,19 @@ async function body(request: IncomingMessage): Promise<unknown> {
   }
 }
 
-/** Person JSON reads share transport mechanics while application ports own authorization and audit. */
+/**
+ * Person JSON reads share transport mechanics while application ports own authorization and audit. A body that is too
+ * large or not JSON, and a request its validator refuses, say so (requestRefusal).
+ */
 async function personBody<Request>(request: IncomingMessage, validate: (value: unknown) => Request): Promise<Request> {
-  try { return validate(await body(request)); }
-  catch { throw new AuthorityOperationError("invalid_request", "request is invalid"); }
+  let value: unknown;
+  try { value = await body(request); }
+  catch (error) {
+    if (error instanceof AuthorityOperationError && error.code === "invalid_request") throw new RequestRefusal("invalid_request", error.message);
+    throw error;
+  }
+  try { return validate(value); }
+  catch (error) { throw requestRefusal(error); }
 }
 
 type PersonPostHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
@@ -516,9 +569,9 @@ function personAskV7Post(application: PersonAnswerV7HttpApplication): PersonPost
       if (stream === undefined) throw error;
       if (disconnect.signal.aborted) stream.close();
       else {
-        const { status, code } = failureOf(error);
+        const { status, code, message } = failureOf(error);
         streamedFailureStatus.set(response, status);
-        stream.end({ type: "error", status, error: { code, message: "request failed" } });
+        stream.end({ type: "error", status, error: { code, message } });
       }
     } finally { disconnect.dispose(); }
   };
@@ -559,11 +612,12 @@ function recordLimit(url: URL): number | undefined {
     throw new AuthorityOperationError("invalid_request", "request is invalid");
   }
   const raw = values[0][1];
-  if (!/^[1-9][0-9]{0,2}$/.test(raw)) {
+  // Any positive count: the newest that many records.
+  if (!/^[1-9][0-9]*$/.test(raw)) {
     throw new AuthorityOperationError("invalid_request", "request is invalid");
   }
   const limit = Number(raw);
-  if (!Number.isSafeInteger(limit) || limit > 100) {
+  if (!Number.isSafeInteger(limit)) {
     throw new AuthorityOperationError("invalid_request", "request is invalid");
   }
   return limit;
@@ -586,18 +640,18 @@ function recordSearchInput(value: unknown): {
   readonly limit?: number;
 } {
   try { return validatePersonRecordSearchRequestV2(value); }
-  catch { throw new AuthorityOperationError("invalid_request", "request is invalid"); }
+  catch (error) { throw requestRefusal(error); }
 }
 
-/** Validate transport input without exposing codec diagnostics to the caller. */
+/** Validate transport input; a refusal names its rule, under the project family's one refusal code. */
 function projectInput<T>(validate: (value: unknown) => T, value: unknown): T {
   try { return validate(value); }
-  catch { throw new AuthorityOperationError('invalid_request', 'request failed'); }
+  catch (error) { throw requestRefusal(error, "invalid_request"); }
 }
 
-async function projectBody(request: IncomingMessage): Promise<unknown> {
+async function projectBody(request: IncomingMessage, maximum = MAX_ORGANIZATION_API_BODY_BYTES): Promise<unknown> {
   try {
-    return uniqueMemberJsonV1(await rawBody(request, MAX_ORGANIZATION_API_BODY_BYTES));
+    return uniqueMemberJsonV1(await rawBody(request, maximum));
   } catch { throw new AuthorityOperationError('invalid_request', 'request failed'); }
 }
 
@@ -634,6 +688,8 @@ const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   readonly request: (value: unknown) => unknown;
   readonly response: (value: unknown) => unknown;
   readonly status: number;
+  /** The route's request body bound, an abuse bound; the organization API's 16 KiB when absent. */
+  readonly maximum_body_bytes?: number;
 }> = new Map([
   [PERSON_PROJECTS_PATH_V1, { operation: 'createProject', request: validateProjectCreateV1, response: validateProjectCreateReceiptV1, status: 201 }],
   [PERSON_PROJECT_RENAME_PATH_V1, { operation: 'renameProject', request: validateProjectRenameV1, response: validateProjectSettingsReceiptV1, status: 200 }],
@@ -647,7 +703,8 @@ const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   [`${PERSON_PROJECTS_PATH_V1}/members/remove`, { operation: 'removeMember', request: validateProjectMemberRemoveV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/associate`, { operation: 'associateContext', request: validateProjectContextAssociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/dissociate`, { operation: 'dissociateContext', request: validateProjectContextDissociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
-  [PERSON_UPDATES_PATH_V3, { operation: 'submitUploadV3', request: validatePersonUpdateSubmitV3, response: validatePersonUpdateReceiptV3, status: 202 }],
+  // A note has no size of its own; its request body is held to 1 MiB against abuse.
+  [PERSON_UPDATES_PATH_V3, { operation: 'submitUploadV3', request: validatePersonUpdateSubmitV3, response: validatePersonUpdateReceiptV3, status: 202, maximum_body_bytes: PERSON_UPDATE_REQUEST_MAX_BYTES_V1 }],
 ]);
 
 /** Route selection returns a synchronous release callback after all input I/O. */
@@ -659,7 +716,7 @@ async function projectRoute(
   if (method === 'POST' && route !== undefined) {
     const token = accessToken(request.headers.authorization);
     if (url.search !== '') throw new AuthorityOperationError('invalid_request', 'request failed');
-    const input = projectInput(route.request, await projectBody(request));
+    const input = projectInput(route.request, await projectBody(request, route.maximum_body_bytes));
     return response => projectResponse(response, route.status, application[route.operation](token, input), route.response);
   }
   if (method !== 'GET') return undefined;
@@ -765,7 +822,7 @@ export function createOrganizationAuthorityHttpServer(
             route_id: ingress.route.route_id,
             method: ingress.route.method,
             path: ingress.route.path,
-            raw_body: await rawBody(request),
+            raw_body: await rawBody(request, PROVIDER_REQUEST_BODY_MAX_BYTES),
             content_type: headers["content-type"],
             headers,
             signal: disconnect.signal,
@@ -1054,8 +1111,8 @@ export function createOrganizationAuthorityHttpServer(
       }
       fail(response, 404, "not_found");
     } catch (error) {
-      const { status, code } = failureOf(error);
-      fail(response, status, code);
+      const { status, code, message } = failureOf(error);
+      fail(response, status, code, message);
     } finally {
       if (responseFinished !== undefined) await responseFinished;
       activeHttp -= 1;

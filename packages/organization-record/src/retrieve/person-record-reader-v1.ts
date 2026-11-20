@@ -34,8 +34,8 @@ export interface PersonReadableRecordV1 {
   readonly envelope: JsonObject;
 }
 
+/** The page a caller gets when it names none; a caller may ask for any positive number. */
 const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 100;
 
 function requiredText(value: string, label: string): void {
   if (typeof value !== "string" || value.length === 0 || value.length > 256) {
@@ -74,10 +74,8 @@ export class PersonRecordReaderV1 {
       requiredText(input.project_id, "Person record project_id");
     }
     const limit = input.limit ?? DEFAULT_LIMIT;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
-      throw new Error(
-        `Person record limit must be an integer from 1 to ${MAX_LIMIT}`,
-      );
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new Error("Person record limit must be a positive integer");
     }
     if (
       input.record_sha256 !== undefined &&

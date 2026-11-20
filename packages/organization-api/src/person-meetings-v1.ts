@@ -1,6 +1,6 @@
 import { validateProjectIdV1 } from './project-context-v1.js';
 import { asEnumerableRecord, assertExactKeys, assertTimestamp, utf8ByteLength, fail } from './validation.js';
-import { PERSON_TOOL_REQUEST_MAX_BYTES_V1, type PersonToolHostV1 } from './person-tool-client.js';
+import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_REQUEST_MAX_BYTES_V1, type PersonToolHostV1 } from './person-tool-client.js';
 
 export const PERSON_MEETINGS_PATH_V2 = '/v1/person/meetings';
 export const PERSON_SYNTHETIC_MEETING_MAX_BYTES_V1 = 48 * 1024;
@@ -100,31 +100,32 @@ export function validatePersonMeetingResultV2<K extends keyof PersonMeetingResul
   const keys = { home: ['connected','email','workspace','folders','settings_sha256','sources'], browse: ['meetings'], open: ['id','title','notes','summary','truncated'],
     watch: ['status'], import: ['status'], submit: ['status','meeting_id'], cancel_import: ['status'] };
   assertExactKeys(row, keys[operation], 'Personal meeting response');
-  if (utf8ByteLength(JSON.stringify(row)) > 120_000) fail('Personal meeting response exceeds its bound');
   const object = (value: unknown, keys: readonly string[], optional: readonly string[] = []) => {
     const item = asEnumerableRecord(value, 'Meeting response item');
     assertExactKeys(item, [...keys, ...optional.filter(key => Object.hasOwn(item, key))], 'Meeting response item');
     return item;
   };
-  const array = (value: unknown, limit: number): unknown[] => { if (!Array.isArray(value) || value.length > limit) fail('Invalid meeting collection'); return value; };
-  const nullableText = (value: unknown) => { if (value !== null) text(value, 512); };
+  // No count or length of its own: the transport's response bound is the one bound.
+  const ANY = Number.POSITIVE_INFINITY;
+  const array = (value: unknown): unknown[] => { if (!Array.isArray(value)) fail('Invalid meeting collection'); return value; };
+  const nullableText = (value: unknown) => { if (value !== null) text(value, ANY); };
   const project = (value: unknown) => validateProjectIdV1(value);
   if (operation === 'home') {
     if (typeof row.connected !== 'boolean') fail('Invalid meeting connection');
     nullableText(row.email); nullableText(row.workspace); digest(row.settings_sha256);
-    for (const value of array(row.folders, 200)) { const item = object(value, ['id','title','count']); text(item.id); text(item.title, 128); if (!Number.isSafeInteger(item.count) || (item.count as number) < 0) fail('Invalid folder count'); }
-    for (const value of array(row.sources, 100)) {
+    for (const value of array(row.folders)) { const item = object(value, ['id','title','count']); text(item.id, ANY); text(item.title, ANY); if (!Number.isSafeInteger(item.count) || (item.count as number) < 0) fail('Invalid folder count'); }
+    for (const value of array(row.sources)) {
       const item = object(value, ['source_key','watch','folder_id','project_id','baseline','pending_imports','checked_at','error']);
       text(item.source_key); nullableText(item.folder_id); if (item.project_id !== null) project(item.project_id); nullableText(item.error);
       if (!watchShape(item.watch, item.folder_id, item.project_id)) fail('Invalid meeting watch');
       if (typeof item.baseline !== 'boolean') fail('Invalid folder baseline'); if (item.checked_at !== null) assertTimestamp(item.checked_at, 'Meeting check timestamp');
-      for (const id of array(item.pending_imports, 50)) text(id);
+      for (const id of array(item.pending_imports)) text(id, ANY);
     }
   }
-  if (operation === 'browse') for (const value of array(row.meetings, 50)) { const item = object(value, ['id','title','date']); text(item.id); text(item.title, 256); text(item.date, 128); }
+  if (operation === 'browse') for (const value of array(row.meetings)) { const item = object(value, ['id','title','date']); text(item.id, ANY); text(item.title, ANY); text(item.date, ANY); }
   if (operation === 'open') {
-    text(row.id); text(row.title, 256);
-    if (typeof row.notes !== 'string' || row.notes.length > 8000 || typeof row.summary !== 'string' || row.summary.length > 8000 || typeof row.truncated !== 'boolean') fail('Invalid meeting preview');
+    text(row.id, ANY); text(row.title, ANY);
+    if (typeof row.notes !== 'string' || typeof row.summary !== 'string' || typeof row.truncated !== 'boolean') fail('Invalid meeting preview');
   }
   const statuses = { watch: ['saved'], import: ['queued'], submit: ['queued'], cancel_import: ['cancelled'] };
   if (operation === 'submit') {
@@ -137,5 +138,5 @@ export function validatePersonMeetingResultV2<K extends keyof PersonMeetingResul
 export function personMeetingCommandV2<K extends PersonMeetingOperationV2['operation']>(host: PersonToolHostV1, request: PersonMeetingRequestV2 & { readonly operation: K }): Promise<PersonMeetingResultsV2[K]> {
   // A custom staging meeting is up to 48 KiB, past the ordinary 16 KiB request body.
   return host.withToolSession(session => session.transport.json({ path: PERSON_MEETINGS_PATH_V2, body: validatePersonMeetingRequestV2(request), validate_request: validatePersonMeetingRequestV2,
-    validate_response: value => validatePersonMeetingResultV2(request.operation, value), maximum_request_bytes: PERSON_TOOL_REQUEST_MAX_BYTES_V1, maximum_response_bytes: 128 * 1024, timeout_ms: 75_000 }));
+    validate_response: value => validatePersonMeetingResultV2(request.operation, value), maximum_request_bytes: PERSON_TOOL_REQUEST_MAX_BYTES_V1, maximum_response_bytes: PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, timeout_ms: 75_000 }));
 }

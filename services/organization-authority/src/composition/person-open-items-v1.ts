@@ -2,10 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
 import {
   PERSON_HOME_ROWS_V1,
-  PERSON_IMPACT_CARD_LIMITS_V1 as LIMITS,
   PERSON_OPEN_ITEMS_PAGE_V1,
-  PERSON_RUN_ITEMS_MAX_V1,
-  PERSON_UPLOAD_PROJECT_SET_MAX,
   validatePersonAnswerCitationV6,
   validatePersonRunsResultV1,
   type PersonAnswerCitationV6,
@@ -139,21 +136,12 @@ export type OpenItemLiveReadV1 = { readonly reach: 'opened'; readonly item: Desk
 type LiveRead = OpenItemLiveReadV1;
 
 const STATES: readonly ImpactItemStateV1[] = ['unsent', 'open', 'done', 'not_relevant'];
-/** `involving` and `orphaned` apply their limit before any access check and have no cursor: a bound far above one person's open items. */
-const INVOLVING_MAX = 1000;
-/** The most rows a run, record or project `items` scope reads; its pages and summary are within them. */
-const SCOPE_ROWS_MAX = 5000;
+/** The store's row reads with no count: `involving`, `orphaned` and a scope's `forRecords` have no cursor, so they read every row. */
+const EVERY_ROW = Number.MAX_SAFE_INTEGER;
 /** The rows a personal `items` scope reads at a time; it reads every page. */
 const PERSONAL_PAGE = 1000;
-/** The most records a project scope reads (the record lookup's own bound). */
-const PROJECT_RECORDS_MAX = 500;
-/** The most decisions a summary's per-decision counts, or the stages, cover. */
-const SCOPE_DECISIONS_MAX = 100;
-/** Live opens per call, each item at most once, a few at a time. */
-const LIVE_OPENS_MAX = 50;
+/** Live opens in flight at once: every item is opened (each once); this only paces provider reads against rate limiting. */
 const LIVE_OPENS_AT_ONCE = 4;
-/** An item's status and due date, as the API bounds them. */
-const DETAIL_CHARS = 128;
 const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
 const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const GLOBAL = Object.freeze({ kind: 'global' as const });
@@ -234,9 +222,9 @@ function cursorAfter(cursor: string): { readonly created_at: string; readonly it
   return { created_at, item_id };
 }
 
-/** A member's display name as one line of the API's name rule; directory names are not otherwise bounded. */
+/** A member's display name as one line, whole. */
 function nameOf(people: People, membershipId: string): string {
-  return impactCardLineV1(people.get(membershipId)?.name, LIMITS.name_chars) || UNKNOWN_MEMBER;
+  return impactCardLineV1(people.get(membershipId)?.name) || UNKNOWN_MEMBER;
 }
 function personOf(people: People, membershipId: string): PersonOpenItemPersonV1 {
   return Object.freeze({ membership_id: membershipId, name: nameOf(people, membershipId), active: people.get(membershipId)?.active === true });
@@ -248,9 +236,9 @@ function currentOf(item: DeskItem): PersonOpenItemCurrentV1 | undefined {
   try { citation = validatePersonAnswerCitationV6({ citation: item.citation, kind: item.kind, label: item.label, visibility: item.visibility }); } catch { return undefined; }
   const says_now = currentImpactLineV1({ citation, label: item.label, ...(item.text === undefined ? {} : { text: item.text }), ...(item.attributes === undefined ? {} : { attributes: item.attributes }) });
   if (says_now.length === 0) return undefined;
-  const assignee = impactCardLineV1(item.attributes?.owner, LIMITS.name_chars);
-  const status = impactCardLineV1(item.attributes?.status, DETAIL_CHARS);
-  const due_at = impactCardLineV1(item.attributes?.due_at, DETAIL_CHARS);
+  const assignee = impactCardLineV1(item.attributes?.owner);
+  const status = impactCardLineV1(item.attributes?.status);
+  const due_at = impactCardLineV1(item.attributes?.due_at);
   return Object.freeze({ citation, says_now, ...(assignee === '' ? {} : { assignee }), ...(status === '' ? {} : { status }), ...(due_at === '' ? {} : { due_at }) });
 }
 
@@ -376,8 +364,8 @@ function firstDecidedLines(sources: Pick<OpenItemSourcesV1, 'runs' | 'on_live_fa
 function decisionOf(decision: PersonReadableDecisionV1, first_line: string | null): PersonOpenItemDecisionV1 {
   return Object.freeze({
     approval_id: decision.approval_id, record_sha256: decision.record_sha256,
-    title: impactCardLineV1(decision.title, LIMITS.name_chars) || 'Approved meeting', first_line, approved_at: decision.approved_at,
-    project_ids: Object.freeze(decision.project_ids.slice(0, PERSON_UPLOAD_PROJECT_SET_MAX)),
+    title: impactCardLineV1(decision.title) || 'Approved meeting', first_line, approved_at: decision.approved_at,
+    project_ids: Object.freeze([...decision.project_ids]),
   });
 }
 /**
@@ -456,7 +444,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
 
   /**
    * One desk for the request, bound to the viewer in the global scope; each
-   * item opened at most once, at most 50 per call, then the desk's fence. An
+   * item opened at most once, then the desk's fence. An
    * open the desk refuses for the viewer's access (`unauthorized`,
    * `not_found`, `stale_access_state`), an empty one, or one that releases
    * anything but the item itself: the viewer cannot open it (`no_access`).
@@ -467,7 +455,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
   const openLive = async (viewer: Viewer, rows: readonly ImpactItemRowV1[], signal?: AbortSignal): Promise<ReadonlyMap<Sha256Digest, LiveRead>> => {
     const targets = new Map<Sha256Digest, Pointer>();
     // A meeting action, or a follow-up from a chat about no other item, is never read live: it stays not_read.
-    for (const row of rows) if (targets.size < LIVE_OPENS_MAX && !targets.has(row.item_key) && !ownAction(row)) targets.set(row.item_key, row.pointer);
+    for (const row of rows) if (!targets.has(row.item_key) && !ownAction(row)) targets.set(row.item_key, row.pointer);
     if (targets.size === 0) return new Map();
     const withSignal = signal === undefined ? {} : { signal };
     /** The whole request could not be read: every item tried is unavailable. A cancelled request is not an outage. */
@@ -571,11 +559,11 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const actor = { organization_id: viewer.organization, principal_id: viewer.principal, membership_id: viewer.membership };
       // A follow-up from a chat is sent on its own, from the caller's drafts, never from a run's Send row.
       // Only rows with a run are read, so no number of chat drafts naming the caller pushes a meeting's rows out of the window.
-      const unsent = options.items.involving(viewer.organization, viewer.membership, { states: ['unsent'], limit: INVOLVING_MAX, from_run: true })
+      const unsent = options.items.involving(viewer.organization, viewer.membership, { states: ['unsent'], limit: EVERY_ROW, from_run: true })
         .filter(row => approvedBy(row, viewer));
       const open = new Map<string, ImpactItemRowV1>();
       // Leads take an item when its approver and owner have both left.
-      for (const row of [...options.items.involving(viewer.organization, viewer.membership, { states: ['open'], limit: INVOLVING_MAX }), ...options.items.orphaned(viewer.organization, { limit: INVOLVING_MAX })]) {
+      for (const row of [...options.items.involving(viewer.organization, viewer.membership, { states: ['open'], limit: EVERY_ROW }), ...options.items.orphaned(viewer.organization, { limit: EVERY_ROW })]) {
         if (row.state === 'open') open.set(row.item_id, row);
       }
       // Drafts: the caller's own unsent follow-ups from a chat, newest first (ADR-0053).
@@ -599,8 +587,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         send.push(Object.freeze({
           run_id: runId, decision: decisionOf(decision, firstLine(run)), items: rows.length,
           kinds: Object.freeze(KIND_ORDER.filter(kind => rows.some(row => openItemKindV1(row.pointer) === kind))),
-          // As many owners as a run has items: its affected rows and its meeting actions.
-          owners: Object.freeze(owners.sort((left, right) => left.localeCompare(right)).slice(0, PERSON_RUN_ITEMS_MAX_V1)), finished_at: run.updated_at,
+          // Every owner of the run's items: its affected rows and its meeting actions.
+          owners: Object.freeze(owners.sort((left, right) => left.localeCompare(right))), finished_at: run.updated_at,
         }));
       }
       send.sort((left, right) => ascending(right.finished_at, left.finished_at) || ascending(left.run_id, right.run_id));
@@ -646,12 +634,12 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         }
         case 'record':
           scopeRecords = [request.id as Sha256Digest];
-          context = assess(viewer, options.items.forRecords(scopeRecords, { states: STATES, limit: SCOPE_ROWS_MAX }), scopeRecords);
+          context = assess(viewer, options.items.forRecords(scopeRecords, { states: STATES, limit: EVERY_ROW }), scopeRecords);
           break;
         default:
           // project: the records the viewer reads in it now, newest first.
-          projectRecords = options.records.projectRecords({ access_token: input.access_token, project_id: request.id!, limit: PROJECT_RECORDS_MAX });
-          context = assess(viewer, options.items.forRecords(projectRecords, { states: STATES, limit: SCOPE_ROWS_MAX }));
+          projectRecords = options.records.projectRecords({ access_token: input.access_token, project_id: request.id! });
+          context = assess(viewer, options.items.forRecords(projectRecords, { states: STATES, limit: EVERY_ROW }));
       }
       const visible = context.assessed.filter(entry => entry.access.see_row).sort((left, right) => oldestFirst(left.row, right.row));
       const open = visible.filter(entry => entry.row.state === 'open');
@@ -683,9 +671,9 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         unsent: visible.filter(entry => entry.row.state === 'unsent').length, open: open.length,
         done: visible.filter(entry => entry.row.state === 'done').length, not_relevant: visible.filter(entry => entry.row.state === 'not_relevant').length,
         decisions: recordsOf(visible.map(entry => entry.row)).length,
-        // Most recent decisions first, when a scope holds more than the API carries.
+        // Most recent decisions first, every one in scope.
         by_decision: [...byDecision].sort(([leftRecord, left], [rightRecord, right]) => ascending(right.latest, left.latest) || ascending(leftRecord, rightRecord))
-          .slice(0, SCOPE_DECISIONS_MAX).map(([record_sha256, { latest: _latest, ...counts }]) => ({ record_sha256, ...counts })),
+          .map(([record_sha256, { latest: _latest, ...counts }]) => ({ record_sha256, ...counts })),
       };
 
       // Each decision's impact check stage, for the decisions in scope the policy shows the viewer: a project lists the records they read now.
@@ -701,7 +689,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         return run === undefined ? [] : [{
           record_sha256: record, run_id: run.run_id, state: triggerRunStateAtV1(run, at), error_code: run.state === 'failed' ? run.error_code ?? 'research_failed' : null, mine: runFor(run, viewer),
         }];
-      }).slice(0, SCOPE_DECISIONS_MAX);
+      });
 
       // Counts (a meeting's and a project's Follow-ups line): no item is listed, so none is opened and no desk is bound. Rows: the
       // same page with no live read, so a list shows its rows at once and reads live only what it shows (follow-ups thread v1).

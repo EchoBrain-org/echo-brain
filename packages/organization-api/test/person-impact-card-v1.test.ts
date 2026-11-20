@@ -1,6 +1,6 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
-import { PERSON_IMPACT_CARD_LIMITS_V1, validatePersonImpactCardV1 } from '../src/person-impact-card-v1.js';
+import { validatePersonImpactCardV1 } from '../src/person-impact-card-v1.js';
 
 const recordCitation = {
   citation: { kind: 'approved_record', atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'project-members-readable-person-v1' },
@@ -69,18 +69,15 @@ describe('impact card', () => {
     refused(Object.fromEntries(Object.entries(assessed).filter(([key]) => key !== 'people')), 'people left out');
   });
 
-  it('rejects any text field over its limit, and text that is not one trimmed line', () => {
-    const { line_chars: line, name_chars: name, milestone_chars: milestone, expected_chars: expected } = PERSON_IMPACT_CARD_LIMITS_V1;
-    expect({ line, name, milestone, expected }).toEqual({ line: 300, name: 200, milestone: 120, expected: 120 });
-    // At the limit is accepted; one over is refused.
-    expect(() => validatePersonImpactCardV1({ ...assessed, decided: [{ text: 'd'.repeat(line), citation_index: 0 }] })).not.toThrow();
+  it('takes text of any length, and refuses text that is not one trimmed line', () => {
+    // No line, name, milestone or follow-up has a length of its own: the response that carries the card bounds them.
+    const long = (letter: string) => letter.repeat(20_000);
+    const card = {
+      ...affectedWith(assessed, 0, { ...ticket, says_now: long('s'), owner: long('o'), expected: long('e'), date_at_risk: { date: '2026-10-15', milestone: long('m') } }),
+      decided: [{ text: long('d'), citation_index: 0 }], unconfirmed: [long('u')], people: [{ name: long('o'), items: [1] }],
+    };
+    expect(validatePersonImpactCardV1(card)).toEqual(card);
     for (const [label, value] of [
-      ['decided text', { ...assessed, decided: [{ text: 'd'.repeat(line + 1), citation_index: 0 }] }],
-      ['says_now', affectedWith(assessed, 0, { ...ticket, says_now: 's'.repeat(line + 1) })],
-      ['owner', { ...affectedWith(assessed, 0, { ...ticket, owner: 'o'.repeat(name + 1) }), people: [{ name: 'o'.repeat(name + 1), items: [1] }] }],
-      ['milestone', affectedWith(assessed, 0, { ...ticket, date_at_risk: { date: '2026-10-15', milestone: 'm'.repeat(milestone + 1) } })],
-      ['expected', assessedCard({ expected: 'e'.repeat(expected + 1) })],
-      ['unconfirmed', { ...assessed, unconfirmed: ['u'.repeat(line + 1)] }],
       ['two lines', { ...assessed, decided: [{ text: 'Show two decimals.\nAlso ship.', citation_index: 0 }] }],
       ['untrimmed', affectedWith(assessed, 0, { ...ticket, says_now: ' padded' })],
       ['empty', { ...assessed, unconfirmed: [''] }],
@@ -88,7 +85,6 @@ describe('impact card', () => {
   });
 
   it('rejects inconsistent cards', () => {
-    const limits = PERSON_IMPACT_CARD_LIMITS_V1;
     for (const [label, value] of [
       ['relation', affectedWith(assessed, 1, { ...page, relation: 'change_in_jira' })],
       ['status', { ...assessed, status: 'done' }],
@@ -109,10 +105,22 @@ describe('impact card', () => {
       ['not assessed with a relation', affectedWith(notAssessed, 1, { citation_index: 1, says_now: 'PRD: Display', relation: 'confirms' })],
       ['not assessed with a date', affectedWith(notAssessed, 1, { citation_index: 1, says_now: 'PRD: Display', date_at_risk: { date: '2026-10-15', milestone: 'DVT gate' } })],
       ['not assessed with a decided item also affected', { ...notAssessed, decided: [{ text: 'Show two decimals.', citation_index: 1 }] }],
-      ['too many decisions', { ...assessed, decided: Array.from({ length: limits.decided + 1 }, (_, index) => ({ text: `Decision ${index}.`, citation_index: 0 })) }],
-      ['too many notes', { ...assessed, unconfirmed: Array.from({ length: limits.unconfirmed + 1 }, (_, index) => `Note ${index}.`) }],
       ['repeated note', { ...assessed, unconfirmed: ['Note.', 'Note.'] }],
     ] as const) refused(value as Card, label);
+  });
+
+  it('keeps a decision that affects many items whole, with no count of decided, affected or unconfirmed entries', () => {
+    // A decision that affects 250 tickets lists all 250, with 300 decisions and 300 notes.
+    const tickets = Array.from({ length: 250 }, (_, at) => ({ ...ticketCitation, citation: { ...ticketCitation.citation, ticket_id: String(20_000 + at), text_sha256: canonicalSha256(`ticket ${at}`) } }));
+    const many = {
+      ...assessed, people: [],
+      decided: Array.from({ length: 300 }, (_, at) => ({ text: `Decision ${at}.`, citation_index: 0 })),
+      affected: tickets.map((_, at) => ({ citation_index: at + 1, says_now: `Ticket ${at} formats one decimal.`, relation: 'conflicts' })),
+      unconfirmed: Array.from({ length: 300 }, (_, at) => `Note ${at}.`),
+      citations: [recordCitation, ...tickets],
+    };
+    const card = validatePersonImpactCardV1(many);
+    expect([card.decided.length, card.affected.length, card.unconfirmed.length]).toEqual([300, 250, 300]);
   });
 
   it('allows expected only on assessed conflicts and needs-updating rows', () => {

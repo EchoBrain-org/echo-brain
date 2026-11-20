@@ -81,11 +81,11 @@ describe("Agentic Ask and OpenRouter timeout contract", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("normalizes fractional shrinking planner and answer budgets before the real adapter", async () => {
+  it("hands the real adapter the profile's integer silence period on every call, whatever the fractional clock reads", async () => {
     const startedAt = 100.125;
     let clock = startedAt;
-    // Steps short enough that a third still starts: a step needs 1.25 times the longest step call so far.
-    const elapsed = [19_200.25, 19_200.125, 22_600.25, 0];
+    // Slow calls on a fractional clock: no call's silence period shrinks as the run goes on.
+    const elapsed = [140_000.25, 140_000.125, 140_000.25, 0];
     const replies = [
       {
         parts: [{ question: "When is launch?", notes: "", needs: [{ need: "launch date", status: "open", evidence: [] }] }],
@@ -102,11 +102,12 @@ describe("Agentic Ask and OpenRouter timeout contract", () => {
       { blocks: [{ block: "answer", sentences: [{ text: "Launch is Tuesday.", evidence: ["E1"] }] }], not_found: [] },
     ];
     const timeouts: number[] = [];
-    const nativeTimeout = AbortSignal.timeout;
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
-      timeouts.push(milliseconds);
-      return nativeTimeout(milliseconds);
-    });
+    // The adapter's silence watchdog is a timer of the profile's integer period, armed for each call.
+    const nativeTimeout = globalThis.setTimeout;
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void, milliseconds?: number) => {
+      if (typeof milliseconds === "number") timeouts.push(milliseconds);
+      return nativeTimeout(handler, milliseconds);
+    }) as typeof setTimeout);
     const fetch = vi.fn<typeof globalThis.fetch>(async (): Promise<Response> => {
       const index = fetch.mock.calls.length - 1;
       clock += elapsed[index]!;
@@ -128,7 +129,9 @@ describe("Agentic Ask and OpenRouter timeout contract", () => {
           generation_adapter_id: "openrouter",
           planner_model: "openai/gpt-4.1-mini",
           answer_model: "openai/gpt-4.1-mini",
-          timeout_ms: 30_000,
+          timeout_ms: 180_000,
+          context_tokens: 131_072,
+          max_output_tokens: 16_000,
         },
         audit: { append: entry => { audit.push(entry); } },
         now_ms: () => clock,
@@ -137,7 +140,8 @@ describe("Agentic Ask and OpenRouter timeout contract", () => {
 
       expect(answer).toMatchObject({ outcome: "answered", citations: [{ citation: launchEvidence().citation }] });
       expect(fetch).toHaveBeenCalledTimes(4);
-      expect(timeouts).toEqual([25_000, 25_000, 24_599, 26_999]);
+      expect(timeouts.filter(milliseconds => milliseconds === 180_000).length).toBeGreaterThanOrEqual(4);
+      expect(timeouts.every(milliseconds => Number.isSafeInteger(milliseconds))).toBe(true);
       expect(audit).toEqual([expect.objectContaining({ outcome: "answered", model_calls: 4, repairs: 0, fallbacks: 0, citation_count: 1 })]);
       expect(audit[0]!.checked_at).toBe(checkedAt);
     } finally {

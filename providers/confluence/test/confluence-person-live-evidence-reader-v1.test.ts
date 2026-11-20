@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import type { PersonPageCitationV1 } from '@echo-brain/organization-api';
+import { PERSON_EVIDENCE_LABEL_MAX_BYTES_V1, type PersonPageCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReleaseV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
@@ -137,26 +137,6 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(f.calls.length).toBeGreaterThan(300);
   });
 
-  it('still caps content reads at 160 per request', async () => {
-    const f = await fixture();
-    // Each unmapped search is one CQL request plus one exact metadata read.
-    for (let search = 0; search < 80; search += 1) await f.source.search({ query: `gate ${search}` });
-    await expect(f.source.search({ query: 'one more' })).rejects.toMatchObject({ code: 'unavailable' });
-    expect(f.calls.filter(call => call.path === '/rest/api/search' || call.path.startsWith('/api/v2/pages/'))).toHaveLength(160);
-    // Fences still run: a revalidation of everything released so far succeeds.
-    await expect(f.source.revalidate({})).resolves.toBeUndefined();
-  });
-
-  it('stops a runaway loop at a hard bound of 2048 requests, fences included', async () => {
-    const f = await fixture();
-    let failure: unknown;
-    for (let fence = 0; fence < 600 && failure === undefined; fence += 1) {
-      try { await f.source.revalidate({}); } catch (error) { failure = error; }
-    }
-    expect(failure).toMatchObject({ code: 'unavailable' });
-    expect(f.calls.length).toBe(2048);
-  });
-
   it('says when a last list page was exactly full, so its end is unverified (ADR-0041)', async () => {
     const f = await fixture({ pages: Array.from({ length: 20 }, (_, index) => page({ id: String(100 + index) })) });
     expect(await f.source.list({ limit: 20 })).toMatchObject({ truncated: false, page_full: true });
@@ -226,6 +206,33 @@ describe('Confluence live reader through the audited evidence source', () => {
     f.state.keys.set('42', 'RENAMED_AGAIN');
     await f.source.search({ query: 'EVT requirements' });
     expect(f.calls.filter(call => call.path === '/rest/api/search').at(-1)!.query.get('cql')).toContain('"RENAMED_AGAIN"');
+  });
+
+  it('returns as many search matches as asked for, and says when more matched', async () => {
+    const ids = Array.from({ length: 50 }, (_, index) => String(200 + index));
+    const f = await fixture({ pages: ids.map(id => page({ id })) });
+    f.state.searchIds = ids; f.state.searchNext = '/wiki/rest/api/search?cursor=second';
+    const found = await f.source.search({ query: 'requirements', limit: 50 });
+    expect(found.items.map(item => item.citation.page_id)).toEqual(ids);
+    expect(found.truncated).toBe(true);
+    expect(f.calls.find(call => call.path === '/rest/api/search')!.query.get('limit')).toBe('50');
+  });
+
+  it('lists every page of more mapped spaces than one space-id filter takes, a filter of 100 at a time, through the cursor', async () => {
+    const selected = Array.from({ length: 230 }, (_, index) => String(1000 + index));
+    const pages = selected.map((spaceId, index) => page({ id: String(5000 + index), spaceId }));
+    const f = await fixture({ selected, pages });
+    const seen: string[] = [];
+    let result = await f.source.list({ limit: 1000 });
+    for (;;) {
+      seen.push(...result.items.map(item => item.citation.page_id));
+      if (result.next_cursor === undefined) break;
+      result = await f.source.list({ limit: 1000, cursor: result.next_cursor });
+    }
+    expect(seen.sort()).toEqual(pages.map(value => value.id).sort());
+    const filters = f.calls.filter(call => call.path === '/api/v2/pages' && call.query.get('id') === null).map(call => call.query.get('space-id')!.split(','));
+    expect(filters.map(filter => filter.length)).toEqual([100, 100, 30]);
+    expect(filters.flat()).toEqual(selected);
   });
 
   it('leaves out a mapped space Confluence does not find for the asker (404), and every page of the result says so', async () => {
@@ -329,34 +336,6 @@ describe('Confluence live reader through the audited evidence source', () => {
     await expect(f.source.revalidate({ mode: 'incremental' })).rejects.toMatchObject({ code: 'unauthorized' });
   });
 
-  it('runs an incremental check of newly released pages through the fences, so a spent content cap never blocks it', async () => {
-    const f = await fixture({ pages: [page(), page({ id: '124' })] });
-    const verify = ['/oauth/token/accessible-resources', '/rest/api/user/current'];
-    const reads = () => f.calls.map(call => call.query.has('id') ? `bulk:${call.query.get('id')}` : call.query.get('body-format') === 'atlas_doc_format' ? `body:${call.path}` : call.path);
-    // Pages 123 and 124 are listed and checked.
-    const listed = await f.source.list({});
-    await f.source.revalidate({ mode: 'incremental' });
-    // New since that check: an opened section of 123, and page 125, created later, which searches release.
-    await f.source.open({ item: listed.items[0]!.id });
-    f.state.pages.set('125', page({ id: '125' }));
-    f.state.searchIds = ['125'];
-    let spent: unknown;
-    for (let search = 0; search < 100 && spent === undefined; search += 1) {
-      try { await f.source.search({ query: `gate ${search}` }); } catch (error) { spent = error; }
-    }
-    // Content reads (list, search, open and their exact reads) are capped at 160 per request.
-    expect(spent).toMatchObject({ code: 'unavailable' });
-    expect(f.calls.filter(call => call.path === '/rest/api/search' || (/^\/api\/v2\/pages(\/\d+)?$/.test(call.path) && !call.query.has('id')))).toHaveLength(160);
-    // The check before the next model call re-reads exactly the new page and the opened body, then verifies the connection:
-    // every request is fence traffic, so it succeeds although the content cap is spent.
-    f.calls.length = 0;
-    await expect(f.source.revalidate({ mode: 'incremental' })).resolves.toBeUndefined();
-    expect(reads()).toEqual(['bulk:125', 'body:/api/v2/pages/123', ...verify]);
-    // And so does the full check at release; the fences did not hand content reads back.
-    await expect(f.source.revalidate({})).resolves.toBeUndefined();
-    await expect(f.source.search({ query: 'after the checks' })).rejects.toMatchObject({ code: 'unavailable' });
-  });
-
   it('revalidates every released metadata page in bounded batches regardless of response order', async () => {
     const pages = Array.from({ length: 107 }, (_, index) => page({ id: String(100 + index) }));
     const f = await fixture({ pages });
@@ -371,7 +350,8 @@ describe('Confluence live reader through the audited evidence source', () => {
     f.calls.length = 0;
     await f.source.revalidate({});
     const batches = f.calls.filter(call => call.query.has('id'));
-    expect(batches.map(call => call.query.get('id')!.split(',').length)).toEqual([50, 50, 7]);
+    // Confluence filters by up to 250 ids per call.
+    expect(batches.map(call => call.query.get('id')!.split(',').length)).toEqual([107]);
     expect(batches.flatMap(call => call.query.get('id')!.split(','))).toEqual(pages.map(value => value.id));
     expect(f.bodyCalls()).toEqual([]);
     expect(f.calls.some(call => /^\/api\/v2\/pages\/\d+$/.test(call.path))).toBe(false);
@@ -542,15 +522,15 @@ describe('Confluence live reader through the audited evidence source', () => {
   });
 
   it('bounds Unicode labels before the shared audit boundary and preserves source identity', async () => {
-    // 480 UTF-16 code units, 1,200 UTF-8 bytes: inside the 1,024-code-unit title bound, over four times the 256-byte label bound.
+    // 480 UTF-16 code units, 1,200 UTF-8 bytes: inside the 1,024-code-unit title bound, over the evidence label bound.
     const title = '需求😊'.repeat(120);
     const f = await fixture({ pages: [page({ title })] });
     const found = await f.source.list({});
-    expect(Buffer.byteLength(found.items[0]!.label, 'utf8')).toBeLessThanOrEqual(256);
+    expect(Buffer.byteLength(found.items[0]!.label, 'utf8')).toBeLessThanOrEqual(PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
     expect(found.items[0]!.label).not.toContain('\ufffd');
     const opened = await f.source.open({ item: found.items[0]!.id });
     expect(opened.items[0]!.citation.page_id).toBe('123');
-    expect(Buffer.byteLength(opened.items[0]!.label, 'utf8')).toBeLessThanOrEqual(256);
+    expect(Buffer.byteLength(opened.items[0]!.label, 'utf8')).toBeLessThanOrEqual(PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
   });
 
   it('filters a keyword search by the current revision timestamp in the client zone', async () => {

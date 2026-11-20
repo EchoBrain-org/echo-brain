@@ -118,7 +118,6 @@ describe('shared audited live evidence source V1', () => {
       { ...ticket(), citation: { ...ticket().citation, external_scope_id: 'tenant-two' } },
       { ...ticket(), citation: { ...ticket().citation, tool_id: 'another-tool' } },
       { ...ticket(), citation: { ...ticket().citation, text_sha256: textDigest('different bytes') } },
-      { ...ticket(), text: 'x'.repeat(3073) },
       { ...ticket(), label: 'x'.repeat(1025) },
       { ...ticket(), occurred_at: '2026-02-30' },
       { ...ticket(), date_kind: 'completed' as never },
@@ -138,6 +137,12 @@ describe('shared audited live evidence source V1', () => {
     expect(s.audit.record).not.toHaveBeenCalled();
   });
 
+  it('carries a live passage of any length: the reader text, whole', async () => {
+    const long = 'x'.repeat(256 * 1024);
+    const f = fixture('tickets', page([ticket(long)]));
+    await expect(f.make().search({ query: 'launch' })).resolves.toMatchObject({ items: [expect.objectContaining({ text: long })] });
+  });
+
   it('revalidates inventory metadata, repeated revisions and provider item visibility before reuse', async () => {
     const inventoryCitation = { ...ticket().citation, text_sha256: textDigest('') };
     const f = fixture('tickets', page([{ ...ticket(), citation: inventoryCitation, text: undefined }]));
@@ -146,7 +151,7 @@ describe('shared audited live evidence source V1', () => {
     expect(inventory.items[0]).not.toHaveProperty('text');
     f.select(page([ticket()]));
     await source.open({ item: inventory.items[0]!.id });
-    expect(f.reader.open).toHaveBeenCalledWith({ handle: ticket().handle, limit: 10 });
+    expect(f.reader.open).toHaveBeenCalledWith({ handle: ticket().handle, limit: Number.MAX_SAFE_INTEGER });
     f.select(page([ticket('The ticket was edited')]));
     await source.search({ query: 'edited' });
     await source.revalidate({});
@@ -206,7 +211,9 @@ describe('shared audited live evidence source V1', () => {
     const result = await f.make().search({ query: 'ship' });
     expect(result.notice).toBe('Some live content could not be represented as text.');
     expect(JSON.stringify(f.releases)).not.toContain('could not be represented');
-    for (const notice of ['', ' leading', 'trailing ', 'line\nbreak', 'x'.repeat(1025)]) {
+    f.select(page([ticket()], undefined, 'n'.repeat(4_096)));
+    await expect(f.make().search({ query: 'ship' })).resolves.toMatchObject({ notice: 'n'.repeat(4_096) });
+    for (const notice of ['', ' leading', 'trailing ', 'line\nbreak']) {
       f.select(page([ticket()], undefined, notice));
       await expect(f.make().search({ query: 'ship' })).rejects.toMatchObject({ code: 'invalid_output' });
     }
@@ -256,7 +263,7 @@ describe('shared audited live evidence source V1', () => {
     expect(first.next_cursor).not.toBe('private-provider-cursor');
     expect(JSON.stringify(f.releases)).not.toContain('private-provider-cursor');
     await source.list({ container: 'ECHO', since: '2026-09-01', cursor: first.next_cursor });
-    expect(f.reader.list).toHaveBeenLastCalledWith({ container: 'ECHO', since: '2026-09-01', limit: 10, cursor: 'private-provider-cursor' });
+    expect(f.reader.list).toHaveBeenLastCalledWith({ container: 'ECHO', since: '2026-09-01', limit: Number.MAX_SAFE_INTEGER, cursor: 'private-provider-cursor' });
     for (const input of [{ container: 'another-project', since: '2026-09-01', cursor: first.next_cursor }, { container: 'ECHO', cursor: first.next_cursor }, { cursor: 'private-provider-cursor' }]) {
       await expect(source.list(input)).rejects.toMatchObject({ code: 'invalid_request' });
     }
@@ -274,7 +281,7 @@ describe('shared audited live evidence source V1', () => {
     expect(f.reader.open).not.toHaveBeenCalled();
     const result = await source.search({ query: 'ship' });
     await source.open({ item: result.items[0]!.id });
-    expect(f.reader.open).toHaveBeenCalledWith({ handle: 'private:ECHO-42', limit: 10 });
+    expect(f.reader.open).toHaveBeenCalledWith({ handle: 'private:ECHO-42', limit: Number.MAX_SAFE_INTEGER });
     await expect(f.make().open({ item: result.items[0]!.id })).rejects.toMatchObject({ code: 'not_found' });
   });
 
@@ -296,9 +303,10 @@ describe('shared audited live evidence source V1', () => {
     expect(f.audit.record).not.toHaveBeenCalled();
   });
 
-  it('bounds the aggregate release before auditing and rejects sparse or accessor output without evaluating it', async () => {
+  it('releases a page of any total size, and rejects sparse or accessor output without evaluating it', async () => {
     const f = fixture('tickets', page(Array.from({ length: 50 }, (_, i) => ticket('x'.repeat(3000), `ECHO-${i}`))));
-    await expect(f.make().search({ query: 'ship', limit: 50 })).rejects.toMatchObject({ code: 'invalid_output' });
+    await expect(f.make().search({ query: 'ship', limit: 50 })).resolves.toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ label: 'ECHO-49' })]) });
+    f.audit.record.mockClear();
     f.select(page(Array(1)));
     await expect(f.make().search({ query: 'ship' })).rejects.toMatchObject({ code: 'invalid_output' });
     const getter = vi.fn(() => { throw new Error('private provider response'); });
@@ -308,7 +316,7 @@ describe('shared audited live evidence source V1', () => {
     expect(f.audit.record).not.toHaveBeenCalled();
   });
 
-  it('reserves request capacity across releases waiting for their audits', async () => {
+  it('holds every release a request makes, however many, with no request capacity', async () => {
     const f = fixture('tickets', page([]));
     const source = f.make();
     vi.mocked(f.reader.search).mockImplementation(async input => page(Array.from({ length: 50 }, (_, index) =>
@@ -321,50 +329,16 @@ describe('shared audited live evidence source V1', () => {
       await auditPending;
       return canonicalSha256(release);
     });
-
-    const reads = Array.from({ length: 11 }, (_, index) => source.search({ query: `batch-${index}`, limit: 50 }));
-    await vi.waitFor(() => expect(f.reader.search).toHaveBeenCalledTimes(11), { interval: 1 });
+    // 120 reads of 50 while every audit waits: 6,000 items, past the 5,120 a request used to hold.
+    const reads = Array.from({ length: 120 }, (_, index) => source.search({ query: `batch-${index}`, limit: 50 }));
+    await vi.waitFor(() => expect(f.reader.search).toHaveBeenCalledTimes(120), { interval: 1 });
     releaseAudit();
-    const outcomes = await Promise.allSettled(reads);
-
-    expect(outcomes.filter(value => value.status === 'fulfilled')).toHaveLength(10);
-    expect(outcomes.filter(value => value.status === 'rejected')).toHaveLength(1);
-    expect(f.audit.record).toHaveBeenCalledTimes(10);
-  });
-
-  it('keeps a shared reservation until its last pending audit settles', async () => {
-    const f = fixture('tickets', page([]));
-    const source = f.make();
-    vi.mocked(f.reader.search).mockImplementation(async input => {
-      if (input.query === 'shared') return page([ticket('Shared evidence', 'ECHO-SHARED')]);
-      const count = input.query === 'fill-final' ? 12 : input.query === 'recovered' ? 11 : 50;
-      return page(Array.from({ length: count }, (_, index) => ticket(`Evidence ${input.query} ${index}`, `ECHO-${input.query}-${index}`)));
-    });
-    let failFirstAudit!: () => void;
-    let finishSecondAudit!: () => void;
-    const firstAudit = new Promise<void>(resolve => { failFirstAudit = resolve; });
-    const secondAudit = new Promise<void>(resolve => { finishSecondAudit = resolve; });
-    let audits = 0;
-    f.audit.record.mockImplementation(async release => {
-      f.releases.push(release);
-      audits += 1;
-      if (audits === 1) { await firstAudit; throw new Error('audit failed'); }
-      if (audits === 2) await secondAudit;
-      return canonicalSha256(release);
-    });
-
-    const first = source.search({ query: 'shared' });
-    const second = source.search({ query: 'shared' });
-    await vi.waitFor(() => expect(f.audit.record).toHaveBeenCalledTimes(2), { interval: 1 });
-    failFirstAudit();
-    await expect(first).rejects.toMatchObject({ code: 'unavailable' });
-
-    for (let index = 0; index < 10; index += 1) await source.search({ query: `fill-${index}`, limit: 50 });
-    await expect(source.search({ query: 'fill-final', limit: 12 })).rejects.toMatchObject({ code: 'invalid_output' });
-    finishSecondAudit();
-    await expect(second).resolves.toMatchObject({ items: [expect.objectContaining({ label: 'ECHO-SHARED' })] });
-    const recovered = await source.search({ query: 'recovered', limit: 11 });
-    expect(recovered.items).toHaveLength(11);
+    const results = await Promise.all(reads);
+    expect(results.reduce((sum, result) => sum + result.items.length, 0)).toBe(6_000);
+    expect(results.every(result => result.truncated === false && result.notice === undefined)).toBe(true);
+    // Every read is audited, each with exactly what it released, and every item opens.
+    expect(f.releases.reduce((sum, release) => sum + release.citations.length, 0)).toBe(6_000);
+    await expect(source.open({ item: results.at(-1)!.items.at(-1)!.id })).resolves.toMatchObject({ truncated: false });
   });
 
   it('retains immutable release bytes while an asynchronous audit is pending', async () => {
@@ -381,7 +355,14 @@ describe('shared audited live evidence source V1', () => {
   it('bounds input, propagates cancellation and suppresses raw provider error content', async () => {
     const f = fixture('tickets', page([ticket()]));
     const source = f.make();
-    for (const value of [0, 51, 1.5, NaN]) await expect(source.search({ query: 'ship', limit: value })).rejects.toMatchObject({ code: 'invalid_request' });
+    for (const value of [0, -1, 1.5, NaN]) await expect(source.search({ query: 'ship', limit: value })).rejects.toMatchObject({ code: 'invalid_request' });
+    // The caller's count reaches the reader whole, never clamped or refused; no count asks for everything, and the
+    // reader fills one page to its provider's maximum and what one result carries, with a cursor for the rest.
+    await source.search({ query: 'ship', limit: 500 });
+    await source.search({ query: 'ship' });
+    expect(vi.mocked(f.reader.search).mock.calls.map(([input]) => input.limit)).toEqual([500, Number.MAX_SAFE_INTEGER]);
+    vi.mocked(f.reader.search).mockClear();
+    f.audit.record.mockClear();
     await expect(source.list({ since: '2026-02-30' })).rejects.toMatchObject({ code: 'invalid_request' });
     await expect(source.list({ since: '2026-09-30', until: '2026-09-01' })).rejects.toMatchObject({ code: 'invalid_request' });
     expect(f.reader.search).not.toHaveBeenCalled();
@@ -436,8 +417,10 @@ describe('tool containers and any-date windows at the shared boundary (research 
     expect(f.audit.record).not.toHaveBeenCalled();
   });
 
-  it('bounds a container key like any other attribute', async () => {
-    const f = containers(page([{ ...container(), attributes: { key: 'K'.repeat(257), tool: 'Jira' } }]));
+  it('checks the shape of a container key like any other attribute, at any length', async () => {
+    const long = containers(page([{ ...container(), attributes: { key: 'K'.repeat(2_000), tool: 'Jira' } }]));
+    await expect(long.source.list({})).resolves.toMatchObject({ items: [expect.objectContaining({ attributes: { key: 'K'.repeat(2_000), tool: 'Jira' } })] });
+    const f = containers(page([{ ...container(), attributes: { key: 'K\nK', tool: 'Jira' } }]));
     await expect(f.source.list({})).rejects.toMatchObject({ code: 'invalid_output' });
     expect(f.audit.record).not.toHaveBeenCalled();
   });

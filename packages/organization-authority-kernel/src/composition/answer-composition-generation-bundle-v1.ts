@@ -10,9 +10,15 @@ export interface AnswerCompositionGenerationProfileV1 {
   readonly generation_adapter_id: string;
   readonly planner_model: string;
   readonly answer_model: string;
+  /**
+   * How long one model call may send nothing before it is stalled. A structured call sends nothing until its reply is
+   * whole, so this is the time one call may take.
+   */
   readonly timeout_ms: number;
-  /** The answer model's context window in tokens, when known. Agentic Ask sizes its scratchpad from it. */
-  readonly context_tokens?: number;
+  /** The model's own context window, in tokens: the one place Ask sizes its prompts from. */
+  readonly context_tokens: number;
+  /** The model's own maximum output, in tokens, reasoning included: every call's output allowance. */
+  readonly max_output_tokens: number;
 }
 
 /**

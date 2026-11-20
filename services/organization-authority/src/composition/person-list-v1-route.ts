@@ -270,7 +270,7 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
     const opened = options.originals.open({
       access_token,
       ref: kind === "imported_meeting" ? { kind, id: id as `cap_${string}` } : kind === "note" ? { kind, id: id as `ctx_${string}` } : { kind, id: id as `doc_${string}` },
-      ...(position?.kind === "imported_meeting" ? { from_ordinal: position.offset } : position?.kind === "document" ? { from_ordinal: position.from_ordinal } : {}),
+      ...(position?.kind === "imported_meeting" || position?.kind === "note" ? { from_ordinal: position.offset } : position?.kind === "document" ? { from_ordinal: position.from_ordinal } : {}),
     });
     if (opened.kind !== kind) invalidOutput();
     return opened;
@@ -280,9 +280,8 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
     const base = { schema_version: 1, kind: "echo-person-open-v1", ref };
     switch (opened.kind) {
       case "imported_meeting":
-        return { ...base, item: projectRow(opened.row, joined), text: opened.text, next_cursor: opened.next_offset == null ? null : encodePersonOpenCursorV1(binding, { kind: "imported_meeting", offset: opened.next_offset }) };
       case "note":
-        return { ...base, item: projectRow(opened.row, joined), text: opened.text, next_cursor: null };
+        return { ...base, item: projectRow(opened.row, joined), text: opened.text, next_cursor: opened.next_offset == null ? null : encodePersonOpenCursorV1(binding, { kind: opened.kind, offset: opened.next_offset }) };
       case "document":
         return {
           ...base, item: projectRow(opened.row, joined), filename: opened.filename,

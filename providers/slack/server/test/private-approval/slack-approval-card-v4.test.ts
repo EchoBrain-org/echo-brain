@@ -73,7 +73,8 @@ describe("Slack approval card V4", () => {
     const destination = built.blocks.find((block) => (block as { block_id?: string }).block_id?.endsWith("-destination")) as { text: { text: string } };
     expect(destination.text.text.length).toBeLessThanOrEqual(3_000);
     expect(destination.text.text.endsWith("…")).toBe(true);
-    expect(() => card(Array.from({ length: 21 }, (_, index) => `P${index}`))).toThrow("Slack limits");
+    // Projects have no count of their own: the one line holds as many as Slack's section allows.
+    expect(card(Array.from({ length: 30 }, (_, index) => `P${index}`)).text).toContain("P29");
   });
   it("uses the exact closed-card outcome language and names each destination", () => {
     const approved = buildClosedApprovalCardV4({ title: "Roadmap", outcome: "approved", surface: "desktop", destinations: ["THERM", "THERM + ECHO", "Only you"] });
@@ -91,5 +92,30 @@ describe("Slack approval card V4", () => {
     expect(ids).toContain(slackApprovalOwnerActionIdV4("apr_test", "act_alpha"));
     expect(ids).toContain(slackApprovalOwnerActionIdV4("apr_test", "act_beta"));
     expect(JSON.stringify(built)).not.toContain("owner-input-0");
+  });
+  it("shows the owners that fit Slack's 50 blocks and says how many more the desktop app has", () => {
+    const owners = Array.from({ length: 120 }, (_, index) => ({ signal_id: `act_${index}`, action: `Action ${index}`, proposed: "Ada" }));
+    const built = card(["THERM"], owners);
+    expect(built.blocks.length).toBe(50);
+    const inputs = controls(built).filter((control) => control.type === "plain_text_input");
+    const more = built.blocks.find((block) => (block as { block_id?: string }).block_id?.endsWith("-more-owners")) as { elements: { text: string }[] };
+    expect(more.elements[0]!.text).toBe(`${120 - inputs.length} more actions have a proposed owner. Set them in the ECHO desktop app.`);
+    expect(inputs.map((input) => input.action_id)).toEqual(owners.slice(0, inputs.length).map((owner) => slackApprovalOwnerActionIdV4("apr_test", owner.signal_id)));
+    expect(built.text).toContain(`${120 - inputs.length} more actions have a proposed owner.`);
+    // Every owner that fits is shown, and no note when all fit.
+    expect(JSON.stringify(card(["THERM"], owners.slice(0, 10)))).not.toContain("more actions have a proposed owner");
+  });
+  it("holds an owner input to Slack's own 3,000 characters, and leaves a longer owner to the desktop app", () => {
+    const built = card(["THERM"], [
+      { signal_id: "act_long", action: "A".repeat(5_000), proposed: "R".repeat(3_000) },
+      { signal_id: "act_over", action: "Send draft", proposed: "R".repeat(3_001) },
+    ]);
+    const inputs = built.blocks.filter((block) => (block as { type?: string }).type === "input") as unknown as
+      { label: { text: string }; element: { action_id: string; initial_value: string; max_length: number } }[];
+    expect(inputs.map((input) => input.element.action_id)).toEqual([slackApprovalOwnerActionIdV4("apr_test", "act_long")]);
+    expect(inputs[0]!.element).toMatchObject({ initial_value: "R".repeat(3_000), max_length: 3_000 });
+    expect(inputs[0]!.label.text.length).toBeLessThanOrEqual(2_000);
+    expect(inputs[0]!.label.text.endsWith("…")).toBe(true);
+    expect(built.text).toContain("1 more action has a proposed owner. Set it in the ECHO desktop app.");
   });
 });

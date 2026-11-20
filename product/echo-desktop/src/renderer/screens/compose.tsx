@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { MAX_CAPTURE_PROJECTS, type ProjectSummary } from '../../shared/protocol.js';
+import type { ProjectSummary } from '../../shared/protocol.js';
 import { bytes } from '../format.js';
 import { message } from '../messages.js';
 import {
@@ -109,7 +109,7 @@ function PlaceList({ state, compose, projects, anchor }: {
       }}
     >
       <ProjectPicker
-        projects={projects} ticked={compose.projects.map(project => project.project_id)} max={MAX_CAPTURE_PROJECTS}
+        projects={projects} ticked={compose.projects.map(project => project.project_id)}
         onTick={id => { const project = projects.find(candidate => candidate.project_id === id); if (project) tickProject(project); }}
         more={state.projects.next !== null && !state.projects.loading} onMore={() => void loadProjects(true)}
       />

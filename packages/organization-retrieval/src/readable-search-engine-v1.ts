@@ -54,12 +54,12 @@ type Plane = "facts" | "content" | "lexical";
 type SegmentKind = "reviewer" | "project-members";
 
 /**
- * Lean V1 admission ceiling, sized by measurement (see the scaling decision
- * guide). Every rebuild is synchronous, roughly 0.13 ms per atom plus 9 ms per
- * segment: at this ceiling one took about 2.5 s to build and 0.5 s to prewarm
- * on a laptop. Postings allow 25 per atom, above the 15 to 17 an approved item
- * carries, so atoms bind first. Validation happens before retrieval staging is
- * touched.
+ * Host capacity of one generation, sized by measurement (see the scaling decision guide). The whole generation is
+ * rebuilt synchronously on the Authority's event loop and then held in memory as the one warmed handle, text and
+ * postings included: roughly 0.13 ms per atom plus 9 ms per segment, so at this ceiling one took about 2.5 s to build
+ * and 0.5 s to prewarm on a laptop, and atoms times atom text bounds the resident text at 32 MiB. Postings allow 25 per
+ * atom, above the 15 to 17 an approved item carries, so atoms bind first. Validation happens before retrieval staging
+ * is touched; a refused build names the dimension it passed and the published generation stays in place.
  */
 export const READABLE_SEARCH_ADMISSION_BUDGET_V1 = Object.freeze({
   maximum_atoms: 8_192,
@@ -68,6 +68,7 @@ export const READABLE_SEARCH_ADMISSION_BUDGET_V1 = Object.freeze({
   maximum_postings: 204_800,
 });
 export type ReadableSearchAdmissionLimitV1 = keyof typeof READABLE_SEARCH_ADMISSION_BUDGET_V1;
+
 
 /**
  * The limit a refused build exceeded, or undefined for any other failure. A
@@ -256,7 +257,8 @@ function canonicalProjectIds(
   required: boolean,
 ): readonly string[] {
   if (value === undefined && !required) return Object.freeze([]);
-  if (!Array.isArray(value) || value.length > 20 || (required && value.length < 1))
+  // How many projects a record is filed in is the approval's rule (ADR-0049); the index holds whatever it was given.
+  if (!Array.isArray(value) || (required && value.length < 1))
     throw new Error(`${label} must be a non-empty bounded project-id array`);
   const ids = value.map((id) => {
     if (typeof id !== "string" || id.length < 1 || id.length > 512)
@@ -1135,7 +1137,7 @@ export interface SearchReadableSearchGenerationV1Input {
   readonly query: string;
   /** Authority-authorized project scope. It narrows association only. */
   readonly project_id?: string;
-  /** Defaults to 10 and is deliberately bounded to the V1 response ceiling. */
+  /** The most hits the caller wants; every match when absent. More matches set `truncated`. */
   readonly limit?: number;
   /** Desk-only kind narrowing, applied before relevance slicing. */
   readonly kinds?: readonly ReadableSearchAtomV1["item_kind"][];
@@ -1165,7 +1167,7 @@ export interface ListReadableSearchGenerationV1Input {
   readonly active_generation: ReadableSearchActiveGenerationV1;
   readonly reader: ReadableSearchReaderV1;
   readonly project_id?: string;
-  /** Deliberately larger than search, but bounded for an evidence inventory. */
+  /** The most atoms the caller wants; every admitted atom when absent. More set `truncated`. */
   readonly limit?: number;
   /** Desk-only kind narrowing, applied before inventory slicing. */
   readonly kinds?: readonly ReadableSearchAtomV1["item_kind"][];
@@ -2039,6 +2041,14 @@ function readAndValidateReadableSearchSegment(
   }
 }
 
+/** A caller's result count: any positive safe integer, or every match when absent. */
+function resultLimit(value: number | undefined): number {
+  if (value === undefined) return Number.POSITIVE_INFINITY;
+  if (!Number.isSafeInteger(value) || value < 1)
+    throw new Error("readable-search engine limit must be a positive safe integer");
+  return value;
+}
+
 /**
  * Reads one active, immutable readable-search generation. It does not open Authority,
  * record, or a migration ledger, and it never creates or modifies state.
@@ -2056,11 +2066,7 @@ function validateAndWarmReadableSearchGenerationV1(
   validDigest(active.retrieval_contract_sha256, "active retrieval contract");
   assertExactHead(active.exact_head, "active exact_head");
   assertReader(input.reader);
-  const limit = input.limit ?? 10;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10)
-    throw new Error(
-      "readable-search engine limit must be a safe integer from one through ten",
-    );
+  const limit = resultLimit(input.limit);
   const terms = analyzeReadableSearchQuery(input.query);
   const generations = join(
     input.state_directory,
@@ -2205,11 +2211,7 @@ export function searchReadableSearchGenerationV1(
   assertReader(input.reader);
   const records = readerRecordNarrowing(input.record_sha256s);
   const excluded = readerExclusion(input.exclude);
-  const limit = input.limit ?? 10;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10)
-    throw new Error(
-      "readable-search engine limit must be a safe integer from one through ten",
-    );
+  const limit = resultLimit(input.limit);
   const handle = activeGenerationHandle(input.active_generation);
   const terms = analyzeReadableSearchQuery(input.query);
   const admitted = scopedSegments(
@@ -2245,9 +2247,7 @@ export function listReadableSearchGenerationV1(
   assertReader(input.reader);
   const records = readerRecordNarrowing(input.record_sha256s);
   const excluded = readerExclusion(input.exclude);
-  const limit = input.limit ?? 50;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)
-    throw new Error("readable-search inventory limit must be a safe integer from one through fifty");
+  const limit = resultLimit(input.limit);
   const handle = activeGenerationHandle(input.active_generation);
   const admitted = scopedSegments(
     handle.segments,

@@ -1,10 +1,10 @@
 // The ask bar's own words: "Try asking" for an empty bar (the questions you
 // asked in the bar's scope, from the Ask timeline, each reopening its turn;
 // then the meetings ECHO shows there, then the question for any week; at most
-// three, each once) and the count toward a question's 240 characters.
+// three, each once). A question has no length of its own: the bar never counts or cuts it.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, HomeView, ListItem, OpenItemView } from '../../src/shared/protocol.js';
-import { COUNT_FROM, decidedIn, MAX_QUESTION, MAX_SUGGESTIONS, questionCount, suggestedQuestions, weekQuestion } from '../../src/renderer/bar.js';
+import { decidedIn, MAX_SUGGESTIONS, suggestedQuestions, weekQuestion } from '../../src/renderer/bar.js';
 import { ACCOUNT, EMPTY_SUMMARY, cover, fail, fileOf, flush, Held, ok, project, rpcFor, startStore, storeLifecycle, timelineFiles, uncover } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -53,19 +53,6 @@ beforeEach(() => {
   }, () => ({ active: [apollo], archived: [] })));
 });
 
-describe('the count toward a question\'s limit', () => {
-  it('shows nothing below 200 characters, counts from 200, and is full at 240', () => {
-    expect(COUNT_FROM).toBe(200);
-    expect(MAX_QUESTION).toBe(240);
-    expect(questionCount('')).toBeNull();
-    expect(questionCount('x'.repeat(199))).toBeNull();
-    expect(questionCount('x'.repeat(200))).toEqual({ words: '200 / 240', full: false });
-    expect(questionCount('x'.repeat(212))).toEqual({ words: '212 / 240', full: false });
-    expect(questionCount('x'.repeat(239))).toEqual({ words: '239 / 240', full: false });
-    expect(questionCount('x'.repeat(240))).toEqual({ words: '240 / 240', full: true });
-  });
-});
-
 /** What the bar suggests, as words. */
 const questions = (suggestions: readonly { question: string }[]) => suggestions.map(suggestion => suggestion.question);
 
@@ -86,12 +73,11 @@ describe('what an empty bar suggests', () => {
       .toEqual(['What did we decide in Pilot planning?', 'What did we decide this week?']);
   });
 
-  it('asks about any week in the bar\'s own words for its scope, and keeps a long meeting name within the limit', () => {
+  it('asks about any week in the bar\'s own words for its scope, and asks about a long meeting or project by its whole name', () => {
     expect(weekQuestion({ kind: 'global' }, null)).toBe('What did we decide this week?');
     expect(weekQuestion({ kind: 'project', project_id: apollo.project_id }, 'Apollo')).toBe('What changed in Apollo this week?');
-    const long = decidedIn('A'.repeat(300));
-    expect(long.length).toBeLessThanOrEqual(MAX_QUESTION);
-    expect(long).toMatch(/^What did we decide in A+…\?$/);
+    expect(decidedIn('A'.repeat(300))).toBe(`What did we decide in ${'A'.repeat(300)}?`);
+    expect(weekQuestion({ kind: 'project', project_id: apollo.project_id }, 'P'.repeat(300))).toBe(`What changed in ${'P'.repeat(300)} this week?`);
   });
 
   it('lists the questions you asked, from the timeline, by scope and newest first; Home\'s meetings follow, newest first', async () => {

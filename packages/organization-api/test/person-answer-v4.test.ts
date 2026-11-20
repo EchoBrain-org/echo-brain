@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PERSON_ANSWER_REQUEST_MAX_BYTES_V3,
+  PERSON_QUERY_INPUT_MESSAGES_V1,
+  personQuestionToSend,
   validatePersonAnswerRequestV3,
+  validatePersonQueryText,
+  validatePersonQuestionText,
   validatePersonAnswerResponseV8,
   validatePersonEvidenceOpenRequestV1,
 } from '../src/index.js';
@@ -17,6 +22,32 @@ describe('Agentic Ask V1 public contracts', () => {
   it('defines the Ask request', () => {
     expect(validatePersonAnswerRequestV3({ schema_version: 3, question: 'What changed?', project_id }))
       .toEqual({ schema_version: 3, question: 'What changed?', project_id });
+  });
+
+  it('takes a question of any length and lines up to the Ask request body bound, and names the rule a refusal broke', () => {
+    // No distinct-word count and no character cap: a long question on two lines, 10,000 emoji, a lone symbol.
+    for (const question of ["Who owns the thermal fix, what is still blocked on samples, and what changed since Tuesday?\nAnd what is due Friday?", '😀'.repeat(10_000), '?', 'Who owns it?\tAnd\r\nwhen?']) {
+      expect(validatePersonAnswerRequestV3({ schema_version: 3, question })).toEqual({ schema_version: 3, question });
+    }
+    expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'a'.repeat(PERSON_ANSWER_REQUEST_MAX_BYTES_V3) }))
+      .toThrow('Ask request exceeds JSON byte bound');
+    for (const [value, code] of [
+      ['', 'question_empty'], [' \n ', 'question_empty'], [42, 'question_empty'], ['é', 'question_normalization'], [' Who owns it?', 'question_whitespace'],
+      ['Who owns it?\n', 'question_whitespace'], ['Who\u0000 owns it?', 'question_controls'], ['Who \ud800owns it?', 'question_controls'],
+    ] as const) {
+      expect(() => validatePersonQuestionText(value), String(value)).toThrow(expect.objectContaining({ code, message: PERSON_QUERY_INPUT_MESSAGES_V1[code] }));
+      expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: value })).toThrow(PERSON_QUERY_INPUT_MESSAGES_V1[code]);
+    }
+    // A client's one check before sending: NFC, trimmed, not empty; what it sends, the rule takes.
+    expect(personQuestionToSend('  é and\nmore \n')).toBe('é and\nmore');
+    expect(() => personQuestionToSend(' \n\t ')).toThrow(expect.objectContaining({ code: 'question_empty' }));
+  });
+
+  it('takes a keyword search of any length, one line, and names a term longer than the index holds', () => {
+    const long = 'thermal retest '.repeat(200).trim();
+    expect(validatePersonQueryText(long)).toBe(long);
+    expect(() => validatePersonQueryText('two\nlines')).toThrow(expect.objectContaining({ code: 'query_controls' }));
+    expect(() => validatePersonQueryText('é'.repeat(33))).toThrow(PERSON_QUERY_INPUT_MESSAGES_V1.query_term_too_long);
   });
 
   it('accepts a structured answer with cited prose and bounded deterministic fallback records', () => {
@@ -63,7 +94,9 @@ describe('Agentic Ask V1 public contracts', () => {
   it('validates evidence open coordinates', () => {
     expect(validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation, neighbours: 2, project_id }))
       .toMatchObject({ citation, neighbours: 2, project_id });
-    expect(() => validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation, neighbours: 3 })).toThrow();
+    // Any whole number of neighbours: the desk reads as many as its open's byte budget holds and offers the next.
+    expect(validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation, neighbours: 40 })).toMatchObject({ neighbours: 40 });
+    for (const neighbours of [-1, 1.5, '2', null]) expect(() => validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation, neighbours })).toThrow();
   });
 
   it('preserves exact evidence whitespace while requiring model prose to be trimmed', () => {

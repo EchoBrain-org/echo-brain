@@ -21,6 +21,7 @@ import {
 import { validateOrganizationRecordEnvelopeV4, type OrganizationRecordDecisionBriefV1, type RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import {
   PERSON_LIST_TEXT_MAX_BYTES_V1,
+  PersonQueryInputError,
   validatePersonQueryText,
   validateProjectIdV1,
   type PersonAnswerCitationV3,
@@ -94,7 +95,6 @@ interface ActiveGenerationRow {
 }
 
 type SearchGeneration = typeof searchReadableSearchGenerationV1;
-const EVIDENCE_DESK_MAX_ITEM_UTF8_BYTES_V1 = 3_072;
 
 /** Only an observed head/pointer lag may put the request in originals-only mode. Diagnostics name it `index_lag` by its name. */
 export class PersonRecordSearchIndexLagV1 extends AuthorityOperationError {
@@ -334,10 +334,10 @@ export interface PersonReadableDecisionsV1 {
   /** The records among these that this person can read now (the exact Layer 1 check `admittedRecord`), with what a list row shows of each. A lookup, not a release: nothing is audited. */
   readableDecisions(input: { readonly access_token: string; readonly record_sha256s: readonly Sha256Digest[] }): ReadonlyMap<Sha256Digest, PersonReadableDecisionV1>;
   /**
-   * The records this person can read in one project now, newest first, at most `limit` (at most 500). Another's records kept
+   * The records this person can read in one project now, newest first: every one, or the newest `limit` when named. Another's records kept
    * private in the project are never candidates, so they cost no read.
    */
-  projectRecords(input: { readonly access_token: string; readonly project_id: string; readonly limit: number }): readonly Sha256Digest[];
+  projectRecords(input: { readonly access_token: string; readonly project_id: string; readonly limit?: number }): readonly Sha256Digest[];
 }
 
 /** Which decisions the change check's viewer reads, with their projects only (ADR-0036). */
@@ -355,16 +355,17 @@ export interface PersonReadableDecisionProjectsV1 {
 interface PersonProjectRecordsV1 {
   /**
    * When the newest record filed in the project that this person reads now and did not approve arrived (its receipt time),
-   * else null. Only the project's newest 500 filed records are looked at: one older than them never counts.
+   * else null. Filed records are looked at newest first, a page at a time, until that one is found, and no further.
    */
   readonly meeting_at: string | null;
   /**
-   * The newest records filed in the project, at most 500, newest first: those its members read by the record's project
+   * Every record filed in the project, newest first, one page (PROJECT_RECORDS_PAGE) at a time, each page read only as the
+   * caller takes it, so a caller holds one page, never the whole history: those its members read by the record's project
    * audience, and those its approver alone reads (ADR-0049) only when this person is that approver, so another's private
    * records never take the place of a record this person reads. A lookup, not a read: it checks no current grant, so the
-   * caller checks each one it uses (`readableDecisionProjects`).
+   * caller checks each one it uses (`readableDecisionProjects`). Taken inside the caller's same synchronous read.
    */
-  readonly filed: readonly Sha256Digest[];
+  filed(): Iterable<readonly Sha256Digest[]>;
 }
 
 /** What arrived in a person's projects from approved meetings (Ask timeline v1, C2). */
@@ -374,8 +375,8 @@ export interface PersonProjectRecordActivityV1 {
    * position, and when the newest of them that this person reads and that is not theirs arrived. A record is theirs when it is
    * in `own` (the records their published decisions name, skipped with no record read) or when its signed record names them its
    * approver (as while the decision's receipt is not written yet). The exact Layer 1 check reads candidates only until that
-   * record is found, and never past the project's newest 500 filed records: a project whose newest 500 are all this person's
-   * own, or all unreadable to them, has no meeting time, however many older records it holds. Nothing is audited. `projects`
+   * record is found; a project whose records are all this person's own, or all unreadable to them, has no meeting time.
+   * Nothing is audited. `projects`
    * is this person's own grants, read inside the caller's own read transaction, as `readableDecisionProjects` takes them.
    */
   projectRecordActivity(input: {
@@ -517,12 +518,12 @@ function releaseAuthorization(
   return Object.freeze({ ...authorization });
 }
 
-function validBatchQuery(query: string): boolean {
+/** The shared query rule; a refusal carries the rule's own content-free reason, so research can be told why. */
+function assertBatchQuery(query: string): void {
   try {
     validatePersonQueryText(query);
-    return true;
-  } catch {
-    return false;
+  } catch (error) {
+    throw new AuthorityOperationError("invalid_request", error instanceof PersonQueryInputError ? error.message : "request is invalid");
   }
 }
 
@@ -534,13 +535,12 @@ function engineExclusion(exclude: PersonRecordDeskExclusionV1 | undefined): Read
 }
 
 function assertValidBatch(input: PersonRecordSearchBatchInputV1): void {
+  assertBatchQuery(input.query);
   if (
-    !validBatchQuery(input.query) ||
     (input.kinds !== undefined && (!Array.isArray(input.kinds) || input.kinds.length < 1 || new Set(input.kinds).size !== input.kinds.length || input.kinds.some((kind) => kind !== "decision" && kind !== "action" && kind !== "rationale"))) ||
     (input.limit !== undefined &&
       (!Number.isSafeInteger(input.limit) ||
-        input.limit < 1 ||
-        input.limit > 10))
+        input.limit < 1))
   ) {
     invalidRequest();
   }
@@ -601,15 +601,14 @@ function deskLabel(title: string | undefined, time: DeskMeetingTime): string {
 }
 
 /**
- * How Ask's list rows name a meeting record (ADR-0041): one line of its own text, at most 80 characters, then its
- * meeting, since every record of a meeting carries the meeting's label. "Send fixture drawings to vendor (THERM DVT
- * sync, 2026-10-04)". `text` is the record's own text, without the owner the row already states.
+ * How Ask's list rows name a meeting record (ADR-0041): its own text whole, on one line, then its meeting, since every
+ * record of a meeting carries the meeting's label. "Send fixture drawings to vendor (THERM DVT sync, 2026-10-04)".
+ * `text` is the record's own text, without the owner the row already states.
  */
 function deskListLabel(text: string, title: string | undefined, time: DeskMeetingTime): string {
   const date = meetingStamp(time);
-  const own = [...text.normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/gu, " ").trim()];
-  const line = own.length <= 80 ? own.join("") : `${own.slice(0, 79).join("").trimEnd()}…`;
-  return boundedLabel(`${line} (${title ?? "Approved meeting"}${date === undefined ? "" : `, ${date.slice(0, 10)}`})`);
+  const line = text.normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/gu, " ").trim();
+  return `${line} (${title ?? "Approved meeting"}${date === undefined ? "" : `, ${date.slice(0, 10)}`})`;
 }
 
 /** Store-raw: only the list route collapses these tokens (ADR-0024). */
@@ -631,14 +630,13 @@ type RecordEnvelopeV4 = ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
 
 /**
  * The one envelope reader: an admitted record's stored approved row, bound to its digests (and to `envelopeSha256` when
- * given), parsed and validated as an approved record. Any mismatch is unavailable metadata. `digest: false` skips the
- * stored-digest check, for the desk open's atom count only, which reads after its audit and never checked it.
+ * given), parsed and validated as an approved record. Any mismatch is unavailable metadata.
  */
-function approvedEnvelope(record: Database.Database, codecs: RecordInputCodecRegistryV4, position: number, recordSha256: Sha256Digest, envelopeSha256?: Sha256Digest, digest = true) {
+function approvedEnvelope(record: Database.Database, codecs: RecordInputCodecRegistryV4, position: number, recordSha256: Sha256Digest, envelopeSha256?: Sha256Digest) {
   const row = record.prepare("SELECT canonical_envelope, envelope_sha256, receipt_issued_at, approval_id FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'").get(position, recordSha256) as
     | { readonly canonical_envelope: string; readonly envelope_sha256: Sha256Digest; readonly receipt_issued_at: string; readonly approval_id: string }
     | undefined;
-  if (row === undefined || (digest && sha256Digest(row.canonical_envelope) !== row.envelope_sha256) || (envelopeSha256 !== undefined && row.envelope_sha256 !== envelopeSha256)) metadataUnavailable();
+  if (row === undefined || sha256Digest(row.canonical_envelope) !== row.envelope_sha256 || (envelopeSha256 !== undefined && row.envelope_sha256 !== envelopeSha256)) metadataUnavailable();
   let parsed: JsonObject;
   let envelope: RecordEnvelopeV4;
   try {
@@ -694,12 +692,6 @@ function deskItems(record: Database.Database, items: readonly ReadableSearchResu
   }));
 }
 
-function boundedDeskItems(items: readonly ReadableSearchResultItemV1[]): readonly ReadableSearchResultItemV1[] {
-  return items.filter((item) =>
-    Buffer.byteLength(item.text, "utf8") <= EVIDENCE_DESK_MAX_ITEM_UTF8_BYTES_V1,
-  );
-}
-
 function hasExpectedGenerationIdentity(input: {
   readonly result: Pick<ReadableSearchResultV1, "generation_id" | "exact_head">;
   readonly pointer: ActiveGenerationRow;
@@ -734,15 +726,12 @@ function readGeneration<T>(read: () => T): T {
   }
 }
 
-const MEETING_COLLECT_MAX = 26;
-/** The Layer 1 reader page limit: a longer lag holds Only me without reading further. */
-const MEETING_WAITING_ONLY_ME_MAX = 100;
 const RECORD_SHA256 = /^sha256:[0-9a-f]{64}$/;
-/** The most records one project lookup returns, and the candidates it reads per page. */
-const PROJECT_RECORDS_MAX = 500;
+/**
+ * The filed records a project lookup reads per SQL page; it pages on until none is left. Batching, not a bound: host working
+ * memory, since a project activity read holds one page of a project's filed history at a time, never all of it.
+ */
 const PROJECT_RECORDS_PAGE = 100;
-/** The newest filed records project activity lists, and looks through for a meeting from someone else (Ask timeline v1, C2). */
-const PROJECT_ACTIVITY_SCAN_MAX = 500;
 
 type MeetingCollectionState = {
   readonly authorization: PersonRecordSearchReleaseAuthorizationV1;
@@ -1157,11 +1146,10 @@ export function createPersonRecordSearchRouteV1(
       principal_id: authorization.principal_id, membership_id: authorization.membership_id,
       ...(options.capture_projects === undefined ? {} : { project_ids: projects.project_ids }),
       ...(scope.project_id === undefined ? {} : { project_id: scope.project_id }),
-      after_position: publishedHead, limit: scope.only_me ? MEETING_WAITING_ONLY_ME_MAX : 1,
+      // Only me reads every record past the published head: whether one is waiting depends on each one's policy.
+      after_position: publishedHead, limit: scope.only_me ? Number.MAX_SAFE_INTEGER : 1,
     });
     if (!scope.only_me) return waiting.length > 0;
-    // A lag longer than one probe holds, rather than list a stale Only me.
-    if (waiting.length === MEETING_WAITING_ONLY_ME_MAX) return true;
     // The Layer 1 read admits a restricted reviewer record to its approver alone.
     return waiting.some((record) => envelopePolicy(record.envelope) === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2);
   }
@@ -1220,13 +1208,10 @@ export function createPersonRecordSearchRouteV1(
     const items = result.items.filter((item, index) => result.items.findIndex((other) => other.atom_id === item.atom_id) === index);
     const released = fence(input.access_token, [authorization], projects.grants_sha256, input.project_id);
     assertCurrentSnapshot(pointer);
-    const deskSourceItems = input.desk === true
-      ? boundedDeskItems(items)
+    const response = asResponse({ items });
+    const deskProjection = input.desk === true
+      ? deskItems(options.record, items, options)
       : undefined;
-    const response = asResponse({ items: deskSourceItems ?? items });
-    const deskProjection = deskSourceItems === undefined
-      ? undefined
-      : deskItems(options.record, deskSourceItems, options);
     // What a dated read could not test is a desk read's, released and audited beside its items.
     const unchecked = deskProjection === undefined ? undefined : dated.unchecked;
     const release = commitBatchRelease({
@@ -1240,8 +1225,7 @@ export function createPersonRecordSearchRouteV1(
       release,
       ...(unchecked === undefined ? {} : { unchecked }),
       ...(deskProjection === undefined ? {} : { desk_items: deskProjection }),
-      truncated: result.truncated === true ||
-        (deskSourceItems !== undefined && deskSourceItems.length !== items.length),
+      truncated: result.truncated === true,
     });
   }
 
@@ -1267,26 +1251,22 @@ export function createPersonRecordSearchRouteV1(
       resolvedAnchor.item_kind !== input.anchor.item_kind ||
       resolvedAnchor.text !== input.anchor.text ||
       resolvedAnchor.policy_id !== input.anchor.policy_id) unavailable();
-    // The anchor's record in its own order: decisions, actions, then rationales. The anchor read already admitted
-    // it, and its first ten atoms always hold the nine that join the anchor.
+    // The anchor's record in its own order: decisions, actions, then rationales. The anchor read already admitted it.
     const record = generationRead(input.pointer, () => listReadableSearchGenerationV1({
-      ...generationInput(input.pointer, input.current, input.projects, input.project_id), record_sha256s: [resolvedAnchor.record_sha256], limit: 10,
+      ...generationInput(input.pointer, input.current, input.projects, input.project_id), record_sha256s: [resolvedAnchor.record_sha256],
     }));
-    const items = [resolvedAnchor, ...record.items.filter((item) => item.atom_id !== resolvedAnchor.atom_id).slice(0, 9)];
+    // The anchor first, then every other item of the record in its order: an open reads the whole record.
+    const items = [resolvedAnchor, ...record.items.filter((item) => item.atom_id !== resolvedAnchor.atom_id)];
     const released = fence(input.access_token, [input.current], input.projects.grants_sha256, input.project_id);
     assertCurrentSnapshot(input.pointer);
-    const deskSourceItems = boundedDeskItems(items);
-    const response = asResponse({ items: deskSourceItems });
-    const projection = deskItems(options.record, deskSourceItems, options);
+    const response = asResponse({ items });
+    const projection = deskItems(options.record, items, options);
     const release = commitBatchRelease({
       initial_authorization: input.initial_authorization,
       current: released, pointer: input.pointer, projects: input.projects, scope: input, response, desk_items: projection,
     });
-    // A record's text is released whole or not at all, so the anchor is cut only when its bound left it out; truncated
-    // also covers the meeting's other records (ADR-0041).
-    const { brief } = approvedEnvelope(options.record, options.record_input_codecs, resolvedAnchor.record_position, resolvedAnchor.record_sha256, undefined, false);
-    return Object.freeze({ response, release, desk_items: projection, truncated: brief.decisions.length + brief.actions.length + brief.rationales.length > 10 || deskSourceItems.length !== items.length,
-      anchor_truncated: !deskSourceItems.includes(resolvedAnchor) });
+    // A record's text is released whole and the open reads every item of it, so nothing is cut (ADR-0041).
+    return Object.freeze({ response, release, desk_items: projection, truncated: false, anchor_truncated: false });
   }
 
   return Object.freeze({
@@ -1322,8 +1302,9 @@ export function createPersonRecordSearchRouteV1(
       readonly kinds?: readonly ReadableSearchResultItemV1["item_kind"][];
       readonly exclude?: PersonRecordDeskExclusionV1;
     }): PersonRecordSearchBatchResultV1 {
-      const limit = input.limit ?? 50;
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) invalidRequest();
+      // A named limit is the caller's page, any size; with none, every admitted item. More set `truncated`.
+      const { limit } = input;
+      if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) invalidRequest();
       const { authorization, projects } = reader(input.access_token, input.project_id);
       if (input.expected_pointer !== undefined) assertReleaseSnapshot(input.expected_pointer);
       const pointer = exactPointer();
@@ -1331,7 +1312,7 @@ export function createPersonRecordSearchRouteV1(
       const dated = datedSelection(input, authorization, projects, pointer, input.project_id);
       const excluded = engineExclusion(input.exclude);
       const inventory = generationRead(pointer, () => listReadableSearchGenerationV1({
-        ...generationInput(pointer, authorization, projects, input.project_id), limit,
+        ...generationInput(pointer, authorization, projects, input.project_id), ...(limit === undefined ? {} : { limit }),
         ...(dated.records === undefined ? {} : { record_sha256s: dated.records }),
         ...(dated.atom_orders === undefined ? {} : { atom_orders: dated.atom_orders }),
         ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
@@ -1339,15 +1320,14 @@ export function createPersonRecordSearchRouteV1(
       }));
       const released = fence(input.access_token, [authorization], projects.grants_sha256, input.project_id);
       assertCurrentSnapshot(pointer);
-      const deskSourceItems = boundedDeskItems(inventory.items);
-      const response = asResponse({ items: deskSourceItems });
-      const projection = deskItems(options.record, deskSourceItems, options);
+      const response = asResponse({ items: inventory.items });
+      const projection = deskItems(options.record, inventory.items, options);
       const { unchecked } = dated;
       const release = commitBatchRelease({
         initial_authorization: releaseAuthorization(authorization),
         current: released, pointer, projects, scope: input, response, desk_items: projection, ...(unchecked === undefined ? {} : { unchecked }),
       });
-      return Object.freeze({ response, release, desk_items: projection, ...(unchecked === undefined ? {} : { unchecked }), truncated: inventory.truncated === true || deskSourceItems.length !== inventory.items.length });
+      return Object.freeze({ response, release, desk_items: projection, ...(unchecked === undefined ? {} : { unchecked }), truncated: inventory.truncated === true });
     },
     openDeskCitation(input: {
       readonly access_token: string;
@@ -1399,7 +1379,8 @@ export function createPersonRecordSearchRouteV1(
       });
     },
     collectMeetings(input: Parameters<PersonMeetingItemsPortV1["collectMeetings"]>[0]): PersonMeetingCollectionV1 {
-      if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > MEETING_COLLECT_MAX) invalidRequest();
+      // The page size is the person list route's, which pages on with its cursor; here only a non-count is refused.
+      if (!Number.isSafeInteger(input.limit) || input.limit < 1) invalidRequest();
       const after = meetingPosition(input.after);
       const scope = meetingScope(input.scope);
       const { authorization, projects } = reader(input.access_token, scope.project_id);
@@ -1518,32 +1499,40 @@ export function createPersonRecordSearchRouteV1(
       for (const projectId of new Set(input.project_ids)) {
         // A project the reader does not hold has nothing filed for them, as projectRecords answers it.
         if (!held.has(projectId)) continue;
-        const filed: Sha256Digest[] = [];
+        /** The project's filed records, newest first, a page at a time, read as they are taken. */
+        const pages = function* (): Generator<readonly { readonly record_position: number; readonly record_sha256: Sha256Digest }[]> {
+          for (let before = Number.MAX_SAFE_INTEGER; ;) {
+            const page = filedIn(projectId, before, PROJECT_RECORDS_PAGE);
+            if (page.length > 0) yield page;
+            if (page.length < PROJECT_RECORDS_PAGE) return;
+            before = page.at(-1)!.record_position;
+          }
+        };
         let meeting_at: string | null = null;
-        // A page at a time, until none is left or the newest PROJECT_ACTIVITY_SCAN_MAX are listed, each looked through until the
-        // newest that is not the reader's own is found.
-        for (let before = Number.MAX_SAFE_INTEGER; ;) {
-          const size = Math.min(PROJECT_RECORDS_PAGE, PROJECT_ACTIVITY_SCAN_MAX - filed.length);
-          const page = filedIn(projectId, before, size);
+        // Pages until the newest record that is not the reader's own and that they read is found.
+        found: for (const page of pages()) {
           for (const candidate of page) {
-            filed.push(candidate.record_sha256);
-            if (meeting_at !== null || input.own.has(candidate.record_sha256)) continue;
+            if (input.own.has(candidate.record_sha256)) continue;
             const row = readableRecord(authorization, input.projects, candidate.record_sha256);
             if (row === undefined) continue;
             if (row.position !== candidate.record_position) metadataUnavailable();
             const approver = approverTupleV1(row.envelope, row.approval_id, options, options.record_approver);
             if (approver !== undefined && approver.principal_id === authorization.principal_id && approver.membership_id === authorization.membership_id) continue;
             meeting_at = receiptTime(receipt.get(row.position, row.record_sha256));
+            break found;
           }
-          if (page.length < size || filed.length >= PROJECT_ACTIVITY_SCAN_MAX) break;
-          before = page.at(-1)!.record_position;
         }
-        result.set(projectId, Object.freeze({ meeting_at, filed: Object.freeze(filed) }));
+        const filed = function* (): Generator<readonly Sha256Digest[]> {
+          for (const page of pages()) yield Object.freeze(page.map(candidate => candidate.record_sha256));
+        };
+        result.set(projectId, Object.freeze({ meeting_at, filed }));
       }
       return result;
     },
     projectRecords(input: Parameters<PersonReadableDecisionsV1["projectRecords"]>[0]): readonly Sha256Digest[] {
-      if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > PROJECT_RECORDS_MAX) invalidRequest();
+      // Every readable record of the project unless the caller names how many.
+      const wanted = input.limit ?? Number.POSITIVE_INFINITY;
+      if (input.limit !== undefined && (!Number.isSafeInteger(input.limit) || input.limit < 1)) invalidRequest();
       let projectId: string;
       try { projectId = validateProjectIdV1(input.project_id); } catch { invalidRequest(); }
       const { authorization, projects } = reader(input.access_token);
@@ -1553,10 +1542,10 @@ export function createPersonRecordSearchRouteV1(
       const filedIn = filedPages(authorization);
       let before = Number.MAX_SAFE_INTEGER;
       // The project's records newest first, each through the exact Layer 1 read with current grants.
-      while (found.length < input.limit) {
+      while (found.length < wanted) {
         const candidates = filedIn(projectId, before, PROJECT_RECORDS_PAGE);
         for (const candidate of candidates) {
-          if (found.length < input.limit && readableRecord(authorization, projects, candidate.record_sha256) !== undefined) found.push(candidate.record_sha256);
+          if (found.length < wanted && readableRecord(authorization, projects, candidate.record_sha256) !== undefined) found.push(candidate.record_sha256);
         }
         if (candidates.length < PROJECT_RECORDS_PAGE) break;
         before = candidates.at(-1)!.record_position;

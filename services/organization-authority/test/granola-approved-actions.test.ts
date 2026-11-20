@@ -1,7 +1,5 @@
 import { expect, it, vi } from 'vitest';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import { PERSON_IMPACT_CARD_LIMITS_V1 } from '@echo-brain/organization-api';
-import { impactCardLineV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { meetingActionDueOnV1 } from '../src/composition/person-meeting-items-v1.js';
 import { openItemsFixture } from './fixtures/open-items.js';
 import { EMP_A, SHARED, T, meetingWorld } from './fixtures/person-meeting-world.js';
@@ -46,6 +44,23 @@ it('tries an outage again before it settles for an unassessed card', async () =>
   expect(fixture.items.forRun(fixture.runId)).toHaveLength(1);
 });
 
+it.each([[1, 'assessed'], [2, 'not_assessed']] as const)('writes an invalid impact card once more, never twice (%i invalid)', async (invalid, status) => {
+  const fixture = await openItemsFixture({ meetingActions: [{ signal_id: 'act-0', text: 'Prepare the document', owner: 'Mina Patel' }] });
+  const valid = fixture.research.getMockImplementation()!;
+  let renders = 0;
+  fixture.research.mockImplementation(((...args: Parameters<typeof valid>) => ({ renderWithResearch: async (...input: unknown[]) => {
+    renders += 1;
+    if (renders <= invalid) throw new AuthorityOperationError('invalid_output', 'The impact card is not valid');
+    return (valid(...args).renderWithResearch as (...value: unknown[]) => unknown)(...input);
+  } })) as typeof valid);
+  await fixture.app.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id: fixture.runId } });
+  await vi.waitFor(() => expect(fixture.runs.read(fixture.person, fixture.runId)!.state).toBe('done'), { interval: 1 });
+  // One repair, without spending another of the run's attempts; a second invalid card settles for the meeting's own action.
+  expect(renders).toBe(2);
+  expect(fixture.runs.read(fixture.person, fixture.runId)).toMatchObject({ attempts: 0 });
+  expect(JSON.parse(fixture.runs.read(fixture.person, fixture.runId)!.result_json!).status).toBe(status);
+});
+
 it("keeps a meeting action's whole line and gives its card the action's day, and none to an action without one", async () => {
   const long = `Prepare ${'the vendor contract and every annex '.repeat(4)}`.trim();
   const fixture = await openItemsFixture({ meetingActions: [
@@ -54,7 +69,9 @@ it("keeps a meeting action's whole line and gives its card the action's day, and
   ] });
   await fixture.finishImpactRun();
   const actions = fixture.items.forRun(fixture.runId).filter(row => row.pointer.kind === 'meeting_action').sort((left, right) => String(left.pointer.signal_id).localeCompare(String(right.pointer.signal_id)));
-  expect(actions.map(row => [row.expected, row.due_on])).toEqual([[impactCardLineV1(long, PERSON_IMPACT_CARD_LIMITS_V1.expected_chars), '2026-11-20'], ['Book the pilot room', null]]);
+  // The action's line is never cut: it is stored as the meeting worded it.
+  expect(long.length).toBeGreaterThan(120);
+  expect(actions.map(row => [row.expected, row.due_on])).toEqual([[long, '2026-11-20'], ['Book the pilot room', null]]);
   // What the impact card found carries no due date of its own.
   expect(fixture.items.forRun(fixture.runId).filter(row => row.pointer.kind !== 'meeting_action').every(row => row.due_on === null)).toBe(true);
 });

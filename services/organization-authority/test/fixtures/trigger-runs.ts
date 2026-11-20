@@ -12,7 +12,7 @@ export async function approvedRunFixture(options: { readonly runs?: number; read
   const runs = new SqliteTriggerRunsV1(f.db, () => now);
   const hook = enqueueApprovedRecordRunV1(runs);
   const approvals = [f.approvalId];
-  for (let index = 1; index < (options.runs ?? 1); index++) approvals.push((await f.otherProposal()).approvalId);
+  for (let index = 1; index < (options.runs ?? 1); index++) approvals.push((await f.otherProposal(true, `note-${index + 1}`)).approvalId);
   for (const approvalId of approvals) {
     f.core.decide('desktop', f.approve({ approval_id: approvalId, command_id: `approve-${approvalId}` }), () => f.session);
   }

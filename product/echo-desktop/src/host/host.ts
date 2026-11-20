@@ -1,5 +1,5 @@
 import {
-  validatePersonChangesV1, validatePersonDocumentIdV1, validatePersonItemRefV1, validatePersonMeetingRequestV2,
+  PERSON_UPDATE_REQUEST_MAX_BYTES_V1, validatePersonChangesV1, validatePersonDocumentIdV1, validatePersonItemRefV1, validatePersonMeetingRequestV2,
   validatePersonMeetingResultV2, validatePersonRunsRequestV1, validatePersonRunsResultV1, validatePersonUpdateRequestId, validatePersonUploadContextId, validateProjectIdV1,
   validatePersonReviewRequestV1, validatePersonReviewResultV1,
 } from '@echo-brain/organization-api';
@@ -11,12 +11,12 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, HOST_TIMEOUT_MS, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type Audience, type Expect, type Failure, type HostMethods,
+  externalUrl, HOST_TIMEOUT_MS, isWriteCall, WRITE_METHODS, type AppStatus, type Audience, type Expect, type Failure, type HostMethods,
   type HostMethodName, type HostRequest, type ItemRef, type ListScope, type ProjectChange, type Result,
 } from '../shared/protocol.js';
 import { sameFolder } from '../shared/folders.js';
 import { askText } from '../shared/query.js';
-import { askArgv, askCheckArgv, askCheckRequest, askPrevious, askProgressLines, askRecordArgv, askSourceArgv } from './ask.js';
+import { askArgv, askCheckArgv, askCheckRequest, askPrevious, askProgressLines, askRecordArgv, askSourceArgv, silence } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import { lost, pinRefusal, refreshStops } from './session.js';
 import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timelineTurn } from './timeline.js';
@@ -107,15 +107,17 @@ const inFlight = new Set<string>();
 /** Active Ask aborts, keyed by a renderer-issued id that never reaches the Authority. */
 const activeAsks = new Map<string, AbortController>();
 
-/** A project's name as the API takes it: one line, trimmed, NFC, at most 200 UTF-8 bytes. */
+/** A project's name as the API takes it: one line, trimmed, NFC, of any length (the request bound carries it). */
 function projectName(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const name = value.normalize('NFC').trim();
-  return name === '' || Buffer.byteLength(name) > 200 || /[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(name) ? null : name;
+  return name === '' || /[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(name) ? null : name;
 }
 
 /** An employee's name and email, bounded; the client checks them exactly before anything is sent. */
-function employeeText(value: unknown, maximum: number): value is string {
+/** An email address's own maximum (RFC 5321); a name has no length of its own. */
+const EMAIL_MAX_CHARACTERS = 254;
+function employeeText(value: unknown, maximum = Number.POSITIVE_INFINITY): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= maximum && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
@@ -310,10 +312,10 @@ async function login(identity: string[], fallback: string): Promise<Result<AppSt
 
 /**
  * A set of projects as the client takes it: canonical JSON, the IDs sorted
- * and unique, at most MAX_CAPTURE_PROJECTS. Null for anything else.
+ * and unique, any number. Null for anything else.
  */
 function projectSet(value: unknown, minimum: number): string | null {
-  if (!Array.isArray(value) || value.length < minimum || value.length > MAX_CAPTURE_PROJECTS) return null;
+  if (!Array.isArray(value) || value.length < minimum) return null;
   if (!value.every(id => valid(validateProjectIdV1, id))) return null;
   const sorted = [...value as string[]].sort();
   return sorted.some((id, index) => index > 0 && id === sorted[index - 1]) ? null : JSON.stringify(sorted);
@@ -404,8 +406,8 @@ function changeArgs(change: ProjectChange | undefined, requestId: string): strin
 
 type Params<M extends HostMethodName> = HostMethods[M]['params'];
 
-/** Every call but ask.cancel, which the port answers at once. */
-async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unknown, abortSignal?: AbortSignal): Promise<Result<unknown>> {
+/** Every call but ask.cancel, which the port answers at once. `alive` restarts the call's silence (an Ask's every printed line). */
+async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unknown, abortSignal?: AbortSignal, alive: () => void = () => undefined): Promise<Result<unknown>> {
   switch (method) {
     case 'app.status': {
       const current = await status();
@@ -442,11 +444,11 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       return forAccount(method, expect, ['list', ...where, ...(cursor ? [option('cursor', cursor)] : [])], stdout => listView(lastJson(stdout), asked));
     }
     case 'open.ref': {
-      // Opened under your current access, wherever it was listed: a note has one page. A meeting is read with ask.record, whole,
+      // Opened under your current access, wherever it was listed, a page at a time. A meeting is read with ask.record, whole,
       // as the source pane reads it.
       const { expect, ref, cursor } = params as Params<'open.ref'>;
       const argument = refArgument(ref);
-      if (argument === null || ref.kind === 'meeting' || !cursorOk(cursor) || (ref.kind === 'note' && cursor !== undefined)) return code('invalid_request');
+      if (argument === null || ref.kind === 'meeting' || !cursorOk(cursor)) return code('invalid_request');
       const asked = { kind: ref.kind, id: ref.id };
       return forAccount(method, expect, ['open', argument, ...(cursor ? [option('cursor', cursor)] : [])], stdout => openView(lastJson(stdout), asked));
     }
@@ -481,7 +483,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const { expect, project_id, request_id, expected_revision, space_ids } = params as Params<'projects.confluenceSet'>;
       if (!valid(validateProjectIdV1, project_id) || !valid(validatePersonUpdateRequestId, request_id) ||
           (expected_revision !== null && !valid(validatePersonUpdateRequestId, expected_revision)) ||
-          (space_ids !== null && (!Array.isArray(space_ids) || space_ids.length < 1 || space_ids.length > 20 || !space_ids.every(id => typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id)) || new Set(space_ids).size !== space_ids.length))) return code('invalid_request', true);
+          (space_ids !== null && (!Array.isArray(space_ids) || space_ids.length < 1 || !space_ids.every(id => typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id)) || new Set(space_ids).size !== space_ids.length))) return code('invalid_request', true);
       return forAccount(method, expect, ['tools', 'project', '--tool=confluence', option('echo-project', project_id), option('mapping-request', request_id), option('mapping-revision', expected_revision ?? 'none'), ...(space_ids === null ? ['--clear'] : [option('space-ids', space_ids.join(','))])], stdout => projectConfluenceMappingView(lastJson(stdout), project_id), request_id);
     }
     case 'projects.confluenceSpaces': {
@@ -498,7 +500,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const { expect, project_id, request_id, expected_revision, folder_ids } = params as Params<'projects.granolaSet'>;
       if (!valid(validateProjectIdV1, project_id) || !valid(validatePersonUpdateRequestId, request_id) ||
           (expected_revision !== null && !valid(validatePersonUpdateRequestId, expected_revision)) ||
-          (folder_ids !== null && (!Array.isArray(folder_ids) || folder_ids.length < 1 || folder_ids.length > 20 || !folder_ids.every(id => typeof id === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id)) || new Set(folder_ids).size !== folder_ids.length))) return code('invalid_request', true);
+          (folder_ids !== null && (!Array.isArray(folder_ids) || folder_ids.length < 1 || !folder_ids.every(id => typeof id === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id)) || new Set(folder_ids).size !== folder_ids.length))) return code('invalid_request', true);
       return forAccount(method, expect, ['tools', 'project', '--tool=granola', option('echo-project', project_id), option('mapping-request', request_id), option('mapping-revision', expected_revision ?? 'none'), ...(folder_ids === null ? ['--clear'] : [option('folder-ids', folder_ids.join(','))])], stdout => projectGranolaMappingView(lastJson(stdout), project_id), request_id);
     }
     case 'projects.granolaFolders': {
@@ -552,7 +554,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const { expect, email } = params as Params<'employees.reissue'>;
       const name = (params as { name?: unknown }).name;
       const out = (params as { out?: unknown }).out;
-      if (typeof out !== 'string' || !employeeText(email, 254) || (method === 'employees.invite' && !employeeText(name, 200))) {
+      if (typeof out !== 'string' || !employeeText(email, EMAIL_MAX_CHARACTERS) || (method === 'employees.invite' && !employeeText(name))) {
         return code('invalid_request', true);
       }
       const who = method === 'employees.invite' ? ['invite', option('name', name as string)] : ['reissue'];
@@ -568,7 +570,8 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const { expect, request_id, text, audience, project_ids } = params as Params<'notes.submit'>;
       const title = noteTitle(text);
       const readers = audienceArgs(audience, project_ids);
-      if (title === '' || Buffer.byteLength(text) > 8 * 1024 || readers === null) return code('invalid_request', true, request_id);
+      // A note has no size of its own; the Authority's note request bound is the only one.
+      if (title === '' || Buffer.byteLength(text) > PERSON_UPDATE_REQUEST_MAX_BYTES_V1 || readers === null) return code('invalid_request', true, request_id);
       // The client saves a file unchanged; write the exact text privately.
       const folder = mkdtempSync(join(tmpdir(), 'echo-note-'));
       const file = join(folder, 'note.txt');
@@ -607,14 +610,18 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       // A retired or malformed scope is refused, never widened to all accessible context.
       if (scope?.kind !== 'global' && scope?.kind !== 'project') return code('invalid_request');
       const text = askText(question);
-      // The earlier turn a follow-up or Ask again carries, checked as the client checks it (C3): one it would refuse is refused here.
-      const previous = earlier === undefined ? undefined : askPrevious(earlier, text, scope);
-      if (text === '' || previous === null) return code('invalid_request');
-      // An Ask's steps reach the page as they are printed (ask.ts).
-      const progress = abortSignal !== undefined
+      // The earlier turn a follow-up or Ask again carries, checked as the client checks it (C3). One it would refuse is
+      // context, not the question: the Ask goes without it rather than failing.
+      const checked = earlier === undefined ? undefined : askPrevious(earlier, text, scope);
+      if (text === '') return code('invalid_request');
+      if (checked === null && __ECHO_TEST_HOOK__) console.error('[client] ask previous refused; asking without it');
+      const previous = checked ?? undefined;
+      // An Ask's steps reach the page as they are printed (ask.ts); every line it prints, a heartbeat's included, shows it is alive.
+      const steps = abortSignal !== undefined
         ? askProgressLines(cancel_id, expect, abortSignal, notice => port.postMessage({ notice: 'ask.progress', payload: notice }),
           () => { if (__ECHO_TEST_HOOK__) console.error('[client] ask progress line refused'); })
         : undefined;
+      const progress = (line: string) => { alive(); steps?.(line); };
       return forAccount(method, expect, askArgv(text, scope, previous), stdout => answerView(lastJson(stdout), scope), undefined, abortSignal, undefined, progress);
     }
     case 'timeline.read': {
@@ -630,7 +637,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const turn = timelineTurn(given);
       if (turn === null) return code('invalid_request');
       // Pruned by this computer's clock, the one the page asked by.
-      return onDevice(expect, directory => { putTimeline(directory, expect, turn, Date.now()); return {}; });
+      return onDevice(expect, directory => { putTimeline(directory, expect, turn); return {}; });
     }
     case 'ask.check': {
       // The person client prints the check as its last line.
@@ -766,11 +773,13 @@ port.on('message', ({ data }) => {
   const write = isWriteCall(method, request.params);
   const abort = method === 'ask.run' && typeof cancelId === 'string' && ASK_CANCEL_ID.test(cancelId) ? new AbortController() : undefined;
   if (abort && typeof cancelId === 'string') activeAsks.set(cancelId, abort);
-  // A call still queued behind a refresh when its time runs out never starts.
+  // A call still queued behind a refresh when its time runs out never starts. The time is a silence: a call that shows
+  // it is alive (an Ask's printed lines) starts it again, and an Ask that falls silent is `stalled`, not timed out.
   let expired = false;
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<Result<unknown>>(resolve => {
-    timer = setTimeout(() => { expired = true; abort?.abort(); resolve(code('timeout', write, requestId)); }, HOST_TIMEOUT_MS[method]);
+  let expire!: (result: Result<unknown>) => void;
+  const timeout = new Promise<Result<unknown>>(resolve => { expire = resolve; });
+  const quiet = silence(HOST_TIMEOUT_MS[method], () => {
+    expired = true; abort?.abort(); expire(code(method === 'ask.run' ? 'stalled' : 'timeout', write, requestId));
   });
   // Sign-in still runs after a refresh with no answer: it replaces the
   // session, and sign-out ends it either way. Any other call was not made,
@@ -781,7 +790,7 @@ port.on('message', ({ data }) => {
       return fail(write ? { ...failure, mutation_outcome: 'not_submitted' as const } : failure);
     };
   // Status goes through the gate too: mid-refresh the client reports signed out.
-  const work = gated(() => expired ? timeout : handle(method, request.params, abort?.signal), method, refreshFailed)
+  const work = gated(() => expired ? timeout : handle(method, request.params, abort?.signal, quiet.alive), method, refreshFailed)
     // A write that threw after reaching the client may have landed.
     .catch((error: unknown) => {
       if (__ECHO_TEST_HOOK__) console.error(`[client] ${method} threw:`, error);
@@ -789,5 +798,5 @@ port.on('message', ({ data }) => {
       ...(requestId === undefined ? {} : { request_id: requestId }) }) : code('failed');
     });
   void Promise.race([work, timeout])
-    .then(result => { clearTimeout(timer); if (typeof cancelId === 'string') activeAsks.delete(cancelId); port.postMessage({ id: request.id, result }); });
+    .then(result => { quiet.stop(); if (typeof cancelId === 'string') activeAsks.delete(cancelId); port.postMessage({ id: request.id, result }); });
 });

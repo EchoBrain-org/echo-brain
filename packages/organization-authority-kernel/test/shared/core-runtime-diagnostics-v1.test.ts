@@ -33,7 +33,7 @@ describe('shared selected-run diagnostics', () => {
     const diagnostics: CoreRuntimeDiagnosticObservationV1[] = [];
     await observeCoreRuntimeV1('http_request', async () => withCoreRuntimeDiagnosticsV1(event => { diagnostics.push(event); }, async () => {
       await observeCoreRuntimeV1('research_run', async () => {
-        annotateCoreRuntimeV1({ trigger: 'ask', run_id: coreRuntimeIdentityV1('run', 'private-run'), research_stop_reason: 'budget', research_admission: 'post_revalidation_no_time' });
+        annotateCoreRuntimeV1({ trigger: 'ask', run_id: coreRuntimeIdentityV1('run', 'private-run'), research_stop_reason: 'stalled' });
         await observeCoreRuntimeV1('evidence_open', async () => observeCoreRuntimeDiagnosticV1(payload()));
       });
     }), { vocabulary, observer: event => { metadata.push(event); } });
@@ -42,7 +42,7 @@ describe('shared selected-run diagnostics', () => {
     expect(new Set(metadata.map(event => event.operation_id)).size).toBe(1);
     expect(JSON.stringify(metadata)).not.toMatch(/private released text|private-run/);
     expect(open).toMatchObject({ trigger: 'ask', run_id: coreRuntimeIdentityV1('run', 'private-run') });
-    expect(metadata.find(event => event.phase === 'research_run' && event.event === 'succeeded')).toMatchObject({ research_stop_reason: 'budget', research_admission: 'post_revalidation_no_time' });
+    expect(metadata.find(event => event.phase === 'research_run' && event.event === 'succeeded')).toMatchObject({ research_stop_reason: 'stalled' });
   });
 
   it('supports diagnostic-only scopes and preserves synchronous and asynchronous results', async () => {

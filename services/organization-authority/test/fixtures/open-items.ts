@@ -19,7 +19,7 @@ import { approvalCoreFixture } from './approval-core.js';
 import { addMembership, revokeMembership } from './project-context-sqlite.js';
 
 /**
- * Open items over a real Authority V17 database (open items and Home v1).
+ * Open items over a real Authority V18 database (open items and Home v1).
  * Ari approves a meeting into project A, whose members are Ari (lead), Mina
  * Patel and Rafael Moreno; S. Okafor is in the organization but not in project
  * A. Decision readers are project A's active members. The impact check finds
@@ -283,7 +283,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     },
     /**
      * Leaves a last check on an item by raw SQL, stamped now, as a sweep of `by` that finished before sweeps were retired
-     * (SVC-2) left one: V17 state no code writes any more.
+     * (SVC-2) left one: V18 state no code writes any more.
      */
     check(itemId: string, verdict: 'landed' | 'still_open' | 'changed' | 'unreadable', by: FixturePerson = 'ari') {
       const sweep = `run_${randomUUID()}`;

@@ -1,7 +1,7 @@
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import { validatePersonAnswerEvidenceCitationV8 } from './person-answer-v4.js';
 import type { PersonAnswerEvidenceCitationV8 } from './person-answer-v8.js';
-import { asEnumerableRecord, assertExactKeys, assertTimestamp, boundedList, fail, oneOf } from './validation.js';
+import { asEnumerableRecord, assertExactKeys, assertTimestamp, boundedList, fail, MAX_ORGANIZATION_API_BODY_BYTES, oneOf } from './validation.js';
 
 /**
  * The Ask source check (Ask timeline v1, C1; ADR-0047). The desktop keeps old
@@ -18,14 +18,17 @@ export const PERSON_ASK_CHECK_PATH_V1 = '/v1/person/ask/check';
 export const PERSON_ASK_CHECK_REQUEST_KIND_V1 = 'echo-person-ask-check-request-v1';
 export const PERSON_ASK_CHECK_KIND_V1 = 'echo-person-ask-check-v1';
 
-/** The evidence citations a check reads; any other kind is `invalid_request`. */
-export const PERSON_ASK_CHECK_CITATION_KINDS_V1 = Object.freeze(['approved_record', 'source_revision', 'follow_up', 'ticket', 'page'] as const);
+/**
+ * The evidence citations a check reads; any other kind is `invalid_request`. A project is read as the caller's membership of
+ * it. A person, a tool and a tool container are not checked, so a client treats what cites them as not known readable.
+ */
+export const PERSON_ASK_CHECK_CITATION_KINDS_V1 = Object.freeze(['approved_record', 'source_revision', 'follow_up', 'ticket', 'page', 'project'] as const);
 export type PersonAskCheckCitationKindV1 = (typeof PERSON_ASK_CHECK_CITATION_KINDS_V1)[number];
 const PERSON_ASK_CHECK_STATES_V1 = Object.freeze(['same', 'unreadable', 'unknown'] as const);
 export type PersonAskCheckStateV1 = (typeof PERSON_ASK_CHECK_STATES_V1)[number];
 
-/** 1 to 100 items, and a request body of at most 64 KiB of canonical JSON. */
-export const PERSON_ASK_CHECK_LIMITS_V1 = Object.freeze({ items_min: 1, items_max: 100, body_bytes: 64 * 1024 });
+/** At least one item, and transport: the one Person request body bound, its only bound. */
+export const PERSON_ASK_CHECK_LIMITS_V1 = Object.freeze({ items_min: 1, body_bytes: MAX_ORGANIZATION_API_BODY_BYTES });
 
 export interface PersonAskCheckRequestItemV1 {
   /** When the turn whose answer cited this source was asked. */
@@ -37,7 +40,7 @@ export interface PersonAskCheckRequestItemV1 {
 export interface PersonAskCheckRequestV1 {
   readonly schema_version: 1;
   readonly kind: typeof PERSON_ASK_CHECK_REQUEST_KIND_V1;
-  /** 1 to 100, in the order the response answers them. */
+  /** At least one, in the order the response answers them. */
   readonly items: readonly PersonAskCheckRequestItemV1[];
 }
 
@@ -69,7 +72,7 @@ export function validatePersonAskCheckRequestV1(value: unknown): PersonAskCheckR
   assertExactKeys(input, ['schema_version', 'kind', 'items'], 'Ask check request');
   if (input.schema_version !== 1) fail('Ask check request schema_version is unsupported');
   if (input.kind !== PERSON_ASK_CHECK_REQUEST_KIND_V1) fail('Ask check request kind is invalid');
-  const items = boundedList(input.items, 'Ask check request items', PERSON_ASK_CHECK_LIMITS_V1.items_max, PERSON_ASK_CHECK_LIMITS_V1.items_min)
+  const items = boundedList(input.items, 'Ask check request items', Number.POSITIVE_INFINITY, PERSON_ASK_CHECK_LIMITS_V1.items_min)
     .map((entry, index) => requestItem(entry, `Ask check request item ${index}`));
   const result: PersonAskCheckRequestV1 = Object.freeze({ schema_version: 1, kind: PERSON_ASK_CHECK_REQUEST_KIND_V1, items: Object.freeze(items) });
   if (canonicalJsonBytes(result).byteLength > PERSON_ASK_CHECK_LIMITS_V1.body_bytes) fail('Ask check request exceeds its byte bound');
@@ -88,7 +91,7 @@ export function validatePersonAskCheckV1(value: unknown, request?: PersonAskChec
   assertExactKeys(input, ['schema_version', 'kind', 'items'], 'Ask check');
   if (input.schema_version !== 1) fail('Ask check schema_version is unsupported');
   if (input.kind !== PERSON_ASK_CHECK_KIND_V1) fail('Ask check kind is invalid');
-  const listed = boundedList(input.items, 'Ask check items', PERSON_ASK_CHECK_LIMITS_V1.items_max, PERSON_ASK_CHECK_LIMITS_V1.items_min);
+  const listed = boundedList(input.items, 'Ask check items', Number.POSITIVE_INFINITY, PERSON_ASK_CHECK_LIMITS_V1.items_min);
   if (request !== undefined && listed.length !== request.items.length) fail('Ask check answers a different number of items');
   const items = listed.map((entry, index) => answerItem(entry, `Ask check item ${index}`));
   return Object.freeze({ schema_version: 1, kind: PERSON_ASK_CHECK_KIND_V1, items: Object.freeze(items) });

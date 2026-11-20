@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
+  PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1,
   PERSON_ASK_PROGRESS_HEARTBEAT_V1,
   PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1,
   formatPersonAskProgressEventV3,
@@ -16,7 +17,7 @@ import {
   type PersonAskProgressEventV3,
   type PersonAskProgressStepEventV3,
 } from '@echo-brain/organization-api';
-import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
+import { ASK_SILENCE_MS, PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
 import { PersonClient } from '../../src/product/person-client/client.js';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
@@ -187,7 +188,7 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     }
   });
 
-  it('drops the connection on a malformed event while the Authority is still writing, and names nothing after it', async () => {
+  it('skips a progress step it cannot read and keeps reading to the answer', async () => {
     const stream = openStream();
     const progress: PersonAskProgressStepEventV3[] = [];
     const pending = authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream.response))
@@ -195,9 +196,28 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     stream.write(frames(STEPS.slice(0, 1)));
     await vi.waitFor(() => expect(progress).toHaveLength(1));
     stream.write('data: {"type":"read","items":[{"id":"E5"}]}\n\n');
-    await expect(pending).rejects.toMatchObject({ code: 'invalid_response' });
-    expect(stream.state.cancelled).toBe(true);
-    expect(progress).toEqual(STEPS.slice(0, 1));
+    stream.write(frames([...STEPS.slice(1), ANSWERED]));
+    stream.close();
+    await expect(pending).resolves.toEqual({ result: answer(), receipt: receipt() });
+    expect(progress).toEqual(STEPS);
+  });
+
+  // Card entities are an open set (ADR-0051 as widened): an unfamiliar entity stays a card; only an unknown block kind
+  // becomes text.
+  it('shows an answer block it does not know as a text block of the same statements, and keeps a card of any entity', async () => {
+    const two = { ...answer(), parts: [{ ...answer().parts[0]!, statements: [answer().parts[0]!.statements[0]!, { text: 'Lin owns the retest.', citation_indexes: [0], private: false }],
+      blocks: [{ kind: 'answer', statements: [0] }, { kind: 'gallery', title: 'Photos', statements: [1] }] }] };
+    const card = { ...answer(), parts: [{ ...answer().parts[0]!, statements: [answer().parts[0]!.statements[0]!, { text: 'A', citation_indexes: [0], private: false }, { text: 'B', citation_indexes: [0], private: false }],
+      blocks: [{ kind: 'answer', statements: [0] }, { kind: 'card', title: 'Acme', entity: 'customer', facts: [{ label: 'Plan', value: 'A' }, { label: 'Owner', value: 'B' }], statements: [1, 2] }] }] };
+    for (const [response, blocks] of [
+      [two, [{ kind: 'answer', statements: [0] }, { kind: 'text', title: 'Photos', statements: [1] }]],
+      [card, card.parts[0]!.blocks],
+    ] as const) {
+      const body = `${frames(STEPS)}data: ${JSON.stringify({ type: 'answer', response, receipt: receipt() })}\n\n`;
+      const result = await authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(body, 7)))
+        .askV7WithProgress('bearer', 'What did we decide?', undefined, undefined, () => undefined);
+      expect(result.result.parts[0]!.blocks).toEqual(blocks);
+    }
   });
 
   it('accepts a stream only as a 200', async () => {
@@ -209,15 +229,26 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     }
   });
 
-  it('stops reading past the whole-stream bound', async () => {
+  /** A read event of about 1 MB: 800 items with labels at their 1 KiB bound. */
+  const heavyRead = (): PersonAskProgressStepEventV3 => ({ type: 'read', items: Array.from({ length: 800 }, (_, at) => ({ ...followUp,
+    citation: { kind: 'follow_up' as const, item_id: `itm_bound-${at}` }, ref: `follow_up:itm_bound-${at}` as const, label: `${'L'.repeat(1000)} ${at}` })) });
+
+  it('stops reading once the events pass the whole-stream bound', async () => {
     const stream = openStream();
     const pending = authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream.response))
       .askV7WithProgress('bearer', 'What did we decide?', undefined, undefined, () => undefined);
-    // Comment lines stay under the line bound, so only the stream bound can stop them.
-    const comment = `: ${'x'.repeat(100 * 1024)}\n`;
-    for (let written = 0; written <= PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1; written += comment.length) stream.write(comment);
+    const frame = formatPersonAskProgressEventV3(heavyRead());
+    for (let written = 0; written <= PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1; written += Buffer.byteLength(frame)) stream.write(frame);
     await expect(pending).rejects.toMatchObject({ code: 'response_too_large', status: 200 });
     expect(stream.state.cancelled).toBe(true);
+  });
+
+  it('reads to the answer a stream whose heartbeats alone pass the bound: comments are not kept, so they are not counted', async () => {
+    const comment = `: ${'x'.repeat(100 * 1024)}\n\n`;
+    const body = `${comment.repeat(Math.ceil(PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1 / comment.length) + 1)}${frames([ANSWERED])}`;
+    expect(Buffer.byteLength(body)).toBeGreaterThan(PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1);
+    await expect(authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(body, 64 * 1024)))
+      .askV7WithProgress('bearer', 'What did we decide?', undefined, undefined, () => undefined)).resolves.toMatchObject({ result: answer() });
   });
 
   it('refuses a streamed answer for another scope', async () => {
@@ -319,20 +350,55 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     expect(progress).toEqual([]);
   });
 
-  it('bounds the whole stream by the ask timeout', async () => {
-    const timeout = new AbortController();
-    const spy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeout.signal);
-    const stream = openStream();
-    const progress: PersonAskProgressStepEventV3[] = [];
-    const pending = authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream.response))
-      .askV7WithProgress('bearer', 'What did we decide?', undefined, new AbortController().signal, event => progress.push(event));
-    stream.write(frames(STEPS.slice(0, 1)));
-    await vi.waitFor(() => expect(progress).toHaveLength(1));
-    timeout.abort();
-    await expect(pending).rejects.toMatchObject({ code: 'transport_failed' });
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy).toHaveBeenCalledWith(135_000);
-    expect(stream.state.cancelled).toBe(true);
+  it('has no whole-Ask deadline: it waits as long as the heartbeat keeps arriving, and hands each heartbeat on', async () => {
+    expect(ASK_SILENCE_MS).toBe(4 * PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const stream = openStream();
+      const progress: PersonAskProgressStepEventV3[] = [];
+      let heartbeats = 0;
+      const pending = authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream.response))
+        .askV7WithProgress('bearer', 'What did we decide?', undefined, undefined, event => progress.push(event), undefined, () => { heartbeats += 1; });
+      // Twenty minutes of heartbeats, each just inside the silence, then the answer.
+      for (let minute = 0; minute < 20 * 60_000; minute += ASK_SILENCE_MS - 1_000) {
+        await vi.advanceTimersByTimeAsync(ASK_SILENCE_MS - 1_000);
+        stream.write(PERSON_ASK_PROGRESS_HEARTBEAT_V1);
+      }
+      stream.write(frames([...STEPS, ANSWERED]));
+      stream.close();
+      await expect(pending).resolves.toMatchObject({ receipt: receipt() });
+      expect(progress).toEqual(STEPS);
+      expect(heartbeats).toBeGreaterThan(20);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('fails as stalled, with its own reason, once the Authority sends nothing for the silence, and drops the stream', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const stream = openStream();
+      const progress: PersonAskProgressStepEventV3[] = [];
+      const pending = authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream.response))
+        .askV7WithProgress('bearer', 'What did we decide?', undefined, undefined, event => progress.push(event));
+      const settled = pending.catch((error: unknown) => error);
+      stream.write(frames(STEPS.slice(0, 1)));
+      await vi.advanceTimersByTimeAsync(ASK_SILENCE_MS - 1);
+      expect(progress).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await settled).toMatchObject({ code: 'stalled', message: 'Person Authority sent nothing for 40 seconds' });
+      expect(stream.state.cancelled).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('fails as stalled when the stream never starts', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => new Promise((_resolve, reject) => {
+        init!.signal!.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      }));
+      const settled = authority(fetch).askV7WithProgress('bearer', 'What did we decide?', undefined, undefined, () => undefined).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(ASK_SILENCE_MS);
+      expect(await settled).toMatchObject({ code: 'stalled' });
+    } finally { vi.useRealTimers(); }
   });
 
   it('a body read that fails mid-stream is a transport failure', async () => {
@@ -405,7 +471,11 @@ describe('person ask --progress', () => {
     const { output, run } = cli(sessionHome(), fetch);
     await expect(run(['ask', '--question', 'Where is Thermal recovery tracked?', '--progress'])).resolves.toBe(0);
     expect(output.stderr).toBe('');
-    const printed = lines(output.stdout);
+    const all = lines(output.stdout);
+    // The stream's one heartbeat, between its second and third step, prints one alive line there.
+    expect(all[2]).toEqual({ ok: true, alive: true });
+    const printed = all.filter(line => !(line as { alive?: unknown }).alive);
+    expect(printed).toHaveLength(all.length - 1);
     expect(printed.slice(0, -1).map(line => validatePersonAskProgressLineV3(line))).toEqual(STEPS_V3.map(progress => ({ ok: true, progress })));
     expect(validatePersonAskProgressResultLineV3(printed.at(-1))).toEqual({ ok: true, result: answerV8(), receipt: receiptV3() });
     expect(output.stdout.endsWith('\n')).toBe(true);
@@ -470,7 +540,8 @@ describe('person ask --progress', () => {
     fetch.mockResolvedValueOnce(sse(STREAM_V3));
     const pinned = cli(sessionHome(), fetch);
     await expect(pinned.run(['ask', '--question', 'What did we decide?', '--progress', ...pin(SESSION.membership_id)])).resolves.toBe(0);
-    expect(lines(pinned.output.stdout)).toHaveLength(STEPS_V3.length + 1);
+    // Each step, the one heartbeat's alive line, and the answer.
+    expect(lines(pinned.output.stdout)).toHaveLength(STEPS_V3.length + 2);
 
     // Only a streamed Ask takes a pin: a plain Ask never checks it.
     const unpinned = cli(sessionHome(), vi.fn<typeof globalThis.fetch>());

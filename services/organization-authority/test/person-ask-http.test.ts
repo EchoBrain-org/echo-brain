@@ -50,6 +50,36 @@ describe("Agentic Ask HTTP capability gate", () => {
     } finally { await value.close(); }
   });
 
+  it('asks a long natural-language question on two lines, and names the question rule a refused one breaks', async () => {
+    const ask = vi.fn(async () => { throw new AuthorityOperationError('not_found', 'fixture'); });
+    const value = await server({ ask: { askWithProgress: ask } });
+    const post = (body: unknown) => fetch(`${value.url}${PERSON_ANSWER_PATH_V7}`, {
+      method: 'POST', headers: { authorization: 'Bearer token', 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    try {
+      const question = 'Can you summarize what the hardware and firmware teams decided about the thermal fix, who owns each follow-up, '
+        + "what's still blocked on supplier samples, and what changed since last Tuesday's review?\nAnd which of those are due before Friday's build review?";
+      expect(question.length).toBeGreaterThan(240);
+      expect((await post({ schema_version: 3, question })).status).toBe(404);
+      expect(ask).toHaveBeenCalledWith(expect.objectContaining({ request: { schema_version: 3, question } }));
+      // A question has no length of its own: 100 KiB is asked.
+      expect((await post({ schema_version: 3, question: 'x'.repeat(100 * 1024) })).status).toBe(404);
+      // Past the server's 1 MiB Person body, the body bound refuses it and says so.
+      const over = await post({ schema_version: 3, question: 'x'.repeat(1024 * 1024) });
+      expect(over.status).toBe(400);
+      await expect(over.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'request body is too large' } });
+      for (const [refused, code, message] of [
+        [' What changed?', 'question_whitespace', 'Remove spaces and line breaks from the start and end of the question.'],
+        ['What\u0000 changed?', 'question_controls', 'Remove control characters from the question; line breaks and tabs are fine.'],
+      ] as const) {
+        const response = await post({ schema_version: 3, question: refused });
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toEqual({ error: { code, message } });
+      }
+      expect(ask).toHaveBeenCalledTimes(2);
+    } finally { await value.close(); }
+  });
+
   it('answers /v7 provider errors and invalid requests with their codes, and retired Ask routes with the plain 404', async () => {
     const ask = vi.fn(async () => { throw new AuthorityOperationError('not_found', 'Provider resource unavailable'); });
     const value = await server({ ask: { askWithProgress: ask } as never });
@@ -62,7 +92,7 @@ describe("Agentic Ask HTTP capability gate", () => {
       await expect(failed.json()).resolves.toEqual({ error: { code: 'not_found', message: 'request failed' } });
       const invalid = await post(PERSON_ANSWER_PATH_V7, {});
       expect(invalid.status).toBe(400);
-      await expect(invalid.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'request failed' } });
+      await expect(invalid.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'Ask request has an unexpected shape' } });
       // A retired route is a plain 404, like one that never existed.
       for (const path of ['/v0/person/ask', ...RETIRED_ASK_PATHS]) {
         const absent = await post(path, { schema_version: 3, question: 'What changed?' });
@@ -117,7 +147,7 @@ describe("Agentic Ask HTTP capability gate", () => {
       expect(value.sessions.authenticateAccess).not.toHaveBeenCalled();
       // Only the retired research-loop trace command sent one: the Ask request refuses it as an unknown key.
       expect(await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What changed?", capture_id }))
-        .toEqual({ status: 400, body: { error: { code: "invalid_request", message: "request failed" } } });
+        .toEqual({ status: 400, body: { error: { code: "invalid_request", message: "Ask request has an unexpected shape" } } });
       expect(ask).not.toHaveBeenCalled();
     } finally { await value.close(); }
   });
@@ -193,7 +223,7 @@ function askFixture(nativeDriver = false) {
     authority_id: "authority_fixture", organization_id: "organization_fixture", state_lineage_id: "lineage_fixture",
     sessions: { authenticateAccess: () => ({ principal_id: "prn_asker", membership_id: "mem_asker", session_family_id: "session_asker" }) } as never,
     originals: originals as unknown as PersonOriginalContextEvidenceDeskPortV1, records: records as unknown as PersonEvidenceDeskRecordsV1,
-    model: { generate }, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000 },
+    model: { generate }, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000, context_tokens: 32_768, max_output_tokens: 8_000 },
     ...(nativeDriver ? { research_driver: { run: nativeRun } } : {}),
     audit: { forRequest: () => ({ append: vi.fn() }), forLiveRequest: () => ({}) } as never,
   };
@@ -201,7 +231,7 @@ function askFixture(nativeDriver = false) {
   async function nativeRun(session: AgenticResearchDriverSessionV1) {
       expect(JSON.stringify(session.initial)).toContain('everything the asker can read');
       const read = await session.call('search', { query: 'launch' });
-      await session.model_request({ model: 'fixture', body_sha256: canonicalSha256(read), payload_digests: [canonicalSha256(session.initial), canonicalSha256(read)], operation: 'messages', timeout: session.remaining }, async () => ({ value: true }));
+      await session.model_request({ model: 'fixture', body_sha256: canonicalSha256(read), payload_digests: [canonicalSha256(session.initial), canonicalSha256(read)], operation: 'messages' }, async () => ({ value: true }));
       expect(await session.call('finish', { completed: true, parts: [{ question: 'Launch day', notes: 'Launch on Tuesday.', needs: [{ need: 'launch day', kind: 'content', status: 'found', evidence: ['E1'] }] }] })).toMatchObject({ accepted: true });
   }
   // The desk cites an original with its display label.
@@ -275,7 +305,7 @@ describe("Ask scope, and citation refs (ADR-0024)", () => {
         { schema_version: 3, question: "What did I decide?", mine: true, project_id: "prj_00000000-0000-4000-8000-000000000001" },
         { schema_version: 3, question: "What did I decide?", mine: false },
       ]) {
-        expect(await post(value.url, PERSON_ANSWER_PATH_V7, body)).toEqual({ status: 400, body: { error: { code: "invalid_request", message: "request failed" } } });
+        expect(await post(value.url, PERSON_ANSWER_PATH_V7, body)).toEqual({ status: 400, body: { error: { code: "invalid_request", message: "Ask request has an unexpected shape" } } });
       }
       expect(f.originals.deskAuthorize).not.toHaveBeenCalled();
       expect(f.generate).not.toHaveBeenCalled();

@@ -79,8 +79,9 @@ describe("OpenRouter structured generation", () => {
     });
     expect(typeof request?.body).toBe("string");
     expect(JSON.parse(request?.body as string)).toMatchObject({
-      stream: false,
-      max_tokens: 4_396,
+      stream: true,
+      // The caller's allowance is the model's whole output, reasoning included: nothing is added to it.
+      max_tokens: 300,
       reasoning: { effort: "medium" },
       response_format: { type: "json_schema", json_schema: {
         name: "echo_layer4", strict: true, schema: { ...structuredRequest.schema, additionalProperties: false },
@@ -148,7 +149,7 @@ describe("OpenRouter structured generation", () => {
     expect(bodies[0]?.response_format).toMatchObject({ type: "json_schema", json_schema: { strict: true } });
   });
 
-  it("gives Sonnet 5.5 bounded reasoning headroom without sending unsupported temperature", async () => {
+  it("sends Sonnet 5.5 the caller's allowance, reasoning included, without sending unsupported temperature", async () => {
     const bodies: Array<Record<string, unknown>> = [];
     const adapter = createOpenRouterStructuredGenerationAdapter({
       credential_ref: "openrouter-production",
@@ -161,13 +162,32 @@ describe("OpenRouter structured generation", () => {
     await adapter.generate({ ...structuredRequest, model: "anthropic/claude-sonnet-5.5", max_output_tokens: 1_500 });
     expect(bodies[0]).toMatchObject({
       model: "anthropic/claude-sonnet-5.5",
-      max_tokens: 5_596,
+      max_tokens: 1_500,
       reasoning: { effort: "medium" },
       response_format: { type: "json_schema" },
       provider: { require_parameters: true, data_collection: "deny", sort: "throughput" },
     });
     expect(bodies[0]).not.toHaveProperty("temperature");
     expect((bodies[0]?.provider as Record<string, unknown>)).not.toHaveProperty("ignore");
+  });
+
+  it("sends the model's own maximum output and any silence period the profile states, and refuses only what is not a whole positive number", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const adapter = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "openrouter-production",
+      credential_resolver: () => "secret-not-in-errors",
+      fetch_impl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(JSON.parse(init!.body as string) as Record<string, unknown>);
+        return new Response(JSON.stringify({ choices: [{ message: { content: '{"queries":[]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+    });
+    await adapter.generate({ ...structuredRequest, model: "anthropic/claude-sonnet-5.5", max_output_tokens: 128_000, timeout_ms: 600_000 });
+    expect(bodies[0]).toMatchObject({ max_tokens: 128_000 });
+    await adapter.generate({ ...structuredRequest, model: "anthropic/claude-sonnet-5.5", timeout_ms: 3_600_000 });
+    await expect(adapter.generate({ ...structuredRequest, model: "anthropic/claude-sonnet-5.5", max_output_tokens: 0 })).rejects.toThrow("OpenRouter output limit is invalid");
+    await expect(adapter.generate({ ...structuredRequest, model: "anthropic/claude-sonnet-5.5", max_output_tokens: 1.5 })).rejects.toThrow("OpenRouter output limit is invalid");
+    await expect(adapter.generate({ ...structuredRequest, model: "anthropic/claude-sonnet-5.5", timeout_ms: 0 })).rejects.toThrow("OpenRouter timeout is invalid");
+    expect(bodies).toHaveLength(2);
   });
 
   it.each([
@@ -360,6 +380,8 @@ describe("OpenRouter structured generation", () => {
       adapter_id: "openrouter",
       finish_reason: null,
       adapter_request_id: "gen-1234567890",
+      // A rate-limit refusal generated nothing: the gate may send it once more.
+      unbilled: true,
     });
     expect(JSON.stringify(error)).not.toContain("secret-not-in-errors");
     expect(JSON.stringify(error)).not.toContain("provider body secret");
@@ -546,9 +568,7 @@ describe("OpenRouter structured generation", () => {
           ok: true,
           status: 200,
           headers: new Headers(),
-          text: async () => {
-            throw testCase.error;
-          },
+          body: new ReadableStream<Uint8Array>({ pull() { throw testCase.error; } }),
         }) as unknown as Response) as typeof fetch,
     });
 

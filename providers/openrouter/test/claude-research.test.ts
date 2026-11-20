@@ -131,14 +131,14 @@ it('delivers provider errors to the SDK and freshly admits its retry without lat
     },
   });
   await driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
-    remaining: () => 60_000, call: async () => ({}), model_request: async (_request, send) => {
+    silence_ms: 60_000, call: async () => ({}), model_request: async (_request, send) => {
       checks++;
       try { return (await send(new AbortController().signal)).value; }
       catch (error) { errors.push(error); throw error; }
     },
   });
   expect(checks).toBe(2); expect(forwards).toBe(2);
-  expect(errors).toEqual([expect.objectContaining({ diagnostic: { failure_class: 'adapter_http', http_status: 429 } })]);
+  expect(errors).toEqual([expect.objectContaining({ diagnostic: { failure_class: 'adapter_http', http_status: 429, unbilled: true } })]);
 });
 
 it('aborts in-flight provider work and closes the request gateway when the caller leaves', async () => {
@@ -170,12 +170,12 @@ it('classifies exhausted SDK provider retries for ECHO research fallback without
     },
   });
   const pending = driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
-    remaining: () => 60_000, call: async () => ({}), model_request: async (_request, send) => (await send(new AbortController().signal)).value });
+    silence_ms: 60_000, call: async () => ({}), model_request: async (_request, send) => (await send(new AbortController().signal)).value });
   await expect(pending).rejects.toMatchObject({ recovery: 'fallback' });
   await expect(pending).rejects.not.toThrow('private provider detail');
 });
 
-it.each(['request error', 'response error', 'response aborted'] as const)('preserves fresh retries and fallback after an upstream %s', async failure => {
+it.each(['request error', 'response error', 'response aborted'] as const)('admits a fresh retry only after an unbilled upstream %s, and falls back', async failure => {
   const request = vi.mocked(https.request).mockImplementation((...args: Parameters<typeof https.request>) => {
     const receive = args.find(value => typeof value === 'function') as (reply: IncomingMessage) => void;
     const upstream = Object.assign(new EventEmitter(), { end() {
@@ -200,27 +200,114 @@ it.each(['request error', 'response error', 'response aborted'] as const)('prese
         if (failure === 'request error') {
           expect((await response).status).toBe(502);
           expect(await (await response).text()).not.toContain('private');
-        } else await expect(response.then(value => value.text())).rejects.toThrow();
+        } else if (i === 0) await expect(response.then(value => value.text())).rejects.toThrow();
+        // A reply that began arriving may have been billed: the SDK's retry is refused before admission.
+        else expect((await response).status).toBe(403);
       }
       await runClaudeResearchV1(input, fake);
     },
   });
   const pending = driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
-    remaining: () => 60_000, call: async () => ({}), model_request: async (_request, send) => {
+    silence_ms: 60_000, call: async () => ({}), model_request: async (_request, send) => {
       try { return (await send(new AbortController().signal)).value; }
       catch (error) { errors.push(error); throw error; }
     } });
   await expect(pending).rejects.toMatchObject({ recovery: 'fallback' });
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(errors).toEqual(Array.from({ length: 2 }, () => expect.objectContaining({ diagnostic: { failure_class: 'adapter_transport', http_status: null } })));
+  // The mock never reports the body sent, so a request error is the unbilled kind and is retried once.
+  const tries = failure === 'request error' ? 2 : 1;
+  expect(request).toHaveBeenCalledTimes(tries);
+  expect(errors).toEqual(Array.from({ length: tries }, () => expect.objectContaining({ diagnostic: {
+    failure_class: 'adapter_transport', http_status: null, ...(failure === 'request error' ? { unbilled: true } : {}) } })));
   await expect(pending).rejects.not.toThrow('private');
 });
 
-it('recovers on a successful SDK retry after a network failure', async () => {
+it('never admits the SDK\'s retry after a provider error that is not rate-limit or overloaded: its billing is unknown, and research falls back', async () => {
+  let admissions = 0, forwards = 0;
+  const driver = createClaudeResearchDriverV1({ model,
+    forward: async ({ res }) => { forwards++; res.writeHead(500); res.end('{}'); throw new ClaudeModelResponseErrorV1(500); },
+    run: async input => {
+      const send = () => fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model, messages: [] }) });
+      expect((await send()).status).toBe(500);
+      // The SDK's one retry of the same generation.
+      expect((await send()).status).toBe(403);
+    },
+  });
+  await expect(driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
+    silence_ms: 60_000, call: async () => ({}), model_request: async (_request, send) => {
+      admissions++; return (await send(new AbortController().signal)).value;
+    } })).rejects.toMatchObject({ recovery: 'fallback' });
+  expect([admissions, forwards]).toEqual([1, 1]);
+});
+
+it.each([
+  // [what happened to the connection before the failure, known never delivered]
+  ['no connection was ever made (refused, DNS, TLS)', 'none', true],
+  ['a new connection failed during its TLS handshake', 'handshake', true],
+  ['the request went out on an established connection, though its write never reported complete', 'established', false],
+  ['the request went out on a reused connection', 'reused', false],
+] as const)('treats a request as never delivered only when %s', async (_name, connection, unbilled) => {
+  vi.mocked(https.request).mockImplementation(() => {
+    const upstream = Object.assign(new EventEmitter(), { end() {
+      queueMicrotask(() => {
+        // The write-completion callback is never called: it proves nothing about what the peer received.
+        if (connection !== 'none') {
+          const socket = Object.assign(new EventEmitter(), { connecting: connection !== 'reused' });
+          upstream.emit('socket', socket);
+          if (connection === 'established') socket.emit('secureConnect');
+        }
+        upstream.emit('error', new Error('synthetic socket failure'));
+      });
+    } });
+    return upstream as unknown as ReturnType<typeof https.request>;
+  });
+  let failure: unknown;
+  const transport = await startClaudeModelTransportV1({ signal: new AbortController().signal, forward: openRouterClaudeForwarderV1(() => 'synthetic credential', model),
+    admit: async (_body, _operation, send) => send(new AbortController().signal).catch((error: unknown) => { failure = error; throw error; }) });
+  try { expect((await fetch(`${transport.base_url}/v1/messages`, { method: 'POST', body: '{}' })).status).toBe(502); }
+  finally { transport.close(); }
+  expect(failure).toMatchObject({ unbilled });
+  if (unbilled) expect(failure).toMatchObject({ diagnostic: { unbilled: true } });
+  else expect((failure as { diagnostic: object }).diagnostic).not.toHaveProperty('unbilled');
+});
+
+it('fails a 200 stream that ends cleanly without the message\'s terminal event as possibly billed, and never admits the retry', async () => {
+  vi.mocked(https.request).mockImplementation((...args: Parameters<typeof https.request>) => {
+    const receive = args.find(value => typeof value === 'function') as (reply: IncomingMessage) => void;
+    const upstream = Object.assign(new EventEmitter(), { end() {
+      queueMicrotask(() => {
+        const reply = Object.assign(new PassThrough(), { statusCode: 200, headers: { 'content-type': 'text/event-stream' } });
+        receive(reply as unknown as IncomingMessage);
+        reply.end('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":0}}}\n\n'
+          + 'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}\n\n');
+      });
+    } });
+    return upstream as unknown as ReturnType<typeof https.request>;
+  });
+  const errors: unknown[] = [];
+  let admissions = 0;
+  const driver = createClaudeResearchDriverV1({ model, forward: openRouterClaudeForwarderV1(() => 'synthetic credential', model),
+    run: async input => {
+      const send = () => fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model, messages: [] }) });
+      // The SDK receives the cut stream as a broken connection, never a clean end it could read as complete.
+      const first = await send(); expect(first.status).toBe(200); await expect(first.text()).rejects.toThrow();
+      // The SDK's retry of the incomplete message.
+      expect((await send()).status).toBe(403);
+    },
+  });
+  await expect(driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
+    silence_ms: 60_000, call: async () => ({}), model_request: async (_request, send) => {
+      admissions++;
+      try { return (await send(new AbortController().signal, () => undefined)).value; } catch (error) { errors.push(error); throw error; }
+    } })).rejects.toMatchObject({ recovery: 'fallback' });
+  expect(admissions).toBe(1);
+  expect(errors).toEqual([expect.objectContaining({ diagnostic: { failure_class: 'adapter_transport', http_status: null } })]);
+});
+
+it('recovers on a successful SDK retry after a network failure before the request was sent', async () => {
   let calls = 0, admissions = 0;
   const driver = createClaudeResearchDriverV1({ model,
     forward: async ({ res }) => {
-      if (++calls === 1) throw new ClaudeModelTransportErrorV1();
+      if (++calls === 1) throw new ClaudeModelTransportErrorV1(true);
       res.end('{}'); return {};
     },
     run: async input => {
@@ -230,7 +317,7 @@ it('recovers on a successful SDK retry after a network failure', async () => {
     },
   });
   await driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
-    remaining: () => 60_000, call: async () => ({}), model_request: async (_request, send) => {
+    silence_ms: 60_000, call: async () => ({}), model_request: async (_request, send) => {
       admissions++; return (await send(new AbortController().signal)).value;
     } });
   expect(calls).toBe(2); expect(admissions).toBe(2);
@@ -244,7 +331,7 @@ it.each([
   let requests = 0;
   const driver = createClaudeResearchDriverV1({ model,
     forward: async ({ res }) => {
-      if (provider === 'network') throw new ClaudeModelTransportErrorV1();
+      if (provider === 'network') throw new ClaudeModelTransportErrorV1(true);
       res.writeHead(503); res.end('{}'); throw new ClaudeModelResponseErrorV1(503);
     },
     run: async input => {
@@ -255,7 +342,7 @@ it.each([
     },
   });
   await expect(driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
-    remaining: () => 60_000, call: async () => ({}), model_request: async (_request, send) => {
+    silence_ms: 60_000, call: async () => ({}), model_request: async (_request, send) => {
       if (++requests === 2) throw terminal;
       return (await send(new AbortController().signal)).value;
     } })).rejects.toBe(terminal);
@@ -269,14 +356,14 @@ it('classifies a provider refusal reported by the actual packaged SDK', async ()
     throw new ClaudeModelResponseErrorV1(400);
   } });
   await expect(driver.run({ initial: { question: 'Synthetic refusal fixture' }, question: true, list_available: false, signal,
-    remaining: () => 20_000, call: async () => ({}), model_request: async (_request, send) => (await send(signal)).value })).rejects.toMatchObject({ recovery: 'fallback' });
+    silence_ms: 20_000, call: async () => ({}), model_request: async (_request, send) => (await send(signal)).value })).rejects.toMatchObject({ recovery: 'fallback' });
 }, 25_000);
 
 it('admits the exact initial packet and refuses an unexpected model before forwarding', async () => {
   const initial = { question: 'synthetic only' }, requests: unknown[] = [];
   let forwarded = 0;
   const session: AgenticResearchDriverSessionV1 = { initial, question: true, list_available: true,
-    signal: new AbortController().signal, remaining: () => 60_000, call: async () => ({}),
+    signal: new AbortController().signal, silence_ms: 60_000, call: async () => ({}),
     model_request: async (request, send) => { requests.push(request); return (await send(new AbortController().signal)).value; },
   };
   const make = (requestedModel: string) => createClaudeResearchDriverV1({ model,
@@ -343,3 +430,51 @@ it('runs the packaged SDK executable against a synthetic local Messages endpoint
     expect(calls).toBeGreaterThan(0);
   } finally { transport.close(); }
 }, 30_000);
+
+it('fails a redirect from the Claude upstream with billing unknown instead of passing it to the SDK', async () => {
+  vi.mocked(https.request).mockImplementation((...args: Parameters<typeof https.request>) => {
+    const receive = args.find(value => typeof value === 'function') as (reply: IncomingMessage) => void;
+    return Object.assign(new EventEmitter(), { end() {
+      queueMicrotask(() => {
+        const reply = Object.assign(new PassThrough(), { statusCode: 308, headers: { location: 'https://elsewhere.example/v1/messages' } });
+        receive(reply as unknown as IncomingMessage);
+        reply.end();
+      });
+    } }) as unknown as ReturnType<typeof https.request>;
+  });
+  let failure: unknown;
+  const transport = await startClaudeModelTransportV1({ signal: new AbortController().signal, forward: openRouterClaudeForwarderV1(() => 'synthetic credential', model),
+    admit: async (_body, _operation, send) => send(new AbortController().signal).catch((error: unknown) => { failure = error; throw error; }) });
+  try {
+    const response = await fetch(`${transport.base_url}/v1/messages`, { method: 'POST', body: '{}', redirect: 'manual' });
+    expect(response.status).toBe(502);
+    expect(response.headers.get('location')).toBeNull();
+  } finally { transport.close(); }
+  expect(failure).toMatchObject({ unbilled: false, diagnostic: { failure_class: 'adapter_transport' } });
+});
+
+it('reports progress only for Anthropic events that carry model output, as their bytes arrive, never for ping or message_start', () => {
+  let produced = 0;
+  const observer = messageUsageObserverV1(false, () => { produced += 1; });
+  const write = (...pieces: string[]) => { for (const piece of pieces) observer.write(Buffer.from(piece)); };
+  write('event: pi', 'ng\n', 'data: {"type":"pi', 'ng"}', '\n\n', 'event: message_start\n', 'data: {"type":"message_st', 'art","message":{"usage":{"input_tokens":1}}}\n\n');
+  expect(produced).toBe(0);
+  // One long delta line, in pieces none of which ends it: each piece is progress, and so is its end.
+  const delta = `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"${'x'.repeat(300)}"}}`;
+  write('event: content_block_delta\n', delta.slice(0, 100), delta.slice(100, 200), delta.slice(200), '\n\n');
+  expect(produced).toBe(4);
+  // Without its event: line, a delta is known by the type it opens with; a whole stop event is progress once.
+  write('data: {"type":"content_block_delta","ind', 'ex":0,"delta":{"type":"text_delta","text":"y"}}\n\n', 'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n');
+  expect(produced).toBe(7);
+});
+
+it('passes research model output to the gate\'s per-request progress', async () => {
+  let gateProgress = 0;
+  const driver = createClaudeResearchDriverV1({ model,
+    forward: async ({ res, alive }) => { for (let piece = 0; piece < 4; piece += 1) alive?.(); res.end('{}'); return {}; },
+    run: async input => { await (await fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model, messages: [] }) })).text(); },
+  });
+  await driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal, silence_ms: 60_000, call: async () => ({}),
+    model_request: async (_request, send) => (await send(new AbortController().signal, () => { gateProgress += 1; })).value });
+  expect(gateProgress).toBe(4);
+});

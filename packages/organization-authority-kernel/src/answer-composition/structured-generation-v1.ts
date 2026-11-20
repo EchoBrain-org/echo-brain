@@ -7,14 +7,18 @@ export interface StructuredGenerationRequestV1 {
   readonly model: string;
   readonly body_sha256: Sha256Digest;
   readonly operation: 'messages' | 'count_tokens';
-  readonly timeout: () => number;
   /** Native session/request cancellation, including expiry while waiting for a call slot. */
   readonly signal?: AbortSignal;
   readonly payload_digests?: readonly Sha256Digest[];
   readonly before_forward?: () => void;
 }
+/**
+ * `forward` sends the admitted request. It calls `progress` at each meaningful piece of the reply that arrives (a content
+ * or tool delta, not a keep-alive); the admission's silence period restarts at each call, so a reply that keeps arriving
+ * is never treated as stalled.
+ */
 export type StructuredGenerationAdmissionV1 = <T>(request: StructuredGenerationRequestV1,
-  forward: (signal: AbortSignal) => Promise<{ readonly value: T; readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string }>) => Promise<T>;
+  forward: (signal: AbortSignal, progress?: () => void) => Promise<{ readonly value: T; readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string }>) => Promise<T>;
 
 export interface StructuredGenerationJsonSchema {
   readonly [key: string]: unknown;
@@ -30,8 +34,14 @@ export interface StructuredGenerationInput {
   readonly user_prompt: string;
   readonly schema: StructuredGenerationJsonSchema;
   readonly max_output_tokens: number;
+  /** The silence period: how long the reply may send nothing before the call is treated as stalled. */
   readonly timeout_ms: number;
   readonly signal?: AbortSignal;
+  /**
+   * Called at each meaningful piece of the reply that arrives (a content or tool delta, not a keep-alive). The caller
+   * restarts its silence period at each call, so a reply that keeps arriving is never treated as stalled.
+   */
+  readonly on_progress?: () => void;
 }
 
 export interface StructuredGenerationPort {
@@ -93,6 +103,11 @@ export interface StructuredGenerationFailureDiagnosticV1 {
   readonly failure_class: StructuredGenerationFailureClassV1;
   readonly http_status: number | null;
   readonly finish_reason: StructuredGenerationFinishReasonV1 | null;
+  /**
+   * True only when the provider cannot have accepted the request (it failed before the request was fully sent), so it
+   * was not billed and may be sent once more. Absent means its billing is unknown, and it is never repeated.
+   */
+  readonly unbilled?: true;
 }
 
 /** The shape a port implementation's thrown error carries to earn retry, repair or fallback. */

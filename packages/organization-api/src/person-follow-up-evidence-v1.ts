@@ -19,12 +19,7 @@ export interface PersonFollowUpCitationV1 {
  */
 export type PersonFollowUpRefV1 = `follow_up:itm_${string}`;
 
-/**
- * The bounds of a follow-up's fields: the open items API's bounds for the
- * same values (names, decided lines, `expected`, an item's status and due
- * date), and a title of one line as long as an item's `says_now`.
- */
-export const PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1 = Object.freeze({ title_chars: 300, owner_chars: 200, due_chars: 128, expected_chars: 120, decision_title_chars: 200, first_line_chars: 300 });
+/** A follow-up's fields have no length of their own: the response that carries them bounds them. */
 
 /** The follow-up's decision, only for an asker who reads that decision now. */
 export interface PersonFollowUpDecisionV1 {
@@ -71,7 +66,6 @@ export interface PersonFollowUpEvidenceV1 {
 const FOLLOW_UP_REF = /^follow_up:itm_[A-Za-z0-9-]{4,60}$/;
 const KINDS = Object.keys({ action: true, ticket: true, page: true, record: true, document: true } satisfies Record<PersonOpenItemKindV1, true>) as readonly PersonOpenItemKindV1[];
 const STATES = Object.keys({ unsent: true, open: true, done: true, not_relevant: true } satisfies Record<PersonOpenItemStateV1, true>) as readonly PersonOpenItemStateV1[];
-const LIMITS = PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1;
 
 function optional(entry: Record<string, unknown>, keys: readonly string[]): string[] {
   return keys.filter(key => Object.hasOwn(entry, key));
@@ -97,7 +91,7 @@ export function personFollowUpRefV1(citation: Pick<PersonFollowUpCitationV1, 'it
 export function validatePersonFollowUpEvidenceV1(value: unknown): PersonFollowUpEvidenceV1 {
   const entry = asEnumerableRecord(value, 'Follow-up evidence');
   assertExactKeys(entry, ['item_id', 'kind', 'title', 'owner', 'status', ...optional(entry, ['created_at', 'sent_at', 'reassigned_at', 'due_at', 'decision', 'expected'])], 'Follow-up evidence');
-  const title = line(entry.title, 'Follow-up title', LIMITS.title_chars);
+  const title = line(entry.title, 'Follow-up title');
   for (const key of ['created_at', 'sent_at', 'reassigned_at'] as const) if (Object.hasOwn(entry, key)) assertTimestamp(entry[key], `Follow-up ${key}`);
   let decision: PersonFollowUpDecisionV1 | undefined;
   if (Object.hasOwn(entry, 'decision')) {
@@ -106,23 +100,23 @@ export function validatePersonFollowUpEvidenceV1(value: unknown): PersonFollowUp
     if (typeof raw.ref !== 'string' || !raw.ref.startsWith('meeting:')) fail('Follow-up decision ref is invalid');
     assertDigest(raw.ref.slice('meeting:'.length), 'Follow-up decision ref');
     decision = Object.freeze({
-      title: line(raw.title, 'Follow-up decision title', LIMITS.decision_title_chars),
-      ...(Object.hasOwn(raw, 'first_line') ? { first_line: line(raw.first_line, 'Follow-up decision first line', LIMITS.first_line_chars) } : {}),
+      title: line(raw.title, 'Follow-up decision title'),
+      ...(Object.hasOwn(raw, 'first_line') ? { first_line: line(raw.first_line, 'Follow-up decision first line') } : {}),
       ref: raw.ref as PersonMeetingRefV1,
     });
   }
-  const expected = Object.hasOwn(entry, 'expected') ? line(entry.expected, 'Follow-up expected', LIMITS.expected_chars) : undefined;
+  const expected = Object.hasOwn(entry, 'expected') ? line(entry.expected, 'Follow-up expected') : undefined;
   if (expected === title) fail('Follow-up expected repeats its title');
   return Object.freeze({
     item_id: itemId(entry.item_id, 'Follow-up item_id'),
     kind: oneOf(entry.kind, KINDS, 'Follow-up kind'),
     title,
-    owner: line(entry.owner, 'Follow-up owner', LIMITS.owner_chars),
+    owner: line(entry.owner, 'Follow-up owner'),
     status: oneOf(entry.status, STATES, 'Follow-up status'),
     ...(Object.hasOwn(entry, 'created_at') ? { created_at: entry.created_at as string } : {}),
     ...(Object.hasOwn(entry, 'sent_at') ? { sent_at: entry.sent_at as string } : {}),
     ...(Object.hasOwn(entry, 'reassigned_at') ? { reassigned_at: entry.reassigned_at as string } : {}),
-    ...(Object.hasOwn(entry, 'due_at') ? { due_at: line(entry.due_at, 'Follow-up due date', LIMITS.due_chars) } : {}),
+    ...(Object.hasOwn(entry, 'due_at') ? { due_at: line(entry.due_at, 'Follow-up due date') } : {}),
     ...(decision === undefined ? {} : { decision }),
     ...(expected === undefined ? {} : { expected }),
   });

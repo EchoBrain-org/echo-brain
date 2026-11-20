@@ -29,6 +29,8 @@ it.each([false, true])('records one extraction attempt and its actual usage when
       const data = [
         { type: 'message_start', message: { usage: { input_tokens: 11, output_tokens: 0 } } },
         { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 7 } },
+        // The message's terminal event: without it the stream was cut, not finished.
+        { type: 'message_stop' },
       ];
       reply.end(data.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
     } }) as unknown as ReturnType<typeof https.request>;

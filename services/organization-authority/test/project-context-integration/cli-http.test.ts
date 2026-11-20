@@ -111,7 +111,7 @@ function readable(person: Person, contextId: string): boolean {
   try { items.open({ access_token: 'fixture', ref: { kind: 'note', id: contextId as `ctx_${string}` } }); return true; } catch { return false; }
 }
 
-describe('PC-06 real CLI -> loopback HTTP -> application -> V17, fixture authentication/model', () => {
+describe('PC-06 real CLI -> loopback HTTP -> application -> V18, fixture authentication/model', () => {
   it('preserves disjoint project visibility, private/team audience and cross-project coordinates', async () => {
     const alpha = await create('Synthetic Alpha'); const beta = await create('Synthetic Beta');
     await member(alpha, 'bob'); await member(beta, 'carol');

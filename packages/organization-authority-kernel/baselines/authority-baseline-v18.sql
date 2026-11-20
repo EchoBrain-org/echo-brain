@@ -1,8 +1,9 @@
--- Authority baseline V17: independent personal meeting-source progress, one approval proposal per meeting with one shared decision table,
+-- Authority baseline V18: independent personal meeting-source progress, one approval proposal per meeting with one shared decision table,
 -- plus project context, raw Person uploads, and optional search enrichment.
 -- An open item may come from a chat answer (ADR-0053): it has no run and no record, and its creator may change its one
 -- line and its due date until it is closed. Any open item may carry a due date, a calendar day.
--- Fresh initialization only; no V16-to-V17 transition or backfill exists, and
+-- V18 holds no size of its own on follow-up lines, notes or decision owners: the request that carries them bounds them (ADR-0055).
+-- Fresh initialization only; no V17-to-V18 transition or backfill exists, and
 -- this file is never an in-place upgrade.
 
 CREATE TABLE authority_metadata (
@@ -525,7 +526,7 @@ CREATE TABLE authority_live_source_admission_v2 (
     source_custodian_observed_at = strftime('%Y-%m-%dT%H:%M:%fZ', source_custodian_observed_at)
   ),
   source_credential_reference_sha256 TEXT NOT NULL CHECK (source_credential_reference_sha256 LIKE 'sha256:%'),
-  initial_cursor TEXT NOT NULL CHECK (length(initial_cursor) BETWEEN 1 AND 65536),
+  initial_cursor TEXT NOT NULL CHECK (length(initial_cursor) >= 1),
   cutoff_at TEXT NOT NULL CHECK (unixepoch(cutoff_at) IS NOT NULL),
   processor_adapter_id TEXT NOT NULL CHECK (length(trim(processor_adapter_id)) BETWEEN 1 AND 128),
   processor_adapter_version TEXT NOT NULL CHECK (length(trim(processor_adapter_version)) BETWEEN 1 AND 128),
@@ -546,7 +547,8 @@ CREATE TABLE authority_live_source_progress_v2 (
   source_key TEXT PRIMARY KEY CHECK (length(source_key) BETWEEN 1 AND 128),
   admission_semantic_input_sha256 TEXT NOT NULL UNIQUE
     REFERENCES authority_live_source_admission_v2(semantic_input_sha256),
-  cursor TEXT NOT NULL CHECK (length(cursor) BETWEEN 1 AND 65536),
+  -- A source's checkpoint has no length of its own: a watch's seen-set holds one mark per meeting of its window.
+  cursor TEXT NOT NULL CHECK (length(cursor) >= 1),
   cursor_version INTEGER NOT NULL CHECK (cursor_version >= 0),
   updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
   FOREIGN KEY (source_key, admission_semantic_input_sha256)
@@ -609,7 +611,7 @@ CREATE TABLE authority_live_source_candidates_v2 (
   review_policy_consequence_text TEXT NOT NULL CHECK (length(review_policy_consequence_text) BETWEEN 1 AND 8192),
   review_policy_consequence_sha256 TEXT NOT NULL CHECK (review_policy_consequence_sha256 LIKE 'sha256:%'),
   disposition TEXT NOT NULL CHECK (disposition IN ('actionable', 'coalesced', 'no_signals')),
-  source_cursor TEXT NOT NULL CHECK (length(source_cursor) BETWEEN 1 AND 65536),
+  source_cursor TEXT NOT NULL CHECK (length(source_cursor) >= 1),
   meeting_sha256 TEXT NOT NULL CHECK (meeting_sha256 LIKE 'sha256:%'),
   meeting_json TEXT NOT NULL UNIQUE CHECK (json_valid(meeting_json) AND json_type(meeting_json) = 'object'),
   decisions_sha256 TEXT NOT NULL CHECK (decisions_sha256 LIKE 'sha256:%'),
@@ -635,8 +637,7 @@ CREATE TABLE authority_live_approval_outbox_v2 (
     length(approved_snapshot_sha256) = 71 AND substr(approved_snapshot_sha256, 1, 7) = 'sha256:'
     AND substr(approved_snapshot_sha256, 8) NOT GLOB '*[^0-9a-f]*')),
   suggested_projects_json TEXT CHECK (suggested_projects_json IS NULL OR (
-    json_valid(suggested_projects_json) AND json_type(suggested_projects_json) = 'array'
-    AND json_array_length(suggested_projects_json) <= 20)),
+    json_valid(suggested_projects_json) AND json_type(suggested_projects_json) = 'array')),
   superseded_by_candidate_id TEXT REFERENCES authority_live_source_candidates_v2(candidate_id),
   superseded_at TEXT CHECK (superseded_at IS NULL OR unixepoch(superseded_at) IS NOT NULL),
   updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
@@ -669,9 +670,7 @@ CREATE TABLE authority_approval_decisions_v1 (
     AND json_extract(body_json, '$.surface') IS surface
     AND json_type(body_json, '$.request.snapshot_sha256') IS 'text'
     AND json_type(body_json, '$.request.routes') IS 'array'
-    AND json_array_length(body_json, '$.request.routes') <= 500
     AND json_type(body_json, '$.request.owners') IS 'array'
-    AND json_array_length(body_json, '$.request.owners') <= 40
     AND json_type(body_json, '$.actor.organization_id') IS 'text'
     AND json_type(body_json, '$.actor.principal_id') IS 'text'
     AND json_type(body_json, '$.actor.membership_id') IS 'text'
@@ -681,7 +680,7 @@ CREATE TABLE authority_approval_decisions_v1 (
   -- Each published record is checked by authority_approval_decision_receipt_v1 (a CHECK cannot iterate).
   receipt_json TEXT CHECK (receipt_json IS NULL OR (json_valid(receipt_json) AND json_type(receipt_json) = 'object'
     AND json_type(receipt_json, '$.records') IS 'array'
-    AND json_array_length(receipt_json, '$.records') BETWEEN 1 AND 500)),
+    AND json_array_length(receipt_json, '$.records') >= 1)),
   CHECK ((surface = 'slack') = (command_id GLOB 'slack:*')),
   CHECK (action = 'approve' OR (json_array_length(body_json, '$.request.routes') = 0
     AND json_array_length(body_json, '$.request.owners') = 0)),
@@ -762,7 +761,7 @@ WHEN NOT EXISTS (
      AND admission.membership_id = json_extract(NEW.body_json, '$.actor.membership_id'))
 BEGIN SELECT RAISE(ABORT, 'approval decision needs the active reviewer'); END;
 -- Each route names a signal and its destination: null (not kept), [] (Only me) or projects,
--- sorted and unique. An approval keeps at least one item and names at most 20 projects in all.
+-- sorted and unique, with no count of their own. An approval keeps at least one item.
 -- Each routed project is active and the reviewer an active member of it. A route that is not an
 -- object is read as {} wherever its fields are read, so JSON functions never see a bare value.
 CREATE TRIGGER authority_approval_decision_routes_v1
@@ -771,14 +770,10 @@ WHEN EXISTS (
   SELECT 1 FROM json_each(NEW.body_json, '$.request.routes') AS route
    WHERE CASE WHEN route.type != 'object' THEN 1
      WHEN json_type(route.value, '$.signal_id') IS NOT 'text' THEN 1
-     WHEN coalesce(json_type(route.value, '$.project_ids'), '') NOT IN ('null', 'array') THEN 1
-     WHEN json_array_length(route.value, '$.project_ids') > 20 THEN 1 ELSE 0 END = 1)
+     WHEN coalesce(json_type(route.value, '$.project_ids'), '') NOT IN ('null', 'array') THEN 1 ELSE 0 END = 1)
   OR (NEW.action = 'approve' AND NOT EXISTS (
   SELECT 1 FROM json_each(NEW.body_json, '$.request.routes') AS route
    WHERE json_type(iif(route.type = 'object', route.value, '{}'), '$.project_ids') = 'array'))
-  OR (SELECT count(DISTINCT chosen.value) FROM json_each(NEW.body_json, '$.request.routes') AS route,
-    json_each(iif(route.type = 'object', route.value, '{}'), '$.project_ids') AS chosen
-   WHERE json_type(iif(route.type = 'object', route.value, '{}'), '$.project_ids') = 'array') > 20
 BEGIN SELECT RAISE(ABORT, 'approval decision routes are invalid'); END;
 CREATE TRIGGER authority_approval_decision_audience_v1
 BEFORE INSERT ON authority_approval_decisions_v1
@@ -903,7 +898,7 @@ CREATE TABLE authority_impact_items_v1 (
   approver_principal_id TEXT NOT NULL,
   approver_membership_id TEXT NOT NULL REFERENCES authority_memberships(membership_id),
   relation TEXT CHECK (relation IS NULL OR relation IN ('conflicts', 'needs_updating')),
-  expected TEXT CHECK (expected IS NULL OR length(expected) BETWEEN 1 AND 120),
+  expected TEXT CHECK (expected IS NULL OR length(expected) >= 1),
   -- A real calendar day.
   due_on TEXT CHECK (due_on IS NULL OR (due_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND date(due_on) IS due_on)),
   owner_membership_id TEXT NOT NULL REFERENCES authority_memberships(membership_id),
@@ -1631,8 +1626,8 @@ CREATE TABLE authority_person_updates_v1 (
   request_id TEXT NOT NULL,
   context_id TEXT NOT NULL UNIQUE,
   payload_sha256 TEXT NOT NULL CHECK (payload_sha256 LIKE 'sha256:%'),
-  title TEXT NOT NULL CHECK (length(CAST(title AS BLOB)) BETWEEN 1 AND 200),
-  text TEXT NOT NULL CHECK (length(CAST(text AS BLOB)) BETWEEN 1 AND 8192),
+  title TEXT NOT NULL CHECK (length(CAST(title AS BLOB)) >= 1),
+  text TEXT NOT NULL CHECK (length(CAST(text AS BLOB)) >= 1),
   visibility TEXT NOT NULL CHECK (visibility IN ('only_me', 'team')),
   received_at TEXT NOT NULL CHECK (unixepoch(received_at) IS NOT NULL),
   PRIMARY KEY (organization_id, membership_id, request_id),
@@ -1688,7 +1683,7 @@ CREATE TABLE authority_projects_v1 (
     replace(substr(project_id, 5), '-', '') NOT GLOB '*[^0-9a-f]*'
   ),
   organization_id TEXT NOT NULL REFERENCES authority_metadata(organization_id),
-  name TEXT NOT NULL CHECK (length(CAST(name AS BLOB)) BETWEEN 1 AND 200),
+  name TEXT NOT NULL CHECK (length(CAST(name AS BLOB)) >= 1),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
   created_at TEXT NOT NULL CHECK (unixepoch(created_at) IS NOT NULL),
   creator_principal_id TEXT NOT NULL,
@@ -1738,14 +1733,14 @@ CREATE TABLE authority_person_updates_v2 (
   request_version INTEGER NOT NULL CHECK(request_version IN (2,3)),
   context_id TEXT NOT NULL UNIQUE,
   payload_sha256 TEXT NOT NULL CHECK (payload_sha256 LIKE 'sha256:%'),
-  title TEXT NOT NULL CHECK (length(CAST(title AS BLOB)) BETWEEN 1 AND 200),
-  text TEXT NOT NULL CHECK (length(CAST(text AS BLOB)) BETWEEN 1 AND 8192),
+  title TEXT NOT NULL CHECK (length(CAST(title AS BLOB)) >= 1),
+  text TEXT NOT NULL CHECK (length(CAST(text AS BLOB)) >= 1),
   audience_kind TEXT NOT NULL CHECK (audience_kind IN ('only_me', 'team', 'project', 'projects')),
   audience_project_id TEXT,
   -- Canonical JSON arrays are checked by the admission adapter. These snapshots
   -- bind immutable request custody; current associations live in their own table.
-  submitted_association_project_ids_json TEXT NOT NULL CHECK(json_valid(submitted_association_project_ids_json) AND json_type(submitted_association_project_ids_json) = 'array' AND json_array_length(submitted_association_project_ids_json) BETWEEN 0 AND 20),
-  audience_project_ids_json TEXT NOT NULL CHECK(json_valid(audience_project_ids_json) AND json_type(audience_project_ids_json) = 'array' AND json_array_length(audience_project_ids_json) BETWEEN 0 AND 20),
+  submitted_association_project_ids_json TEXT NOT NULL CHECK(json_valid(submitted_association_project_ids_json) AND json_type(submitted_association_project_ids_json) = 'array'),
+  audience_project_ids_json TEXT NOT NULL CHECK(json_valid(audience_project_ids_json) AND json_type(audience_project_ids_json) = 'array'),
   project_id TEXT,
   received_at TEXT NOT NULL CHECK (unixepoch(received_at) IS NOT NULL),
   PRIMARY KEY (organization_id, membership_id, request_id),
@@ -1768,7 +1763,7 @@ CREATE TABLE authority_person_updates_v2 (
       AND json_array_length(audience_project_ids_json) = 1
       AND json_extract(audience_project_ids_json, '$[0]') = audience_project_id) OR
     (request_version = 3 AND audience_kind = 'projects' AND audience_project_id IS NULL AND project_id IS NULL
-      AND json_array_length(audience_project_ids_json) BETWEEN 1 AND 20)
+      AND json_array_length(audience_project_ids_json) >= 1)
   ),
   FOREIGN KEY (membership_id, organization_id, principal_id, membership_type)
     REFERENCES authority_memberships(membership_id, organization_id, principal_id, membership_type),
@@ -2061,7 +2056,7 @@ CREATE TABLE authority_person_documents_v1 (
   request_id TEXT NOT NULL,
   request_version INTEGER NOT NULL CHECK(request_version IN (1,2)),
   filename TEXT NOT NULL CHECK(length(CAST(filename AS BLOB)) BETWEEN 1 AND 255),
-  title TEXT NOT NULL CHECK(length(CAST(title AS BLOB)) BETWEEN 1 AND 200),
+  title TEXT NOT NULL CHECK(length(CAST(title AS BLOB)) >= 1),
   detected_media_type TEXT NOT NULL CHECK(detected_media_type IN ('text/plain','text/markdown','application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document')),
   original_size INTEGER NOT NULL CHECK(original_size BETWEEN 1 AND 26214400),
   original_sha256 TEXT NOT NULL CHECK(length(original_sha256) = 71 AND substr(original_sha256, 1, 7) = 'sha256:' AND substr(original_sha256, 8) NOT GLOB '*[^0-9a-f]*'),
@@ -2069,8 +2064,8 @@ CREATE TABLE authority_person_documents_v1 (
   audience_kind TEXT NOT NULL CHECK(audience_kind IN ('only_me','team','project','projects')),
   audience_project_id TEXT,
   -- Immutable initial association; the current association has its own table.
-  submitted_association_project_ids_json TEXT NOT NULL CHECK(json_valid(submitted_association_project_ids_json) AND json_type(submitted_association_project_ids_json) = 'array' AND json_array_length(submitted_association_project_ids_json) BETWEEN 0 AND 20),
-  audience_project_ids_json TEXT NOT NULL CHECK(json_valid(audience_project_ids_json) AND json_type(audience_project_ids_json) = 'array' AND json_array_length(audience_project_ids_json) BETWEEN 0 AND 20),
+  submitted_association_project_ids_json TEXT NOT NULL CHECK(json_valid(submitted_association_project_ids_json) AND json_type(submitted_association_project_ids_json) = 'array'),
+  audience_project_ids_json TEXT NOT NULL CHECK(json_valid(audience_project_ids_json) AND json_type(audience_project_ids_json) = 'array'),
   project_id TEXT,
   received_at TEXT NOT NULL CHECK(unixepoch(received_at) IS NOT NULL),
   UNIQUE(organization_id, membership_id, request_id),
@@ -2097,7 +2092,7 @@ CREATE TABLE authority_person_documents_v1 (
       AND json_array_length(audience_project_ids_json) = 1
       AND json_extract(audience_project_ids_json, '$[0]') = audience_project_id) OR
     (request_version = 2 AND audience_kind = 'projects' AND audience_project_id IS NULL AND project_id IS NULL
-      AND json_array_length(audience_project_ids_json) BETWEEN 1 AND 20)
+      AND json_array_length(audience_project_ids_json) >= 1)
   )
 ) STRICT;
 CREATE INDEX authority_person_documents_feed_v1 ON authority_person_documents_v1(organization_id, received_at DESC, document_id);
@@ -2256,7 +2251,7 @@ CREATE TABLE authority_source_contents_v1 (
   organization_id TEXT NOT NULL,
   source_id TEXT NOT NULL,
   revision_id TEXT NOT NULL,
-  content_json TEXT NOT NULL CHECK(json_valid(content_json) AND length(CAST(content_json AS BLOB))<=33554432),
+  content_json TEXT NOT NULL CHECK(json_valid(content_json)),
   PRIMARY KEY(organization_id,source_id,revision_id),
   FOREIGN KEY(organization_id,source_id,revision_id) REFERENCES authority_source_revisions_v1(organization_id,source_id,revision_id)
 ) STRICT, WITHOUT ROWID;
@@ -2267,7 +2262,7 @@ CREATE TABLE authority_source_representations_v1 (
   representation_id TEXT NOT NULL,
   processor_version TEXT NOT NULL,
   content_sha256 TEXT NOT NULL CHECK(length(content_sha256)=64 AND content_sha256 NOT GLOB '*[^0-9a-f]*'),
-  content_json TEXT NOT NULL CHECK(json_valid(content_json) AND length(CAST(content_json AS BLOB))<=33554432),
+  content_json TEXT NOT NULL CHECK(json_valid(content_json)),
   PRIMARY KEY(organization_id,source_id,revision_id,representation_id),
   FOREIGN KEY(organization_id,source_id,revision_id) REFERENCES authority_source_revisions_v1(organization_id,source_id,revision_id)
 ) STRICT, WITHOUT ROWID;
@@ -2334,7 +2329,7 @@ BEGIN
    WHERE organization_id = OLD.organization_id;
 END;
 
-PRAGMA user_version = 17;
+PRAGMA user_version = 18;
 
 -- A malformed legacy retained note must not pin the source-admission worker.
 -- The disposition carries no title, body, request ID or exception text.
@@ -2387,7 +2382,7 @@ CREATE TABLE authority_live_source_held_extractions_v1 (
     'evidence_id', 'evidence_duplicate', 'evidence_quote', 'due_before_meeting', 'decided_question_only', 'rationale_supports',
     'schema_top_level', 'schema_signal_fields', 'schema_kind', 'schema_text', 'schema_status', 'schema_due_at',
     'schema_confidence', 'schema_supports', 'schema_evidence_shape', 'schema_evidence_item', 'schema_irrelevant_fields', 'schema_owner',
-    'output_json', 'output_contract',
+    'output_json', 'output_contract', 'output_too_long', 'input_too_long',
     'invalid_config', 'unauthorized', 'rate_limited', 'temporarily_unavailable', 'permanently_rejected', 'timeout',
     'unknown_outcome', 'invalid_output', 'cancelled', 'unknown',
     'interrupted', 'output_not_saved', 'not_recorded'

@@ -12,7 +12,7 @@ import type {
 import {
   validateEmployeeRosterV1, validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
-  validateProjectCreateReceiptV1, validateProjectListV2,
+  validateProjectCreateReceiptV1, validateProjectListV2, PERSON_ANSWER_BLOCK_KINDS_V2,
   validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1,
   type PersonAnswerCitationV8, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
   type PersonOpenItemV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
@@ -146,7 +146,7 @@ export function openView(raw: unknown, ref: ItemRef & { readonly kind: Exclude<I
     }
     case 'note': {
       const { text } = opened as PersonOpenNoteV1;
-      return { kind: 'note', content: { context_id: ref.id, title: item.title, text, received_at: item.added_at, audience: item.visibility, project_ids } };
+      return { kind: 'note', content: { context_id: ref.id, title: item.title, text, received_at: item.added_at, audience: item.visibility, project_ids }, next_cursor: next };
     }
     case 'document': {
       const { filename, chunks } = opened as PersonOpenDocumentV1;
@@ -284,14 +284,47 @@ export function recordRead(value: unknown): RecordRead | null {
  * derive actionable explanations from gap_details.
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
-  const { result, receipt } = validated(validatePersonAskProgressResultLineV3, raw);
+  let line: ReturnType<typeof validatePersonAskProgressResultLineV3>;
+  try {
+    line = validatePersonAskProgressResultLineV3(raw);
+  } catch {
+    // An Authority newer than this desktop may arrange a part in a block this contract does not know: that block is
+    // shown as text (its sentences and title), and the answer is checked again, whole. A card of any entity is a card.
+    line = validated(validatePersonAskProgressResultLineV3, withKnownBlocks(raw));
+  }
+  const { result, receipt } = line;
   const { direct, parts, outcome } = result;
   const sources = result.citations.map(citedSource);
+  // A count is bounded by the progress contract: one at its bound is at least that many.
   return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome, receipt: { looked_through: receipt.looked_through },
     ...(result.question === undefined ? {} : { question: result.question }),
     ...(result.since === undefined ? {} : { since: result.since.statements }),
     ...(result.choices === undefined ? {} : { choices: result.choices }),
     ...(result.follow_ups === undefined ? {} : { follow_ups: result.follow_ups }) };
+}
+
+const BLOCK_KINDS: ReadonlySet<unknown> = new Set(PERSON_ANSWER_BLOCK_KINDS_V2);
+
+/**
+ * The answer line with each block of a kind this contract does not know made a
+ * text block of the same sentences and title. Nothing else changes: the line is
+ * checked whole after.
+ */
+function withKnownBlocks(raw: unknown): unknown {
+  const line = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw as Json : {};
+  const result = line.result !== null && typeof line.result === 'object' && !Array.isArray(line.result) ? line.result as Json : undefined;
+  if (result === undefined || !Array.isArray(result.parts)) return raw;
+  const known = (block: Json) => BLOCK_KINDS.has(block.kind);
+  const parts = result.parts.map(part => {
+    if (part === null || typeof part !== 'object' || !Array.isArray((part as Json).blocks)) return part;
+    const blocks = ((part as Json).blocks as unknown[]).map(block => {
+      if (block === null || typeof block !== 'object' || known(block as Json)) return block;
+      const { statements, title } = block as Json;
+      return { kind: 'text', statements, ...(typeof title === 'string' ? { title } : {}) };
+    });
+    return { ...(part as Json), blocks };
+  });
+  return { ...line, result: { ...result, parts } };
 }
 
 /** Who alone may read an item cited as private: you, or the approver. */
@@ -417,20 +450,14 @@ export function openItemsView(result: PersonRunsResultsV1['items']): OpenItemsVi
   return { items: result.items.map(openItemView), next_cursor: result.next_cursor, summary: result.summary, stages: result.stages };
 }
 
-/** Longest text the source pane shows, in characters; longer is cut and marked. The reader shows each whole. */
-const MAX_SOURCE_TEXT = 2_000;
-
 /**
- * Text as the source pane or the reader may show it: control and format
- * characters made spaces, trimmed, and at most `maximum` characters. Nothing
- * left is none.
+ * Text as the source pane or the reader shows it, whole: control and format
+ * characters made spaces, trimmed. Nothing left is none.
  */
-function sourceText(value: unknown, maximum = MAX_SOURCE_TEXT): string | undefined {
+function sourceText(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const cleaned = value.replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim();
-  if (cleaned === '') return undefined;
-  const characters = [...cleaned];
-  return characters.length > maximum ? `${characters.slice(0, maximum - 1).join('')}… (truncated)` : cleaned;
+  return cleaned === '' ? undefined : cleaned;
 }
 
 /** An ISO 8601 time the renderer can format, or none. */
@@ -447,7 +474,7 @@ const RECORD_VISIBILITY: Readonly<Record<RecordPolicy, ApprovedRecord['visibilit
  * The one approved record asked for, as `person records --record-sha256
  * --brief` prints it (organization-api's cited record), only that record: one
  * an answer cites, only under the policy it cited, as the source pane shows
- * it, each text at most 2,000 characters; or, asked with no policy, a meeting
+ * it, each text whole; or, asked with no policy, a meeting
  * opened by its ref, as the reader shows it, every text whole and without the
  * quotes the reader never shows (ADR-0024). Only a decision still open says
  * so, and each item keeps the atom id its citations carry.
@@ -456,7 +483,7 @@ export function recordView(raw: unknown, asked: RecordRead): ApprovedRecord {
   const record = validated(validatePersonCitedRecordV1, unwrap(raw));
   const pane = asked.policy_id !== undefined;
   if (record.record_sha256 !== asked.record_sha256 || (pane && record.policy_id !== asked.policy_id)) throw new ViewError();
-  const shown = (value: string) => sourceText(value, pane ? MAX_SOURCE_TEXT : Number.POSITIVE_INFINITY)!;
+  const shown = (value: string) => sourceText(value)!;
   const section = ({ items }: PersonCitedRecordSectionV1): RecordSection => ({ items: items.map(({ atom_id, text: itemText, status, owner, quotes }) => ({
     text: shown(itemText), ...(status === 'proposed' || status === 'unresolved' ? { status } : {}), ...(owner === undefined ? {} : { owner }),
     excerpts: pane ? quotes.map(({ quote, started_at }) => ({ quote: shown(quote), ...(started_at === undefined ? {} : { at: started_at }) })) : [], atom_id,
@@ -545,7 +572,9 @@ export function writeStatusView(raw: unknown, kind: 'note' | 'document'): WriteS
   return value.state === 'saved' ? { state: 'saved', ...extraction(value) } : { state: 'unknown' };
 }
 
-const RETRYABLE = new Set(['unavailable', 'transport_failed', 'rate_limited', 'timeout', 'outcome_unknown', 'invalid_output', 'busy']);
+/** Failures that may pass on another try: the person sees a Try again button. Refusals of what was sent are not among them. */
+const RETRYABLE = new Set(['unavailable', 'transport_failed', 'rate_limited', 'timeout', 'outcome_unknown', 'invalid_output', 'busy',
+  'internal', 'failed', 'request_failed', 'invalid_response', 'timed_out', 'stalled', 'research_failed', 'document_completion_failed', 'source_admission_failed']);
 /** A write that failed this way may have reached the Authority, unless the client says otherwise. */
 const MAYBE_SENT = new Set(['outcome_unknown', 'timeout', 'unavailable', 'transport_failed']);
 
@@ -571,21 +600,12 @@ export function failureView(raw: unknown, fallback: string, write: boolean, requ
 }
 
 /**
- * A title the API accepts: the first non-empty line, controls and tabs made
- * spaces, at most 200 UTF-8 bytes, cut only between whole characters.
+ * A note's title: its first non-empty line, whole, controls and tabs made
+ * spaces, lone surrogates left out.
  */
 export function noteTitle(body: string): string {
   const line = body.split(/\r?\n/).map(part => part.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim()).find(part => part.length > 0) ?? '';
-  let bytes = 0;
-  let title = '';
-  for (const character of line) {
-    if (/[\uD800-\uDFFF]/.test(character) && character.length === 1) continue; // lone surrogate
-    const size = Buffer.byteLength(character);
-    if (bytes + size > 200) break;
-    bytes += size;
-    title += character;
-  }
-  return title.trim();
+  return line.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '').trim();
 }
 
 /** The CLI validates provider coordinates; only the project key and opaque revision reach the UI. */
@@ -602,11 +622,11 @@ export function projectConfluenceMappingView(raw: unknown, projectId: string): P
   const value = object(unwrap(raw));
   if (value.schema_version !== 1 || value.project_id !== projectId || (value.revision !== null && !REVISION.test(text(value.revision)))) throw new ViewError();
   const mapping = value.mapping === null ? null : object(value.mapping);
-  if (mapping !== null && (value.revision === null || !Array.isArray(mapping.space_ids) || mapping.space_ids.length < 1 || mapping.space_ids.length > 20 || !mapping.space_ids.every(id => typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id)))) throw new ViewError();
+  if (mapping !== null && (value.revision === null || !Array.isArray(mapping.space_ids) || mapping.space_ids.length < 1 || !mapping.space_ids.every(id => typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id)))) throw new ViewError();
   return { project_id: projectId, revision: value.revision as string | null, mapping: mapping === null ? null : { space_ids: [...(mapping.space_ids as string[])] } };
 }
 export function confluenceSpacesView(raw: unknown): ConfluenceSpacesPage {
-  const value = object(unwrap(raw)); if (value.schema_version !== 1 || !Array.isArray(value.items) || value.items.length > 20 || (value.next_cursor !== null && (typeof value.next_cursor !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(value.next_cursor)))) throw new ViewError();
+  const value = object(unwrap(raw)); if (value.schema_version !== 1 || !Array.isArray(value.items) || (value.next_cursor !== null && (typeof value.next_cursor !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(value.next_cursor)))) throw new ViewError();
   const items = value.items.map(raw => { const item = object(raw); if (!/^[1-9][0-9]{0,19}$/.test(text(item.id))) throw new ViewError(); return { id: item.id as string, key: text(item.key), name: text(item.name) }; });
   if (new Set(items.map(item => item.id)).size !== items.length) throw new ViewError(); return { items, next_cursor: value.next_cursor as string | null };
 }
@@ -615,11 +635,11 @@ export function projectGranolaMappingView(raw: unknown, projectId: string): Proj
   const value = object(unwrap(raw));
   if (value.schema_version !== 1 || value.project_id !== projectId || (value.revision !== null && !REVISION.test(text(value.revision)))) throw new ViewError();
   const mapping = value.mapping === null ? null : object(value.mapping);
-  if (mapping !== null && (value.revision === null || !Array.isArray(mapping.folder_ids) || mapping.folder_ids.length < 1 || mapping.folder_ids.length > 20 || !mapping.folder_ids.every(id => typeof id === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id)))) throw new ViewError();
+  if (mapping !== null && (value.revision === null || !Array.isArray(mapping.folder_ids) || mapping.folder_ids.length < 1 || !mapping.folder_ids.every(id => typeof id === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id)))) throw new ViewError();
   return { project_id: projectId, revision: value.revision as string | null, mapping: mapping === null ? null : { folder_ids: [...(mapping.folder_ids as string[])] } };
 }
 export function granolaFoldersView(raw: unknown): GranolaFoldersPage {
-  const value = object(unwrap(raw)); if (value.schema_version !== 1 || !Array.isArray(value.items) || value.items.length > 20 || (value.next_cursor !== null && (typeof value.next_cursor !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(value.next_cursor)))) throw new ViewError();
+  const value = object(unwrap(raw)); if (value.schema_version !== 1 || !Array.isArray(value.items) || (value.next_cursor !== null && (typeof value.next_cursor !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(value.next_cursor)))) throw new ViewError();
   const items = value.items.map(raw => { const item = object(raw); if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(text(item.id))) throw new ViewError(); return { id: item.id as string, key: text(item.key), name: text(item.name) }; });
   if (new Set(items.map(item => item.id)).size !== items.length) throw new ViewError(); return { items, next_cursor: value.next_cursor as string | null };
 }

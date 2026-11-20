@@ -268,7 +268,7 @@ The shared personal connection lifecycle, bounded JSON/MCP transport, Authority
 source processing, native review and original-context readers own the workflow.
 Granola supplies verified account/workspace, folder enumeration, a paged
 `list_meetings` window and meeting normalization. A watch is off, the person's
-own meetings or one folder, over the last 7 days; a project named with it is
+own meetings or one folder, over the last 30 days; a project named with it is
 only a suggestion. Imported notes are labeled unapproved and readable by their
 importer alone; no transcript is exposed through Person reads. Granola and the
 internal staging synthetic source are the implemented meeting intake providers.
@@ -279,10 +279,10 @@ an existing review requires no connected meeting tool. The older meeting route
 continues to accept its existing review operations.
 
 Granola network cost is explicit. A watch pass lists its window (one call per
-200 meetings, at most 200) and reads in detail only a meeting that is new or
+200 meetings, however many the window holds) and reads in detail only a meeting that is new or
 whose `updated_at` changed and has settled for 10 minutes: one notes call and
 one transcript call per 80,000 characters. Watch setup reads the same window to
-check its size. Each MCP call also uses one existing Nango connection lookup
+check that it lists completely. Each MCP call also uses one existing Nango connection lookup
 with current tag verification. No request-level token cache hides remote
 revocation.
 

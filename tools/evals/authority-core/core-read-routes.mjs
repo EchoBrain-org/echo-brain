@@ -24,6 +24,8 @@ const ANSWER_PROFILE = Object.freeze({
   planner_model: "authority-core-query-extractor-v1",
   answer_model: "authority-core-evidence-composer-v1",
   timeout_ms: 60_000,
+  context_tokens: 131_072,
+  max_output_tokens: 16_000,
 });
 
 function text(value, label) {

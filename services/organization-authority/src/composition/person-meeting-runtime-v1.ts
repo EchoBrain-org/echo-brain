@@ -48,7 +48,7 @@ export interface PersonMeetingProviderV1 {
     browse(folder: string | null): Promise<PersonMeetingResultsV2['browse']>;
     /**
      * Optional: checks a watch at Save with the listing its worker uses, refusing a folder the person cannot read and a
-     * window over the watch cap (`quota_exceeded`). A provider without it has nothing to watch.
+     * window the provider cannot list completely. A window of any size is watched. A provider without it has nothing to watch.
      */
     watchable?(watch: PersonalMeetingWatchV1): Promise<void>;
     preview(meeting: string): Promise<PersonMeetingResultsV2['open']>;
@@ -101,8 +101,13 @@ export async function queuePersonMeetingsV1(input: {
 const MEETING_LANES = 3;
 /** Extraction stages that mean the provider is refusing or struggling; one trips the runtime-wide breaker. */
 const TRANSIENT_STAGES = new Set<string>(['rate_limited', 'temporarily_unavailable', 'timeout']);
-/** A watch whose window holds more meetings than it reads (spec §1.2): checking the connection would not help. */
-const WINDOW_FULL = 'More than 200 meetings in 7 days. Choose one folder.';
+/** A meeting too long for the extraction model: another attempt would stop or be refused the same way. */
+const TOO_LONG: ReadonlyMap<string, { readonly held: string; readonly again: string }> = new Map([
+  ['output_too_long', { held: 'is held: it is too long for one extraction pass, and the model\'s reply stopped at its output limit',
+    again: 'Another attempt would stop the same way; an operator can still authorize one.' }],
+  ['input_too_long', { held: 'is held: it is longer than the extraction model\'s context window, so one extraction call cannot read it',
+    again: 'Another attempt would be refused the same way; an operator can still authorize one.' }],
+]);
 /** Meeting lanes over shared custody/candidates/append, and one approval core for every proposal. */
 export function createPersonMeetingRuntimeV1(options: {
   readonly database: Database.Database; readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
@@ -186,10 +191,11 @@ export function createPersonMeetingRuntimeV1(options: {
   /** The owner's status for a source: its oldest authorized held meeting, else its oldest held one, then any connection or access error. */
   function sourceError(sourceKey: string): string | null {
     const rows = held(sourceKey), granted = rows.find(authorized), first = granted ?? rows[0];
-    const parts = [first && `Meeting ${first.external_id} is held after extraction attempt ${first.attempt} failed at ${first.failure_stage}. Later meetings continue. ${
-      granted ? 'A retry is authorized and runs on the next check.' : 'An operator can authorize one more attempt.'}`, observed.get(sourceKey)?.error];
+    const tooLong = first === undefined ? undefined : TOO_LONG.get(first.failure_stage);
+    const parts = [first && `Meeting ${first.external_id} ${tooLong?.held ?? `is held after extraction attempt ${first.attempt} failed at ${first.failure_stage}`}. Later meetings continue. ${
+      granted ? 'A retry is authorized and runs on the next check.' : tooLong?.again ?? 'An operator can authorize one more attempt.'}`, observed.get(sourceKey)?.error];
     const text = parts.filter(part => part !== undefined && part !== null).join(' ');
-    return text === '' ? null : text.slice(0, 512);
+    return text === '' ? null : text;
   }
   // The breaker: after a transient provider failure no source starts a pass until this time; running ones finish.
   // Shutdown (settle with stop) starts none again.
@@ -268,9 +274,8 @@ export function createPersonMeetingRuntimeV1(options: {
         && !retryReady(setting.source_key)) { observed.delete(setting.source_key); return; }
       // Fixed, content-free status; one broken grant cannot starve another person's work. A failed retry is already
       // deferred, so the source's intake goes next.
-      const full = error instanceof AuthorityOperationError && error.code === 'quota_exceeded';
       observed.set(setting.source_key, { checked_at: new Date().toISOString(),
-        error: full ? WINDOW_FULL : 'Meeting intake needs attention. Check the connection and folder access.', next: Date.now() + (retry ? 0 : 60_000) });
+        error: 'Meeting intake needs attention. Check the connection and folder access.', next: Date.now() + (retry ? 0 : 60_000) });
       if (!(error instanceof AuthorityOperationError) && !(error instanceof Error)) throw error;
     }
   }

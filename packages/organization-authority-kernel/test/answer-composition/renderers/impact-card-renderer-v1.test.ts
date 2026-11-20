@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { agenticAskContextBudgetBytesV1 } from "../../../src/answer-composition/agentic-ask-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from "../../../src/answer-composition/agentic-research-v1.js";
 import type { AgenticEvidenceBundleItemV1, AgenticEvidenceBundleV1 } from "../../../src/answer-composition/agentic-evidence-bundle-v1.js";
-import { AGENTIC_MODEL_OUTPUT_TOKENS_V1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
 import { IMPACT_CARD_PROMPT, IMPACT_CARD_RENDERER_V1, screenImpactLineV1 } from "../../../src/answer-composition/renderers/impact-card-renderer-v1.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../../src/shared/core-runtime-observation-v1.js";
 import type { EvidenceDeskItemV2 } from "../../../src/shared/evidence-desk-v2.js";
@@ -75,19 +74,19 @@ function bundle(options: { readonly cited?: readonly string[]; readonly complete
       inventories: [{ source: "tickets", shown_count: 25, more: true, available: true, truncated: false }, { source: "meetings", shown_count: 3, more: false, available: true, truncated: false }],
       notices: ["Knowledge search returns at most 50 pages."],
     },
-    stop: { reason: options.completed === false ? "budget" : "finished", completed: options.completed !== false },
+    stop: { reason: options.completed === false ? "stalled" : "finished", completed: options.completed !== false },
   };
   return Object.freeze(value);
 }
 
 /** The renderer alone: a bundle, a gate over scripted replies, and the approved-record event. */
-function alone(input: { readonly bundle?: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly remaining?: number; readonly prompt_budget?: number }) {
+function alone(input: { readonly bundle?: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly prompt_budget?: number }) {
   const trace: string[] = [];
   const value = input.bundle ?? bundle();
-  const { gate, inputs } = scriptedGate(input.replies, value.budget, trace);
+  const { gate, inputs } = scriptedGate(input.replies, trace);
   const render = () => IMPACT_CARD_RENDERER_V1.render({
-    bundle: value, trigger_input: { record: recordCitation }, gate, remaining: () => input.remaining ?? 30_000, signal: new AbortController().signal,
-    prompt_budget: system => input.prompt_budget ?? agenticAskContextBudgetBytesV1(undefined, system, AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer),
+    bundle: value, trigger_input: { record: recordCitation }, gate, signal: new AbortController().signal,
+    prompt_budget: system => input.prompt_budget ?? agenticAskContextBudgetBytesV1(32_768, system, 16_000),
     on_context: selected => { trace.push(`context:${selected.join(",")}`); },
   });
   return { render, trace, inputs, gate, prompt: (index: number) => JSON.parse(inputs[index]!.user_prompt) as Record<string, unknown> };
@@ -150,7 +149,9 @@ describe("impact card renderer", () => {
     // Each affected entry also says what the record requires of the item.
     const entry = (run.inputs[0]!.schema as { properties: { affected: { items: { required: string[]; properties: Record<string, unknown> } } } }).properties.affected.items;
     expect(entry.required).toContain("expected");
-    expect(entry.properties.expected).toEqual({ type: "string", maxLength: 120 });
+    // No line has a length of its own, and no list a count: the model's own maximum output bounds the reply.
+    expect(entry.properties.expected).toEqual({ type: "string" });
+    expect(JSON.stringify(run.inputs[0]!.schema)).not.toMatch(/maxLength|maxItems/u);
     const user = run.prompt(0);
     expect(user.task).toBe(bundle().goal.kind === "task" ? (bundle().goal as { task: string }).task : "");
     expect((user.record as { id: string }[]).map(value => value.id)).toEqual(["E1", "E2"]);
@@ -201,7 +202,7 @@ describe("impact card renderer", () => {
     const rendered = await alone({ bundle: quiet, replies: [REPLY] }).render();
     expect(rendered.result.unconfirmed).toEqual([]);
     expect(rendered.outcome).toBe("answered");
-    const stopped = await alone({ bundle: { ...quiet, stop: { reason: "budget", completed: false } }, replies: [REPLY] }).render();
+    const stopped = await alone({ bundle: { ...quiet, stop: { reason: "stalled", completed: false } }, replies: [REPLY] }).render();
     expect(stopped.result.unconfirmed).toEqual(["Research stopped before it finished, so other items may be affected too."]);
     expect(stopped.outcome).toBe("partial");
   });
@@ -295,13 +296,10 @@ describe("impact card renderer", () => {
     expect(rendered.result).toEqual((await alone({ replies: [{ wrong: true }, { still: "wrong" }] }).render()).result);
   });
 
-  it("makes no model call when the time left cannot cover one, and still ends with an honest card", async () => {
-    const run = alone({ replies: [REPLY], remaining: 2_999 });
-    const rendered = await run.render();
-    expect(run.trace).toEqual(["context:E1,E2,E3,E4,E6,E8,E7,E5"]);
-    expect(rendered).toMatchObject({ outcome: "partial", fallbacks: 0, result: { status: "not_assessed", unconfirmed: NOTES } });
+  it("still ends with an honest card when the model cannot answer", async () => {
+    const denied = Object.assign(new Error("denied"), { diagnostic: { failure_class: "adapter_http", http_status: 401, finish_reason: null } });
     // Nothing research cited: the card still says what the record decided.
-    const nothing = await alone({ bundle: bundle({ cited: [] }), replies: [], remaining: 0 }).render();
+    const nothing = await alone({ bundle: bundle({ cited: [] }), replies: [denied] }).render();
     expect(nothing).toMatchObject({ cited: ["E1", "E2"], outcome: "partial", result: { status: "not_assessed", affected: [], people: [], citations: ["E1", "E2"].map(citation) } });
     expect(nothing.result.decided.map(entry => entry.citation_index)).toEqual([0, 1]);
   });
@@ -458,11 +456,11 @@ describe("impact card renderer", () => {
       expect(screenImpactLineV1(text, [source])).toBeNull();
     });
 
-    it("quotes a long repair line only in part", async () => {
+    it("quotes a long repair line whole", async () => {
       const long = `Alice owns THERM-48 ${"and the six DVT test bars ".repeat(6)}`.trim();
       const run = alone({ bundle: quoting, replies: [reply([{ id: "E1", text: CANARY }], [affected("E4", long, "needs_updating")]), reply([{ id: "E1", text: CANARY }])] });
       await run.render();
-      expect(JSON.parse(run.inputs[1]!.user_prompt).validation_error).toContain(`The line "${long.slice(0, 79)}…" says "owns".`);
+      expect(JSON.parse(run.inputs[1]!.user_prompt).validation_error).toContain(`The line "${long}" says "owns".`);
     });
   });
 
@@ -470,7 +468,7 @@ describe("impact card renderer", () => {
     ["a relation in another spelling", { affected: [affected("E2", "THERM-46 asks for one decimal", "Needs Updating")] }, { model_enum_respelled: 1 }],
     ["an id in another spelling", { affected: [affected("e2", "THERM-46 asks for one decimal", "conflicts")] }, { model_id_respelled: 1 }],
     ["an evidence id written into a line", { affected: [affected("E2", "THERM-46 asks for one decimal (E2)", "conflicts")] }, { model_inline_ids_stripped: 1 }],
-    ["a line past its cap", { affected: [affected("E2", `THERM-46 asks for one decimal ${"and more ".repeat(40)}`, "conflicts")] }, { model_text_truncated: 1 }],
+    ["a long line, kept whole and counted as nothing", { affected: [affected("E2", `THERM-46 asks for one decimal ${"and more ".repeat(400)}`, "conflicts")] }, {}],
     ["entries with no id, line or known relation", { affected: [affected("THERM-46", "x", "conflicts"), affected("E2", " ", "conflicts"), affected("E3", "y", "replaces")] }, { model_entry_dropped: 3 }],
     ["a date at risk with no milestone", { affected: [affected("E2", "THERM-46 asks for one decimal", "conflicts", "2026-10-15")] }, { card_date_dropped: 1 }],
   ])("counts %s, and nothing else", async (_name, reply, expected) => {

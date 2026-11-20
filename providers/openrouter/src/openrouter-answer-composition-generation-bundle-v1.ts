@@ -8,9 +8,15 @@ export const OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1 =
   "openrouter" as const;
 export const OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 =
   "anthropic/claude-sonnet-5.5" as const;
-export const OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 = 60_000;
-/** Kept conservative so changing the model does not expand Ask's prompt-size contract. */
-export const OPENROUTER_ANSWER_COMPOSITION_CONTEXT_TOKENS_V1 = 131_072;
+/**
+ * How long one call's model may produce nothing: the adapter streams the reply and each piece of model output resets
+ * it, so a reply that keeps arriving runs as long as it needs. Research and the writer have no clock of their own.
+ */
+export const OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 = 600_000;
+/** Claude Sonnet 5.5's own context window, in tokens (Anthropic's model table). */
+export const OPENROUTER_ANSWER_COMPOSITION_CONTEXT_TOKENS_V1 = 1_000_000;
+/** Claude Sonnet 5.5's own maximum output, in tokens, reasoning included (Anthropic's model table). */
+export const OPENROUTER_ANSWER_COMPOSITION_MAX_OUTPUT_TOKENS_V1 = 128_000;
 /**
  * OpenRouter answer-composition adapter bundle. It is the only owner of the
  * private credential read and OpenRouter transport construction.
@@ -43,6 +49,7 @@ export function createOpenRouterAnswerCompositionGenerationBundleV1(input: {
           answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
           timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
           context_tokens: OPENROUTER_ANSWER_COMPOSITION_CONTEXT_TOKENS_V1,
+          max_output_tokens: OPENROUTER_ANSWER_COMPOSITION_MAX_OUTPUT_TOKENS_V1,
         }),
       });
     },

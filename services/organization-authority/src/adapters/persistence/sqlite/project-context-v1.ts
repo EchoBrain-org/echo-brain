@@ -68,7 +68,7 @@ type InternalProjectStoreV1 = {
   readonly validateSource: (row: SourceRow) => void;
 };
 let transactionActive = false;
-/** Notes as the V3 submit stores them; the V17 table may still hold a retired V2 row, which no read finds. */
+/** Notes as the V3 submit stores them; the V18 table may still hold a retired V2 row, which no read finds. */
 const SELECT_SOURCE = 'SELECT submission.* FROM authority_person_updates_v2 AS submission WHERE submission.request_version = 3';
 
 function denied(code: 'not_found' | 'unauthorized' | 'conflict' | 'stale_access_state' | 'rate_limited' = 'not_found'): never {

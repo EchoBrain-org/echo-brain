@@ -18,7 +18,12 @@ import {
  * path keeps its V2 name because installed clients open citations there.
  */
 export const PERSON_SOURCE_EVIDENCE_PATH_V1 = '/v2/person/ask/source';
-const PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1 = 3 * 1024;
+/**
+ * Presentation: how much of one unopened passage the research loop shows whole in its prompt; a longer one shows a
+ * preview marked incomplete, which the step opens to read in full. No desk, source or response holds evidence text to it:
+ * a passage moves whole.
+ */
+export const PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 = 16 * 1024;
 
 /**
  * An imported meeting revision's review, as its source pane shows it: not reviewed yet, reviewed, or nothing to
@@ -179,9 +184,7 @@ export function validatePersonSourceEvidenceV1(value: unknown): PersonSourceEvid
     text: input.text as string,
     ...(imported ? { imported_meeting_review: input.imported_meeting_review as PersonImportedMeetingReviewV1 } : {}),
   };
-  assertEvidenceText(result.text, 'Ask source evidence text', PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1);
-  if (canonicalJsonBytes(result).byteLength > PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1 + 2048) {
-    fail('Ask source evidence response exceeds JSON byte bound');
-  }
+  // The cited packet's own text, whole: its stored size (RFC-0002) is the only size it has.
+  assertEvidenceText(result.text, 'Ask source evidence text', Number.POSITIVE_INFINITY);
   return Object.freeze(result);
 }

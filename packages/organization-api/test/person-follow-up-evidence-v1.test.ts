@@ -63,6 +63,13 @@ describe('Follow-up evidence V1', () => {
     expect(validatePersonFollowUpEvidenceV1(minimal)).toEqual(minimal);
     const { first_line: _line, ...decision } = decided.decision;
     expect(validatePersonFollowUpEvidenceV1({ ...decided, decision }).decision).toEqual(decision);
+    // The line has no length of its own; the response that carries it bounds it.
+    const long = { ...decided, expected: 'e'.repeat(2_000) };
+    expect(validatePersonFollowUpEvidenceV1(long)).toEqual(long);
+    // Nor do its title, owner, due date, decision title or first line.
+    const longer = { ...decided, title: 't'.repeat(5_000), owner: 'o'.repeat(5_000), due_at: 'd'.repeat(5_000),
+      decision: { ...decided.decision, title: 'D'.repeat(5_000), first_line: 'f'.repeat(5_000) } };
+    expect(validatePersonFollowUpEvidenceV1(longer)).toEqual(longer);
   });
 
   it('refuses unknown fields, out-of-range values and a repeated title', () => {
@@ -76,7 +83,6 @@ describe('Follow-up evidence V1', () => {
       { ...decided, decision: { ...decided.decision, ref: 'meeting:sha256:short' } },
       { ...decided, status: 'in_progress' },
       { ...decided, kind: 'follow_up' },
-      { ...decided, title: 'x'.repeat(301) },
       { ...decided, title: 'Two\nlines' },
       { ...decided, owner: '' },
       { ...decided, expected: decided.title },

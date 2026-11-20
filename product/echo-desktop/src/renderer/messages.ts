@@ -1,7 +1,8 @@
 import type { Failure, ToolStatus } from '../shared/protocol.js';
 
 // The renderer's own words for every failure code. No server or client text
-// is ever shown.
+// is ever shown: each code a request can fail with has words a person can act
+// on, and only a code truly unknown falls back to the generic line.
 const MESSAGES: Record<string, string> = {
   account_changed: 'Your account changed. Try again.',
   signed_out: 'You are signed out.',
@@ -26,7 +27,6 @@ const MESSAGES: Record<string, string> = {
   invitation_failed: 'Sign-in did not finish. Try again, or ask your organization owner for a new invitation.',
   signout_failed: 'Sign-out did not finish. Try again.',
   file_exists: 'A file with that name is already there. Choose a new name.',
-  too_many_files: 'Add up to 20 files.',
   invalid_email: 'Enter the employee’s name and email address.',
   invalid_name: 'Enter the employee’s name and email address.',
   invitation_output_invalid: 'The invitation could not be saved there. Choose another place and try again.',
@@ -36,16 +36,48 @@ const MESSAGES: Record<string, string> = {
   owner_access_required: 'Only an organization owner can manage people.',
   invitation_save_failed: 'The invitation was made, but its file could not be saved. Refresh, then reissue it into another folder.',
   outcome_unknown: 'That was not sent. Check your connection and try again.',
+  // The Ask question rule (the Authority's validatePersonQuestionText).
+  question_empty: 'Type a question first.',
+  question_normalization: 'That question has characters ECHO cannot read. Retype it and ask again.',
+  question_whitespace: 'Remove the spaces or line breaks at the start or end of the question.',
+  question_controls: 'That question has hidden control characters. Retype it and ask again.',
+  // A request past its transport bound (the Ask's 64 KiB request body): the only limit on a question's length.
+  request_too_large: 'That is more than ECHO can send in one request. Shorten it and try again.',
+  // The keyword search rule (record search).
+  query_empty: 'Type something to search for.',
+  query_normalization: 'That search has characters ECHO cannot read. Retype it and try again.',
+  query_whitespace: 'Remove the spaces at the start or end of the search.',
+  query_controls: 'Keep the search to one line, without hidden characters.',
+  query_term_count: 'Search for at least one word or number.',
+  query_term_too_long: 'One word in that search is too long. Shorten it and try again.',
+  invalid_limit: 'That asked for too many results at once. Try again with fewer.',
+  // ECHO answered with something it could not use, or more than it can show.
+  invalid_output: 'ECHO could not put that answer together. Try again.',
+  invalid_response: 'ECHO sent back something this app could not read. Try again, or update the app.',
+  response_too_large: 'That answer was too large to show. Ask about a narrower part.',
+  request_failed: 'That did not go through. Try again.',
+  internal: 'ECHO hit a problem on its side. Try again.',
+  failed: 'That did not finish. Try again.',
+  busy: 'ECHO is busy with another request. Try again in a moment.',
+  quota_exceeded: 'Your organization reached its limit for this. Try again later, or ask your organization owner.',
+  timed_out: 'That took too long. Try again.',
+  // An Ask that heard nothing from ECHO for a while (the client's or the host's silence): it has no time limit otherwise.
+  stalled: 'ECHO stopped responding while it worked on that. Try again.',
+  research_failed: 'ECHO could not finish looking into that. Try again.',
+  no_access: 'You do not have access to that.',
+  forbidden: 'You do not have access to that.',
+  identity_not_bound: 'Your account is not linked to a person in your organization yet. Ask your organization owner.',
+  invalid_file: 'That file could not be read. Choose a TXT, Markdown, PDF or Word file up to 25 MB.',
+  document_extraction_failed: 'ECHO could not read the text in that file. Try another copy, or paste the text as a note.',
+  document_completion_failed: 'That file was not finished saving. Try again.',
+  source_admission_failed: 'ECHO could not add that source. Try again.',
+  invalid_retained_text: 'That file changed since you chose it. Choose it again.',
+  update_changed: 'That changed meanwhile. Refresh and try again.',
 };
 
 export function message(failure: Failure): string {
   if (failure.mutation_outcome === 'unknown') return 'This may not have been sent.';
   return Object.hasOwn(MESSAGES, failure.code) ? MESSAGES[failure.code]! : 'Something went wrong. Try again.';
-}
-
-/** A meetings request's failure. There a limit is the watch's window over its cap, which choosing one folder fixes. */
-export function meetingMessage(failure: Failure): string {
-  return failure.mutation_outcome !== 'unknown' && failure.code === 'quota_exceeded' ? 'More than 200 meetings in 7 days. Choose one folder.' : message(failure);
 }
 
 /** Where you stand with a tool, in the renderer's words: on its row in Tools. */

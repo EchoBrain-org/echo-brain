@@ -120,6 +120,7 @@ describe("research loop: list", () => {
     const h = harness([
       reads("open", [{ tool: "list", args: { source: "tickets", since: "2026-10-13" } }]),
       reads("open", [{ tool: "list", args: { source: "tickets", since: "2026-10-13" } }]),
+      reads("open", [{ tool: "list", args: { source: "tickets", since: "2026-10-13" } }]),
     ], { live_sources: [JIRA], openCitation: async () => result([approved]), list });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(h.prompt(1).last_results).toEqual([expect.objectContaining({ tool: "list", items: [], more: true, note: "this page was empty (for example because of a date filter); more pages remain" })]);
@@ -178,12 +179,13 @@ describe("research loop: open", () => {
     const therm = ticket("THERM-48", "THERM-48: firmware formats one decimal.");
     const open = vi.fn(async () => result([therm]));
     const reopen = reads("open", [{ tool: "open", args: { id: "E1" } }]);
-    const h = harness([reopen, reopen, affects("found")], { live_sources: [JIRA], openCitation: async () => result([therm]), open });
+    const h = harness([reopen, reopen, reopen, affects("found")], { live_sources: [JIRA], openCitation: async () => result([therm]), open });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Recheck ${agenticStartingSlotV1(1)}.`, [therm.citation], {}, "report") });
     expect(open).not.toHaveBeenCalled();
     expect(h.prompt(0).opened).toEqual([expect.objectContaining({ id: "E1", text: therm.text })]);
     expect(h.prompt(1).last_results).toEqual([{ tool: "open", args: { id: "E1" }, note: "already open; its full text is in your scratchpad" }]);
-    // Re-opening adds nothing, so two such steps stop research.
+    // Re-opening adds nothing: an open answered from the scratchpad is no work, though its arguments are new, and two such
+    // steps stop research.
     expect(h.generate).toHaveBeenCalledTimes(2);
     expect(view.stop).toEqual({ reason: "no_progress", completed: false });
   });
@@ -281,7 +283,7 @@ describe("research loop: open after a limited open", () => {
 });
 
 describe("research loop: progress", () => {
-  it("counts new full text and text upgrades as progress, never new metadata rows or related references (35130ae1)", async () => {
+  it("counts new full text and text upgrades as progress, never new metadata rows or related references, and stops only on repeated reads (35130ae1)", async () => {
     const approved = record("display", "Approved: the display shows two decimals.");
     const body = ticket("ECHO-1", "ECHO-1: unrelated dashboard work.");
     const list = vi.fn(async (input: EvidenceDeskListInputV2) => ticketPage(pageOf(input), 10));
@@ -289,18 +291,19 @@ describe("research loop: progress", () => {
     const open = vi.fn(async (input: { readonly item: string }) => input.item === body.id ? result([body, ticket("BUG-412")]) : result([ticket("BUG-413")]));
     const listTickets = reads("open", [{ tool: "list", args: { source: "tickets" } }]);
     const h = harness([
-      listTickets,                                           // 20 new rows: idle, and the planner may open what it found
+      listTickets,                                           // 20 new rows: a new read, so not idle
       reads("open", [{ tool: "open", args: { id: "E2" } }]),  // ECHO-1's text arrives: progress
-      listTickets,                                           // 20 more rows: idle
-      reads("open", [{ tool: "open", args: { id: "E23" } }]), // only a related reference: still idle
-      listTickets,                                           // 20 more rows: research stops
+      listTickets,                                           // 20 more rows of the same list: a repeated read with no text, idle
+      reads("open", [{ tool: "open", args: { id: "E23" } }]), // a new read, though it brings only a related reference
+      listTickets,                                           // repeated, idle
+      listTickets,                                           // repeated, idle again: research stops
       listTickets,
     ], { live_sources: [JIRA], openCitation: async () => result([approved]), list, open });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
     expect(open).toHaveBeenCalledTimes(2);
     expect(view.rounds[3]!.actions[0]!.result).toMatchObject({ opened: [], items: ["E43"], note: "no readable text" });
-    expect(h.generate).toHaveBeenCalledTimes(5);
-    expect(list).toHaveBeenCalledTimes(3);
+    expect(h.generate).toHaveBeenCalledTimes(6);
+    expect(list).toHaveBeenCalledTimes(4);
     expect(view.stop).toEqual({ reason: "no_progress", completed: false });
   });
 
@@ -320,15 +323,15 @@ describe("research loop: progress", () => {
     expect(view.stop).toEqual({ reason: "finished", completed: true });
   });
 
-  it("stops after two idle rounds that discover nothing new", async () => {
+  it("does not stop on searches in new words that find nothing: each is new work", async () => {
     const approved = record("display", "Approved: the display shows two decimals.");
     const h = harness([
       reads("open", [{ tool: "search", args: { query: "display" } }]), reads("open", [{ tool: "search", args: { query: "decimals" } }]),
       affects("not_found"),
     ], { openCitation: async () => result([approved]) });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
-    expect(h.generate).toHaveBeenCalledTimes(2);
-    expect(view.stop).toEqual({ reason: "no_progress", completed: false });
+    expect(h.generate).toHaveBeenCalledTimes(3);
+    expect(view.stop).toEqual({ reason: "finished", completed: true });
   });
 });
 
@@ -364,17 +367,17 @@ describe("research loop: starting evidence", () => {
     expect(view.items.map(item => item.title)).toEqual(many.map(item => item.label));
   });
 
-  it("gives each starting item its own context budget", async () => {
-    const context = (key: string, index: number) => ticket(`${key}-CTX-${index}`, `${key} context ${index}: ${"x".repeat(10 * 1024)}`);
+  it("admits every passage a starting read returns, for each starting item", async () => {
+    const context = (key: string, index: number) => ticket(`${key}-CTX-${index}`, `${key} context ${index}: ${"x".repeat(40 * 1024)}`);
     const openCitation = vi.fn(async (input: EvidenceDeskOpenCitationInputV2) => {
       const anchor = items.find(item => (item.citation as { readonly ticket_id: string }).ticket_id === keyOf(input))!;
       return result([anchor, ...[1, 2, 3].map(index => context(anchor.label.slice(0, 8), index))]);
     });
-    const h = harness([found("E1", "E4")], { live_sources: [JIRA], openCitation });
+    const h = harness([found("E1", "E5")], { live_sources: [JIRA], openCitation });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Recheck ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)}.`, items.slice(0, 2).map(item => item.citation), {}, "report") });
-    // An anchor and the two 10 KB passages that fit its 24 KB, for each item; the third passage of each is left out.
-    expect(h.prompt(0).task).toBe("Recheck E1 and E4.");
-    expect(view.items.map(item => item.title)).toEqual([items[0]!.label, "THERM-48-CTX-1: Unrelated work", "THERM-48-CTX-2: Unrelated work", items[1]!.label, "THERM-46-CTX-1: Unrelated work", "THERM-46-CTX-2: Unrelated work"]);
+    // An anchor and its three 40 KB passages, for each item: the loop cuts no read; the prompt shows what fits its window.
+    expect(h.prompt(0).task).toBe("Recheck E1 and E5.");
+    expect(view.items.map(item => item.title)).toEqual([items[0]!.label, ...[1, 2, 3].map(index => `THERM-48-CTX-${index}: Unrelated work`), items[1]!.label, ...[1, 2, 3].map(index => `THERM-46-CTX-${index}: Unrelated work`)]);
   });
 
   it("stops the reads after a starting read that fails in a way that cannot be reported, and research with it", async () => {
@@ -460,12 +463,12 @@ describe("research loop: search only (a record in no project)", () => {
 
   it("never tells a search-only planner to list, even when it refuses a finish", async () => {
     const h = harness([
-      reads("open", [{ tool: "search", args: { query: "canary" } }]),
       affects("not_found"), affects("not_found"),
     ], { openCitation: async () => result([approved]) });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation], { list: false }) });
-    // One search is not enough to conclude absence; the refusal says what to do without naming list.
-    expect(view.rounds[1]!.rejected).toEqual([
+    // Absence before any completed search is refused; the refusal says what to do without naming list.
+    expect(view.rounds.flatMap(round => round.rejected).join(" ")).toContain("before any completed search.");
+    expect(view.rounds[0]!.rejected).toEqual([
       expect.stringContaining("Search or open more, or correct the need status and evidence."), expect.stringContaining("Search or open more"),
     ]);
     expect(view.rounds.flatMap(round => round.rejected).join(" ")).not.toMatch(/\blist\b/u);
@@ -509,7 +512,7 @@ describe("research loop: prompt layout", () => {
   it("sends a stable head, then the evidence, then what changes every step", async () => {
     const h = harness([reads("open", [{ tool: "search", args: { query: "display" } }]), affects("not_found"), affects("not_found")], { openCitation });
     await h.research.research({ trigger: "approved_record", brief: task });
-    expect(Object.keys(h.prompt(0))).toEqual(["task", "today", "time_zone", "time_reference", "scope", "source_catalog", "opened", "seen", "step", "steps_left", "plan", "inventories", "last_results", "searches_done"]);
+    expect(Object.keys(h.prompt(0))).toEqual(["task", "today", "time_zone", "time_reference", "scope", "source_catalog", "opened", "seen", "step", "plan", "inventories", "last_results", "searches_done"]);
   });
 
   it("repeats each step's head and evidence as the next step's prefix, never re-sorting what it read (F5)", async () => {
@@ -545,7 +548,7 @@ describe("research loop: prompt layout", () => {
     expect(h.prompt(1).seen).toEqual([expect.objectContaining({ id: "E3", title: panel.label, text: panel.text, full: true })]);
   });
 
-  it("keeps what the latest reads returned when the scratchpad is full, and leaves out the newest others", async () => {
+  it("shows every entry that fits the window: no count of seen entries", async () => {
     const many = Array.from({ length: 310 }, (_, index) => listed(`row-${index}`));
     const h = harness([
       reads("open", [{ tool: "search", args: { query: "rows" } }]),
@@ -554,9 +557,9 @@ describe("research loop: prompt layout", () => {
     ], { openCitation: async () => result([first]), search: async input => result(input.query === "rows" ? many : [listed("late-1"), listed("late-2")]) });
     await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [first.citation]) });
     const ids = (index: number) => (h.prompt(index).seen as readonly { readonly id: string }[]).map(entry => entry.id);
-    // At most 300 entries: the first search's newest rows are left out, then the second search's two rows are kept.
-    expect(ids(1)).toEqual(Array.from({ length: 300 }, (_, index) => `E${index + 2}`));
-    expect(ids(2)).toEqual([...Array.from({ length: 298 }, (_, index) => `E${index + 2}`), "E312", "E313"]);
+    // All 310 rows, then all 312: the window, not a count, decides what the step sees.
+    expect(ids(1)).toEqual(Array.from({ length: 310 }, (_, index) => `E${index + 2}`));
+    expect(ids(2)).toEqual(Array.from({ length: 312 }, (_, index) => `E${index + 2}`));
     expect(h.prompt(2).last_results).toEqual([{ tool: "search", args: { query: "more rows" }, results: ["E312", "E313"] }]);
   });
 });
@@ -648,48 +651,54 @@ describe("research loop: need ids", () => {
   });
 });
 
-describe("research loop: step time", () => {
-  /** Ask's 90 s deadline with room for 20 rounds, so only time stops research. */
-  const timed: AgenticBriefV1 = { ...brief("Find what changed.", []), budget: { deadline_ms: 90_000, max_rounds: 20, max_model_calls: 48, writer_reserve_ms: 25_000, max_receipts: 512 } };
+describe("research loop: no read budget", () => {
+  it("runs every read of a wide step: the audit row has no receipt bound", async () => {
+    const search = vi.fn(async (input: { readonly query?: string }) => result(Array.from({ length: 60 }, (_value, index) => record(`hit-${input.query ?? ""}-${index}`))));
+    const words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet"];
+    const h = harness([reads("open", words.map(word => ({ tool: "search", args: { query: `${word} design` } }))), affects("not_found")], { search });
+    await h.research.research({ trigger: "approved_record", brief: brief("Find what changed.", []) }).catch(() => undefined);
+    expect(search).toHaveBeenCalledTimes(10);
+    expect((JSON.parse(h.inputs[1]!.user_prompt).last_results as { readonly error?: string }[]).filter(value => value.error !== undefined)).toEqual([]);
+  });
+});
+
+describe("research loop: no clock and no round limit", () => {
   const searching = (index: number) => reads("open", [{ tool: "search", args: { query: `term ${index}` } }]);
-  const search = async (input: { readonly query?: string }) => result([record(`hit-${input.query ?? ""}`)]);
+  const search = async (input: { readonly query?: string }) => result([record(`hit-${input.query ?? ""}`, `Text for ${input.query ?? ""}.`)]);
 
-  it("does not start a step with less than 1.25 times the longest step call so far, and stops for budget (2233bad1)", async () => {
+  it("keeps researching while each step brings new work, however long the steps take, until the planner finishes", async () => {
     let time = 0;
-    // Each step call takes 8 s of the request's time: the eighth would start with 7 s, where it used to start (and time out).
-    const h = harness((_input, index) => { time += 8_000; return searching(index); }, { search }, { now_ms: () => time });
-    const view = await h.research.research({ trigger: "approved_record", brief: timed });
-    expect(h.inputs.map(input => input.timeout_ms)).toEqual([25_000, 25_000, 25_000, 25_000, 25_000, 23_000, 15_000]);
-    expect(view.stop).toEqual({ reason: "budget", completed: false });
-    expect(view.cost).toMatchObject({ rounds: 7, fallbacks: 0 });
+    // Fifty steps of 55 s each: far past any former deadline or round limit. Each searches something new.
+    const h = harness((_input, index) => {
+      time += 55_000;
+      return index < 50 ? searching(index) : step([part("What does E1 affect?", [need("tickets the record affects", "found", ["E1"])])], [{ tool: "finish", args: {} }]);
+    }, { search }, { now_ms: () => time });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief("Find what changed.", []) });
+    expect(view.stop).toEqual({ reason: "finished", completed: true });
+    expect(view.cost).toMatchObject({ rounds: 51, fallbacks: 0 });
+    // Every step call has the same silence period: nothing shrinks as time passes.
+    expect(new Set(h.inputs.map(input => input.timeout_ms))).toEqual(new Set([180_000]));
   });
 
-  it("still starts a step that has a whole step's time after a slower step", async () => {
-    let time = 0;
-    const h = harness((_input, index) => { time += 22_000; return searching(index); }, { search }, { now_ms: () => time });
-    const view = await h.research.research({ trigger: "approved_record", brief: timed });
-    // 1.25 times 22 s is more than a whole step: the second step starts with its whole 25 s; the third, with 19 s, does not.
-    expect(h.inputs.map(input => input.timeout_ms)).toEqual([25_000, 25_000]);
-    expect(view.stop).toEqual({ reason: "budget", completed: false });
+  it("stops with no_progress only when the planner repeats reads it already made and they add nothing", async () => {
+    const h = harness((_input, index) => index === 0 ? searching(0) : searching(0), { search });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief("Find what changed.", []) });
+    // The first search is new work; the next two only repeat it.
+    expect(view.stop).toEqual({ reason: "no_progress", completed: false });
+    expect(view.cost).toMatchObject({ rounds: 3 });
   });
 
-  it("stops for budget, not with an unusable step, when a retried access check leaves a step less than it needs", async () => {
-    let time = 0; let checks = 0;
-    const h = harness((_input, index) => { time += 8_000; return searching(index); }, {
-      search,
-      revalidate: async () => {
-        checks += 1;
-        // The seventh step starts with 15 s, over its 10 s need. Its check fails after 3 s, and the retry takes 2.5 s more: 9.5 s.
-        if (checks === 7) { time += 3_000; throw new AuthorityOperationError("unavailable", "Jira briefly unavailable"); }
-        if (checks === 8) time += 2_500;
-        return { checked_at: "2026-10-06T00:00:00.000Z" };
-      },
-    }, { now_ms: () => time });
-    const view = await h.research.research({ trigger: "approved_record", brief: timed });
-    // No seventh model call goes out with 9.5 s, where one as slow as the others would time out and leave no time to repair.
-    expect(h.inputs.map(input => input.timeout_ms)).toEqual([25_000, 25_000, 25_000, 25_000, 25_000, 23_000]);
-    expect(view.stop).toEqual({ reason: "budget", completed: false, admission: "post_revalidation_no_time" });
-    expect(view.cost).toMatchObject({ fallbacks: 0 });
+  it("stops as stalled, keeping what it released, when a step call sends nothing for its silence period twice", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness((_input, index) => index === 0 ? searching(0) : new Promise(() => undefined), { search });
+      const pending = h.research.research({ trigger: "approved_record", brief: brief("Find what changed.", []) });
+      await vi.advanceTimersByTimeAsync(2 * 180_000);
+      const view = await pending;
+      expect(view.stop).toEqual({ reason: "stalled", completed: false });
+      expect(view.items.map(item => item.id)).toEqual(["E1"]);
+      expect(view.rounds.at(-1)!.rejected).toEqual(["the model sent nothing for 180 s"]);
+    } finally { vi.useRealTimers(); }
   });
 });
 
@@ -748,6 +757,18 @@ describe("research loop: need kinds (ADR-0041)", () => {
       step([part("When is launch?", [])], [{ tool: "search", args: { query: "launch" } }]), step([part("When is launch?", [withId("N1", need("When is launch?", "found", ["E1"]))])], [{ tool: "finish", args: {} }]), writer,
     ], { search: async () => result([launch]) });
     expect((await bare.research.research({ trigger: "ask", brief: question("When is launch?") })).plan[0]!.needs).toEqual([{ need: "When is launch?", kind: "content", status: "found", evidence: ["E1"] }]);
+    // Ask's question follows the API's question rule: a long question on two lines runs, and so does a 10,000-character one;
+    // one with a control character does not.
+    const asked = `${"When is launch, and who owns the thermal retest that blocks it? ".repeat(6).trim()}\nAnd what changed since Tuesday?`;
+    const long = harness([
+      step([part("When is launch?", [])], [{ tool: "search", args: { query: "launch" } }]), step([part("When is launch?", [withId("N1", need("When is launch?", "found", ["E1"]))])], [{ tool: "finish", args: {} }]), writer,
+    ], { search: async () => result([launch]) });
+    expect((await long.research.research({ trigger: "ask", brief: question(asked) })).plan[0]!.needs[0]!.status).toBe("found");
+    await expect(long.research.research({ trigger: "ask", brief: question("Who\u0007 owns it?") })).rejects.toThrow("question is invalid");
+    const huge = harness([
+      step([part("When is launch?", [])], [{ tool: "search", args: { query: "launch" } }]), step([part("When is launch?", [withId("N1", need("When is launch?", "found", ["E1"]))])], [{ tool: "finish", args: {} }]), writer,
+    ], { search: async () => result([launch]) });
+    expect((await huge.research.research({ trigger: "ask", brief: question(`When is launch${"?".repeat(10_000)}`) })).plan[0]!.needs[0]!.status).toBe("found");
     expect(bare.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "When is launch?", kind: "content", status: "open", evidence: [] }] }]);
     // A task goal declares nothing: its schema, plan view and bundle have no kind.
     const plain = harness([
@@ -777,6 +798,22 @@ describe("research loop: corrections of model output (model scaffolding audit 20
   }
   const research = (h: ReturnType<typeof harness>) => () => h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
   /** The need research planned in its first step, found with the items it cites. */
+  it.each(["search", "list"] as const)("never takes a %s with items its date filter could not test as a finished read for not_found", async tool => {
+    // Zero matches, and two items that lack the date asked for: the read did not test them, so it proves no absence.
+    const read = vi.fn(async () => result([], { unchecked: { count: 2, dates: ["approved"] } }));
+    const dated = { source: "meetings", date_field: "occurred", since: "2026-10-01", until: "2026-10-06" };
+    const h = harness([
+      reads("open", [{ tool, args: tool === "search" ? { query: "vendor replaced", ...dated } : dated }]),
+      affects("not_found"),
+      affects("not_found"),
+    ], { openCitation: async () => result([approved]), [tool]: read });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    expect(read).toHaveBeenCalledTimes(1);
+    // The finish and its repair are both refused.
+    expect(view.rounds[1]!.rejected).toEqual([expect.stringContaining("is not_found before any completed search"), expect.stringContaining("is not_found before any completed search")]);
+    expect(view.stop.completed).toBe(false);
+  });
+
   const settled = (...evidence: readonly string[]) => step([part("What does E1 affect?", [need("tickets the record affects", "found", evidence)])], [{ tool: "finish", args: {} }]);
 
   it("counts each repeat list answered from what was listed, and the stop that follows", async () => {

@@ -3,7 +3,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AgenticAskGenerationFailureV1, createAgenticAskV5, createAgenticResearchV1, type AgenticAskAuditEntryV1 } from '../../src/answer-composition/agentic-ask-v1.js';
 import { parseAgenticDriverFinishV1, type AgenticResearchDriverSessionV1 } from '../../src/answer-composition/agentic-research-driver-v1.js';
 import type { EvidenceDeskPortV2 } from '../../src/shared/evidence-desk-v2.js';
-import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from '../../src/answer-composition/agentic-research-v1.js';
+import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from '../../src/answer-composition/agentic-research-v1.js';
 import { AuthorityOperationError } from '../../src/domain/errors.js';
 import { observeCoreRuntimeV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import { checked, generation, listed, record, result } from './fixtures/agentic-scenarios.js';
@@ -11,7 +11,7 @@ import { writerReply } from './fixtures/agentic-scenarios.js';
 
 const evidence = record('driver', 'Approved: calibrate every unit.');
 const packets = new WeakMap<AgenticResearchDriverSessionV1, unknown[]>();
-const admit = (session: AgenticResearchDriverSessionV1, label = 'request') => session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256({ label }), payload_digests: (packets.get(session) ?? []).map(canonicalSha256), operation: 'messages', timeout: () => 10_000 }, async () => ({ value: undefined }));
+const admit = (session: AgenticResearchDriverSessionV1, label = 'request') => session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256({ label }), payload_digests: (packets.get(session) ?? []).map(canonicalSha256), operation: 'messages' }, async () => ({ value: undefined }));
 const finish = (ids = ['E1'], completed = true, kind = 'content') => ({ completed, parts: [{ question: 'Calibration', notes: 'Use the approved rule.', needs: [{ need: 'rule', kind, status: completed ? 'found' : 'open', evidence: ids }] }] });
 function harness(run: (session: AgenticResearchDriverSessionV1) => Promise<void>, overrides: Partial<EvidenceDeskPortV2> = {}) {
   const audit: AgenticAskAuditEntryV1[] = [];
@@ -28,21 +28,22 @@ function harness(run: (session: AgenticResearchDriverSessionV1) => Promise<void>
 }
 
 describe('native research harness shares the real ECHO tool state', () => {
-  it.each([['provider retries', 'unusable_step', 1], ['request timeout', 'budget', 0]] as const)('keeps released evidence available to the writer after native %s', async (failure, stop, corrections) => {
+  it.each([['provider retries', 'unusable_step', 1], ['request stall', 'stalled', 0]] as const)('keeps released evidence available to the writer after native %s', async (failure, stop, corrections) => {
     const h = harness(async session => {
       await admit(session);
       await session.call('search', { query: 'calibrate' });
       await admit(session, 'read');
       if (failure === 'provider retries') throw new AgenticAskGenerationFailureV1('research model was unavailable', 'fallback');
-      const timer = new AbortController();
-      const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timer.signal);
+      // A request that sends nothing for its silence period.
+      vi.useFakeTimers();
       try {
-        await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('timeout'), operation: 'messages', timeout: () => 4_000 },
-          signal => new Promise((_resolve, reject) => {
-            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-            queueMicrotask(() => timer.abort(new DOMException('local timer', 'TimeoutError')));
-          }));
-      } finally { timeout.mockRestore(); }
+        const pending = session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('timeout'), operation: 'messages' },
+          signal => new Promise((_resolve, reject) => { signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }));
+        const settled = pending.then(() => undefined, (error: unknown) => error);
+        await vi.advanceTimersByTimeAsync(generation.timeout_ms);
+        const error = await settled;
+        if (error !== undefined) throw error;
+      } finally { vi.useRealTimers(); }
     });
     let fallbackCorrections = 0;
     const output = await observeCoreRuntimeV1('research_run', h.ask, { observer: event => {
@@ -56,6 +57,44 @@ describe('native research harness shares the real ECHO tool state', () => {
     expect(fallbackCorrections).toBe(corrections);
   });
 
+  it.each(['before its first request', 'between its requests'] as const)('stops a native harness that sends nothing %s as stalled, and tells it to stop', async when => {
+    let signal: AbortSignal | undefined;
+    const h = harness(async session => {
+      signal = session.signal;
+      if (when === 'between its requests') await admit(session);
+      await new Promise<never>(() => undefined);
+    });
+    vi.useFakeTimers();
+    try {
+      const pending = h.ask();
+      await vi.advanceTimersByTimeAsync(generation.timeout_ms);
+      const output = await pending;
+      expect(output.research.stop.reason).toBe('stalled');
+      expect(signal?.aborted).toBe(true);
+      expect(h.audit).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('never stalls a native harness that keeps making requests past its silence period', async () => {
+    const h = harness(async session => {
+      // Each request comes back inside the silence period; together they run far past it.
+      for (let index = 0; index < 6; index += 1) {
+        await new Promise(resolve => setTimeout(resolve, generation.timeout_ms / 2));
+        await admit(session, `turn ${index}`);
+      }
+      await session.call('search', { query: 'calibrate' });
+      await admit(session, 'read');
+      await session.call('finish', finish());
+    });
+    vi.useFakeTimers();
+    try {
+      const pending = h.ask();
+      await vi.advanceTimersByTimeAsync(4 * generation.timeout_ms);
+      const output = await pending;
+      expect(output.research.stop.reason).toBe('finished');
+    } finally { vi.useRealTimers(); }
+  });
+
   it.each(['search', 'list'] as const)('does not let unseen %s results establish absence, including same-turn tool batches', async tool => {
     const h = harness(async session => {
       await admit(session);
@@ -65,9 +104,9 @@ describe('native research harness shares the real ECHO tool state', () => {
         await session.call('search', { query: 'missing' });
       } else await session.call('list', { source: 'meetings' });
       expect(await session.call('finish', absent)).toHaveProperty('error');
-      await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('count only'), payload_digests: (packets.get(session) ?? []).map(canonicalSha256), operation: 'count_tokens', timeout: () => 10_000 }, async () => ({ value: true }));
+      await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('count only'), payload_digests: (packets.get(session) ?? []).map(canonicalSha256), operation: 'count_tokens' }, async () => ({ value: true }));
       expect(await session.call('finish', absent)).toHaveProperty('error');
-      await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('omitted'), operation: 'messages', timeout: () => 10_000 }, async () => ({ value: true }));
+      await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('omitted'), operation: 'messages' }, async () => ({ value: true }));
       expect(await session.call('finish', absent)).toHaveProperty('error');
       await admit(session, 'observed reads');
       expect(await session.call('finish', absent)).toMatchObject({ accepted: true });
@@ -197,21 +236,16 @@ describe('native research harness shares the real ECHO tool state', () => {
 
   // Two clean meeting searches pass the not_found check, but a source could not be read during the request: absence there is
   // unproven, so the not_found need stays unconfirmed whatever completed says, and the reader is asked to try again.
-  it.each([
-    ['an availability notice', true], ['an availability notice', false], ['the read budget', true], ['the read budget', false],
-  ] as const)('keeps a not_found need unconfirmed after %s (completed=%s)', async (failure, completed) => {
+  it.each([true, false])('keeps a not_found need unconfirmed after an availability notice (completed=%s)', async completed => {
     const h = harness(async session => {
       await admit(session);
-      if (failure === 'an availability notice') await session.call('search', { query: 'Harbor owner', source: 'documents' });
+      await session.call('search', { query: 'Harbor owner', source: 'documents' });
       await session.call('search', { query: 'Harbor owner', source: 'meetings' });
       await session.call('search', { query: 'Harbor lead', source: 'meetings' });
-      // Each meeting search adds its own receipt, so a third read no longer fits the 22-receipt budget.
-      if (failure === 'the read budget') expect(await session.call('search', { query: 'Harbor owner', source: 'documents' })).toMatchObject({ error: expect.stringContaining('read budget') });
       await admit(session, 'observed reads');
       expect(await session.call('finish', { ...harborMissing, completed })).toMatchObject({ accepted: true, completed: false });
     }, { search: documents(result([], OUTAGE)) });
-    const output = await createAgenticAskV5(h.options).answerWithResearch({ question: 'Who owns Harbor?',
-      ...(failure === 'the read budget' ? { budget: { ...AGENTIC_RESEARCH_LIVE_BUDGET_V1, max_receipts: 22 } } : {}) });
+    const output = await createAgenticAskV5(h.options).answerWithResearch({ question: 'Who owns Harbor?' });
     expect(output.research.stop).toMatchObject({ reason: 'finished', completed: false });
     expect(output.response.outcome).toBe('partial');
     expect(output.response.parts[0]).toMatchObject({ gap: "I couldn't complete the search. Please try again.", gap_details: { interrupted: true } });
@@ -343,26 +377,30 @@ describe('native research harness shares the real ECHO tool state', () => {
     expect(research.stop).toMatchObject({ reason: 'finished', completed: false });
   });
 
-  it('refuses reads before the audit row would overflow, and the model can still finish', async () => {
+  it('runs every read a session asks for: there is no read budget and no research clock', async () => {
     const h = harness(async session => {
       await admit(session);
-      expect(await session.call('search', { query: 'calibrate' })).not.toHaveProperty('error');
-      expect(await session.call('search', { query: 'again' })).toMatchObject({ error: expect.stringContaining('read budget') });
+      for (let index = 0; index < 120; index += 1) expect(await session.call('search', { query: `calibrate unit${String.fromCharCode(97 + (index % 26))}${String.fromCharCode(97 + Math.floor(index / 26))}` })).not.toHaveProperty('error');
       await admit(session, 'after');
       expect(await session.call('finish', finish())).toMatchObject({ accepted: true });
     });
-    const { research } = await createAgenticAskV5(h.options).answerWithResearch({ question: 'What was decided?', budget: { ...AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, max_receipts: 21 } });
+    const { research } = await createAgenticAskV5(h.options).answerWithResearch({ question: 'What was decided?', budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 });
     expect(research.stop.reason).toBe('finished');
+    expect(research.rounds.flatMap(round => round.actions).filter(action => action.tool === 'search')).toHaveLength(120);
   });
 
-  it('ends an SDK session still waiting when research time runs out, and the writer answers', async () => {
+  it('tells the session how long one model request may stay silent, and nothing about time left', async () => {
+    let seen: AgenticResearchDriverSessionV1 | undefined;
     const h = harness(async session => {
+      seen = session;
+      await admit(session);
       await session.call('search', { query: 'calibrate' });
-      await new Promise((_resolve, reject) => session.signal.addEventListener('abort', () => reject(session.signal.reason), { once: true }));
+      await admit(session, 'read');
+      await session.call('finish', finish());
     });
-    const { research } = await createAgenticAskV5(h.options).answerWithResearch({ question: 'What was decided?', budget: { ...AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, deadline_ms: 27_300 } });
-    expect(research.stop.reason).toBe('budget');
-    expect(h.generate).toHaveBeenCalledTimes(1);
+    await h.ask();
+    expect(seen!.silence_ms).toBe(generation.timeout_ms);
+    expect(seen).not.toHaveProperty('remaining');
   });
 
   it('does not mark a body read before an outbound inference has passed the access gate', async () => {
@@ -371,9 +409,9 @@ describe('native research harness shares the real ECHO tool state', () => {
       await session.call('search', { query: 'calibrate' });
       expect(await session.call('finish', finish())).toMatchObject({ error: expect.stringContaining('full text') });
       // A compaction/auxiliary inference that omits the new tool packet is not evidence admission.
-      await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('omitted'), operation: 'messages', timeout: () => 10_000 }, async () => ({ value: true }));
+      await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('omitted'), operation: 'messages' }, async () => ({ value: true }));
       expect(await session.call('finish', finish())).toMatchObject({ error: expect.stringContaining('full text') });
-      await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('count only'), payload_digests: (packets.get(session) ?? []).map(canonicalSha256), operation: 'count_tokens', timeout: () => 10_000 }, async () => ({ value: true }));
+      await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('count only'), payload_digests: (packets.get(session) ?? []).map(canonicalSha256), operation: 'count_tokens' }, async () => ({ value: true }));
       expect(await session.call('finish', finish())).toMatchObject({ error: expect.stringContaining('full text') });
       await admit(session, 'body');
       expect(await session.call('finish', finish())).toMatchObject({ accepted: true });

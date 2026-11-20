@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
-import { StructuredGenerationAttemptError } from '@echo-brain/organization-processing/llm/llm-provider';
+import { ExtractionInputTooLongError, StructuredGenerationAttemptError } from '@echo-brain/organization-processing/llm/llm-provider';
 import { createClaudeAccountDecisionProcessorBundleV1 } from '../src/claude-account-decision-processor-bundle-v1.js';
 import { claudeAccountDecisionProcessorConfigurationSha256V1, claudeAccountDecisionProcessorCredentialReferenceV1,
   CLAUDE_ACCOUNT_DECISION_PROCESSOR_RUNTIME_VERSION_V1, fixedClaudeAccountDecisionProcessorConfigV1 } from '../src/claude-account-decision-processor-config-v1.js';
@@ -68,7 +68,8 @@ it('runs the unchanged extraction prompt, schema and evidence checks through one
   const forward = vi.fn(async ({ res }) => { res.end('{}'); return {}; });
   const processor = createClaudeAccountDecisionProcessorV1(config, { account, forward,
     run: async input => {
-      expect(input).toMatchObject({ account, model, max_output_tokens: 8192, single_generation: true });
+      // The model's own maximum output, not a smaller allowance of ECHO's.
+      expect(input).toMatchObject({ account, model, max_output_tokens: 128_000, single_generation: true });
       expect(input.system).toContain('Extract only explicit decisions, actions, and rationales');
       expect(input.prompt).toContain('Use vendor X for hosting');
       expect(input.schema).toMatchObject({ required: ['signals'], additionalProperties: false });
@@ -109,15 +110,57 @@ it('retains only actual provider usage on success and on a later SDK failure', a
   }
 });
 
-it.each([['http', 'rate_limited'], ['transport', 'unknown_outcome']] as const)('maps %s failures without authorizing a free retry', async (kind, code) => {
+it.each([
+  [429, 'rate_limited', true, true], [529, 'temporarily_unavailable', true, true], [503, 'temporarily_unavailable', true, true],
+  // A 5xx other than 503/529 can arrive after the model ran: its billing is unknown.
+  [500, 'temporarily_unavailable', false, true], [504, 'temporarily_unavailable', false, true],
+  [400, 'permanently_rejected', false, false], [413, 'permanently_rejected', false, false],
+] as const)('maps a %i refusal to %s, unbilled only when the provider was overloaded or rate-limited', async (status, code, unbilled, retryable) => {
   const client = createClaudeAccountLlmProviderClientV1({ account,
-    forward: async ({ res }) => {
-      if (kind === 'http') { res.writeHead(429); res.end('{}'); throw new ClaudeModelResponseErrorV1(429); }
-      throw new ClaudeModelTransportErrorV1();
-    },
+    forward: async ({ res }) => { res.writeHead(status); res.end('{}'); throw new ClaudeModelResponseErrorV1(status); },
     run: async input => { await send(input); throw new ClaudeResearchResultErrorV1(); },
   });
-  await expect(client.generateStructured(request)).rejects.toMatchObject({ code, unbilled: false });
+  await expect(client.generateStructured(request)).rejects.toMatchObject({ code, unbilled, retryable });
+});
+
+it('holds a meeting the provider refused as past the model\'s context window as input_too_long, never retried', async () => {
+  const client = createClaudeAccountLlmProviderClientV1({ account,
+    forward: async ({ res }) => { res.writeHead(400); res.end('{}'); throw new ClaudeModelResponseErrorV1(400, true); },
+    run: async input => { await send(input); throw new ClaudeResearchResultErrorV1(); },
+  });
+  const failure = await client.generateStructured(request).catch(error => error);
+  expect(failure).toBeInstanceOf(ExtractionInputTooLongError);
+  expect(failure).toMatchObject({ code: 'permanently_rejected', retryable: false });
+});
+
+it('keeps a session that keeps receiving its reply past the silence period, and stops one that goes silent', async () => {
+  // Pieces of the reply 30 ms apart for 150 ms, under a 50 ms silence period.
+  const client = createClaudeAccountLlmProviderClientV1({ account, request_timeout_ms: 50,
+    forward: async ({ res, alive }) => {
+      for (let piece = 0; piece < 5; piece += 1) { await new Promise(resolve => setTimeout(resolve, 30)); alive?.(); }
+      res.end('{}'); return { usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18, cached_input_tokens: null, reasoning_tokens: null }, finish_reason: 'end_turn' };
+    },
+    run: async input => { await send(input); return { signals: [] }; },
+  });
+  await expect(client.generateStructured(request)).resolves.toMatchObject({ content: '{"signals":[]}' });
+});
+
+it('holds a reply that stopped at the model\'s output limit as too long, never retried', async () => {
+  const client = createClaudeAccountLlmProviderClientV1({ account,
+    forward: async ({ res }) => { res.end('{}'); return { usage: { input_tokens: 11, output_tokens: 128_000, total_tokens: 128_011, cached_input_tokens: null, reasoning_tokens: null }, finish_reason: 'length' }; },
+    run: async input => { await send(input); throw new ClaudeResearchResultErrorV1({ subtype: 'error_max_structured_output_retries', stop_reason: 'max_tokens' }); },
+  });
+  const failure = await client.generateStructured(request).catch(error => error);
+  expect(failure).toBeInstanceOf(StructuredGenerationAttemptError);
+  expect(failure).toMatchObject({ code: 'permanently_rejected', retryable: false, unbilled: false, observation: { stopReason: 'length' } });
+});
+
+it('maps a transport failure without authorizing a free retry', async () => {
+  const client = createClaudeAccountLlmProviderClientV1({ account,
+    forward: async () => { throw new ClaudeModelTransportErrorV1(); },
+    run: async input => { await send(input); throw new ClaudeResearchResultErrorV1(); },
+  });
+  await expect(client.generateStructured(request)).rejects.toMatchObject({ code: 'unknown_outcome', unbilled: false });
 });
 
 it('refuses SDK retry after a provider rejection without a second upstream generation', async () => {

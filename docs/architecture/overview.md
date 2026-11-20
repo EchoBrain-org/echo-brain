@@ -191,7 +191,7 @@ Deeper: [component catalog](../components/README.md),
 ### A meeting becomes records
 
 1. A person's source produces a meeting: the Granola watch (their meetings or
-   one folder, last 7 days), or the staging synthetic source.
+   one folder, last 30 days), or the staging synthetic source.
 2. The intake lanes admit it as that person's private source revision. Nobody
    else can read it.
 3. The processing cycle extracts decisions and follow-ups with one model call.

@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { RESTRICTED_REVIEWER_PERSON_POLICY_ID } from '@echo-brain/organization-protocol';
-import { PERSON_IMPACT_CARD_LIMITS_V1, PERSON_RUNS_LIST_LIMIT_V1, validatePersonImpactCardV1, type PersonImpactCardV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
-import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import { isOrganizationApiValidationError, validatePersonImpactCardV1, type PersonImpactCardV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
+import { AgenticAskStalledErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { impactCardLineV1, impactItemKeyV1, refreshImpactCardV1, storableImpactCardV1, type FreshImpactItemV1, type StoredImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -54,12 +54,20 @@ interface CreatePersonTriggerRunsV1Options {
   readonly now?: () => Date;
 }
 
+/**
+ * Liveness, not a whole-run clock: a run holds its lease this long after its last desk read, and every read renews it.
+ * A run that keeps reading is never stopped; one silent this long is taken to have stopped, and its run reads as queued.
+ */
 const LEASE_MS = 600_000;
 const MAX_RUNNING = 4;
 const actorOf = (value: PersonAccessAuthorization): ApprovalActorV1 => ({ organization_id: value.organization_id, principal_id: value.principal_id, membership_id: value.membership_id });
 const sameActor = (left: ApprovalActorV1, right: ApprovalActorV1) => left.organization_id === right.organization_id && left.principal_id === right.principal_id && left.membership_id === right.membership_id;
 function unavailable(error: unknown): boolean {
   return error instanceof AuthorityOperationError && error.code === 'unavailable';
+}
+/** A card the renderer or the contract refused: worth writing once more, unlike an outage, which the run's attempts retry. */
+function invalidCard(error: unknown): boolean {
+  return (error instanceof AuthorityOperationError && error.code === 'invalid_output') || isOrganizationApiValidationError(error);
 }
 /** One item a finished impact run makes, before its owner is matched; the owner name is used only to match a member and is never stored. */
 type ItemCandidateV1 = Omit<ImpactItemDraftV1, 'owner_membership_id' | 'owner_match'> & ImpactOwnerCandidateV1;
@@ -72,7 +80,7 @@ type ItemCandidateV1 = Omit<ImpactItemDraftV1, 'owner_membership_id' | 'owner_ma
  * the card cites it. The card's owner name comes from the item's own
  * details. Then one per action the approved meeting decided, in brief
  * order: it needs doing, its expected line is the action's own text on one
- * line of at most 120 characters, and its owner name is the one the approver
+ * line, never cut, and its owner name is the one the approver
  * confirmed. Every approved action with printable text makes a draft, with the
  * action's day as its due date when it has a deadline (ADR-0053).
  */
@@ -101,7 +109,7 @@ function itemCandidates(record_sha256: Sha256Digest, siblings: readonly Sha256Di
     return [{ item_key, pointer, relation, expected: expected ?? null, ...(row.owner === undefined ? {} : { owner_name: row.owner }) }];
   });
   const decided = actions
-    .map(action => ({ action, expected: impactCardLineV1(action.text, PERSON_IMPACT_CARD_LIMITS_V1.expected_chars) }))
+    .map(action => ({ action, expected: impactCardLineV1(action.text) }))
     .filter(({ expected }) => expected !== '')
     .flatMap(({ action, expected }): ItemCandidateV1[] => {
       const pointer = Object.freeze({ kind: 'meeting_action', record_sha256, signal_id: action.signal_id });
@@ -149,20 +157,33 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     const shared = anchor.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID;
     let card: PersonImpactCardV1;
     let outsideLabels: string[] = [];
-    try {
+    const assess = async () => {
       const run = await research(scope, { records: siblings, sources: source === undefined ? [] : [source], ...(shared ? { private: true } : {}) });
       const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;
       const event = definition.parseEvent({ record: anchor });
       const output = await run.renderWithResearch({ trigger: definition.name, brief: definition.brief(event, scope), renderer: definition.renderer!, trigger_input: event, signal });
-      card = validatePersonImpactCardV1(output.rendered);
-      outsideLabels = output.research.items
+      return { output, card: validatePersonImpactCardV1(output.rendered) };
+    };
+    try {
+      let assessed: Awaited<ReturnType<typeof assess>>;
+      try {
+        assessed = await assess();
+      } catch (error) {
+        // A finished run is frozen, so an invalid card is written once more before the run settles for "not assessed".
+        signal.throwIfAborted();
+        if (!invalidCard(error)) throw error;
+        observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'research', event: 'failed', error_kind: coreRuntimeDiagnosticErrorKindV1(error), data: { run_id: row.run_id, retry: 'invalid_card' } });
+        assessed = await assess();
+      }
+      card = assessed.card;
+      outsideLabels = assessed.output.research.items
         .filter(item => (item.citation as { readonly kind?: unknown }).kind !== 'approved_record' && (item.citation as { readonly kind?: unknown }).kind !== 'source_revision').map(item => item.title);
     } catch (error) {
       signal.throwIfAborted();
       // A timeout or an outage is tried again while the run has attempts left: a finished run is frozen, so falling back
       // on the first one would lose the impact check for good. Only the attempt that would fail the run falls back.
-      const triedAgain = (unavailable(error) || error instanceof AgenticAskDeadlineErrorV1) && row.attempts + 1 < TRIGGER_RUN_ATTEMPTS_MAX_V1;
-      if (triedAgain || !actions.some(action => impactCardLineV1(action.text, PERSON_IMPACT_CARD_LIMITS_V1.expected_chars) !== '') ||
+      const triedAgain = (unavailable(error) || error instanceof AgenticAskStalledErrorV1) && row.attempts + 1 < TRIGGER_RUN_ATTEMPTS_MAX_V1;
+      if (triedAgain || !actions.some(action => impactCardLineV1(action.text) !== '') ||
           error instanceof PersonRecordSearchIndexLagV1 ||
           (error instanceof AuthorityOperationError && !['unavailable', 'invalid_output', 'quota_exceeded'].includes(error.code))) throw error;
       // Research adds external impact. The approved action itself already has an authorized source. The run finishes as
@@ -189,13 +210,21 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
   const authenticates = (token: string) => { try { options.sessions.authenticateAccess({ access_token: token }); return true; } catch { return false; } };
   const launch = (row: TriggerRunRowV1, token: string, authorization: PersonAccessAuthorization, lease_token: string) => {
     const controller = new AbortController(); controllers.add(controller);
+    // Each desk read is progress: it renews the lease, and a run that no longer owns its lease stops before it reads on.
+    const renewing = (desk: Desk): Desk => new Proxy(desk, { get(target, key, receiver) {
+      const value: unknown = Reflect.get(target, key, receiver);
+      return typeof value !== 'function' ? value : (...args: unknown[]) => {
+        if (!options.runs.renew(row.run_id, lease_token, lease)) controller.abort();
+        return (value as (...values: unknown[]) => unknown).apply(target, args);
+      };
+    } });
     const attemptId = randomUUID();
     void observePersonResearchV1({ trigger: row.trigger, run_id: row.run_id, event_id: row.event_ref, attempt_id: attemptId, detached: true }, async () => {
       try {
         const requestContext = { ...context(authorization), request_id: `${row.run_id}_${attemptId}` };
         // The research reads as the person who started the run, on one desk.
         const research = async (scope: DeskScope, exclude?: PersonEvidenceDeskExclusionsV1): Promise<RunResearch> => {
-          const desk = await options.bindDesk(options.bind_options, compatible, { access_token: token, scope, signal: controller.signal, ...(exclude === undefined ? {} : { exclude }) }, requestContext);
+          const desk = renewing(await options.bindDesk(options.bind_options, compatible, { access_token: token, scope, signal: controller.signal, ...(exclude === undefined ? {} : { exclude }) }, requestContext));
           return options.research({ desk, context: requestContext });
         };
         const output = await checkImpact(row, token, research, controller.signal);
@@ -214,7 +243,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
           && options.people.isActiveMember(row.actor.organization_id, row.actor.membership_id);
         if (error instanceof PersonRecordSearchIndexLagV1 || rotated) options.runs.release(row.run_id, lease_token, { counted: false });
         else if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'stale_access_state' || error.code === 'not_found')) options.runs.fail(row.run_id, lease_token, 'no_access');
-        else if (controller.signal.aborted || error instanceof AgenticAskDeadlineErrorV1) options.runs.release(row.run_id, lease_token, { counted: true, exhausted: 'timed_out' });
+        else if (controller.signal.aborted || error instanceof AgenticAskStalledErrorV1) options.runs.release(row.run_id, lease_token, { counted: true, exhausted: 'timed_out' });
         else if (unavailable(error)) options.runs.release(row.run_id, lease_token, { counted: true, exhausted: 'unavailable' });
         else options.runs.fail(row.run_id, lease_token, 'research_failed');
         throw error;
@@ -241,7 +270,8 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
   return Object.freeze({
     async list(input: Parameters<PersonTriggerRunsHttpApplicationV1['list']>[0]) {
       input.signal?.throwIfAborted(); const actor = actorOf(options.sessions.authenticateAccess({ access_token: input.access_token }));
-      const rows = options.runs.list(actor, PERSON_RUNS_LIST_LIMIT_V1);
+      // Every run: the runs response's transport bound (PERSON_RUNS_MAX_RESPONSE_BYTES_V1) carries them.
+      const rows = options.runs.list(actor);
       // A run whose attempt stopped without finishing is listed as pending, so the next check-in starts it again (R60).
       const at = now().toISOString();
       return Object.freeze({ runs: Object.freeze(rows.map(row => Object.freeze({ run_id: row.run_id, trigger: row.trigger, event_ref: row.event_ref, state: triggerRunStateAtV1(row, at), error_code: row.error_code, created_at: row.created_at, updated_at: row.updated_at }))) });

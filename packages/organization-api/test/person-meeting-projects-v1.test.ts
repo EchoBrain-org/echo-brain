@@ -24,6 +24,12 @@ describe('personal meeting search mappings', () => {
     const client = new PersonMeetingProjectClientV1({ withToolSession: operation => operation(session) }, 'granola', 'Granola');
     await expect(client.projectRead(project_id)).rejects.toThrow('did not match');
   });
+  it('maps and lists any number of folders, each name whole', () => {
+    const many = Array.from({ length: 30 }, (_, index) => `folder-${String(index).padStart(2, '0')}`);
+    expect(validatePersonMeetingProjectSetV1({ ...command, folder_ids: many }).folder_ids).toEqual(many);
+    const items = many.map(id => ({ id, key: id, name: 'N'.repeat(400) }));
+    expect(validatePersonMeetingFoldersPageV1({ schema_version: 1, items, next_cursor: null }).items).toHaveLength(30);
+  });
   it('refuses duplicate folder identities and malformed continuations from the provider picker', () => {
     const item = { id: 'folder-1', key: 'folder-1', name: 'Interviews' };
     expect(() => validatePersonMeetingFoldersPageV1({ schema_version: 1, items: [item, item], next_cursor: null })).toThrow();

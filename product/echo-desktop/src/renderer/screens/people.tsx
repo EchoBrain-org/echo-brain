@@ -56,7 +56,7 @@ function Finder({ state, sheet, field }: { state: State; sheet: PeopleSheet; fie
     <>
       {lead && (
         <input
-          ref={field} class="field small" data-testid="people-find" type="text" autocomplete="off" maxLength={240}
+          ref={field} class="field small" data-testid="people-find" type="text" autocomplete="off"
           placeholder="Add someone by name" aria-label="Add someone by name" value={sheet.query} disabled={!manage}
           onInput={event => setPeopleQuery((event.target as HTMLInputElement).value)}
           onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void findPeople(); } }}

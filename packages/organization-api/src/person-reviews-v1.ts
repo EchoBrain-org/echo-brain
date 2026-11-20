@@ -1,3 +1,4 @@
+import { isApprovalOwnerTextV1 } from '@echo-brain/organization-protocol';
 import { validateProjectIdV1 } from './project-context-v1.js';
 import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_REQUEST_MAX_BYTES_V1, type PersonToolHostV1 } from './person-tool-client.js';
 import { asEnumerableRecord, assertExactKeys, assertTimestamp, fail, isCalendarDay, utf8ByteLength } from './validation.js';
@@ -8,7 +9,7 @@ import { asEnumerableRecord, assertExactKeys, assertTimestamp, fail, isCalendarD
  */
 export const PERSON_REVIEWS_PATH_V1 = '/v1/person/reviews';
 /**
- * Where one decision or action goes: null = not kept, [] = Only me, otherwise 1..20 project ids, sorted and unique.
+ * Where one decision or action goes: null = not kept, [] = Only me, otherwise project ids, sorted and unique.
  * `private: true` files it in those projects for the reviewer alone (ADR-0049); it needs a project and is sent only when true.
  */
 export interface PersonMeetingRouteV2 { readonly signal_id: string; readonly project_ids: readonly string[] | null; readonly private?: true }
@@ -74,24 +75,24 @@ const fields: Record<PersonReviewOperationV1['operation'], readonly string[]> = 
 const label = 'Personal review request';
 /** A signal id as records carry it. */
 const SIGNAL = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
-/** At most this many routes: one per decision and action of a meeting. */
-const ROUTES_MAX = 500;
-/** The most bytes the list of reviews (`reviews`) and a decision's receipt (`review`) take as JSON. */
-export const PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 = 120_000;
 /**
- * The most bytes an opened review (`review_open`) takes as JSON. It had the bound above until an item carried `due_on`
- * (ADR-0053). That key adds at most `,"due_on":"YYYY-MM-DD"` to an item, so this bound is larger by that much for each of
- * the most items a review holds: every review that opened before the key still opens with it. Only an opened review has
- * items, so only its bound grew. The Authority answers and the client reads within the tool transport's ceiling
- * (PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1), which this bound must never pass.
+ * A reviews response has no bound of its own: every one is bounded by the tool transport that carries it
+ * (PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1), the one bound per transport. Kept as names for the Authority's own check.
  */
-export const PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1 = PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 + ROUTES_MAX * ',"due_on":"YYYY-MM-DD"'.length;
+export const PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 = PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1;
+export const PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1 = PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1;
+/** An identifier ECHO mints (approval, command and digest ids): its own shape, at most 256 characters. */
 function text(value: unknown, maximum = 256): asserts value is string {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || /[\u0000-\u001f\u007f]/.test(value)) fail(label);
 }
+/** A title, name or line people read: non-empty, one line, with no length of its own (the response bound applies). */
+function line(value: unknown, message: string): asserts value is string {
+  if (typeof value !== 'string' || value.length === 0 || /[\u0000-\u001f\u007f]/.test(value)) fail(message);
+}
 function digest(value: unknown): asserts value is string { text(value); if (!/^sha256:[a-f0-9]{64}$/.test(value)) fail('Invalid meeting digest'); }
+/** Any number of projects, sorted and unique. */
 function projectIds(value: unknown): asserts value is readonly string[] {
-  if (!Array.isArray(value) || value.length > 20) fail(label);
+  if (!Array.isArray(value)) fail(label);
   let previous: string | undefined;
   for (const id of value) { validateProjectIdV1(id); if (previous !== undefined && previous >= id) fail(label); previous = id; }
 }
@@ -100,7 +101,7 @@ function privateDestination(row: Record<string, unknown>, message: string): void
   if (Object.hasOwn(row, 'private') && (row.private !== true || !Array.isArray(row.project_ids) || row.project_ids.length === 0)) fail(message);
 }
 function routes(value: unknown): asserts value is readonly PersonMeetingRouteV2[] {
-  if (!Array.isArray(value) || value.length > ROUTES_MAX) fail(label);
+  if (!Array.isArray(value)) fail(label);
   const seen = new Set<string>();
   for (const entry of value) {
     const route = asEnumerableRecord(entry, label);
@@ -112,13 +113,15 @@ function routes(value: unknown): asserts value is readonly PersonMeetingRouteV2[
   }
 }
 function ownerChoices(input: unknown): asserts input is readonly { readonly signal_id: string; readonly owner: string }[] {
-  if (!Array.isArray(input) || input.length > 40) fail(label);
+  // The shared owner rule (organization-protocol approval-owner-choice-v1.ts), which the approval core checks again.
+  // One owner per action at most (no repeated signal id); the request body bounds how many.
+  if (!Array.isArray(input)) fail(label);
   const seen = new Set<string>();
   for (const value of input) {
     const item = asEnumerableRecord(value, label);
     assertExactKeys(item, ['signal_id', 'owner'], label);
-    text(item.signal_id, 128); text(item.owner, 120);
-    if (item.owner.trim() !== item.owner || /[\p{Cc}\p{Cf}]/u.test(item.owner) || seen.has(item.signal_id)) fail(label);
+    text(item.signal_id, 128);
+    if (!isApprovalOwnerTextV1(item.owner) || seen.has(item.signal_id)) fail(label);
     seen.add(item.signal_id);
   }
 }
@@ -137,9 +140,9 @@ export function validatePersonReviewRequestV1(value: unknown): PersonReviewReque
     const review = row as PersonReviewRequestV1 & { readonly operation: 'review' };
     text(row.command_id, 128);
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(row.command_id) || (row.action !== 'approve' && row.action !== 'reject')) fail(label);
-    // An approval keeps at least one item and names at most 20 projects; a rejection routes and owns nothing.
+    // An approval keeps at least one item; a rejection routes and owns nothing.
     if (review.action === 'reject' ? review.routes.length !== 0 || review.owners.length !== 0
-      : review.routes.every(route => route.project_ids === null) || new Set(review.routes.flatMap(route => route.project_ids ?? [])).size > 20) fail(label);
+      : review.routes.every(route => route.project_ids === null)) fail(label);
   }
   return Object.freeze({ ...row }) as PersonReviewRequestV1;
 }
@@ -156,36 +159,37 @@ export function validatePersonReviewResultV1<K extends keyof PersonReviewResults
     assertExactKeys(item, [...keys, ...optional.filter(key => Object.hasOwn(item, key))], 'Meeting response item');
     return item;
   };
-  const array = (value: unknown, limit: number): unknown[] => { if (!Array.isArray(value) || value.length > limit) fail('Invalid meeting collection'); return value; };
+  // Lists have no count of their own: the response bound above applies to all of them together.
+  const array = (value: unknown): unknown[] => { if (!Array.isArray(value)) fail('Invalid meeting collection'); return value; };
   const project = (value: unknown) => validateProjectIdV1(value);
   // The meeting's or the model's words: any text, line breaks included, bounded with the whole response.
-  const words = (value: unknown, maximum = 20_000) => { if (typeof value !== 'string' || value.length === 0 || value.length > maximum) fail('Invalid meeting review text'); };
+  const words = (value: unknown) => { if (typeof value !== 'string' || value.length === 0) fail('Invalid meeting review text'); };
   const signal = (value: unknown) => { if (typeof value !== 'string' || !SIGNAL.test(value)) fail('Invalid meeting review signal'); };
-  const quotes = (value: unknown) => { for (const quote of array(value, 200)) words(quote); };
+  const quotes = (value: unknown) => { for (const quote of array(value)) words(quote); };
   const records = (value: unknown) => {
     const seen = new Set<unknown>();
-    for (const entry of array(value, ROUTES_MAX)) {
+    for (const entry of array(value)) {
       const record = object(entry, ['approval_id','project_ids'], ['private']);
       if (typeof record.approval_id !== 'string' || !/^apr_[0-9a-f]{64}$/.test(record.approval_id) || seen.has(record.approval_id)) fail('Invalid meeting review record');
       seen.add(record.approval_id); projectIds(record.project_ids); privateDestination(record, 'Invalid meeting review record');
     }
   };
   const review = (value: unknown) => {
-    const item = object(value, ['approval_id','title','project_ids','status','decided_on','first_line','action_count','meeting_at','all_day','records']); text(item.approval_id); text(item.title, 1024); projectIds(item.project_ids);
+    const item = object(value, ['approval_id','title','project_ids','status','decided_on','first_line','action_count','meeting_at','all_day','records']); text(item.approval_id); line(item.title, 'Invalid meeting review title'); projectIds(item.project_ids);
     if (!['pending','publishing','approved','rejected','superseded'].includes(String(item.status)) || ![null, 'desktop', 'slack'].includes(item.decided_on as string | null)) fail('Invalid meeting review state');
-    if (item.first_line !== null) text(item.first_line, 300);
+    if (item.first_line !== null) line(item.first_line, 'Invalid meeting review line');
     if (!Number.isSafeInteger(item.action_count) || (item.action_count as number) < 0) fail('Invalid meeting review action count');
     if (item.meeting_at !== null) assertTimestamp(item.meeting_at, 'Meeting review time');
     if (typeof item.all_day !== 'boolean' || (item.all_day && item.meeting_at === null)) fail('Invalid meeting review time');
     records(item.records);
     if (item.status !== 'approved' && (item.records as unknown[]).length > 0) fail('Invalid meeting review record');
   };
-  if (operation === 'reviews') for (const item of array(row.reviews, 100)) review(item);
+  if (operation === 'reviews') for (const item of array(row.reviews)) review(item);
   if (operation === 'review_open') {
     review(row.review); digest(row.snapshot_sha256); records(row.records);
-    for (const name of array(row.participants, 500)) words(name, 1024);
+    for (const name of array(row.participants)) words(name);
     const items = new Set<unknown>();
-    for (const value of array(row.items, ROUTES_MAX)) {
+    for (const value of array(row.items)) {
       const item = object(value, ['signal_id','kind','text','subject','status','due_at','due_on','quotes','owner','owner_editable','project_ids'], ['private']);
       signal(item.signal_id); if (items.has(item.signal_id)) fail('Invalid meeting review signal'); items.add(item.signal_id);
       words(item.text); if (item.subject !== null) words(item.subject); quotes(item.quotes);
@@ -194,18 +198,17 @@ export function validatePersonReviewResultV1<K extends keyof PersonReviewResults
       if (item.due_at !== null) assertTimestamp(item.due_at, 'Meeting review due date');
       // The day is a deadline's: never without one, and a real calendar day when there.
       if (item.due_on !== null && (item.due_at === null || !isCalendarDay(item.due_on))) fail('Invalid meeting review due day');
-      // An owner is an action's, one line of at most 120 characters; only a proposed one is editable.
-      if (item.owner !== null && (item.kind !== 'action' || typeof item.owner !== 'string' || item.owner.length === 0 || item.owner.length > 120
-        || item.owner.trim() !== item.owner || /[\p{Cc}\p{Cf}]/u.test(item.owner))) fail('Invalid meeting review owner');
+      // An owner is an action's, on one line (the shared owner rule); only a proposed one is editable.
+      if (item.owner !== null && (item.kind !== 'action' || !isApprovalOwnerTextV1(item.owner))) fail('Invalid meeting review owner');
       if (typeof item.owner_editable !== 'boolean' || (item.owner_editable && item.owner === null)) fail('Invalid meeting review owner');
       if (item.project_ids !== null) projectIds(item.project_ids);
       privateDestination(item, 'Invalid meeting review item');
     }
-    for (const value of array(row.reasons, ROUTES_MAX)) {
+    for (const value of array(row.reasons)) {
       const item = object(value, ['signal_id','text','supports','quotes']); signal(item.signal_id); words(item.text); quotes(item.quotes);
-      for (const supported of array(item.supports, 1000)) signal(supported);
+      for (const supported of array(item.supports)) signal(supported);
     }
-    for (const value of array(row.suggested_projects, 20)) { const item = object(value, ['project_id','name']); project(item.project_id); text(item.name, 256); }
+    for (const value of array(row.suggested_projects)) { const item = object(value, ['project_id','name']); project(item.project_id); line(item.name, 'Invalid meeting review project'); }
   }
   if (operation === 'review' && (!['publishing','approved','rejected'].includes(String(row.status)) || !['desktop', 'slack'].includes(String(row.decided_on)))) fail('Invalid meeting outcome');
   return Object.freeze({ ...row }) as unknown as PersonReviewResultsV1[K];

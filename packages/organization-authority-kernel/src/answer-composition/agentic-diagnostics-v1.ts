@@ -21,7 +21,7 @@ export async function observeAgenticLifecycleV1<T>(
     } catch (error) {
       const errorKind = coreRuntimeDiagnosticErrorKindV1(error);
       observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage, event: 'failed', error_kind: errorKind });
-      if (effectivePhase !== undefined) annotateCoreRuntimeV1({ result: errorKind === 'aborted' ? 'cancelled' : errorKind === 'deadline' ? 'timeout' : 'failed' });
+      if (effectivePhase !== undefined) annotateCoreRuntimeV1({ result: errorKind === 'aborted' ? 'cancelled' : errorKind === 'deadline' || errorKind === 'stalled' ? 'timeout' : 'failed' });
       throw error;
     }
   };

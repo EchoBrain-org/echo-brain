@@ -2,15 +2,27 @@ import { StringDecoder } from 'node:string_decoder';
 import type { StructuredGenerationUsageV1 } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 
 export interface ClaudeMessageMetadataV1 { readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string; readonly content?: readonly unknown[] }
-/** Retains numeric usage and finish metadata while the unmodified SSE bytes pass through. */
-export function messageUsageObserverV1(capture = false) {
+/**
+ * Model events that carry something the model produced: a content block opening or growing (text, tool input, thinking)
+ * and the reply's stop. `message_start` and `ping` (Anthropic's keep-alive) carry nothing produced.
+ */
+const PRODUCED_EVENTS = new Set(['content_block_start', 'content_block_delta', 'message_delta']);
+
+/**
+ * Retains numeric usage and finish metadata while the unmodified SSE bytes pass through, and calls `produced` at each
+ * event that carries model output (see PRODUCED_EVENTS) and at each piece of such an event's data line as it arrives:
+ * the liveness a caller timing silence reads.
+ */
+export function messageUsageObserverV1(capture = false, produced?: () => void) {
   const decoder = new StringDecoder('utf8');
-  let pending = '', input: number | undefined, output: number | undefined, cached = 0, created = 0, finish: string | undefined;
+  let pending = '', input: number | undefined, output: number | undefined, cached = 0, created = 0, finish: string | undefined, stopped = false;
   const blocks = new Map<number, { type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: unknown; json: string }>();
   const count = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
   const line = (value: string) => {
     if (!value.startsWith('data:')) return;
     let event; try { event = JSON.parse(value.slice(5).trim()); } catch { return; }
+    if (typeof event?.type === 'string' && PRODUCED_EVENTS.has(event.type)) produced?.();
+    if (event?.type === 'message_stop') stopped = true;
     // The selected private trace receives visible text/tool output; reasoning blocks are not retained.
     if (capture && Number.isSafeInteger(event?.index)) {
       const block = event.content_block;
@@ -29,9 +41,30 @@ export function messageUsageObserverV1(capture = false) {
     const stop = event?.type === 'message_delta' ? event.delta?.stop_reason : undefined;
     if (typeof stop === 'string') finish = stop === 'end_turn' || stop === 'tool_use' ? 'stop' : stop === 'max_tokens' ? 'length' : stop;
   };
-  const accept = (text: string) => { pending += text; let end; while ((end = pending.indexOf('\n')) !== -1) { line(pending.slice(0, end)); pending = pending.slice(end + 1); } };
+  // The current event's type, from its `event:` line or the `"type"` its data line opens with.
+  let eventName: string | undefined;
+  const accept = (text: string) => {
+    let rest = text;
+    let end;
+    while ((end = rest.indexOf('\n')) !== -1) {
+      const full = (pending + rest.slice(0, end)).replace(/\r$/u, '');
+      pending = ''; rest = rest.slice(end + 1);
+      if (full.startsWith('event:')) eventName = full.slice('event:'.length).trim();
+      else if (full === '') eventName = undefined;
+      line(full);
+    }
+    pending += rest;
+    // Bytes of a model-output event's data line still arriving are progress: one long delta can take longer than the
+    // silence period to arrive. Control fields, `ping` and `message_start` never are.
+    if (rest !== '' && pending.startsWith('data:')) {
+      const type = eventName ?? /"type"\s*:\s*"([a-z_]+)"/u.exec(pending.slice(0, 256))?.[1];
+      if (type !== undefined && PRODUCED_EVENTS.has(type)) produced?.();
+    }
+  };
   return {
     write: (chunk: Buffer) => accept(decoder.write(chunk)),
+    /** True once the message's terminal event (`message_stop`) arrived: the reply finished rather than being cut. */
+    finished: () => stopped,
     end(): ClaudeMessageMetadataV1 {
       accept(decoder.end()); if (pending) line(pending); pending = '';
       const totalInput = input === undefined ? undefined : input + cached + created;

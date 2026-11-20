@@ -83,7 +83,7 @@ it('runs submit/status from the exact packed Person CLI without an admitted meet
   } finally { await runtime.close(); }
 });
 
-it('refuses non-V17 Authority state without touching the record log or integrations, then resumes stopped V17 sessions', async () => {
+it('refuses non-V18 Authority state without touching the record log or integrations, then resumes stopped V18 sessions', async () => {
   const fixture = await sourceFreeService();
   const state = fixture.initialized.state_directory;
   const path = join(state, 'authority.sqlite');
@@ -93,20 +93,20 @@ it('refuses non-V17 Authority state without touching the record log or integrati
   expect((current.prepare('SELECT count(*) FROM authority_person_session_families').pluck().get() as number)).toBeGreaterThan(0);
   expect(current.prepare('SELECT count(*) FROM authority_live_source_admission_v2').pluck().get()).toBe(0);
   // A current runtime must never accept older state as active state: relabel a
-  // copy of the live V17 file as V16 and exercise the strict V17 pre-open gate.
-  const olderPath = join(root(), 'v16.sqlite'); current.exec(`VACUUM INTO '${olderPath}'`); current.close();
+  // copy of the live V18 file as V17 and exercise the strict V18 pre-open gate.
+  const olderPath = join(root(), 'v17.sqlite'); current.exec(`VACUUM INTO '${olderPath}'`); current.close();
   const older = new Database(olderPath);
   const manifest = older.prepare('SELECT manifest_json FROM echo_state_lineage_manifest').pluck().get() as string;
-  const relabeled = { ...JSON.parse(manifest), database_schema_version: 16, schema_sha256: canonicalSha256({ retired_authority_schema: 16 }) };
+  const relabeled = { ...JSON.parse(manifest), database_schema_version: 17, schema_sha256: canonicalSha256({ retired_authority_schema: 17 }) };
   older.prepare('UPDATE echo_state_lineage_manifest SET manifest_json = ?, manifest_sha256 = ?').run(canonicalJson(relabeled), canonicalSha256(relabeled));
-  older.pragma('user_version = 16'); older.close();
+  older.pragma('user_version = 17'); older.close();
   const recordPath = join(state, 'record-log.sqlite'); const recordBefore = readFileSync(recordPath);
   const controlPath = join(state, 'integrations.sqlite'); const controlBefore = readFileSync(controlPath);
-  const preservedCurrentPath = join(root(), 'v17.sqlite');
+  const preservedCurrentPath = join(root(), 'v18.sqlite');
   renameSync(path, preservedCurrentPath);
   try {
     renameSync(olderPath, path); chmodSync(path, 0o600);
-    await expect(openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() })).rejects.toThrow('schema version is not exactly 17');
+    await expect(openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() })).rejects.toThrow('schema version is not exactly 18');
   } finally {
     if (existsSync(path)) renameSync(path, olderPath);
     renameSync(preservedCurrentPath, path); chmodSync(path, 0o600);

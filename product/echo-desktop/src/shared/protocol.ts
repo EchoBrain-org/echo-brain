@@ -258,15 +258,18 @@ export type AnswerSource = (
   readonly cited?: PersonAnswerCitationV8;
 };
 
-/** The kinds of evidence a check asks about (Ask source check, C1): what an old answer cited that can go. */
-const CHECK_KINDS: readonly PersonAskCheckCitationKindV1[] = ['approved_record', 'source_revision', 'follow_up', 'ticket', 'page'];
+/**
+ * The kinds of evidence a check asks about (Ask source check, C1): what an old answer cited that can go, a project by the
+ * asker's membership of it. A source of any other kind (a person, a tool, a tool container) is never known readable.
+ */
+const CHECK_KINDS: readonly PersonAskCheckCitationKindV1[] = ['approved_record', 'source_revision', 'follow_up', 'ticket', 'page', 'project'];
 /** A checkable source's evidence citation, as the answer cited it. */
 export type CheckCitation = Extract<PersonAnswerEvidenceCitationV8, { readonly kind: PersonAskCheckCitationKindV1 }>;
 
 /**
  * What `ask.check` asks about a source (ADR-0047): its evidence citation,
  * exactly as the answer cited it, when it can go (a record's item, an
- * original's passage, a follow-up, a ticket or a page). Opaque here.
+ * original's passage, a follow-up, a ticket, a page or a project). Opaque here.
  */
 export function checkOf(source: AnswerSource): CheckCitation | undefined {
   const citation = source.cited?.citation;
@@ -398,17 +401,38 @@ export interface TimelineTurn {
    * a check finds them readable again (C5). A check that cannot tell (`unknown`) changes nothing.
    */
   readonly unreadable?: readonly number[];
+  /**
+   * Kept by a desktop whose answers cite, on each sentence, every item it rests on (rows included). Only such a turn's
+   * sentences go into a follow-up or Ask again; a turn saved before has no mark and carries its question only, since a
+   * sentence of it may rest on a row it no longer cites, which no check can then ask about. It shows as it always did.
+   */
+  readonly citations_complete?: true;
+  /**
+   * What the person typed, in their own words, when the turn knows it: never a question the model wrote (a follow-up's
+   * resolved question, a choice of "Which one?"). `question` may be model-written, from sources the person could read
+   * then; a follow-up, an Ask again or a choice built from this turn sends `question` only when a check made just then
+   * finds every source of the turn readable, and otherwise sends these words. A turn saved before this field has none,
+   * so its `question` is treated as model-written: with any source not readable it carries no earlier turn at all, and
+   * Ask again is not offered for it.
+   */
+  readonly typed?: string;
+  /**
+   * The turn this one's question was derived from (the one its follow-up continued, Ask again asked again or Ask
+   * everywhere widened), or null when it followed none. A resolved question may name what that turn's sources said, so it
+   * goes only while every turn back along this chain checks readable (questionOf). A turn saved before this field has
+   * none, and fails that.
+   */
+  readonly follows?: string | null;
 }
 
-/** The most turns a timeline keeps, and for how long: older ones go on every put. */
-export const MAX_TIMELINE_TURNS = 200;
-export const TIMELINE_DAYS = 90;
 /**
- * The most a put may send: one turn, whose answer is at most the API's 64 KiB
- * with its sources' citations kept beside them. Every other call keeps the
- * broker's MAX_PARAMS_BYTES.
+ * Transport: the most a put may send, one turn, whose answer is at most the
+ * API's PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 (1 MiB) with its sources' citations
+ * kept beside them, so four times the answer's bound. Every other call keeps
+ * the broker's MAX_REQUEST_BYTES. A literal, as the sandboxed renderer imports
+ * this file; a test holds it above the API's bound.
  */
-export const MAX_TIMELINE_PUT_BYTES = 256 * 1024;
+export const MAX_TIMELINE_PUT_BYTES = 4 * 1024 * 1024;
 
 /** What a check says of one cited source (C1): readable by you (`same`), no longer readable, or not known now. */
 export type AskCheckState = PersonAskCheckStateV1;
@@ -416,9 +440,12 @@ export type AskCheckState = PersonAskCheckStateV1;
 export type AskCheckItem = PersonAskCheckRequestItemV1;
 /** What the check said of one item, in the request's order. */
 export type AskCheckResult = Pick<PersonAskCheckItemV1, 'state'>;
-/** The most items one check asks about, and its body's bound (C1). */
-export const MAX_CHECK_ITEMS = 100;
-export const MAX_CHECK_REQUEST_BYTES = 64 * 1024;
+/**
+ * The Authority's one Person request body bound (MAX_ORGANIZATION_API_BODY_BYTES), a transport bound: an Ask with
+ * its `previous`, a source check, a note and every other call's parameters are held to it, and never to less. A
+ * literal, as the sandboxed renderer cannot import the API's runtime module; a unit test pins the two equal.
+ */
+export const MAX_REQUEST_BYTES = 1024 * 1024;
 
 /**
  * The previous turn an Ask carries (C3, ADR-0047): the asker's own context,
@@ -426,9 +453,6 @@ export const MAX_CHECK_REQUEST_BYTES = 64 * 1024;
  * `ask_again` has the writer say what is different since `asked_at`.
  */
 export type AskPrevious = PersonAnswerPreviousV1;
-/** C3's bounds on `previous`, and the Ask request body's own, which it shares. */
-export const PREVIOUS_LIMITS = { statements: 8, statement_chars: 400, citations: 12, statement_citations: 4 } as const;
-export const MAX_ASK_BODY_BYTES = 16 * 1024;
 
 /** The newest thing that arrived in one of your projects from someone else that you can read, or null (C2). */
 export type ProjectActivity = PersonProjectActivityItemV1;
@@ -470,7 +494,7 @@ export interface ApprovedRecord {
   readonly timezone?: string;
   readonly all_day: boolean;
   readonly approved_by?: string;
-  /** At most 32 names; `participants_more` says others were left out. */
+  /** Every name the record holds; `participants_more` is true only from an older Authority that left some out. */
   readonly participants: readonly string[];
   readonly participants_more: boolean;
   readonly visibility: 'project' | 'approver';
@@ -482,7 +506,7 @@ export interface ApprovedRecord {
 /** One item opened by its ref: an imported meeting's or a note's text, or a page of a document's text. A meeting opens with `ask.record`. */
 export type Opened =
   | { readonly kind: 'imported_meeting'; readonly content: ContextContent; readonly next_cursor: string | null }
-  | { readonly kind: 'note'; readonly content: ContextContent }
+  | { readonly kind: 'note'; readonly content: ContextContent; readonly next_cursor: string | null }
   | { readonly kind: 'document'; readonly document: DocumentText };
 
 /** One audience per item: only you, one project's members, several projects' members, or everyone. */
@@ -494,14 +518,11 @@ export type Audience =
   | { readonly kind: 'team' };
 
 /**
- * The most projects a capture is filed in, and the most whose members can
- * read it: the API's own bound (PERSON_UPLOAD_PROJECT_SET_MAX).
+ * Copy answer takes one whole answer, as a saved turn holds one: up to the
+ * bound of a timeline put, in characters. It bounds what the page may hand
+ * the clipboard, never what an answer may say.
  */
-export const MAX_CAPTURE_PROJECTS = 20;
-/** New project takes up to 20 files. */
-export const MAX_PROJECT_FILES = 20;
-/** Copy answer takes what an answer can hold: 12,000 characters. */
-export const MAX_COPY_CHARACTERS = 12_000;
+export const MAX_COPY_CHARACTERS = MAX_TIMELINE_PUT_BYTES;
 
 /** Where a saved document's text extraction stands (the Authority's own states). */
 export type Extraction = 'extracting' | 'ready' | 'partial' | 'no_text' | 'encrypted' | 'malformed' | 'limit_exceeded' | 'timed_out'
@@ -707,7 +728,7 @@ export interface HostMethods {
   'employees.reissue': { params: { expect: Expect; email: string; invitation_handle: string }; result: InvitationSaved };
   /** Revoke access: ends the employee's membership at once. */
   'employees.revoke': { params: { expect: Expect; email: string }; result: null };
-  /** `project_ids`: the projects it is filed in, at most MAX_CAPTURE_PROJECTS, in any order. */
+  /** `project_ids`: the projects it is filed in, any number, in any order. */
   'notes.submit': { params: { expect: Expect; request_id: string; text: string; audience: Audience; project_ids: readonly string[] }; result: Receipt };
   /** The renderer names a file only by a handle main issued; main swaps in the path. */
   'documents.upload': {
@@ -801,14 +822,24 @@ export type MethodName = keyof Methods;
 export type HostMethodName = keyof HostMethods;
 
 /**
+ * How long the host lets an Ask print nothing before it is stalled: the client's own 40 s stall (four missed 10 s
+ * Authority heartbeats, PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1; a unit test pins the relation), plus up to two 15 s session
+ * refreshes before its request goes out and 20 s to start the client. A plain number, so the page's bundle leaves the API out.
+ */
+export const ASK_RUN_SILENCE_MS = 90_000;
+
+/**
  * Each host method's limit in the host; the client enforces its own shorter network timeouts. Its keys are main's allowlist
  * of host methods, so none can be left out. Plain numbers, so the page's bundle leaves the table out.
  */
 export const HOST_TIMEOUT_MS: Readonly<Record<HostMethodName, number>> = {
   'app.status': 5_000, 'signin.begin': 660_000, 'signin.invitation': 660_000, 'projects.list': 45_000, 'changes.read': 15_000,
   'list.page': 45_000, 'open.ref': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
-  // A record read is also the reader's meeting open, which waited 45 s as `open.ref` does.
-  'ask.run': 145_000, 'ask.cancel': 5_000, 'ask.source': 15_000, 'ask.record': 45_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
+  // An Ask has no time limit: its 90 s is a silence, started again by every line the client prints (each step, and an
+  // alive line per Authority heartbeat, ASK_RUN_SILENCE_MS). A cited passage is one read that prints nothing until it
+  // answers, so its whole wait is its silence: the client's 15 s read and its session's 15 s, and 15 s to start the
+  // client. A record read is also the reader's meeting open, which waited 45 s as `open.ref` does.
+  'ask.run': ASK_RUN_SILENCE_MS, 'ask.cancel': 5_000, 'ask.source': 45_000, 'ask.record': 45_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
   'account.signOut': 45_000, 'account.tools': 45_000,
   'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000,
   'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
@@ -958,13 +989,11 @@ export function externalSourcePermalink(kind: unknown, raw: unknown): string | n
 export const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
 /** A project's id, as the API writes one. */
 const NOTICE_PROJECT_ID = /^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-/** A name or a title a notification shows: as long as the API lets either be, in characters. */
+/** Presentation: a name or a title a notification line shows, in characters; a click opens the whole item. */
 export const NOTICE_TEXT_MAX = 200;
 /** A notification's whole line: two titles or names and the words between them, in characters. */
 const NOTICE_LINE_MAX = 2 * NOTICE_TEXT_MAX + 120;
 
-/** The most follow-ups one notification counts, and opens. */
-export const NOTICE_ITEMS_MAX = 100;
 
 /** What a notification opens: one follow-up's page, a list of exactly the follow-ups it counted, or a project. */
 export type NoticeTarget = { readonly kind: 'item'; readonly item_id: string } | { readonly kind: 'items'; readonly item_ids: readonly string[] }
@@ -979,7 +1008,7 @@ export interface Notice {
 /**
  * A notification as main shows it, or null for anything else: exactly a text
  * and a target, the text one non-empty line of at most NOTICE_LINE_MAX
- * characters, and the target an item, two to NOTICE_ITEMS_MAX distinct items,
+ * characters, and the target an item, two or more distinct items,
  * or a project, by their ids.
  */
 export function noticeOf(params: unknown): Notice | null {
@@ -989,7 +1018,7 @@ export function noticeOf(params: unknown): Notice | null {
   if (typeof text !== 'string' || text.trim() === '' || [...text].length > NOTICE_LINE_MAX || /\p{Cc}/u.test(text) || !record(target)) return null;
   const keys = Object.keys(target).sort().join();
   const ids = target.item_ids;
-  if (target.kind === 'items' && keys === 'item_ids,kind' && Array.isArray(ids) && ids.length >= 2 && ids.length <= NOTICE_ITEMS_MAX
+  if (target.kind === 'items' && keys === 'item_ids,kind' && Array.isArray(ids) && ids.length >= 2
       && ids.every(id => typeof id === 'string' && ITEM_ID.test(id)) && new Set(ids).size === ids.length) {
     return { text: text.trim(), target: { kind: 'items', item_ids: [...ids as string[]] } };
   }
@@ -1012,11 +1041,13 @@ export function changesLogLine(params: unknown): string | null {
   return `changes moved ${areas.filter(area => moved.includes(area)).join(',')}`;
 }
 
-/** Parameters larger than this are refused at the broker. */
-export const MAX_PARAMS_BYTES = 64 * 1024;
-/** The most a call's parameters may take at the broker: a timeline put carries one whole answer, every other call MAX_PARAMS_BYTES. */
+/**
+ * The most a call's parameters may take at the broker: a timeline put and
+ * Copy answer each carry one whole answer, every other call (an Ask, a note)
+ * the Authority's Person request bound, MAX_REQUEST_BYTES.
+ */
 export function paramsLimit(method: string): number {
-  return method === 'timeline.put' ? MAX_TIMELINE_PUT_BYTES : MAX_PARAMS_BYTES;
+  return method === 'timeline.put' || method === 'clipboard.writeText' ? MAX_TIMELINE_PUT_BYTES : MAX_REQUEST_BYTES;
 }
 /** Deeper than any request's parameters: it bounds the walk, and ends a cycle a structured clone can carry. */
 const MAX_PARAMS_DEPTH = 32;

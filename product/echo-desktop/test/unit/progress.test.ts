@@ -81,6 +81,8 @@ describe('the receipt', () => {
     // The wait is the page's own, as its timer counted it, not the Authority's shorter research time.
     expect(lookedThrough(receipt)).toBe('Looked through 14 items');
     expect(lookedThrough({ ...receipt, looked_through: 1 })).toBe('Looked through 1 item');
+    // A count is the count the Authority gave, however large.
+    expect(lookedThrough({ looked_through: 3_000 })).toBe('Looked through 3,000 items');
     expect(duration(52_900)).toBe('52s');
     expect(duration(72_400)).toBe('1m 12s');
     // As the live timer shows it: whole seconds gone.

@@ -1,10 +1,10 @@
 import { evidenceDateFilterV1, matchesEvidenceDateV1, validateEvidenceDateFilterV1, EVIDENCE_ANY_DATE_V1, type EvidenceDateFieldV1, type EvidenceDateFilterV1, type EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { randomUUID } from 'node:crypto';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonPageCitationV1, type PersonPageCitationV1 } from '@echo-brain/organization-api';
+import { PERSON_EVIDENCE_LABEL_MAX_BYTES_V1, validatePersonPageCitationV1, type PersonPageCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createAtlassianVerificationBatchV1, verifyAtlassianConnectionV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
-import { boundUtf8V1, inBatchesOfFourV1 as parallel } from '@echo-brain/provider-runtime/person-provider-v1';
+import { boundUtf8V1, createPersonLiveListV1, inBatchesOfFourV1 as parallel, personLiveEvidencePageFitV1 as fit } from '@echo-brain/provider-runtime/person-provider-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { ConfluenceCloudTransportV1 } from './confluence-cloud-transport-v1.js';
 import { normalizeConfluencePageDocumentV1 } from './confluence-page-text-v1.js';
@@ -13,16 +13,10 @@ import {
   copyConfluenceBindingV1,
 } from './confluence-validation-v1.js';
 
-const MAX_HANDLES = 512;
-/**
- * Content reads (search, list and open traffic) per request. Connection
- * checks and revalidation are mandatory fences whose count grows with the
- * run's model calls, so they count only toward the hard bound below, which
- * stops a runaway loop without failing a long run after research finished.
- */
-const MAX_CONTENT_REQUESTS = 160;
-const MAX_REQUESTS = 2048;
-const REVALIDATION_BATCH_SIZE = 50;
+/** Confluence's largest page: 250 results per search or page list, and 250 ids per page-id filter. */
+const CONFLUENCE_PAGE_MAX = 250;
+/** Confluence's largest space-id filter on a page list: 100 ids. More mapped spaces are listed 100 at a time, in turn. */
+const CONFLUENCE_SPACE_FILTER_MAX = 100;
 const LIST_STATUSES = Object.freeze(['current', 'archived', 'deleted', 'trashed']);
 const STATUSES = Object.freeze([...LIST_STATUSES, 'draft', 'historical']);
 const EMPTY_DIGEST = sha256Digest('');
@@ -36,11 +30,16 @@ const DATE_SELECTIONS = Object.freeze([...Object.keys(CQL_DATE_FIELDS) as Eviden
 const SPACES_LEFT_OUT = "Some of this project's Confluence spaces were not found or are not visible to you, so these results leave out their pages.";
 type Page = Readonly<{ dates: EvidenceDatesV1; id: string; space_id: string; title: string; version: string; status: string; occurred_at?: string; date_kind?: 'created' | 'version_created'; document?: string }>;
 type Item = Readonly<{ page: Page; section: string; offset: number; text?: string }>;
-type Cursor = Readonly<{ selection: string; path: string; query: Readonly<Record<string, string | readonly string[]>>; token: string; left_out: boolean }>;
+/**
+ * Where a list stands: its query (and so whether it left out a mapped space), Confluence's next page token, and, when
+ * the mapped spaces take more than one space-id filter, which group of them it reads.
+ */
+type ListState = Readonly<{ path: string; query: Readonly<Record<string, string | readonly string[]>>; left_out: boolean; token?: string; group?: number }>;
 
-function limit(value: number, maximum = 20): number {
-  if (!Number.isInteger(value) || value < 1 || value > 50) confluenceFailure('invalid_request');
-  return Math.min(value, maximum);
+/** Any positive limit: a page holds as many as are asked for, up to Confluence's page and what one result carries. */
+function limit(value: number): number {
+  if (!Number.isInteger(value) || value < 1) confluenceFailure('invalid_request');
+  return value;
 }
 function leftOut(left_out: boolean): { notice?: string } { return left_out ? { notice: SPACES_LEFT_OUT } : {}; }
 function quote(value: string): string { return `"${value.replace(/[\\"]/g, '\\$&')}"`; }
@@ -87,27 +86,19 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
   const bindingHash = canonicalSha256(binding);
   const cloud = binding.external_scope_id!;
   const selected = options.space_ids === undefined ? undefined : Object.freeze([...new Set(options.space_ids)]);
-  if (selected !== undefined && (selected.length === 0 || selected.length > 20 || selected.some(id => !ID.test(id)))) confluenceFailure('invalid_request');
+  if (selected !== undefined && (selected.length === 0 || selected.some(id => !ID.test(id)))) confluenceFailure('invalid_request');
   const handles = new Map<string, Item>();
   const issued = new Map<string, Item>();
-  const cursors = new Map<string, Cursor>();
-  let requests = 0;
-  let contentRequests = 0;
+  const lists = createPersonLiveListV1<Page, ListState>('confluence_cursor_', confluenceFailure);
   let origin = options.expected_origin;
-  const counted = (content: boolean): ConfluenceCloudTransportV1 => Object.freeze({ binding, async request(input: Parameters<ConfluenceCloudTransportV1['request']>[0]) {
-    if (++requests > MAX_REQUESTS || (content && ++contentRequests > MAX_CONTENT_REQUESTS)) confluenceFailure('unavailable');
-    return options.transport.request(input);
-  } });
-  const transport = counted(true);
-  /** Connection checks and revalidation. */
-  const fences = counted(false);
+  const transport = options.transport;
   function current(signal?: AbortSignal): void {
     signal?.throwIfAborted();
     if (canonicalSha256(options.transport.binding) !== bindingHash) confluenceFailure('stale_access_state');
   }
   const verifyQueued = createAtlassianVerificationBatchV1(async (signal?: AbortSignal): Promise<void> => {
     current(signal);
-    const result = await verifyAtlassianConnectionV1(CONFLUENCE_PERSON_PROVIDER_V1, fences, { signal, expected_origin: origin,
+    const result = await verifyAtlassianConnectionV1(CONFLUENCE_PERSON_PROVIDER_V1, transport, { signal, expected_origin: origin,
       require_account(account) { if (account !== binding.external_subject_id) confluenceFailure('unauthorized'); } });
     origin = result.origin;
     current(signal);
@@ -121,29 +112,32 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
   }
   function inScope(page: Page): void { if (selected !== undefined && !selected.includes(page.space_id)) confluenceFailure('unauthorized'); }
   function permalink(page: Page): string { return `${origin}/wiki/pages/viewpage.action?pageId=${page.id}`; }
-  /** Revalidation's exact reads are fence traffic; content operations pass the content transport. */
-  async function exact(id: string, body: boolean, status?: string, signal?: AbortSignal, via = fences): Promise<Page> {
-    const page = metadata(await via.request({ path: `/api/v2/pages/${id}`, query: { ...(body ? { 'body-format': 'atlas_doc_format' } : {}), ...(status === undefined ? {} : { status }) }, signal }), body);
+  async function exact(id: string, body: boolean, status?: string, signal?: AbortSignal): Promise<Page> {
+    const page = metadata(await transport.request({ path: `/api/v2/pages/${id}`, query: { ...(body ? { 'body-format': 'atlas_doc_format' } : {}), ...(status === undefined ? {} : { status }) }, signal }), body);
     if (page.id !== id) confluenceFailure('invalid_output');
     inScope(page);
     return page;
   }
-  function remember(item: Item): PersonLiveEvidenceValueV1<PersonPageCitationV1> {
-    if (handles.size >= MAX_HANDLES) confluenceFailure('unavailable');
+  /** An item as it is released, without its handle. */
+  function valueOf(item: Item): Omit<PersonLiveEvidenceValueV1<PersonPageCitationV1>, 'handle'> {
     const citation = validatePersonPageCitationV1({ kind: 'page', tool_id: 'confluence', external_scope_id: cloud,
       page_id: item.page.id, section_id: item.section, version: item.page.version,
       permalink: permalink(item.page), text_sha256: item.text === undefined ? EMPTY_DIGEST : sha256Digest(item.text) });
+    const label = item.section.startsWith('continue:') ? `Continue ${item.page.title} from section ${item.offset + 1}`
+      : item.section === 'inventory' ? item.page.title : `${item.page.title} · section ${item.offset + 1}`;
+    return Object.freeze({ citation, label: boundUtf8V1(label, PERSON_EVIDENCE_LABEL_MAX_BYTES_V1), visibility: 'only_me',
+      attributes: Object.freeze({ status: item.page.status }), dates: item.page.dates, ...(item.page.occurred_at === undefined ? {} : { occurred_at: item.page.occurred_at, date_kind: item.page.date_kind }),
+      ...(item.text === undefined ? {} : { text: item.text }) });
+  }
+  function remember(item: Item): PersonLiveEvidenceValueV1<PersonPageCitationV1> {
+    const value = valueOf(item);
     const handle = `confluence_item_${randomUUID()}`;
     // Page bodies are never needed in a handle or audit. Keep only the released section in request memory.
     const { document: _document, ...page } = item.page;
     const saved: Item = Object.freeze({ ...item, page: Object.freeze(page) });
     handles.set(handle, saved);
-    issued.set(canonicalSha256(citation), saved);
-    const label = item.section.startsWith('continue:') ? `Continue ${item.page.title} from section ${item.offset + 1}`
-      : item.section === 'inventory' ? item.page.title : `${item.page.title} · section ${item.offset + 1}`;
-    return Object.freeze({ citation, handle, label: boundUtf8V1(label, 256), visibility: 'only_me',
-      attributes: Object.freeze({ status: item.page.status }), dates: item.page.dates, ...(item.page.occurred_at === undefined ? {} : { occurred_at: item.page.occurred_at, date_kind: item.page.date_kind }),
-      ...(item.text === undefined ? {} : { text: item.text }) });
+    issued.set(canonicalSha256(value.citation), saved);
+    return Object.freeze({ ...value, handle });
   }
   function inventory(page: Page): Item { return Object.freeze({ page, section: 'inventory', offset: 0 }); }
   /** A released page section has a stable reader coordinate. Inventories and continuations have no text to re-read. */
@@ -212,7 +206,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       });
       // CQL uses v1 content envelopes. Fetch only v2 metadata, never assume the
       // v1 fields are the v2 page schema or release a search excerpt as evidence.
-      pages = await parallel(ids, id => exact(id, false, undefined, signal, transport));
+      pages = await parallel(ids, id => exact(id, false, undefined, signal));
     } else pages = rows.map(row => metadata(row));
     if (new Set(pages.map(page => page.id)).size !== pages.length) confluenceFailure('invalid_output');
     pages.forEach(inScope);
@@ -221,8 +215,8 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     return { pages, ...(token === undefined ? {} : { token }) };
   }
   async function revalidateMetadata(groups: readonly (readonly Item[])[], signal?: AbortSignal): Promise<void> {
-    for (let offset = 0; offset < groups.length; offset += REVALIDATION_BATCH_SIZE) {
-      const batch = groups.slice(offset, offset + REVALIDATION_BATCH_SIZE);
+    for (let offset = 0; offset < groups.length; offset += CONFLUENCE_PAGE_MAX) {
+      const batch = groups.slice(offset, offset + CONFLUENCE_PAGE_MAX);
       const expected = new Map(batch.map(items => [items[0]!.page.id, items]));
       const returned = new Set<string>();
       const tokens = new Set<string>();
@@ -231,7 +225,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
         current(signal);
         // GET /pages applies the asker's current permissions to this exact ID
         // set. Never retrieve bodies merely to revalidate inventory metadata.
-        const response = confluenceRecord(await fences.request({ path: '/api/v2/pages',
+        const response = confluenceRecord(await transport.request({ path: '/api/v2/pages',
           query: { id: [...expected.keys()], limit: String(batch.length), status: LIST_STATUSES,
             ...(cursor === undefined ? {} : { cursor }) }, signal }));
         current(signal);
@@ -258,7 +252,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
   /** Opens one released item: its page's current body from the item's section on. */
   async function openItem(item: Item, maximum: number, signal?: AbortSignal, cited?: PersonPageCitationV1): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
     await verify(signal);
-    const page = await exact(item.page.id, true, item.page.status, signal, transport);
+    const page = await exact(item.page.id, true, item.page.status, signal);
     if (!samePage(page, item.page)) confluenceFailure('stale_access_state');
     const normalized = normalizeConfluencePageDocumentV1(page.document!);
     const texts = normalized.sections;
@@ -277,14 +271,24 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     if (single && cited !== undefined && texts[offset]!.trim() === '') confluenceFailure('not_found');
     const remaining = single ? 1 : texts.length - offset;
     if (remaining > 1 && maximum < 2) confluenceFailure('invalid_request');
-    const count = remaining > maximum ? maximum - 1 : Math.min(remaining, maximum);
-    const result: Item[] = [];
-    for (let index = offset; index < offset + count; index += 1) {
-      // Empty/whitespace-only pages contain no releasable evidence.
-      if (texts[index]!.trim() !== '') result.push(Object.freeze({ page, section: `s${index + 1}`, offset: index, text: texts[index]! }));
+    /** `count` sections from `offset`, then a continuation when more follow. */
+    const build = (count: number): Item[] => {
+      const items: Item[] = [];
+      for (let index = offset; index < offset + count; index += 1) {
+        // Empty/whitespace-only pages contain no releasable evidence.
+        if (texts[index]!.trim() !== '') items.push(Object.freeze({ page, section: `s${index + 1}`, offset: index, text: texts[index]! }));
+      }
+      if (!single && offset + count < texts.length) items.push(Object.freeze({ page, section: `continue:${offset + count}`, offset: offset + count }));
+      return items;
+    };
+    // As many sections as the limit asks for and one result carries; a continuation then opens the rest.
+    let count = remaining > maximum ? maximum - 1 : Math.min(remaining, maximum);
+    let result = build(count);
+    for (let fits = fit(result.map(valueOf)); count > 1 && fits < result.length; fits = fit(result.map(valueOf))) {
+      count = Math.max(1, Math.min(count - 1, fits - 1));
+      result = build(count);
     }
     const hasMore = !single && offset + count < texts.length;
-    if (hasMore) result.push(Object.freeze({ page, section: `continue:${offset + count}`, offset: offset + count }));
     await verify(signal);
     const notices = [
       ...(changed ? ['The cited section changed since it was cited; this is the current page from the top.'] : []),
@@ -305,59 +309,68 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     },
     async search(input): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
       validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
-      const maximum = limit(input.limit, 5);
-      const query = confluenceString(input.query, 1024).trim();
+      const wanted = limit(input.limit);
+      const maximum = Math.min(wanted, CONFLUENCE_PAGE_MAX);
+      // Any length: the request's query string carries the CQL, and the transport refuses one past its capacity.
+      const query = confluenceString(input.query, Number.MAX_SAFE_INTEGER).trim();
       if (query === '') confluenceFailure('invalid_request');
       await verify(input.signal);
       const scoped = await cql(query, input.since, input.until, input.signal, input);
       const result = scoped.expression === undefined ? { pages: [] } : await discover('/rest/api/search', { cql: scoped.expression, limit: String(maximum), includeArchivedSpaces: 'true' }, maximum, input.signal);
       await verify(input.signal);
-      return Object.freeze({ items: Object.freeze(result.pages.filter(page => matchesEvidenceDateV1(page.dates, input, "updated")).map(page => remember(inventory(page)))), truncated: result.token !== undefined, ...leftOut(scoped.left_out) });
+      // As many as were asked for and one result carries; the rest are reported with `truncated`.
+      const found = result.pages.filter(page => matchesEvidenceDateV1(page.dates, input, "updated")).map(inventory);
+      const shown = found.slice(0, fit(found.map(valueOf), wanted));
+      return Object.freeze({ items: Object.freeze(shown.map(remember)), truncated: result.token !== undefined || shown.length < found.length, ...leftOut(scoped.left_out) });
     },
     async list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
       validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
-      const maximum = limit(input.limit);
+      const wanted = limit(input.limit);
+      const maximum = Math.min(wanted, CONFLUENCE_PAGE_MAX);
       const container = input.container === undefined ? undefined : confluenceString(input.container, 20, ID);
       if (selected !== undefined && container !== undefined && !selected.includes(container)) confluenceFailure('unauthorized');
       if (input.since !== undefined) day(input.since);
       if (input.until !== undefined) day(input.until);
       if (input.since !== undefined && input.until !== undefined && input.since > input.until) confluenceFailure('invalid_request');
       const selection = canonicalSha256({ container: container ?? null, since: input.since ?? null, until: input.until ?? null, maximum, ...evidenceDateFilterV1(input) });
-      const previous = input.cursor === undefined ? undefined : cursors.get(input.cursor);
-      if (input.cursor !== undefined && (previous === undefined || previous.selection !== selection)) confluenceFailure('invalid_request');
+      const previous = lists.resume(input.cursor, selection);
+      // The mapped spaces are listed a space-id filter's worth at a time, group after group.
+      const groups = container === undefined && selected !== undefined ? Math.ceil(selected.length / CONFLUENCE_SPACE_FILTER_MAX) : 1;
+      const group = (index: number) => selected!.slice(index * CONFLUENCE_SPACE_FILTER_MAX, (index + 1) * CONFLUENCE_SPACE_FILTER_MAX);
       await verify(input.signal);
-      let path = '/api/v2/pages';
-      let query: Readonly<Record<string, string | readonly string[]>>;
-      // A continuation reuses its first page's query, and so whether that query left out a mapped space.
-      let left_out = false;
-      if (previous !== undefined) { path = previous.path; query = { ...previous.query, cursor: previous.token }; left_out = previous.left_out; }
-      else if (input.since !== undefined || input.until !== undefined) {
-        if (container !== undefined) confluenceFailure('invalid_request');
-        const scoped = await cql(undefined, input.since, input.until, input.signal, input);
-        if (scoped.expression === undefined) { await verify(input.signal); return Object.freeze({ items: Object.freeze([]), truncated: false, page_full: false, ...leftOut(scoped.left_out) }); }
-        path = '/rest/api/search'; query = { cql: scoped.expression, limit: String(maximum), includeArchivedSpaces: 'true' }; left_out = scoped.left_out;
-      } else query = { limit: String(maximum), status: LIST_STATUSES, ...(container === undefined ? selected === undefined ? {} : { 'space-id': selected } : { 'space-id': container }) };
-      const result = await discover(path, query, maximum, input.signal);
+      const page = await lists.page({ previous, selection, wanted, value: page => valueOf(inventory(page)), async read(state) {
+        let at: ListState;
+        if (state?.token !== undefined) at = state;
+        // The last group's pages ended: the next group of mapped spaces starts from its first page.
+        else if (state !== undefined) at = { ...state, group: state.group! + 1, query: { ...state.query, 'space-id': group(state.group! + 1) } };
+        else if (input.since !== undefined || input.until !== undefined) {
+          if (container !== undefined) confluenceFailure('invalid_request');
+          const scoped = await cql(undefined, input.since, input.until, input.signal, input);
+          if (scoped.expression === undefined) return { rows: [], state: { path: '', query: {}, left_out: scoped.left_out }, more: false, full: false };
+          at = { path: '/rest/api/search', query: { cql: scoped.expression, limit: String(maximum), includeArchivedSpaces: 'true' }, left_out: scoped.left_out };
+        } else {
+          at = { path: '/api/v2/pages', query: { limit: String(maximum), status: LIST_STATUSES, ...(container === undefined ? selected === undefined ? {} : { 'space-id': group(0) } : { 'space-id': container }) },
+            left_out: false, ...(groups > 1 ? { group: 0 } : {}) };
+        }
+        const result = await discover(at.path, at.token === undefined ? at.query : { ...at.query, cursor: at.token }, maximum, input.signal);
+        const nextGroup = at.group !== undefined && at.group + 1 < groups;
+        const { token: _token, ...stable } = at;
+        // A last page with no next link can still be exactly full (ADR-0041): counted before ECHO's own date filter.
+        return { rows: result.pages.filter(page => matchesEvidenceDateV1(page.dates, input, "updated")), state: { ...stable, ...(result.token === undefined ? {} : { token: result.token }) },
+          more: result.token !== undefined || nextGroup, full: result.token === undefined && !nextGroup && result.pages.length >= maximum };
+      } });
       await verify(input.signal);
-      let next_cursor: string | undefined;
-      if (result.token !== undefined) {
-        if (cursors.size >= MAX_HANDLES) confluenceFailure('unavailable');
-        next_cursor = `confluence_cursor_${randomUUID()}`;
-        const { cursor: _cursor, ...stable } = query;
-        cursors.set(next_cursor, Object.freeze({ selection, path, query: Object.freeze(stable), token: result.token, left_out }));
-      }
-      // A last page with no next link can still be exactly full (ADR-0041): counted before ECHO's own date filter.
-      const page_full = next_cursor === undefined && result.pages.length >= maximum;
-      return Object.freeze({ items: Object.freeze(result.pages.filter(page => matchesEvidenceDateV1(page.dates, input, "updated")).map(page => remember(inventory(page)))), truncated: next_cursor !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }), page_full, ...leftOut(left_out) });
+      return Object.freeze({ items: Object.freeze(page.rows.map(page => remember(inventory(page)))), truncated: page.truncated, ...(page.next_cursor === undefined ? {} : { next_cursor: page.next_cursor }),
+        page_full: page.page_full, ...leftOut(page.state.left_out) });
     },
     async open(input): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
-      const maximum = limit(input.limit, 8);
+      const maximum = limit(input.limit);
       const item = handles.get(input.handle);
       if (item === undefined) confluenceFailure('not_found');
       return openItem(item, maximum, input.signal);
     },
     async openCitation(input): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
-      const maximum = limit(input.limit, 8);
+      const maximum = limit(input.limit);
       let citation: PersonPageCitationV1;
       try { citation = validatePersonPageCitationV1(input.citation); } catch { confluenceFailure('invalid_request'); }
       if (citation.tool_id !== 'confluence' || citation.external_scope_id !== cloud || !ID.test(citation.page_id)) confluenceFailure('unauthorized');
@@ -365,7 +378,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       // Current metadata through the exact read (space pin and permissions), then
       // the cited section from the current page: a re-read never trusts an old
       // version or silently substitutes another section.
-      const current = await exact(citation.page_id, false, undefined, input.signal, transport);
+      const current = await exact(citation.page_id, false, undefined, input.signal);
       if (citation.permalink !== permalink(current)) confluenceFailure('unauthorized');
       return openItem(citedSection(current, citation), maximum, input.signal, citation);
     },
@@ -394,7 +407,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       await revalidateMetadata(metadataOnly, input.signal);
       await parallel(exactReads, async items => {
         const needsBody = items.some(item => item.text !== undefined);
-        const page = await exact(items[0]!.page.id, needsBody, items[0]!.page.status, input.signal, fences);
+        const page = await exact(items[0]!.page.id, needsBody, items[0]!.page.status, input.signal);
         const normalized = needsBody ? normalizeConfluencePageDocumentV1(page.document!) : undefined;
         for (const item of items) {
           if (!samePage(item.page, page)) confluenceFailure('stale_access_state');

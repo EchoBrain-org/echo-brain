@@ -5,6 +5,7 @@ import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import {
   PERSON_ASK_CHECK_PATH_V1,
   PERSON_ASK_CHECK_REQUEST_KIND_V1,
+  PERSON_UPDATE_REQUEST_MAX_BYTES_V1,
   validatePersonAskCheckRequestV1,
   validatePersonAskCheckV1,
   type PersonAskCheckItemV1,
@@ -186,6 +187,19 @@ describe('Ask source check: the database kinds', () => {
     // Leaving project A loses the record.
     f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'").run(f.clock().toISOString(), f.projectA, f.membership('rafael'));
     expect(await check('rafael', [item(record)])).toEqual([UNREADABLE]);
+  });
+
+  it('answers a project the caller is a member of same, and unreadable once they leave it or to anyone outside it', async () => {
+    const f = await world();
+    const { check } = askCheckOf(f);
+    const projectA = { kind: 'project', project_id: f.projectA };
+    const never = { kind: 'project', project_id: 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' };
+    expect(await check('mina', [item(projectA), item(never)])).toEqual([SAME, UNREADABLE]);
+    // Okafor is not in project A.
+    expect(await check('okafor', [item(projectA)])).toEqual([UNREADABLE]);
+    // Leaving project A: an old answer's roster sentence citing it is no longer readable to Mina.
+    f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'").run(f.clock().toISOString(), f.projectA, f.membership('mina'));
+    expect(await check('mina', [item(projectA), item(f.cited.team)])).toEqual([UNREADABLE, SAME]);
   });
 
   it('answers originals through their ACL: what the caller reads is the same, an edited import\'s older revision included', async () => {
@@ -488,7 +502,7 @@ describe('Ask source check HTTP route', () => {
       items: [SAME, SAME, UNREADABLE] });
     // Kinds outside the check, a retired marker, a bad shape, a query and a body over 64 KiB are invalid requests.
     for (const invalid of [
-      { ...body, items: [item({ kind: 'project', project_id: 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' })] },
+      { ...body, items: [item({ kind: 'person', membership_id: 'mem_0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e' })] },
       { ...body, items: [item({ kind: 'tool', tool_id: 'jira' })] },
       { ...body, items: [item(ticket('10012'), undefined, canonicalSha256('marker'))] },
       { ...body, items: [] },
@@ -497,10 +511,13 @@ describe('Ask source check HTTP route', () => {
     ]) {
       const refused = await post('Bearer ari', invalid);
       expect(refused.status, JSON.stringify(invalid)).toBe(400);
-      expect(await refused.json()).toEqual({ error: { code: 'invalid_request', message: 'request failed' } });
+      // The validator's own static message names what is wrong.
+      expect(await refused.json()).toEqual({ error: { code: 'invalid_request', message: expect.any(String) } });
     }
     expect((await post('Bearer ari', body, `${PERSON_ASK_CHECK_PATH_V1}?since=1`)).status).toBe(404);
-    expect((await post('Bearer ari', `${JSON.stringify(body)}${' '.repeat(64 * 1024)}`)).status).toBe(400);
+    // A Person request body is held only to the Person transport bound (a note upload's 1 MiB): past it, refused whole.
+    expect((await post('Bearer ari', `${JSON.stringify(body)}${' '.repeat(64 * 1024)}`)).status).toBe(200);
+    expect((await post('Bearer ari', `${JSON.stringify(body)}${' '.repeat(PERSON_UPDATE_REQUEST_MAX_BYTES_V1)}`)).status).toBe(400);
     // Only POST is served.
     expect((await fetch(`${base}${PERSON_ASK_CHECK_PATH_V1}`, { headers: { authorization: 'Bearer ari' } })).status).toBe(404);
   });

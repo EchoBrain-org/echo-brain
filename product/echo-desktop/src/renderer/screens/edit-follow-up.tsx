@@ -2,9 +2,6 @@ import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { OpenItemView } from '../../shared/protocol.js';
 import type { ItemEdit } from '../store.js';
 
-/** The longest line a follow-up keeps (the runs contract's own bound). */
-const LINE_CHARS = 120;
-
 /**
  * Edit, on a follow-up from a chat that you may edit (ADR-0053): its one line
  * and its due date, in place. Save sends only what changed and closes once it
@@ -27,7 +24,7 @@ export function EditFollowUp({ item, busy, save, close }: {
       onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); close(); } }}>
       <label class="edit-follow-up-field">
         <span class="section-label">What needs doing</span>
-        <input ref={field} class="field small" type="text" data-testid="edit-follow-up-line" maxLength={LINE_CHARS} value={line} disabled={busy}
+        <input ref={field} class="field small" type="text" data-testid="edit-follow-up-line" value={line} disabled={busy}
           onInput={event => setLine((event.target as HTMLInputElement).value)} />
       </label>
       <label class="edit-follow-up-field due">

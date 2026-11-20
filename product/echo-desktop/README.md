@@ -68,7 +68,7 @@ across everything you can see**, stays.
 
 Ask keeps a timeline (ADR-0047): every question you asked and its answer, on
 this computer only, in one owner-only file per account beside the person
-session (`ask-timeline-v1`), at most 200 turns and 90 days. Our own sign-out,
+session (`ask-timeline-v1`), every turn until the file would pass what the runtime can read back as one string. Our own sign-out,
 or another account signing in here, deletes it; a session that merely ended
 keeps it. The Authority never stores it. Ask opens over the page on the
 thread of its place (ADR-0049): from Home every turn, from a project only
@@ -96,9 +96,9 @@ before. The empty bar suggests the questions of its place's thread first,
 newest first; one opens Ask at its turn instead of asking it again.
 
 Typed while Ask is open, a question continues the conversation: it carries the
-earlier turn opened, or else the latest one when it was asked in the last hour
+earlier turn opened, or else the latest one, however long ago it was asked
 (the question, and the sentences a check of the last five minutes found you can
-still read, within the Ask's 16 KiB). It waits for that check; with none, it
+still read, within the Ask's request body bound). It waits for that check; with none, it
 carries the question alone. A turn asked in the last five minutes needs none:
 its answer just read what it cites.
 ECHO works out what "it" or "that ticket" means: when one thing fits it answers

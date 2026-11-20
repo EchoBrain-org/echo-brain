@@ -4,7 +4,7 @@
  * structured reply alone, and the four rules are counts over trials.
  */
 import { readFileSync } from "node:fs";
-import { validatePersonAnswerRequestV3, validatePersonQueryText } from "@echo-brain/organization-api";
+import { validatePersonAnswerRequestV3, validatePersonQuestionText } from "@echo-brain/organization-api";
 
 export const CASES_FILE = new URL("./cases.json", import.meta.url);
 /** Each group's number of cases, as pre-registered. */
@@ -45,7 +45,7 @@ export function caseProblems(document) {
     } else {
       if (!nonEmptyStrings(expect.terms)) problems.push(`${where}: terms are required`);
       else if (!expect.terms.every((term) => lower(entry.question).includes(lower(term)))) problems.push(`${where}: its own question must carry its terms`);
-      try { validatePersonQueryText(entry.question); } catch { problems.push(`${where}: the question is not a valid Ask question`); }
+      try { validatePersonQuestionText(entry.question); } catch { problems.push(`${where}: the question is not a valid Ask question`); }
     }
   }
   return problems;

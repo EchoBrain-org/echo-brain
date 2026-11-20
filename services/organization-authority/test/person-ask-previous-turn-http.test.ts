@@ -5,6 +5,8 @@ import {
 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { createPersonLiveAnswerRouteV1 } from '../src/composition/person-live-answer-route-v1.js';
+import { readablePreviousV1 } from '../src/composition/person-ask-previous-check-v1.js';
+import { PersonRecordSearchSnapshotChangedV1 } from '../src/composition/person-record-search-route.js';
 import { SqlitePersonImportedMeetingsV1 } from '../src/adapters/persistence/sqlite/person-imported-meetings-v1.js';
 import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
 import { askClient, auditBodies, closeAskServers, decodeAll, liveAskOptions, myOpenTasksPlanner, serveAsk, streamedAnswer } from './fixtures/ask-over-http.js';
@@ -133,12 +135,101 @@ describe('the previous turn on /v7 (ADR-0047)', () => {
     const generate = vi.fn(async () => { throw new Error('no model call expected'); });
     const base = await v7(f, { generate });
     // An Ask again of another question than the earlier one is not an Ask again.
-    for (const previous of [{ ...PREVIOUS, purpose: 'guess' }, { ...PREVIOUS, statements: [{ text: 'x'.repeat(401), citation_indexes: [] }] }, { ...PREVIOUS, extra: true }, { ...PREVIOUS, purpose: 'ask_again' }]) {
+    for (const previous of [{ ...PREVIOUS, purpose: 'guess' }, { ...PREVIOUS, statements: [{ text: 'x', citation_indexes: [5] }] }, { ...PREVIOUS, extra: true }, { ...PREVIOUS, purpose: 'ask_again' }]) {
       const response = await ask(base, { body: body(previous) });
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toMatchObject({ error: { code: 'invalid_request' } });
     }
     expect(generate).not.toHaveBeenCalled();
+  });
+});
+
+describe('the previous turn as the Authority lets its model read it (ADR-0047)', () => {
+  /** The fixture's real Ask source check, as the runtime composes it beside the Ask. */
+  const checkOf = (f: OpenItemsFixtureV1) => liveAskOptions(f, undefined as never).previous_check!;
+  const ROSTER = 'Kestrel roster: Mina Park (lead) and Rafael Ortiz.';
+  const LABEL = 'Kestrel launch project';
+  const MARA = 'Mara Lind owns the launch.';
+  const EARLIER = 'Who is on the launch project?';
+  /** An earlier answer citing a project (its roster) and a person (whom no check reads). */
+  const previousOf = (f: OpenItemsFixtureV1, purpose: 'follow_up' | 'ask_again' = 'follow_up', question = EARLIER, project_id: string = f.projectA): PersonAnswerPreviousV1 => ({
+    purpose, question, asked_at: '2026-10-24T17:05:00.000Z',
+    statements: [{ text: ROSTER, citation_indexes: [0] }, { text: MARA, citation_indexes: [1] }],
+    citations: [
+      { citation: { kind: 'project', project_id: project_id as never }, kind: 'project', label: LABEL, visibility: 'project', ref: `project:${project_id}` as never },
+      { citation: { kind: 'person', membership_id: 'mem_0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e' }, kind: 'person', label: 'Mara Lind', visibility: 'team' },
+    ],
+  });
+  /** Every model call's prompts, with a resolver that says the question stands alone and research that lists open tasks. */
+  function recording() {
+    const seen: string[] = [];
+    const tasks = myOpenTasksPlanner();
+    const model: StructuredGenerationPort = { async generate(input) {
+      seen.push(`${input.system_prompt}\n${input.user_prompt}`);
+      if ((input.schema.properties as Readonly<Record<string, unknown>>).resolution !== undefined) return { resolution: 'same' };
+      return tasks.model.generate(input);
+    } };
+    return { model, seen: () => seen.join('\n'), reset: () => { seen.length = 0; tasks.reset(); } };
+  }
+  const leave = (f: OpenItemsFixtureV1) => f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'")
+    .run(f.clock().toISOString(), f.projectA, f.membership('mina'));
+  const v7Checked = (f: OpenItemsFixtureV1, model: StructuredGenerationPort) =>
+    serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(liveAskOptions(f, model)) });
+
+  it('carries a sentence only while every citation it rests on is readable when the request arrives', async () => {
+    const f = await sentFixture();
+    const run = recording();
+    const base = await v7Checked(f, run.model);
+    const uncited = 'Uncited: the roster is Mina and Rafael.';
+    const previous = { ...previousOf(f), statements: [...previousOf(f).statements, { text: uncited, citation_indexes: [] }] };
+    const send = () => ask(base, { body: body(previous, 'And who leads it?') });
+    await streamedAnswer(await send());
+    // A member reads the roster; a sentence resting on a person (no check reads one) or on nothing is never carried.
+    expect(run.seen()).toContain(ROSTER);
+    expect(run.seen()).toContain(LABEL);
+    expect(run.seen()).not.toContain(MARA);
+    expect(run.seen()).not.toContain(uncited);
+    // The client's check said `same`; then Mina leaves the project, and the same request is sent again (a retry of it).
+    leave(f);
+    run.reset();
+    expect((await streamedAnswer(await send())).outcome).toBe('answered');
+    expect(run.seen()).not.toContain(ROSTER);
+    expect(run.seen()).not.toContain(LABEL);
+    // The person's own earlier question still reaches the resolver.
+    expect(run.seen()).toContain(EARLIER);
+  });
+
+  it.each([false, true])('checks the turn again on a snapshot restart, and reuses the paid resolution only while the checked turn is the same (access lost: %s)', async lost => {
+    const f = await sentFixture();
+    const tasks = myOpenTasksPlanner();
+    const prompts: string[] = [];
+    let restarted = false;
+    // The first research step after the resolver sees the snapshot move; access may be lost before the restart.
+    const model: StructuredGenerationPort = { async generate(input) {
+      if ((input.schema.properties as Readonly<Record<string, unknown>>).resolution !== undefined) {
+        prompts.push(input.user_prompt);
+        return { resolution: 'same' };
+      }
+      if (!restarted) { restarted = true; if (lost) leave(f); throw new PersonRecordSearchSnapshotChangedV1(); }
+      return tasks.model.generate(input);
+    } };
+    expect((await streamedAnswer(await ask(await v7Checked(f, model), { body: body(previousOf(f), 'And who leads it?') }))).outcome).toBe('answered');
+    expect(restarted).toBe(true);
+    // Unchanged: the resolution is not paid for twice. Changed: resolved again, from the turn as checked now.
+    expect(prompts).toHaveLength(lost ? 2 : 1);
+    if (lost) expect(prompts[1]).not.toContain(ROSTER);
+  });
+
+  it('answers an unknown project and one the asker is not a member of identically, and keeps only the question with no check', async () => {
+    const f = await sentFixture();
+    const check = checkOf(f);
+    const questionOnly = { purpose: 'follow_up', question: EARLIER, asked_at: '2026-10-24T17:05:00.000Z', statements: [], citations: [] };
+    expect(await readablePreviousV1(previousOf(f, 'follow_up', EARLIER, 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10'), { access_token: 'mina', check })).toEqual(questionOnly);
+    expect(await readablePreviousV1(previousOf(f), { access_token: 'okafor', check })).toEqual(questionOnly);
+    expect(await readablePreviousV1(previousOf(f), { access_token: 'mina', check: undefined })).toEqual(questionOnly);
+    // A member keeps the roster, renumbered to the citations that stay.
+    expect(await readablePreviousV1(previousOf(f), { access_token: 'mina', check })).toMatchObject({
+      statements: [{ text: ROSTER, citation_indexes: [0] }], citations: [expect.objectContaining({ label: LABEL })] });
   });
 });
 

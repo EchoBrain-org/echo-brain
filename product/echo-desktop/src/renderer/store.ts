@@ -1,4 +1,3 @@
-import { PERSON_RUN_ITEMS_MAX_V1 } from '@echo-brain/organization-api/person-runs-limits-v1';
 import type {
   PersonImpactStageV1, PersonMeetingOperationV2, PersonMeetingResultsV2, PersonMeetingReviewV2, PersonReviewOperationV1, PersonReviewResultsV1, PersonOpenItemStateV1, PersonRunV1, PersonRunsRequestV1,
 } from '@echo-brain/organization-api';
@@ -6,27 +5,27 @@ import type {
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  AccountCommand, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
+  AccountCommand, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
   ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Member, OpenItemsView, OpenItemView,
   ProjectChange, ProjectGranolaMapping, ProjectConfluenceMapping, ConfluenceSpace, GranolaFolder, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
+import { ACCOUNT_GONE, isWriteCall, MAX_COPY_CHARACTERS, MAX_REQUEST_BYTES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
-  answeredNow, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, checksHiding, followedTurn, foundUnreadable, freshChecks, freshStates, knownStates,
+  askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, checkedOf, checkPlan, checksHiding, followedTurn, foundUnreadable, freshChecks, freshStates, knownStates, turnReadable,
   previousOf, sameScope, shownInFull, showsOf, threadOf, unreadableAfter, visibleTurns, turnGroups, type CheckPlan, type Suggestion, type TurnCheck, type TurnChecks,
 } from './timeline.js';
 import { openerOf } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
-import { PERSON_LIVE_MAX, PROJECT_READS_AT_ONCE, unowned } from './altitude.js';
+import { PROJECT_READS_AT_ONCE, unowned } from './altitude.js';
 import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
 import { askedWhen } from './format.js';
 import * as freshness from './freshness.js';
-import { meetingMessage, message } from './messages.js';
+import { message } from './messages.js';
 import { ACTIVE_STATES, CLOSED_STATES, fromChat, ownerRows, ownerShown, ownerUnmatched, reopenSends, sentWords, whoWords } from './needs.js';
 
 /** Only me: everything only you can read, filed in a project or not (ADR-0049). Follow-ups: everything you sent, own or last handed on. */
@@ -40,26 +39,27 @@ export interface AskQuestion {
 }
 
 /**
- * How a question is asked (ADR-0047): with the earlier turn it carries, as
- * built (a choice's, or as it went, for Try again; null for none), and the
- * turn it asks again. With none built, Ask again carries the turn it asks
- * again, as a follow-up carries the turn it continues, built once what that
- * turn cited is known now. Try again asks a failed question the same way.
+ * How a question is asked (ADR-0047), kept on a failed one so Try again asks it the same way: what a question built from
+ * an earlier turn sends is derived from that turn each time it is sent (askAs), never replayed.
  */
-interface AskHow {
-  previous?: AskPrevious | null;
-  againOf?: string;
-}
+type AskHow =
+  /** The person's own words, continuing the turn `follows` when typed with Ask open (null: none). */
+  | { readonly kind: 'typed'; readonly question: string; readonly follows: string | null }
+  /** A turn's question again: in its scope, carrying the turn (Ask again), or everywhere, carrying nothing (Ask everywhere). */
+  | { readonly kind: 'again' | 'everywhere'; readonly turn: string }
+  /** A choice of "Which one?", model-written, for the person's follow-up `typed` (null: not known) that continued `follows`. */
+  | { readonly kind: 'choice'; readonly question: string; readonly typed: string | null; readonly follows: string | null };
 
 /** The question on its way, and what it has done so far (ADR-0039). */
 export interface AskAsking extends AskQuestion {
   progress: AskProgress;
 }
 
-/** "Which one?": a follow-up that could mean several things, the choices, and the earlier turn each asks with. Never kept. */
+/** "Which one?": a follow-up that could mean several things, the choices, the turn it continued and its typed words. Never kept. */
 export interface AskClarify extends AskQuestion {
   choices: readonly AskChoice[];
-  previous: AskPrevious | null;
+  follows: string | null;
+  typed: string | null;
 }
 
 /**
@@ -1020,7 +1020,7 @@ function cancelWaitingConnection(connect: Pick<ToolConnectSheet, 'tool' | 'phase
 
 /** A host call that failed: the page's words for it as its message, and the failure itself. */
 class CommandFailed extends Error {
-  constructor(readonly failure: Failure, words = message(failure)) { super(words); }
+  constructor(readonly failure: Failure) { super(message(failure)); }
 }
 
 /** The failure a command threw; a plain one when the account or the screen changed under it. */
@@ -1036,7 +1036,7 @@ function outcomeUnknown(failure: Failure, resend: boolean): boolean {
 /** Account-fenced command for a personal meeting tool. No provider token enters the renderer. */
 export function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }, tool_id: string): Promise<PersonMeetingResultsV2[K]> {
   return fencedCommand<PersonMeetingResultsV2[K]>(account => rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id } }),
-    isWriteCall('tools.meetings', { request: operation }), meetingMessage);
+    isWriteCall('tools.meetings', { request: operation }));
 }
 
 /** Reviews belong to the person, independent of any connected import tool. */
@@ -1057,7 +1057,7 @@ export function runsCommand<K extends keyof RunsResults>(request: PersonRunsRequ
  * it settles that. Another app in front changes nothing: the reply is the
  * Authority's answer, and the page it is for fences it by itself.
  */
-async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknown>>, write: boolean, words: (failure: Failure) => string = message): Promise<T> {
+async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknown>>, write: boolean): Promise<T> {
   const account = expect();
   if (!account) throw new Error('Sign in to use meetings.');
   const result = await send(account);
@@ -1066,7 +1066,7 @@ async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknow
     const unsent = !result.ok && result.failure.mutation_outcome === 'not_submitted';
     throw new CommandFailed({ code: 'account_changed', retryable: false, mutation_outcome: unsent ? 'not_submitted' : 'unknown' });
   }
-  if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure, words(result.failure)); }
+  if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure); }
   return result.value as T;
 }
 
@@ -1789,18 +1789,18 @@ async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string, cited
   }
   const opened = result.value;
   if (opened.kind === 'meeting') { set({ reader: { ...base, loading: false, record: opened.record } }); return; }
-  if (opened.kind === 'imported_meeting') {
+  // A note or an imported meeting's notes come a page at a time; each further page is appended.
+  if (opened.kind === 'imported_meeting' || opened.kind === 'note') {
     const content = cursor === undefined ? opened.content : kept.content ? { ...opened.content, text: kept.content.text + opened.content.text } : null;
     if (!content) return;
     set({ reader: { ...base, loading: false, content, importedNext: opened.next_cursor } }); return;
   }
-  if (opened.kind === 'note') { set({ reader: { ...base, loading: false, content: opened.content } }); return; }
   set({ reader: { ...base, loading: false, document: opened.document } });
 }
 
 export function moreImportedMeeting(): void {
   const reader = state.reader;
-  if (reader?.ref.kind !== 'imported_meeting' || !reader.importedNext || reader.loading) return;
+  if ((reader?.ref.kind !== 'imported_meeting' && reader?.ref.kind !== 'note') || !reader.importedNext || reader.loading) return;
   void openReader(reader.ref, reader.from, reader.importedNext);
 }
 
@@ -2399,7 +2399,7 @@ export function toggleProjectPick(id: string, tool: PickTool): void {
   if (!settings || !setting || setting.status !== 'ready' || settings.project.role !== 'lead' ||
       (!setting.spaces.some(space => space.id === id) && !setting.selected.includes(id))) return;
   const selected = setting.selected.includes(id) ? setting.selected.filter(value => value !== id) : [...setting.selected, id];
-  if (selected.length <= 20) setMapping(settings, tool, { ...setting, selected });
+  setMapping(settings, tool, { ...setting, selected });
 }
 export async function moreProjectPicks(tool: PickTool): Promise<void> {
   const settings = state.projectSettings; const setting = settings?.[tool]; const account = expect();
@@ -2766,7 +2766,6 @@ export function confirmMemberChange(): void {
 
 // ---- new project -----------------------------------------------------------------
 
-const TOO_MANY_FILES = 'Add up to 20 files.';
 /** Said when New project closes after Create with files that may not have been saved, people who may not have been added, or both. */
 const UNSAVED_FILES = 'Some files may not have been saved.';
 const UNADDED_PEOPLE = 'Some people may not have been added.';
@@ -2795,10 +2794,10 @@ export function newProjectBusy(sheet: NewProjectSheet): boolean {
     sheet.files.some(file => file.status === 'saving' || file.status === 'checking');
 }
 
-/** A project's name as the API takes it: one line, trimmed, NFC, at most 200 UTF-8 bytes. */
+/** A project's name as the API takes it: one line, trimmed, NFC, of any length (the request bound carries it). */
 export function projectName(text: string): string | null {
   const name = text.normalize('NFC').trim();
-  return name === '' || new TextEncoder().encode(name).length > 200 || /[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(name) ? null : name;
+  return name === '' || /[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(name) ? null : name;
 }
 
 /**
@@ -3116,7 +3115,6 @@ export async function chooseFiles(): Promise<void> {
 export async function dropFiles(files: readonly File[]): Promise<void> {
   const sheet = newProjectSheet();
   if (!sheet || files.length === 0) return;
-  if (sheet.files.length + files.length > MAX_PROJECT_FILES) { setNewProject({ notice: TOO_MANY_FILES }, sheet.seq); return; }
   const chosen: { name: string; handle?: FileHandle; failure?: Failure }[] = [];
   for (const file of files) {
     const result = await dropFile(file);
@@ -3129,7 +3127,6 @@ export async function dropFiles(files: readonly File[]): Promise<void> {
 function addFiles(mine: number, chosen: readonly { name: string; handle?: FileHandle; failure?: Failure }[]): void {
   const sheet = newProjectSheet(mine);
   if (!sheet || chosen.length === 0) return;
-  if (sheet.files.length + chosen.length > MAX_PROJECT_FILES) { setNewProject({ notice: TOO_MANY_FILES }, mine); return; }
   const added: ProjectFile[] = chosen.map(file => ({
     id: ++rowIds, name: file.name, requestId: crypto.randomUUID(), kept: false,
     ...(file.handle ? { handle: file.handle, status: 'waiting' as const } : { status: 'failed' as const, failure: file.failure }),
@@ -3378,7 +3375,7 @@ export async function inviteEmployee(): Promise<void> {
   if (!page || !page.items || page.write) return;
   const name = page.name.normalize('NFC').trim();
   const email = invitationEmail(page.email);
-  if (name === '' || name.length > 200 || /[\u0000-\u001f\u007f]/.test(name) || !email) { setOrganization({ notice: ENTER_BOTH }); return; }
+  if (name === '' || /[\u0000-\u001f\u007f]/.test(name) || !email) { setOrganization({ notice: ENTER_BOTH }); return; }
   const conflict = alreadyHere(email, page);
   if (conflict) { setOrganization({ notice: conflict }); return; }
   const chosen = await rpc('dialog.saveInvitation', { name });
@@ -3509,7 +3506,7 @@ let timelineSeq = 0;
 /** Which timeline, as last read, the checks on their way are for: forgetting it, or reading it again, drops their replies. */
 let checkSeq = 0;
 /** The checks on their way, by each turn they speak for: a follow-up or Ask again of one waits for its reply. */
-const checking = new Map<string, Promise<void>>();
+const checking = new Map<string, Promise<unknown>>();
 /**
  * When each place's newest turns were last checked, as the check went (this computer's clock), by its thread (`threadKey`):
  * Ask opening in that place checks them again five minutes on (ADR-0049).
@@ -3579,7 +3576,7 @@ async function loadTimeline(): Promise<void> {
   const read = result.value.turns;
   const kept = state.timeline.turns.filter(turn => !read.some(other => other.id === turn.id));
   forgetChecks();
-  setTimeline({ turns: [...read, ...kept].slice(-MAX_TIMELINE_TURNS), checks: {} });
+  setTimeline({ turns: [...read, ...kept], checks: {} });
 }
 
 /** Nothing of the account's timeline stays on screen or in memory: signed out, or another account. Its file is the host's. */
@@ -3612,18 +3609,25 @@ function keepChecks(checks: Readonly<Record<string, TurnCheck>>): void {
   if (Number.isFinite(next)) checksExpire = setTimeout(() => { checksExpire = null; keepChecks(state.timeline.checks); }, next - now);
 }
 
+/** What the person is told when a turn could not be kept on this computer. */
+export const TURN_NOT_SAVED = 'This answer could not be saved on this computer, so it will be gone after ECHO restarts.';
+
 /**
  * Keeps a turn, here and in the account's file: in place of the turn with its
- * id, or at the end. A put that fails is not retried: the turn shows until the
- * timeline is read again.
+ * id, or at the end. A put that fails is not retried, and says so: the turn
+ * shows until the timeline is read again.
  */
 function keepTurn(turn: TimelineTurn): void {
   const account = expect();
   if (!account) return;
   const turns = state.timeline.turns;
   const kept = turns.some(other => other.id === turn.id) ? turns.map(other => (other.id === turn.id ? turn : other)) : [...turns, turn];
-  setTimeline({ ...state.timeline, turns: kept.slice(-MAX_TIMELINE_TURNS) });
-  void rpc('timeline.put', { expect: account, turn });
+  setTimeline({ ...state.timeline, turns: kept });
+  // Said only while the same account is signed in: another's page never hears of it.
+  const same = () => expect()?.membership_id === account.membership_id && expect()?.authority === account.authority;
+  void rpc('timeline.put', { expect: account, turn }).then(result => {
+    if (!result.ok && same()) set({ toast: TURN_NOT_SAVED });
+  }, () => { if (same()) set({ toast: TURN_NOT_SAVED }); });
 }
 
 /** A place's thread, as its checks are kept: Home's, or a project's by its id. */
@@ -3632,16 +3636,17 @@ function threadKey(scope: AskScope): string {
 }
 
 /**
- * Ask opened: whether you can still read what the newest ten turns its
- * place's thread shows cited, in one check (C5), unless that place's last one
+ * Ask opened: whether you can still read what every turn its place's thread
+ * shows cited, in one check (C5), unless that place's last one
  * went under five minutes ago (ADR-0049); and what the turn a suggestion
  * opened it at (`opened`) cited, first in that check or in one of its own,
  * unless what its sources are now is known or on its way.
  */
-function checkTimeline(opened?: TimelineTurn): Promise<void> {
+function checkTimeline(opened?: TimelineTurn): Promise<unknown> {
   const key = threadKey(state.barScope);
   const fresh = Date.now() - (newestCheckedAt.get(key) ?? Number.NEGATIVE_INFINITY) < CHECK_FRESH_MS;
-  const newest = fresh ? [] : askThread().slice(-CHECK_TURNS).reverse();
+  // Every turn, newest first: the plan splits them into requests by the body bound, sent one at a time.
+  const newest = fresh ? [] : [...askThread()].reverse();
   const first = opened !== undefined && (newest.includes(opened) || (freshChecksOf(opened) === undefined && !checking.has(opened.id))) ? [opened] : [];
   return checkTurns([...first, ...newest.filter(turn => turn !== opened)], newest.length > 0 ? key : null);
 }
@@ -3651,7 +3656,7 @@ function checkTimeline(opened?: TimelineTurn): Promise<void> {
  * own sources (C5), when nothing in the last five minutes said what they are
  * now; one on its way is waited for instead.
  */
-function checkTurn(turn: TimelineTurn): Promise<void> {
+function checkTurn(turn: TimelineTurn): Promise<unknown> {
   return checking.get(turn.id) ?? (freshChecksOf(turn) === undefined ? checkTurns([turn]) : Promise.resolve());
 }
 
@@ -3665,17 +3670,19 @@ function checkTurn(turn: TimelineTurn): Promise<void> {
  * with it; only what a request that came back found you can no longer read
  * stays, hidden as the turn's unreadable sources and over what a check still
  * good said of them. `newest`: the place (`threadKey`) whose newest turns Ask
- * opening checked, made again there five minutes after it went.
+ * opening checked, made again there five minutes after it went. It answers
+ * what this check itself found of each turn it spoke for, or null when it
+ * failed or spoke for none.
  */
-function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null): Promise<void> {
+function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null): Promise<Readonly<Record<string, TurnChecks>> | null> {
   const account = expect();
-  if (!account || turns.length === 0) return Promise.resolve();
+  if (!account || turns.length === 0) return Promise.resolve(null);
   const plan = checkPlan(turns);
   const mine = checkSeq;
   const at = Date.now();
   const check = async () => {
     const asked = await askChecks(account, plan, () => mine === checkSeq && sameAccount(account));
-    if (asked === null) return;
+    if (asked === null) return null;
     const found = checkedOf(plan, asked.results);
     const before = state.timeline.checks;
     const latest = Object.entries(found).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at);
@@ -3685,11 +3692,12 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
       const hidden = gone ? {} : Object.fromEntries(latest.map(([id, states]) => [id, foundUnreadable(states)]));
       keepChecks(checksHiding(state.timeline.checks, hidden));
       keepUnreadable(Object.entries(hidden));
-      return;
+      return null;
     }
     if (newest !== null) newestCheckedAt.set(newest, at);
     keepChecks({ ...before, ...Object.fromEntries(latest.map(([id, states]) => [id, { at, states }])) });
     keepUnreadable(latest);
+    return found;
   };
   const run = check();
   for (const id of plan.turns) checking.set(id, run);
@@ -3697,17 +3705,42 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
   return run;
 }
 
+/** What `questionOf` derives from a turn for a request built from it. */
+interface Derived {
+  /** The earlier question that may go: the turn's own, or the person's typed words; undefined when neither may. */
+  readonly question: string | undefined;
+  /** Whether the turn and every turn back along what it followed checked readable. */
+  readonly readable: boolean;
+  /** What this check found of the turn's own sources, for the sentences `previous` carries; null if it found nothing. */
+  readonly checks: TurnChecks | null;
+}
+
 /**
- * What is known now of a turn's sources, for the sentences a follow-up or
- * Ask again carries of it (C5): what a check said in the last five minutes,
- * waiting for one on its way or making one; for a turn asked in the last
- * five minutes, what its own answer read of them; and null when nothing is,
- * so it carries none of its sentences.
+ * The one rule for a question the model may have written (ADR-0047, C5), for every follow-up, Ask again, Ask everywhere
+ * and choice of "Which one?" built from an earlier turn, first and on Try again alike. A turn's question may have been
+ * written from its own sources and from those of each turn back along `follows`. It goes only when a check made by this
+ * very call (never the five-minute one) finds the turn and every turn along that chain with at least one source, each
+ * readable; a chain with a turn missing, or saved before `follows` was kept, fails. A first question in the person's own
+ * words needs no check. Otherwise only the person's typed words go, and none for a turn that never kept them. Access lost
+ * between this check and the send is the Authority's to catch: it checks the turn's citations again when the request comes.
  */
-async function knownSources(turn: TimelineTurn): Promise<TurnChecks | null> {
-  const recent = Date.now() - Date.parse(turn.asked_at) < CHECK_FRESH_MS;
-  if (freshChecksOf(turn) === undefined && !recent) await checkTurn(turn);
-  return checksOf(turn) ?? (recent ? answeredNow(turn) : null);
+async function questionOf(turn: TimelineTurn): Promise<Derived> {
+  const chain: TimelineTurn[] = [];
+  for (let link: TimelineTurn | undefined = turn; link && link.follows !== undefined && !chain.includes(link);) {
+    chain.push(link);
+    link = link.follows === null ? undefined : turnOf(link.follows);
+  }
+  const found = await checkTurns(chain.length > 0 ? chain : [turn]);
+  // Whole only when the chain ends at a turn that followed none.
+  const readable = found !== null && chain.at(-1)?.follows === null && chain.every(link => turnReadable(link, found[link.id]));
+  const own = turn.follows === null && turn.typed !== undefined && askText(turn.typed) === askText(turn.question);
+  const question = readable || own ? askText(turn.question) : turn.typed === undefined ? undefined : askText(turn.typed);
+  return { question, readable, checks: found?.[turn.id] ?? null };
+}
+
+/** Whether Ask again is offered on a turn: one that kept the person's typed words, which may always go. */
+export function askAgainOffered(turn: TimelineTurn): boolean {
+  return turn.typed !== undefined;
 }
 
 /**
@@ -3758,27 +3791,50 @@ export function fullTurns(view: AskState): readonly string[] {
 /**
  * Asks, on the timeline (ADR-0047). One question at a time: a second never
  * replaces one on its way. Typed with Ask open, it continues the conversation:
- * it carries the earlier turn opened, or else the latest when it was asked in
- * the last hour (`previous`), unless `how` says how it is asked; Ask again
- * carries the turn it asks again. Either carries that turn's sentences only
- * once what they cite is known now: a check of the last five minutes, waited
- * for or made while the question shows on its way; none when no check can
- * say (C5). Asked from a page, it opens Ask, which checks what you can still
- * read of the newest turns. The answer is kept at the end of the timeline, in
- * full; "Which one?" waits for a choice and is kept nowhere. While it works,
- * one line under it names the step the host reports (ADR-0039).
+ * it carries the earlier turn opened, or else the latest, however long ago.
+ * Asked from a page, it opens Ask, which checks what you can still read of the
+ * thread's turns. The answer is kept at the end of the timeline, in full;
+ * "Which one?" waits for a choice and is kept nowhere. While it works, one
+ * line under it names the step the host reports (ADR-0039).
  */
-export async function ask(question: string, scope: AskScope = state.barScope, how?: AskHow): Promise<void> {
-  const account = expect();
-  const text = question.trim();
+export function ask(question: string, scope: AskScope = state.barScope): Promise<void> {
   const open = state.ask;
-  if (!account || text === '' || open?.asking) return;
   // The turn opened, until a question asked since it was opened is answered: then the conversation goes on from the latest.
   const continued = open && open.asked.length === open.openedAt ? open.opened : null;
-  const againOf = how?.againOf;
-  // The turn it carries, unless `how` brings it built: the one it asks again, or the one a follow-up continues.
-  const from = how?.previous !== undefined ? null : againOf !== undefined ? turnOf(againOf) ?? null
-    : open && how === undefined ? followedTurn(threadOf(state.timeline.turns, scope), continued, Date.now()) : null;
+  const follows = open ? followedTurn(threadOf(state.timeline.turns, scope), continued)?.id ?? null : null;
+  return askAs({ kind: 'typed', question: question.trim(), follows }, scope);
+}
+
+/**
+ * Asks as `how` says, the first time and on Try again alike. The earlier turn it builds from (the one it asks again or
+ * widens, or the one a follow-up continues) goes through questionOf each time: for a question built from it (Ask again,
+ * Ask everywhere, a choice) before anything shows, as that decides what is asked; for the person's own follow-up while it
+ * shows on its way. What is asked: the person's words; the turn's question or typed words as questionOf decides, nothing
+ * when neither may go; a choice only while its turn and all it followed check readable, else the person's follow-up
+ * again, and with their words unknown, nothing. A turn it carries (`previous`) carries its sentences a check found
+ * readable just then (previousOf).
+ */
+async function askAs(how: AskHow, scope: AskScope): Promise<void> {
+  const account = expect();
+  if (!account || state.ask?.asking) return;
+  const fromId = 'turn' in how ? how.turn : how.follows;
+  const from = fromId === null ? null : turnOf(fromId) ?? null;
+  let derived: Derived | null = null;
+  let text: string | null = how.kind === 'typed' ? how.question : null;
+  let typed: string | null = text;
+  if (how.kind !== 'typed') {
+    if (!from && how.kind !== 'choice') return;
+    derived = from ? await questionOf(from) : null;
+    if (state.ask?.asking || !sameAccount(account)) return;
+    typed = how.kind === 'choice' ? how.typed : from?.typed ?? null;
+    text = how.kind === 'choice' ? (derived?.readable ? how.question : typed) : derived?.question ?? null;
+  }
+  if (!text) {
+    if (how.kind === 'choice' && state.ask) set({ ask: { ...state.ask, clarify: null } });
+    return;
+  }
+  const open = state.ask;
+  const again = how.kind === 'again';
   const view = open ?? { ...newAsk(), forQuestion: true };
   const mine = ++seq;
   const cancelId = crypto.randomUUID();
@@ -3786,33 +3842,34 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const named: AskQuestion = { question: text, scope };
   const started = Date.now();
   set({
-    ask: { ...view, seq: mine, asking: { ...named, progress: startProgress(started) }, clarify: null, failed: null,
-      ...(againOf === undefined ? {} : { opened: null }) },
+    ask: { ...view, seq: mine, asking: { ...named, progress: startProgress(started) }, clarify: null, failed: null, ...(again ? { opened: null } : {}) },
     sources: freshSources(null), toast: null,
   });
   if (!open) void checkTimeline();
-  let previous = how?.previous ?? null;
-  if (from) {
-    const known = await knownSources(from);
+  if (how.kind === 'typed' && from) {
+    derived = await questionOf(from);
     if (state.ask?.seq !== mine || !sameAccount(account)) {
       if (activeAskCancelId === cancelId) activeAskCancelId = null;
       return; // cancelled, or Ask was left, while what it carries was checked
     }
-    previous = previousOf(from, againOf === undefined ? 'follow_up' : 'ask_again', known, askText(text), scope);
   }
+  // Ask everywhere carries nothing: its turn is in another scope.
+  const previous = !from || how.kind === 'everywhere' || derived?.question === undefined ? null
+    : previousOf(from, again ? 'ask_again' : 'follow_up', derived.checks, askText(text), scope, derived.question);
   const result = await rpc('ask.run', { expect: account, question: text, scope, cancel_id: cancelId, ...(previous ? { previous } : {}) });
   if (activeAskCancelId === cancelId) activeAskCancelId = null;
   const current = state.ask;
   if (current?.seq !== mine) return; // cancelled, or Ask was left
   if (!result.ok) {
-    set({ ask: { ...current, asking: null, failed: { ...named, failure: result.failure, how: { previous, ...(againOf === undefined ? {} : { againOf }) } } } });
+    set({ ask: { ...current, asking: null, failed: { ...named, failure: result.failure, how } } });
     startSources();
     accountLost(result.failure);
     return;
   }
   const answer = result.value;
   if (answer.outcome === 'clarify') {
-    set({ ask: { ...current, asking: null, clarify: { ...named, choices: answer.choices ?? [], previous } } });
+    const follows = how.kind === 'typed' || how.kind === 'choice' ? from?.id ?? null : null;
+    set({ ask: { ...current, asking: null, clarify: { ...named, choices: answer.choices ?? [], follows, typed } } });
     startSources();
     return;
   }
@@ -3820,8 +3877,9 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   // through only while this Ask shows it; and no choices, which only "Which one?" has.
   const { receipt, question: full, since, choices: _choices, ...kept } = answer;
   const turn: TimelineTurn = {
-    id: crypto.randomUUID(), asked_at: new Date(started).toISOString(), text, question: full ?? text, scope, answer: kept,
-    ...(since === undefined ? {} : { since }), ...(againOf === undefined ? {} : { again_of: againOf }),
+    id: crypto.randomUUID(), asked_at: new Date(started).toISOString(), text, question: full ?? text, scope, answer: kept, citations_complete: true,
+    ...(typed === null ? {} : { typed }), follows: from?.id ?? null,
+    ...(since === undefined ? {} : { since }), ...(how.kind === 'again' ? { again_of: how.turn } : {}),
   };
   keepTurn(turn);
   // Only an Ask that took long enough to show its work keeps its receipt, timed as its live line was.
@@ -3881,7 +3939,7 @@ export function askEverywhere(id: string): void {
   const turn = turnOf(id);
   if (!turn || state.ask?.asking || !canAskEverywhere(turn)) return;
   widenScope();
-  void ask(turn.question, { kind: 'global' }, { previous: null });
+  void askAs({ kind: 'everywhere', turn: turn.id }, { kind: 'global' });
 }
 
 /**
@@ -3893,20 +3951,20 @@ export function askEverywhere(id: string): void {
 export function askAgain(id: string): void {
   const turn = turnOf(id);
   if (!turn || state.ask?.asking) return;
-  void ask(askText(turn.question), turn.scope, { againOf: turn.id });
+  void askAs({ kind: 'again', turn: id }, turn.scope);
 }
 
-/** A choice of "Which one?": its full question, asked with the same earlier turn. */
+/** A choice of "Which one?": its full question, built from the turn the follow-up continued (askAs). */
 export function chooseClarified(choice: AskChoice): void {
   const clarify = state.ask?.clarify;
   if (!clarify || state.ask?.asking) return;
-  void ask(choice.question, clarify.scope, { previous: clarify.previous });
+  void askAs({ kind: 'choice', question: choice.question, typed: clarify.typed, follows: clarify.follows }, clarify.scope);
 }
 
-/** Try again, on a question that failed: asked as it was. */
+/** Try again, on a question that failed: asked as it was, what it builds from an earlier turn built again (askAs). */
 export function retryAsk(): void {
   const failed = state.ask?.failed;
-  if (failed && !state.ask?.asking) void ask(failed.question, failed.scope, failed.how);
+  if (failed && !state.ask?.asking) void askAs(failed.how, failed.scope);
 }
 
 /**
@@ -4470,9 +4528,12 @@ export function pickSuggestion(suggestion: Suggestion): void {
 // ---- capture -----------------------------------------------------------------
 
 const NOTE_OR_FILE = 'Save this note before attaching a file.';
-/** What a note may hold, as the API takes it: 8 KiB of text. */
-const MAX_NOTE_BYTES = 8 * 1024;
-const TOO_LONG = 'Up to 8 KiB of text.';
+/**
+ * A note has no size of its own; its text must fit the Authority's 1 MiB note
+ * request, with room for the request's other fields and JSON escaping.
+ */
+const MAX_NOTE_BYTES = MAX_REQUEST_BYTES - 64 * 1024;
+const TOO_LONG = 'This note is too long to send in one piece. Split it into notes under about 1 MB each, or attach it as a file.';
 
 /** What main's quit guard was last told. */
 let unresolvedTold = '';
@@ -4588,12 +4649,11 @@ export function openProjects(): void {
   setCompose({ ...compose, picking: { place: compose.place, projects: compose.projects } });
 }
 
-/** Ticks a project in the place list, or unticks it: either way the place is a project choice. No more than the API takes. */
+/** Ticks a project in the place list, or unticks it: either way the place is a project choice. */
 export function tickProject(project: ProjectSummary): void {
   const compose = state.compose;
   if (!compose?.picking || project.status !== 'active') return;
   const ticked = compose.projects.some(entry => entry.project_id === project.project_id);
-  if (!ticked && compose.projects.length >= MAX_CAPTURE_PROJECTS) return;
   editCompose({ place: 'projects', projects: ticked ? compose.projects.filter(entry => entry.project_id !== project.project_id) : [...compose.projects, project] });
 }
 
@@ -5353,8 +5413,8 @@ function settle(): void {
  * person's live; never joined to a load on its way, whose reads may predate
  * the change. Otherwise (a zoom), only what is new: projects not read yet,
  * and the project zoomed into. A project zoomed into reads all its follow-ups,
- * then its waiting ones live; a person's are read live one by one, at most
- * PERSON_LIVE_MAX, from projects still on your list. When the sidebar shows
+ * then its waiting ones live; a person's are read live one by one, every
+ * one, a few at a time, from projects still on your list. When the sidebar shows
  * only its first pages, Home reads every page. A newer load, or another
  * account, stops an older one at its next project.
  */
@@ -5414,8 +5474,8 @@ export function loadAltitude(fresh = true): Promise<void> {
     if (state.altitude.level === 'person' && membership_id !== null) {
       const theirs = listed.flatMap(id => state.altitude.reads[id]?.active ?? [])
         .filter(item => item.owner.membership_id === membership_id && !unowned(item) && item.kind !== 'action');
-      // The same first PERSON_LIVE_MAX of theirs each time, however often Home zooms on them; the rest keep stored words.
-      const unread = [...new Map(theirs.map(item => [item.item_id, item])).values()].slice(0, PERSON_LIVE_MAX)
+      // Every one of theirs, once, however often Home zooms on them.
+      const unread = [...new Map(theirs.map(item => [item.item_id, item])).values()]
         .filter(item => again || !state.altitude.live[item.item_id]);
       set({ altitude: { ...state.altitude, reading: unread.length > 0 } });
       await inTurns(unread, PROJECT_READS_AT_ONCE, async item => {
@@ -5727,21 +5787,13 @@ function routedItems(decision: DecisionState): readonly ReviewOpen['items'][numb
 export function keptItems(decision: DecisionState): readonly ReviewOpen['items'][number][] {
   return routedItems(decision).filter(item => (decision.routes[item.signal_id] ?? null) !== null);
 }
-/** Every project the routes name, each once, locked or not: what counts toward the meeting's MAX_CAPTURE_PROJECTS. */
-export function routedProjects(routes: Readonly<Record<string, Destination>>): Set<string> {
-  return new Set(Object.values(routes).flatMap(destination => destination?.projects ?? []));
-}
-/** Routes the card may send: at most MAX_CAPTURE_PROJECTS projects in all, as at most so many in one item. */
-function withinProjects(routes: Readonly<Record<string, Destination>>): boolean {
-  return routedProjects(routes).size <= MAX_CAPTURE_PROJECTS;
-}
 
 /** One item's destination: not kept (null), Only me, or exactly these projects, locked or not. */
 export function setDecisionRoute(signalId: string, destination: Destination): void {
   const decision = state.decision;
   if (!decision) return;
   const routes = { ...decision.routes, [signalId]: destination === null ? null : destinationOf(destination.projects, destination.private) };
-  if (withinProjects(routes)) editChoices({ routes });
+  editChoices({ routes });
 }
 /**
  * A project ticked or unticked on one item. The lock stays as it was while projects stay ticked; the first project ticked
@@ -5772,7 +5824,7 @@ export function setDecisionRoutes(destination: Destination): void {
   const targets = destination === null || keptItems(decision).length === 0 ? items : keptItems(decision);
   const value = destination === null ? null : destinationOf(destination.projects, destination.private);
   const routes = { ...decision.routes, ...Object.fromEntries(targets.map(item => [item.signal_id, value])) };
-  if (withinProjects(routes)) editChoices({ routes });
+  editChoices({ routes });
 }
 /**
  * A project ticked or unticked on every kept item at once (on every item when none is kept), each keeping its other projects
@@ -5789,7 +5841,7 @@ export function tickDecisionRoutes(projectId: string): void {
     const others = (now?.projects ?? []).filter(id => id !== projectId);
     return [item.signal_id, destinationOf(off ? others : [...others, projectId], keptPrivate(now))];
   })) };
-  if (withinProjects(routes)) editChoices({ routes });
+  editChoices({ routes });
 }
 /**
  * The Only me lock on every kept item filed in projects at once: each locked, or unlocked when each already is. An item in
@@ -6585,17 +6637,14 @@ export async function sendTicked(include: boolean): Promise<void> {
   setView({ ...list, busy: true, said: null, picker: null });
   const sends: Record<string, SendCommand> = { ...list.sends };
   const tried = new Map<string, Failure | undefined>();
-  batches: for (const batch of new Set(ticked.map(sendBatch))) {
-    const rows = ticked.filter(item => sendBatch(item) === batch);
-    // One Send lists at most so many of a run's items, so a long meeting goes in parts; a follow-up from a chat is a batch of its own.
-    for (let start = 0; start < rows.length; start += PERSON_RUN_ITEMS_MAX_V1) {
-      if (!viewOf('list', list.seq) || !sameAccount(account)) break batches;
-      const part = rows.slice(start, start + PERSON_RUN_ITEMS_MAX_V1);
-      const sent = await sendRows(part, include, sends[batch]);
-      if (sent.unknown) sends[batch] = sent.command; else delete sends[batch];
-      for (const item of part) tried.set(item.item_id, sent.failure);
-      if (sent.failure) break batches;
-    }
+  for (const batch of new Set(ticked.map(sendBatch))) {
+    // One Send takes all of a run's ticked items; a follow-up from a chat is a batch of its own.
+    const part = ticked.filter(item => sendBatch(item) === batch);
+    if (!viewOf('list', list.seq) || !sameAccount(account)) break;
+    const sent = await sendRows(part, include, sends[batch]);
+    if (sent.unknown) sends[batch] = sent.command; else delete sends[batch];
+    for (const item of part) tried.set(item.item_id, sent.failure);
+    if (sent.failure) break;
   }
   if (!viewOf('list', list.seq) || !sameAccount(account)) return;
   await readList(list.seq, 'again');

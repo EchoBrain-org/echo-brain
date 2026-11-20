@@ -18,9 +18,38 @@ interface ClaudeResearchRunV1 {
   readonly single_generation?: true;
 }
 
+/**
+ * Why a started SDK session gave no result, content-free: the SDK's result subtype (`error_max_turns`,
+ * `error_max_structured_output_retries`, ...), `no_structured_output` for a success without the answer, or
+ * `session_failed` when the stream ended without a result (the child exited).
+ */
+export interface ClaudeResultFailureV1 {
+  readonly subtype: string;
+  /** The model's last stop reason (`max_tokens`, `end_turn`, ...), `other` when it is not a plain token, null when unknown. */
+  readonly stop_reason: string | null;
+}
+/** A content-free token: a known SDK word, never text from the session. */
+function token(value: unknown, fallback: string): string {
+  return typeof value === 'string' && /^[a-z_]{1,64}$/u.test(value) ? value : fallback;
+}
+
 /** A started SDK session failed: an error result (provider refusals after its retry, output retries) or the child exited. */
 export class ClaudeResearchResultErrorV1 extends Error {
-  constructor() { super('Claude research did not complete'); this.name = 'ClaudeResearchResultErrorV1'; }
+  readonly subtype: string;
+  readonly stop_reason: string | null;
+  constructor(failure: ClaudeResultFailureV1 = { subtype: 'session_failed', stop_reason: null }) {
+    super(`Claude research did not complete (${failure.subtype})`);
+    this.name = 'ClaudeResearchResultErrorV1';
+    this.subtype = failure.subtype;
+    this.stop_reason = failure.stop_reason;
+  }
+}
+function resultFailure(result: SDKResultMessage | undefined, subtype?: string): ClaudeResearchResultErrorV1 {
+  const stop = (result as { readonly stop_reason?: unknown } | undefined)?.stop_reason;
+  return new ClaudeResearchResultErrorV1({
+    subtype: subtype ?? (result === undefined ? 'session_failed' : token(result.subtype, 'other')),
+    stop_reason: stop === undefined || stop === null ? null : token(stop, 'other'),
+  });
 }
 
 /** Each request gets an empty working directory and only ECHO tools; personal runs preserve native sign-in. */
@@ -31,7 +60,7 @@ export async function runClaudeResearchV1(input: ClaudeResearchRunV1, sdkQuery: 
 /** A separate native writing pass: same isolated runtime, no research tools, ECHO's answer schema. */
 export async function runClaudeStructuredV1(input: Omit<ClaudeResearchRunV1, 'servers' | 'tools'> & { readonly schema: Record<string, unknown>; readonly max_output_tokens: number }, sdkQuery: typeof query = query): Promise<unknown> {
   const result = await runClaudeSessionV1({ ...input, servers: {}, tools: [] }, input.schema, sdkQuery, input.max_output_tokens);
-  if (result.structured_output === undefined) throw new ClaudeResearchResultErrorV1();
+  if (result.structured_output === undefined) throw resultFailure(result, 'no_structured_output');
   return result.structured_output;
 }
 
@@ -95,7 +124,7 @@ async function runClaudeSessionV1(input: ClaudeResearchRunV1, schema: Record<str
       throw new ClaudeResearchResultErrorV1();
     }
     input.signal.throwIfAborted();
-    if (result?.subtype !== 'success' || result.is_error) throw new ClaudeResearchResultErrorV1();
+    if (result?.subtype !== 'success' || result.is_error) throw resultFailure(result, result?.subtype === 'success' ? 'error_result' : undefined);
     return result;
   } finally {
     input.signal.removeEventListener('abort', cancel);

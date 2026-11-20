@@ -23,13 +23,6 @@ export const FOLLOW_UPS_SOURCE_ID_V1 = 'follow_ups' as const;
 const FOLLOW_UPS_SELECTOR_V1 = 'follow_ups' as const;
 /** A status group a follow-ups list takes. */
 export type FollowUpListStatusV1 = 'open' | 'done';
-/**
- * Per-request bounds: the hits one search returns, the rows one list page
- * returns, and the distinct tool items read live for follow-ups in one
- * request (each at most once, so follow-ups on one item share its read).
- * Past the last, a follow-up is released with ECHO-held text only.
- */
-export const FOLLOW_UPS_LIMITS_V1 = Object.freeze({ search_hits: 5, list_page: 10, live_reads: 20 });
 
 /**
  * The descriptor of ECHO's follow-ups. Request-bound like a connected tool's,

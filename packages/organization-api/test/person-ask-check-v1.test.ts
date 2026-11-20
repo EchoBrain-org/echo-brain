@@ -6,6 +6,7 @@ import {
   PERSON_ASK_CHECK_LIMITS_V1,
   PERSON_ASK_CHECK_PATH_V1,
   PERSON_ASK_CHECK_REQUEST_KIND_V1,
+  MAX_ORGANIZATION_API_BODY_BYTES,
   validatePersonAnswerEvidenceCitationV8,
   validatePersonAskCheckRequestV1,
   validatePersonAskCheckV1,
@@ -23,6 +24,7 @@ const citations = {
   follow_up: { kind: 'follow_up', item_id: 'itm_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' },
   ticket: { kind: 'ticket', tool_id: 'jira', external_scope_id: '00000000-0000-4000-8000-000000000007', ticket_id: '10012', permalink: 'https://echo.atlassian.net/browse/ECHO-12', text_sha256: digest('1') },
   page: { kind: 'page', tool_id: 'confluence', external_scope_id: '00000000-0000-4000-8000-000000000007', page_id: '200', section_id: 's2', version: '3', permalink: 'https://echo.atlassian.net/wiki/pages/viewpage.action?pageId=200', text_sha256: digest('2') },
+  project: { kind: 'project', project_id: 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' },
 } as const;
 const item = (citation: unknown, fields: Record<string, unknown> = {}) => ({ asked_at: ASKED, citation, ...fields });
 const request = (items: readonly unknown[] = Object.values(citations).map(citation => item(citation)), fields: Record<string, unknown> = {}) =>
@@ -32,9 +34,10 @@ const answer = (items: readonly unknown[], fields: Record<string, unknown> = {})
 describe('Ask source check request (Ask timeline v1, C1)', () => {
   it('serves one path and freezes its bounds and kinds', () => {
     expect(PERSON_ASK_CHECK_PATH_V1).toBe('/v1/person/ask/check');
-    expect(PERSON_ASK_CHECK_LIMITS_V1).toEqual({ items_min: 1, items_max: 100, body_bytes: 64 * 1024 });
+    expect(PERSON_ASK_CHECK_LIMITS_V1).toEqual({ items_min: 1, body_bytes: MAX_ORGANIZATION_API_BODY_BYTES });
+    expect(MAX_ORGANIZATION_API_BODY_BYTES).toBe(1024 * 1024);
     expect(Object.isFrozen(PERSON_ASK_CHECK_LIMITS_V1)).toBe(true);
-    expect([...PERSON_ASK_CHECK_CITATION_KINDS_V1]).toEqual(['approved_record', 'source_revision', 'follow_up', 'ticket', 'page']);
+    expect([...PERSON_ASK_CHECK_CITATION_KINDS_V1]).toEqual(['approved_record', 'source_revision', 'follow_up', 'ticket', 'page', 'project']);
   });
 
   it('accepts each checkable kind exactly as an answer cited it, and returns a frozen copy', () => {
@@ -50,19 +53,18 @@ describe('Ask source check request (Ask timeline v1, C1)', () => {
     expect(validatePersonAskCheckRequestV1(request([item(citations.page), item(citations.page, { asked_at: '2026-10-21T09:30:00.000Z' })])).items).toHaveLength(2);
   });
 
-  it('takes 1 to 100 items within 64 KiB', () => {
-    expect(validatePersonAskCheckRequestV1(request(Array.from({ length: 100 }, () => item(citations.follow_up)))).items).toHaveLength(100);
+  it('takes any number of items within the Person body bound, and at least one', () => {
+    expect(validatePersonAskCheckRequestV1(request(Array.from({ length: 300 }, () => item(citations.follow_up)))).items).toHaveLength(300);
     refused(() => validatePersonAskCheckRequestV1(request([])), 'no items');
-    refused(() => validatePersonAskCheckRequestV1(request(Array.from({ length: 101 }, () => item(citations.follow_up)))), '101 items');
-    // A hundred long source citations pass the item bound but not the byte bound.
+    // The byte bound is the request's one bound.
     const long = { ...citations.source_revision, revision_id: 'r'.repeat(512), label: 'L'.repeat(200) };
-    const heavy = request(Array.from({ length: 100 }, () => item(long)));
+    const heavy = request(Array.from({ length: 1_500 }, () => item(long)));
     expect(canonicalJsonBytes(heavy).byteLength).toBeGreaterThan(PERSON_ASK_CHECK_LIMITS_V1.body_bytes);
-    refused(() => validatePersonAskCheckRequestV1(heavy), 'over 64 KiB');
+    refused(() => validatePersonAskCheckRequestV1(heavy), 'over 1 MiB');
   });
 
   it.each([
-    ['a project', { kind: 'project', project_id: 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' }],
+    ['a project with a bad id', { kind: 'project', project_id: 'project-1' }],
     ['a person', { kind: 'person', membership_id: 'mem_0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e' }],
     ['a tool', { kind: 'tool', tool_id: 'jira' }],
     ['a tool container', { kind: 'tool_container', tool_id: 'jira', external_scope_id: 'cloud-1', container: 'jira_project', container_id: '10001', permalink: 'https://example.atlassian.net/browse/THERM' }],
@@ -126,7 +128,6 @@ describe('Ask source check answer (Ask timeline v1, C1)', () => {
     ['the request kind', answer([{ state: 'same' }], { kind: PERSON_ASK_CHECK_REQUEST_KIND_V1 })],
     ['an extra key', answer([{ state: 'same' }], { checked_at: ASKED })],
     ['no items', answer([])],
-    ['101 items', answer(Array.from({ length: 101 }, () => ({ state: 'same' })))],
     ['another state', answer([{ state: 'stale' }])],
     ['no state', answer([{}])],
     ['a reason', answer([{ state: 'unreadable', reason: 'deleted' }])],

@@ -2,7 +2,6 @@ import type Database from 'better-sqlite3';
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
 import {
   PERSON_PROJECT_ACTIVITY_KIND_V1,
-  PERSON_PROJECT_ACTIVITY_LIMITS_V1,
   validatePersonProjectActivityV1,
   type PersonProjectActivityV1,
   type ProjectIdV1,
@@ -20,7 +19,7 @@ import type { PersonProjectRecordActivityV1, PersonReadableDecisionProjectsV1, P
 
 /**
  * Project activity (Ask timeline v1, C2; ADR-0047): `GET /v1/person/project-activity` answers, for every active project the
- * caller is a member of (newest first, as the project list pages them, at most 500), when something last arrived in it from
+ * caller is a member of (newest first, as the project list pages them), when something last arrived in it from
  * someone else, or null, and no content. The route authenticates the caller before it asks.
  *
  * `latest_at` is the newest of these, each counted only from rows the caller reads now, through the same policy as the
@@ -32,7 +31,9 @@ import type { PersonProjectRecordActivityV1, PersonReadableDecisionProjectsV1, P
  *   owner or state someone else set last (`sent_at`, `owner_set_at`, `state_set_at`), of the rows the open-items policy shows
  *   the caller with their decision. The store returns only rows someone else moved, with when, newest move first, a page at a
  *   time, so the first row the policy pass shows is the newest.
- * Only a project's newest 500 filed records count: its meetings past them, and their follow-ups, never light it.
+ * Every filed record counts, however old. The filed history is read a page at a time and each page's follow-ups looked up
+ * on their own, so one read holds one page of records, never a project's whole history; the meeting lookup stops at the
+ * newest it needs.
  * Live Jira and Confluence edits never count, and no global position, counter or revision goes into it: it moves only with
  * activity the caller can see (ADR-0012, ADR-0036).
  *
@@ -53,7 +54,6 @@ export interface CreatePersonProjectActivityV1Options {
   readonly records: PersonProjectRecordActivityV1 & PersonReadableDecisionProjectsV1;
 }
 
-const PROJECTS_MAX = PERSON_PROJECT_ACTIVITY_LIMITS_V1.items;
 /** The follow-ups someone else moved, read a page at a time, newest move first. */
 const MOVES_PAGE = 50;
 
@@ -63,12 +63,15 @@ export function createPersonProjectActivityV1(options: CreatePersonProjectActivi
    * policy shows the viewer together with their decision: an owner who cannot read the decision sees the row, never which
    * project it is filed in. The store returns only rows someone else moved, each with when it last did (`moved_at`), newest
    * move first, a page at a time, so the first row the policy shows is the newest. Usually the first page has one; a page
-   * whose rows the viewer cannot see moves on to the next.
+   * whose rows the viewer cannot see moves on to the next. Only a move newer than `newer_than` (the newest already found)
+   * can change the answer, so the pages stop at the first move that is not.
    */
-  const followUpsAt = (viewer: OpenItemViewerV1, projectId: ProjectIdV1, records: readonly Sha256Digest[], decisions: OpenItemDecisionsReaderV1<Pick<PersonReadableDecisionV1, 'project_ids'>>): string | null => {
+  const followUpsAt = (viewer: OpenItemViewerV1, projectId: ProjectIdV1, records: readonly Sha256Digest[], decisions: OpenItemDecisionsReaderV1<Pick<PersonReadableDecisionV1, 'project_ids'>>,
+    newer_than: string | null): string | null => {
     if (records.length === 0) return null;
     for (let after: { readonly moved_at: string; readonly item_id: string } | undefined; ;) {
-      const page = options.items.movedByOthers(viewer.organization, viewer.membership, records, { limit: MOVES_PAGE, ...(after === undefined ? {} : { after }) });
+      const page = options.items.movedByOthers(viewer.organization, viewer.membership, records, { limit: MOVES_PAGE, ...(after === undefined ? {} : { after }) })
+        .filter(entry => newer_than === null || entry.moved_at > newer_than);
       const last = page.at(-1);
       if (last === undefined) return null;
       const context = assessOpenItemsV1({ records: decisions, people: options.people }, viewer, page.map(entry => entry.row));
@@ -88,7 +91,7 @@ export function createPersonProjectActivityV1(options: CreatePersonProjectActivi
       const items = options.database.transaction(() => {
         const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
         const view = options.projects.personChangeView(authorization);
-        const active = view.projects.filter(project => project.status === 'active').slice(0, PROJECTS_MAX);
+        const active = view.projects.filter(project => project.status === 'active');
         const ids = active.map(project => project.project_id);
         const latest = new Map<string, string | null>(ids.map(id => [id, null]));
         const arrived = (projectId: string, at: string | null): void => {
@@ -102,13 +105,19 @@ export function createPersonProjectActivityV1(options: CreatePersonProjectActivi
           access_token: input.access_token, projects, project_ids: ids, own: options.approvals.approvedRecords(authorization),
         });
         const viewer = openItemViewerV1(input.access_token, authorization);
-        // Which records the viewer reads, from the grants read in the read's own transaction; each looked up once per read.
-        const decisions = openItemDecisionsReaderV1(options.records, input.access_token, () => projects);
         for (const { project_id } of active) {
           const records = filed.get(project_id);
           if (records === undefined) continue;
           arrived(project_id, records.meeting_at);
-          arrived(project_id, followUpsAt(viewer, project_id, records.filed, decisions));
+          // One page of the filed history at a time: its follow-ups' newest move, kept only when newer than any found. Each
+          // page has its own reader of which records the viewer reads (from the grants read in this transaction), so what
+          // one page learned is let go before the next: a read holds one page's decisions, never the whole history's.
+          let moved: string | null = null;
+          for (const page of records.filed()) {
+            const decisions = openItemDecisionsReaderV1(options.records, input.access_token, () => projects);
+            moved = followUpsAt(viewer, project_id, page, decisions, moved) ?? moved;
+          }
+          arrived(project_id, moved);
         }
         return active.map(project => ({ project_id: project.project_id, latest_at: latest.get(project.project_id) ?? null }));
       }).deferred();

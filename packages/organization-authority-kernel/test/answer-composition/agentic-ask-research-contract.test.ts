@@ -75,6 +75,32 @@ describe('Ask research tool contract v1', () => {
       .toEqual([['research_loop', { research_repeat_refusal: 1 }], ['research_output', { writer_fallback: 1 }]]);
   });
 
+  it('stops research that only gets refused, though each round words its refused read differently', async () => {
+    // Every round asks meetings for a date they do not record, in new words: each read is refused unsent, so no round
+    // produces anything, and two such rounds stop research.
+    const refused = (n: number) => step([{ tool: 'search', args: { source: 'meetings', query: `vendor change ${n}`, date_field: 'sent', since: '2026-10-18', until: '2026-10-18' } }]);
+    const port = desk();
+    const run = scripted([refused(1), refused(2), refused(3), refused(4), refused(5), step([{ tool: 'finish', args: {} }], 'not_found')]);
+    const events: CoreRuntimeObservationV1[] = [];
+    await observeCoreRuntimeV1('ask_request', () => ask(port, run.model).answer({ question }), { observer: event => { events.push(event); } }).catch(() => undefined);
+    expect(port.search).not.toHaveBeenCalled();
+    expect(run.steps()).toHaveLength(2);
+    expect(events.some(event => event.model_corrections?.research_no_progress_stop === 1)).toBe(true);
+  });
+
+  it('stops research whose searches only meet an availability notice, though each round words its search differently', async () => {
+    // Each search reaches the desk, finds nothing and says the source could not be searched: no round completes a read or
+    // adds evidence, so two such rounds stop research.
+    const searchFor = (n: number) => step([{ tool: 'search', args: { query: `vendor change ${n}` } }]);
+    const port = desk({ search: vi.fn(async () => result([], { notice: 'Follow-ups are temporarily unavailable.' })) });
+    const run = scripted([searchFor(1), searchFor(2), searchFor(3), searchFor(4), searchFor(5), step([{ tool: 'finish', args: {} }], 'not_found')]);
+    const events: CoreRuntimeObservationV1[] = [];
+    await observeCoreRuntimeV1('ask_request', () => ask(port, run.model).answer({ question }), { observer: event => { events.push(event); } }).catch(() => undefined);
+    expect(port.search).toHaveBeenCalledTimes(2);
+    expect(run.steps()).toHaveLength(2);
+    expect(events.some(event => event.model_corrections?.research_no_progress_stop === 1)).toBe(true);
+  });
+
   it('reads a window with no date field on any of an item\'s dates where its source declares that, and shows which matched', async () => {
     const approvedYesterday = decision('canary', { approved: '2026-10-18T21:05:00.000Z' });
     const port = desk({ list: vi.fn(async () => result([approvedYesterday])) });
@@ -125,14 +151,14 @@ describe('Ask research tool contract v1', () => {
     expect(answer.parts[0]!.gap).toBe('None of the items that record the date asked for matched. 3 decisions have no recorded time, so they were not checked against these dates. They have an approval date.');
   });
 
-  it('lets one Ask step look at up to ten sources and queries at once', async () => {
+  it('lets one Ask step look at as many sources and queries at once as it needs', async () => {
     const port = desk();
-    const queries = Array.from({ length: 10 }, (_, index) => ({ tool: 'search', args: { query: `topic ${index + 1}` } }));
+    const queries = Array.from({ length: 45 }, (_, index) => ({ tool: 'search', args: { query: `topic ${index + 1}` } }));
     const run = scripted([step(queries), step([{ tool: 'finish', args: {} }], 'not_found')]);
     await ask(port, run.model).answer({ question }).catch(() => undefined);
-    expect(port.search).toHaveBeenCalledTimes(10);
-    const schema = run.steps()[0]!.schema as { properties: { actions: { maxItems: number } } };
-    expect(schema.properties.actions.maxItems).toBe(10);
+    expect(port.search).toHaveBeenCalledTimes(45);
+    const schema = run.steps()[0]!.schema as { properties: { actions: Record<string, unknown> } };
+    expect(schema.properties.actions).not.toHaveProperty('maxItems');
   });
 
   it('answers V8 with a cited project and its leads, and streams progress V3 that names the projects source', async () => {

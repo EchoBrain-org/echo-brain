@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { byTestId, cover, elements, fail, flush, Held, numbered, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text } from './harness.js';
+import { MAX_REQUEST_BYTES } from '../../src/shared/protocol.js';
 
 const { rpc, dropFile } = vi.hoisted(() => ({ rpc: vi.fn(), dropFile: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile }));
@@ -141,7 +142,7 @@ describe('where a capture goes and who can read it', () => {
     expect(store.getState().toast).toBe('Saved for you');
   });
 
-  it('pages the picker and accepts at most twenty projects, releasing a place when unticked', async () => {
+  it('pages the picker and files a capture in every project ticked, however many', async () => {
     active = numbered(22);
     const store = await startStore();
     store.openCompose(); store.setComposeText('Quarterly numbers'); store.openProjects();
@@ -153,13 +154,15 @@ describe('where a capture goes and who can read it', () => {
     expect(store.getState().projects.items).toHaveLength(22);
     expect(byTestId(await sheet(store), 'projects-more')).toHaveLength(0);
     for (const entry of active) store.tickProject(entry);
-    expect(store.getState().compose?.projects).toEqual(active.slice(0, 20));
-    expect(text(byTestId(await sheet(store), 'projects-limit'))).toBe('Up to 20 projects.');
+    expect(store.getState().compose?.projects).toEqual(active);
+    expect(byTestId(await sheet(store), 'projects-limit')).toEqual([]);
     const disabled = async () => elements(byTestId(await sheet(store), 'projects-row')).filter(node => node.type === 'input').map(node => node.props.disabled);
-    expect((await disabled()).slice(19)).toEqual([false, true, true]);
-    store.tickProject(active[0]!); store.tickProject(active[20]!);
+    expect((await disabled()).every(off => !off)).toBe(true);
+    // Unticking one releases it.
+    store.tickProject(active[0]!);
     await store.sendCompose();
-    expect(sent('notes.submit')[0]).toMatchObject({ audience: { kind: 'projects', project_ids: active.slice(1, 21).map(row => row.project_id).sort() }, project_ids: active.slice(1, 21).map(row => row.project_id).sort() });
+    const ids = active.slice(1).map(row => row.project_id).sort();
+    expect(sent('notes.submit')[0]).toMatchObject({ audience: { kind: 'projects', project_ids: ids }, project_ids: ids });
   });
 });
 
@@ -223,17 +226,18 @@ describe('files and unresolved captures', () => {
     expect(byTestId(await sheet(store), 'compose-body')).toHaveLength(1);
   });
 
-  it('rejects a note over 8 KiB before sending, and accepts exactly 8 KiB', async () => {
+  it('sends a long note whole, and refuses before sending only one that cannot fit the 1 MiB note request', async () => {
     const store = await startStore();
-    store.openCompose(); store.setComposeText(`Long note\n${'x'.repeat(8192)}`);
+    store.openCompose(); store.setComposeText(`Long note\n${'x'.repeat(MAX_REQUEST_BYTES)}`);
     await store.sendCompose();
-    expect(store.getState().compose).toMatchObject({ notice: 'Up to 8 KiB of text.', status: 'editing' });
+    expect(store.getState().compose).toMatchObject({ notice: expect.stringContaining('too long to send in one piece'), status: 'editing' });
     expect(sent('notes.submit')).toHaveLength(0);
     expect(byTestId(await sheet(store), 'compose-error')).toHaveLength(0);
-    store.setComposeText(`Long note\n${'x'.repeat(8182)}`);
+    // Past the old 8 KiB, a note goes as written.
+    store.setComposeText(`Long note\n${'x'.repeat(200 * 1024)}`);
     expect(store.getState().compose?.notice).toBeUndefined();
     await store.sendCompose();
-    expect(Buffer.byteLength(sent('notes.submit')[0].text)).toBe(8192);
+    expect(Buffer.byteLength(sent('notes.submit')[0].text)).toBe(200 * 1024 + 10);
   });
 
   it.each(['team', 'locked'] as const)('an unconfirmed %s save locks its audience and says what may have happened', async kind => {

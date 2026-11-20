@@ -1,5 +1,4 @@
 import type { JsonObject, Sha256Digest } from "@echo-brain/federation-protocol";
-import { PERSON_CITED_RECORD_PARTICIPANTS_MAX_V1, PERSON_LIST_TEXT_MAX_BYTES_V1 } from "@echo-brain/organization-api";
 import { isCalendarDay } from "@echo-brain/organization-api/validation";
 import { localDateV1 } from "@echo-brain/organization-processing/core";
 import type { OrganizationRecordDecisionBriefV1, OrganizationRecordMeetingTimeV1 } from "@echo-brain/organization-protocol";
@@ -97,20 +96,18 @@ export function confirmedOwners(reference: unknown): ReadonlyMap<string, string>
 }
 
 /**
- * A meeting's participants as one row fact (research tool contract v1): display names only, each once, at most 32,
- * joined with ", " and ending ", and more" when the meeting recorded more. Never participant ids, identities, roles,
+ * A meeting's participants as one row fact (research tool contract v1): display names only, each once, every one,
+ * joined with ", ". Never participant ids, identities, roles,
  * organizations, metadata, the meeting or brief id, provenance, subjects or confidence.
  */
 export function meetingParticipantsV1(brief: OrganizationRecordDecisionBriefV1): string | undefined {
   const participants: string[] = [];
-  let more = false;
   for (const participant of brief.meeting.participants) {
-    const name = boundedTextV1(participant.display_name, PERSON_LIST_TEXT_MAX_BYTES_V1);
+    const name = boundedTextV1(participant.display_name, Number.POSITIVE_INFINITY);
     if (name === undefined || participants.includes(name)) continue;
-    if (participants.length === PERSON_CITED_RECORD_PARTICIPANTS_MAX_V1) { more = true; break; }
     participants.push(name);
   }
-  return participants.length === 0 ? undefined : `${participants.join(", ")}${more ? ", and more" : ""}`;
+  return participants.length === 0 ? undefined : participants.join(", ");
 }
 
 interface RecordCoordinatesV1 {

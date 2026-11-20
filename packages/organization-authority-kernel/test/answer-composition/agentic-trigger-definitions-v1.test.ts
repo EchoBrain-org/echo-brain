@@ -51,8 +51,11 @@ describe("Ask definition", () => {
     });
   });
 
-  it("applies the product question limits", () => {
-    for (const input of [{ question: "x ".repeat(130).trim() }, { question: " padded" }, { question: "q", extra: true }, {}, "Why?", null]) refused("ask", input);
+  it("applies the product question rule: a long question on two lines is asked, and the rule has no length of its own", () => {
+    const question = `${"Who owns the thermal retest and what is blocked on supplier samples? ".repeat(5).trim()}\nAnd what changed since Tuesday?`;
+    expect(brief("ask", { question }).goal).toEqual({ kind: "question", question });
+    expect(brief("ask", { question: "x".repeat(10_000) }).goal).toEqual({ kind: "question", question: "x".repeat(10_000) });
+    for (const input of [{ question: "Who\u0007 owns it?" }, { question: " padded" }, { question: "q", extra: true }, {}, "Why?", null]) refused("ask", input);
   });
 });
 

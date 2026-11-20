@@ -6,7 +6,7 @@ import { retainedMeetingSourceCoordinateV1 } from '@echo-brain/organization-proc
 import type { DecisionBrief } from '@echo-brain/organization-processing/core';
 import { approvalCoreFixture } from './fixtures/approval-core.js';
 import {
-  APPROVAL_PROJECTS_MAX_V1, APPROVAL_ROUTES_MAX_V1, APPROVAL_SNAPSHOT_SURFACE_V1, approvalProposalSummaryV1, approvalReviewV1,
+  APPROVAL_SNAPSHOT_SURFACE_V1, approvalProposalSummaryV1, approvalReviewV1,
   createApprovalCoreV1, validateApprovalDecisionRequestV1, type ApprovalAuthorizationV1,
 } from '../src/composition/approval-core-v1.js';
 
@@ -79,7 +79,9 @@ describe('approval core: owners', () => {
   it('offers only owner proposals that the shared owner rule accepts', async () => {
     const f = await approvalCoreFixture({ actions: [{ id: 'act-1', owner: '  Rafael \t Moreno ' }, { id: 'act 2', owner: 'Odd Id' }, { id: 'act-3', owner: 'Zoë' }, { id: 'act-4', owner: 'x'.repeat(130) }] });
     const offered = f.core.ownerProposals(f.approvalId);
-    expect(offered).toEqual([{ signal_id: 'act-1', action: 'Follow up on item 1.', proposed: 'Rafael Moreno' }, { signal_id: 'act-3', action: 'Follow up on item 3.', proposed: 'Zoë' }]);
+    // A long owner is offered whole: an owner has no length of its own.
+    expect(offered).toEqual([{ signal_id: 'act-1', action: 'Follow up on item 1.', proposed: 'Rafael Moreno' }, { signal_id: 'act-3', action: 'Follow up on item 3.', proposed: 'Zoë' },
+      { signal_id: 'act-4', action: 'Follow up on item 4.', proposed: 'x'.repeat(130) }]);
     for (const item of offered) expect(isApprovalOwnerTextV1(item.proposed)).toBe(true);
     expect(f.core.ownerProposals('apr_' + '0'.repeat(64))).toEqual([]);
   });
@@ -88,10 +90,14 @@ describe('approval core: owners', () => {
     const brief = { actions: owners.map((owner, i) => ({ id: `a${i}`, kind: 'action', text: 'Do it.', owner, due_at: null })) } as unknown as DecisionBrief;
     for (const proposal of ownerProposalsV1(brief)) expect(isApprovalOwnerTextV1(proposal.owner)).toBe(true);
   });
-  it('offers no owners above 40 proposals and then refuses any owner', async () => {
-    const f = await approvalCoreFixture({ actions: Array.from({ length: 41 }, (_, i) => ({ id: `act-${i + 1}`, owner: `Owner ${i + 1}` })) });
-    expect(f.core.ownerProposals(f.approvalId)).toEqual([]);
-    expect(() => f.core.decide('desktop', f.approve({ owners: [{ signal_id: 'act-1', owner: 'Owner 1' }] }), () => f.session)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
+  it('offers every owner proposal, and stores a decision that confirms all of them', async () => {
+    const f = await approvalCoreFixture({ actions: Array.from({ length: 120 }, (_, i) => ({ id: `act-${i + 1}`, owner: `Owner ${i + 1}` })) });
+    const offered = f.core.ownerProposals(f.approvalId);
+    expect(offered.map(item => item.signal_id)).toEqual(Array.from({ length: 120 }, (_, i) => `act-${i + 1}`));
+    const owners = offered.map(item => ({ signal_id: item.signal_id, owner: item.proposed }));
+    expect(f.core.decide('desktop', f.approve({ owners }), () => f.session)).toMatchObject({ kind: 'decided' });
+    const body = JSON.parse(f.db.prepare('SELECT body_json FROM authority_approval_decisions_v1').pluck().get() as string);
+    expect(body.request.owners).toHaveLength(120);
   });
   it('refuses owners out of brief order or for an action without a proposal', async () => {
     const f = await approvalCoreFixture({ owners: { 'act-1': 'Rafael Moreno', 'act-2': 'Ana Lima' } });
@@ -122,12 +128,9 @@ describe('approval core: decide', () => {
       { ...base, routes: f.routes(null) }, { ...base, routes: [] }, { ...base, routes: [{ signal_id: 'act 1', project_ids: [] }] },
       { ...base, routes: [{ signal_id: 'act-1' }] }, { ...base, routes: [{ signal_id: 'act-1', project_ids: [], note: 'x' }] },
       { ...base, routes: [{ signal_id: 'act-1', project_ids: 'prj_00000000-0000-4000-8000-0000000000a1' }] },
-      { ...base, routes: f.routes(many) }, { ...base, routes: f.routes((_id, kind) => kind === 'decision' ? many.slice(0, 11) : many.slice(11)) },
-      { ...base, routes: Array.from({ length: APPROVAL_ROUTES_MAX_V1 + 1 }, (_, i) => ({ signal_id: `act-${i}`, project_ids: [] })) },
       { ...base, owners: [{ signal_id: 'act-1' }] }, { ...base, owners: [{ signal_id: 'act 1', owner: 'A' }] },
       { ...base, action: 'reject' }, { ...base, action: 'reject', routes: [], owners: [{ signal_id: 'act-1', owner: 'A' }] }, null, 'approve',
       { ...base, owners: [{ signal_id: 'act-1', owner: 'A' }, { signal_id: 'act-1', owner: 'B' }] }, { ...base, owners: [{ signal_id: 'act-1', owner: ' padded ' }] },
-      { ...base, owners: [{ signal_id: 'act-1', owner: 'x'.repeat(121) }] },
       // Kept private only inside a project, and said only as `true`.
       { ...base, routes: f.routes([]).map(route => ({ ...route, private: true })) }, { ...base, routes: f.routes(id => id === 'act-1' ? null : []).map(route => ({ ...route, private: true })) },
       { ...base, routes: f.routes([f.projectA]).map(route => ({ ...route, private: false })) }, { ...base, routes: f.routes([f.projectA]).map(route => ({ ...route, private: 'true' })) },
@@ -136,6 +139,9 @@ describe('approval core: decide', () => {
     }
     expect(() => f.core.decide('email' as never, base, never)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
     expect(f.decisionCount()).toBe(0);
+    // Routes and projects have no count of their own: a route may name any number of projects, and a request any number of routes.
+    expect(validateApprovalDecisionRequestV1('desktop', { ...base, routes: f.routes([...many].sort()) }).routes[0]!.project_ids).toHaveLength(21);
+    expect(validateApprovalDecisionRequestV1('desktop', { ...base, routes: Array.from({ length: 501 }, (_, i) => ({ signal_id: `act-${i}`, project_ids: [] })) }).routes).toHaveLength(501);
   });
   it('binds command ids to their surface', async () => {
     const f = await approvalCoreFixture();
@@ -335,7 +341,6 @@ describe('approval core: decide', () => {
     expect(() => validateApprovalDecisionRequestV1('slack', good)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
     expect(validateApprovalDecisionRequestV1('slack', { ...good, command_id: 'slack:Zx_9-.' }).command_id).toBe('slack:Zx_9-.');
     expect(f.core.decide('desktop', good, () => f.session).kind).toBe('decided');
-    expect(APPROVAL_PROJECTS_MAX_V1).toBe(20);
   });
 });
 
@@ -371,7 +376,7 @@ describe('approval core: freeze', () => {
     await f.core.stager.reconcilePendingDeliveries();
     expect(outbox(f, f.approvalId).state).toBe('staged');
   });
-  it('freezes at most 20 suggestions, sorted, and ignores suggestions recorded later', async () => {
+  it('freezes every suggestion, sorted, and ignores suggestions recorded later', async () => {
     const f = await approvalCoreFixture({ stage: false, suggestions: 2 });
     const extra = Array.from({ length: 20 }, (_, i) => `prj_00000000-0000-4000-8000-0000000001${i.toString(16).padStart(2, '0')}`);
     for (const [i, id] of extra.entries()) {
@@ -381,7 +386,7 @@ describe('approval core: freeze', () => {
     }
     await f.core.stager.reconcilePendingDeliveries();
     const frozen = JSON.parse(outbox(f, f.approvalId).suggested_projects_json!) as string[];
-    expect(frozen).toEqual([...extra, f.projectA, f.projectB].sort().slice(0, 20));
+    expect(frozen).toEqual([...extra, f.projectA, f.projectB].sort());
     f.db.prepare('INSERT INTO authority_person_meeting_suggestions_v1 VALUES (?,?,?,?)').run(f.sourceKey, f.externalId, f.projectC, '2026-10-07T09:00:00.000Z');
     expect(JSON.parse(outbox(f, f.approvalId).suggested_projects_json!)).toEqual(frozen);
   });
@@ -438,10 +443,10 @@ describe('approval core: views', () => {
     expect(statuses(1)).toEqual(listed(1));
     expect(f.core.proposalStatuses({ ...f.person, membership_id: 'mem_00000000-0000-4000-8000-0000000000e2' })).toEqual([]);
   });
-  it('clamps the list limit to 1..100', async () => {
+  it('lists every proposal with no count of its own; a count a caller names takes the first that many', async () => {
     const f = await approvalCoreFixture();
     await f.otherProposal();
-    expect(f.core.proposals(f.person, 0)).toHaveLength(1);
+    expect(f.core.proposals(f.person)).toHaveLength(2);
     expect(f.core.proposals(f.person, 1)).toHaveLength(1);
     expect(f.core.proposals(f.person, 1000)).toHaveLength(2);
   });
@@ -530,12 +535,11 @@ describe('approval core: the Home row summary', () => {
       .toEqual({ first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', all_day: false });
     expect(approvalProposalSummaryV1(snapshot({ decisions: [], actions: ['Book the lab'] })).first_line).toBe('Book the lab');
   });
-  it('keeps the line to one line of at most 300 characters and counts every action', () => {
+  it('keeps the whole line on one line and counts every action', () => {
     expect(approvalProposalSummaryV1(snapshot({ decisions: ['  Launch the\n\tpilot\u0007 next week.  '], actions: [] })).first_line).toBe('Launch the pilot next week.');
     expect(approvalProposalSummaryV1(snapshot({ decisions: ['L'.repeat(400)], actions: Array.from({ length: 41 }, (_, i) => `Action ${i + 1}`) })))
-      .toMatchObject({ first_line: 'L'.repeat(300), action_count: 41 });
-    // The cut never leaves half of a character.
-    expect(approvalProposalSummaryV1(snapshot({ decisions: ['x'.repeat(299) + '🚀'], actions: [] })).first_line).toBe('x'.repeat(299));
+      .toMatchObject({ first_line: 'L'.repeat(400), action_count: 41 });
+    expect(approvalProposalSummaryV1(snapshot({ decisions: ['x'.repeat(299) + '🚀'], actions: [] })).first_line).toBe('x'.repeat(299) + '🚀');
   });
   it('falls back to the scheduled start, and has no line or time when the proposal has none', () => {
     expect(approvalProposalSummaryV1(snapshot({ decisions: [], actions: [], scheduled: '2026-10-06T15:30:00.000Z' })))

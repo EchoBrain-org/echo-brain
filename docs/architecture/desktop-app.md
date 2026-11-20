@@ -36,7 +36,8 @@ flowchart LR
 
 1. The renderer calls `rpc(method, params)`.
 2. Main's broker accepts it only from the app's own main frame, only as plain
-   JSON up to 64 KiB (256 KiB for `timeline.put`), and only for an allowlisted
+   JSON up to the Authority's 1 MiB Person request bound (1 MiB for `timeline.put`
+   and Copy answer, which carry one whole answer), and only for an allowlisted
    method. Main answers its own methods (dialogs, clipboard, menus, notices,
    updates) and forwards host methods, swapping file handles for paths on the
    way. Dropped files use a separate channel with the path read from a real
@@ -128,7 +129,7 @@ unresolved.
 | What | Where |
 | --- | --- |
 | Person session | `~/.local/share/echo-brain/person/`, owned by the Person client |
-| Ask timeline | `<person dir>/ask-timeline-v1/<digest>.json`, one file per account, at most 200 turns and 90 days, deleted at sign-out |
+| Ask timeline | `<person dir>/ask-timeline-v1/<digest>.json`, one file per account, every turn kept until the file would pass what the runtime can read back as one string (then the oldest go), deleted at sign-out |
 | Updater state | `<appData>/ECHO/desktop/updater/` |
 | Chromium data and log | `<appData>/ECHO/chromium`; `<userData>/logs/desktop.log` (codes only, rotated at 1 MiB) |
 | Renderer conveniences | Three `localStorage` keys: sidebar open, last Authority, projects seen |

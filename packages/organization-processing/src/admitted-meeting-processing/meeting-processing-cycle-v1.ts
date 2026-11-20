@@ -21,7 +21,7 @@ import type {
 } from "./meeting-processing-worker-lifecycle.js";
 import type { AdmittedMeetingSourceCursorPolicyV1 } from "./admitted-meeting-source-cursor-policy-v1.js";
 import type { ExtractionAttemptKeyV1, ExtractionAttemptReservationV1, ExtractionAttemptStoreV1 } from "./extraction-attempt-store-v1.js";
-import { classifyExtractionFailureStageV1, unbilledExtractionFailureV1, type ExtractionFailureStageV1 } from "./extraction-failure-stage-v1.js";
+import { classifyExtractionFailureStageV1, freeRetryExtractionFailureV1, type ExtractionFailureStageV1 } from "./extraction-failure-stage-v1.js";
 import {
   reviewInputSha256V1,
   reviewLineageIdV1,
@@ -31,10 +31,10 @@ import {
 
 const MAXIMUM_PULL_LIMIT = 1;
 /**
- * A pending attempt younger than this may still be running elsewhere; it outlasts the 600 s extraction timeout.
- * It assumes the model-call limiter's queue wait, which that timeout does not count, fits in the margin. A longer
- * wait during a two-process overlap can park a live extraction as interrupted: never a second spend, but its late
- * result may not stage.
+ * A pending attempt younger than this may still be running elsewhere: it outlasts one 600 s extraction silence period.
+ * An extraction that keeps streaming can run longer, and so can the model-call limiter's queue wait; during a
+ * two-process overlap such a live extraction can be parked as interrupted: never a second spend, but its late result
+ * may not stage. Telling a live attempt apart without a clock needs the attempt ledger to record progress.
  */
 const EXTRACTION_IN_FLIGHT_MS = 660_000;
 
@@ -261,7 +261,7 @@ export type AdmittedMeetingProcessingCycleResultV1 =
       readonly cursor_advanced: false;
     }
   | {
-      /** An unbilled first failure: its exact key has one automatic retry, and the revision stays at the head. */
+      /** An unbilled, retryable first failure: its exact key has one automatic retry, and the revision stays at the head. */
       readonly kind: "retry_scheduled";
       readonly stage: ExtractionFailureStageV1;
       readonly cursor_advanced: false;
@@ -468,7 +468,7 @@ function rebindDecisionsToRevision(
  * revision stays in source custody for an operator-authorized retry
  * (`retryHeldOnce`). A revision whose pending attempt is still within its lease
  * is left in place (`in_flight`) for a later poll. A first attempt the processor
- * adapter declares refused unbilled (no output) is not parked: its exact key
+ * adapter declares refused unbilled and retryable (no output) is not parked: its exact key
  * gets one automatic retry and the revision stays at the head
  * (`retry_scheduled`); any later failure parks. Advancing past a queued
  * import consumes it, so its suggested projects are recorded as suggestions
@@ -765,11 +765,11 @@ export class AdmittedMeetingProcessingCycleV1 {
         if (aborted) { complete(); throw error; }
         const failure = { aborted, received_output: receivedOutput };
         const failureStage = classifyExtractionFailureStageV1(error, failure);
-        // One free retry for an unbilled first failure of a pulled revision: no
+        // One free retry for an unbilled, retryable first failure of a pulled revision: no
         // park and no cursor move, so the next poll re-runs it and its
         // reservation consumes this grant. A crash before the grant leaves a
         // failed attempt that the next poll parks as not_recorded.
-        if (!fromCustody && claim.attempt === 1 && attempts?.authorizeRetry !== undefined && unbilledExtractionFailureV1(error, failure)) {
+        if (!fromCustody && claim.attempt === 1 && attempts?.authorizeRetry !== undefined && freeRetryExtractionFailureV1(error, failure)) {
           complete();
           attempts.authorizeRetry({ key: extractionKey, expected_attempt: claim.attempt, expected_outcome: "failed" });
           return { done: { kind: "retry_scheduled", stage: failureStage, cursor_advanced: false } };

@@ -31,7 +31,6 @@ function validateEmployeeName(value: string): void {
   if (
     typeof value !== "string" ||
     value.length < 1 ||
-    value.length > 200 ||
     value !== value.trim() ||
     value !== value.normalize("NFC") ||
     /[\u0000-\u001f\u007f]/.test(value)

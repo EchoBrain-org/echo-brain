@@ -305,7 +305,7 @@ describe("person original items store", () => {
   it("pages a keyset over shared timestamps with no gap or duplicate for any emitted prefix", () => {
     const f = fixture();
     const times = ["2026-09-21T22:05:00.000Z", "2026-09-21T22:04:00.000Z", "2026-09-21T22:03:00.000Z"];
-    // Split across two members: each keeps at most 100 retained originals.
+    // Split across two members.
     for (let index = 0; index < 60; index += 1) {
       f.time.pinned = times[index % 3];
       f.note("owner", { kind: "team" }, [PROJECT_ALPHA]);

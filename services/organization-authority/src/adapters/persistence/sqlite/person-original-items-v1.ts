@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { canonicalJson, canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import {
   PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES,
+  PERSON_OPEN_TEXT_PAGE_MAX_BYTES_V1,
   validatePersonDocumentIdV1,
   validatePersonUploadContextId,
   type PersonDocumentExtractionStateV1,
@@ -178,24 +179,18 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
     const actor = this.authenticate(input.access_token);
     const grants = this.grants(actor);
     if (kind === "note" || kind === "imported_meeting") {
-      if (kind === "note" && input.from_ordinal !== undefined) invalid();
       const found = this.notes(actor, GLOBAL, grants, { ids: [id] })[0];
       if (found === undefined || found.row.kind !== kind) notFound();
       const current = this.fence(input.access_token, tuple(actor), grants.sha256);
-      if (kind === 'imported_meeting') {
-        const offset = input.from_ordinal ?? 0, body = releasableBodyV1(found.text);
-        if (!Number.isSafeInteger(offset) || offset < 0 || (offset > 0 && offset >= body.length)) notFound();
-        let text = '', bytes = 0;
-        for (const scalar of body.slice(offset)) { const size = Buffer.byteLength(scalar); if (bytes + size > 8192) break; text += scalar; bytes += size; }
-        const release = this.openRelease(current, grants, { notes: [found.row], documents: [] }, {
-          ref: `${kind}:${id}`, from_offset: offset, released_text_sha256: canonicalSha256(text),
-        });
-        return { kind, row: found.row, text, next_offset: offset + text.length < body.length ? offset + text.length : null, release };
-      }
+      // A note or an imported meeting's notes are read a page at a time, as many pages as the text needs.
+      const offset = input.from_ordinal ?? 0, body = releasableBodyV1(found.text);
+      if (!Number.isSafeInteger(offset) || offset < 0 || (offset > 0 && offset >= body.length)) notFound();
+      let text = '', bytes = 0;
+      for (const scalar of body.slice(offset)) { const size = Buffer.byteLength(scalar); if (bytes + size > PERSON_OPEN_TEXT_PAGE_MAX_BYTES_V1) break; text += scalar; bytes += size; }
       const release = this.openRelease(current, grants, { notes: [found.row], documents: [] }, {
-        ref: `note:${id}`, released_text_sha256: canonicalSha256(found.text),
+        ref: `${kind}:${id}`, from_offset: offset, released_text_sha256: canonicalSha256(text),
       });
-      return Object.freeze({ kind, row: found.row, text: found.text, release });
+      return { kind, row: found.row, text, next_offset: offset + text.length < body.length ? offset + text.length : null, release };
     }
     const from = input.from_ordinal ?? 0;
     if (!Number.isSafeInteger(from) || from < 0 || from > MAXIMUM_ORDINAL) invalid();

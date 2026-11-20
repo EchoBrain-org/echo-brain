@@ -416,8 +416,9 @@ export async function startOrganizationAuthorityApiRuntime(
       // source is configured.
       // An answer's writer may draft follow-ups (ADR-0053): each is saved, once the answer is released, as the asker's own
       // unsent open item. Only this route saves them; the research evaluation drafts none.
+      // A request's previous turn goes through the Ask source check before any model reads it (ADR-0047).
       person_answer_v7: createPersonLiveAnswerRouteV1({
-        ...answerOptions, live_sources: liveSources, follow_ups: followUps, workspace,
+        ...answerOptions, live_sources: liveSources, follow_ups: followUps, workspace, previous_check: askCheck,
         follow_up_drafts: createAskFollowUpSinksV1({ items, people }),
       }),
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),

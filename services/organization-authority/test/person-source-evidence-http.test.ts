@@ -67,7 +67,8 @@ function request(origin: string, path: string, body: unknown, authorization = 'B
 function failure(response: Response, status: number, code: string): Promise<void> {
   expect(response.status).toBe(status);
   expect(response.headers.get('cache-control')).toBe('no-store');
-  return expect(response.json()).resolves.toEqual({ error: { code, message: 'request failed' } });
+  // A refused request names the rule it broke; any other failure stays generic.
+  return expect(response.json()).resolves.toEqual({ error: { code, message: code === 'invalid_request' ? expect.any(String) : 'request failed' } });
 }
 
 describe('cited original HTTP transport', () => {

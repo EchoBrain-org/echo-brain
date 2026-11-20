@@ -224,7 +224,7 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     expect(walk(w.route({ record_approver: undefined }), "emp_a", inProject(SHARED))).toHaveLength(2);
     const route = w.route();
     for (const input of [
-      { limit: 0 }, { limit: 27 }, { limit: 1.5 },
+      { limit: 0 }, { limit: -1 }, { limit: 1.5 },
       { after: { added_at: "2026-09-01T10:00:00Z", id: w.digest("r1") } },
       { after: { added_at: T(1), id: "sha256:ABC" } },
       { scope: { kind: "everyone" } as unknown as PersonListStoreScopeV1 },

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { ActionSignal } from "../../src/core/contracts/decision.js";
 import type { DecisionBrief } from "../../src/core/contracts/delivery.js";
 import {
-  OWNER_PROPOSALS_MAX_V1,
   ownerProposalsV1,
   withoutProposedOwnersV1,
 } from "../../src/core/processing/owner-proposals-v1.js";
@@ -46,22 +45,24 @@ describe("owner proposals V1", () => {
       action(1, null),
       action(2, "   "),
       action(3, "Jules\u0007"),
-      action(4, "J".repeat(121)),
+      action(4, "J".repeat(10_000)),
       action(5, "Rafael Moreno", " padded text "),
       action(6, "Cafe\u0301"),
     ]);
     expect(ownerProposalsV1(proposed)).toEqual([
       { action_index: 0, action_text: "Send the launch plan 1", owner: "Priya Shah" },
+      { action_index: 4, action_text: "Send the launch plan 5", owner: "J".repeat(10_000) },
       { action_index: 6, action_text: "Send the launch plan 7", owner: "Caf\u00e9" },
     ]);
   });
 
-  it("offers at most 40 proposals and none for a brief with more", () => {
-    expect(OWNER_PROPOSALS_MAX_V1).toBe(40);
-    const forty = brief(Array.from({ length: 40 }, (_, index) => action(index, "Participant")));
-    expect(ownerProposalsV1(forty)).toHaveLength(40);
-    const fortyOne = brief(Array.from({ length: 41 }, (_, index) => action(index, "Participant")));
-    expect(ownerProposalsV1(fortyOne)).toEqual([]);
+  it("offers every proposal, in brief order, however many the brief has", () => {
+    const many = brief(Array.from({ length: 120 }, (_, index) => action(index, index === 2 ? null : `Participant ${index}`)));
+    const offered = ownerProposalsV1(many);
+    expect(offered.map((proposal) => proposal.action_index)).toEqual(
+      Array.from({ length: 120 }, (_, index) => index).filter((index) => index !== 2),
+    );
+    expect(offered.at(-1)).toEqual({ action_index: 119, action_text: "Send the launch plan 120", owner: "Participant 119" });
   });
 
   it("clears every proposed owner and leaves a brief without proposals byte-identical", () => {

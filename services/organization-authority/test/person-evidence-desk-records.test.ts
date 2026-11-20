@@ -311,28 +311,42 @@ describe('Person evidence desk over the real approved-record route', () => {
     })).toThrow('exact-head readable-search generation is not available');
   });
 
-  it('keeps a 3,072-byte record atom, but omits 3,073- and 4,096-byte atoms with truncation', async () => {
-    const accepted = await fixture({ atom_text: `Decision ${'x '.repeat(1_532).slice(0, 3_063)}` });
-    expect(Buffer.byteLength(accepted.recordAtom.text, 'utf8')).toBe(3_072);
-    const result = await accepted.makeDesk().search({ query: 'Decision', limit: 10 });
-    expect(result.items.filter(item => item.citation.kind === 'approved_record')).toHaveLength(1);
-    expect(result.truncated).toBe(false);
-    const inventoryDesk = accepted.makeDesk();
-    const inventory = await inventoryDesk.search({ limit: 10 });
-    const item = inventory.items.find(value => value.citation.kind === 'approved_record');
-    expect(item).toBeDefined();
-    // A record's text is released whole: the open says its anchor was not cut (ADR-0041).
-    await expect(inventoryDesk.open({ item: item!.id })).resolves.toMatchObject({
-      items: [expect.objectContaining({ text: accepted.recordAtom.text })], truncated: false, anchor_truncated: false,
-    });
-
-    for (const bytes of [3_073, 4_096]) {
+  it('carries every record atom whole, whatever its length, in search, list and open', async () => {
+    for (const bytes of [3_072, 3_073, 4_096]) {
       const value = await fixture({ atom_text: `Decision ${'x '.repeat(2_100).slice(0, bytes - 9)}` });
       expect(Buffer.byteLength(value.recordAtom.text, 'utf8')).toBe(bytes);
       const result = await value.makeDesk().search({ query: 'Decision', limit: 10 });
-      expect(result.items.filter(item => item.citation.kind === 'approved_record')).toEqual([]);
-      expect(result.truncated).toBe(true);
+      expect(result.items.filter(item => item.citation.kind === 'approved_record')).toEqual([expect.objectContaining({ text: value.recordAtom.text })]);
+      expect(result.truncated).toBe(false);
+      const inventoryDesk = value.makeDesk();
+      const inventory = await inventoryDesk.search({ limit: 10 });
+      const item = inventory.items.find(entry => entry.citation.kind === 'approved_record');
+      expect(item).toBeDefined();
+      expect(inventory.truncated).toBe(false);
+      // A record's text is released whole: the open says its anchor was not cut (ADR-0041).
+      await expect(inventoryDesk.open({ item: item!.id })).resolves.toMatchObject({
+        items: [expect.objectContaining({ text: value.recordAtom.text })], truncated: false, anchor_truncated: false,
+      });
     }
+  });
+
+  it('keeps the originals when the records\' query rule refuses the words, and tells research which source sat out and why', async () => {
+    const value = await fixture();
+    // A term longer than the index holds; a long query alone is not refused.
+    const query = `Decision ${'é'.repeat(33)}`;
+    const result = await value.makeDesk().search({ query });
+    expect(result.items).toEqual([]);
+    expect(result.notice).toBe('Meeting records could not be searched with these words: Shorten each normalized term to at most 64 UTF-8 bytes; non-ASCII letters can use multiple bytes.');
+    expect(result.notice_kind).toBe('informational');
+  });
+
+  it('asks the records for the page the desk search names, any size, and for every match when it names none', async () => {
+    const value = await fixture();
+    const searchBatch = vi.fn(value.route.searchBatch);
+    const desk = createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, originals: emptyOriginals(), records: { ...value.route, searchBatch } });
+    await desk.search({ query: 'Decision' });
+    await desk.search({ query: 'Decision', limit: 500 });
+    expect(searchBatch.mock.calls.map(([input]) => input.limit)).toEqual([undefined, 500]);
   });
 
   it('writes one final record-read audit for a fresh citation open', async () => {

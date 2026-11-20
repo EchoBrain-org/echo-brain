@@ -13,8 +13,6 @@ import { asEnumerableRecord, assertExactKeys, assertTimestamp, assertUnique, bou
  */
 export const PERSON_PROJECT_ACTIVITY_PATH_V1 = '/v1/person/project-activity';
 export const PERSON_PROJECT_ACTIVITY_KIND_V1 = 'echo-person-project-activity-v1';
-/** One item per project, each project once, at most this many. */
-export const PERSON_PROJECT_ACTIVITY_LIMITS_V1 = Object.freeze({ items: 500 });
 
 export interface PersonProjectActivityItemV1 {
   readonly project_id: ProjectIdV1;
@@ -24,7 +22,7 @@ export interface PersonProjectActivityItemV1 {
 export interface PersonProjectActivityV1 {
   readonly schema_version: 1;
   readonly kind: typeof PERSON_PROJECT_ACTIVITY_KIND_V1;
-  /** Every active project the caller is a member of, at most 500. */
+  /** Every active project the caller is a member of, each once. */
   readonly items: readonly PersonProjectActivityItemV1[];
 }
 
@@ -32,7 +30,7 @@ export function validatePersonProjectActivityV1(value: unknown): PersonProjectAc
   const record = asEnumerableRecord(value, 'Person project activity');
   assertExactKeys(record, ['schema_version', 'kind', 'items'], 'Person project activity');
   if (record.schema_version !== 1 || record.kind !== PERSON_PROJECT_ACTIVITY_KIND_V1) fail('Person project activity version or kind is unsupported');
-  const items = boundedList(record.items, 'Person project activity items', PERSON_PROJECT_ACTIVITY_LIMITS_V1.items).map(entry => {
+  const items = boundedList(record.items, 'Person project activity items', Number.POSITIVE_INFINITY).map(entry => {
     const item = asEnumerableRecord(entry, 'Person project activity item');
     assertExactKeys(item, ['project_id', 'latest_at'], 'Person project activity item');
     const project_id = validateProjectIdV1(item.project_id, 'Person project activity project_id');

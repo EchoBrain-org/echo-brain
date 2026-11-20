@@ -81,7 +81,7 @@ function fixture() {
     authority_id: "oau_project_fixture", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
     sessions: { authenticateAccess } as never, originals,
     records: { initializeDesk() { throw new PersonRecordSearchIndexLagV1(); } } as never,
-    model, generation: { generation_adapter_id: "openrouter", planner_model: MODEL, answer_model: MODEL, timeout_ms: 10_000 },
+    model, generation: { generation_adapter_id: "openrouter", planner_model: MODEL, answer_model: MODEL, timeout_ms: 10_000, context_tokens: 32_768, max_output_tokens: 8_000 },
     audit: new SqlitePersonAgenticAskAuditV1(database),
   });
   // The HTTP server wraps every request in this root span.

@@ -5,8 +5,8 @@ import {
   type PersonDocumentExtractionStateV1,
   type PersonDocumentMediaTypeV1,
 } from './person-documents-v1.js';
-import { PERSON_UPDATE_TEXT_MAX_BYTES } from './person-updates.js';
-import { PROJECT_NAME_MAX_BYTES, validateProjectIdV1, type ProjectIdV1, type ProjectRoleV1 } from './project-context-v1.js';
+import { PERSON_OPEN_TEXT_PAGE_MAX_BYTES_V1 } from './person-updates.js';
+import { validateProjectIdV1, type ProjectIdV1, type ProjectRoleV1 } from './project-context-v1.js';
 import type { ProjectStatusV2 } from './project-context-v2.js';
 import { asEnumerableRecord as object, assertExactKeys, assertTimestamp, fail, utf8ByteLength } from './validation.js';
 
@@ -18,12 +18,9 @@ import { asEnumerableRecord as object, assertExactKeys, assertTimestamp, fail, u
 export const PERSON_LIST_PATH_V1 = '/v1/person/list';
 export const PERSON_OPEN_PATH_V1 = '/v1/person/open';
 export const PERSON_LIST_PAGE_SIZE_V1 = 25;
-/** Equals the association cap, so a row never hides a joined project. */
-const PERSON_LIST_ROW_PROJECTS_MAX_V1 = 20;
 export const PERSON_LIST_TEXT_MAX_BYTES_V1 = 200;
 export const PERSON_LIST_RESPONSE_MAX_BYTES_V1 = 320 * 1024;
 export const PERSON_OPEN_RESPONSE_MAX_BYTES_V1 = 64 * 1024;
-const PERSON_OPEN_DOCUMENT_CHUNKS_MAX_V1 = 8;
 export const PERSON_LIST_NOTICE_MEETINGS_UNAVAILABLE_V1 = 'meetings_unavailable';
 
 export type PersonItemKindV1 = 'imported_meeting' | 'note' | 'document' | 'meeting';
@@ -113,8 +110,8 @@ export interface PersonOpenImportedMeetingV1 extends PersonOpenBaseV1 { readonly
 export interface PersonOpenNoteV1 extends PersonOpenBaseV1 {
   readonly ref: PersonNoteRefV1;
   readonly item: PersonListNoteRowV1;
+  /** One page of the note's text; `next_cursor` reads on. */
   readonly text: string;
-  readonly next_cursor: null;
 }
 export interface PersonOpenDocumentV1 extends PersonOpenBaseV1 {
   readonly ref: PersonDocumentRefV1;
@@ -198,7 +195,7 @@ export function personRefIdV1(ref: PersonItemRefV1): string {
 }
 
 function projectName(value: unknown, label: string): asserts value is string {
-  line(value, label, PROJECT_NAME_MAX_BYTES, C0_C1_CONTROLS);
+  line(value, label, Number.POSITIVE_INFINITY, C0_C1_CONTROLS);
 }
 
 function rowProject(value: unknown): PersonListProjectRefV1 {
@@ -219,7 +216,8 @@ function row(value: unknown, label: string): PersonListRowV1 {
   line(input.title, `${label} title`, PERSON_LIST_TEXT_MAX_BYTES_V1);
   assertTimestamp(input.added_at, `${label} added_at`);
   if (!VISIBILITIES.includes(input.visibility as string)) fail(`${label} visibility is invalid`);
-  if (!Array.isArray(input.projects) || input.projects.length > PERSON_LIST_ROW_PROJECTS_MAX_V1) fail(`${label} projects is invalid`);
+  // Every project the item is filed in: a row names them all.
+  if (!Array.isArray(input.projects)) fail(`${label} projects is invalid`);
   const projects = input.projects.map(rowProject);
   if (new Set(projects.map((project) => project.project_id)).size !== projects.length) fail(`${label} projects contains duplicates`);
   const base = { title: input.title, added_at: input.added_at, visibility: input.visibility as PersonListVisibilityV1, projects: Object.freeze(projects) };
@@ -318,7 +316,6 @@ export function validatePersonOpenRequestV1(value: unknown): PersonOpenRequestV1
   assertExactKeys(input, ['schema_version', 'ref', ...optionalKeys(input, ['cursor'])], 'Person open request');
   if (input.schema_version !== 1) fail('Person open request schema_version is unsupported');
   const ref = openRef(input.ref, 'Person open request ref');
-  if (Object.hasOwn(input, 'cursor') && personRefKindV1(ref) === 'note') fail('Person open request cursor is invalid');
   return Object.freeze({ schema_version: 1 as const, ref, ...(Object.hasOwn(input, 'cursor') ? { cursor: cursor(input.cursor, 'Person open request cursor') } : {}) });
 }
 
@@ -373,19 +370,20 @@ export function validatePersonOpenResponseV1(value: unknown): PersonOpenResponse
       const item = openItem(input.item, ref as PersonImportedMeetingRefV1) as PersonListImportedMeetingRowV1;
       // A meeting tool's import can contain only a transcript, which is never
       // released, so its imported-notes text is empty.
-      body(input.text, 'Imported meeting notes', 8192, true);
+      body(input.text, 'Imported meeting notes', PERSON_OPEN_TEXT_PAGE_MAX_BYTES_V1, true);
       return bounded<PersonOpenImportedMeetingV1>({ ...base, ref: ref as PersonImportedMeetingRefV1, item, text: input.text, next_cursor }, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, 'Person open response');
     }
     case 'note': {
-      if (next_cursor !== null) fail('Person open note next_cursor is invalid');
       const item = openItem(input.item, ref as PersonNoteRefV1) as PersonListNoteRowV1;
-      body(input.text, 'Person open note text', PERSON_UPDATE_TEXT_MAX_BYTES);
+      // One page of the note; next_cursor reads on.
+      body(input.text, 'Person open note text', PERSON_OPEN_TEXT_PAGE_MAX_BYTES_V1);
       return bounded<PersonOpenNoteV1>({ ...base, ref: ref as PersonNoteRefV1, item, text: input.text, next_cursor }, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, 'Person open response');
     }
     case 'document': {
       const item = openItem(input.item, ref as PersonDocumentRefV1) as PersonListDocumentRowV1;
       filename(input.filename);
-      if (!Array.isArray(input.chunks) || input.chunks.length > PERSON_OPEN_DOCUMENT_CHUNKS_MAX_V1) fail('Person open document chunks is invalid');
+      // The Authority pages a document's chunks; the page it sends is checked by the response bound alone.
+      if (!Array.isArray(input.chunks)) fail('Person open document chunks is invalid');
       return bounded<PersonOpenDocumentV1>({
         ...base, ref: ref as PersonDocumentRefV1, item, filename: input.filename, chunks: Object.freeze(input.chunks.map(chunk)), next_cursor,
       }, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, 'Person open response');

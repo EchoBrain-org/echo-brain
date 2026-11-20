@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '../../src/answer-composition/agentic-trigger-definitions-v1.js';
-import { AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from '../../src/answer-composition/agentic-research-v1.js';
 import { AuthorityOperationError } from '../../src/domain/errors.js';
 import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import { checked, need, part, record, replay, researchHarness, result, SCENARIOS, step } from './fixtures/agentic-scenarios.js';
@@ -81,23 +80,6 @@ describe('shared research diagnostics lifecycle', () => {
     expect(lifecycle(events)).toContainEqual(expect.objectContaining({ stage: 'renderer', event: 'succeeded', data: expect.objectContaining({ selected_evidence: ['E1'], fallback_count: 1, result: output.response }) }));
     expect(metadata).toContainEqual(expect.objectContaining({ phase: 'research_run', event: 'succeeded', counts: expect.objectContaining({ context_atom_count: 1 }) }));
     expect(lifecycle(events).at(-1)).toMatchObject({ stage: 'run', event: 'succeeded', data: { result: output.response } });
-  });
-
-  it('keeps budget admission metadata after revalidation prevents the next planner call', async () => {
-    const events: CoreRuntimeDiagnosticObservationV1[] = [];
-    const metadata: CoreRuntimeObservationV1[] = [];
-    let time = 0; let checks = 0;
-    const body = record('budget');
-    const h = researchHarness([step([part('Current state', [need('current state', 'open')])], [{ tool: 'search', args: { query: 'state' } }])], {
-      openCitation: async () => result([body]), revalidate: async () => { if (++checks === 2) time = 86_001; return checked; },
-    }, { now_ms: () => time });
-    await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => observeCoreRuntimeV1('research_run', () => h.research.research({
-      trigger: 'approved_record', brief: { goal: { kind: 'task', task: 'Recheck current state.' }, starting: [{ citation: body.citation, if_unreadable: 'fail' }], budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: {} },
-    }), { observer: event => { metadata.push(event); } }));
-    expect(events.filter(event => event.kind === 'model_request')).toHaveLength(1);
-    expect(metadata).toContainEqual(expect.objectContaining({ phase: 'research_loop', event: 'succeeded', research_stop_reason: 'budget', research_admission: 'post_revalidation_no_time' }));
-    expect(metadata).toContainEqual(expect.objectContaining({ phase: 'research_run', event: 'succeeded', result: 'partial', research_stop_reason: 'budget', research_admission: 'post_revalidation_no_time' }));
-    expect(lifecycle(events)).toContainEqual(expect.objectContaining({ stage: 'research', event: 'succeeded', data: expect.objectContaining({ research: expect.objectContaining({ stop: { reason: 'budget', completed: false, admission: 'post_revalidation_no_time' } }) }) }));
   });
 
   it('keeps a successful audit distinct from failed release and keeps error text out of diagnostics', async () => {

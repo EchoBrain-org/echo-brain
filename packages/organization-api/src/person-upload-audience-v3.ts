@@ -8,10 +8,9 @@ export type PersonUploadAudienceV3 =
   /** Immutable union of the current active members of these selected projects. */
   | { readonly kind: 'projects'; readonly project_ids: readonly ProjectIdV1[] };
 
-export const PERSON_UPLOAD_PROJECT_SET_MAX = 20;
-
+/** Any number of projects, sorted and unique: the request body that carries them is their bound. */
 function canonicalProjectIds(value: unknown, label: string, minimum: number): readonly ProjectIdV1[] {
-  if (!Array.isArray(value) || value.length < minimum || value.length > PERSON_UPLOAD_PROJECT_SET_MAX) {
+  if (!Array.isArray(value) || value.length < minimum) {
     fail(`${label} is invalid`);
   }
   const project_ids = value.map((projectId) => validateProjectIdV1(projectId, label));

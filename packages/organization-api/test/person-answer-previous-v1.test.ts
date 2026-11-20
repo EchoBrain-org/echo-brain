@@ -2,11 +2,7 @@ import { canonicalJsonBytes, canonicalSha256 } from '@echo-brain/federation-prot
 import { describe, expect, it } from 'vitest';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
-  PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1,
-  PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1,
-  PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1,
-  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1,
-  PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1,
+  PERSON_ANSWER_REQUEST_MAX_BYTES_V3,
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV8,
 } from '../src/index.js';
@@ -41,16 +37,14 @@ describe('the previous turn on the Ask request (ADR-0047)', () => {
     expect(validatePersonAnswerRequestV3({ ...ask(previous()), project_id })).toMatchObject({ project_id, previous: previous() });
   });
 
-  it('holds 8 sentences of 400 characters, 4 citations each, among 12 citations of its answer', () => {
-    const citations = Array.from({ length: PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1 }, (_, index) => ({ ...ticket, citation: { ...ticket.citation, ticket_id: String(10_000 + index) }, label: `THERM-${index}` }));
-    const statements = Array.from({ length: PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1 }, (_, index) => ({ text: `${'é'.repeat(PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1 - 1)}${index}`, citation_indexes: [index, index + 1, index + 2, index + 3] }));
-    expect(validatePersonAnswerRequestV3(ask(previous({ citations, statements }))).previous!.statements).toHaveLength(8);
-    for (const value of [
-      previous({ citations, statements: [...statements, statements[0]] }),
-      previous({ citations: [...citations, { ...ticket, citation: { ...ticket.citation, ticket_id: '99999' } }] }),
-      previous({ statements: [{ text: 'x'.repeat(PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1 + 1), citation_indexes: [] }] }),
-      previous({ citations, statements: [{ text: 'Five citations.', citation_indexes: [0, 1, 2, 3, 4] }] }),
-    ]) expect(() => validatePersonAnswerRequestV3(ask(value))).toThrow();
+  it('holds the whole earlier answer: its statements as released, each with a statement\'s own citations, inside the request', () => {
+    const citations = Array.from({ length: 60 }, (_, index) => ({ ...ticket, citation: { ...ticket.citation, ticket_id: String(10_000 + index) }, label: `THERM-${index}` }));
+    // No count of sentences or citations: 250 sentences, past the old 200; one citing 60 citations, past the old 40.
+    const statements = [...Array.from({ length: 249 }, (_, index) => ({ text: `S${index}.`, citation_indexes: [index % 60] })),
+      { text: `${'é'.repeat(1_000)}`, citation_indexes: Array.from({ length: 60 }, (_, index) => index) }];
+    expect(validatePersonAnswerRequestV3(ask(previous({ citations, statements }))).previous!.statements).toHaveLength(250);
+    // A sentence of any length: only the request's own transport bound limits it.
+    expect(validatePersonAnswerRequestV3(ask(previous({ statements: [{ text: 'é'.repeat(4 * 1024), citation_indexes: [] }] }))).previous!.statements).toHaveLength(1);
     // A sentence may cite nothing the asker can still read; one that cites nothing at all is still the asker's context.
     expect(validatePersonAnswerRequestV3(ask(previous({ statements: [{ text: 'It is on hold.', citation_indexes: [] }] }))).previous!.statements[0]!.citation_indexes).toEqual([]);
   });
@@ -58,13 +52,15 @@ describe('the previous turn on the Ask request (ADR-0047)', () => {
   it('refuses anything else: another purpose, key or shape, a bad question or time, an index out of range, a repeated citation', () => {
     for (const value of [
       previous({ purpose: 'clarify' }), { ...previous(), extra: true }, (({ asked_at: _asked, ...rest }) => rest)(previous()),
-      previous({ question: ' padded ' }), previous({ question: 'x'.repeat(241) }), previous({ question: '' }),
+      previous({ question: ' padded ' }), previous({ question: 'a\u0007b' }), previous({ question: '' }), previous({ question: 'a\u0000b' }),
       previous({ asked_at: '2026-10-24T17:05:00Z' }), previous({ asked_at: '2026-02-30T00:00:00.000Z' }),
       previous({ statements: [{ text: 'Out of range.', citation_indexes: [2] }] }), previous({ statements: [{ text: 'Twice.', citation_indexes: [0, 0] }] }),
       previous({ statements: [{ text: ' Untrimmed.', citation_indexes: [0] }] }), previous({ statements: [{ text: 'Extra.', citation_indexes: [0], private: false }] }),
       previous({ citations: [ticket, ticket] }), previous({ citations: [{ ...ticket, kind: 'page' }] }),
       null, [], 'previous',
     ]) expect(() => validatePersonAnswerRequestV3(ask(value))).toThrow();
+    // The earlier question has no length of its own: only the request's body bound limits it.
+    expect(validatePersonAnswerRequestV3(ask(previous({ question: 'x'.repeat(10_000) }))).previous!.question).toHaveLength(10_000);
   });
 
   it('takes an Ask again only of the earlier question itself, and a follow-up of any question', () => {
@@ -76,13 +72,17 @@ describe('the previous turn on the Ask request (ADR-0047)', () => {
     expect(validatePersonAnswerRequestV3({ schema_version: 3, question: again.question, previous: previous() }).previous!.purpose).toBe('follow_up');
   });
 
-  it('keeps the whole request within its 16 KiB bound', () => {
+  it('carries a long earlier question, and keeps the whole request within the Authority\'s one 1 MiB Person body bound', () => {
+    expect(PERSON_ANSWER_REQUEST_MAX_BYTES_V3).toBe(1024 * 1024);
+    expect(MAX_ORGANIZATION_API_BODY_BYTES).toBe(PERSON_ANSWER_REQUEST_MAX_BYTES_V3);
+    const long = `${'Who owns the thermal retest, '.repeat(130)}and when?\nAnd what is blocked?`;
+    expect(validatePersonAnswerRequestV3(ask(previous({ question: long }))).previous!.question).toBe(long);
     const label = 'L'.repeat(1_000);
     const citations = Array.from({ length: 12 }, (_, index) => ({ ...ticket, citation: { ...ticket.citation, ticket_id: String(20_000 + index) }, label: `${index}${label}` }));
     const statements = Array.from({ length: 8 }, (_, index) => ({ text: `${index}${'s'.repeat(399)}`, citation_indexes: [index] }));
-    const big = ask(previous({ citations, statements }));
-    expect(canonicalJsonBytes(big).byteLength).toBeGreaterThan(MAX_ORGANIZATION_API_BODY_BYTES);
-    expect(() => validatePersonAnswerRequestV3(big)).toThrow('Ask request exceeds JSON byte bound');
+    const big = { ...ask(previous({ citations, statements, question: long })), question: '😀'.repeat(4_000) };
+    expect(canonicalJsonBytes(big).byteLength).toBeGreaterThan(16 * 1024);
+    expect(validatePersonAnswerRequestV3(big).question).toBe(big.question);
   });
 });
 
@@ -114,33 +114,43 @@ describe('what an answer to the previous turn carries (ADR-0047)', () => {
     expect(JSON.stringify(validatePersonAnswerResponseV8(plain))).toBe(JSON.stringify(plain));
   });
 
-  it('refuses a since that is not an Ask again answer\'s: uncited, out of range, too long, without a question, or with no evidence', () => {
+  it('accepts a since of any length and an answer of any number of parts: the response\'s bytes bound them', () => {
+    const statement = { text: 'Changed.', citation_indexes: [1], private: false };
+    const many = answered({ since: { statements: Array.from({ length: 20 }, (_, index) => ({ ...statement, text: `Changed ${index}.` })) } });
+    expect(validatePersonAnswerResponseV8(many).since!.statements).toHaveLength(20);
+    const parts = answered();
+    const sixParts = { ...parts, parts: Array.from({ length: 6 }, (_, index) => ({ ...parts.parts[0]!, question: `Part ${index + 1}?` })) };
+    expect(validatePersonAnswerResponseV8(sixParts).parts).toHaveLength(6);
+  });
+
+  it('refuses a since that is not an Ask again answer\'s: uncited, out of range, without a question, or with no evidence', () => {
     const statement = { text: 'Changed.', citation_indexes: [1], private: false };
     for (const value of [
       answered({ since: { statements: [{ ...statement, citation_indexes: [] }] } }),
       answered({ since: { statements: [{ ...statement, citation_indexes: [2] }] } }),
       answered({ since: { statements: [{ ...statement, citation_indexes: [0] }] } }),
-      answered({ since: { statements: Array.from({ length: PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1 + 1 }, (_, index) => ({ ...statement, text: `Changed ${index}.` })) } }),
       answered({ since: { statements: [statement], extra: [] } }),
       (({ question: _question, ...rest }) => rest)(answered({ since: { statements: [] } })),
       { ...answered({ since: { statements: [] } }), outcome: 'not_found', citations: [], parts: [{ question: 'Q', status: 'not_found', statements: [], gap: 'Not found.' }] },
       { ...answered({ since: { statements: [] } }), outcome: 'partial', citations: [], parts: [{ question: 'Q', status: 'not_found', statements: [], gap: 'Research stopped early.' }] },
-      answered({ question: 'x'.repeat(241) }),
+      answered({ question: 'a\u0007b' }), answered({ question: ' padded' }),
     ]) expect(() => validatePersonAnswerResponseV8(value)).toThrow();
   });
 
-  it('asks which one with clarify: two to four full questions, the question asked, and no part or citation', () => {
+  it('asks which one with clarify: any number of full questions, each label one line of any length, and no part or citation', () => {
     const accepted = validatePersonAnswerResponseV8(clarified());
     expect(accepted).toEqual(clarified());
     expect(Object.isFrozen(accepted.choices![0])).toBe(true);
     const four = Array.from({ length: 4 }, (_, index) => ({ label: `Ticket ${index}`, question: `What are the details on THERM-${index}?` }));
     expect(validatePersonAnswerResponseV8(clarified({ choices: four })).choices).toHaveLength(4);
-    expect(validatePersonAnswerResponseV8(clarified({ choices: [{ label: 'L'.repeat(PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1), question: 'What is A?' }, { label: 'B', question: 'What is B?' }] })).choices).toHaveLength(2);
+    expect(validatePersonAnswerResponseV8(clarified({ choices: [{ label: 'L'.repeat(600), question: 'What is A?' }, { label: 'B', question: 'What is B?' }] })).choices).toHaveLength(2);
+    expect(validatePersonAnswerResponseV8(clarified({ choices: [...four, { label: 'Five', question: 'What is five?' }] })).choices).toHaveLength(5);
+    expect(validatePersonAnswerResponseV8(clarified({ choices: four.slice(0, 1) })).choices).toHaveLength(1);
     for (const value of [
-      clarified({ choices: four.slice(0, 1) }), clarified({ choices: [...four, { label: 'Five', question: 'What is five?' }] }),
+      clarified({ choices: [] }),
       clarified({ choices: [four[0], { ...four[1], question: four[0]!.question }] }), clarified({ choices: [four[0], { ...four[1], label: four[0]!.label }] }),
-      clarified({ choices: [four[0], { ...four[1], label: 'L'.repeat(PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1 + 1) }] }),
-      clarified({ choices: [four[0], { ...four[1], question: 'q'.repeat(241) }] }), clarified({ choices: [four[0], { ...four[1], extra: 1 }] }),
+      clarified({ choices: [four[0], { ...four[1], label: 'two\nlines' }] }),
+      clarified({ choices: [four[0], { ...four[1], question: 'q\u0007' }] }), clarified({ choices: [four[0], { ...four[1], extra: 1 }] }),
       (({ choices: _choices, ...rest }) => rest)(clarified()), (({ question: _question, ...rest }) => rest)(clarified()),
       clarified({ citations: [ticket] }), clarified({ parts: answered().parts }), clarified({ notice: 'Research stopped early.' }), clarified({ since: { statements: [] } }),
       answered({ choices: clarified().choices }),

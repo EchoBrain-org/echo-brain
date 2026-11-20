@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { normalizeAtlassianDocumentTextV1 } from '@echo-brain/provider-runtime/atlassian-document-text-v1';
 import { normalizeConfluencePageDocumentV1 } from '../src/confluence-page-text-v1.js';
+import { CONFLUENCE_PERSON_PROVIDER_V1 } from '../src/confluence-validation-v1.js';
 
 const text = (value: string) => ({ type: 'text', text: value });
 const paragraph = (value: string) => ({ type: 'paragraph', content: [text(value)] });
@@ -64,9 +66,23 @@ describe('Confluence native ADF page text', () => {
     document(text('\u0000')), document(text('\ud800')), document(text('\u0085')),
     document({ type: 'text', text: 'bad', content: [] }), document({ type: 'taskItem', attrs: { state: 'unknown' } }),
     document({ type: 'date', attrs: { timestamp: 'invalid' } }), 'x'.repeat(1024 * 1024 + 1),
-    // Nesting, node count and total released text are bounded independently.
-    document(nested(65)), document(...Array.from({ length: 50_001 }, () => ({ type: 'hardBreak' }))), document(text('x'.repeat(512 * 1024 + 1))),
-  ])('rejects malformed or excessive native documents', value => {
+  ])('rejects malformed native documents', value => {
     expect(() => normalizeConfluencePageDocumentV1(value)).toThrow();
+  });
+
+  it('reads a large page whole: its size and node count are bounded only by the response that carried it', () => {
+    const result = normalizeConfluencePageDocumentV1(document(nested(65), ...Array.from({ length: 50_001 }, () => ({ type: 'hardBreak' })), text('x'.repeat(512 * 1024 + 1))));
+    expect(result.sections.join('')).toContain('x'.repeat(512 * 1024 + 1));
+    expect(result.incomplete).toBe(false);
+  });
+
+  it('leaves out a subtree nested deeper than the host stack can walk and says the page is incomplete', () => {
+    const value = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Kept' }] }] as unknown[] };
+    let deep: Record<string, unknown> = { type: 'paragraph', content: [{ type: 'text', text: 'too deep' }] };
+    for (let level = 0; level < 200_000; level += 1) deep = { type: 'blockquote', content: [deep] };
+    // A JSON body this deep cannot be parsed, so the walk is tested on an already-parsed document.
+    const result = normalizeAtlassianDocumentTextV1({ ...value, content: [...value.content, deep] }, CONFLUENCE_PERSON_PROVIDER_V1, { unsupported: 'omit' });
+    expect(result).toMatchObject({ incomplete: true });
+    expect(result.text).toBe('Kept');
   });
 });

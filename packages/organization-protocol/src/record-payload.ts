@@ -12,16 +12,14 @@ import {
 import { organizationProtocolValidationFailure } from "./validation-error.js";
 
 /**
- * A brief with verbatim evidence spans routinely exceeds the shared 16 KiB
- * protocol default, so record documents carry an explicit exemption. Every
- * other organization protocol document keeps the 16 KiB default.
+ * A record document carries every evidence span its items cite, so its only
+ * bound is the record store's capacity: SQLite's largest string or BLOB value
+ * (SQLITE_MAX_LENGTH, 1,000,000,000 bytes in the better-sqlite3 build the
+ * record log and the Authority database use). Every other organization
+ * protocol document keeps the shared 16 KiB default.
  */
-export const MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES = 256 * 1024;
+export const MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES = 1_000_000_000;
 
-const MAX_RECORD_PARTICIPANTS = 10_000;
-const MAX_RECORD_SIGNAL_LINKS = 1_000;
-const MAX_RECORD_PARTICIPANT_IDENTITIES = 100;
-const MAX_RECORD_PARTICIPANT_ROLES = 20;
 const MAX_RECORD_METADATA_DEPTH = 32;
 const SURFACE_PATTERN = /^[a-z][a-z0-9-]*$/;
 
@@ -76,16 +74,13 @@ function assertOptionalTimestamp(value: unknown, label: string): void {
   if (value !== undefined) assertTimestamp(value, label);
 }
 
+/** A list has no count of its own: the record document's byte bound (the record store's capacity) applies. */
 function assertArray(
   value: unknown,
   label: string,
-  maximum: number,
 ): unknown[] {
   if (!Array.isArray(value)) {
     organizationProtocolValidationFailure(`${label} must be an array`);
-  }
-  if ((value as unknown[]).length > maximum) {
-    organizationProtocolValidationFailure(`${label} exceeds the safety limit`);
   }
   return value as unknown[];
 }
@@ -151,12 +146,11 @@ function optionalAmong(allowed: readonly string[]): Check {
 function eachUnique<T>(
   value: unknown,
   label: string,
-  maximum: number,
   check: (item: unknown, label: string) => void,
   key: (item: T) => unknown,
 ): void {
   const seen = new Set<unknown>();
-  assertArray(value, label, maximum).forEach((item, index) => {
+  assertArray(value, label).forEach((item, index) => {
     check(item, `${label}[${index}]`);
     const id = key(item as T);
     if (seen.has(id)) {
@@ -199,7 +193,7 @@ const PARTICIPANT_CHECKS: Readonly<Record<string, Check>> = {
   display_name: optionalText,
   identities: (value, label) => {
     if (value === undefined) return;
-    eachUnique(value, label, MAX_RECORD_PARTICIPANT_IDENTITIES, (item, itemLabel) => {
+    eachUnique(value, label, (item, itemLabel) => {
       fields(item, itemLabel, {
         kind: (kind, kindLabel) => assertOneOf(kind, PARTICIPANT_IDENTITY_KINDS, kindLabel),
         value: text,
@@ -208,7 +202,7 @@ const PARTICIPANT_CHECKS: Readonly<Record<string, Check>> = {
   },
   roles: (value, label) => {
     if (value === undefined) return;
-    eachUnique(value, label, MAX_RECORD_PARTICIPANT_ROLES, (role, roleLabel) => assertOneOf(role, PARTICIPANT_ROLES, roleLabel), (role: unknown) => role);
+    eachUnique(value, label, (role, roleLabel) => assertOneOf(role, PARTICIPANT_ROLES, roleLabel), (role: unknown) => role);
   },
   response_status: optionalAmong(PARTICIPANT_RESPONSE_STATUSES),
   attendance: optionalAmong(PARTICIPANT_ATTENDANCE),
@@ -316,7 +310,6 @@ function assertSignalArray(
       const supports = assertArray(
         signal.supports_signal_ids,
         `${label}[${index}].supports_signal_ids`,
-        MAX_RECORD_SIGNAL_LINKS,
       );
       supports.forEach((supported, supportedIndex) =>
         assertNonEmptyString(
@@ -371,7 +364,7 @@ function assertOrganizationRecordDecisionBrief(
     // distinct observation. Every protocol-valid payload must be derivable.
     participants: (participants, participantsLabel) => {
       const participantIds = new Set<unknown>();
-      assertArray(participants, participantsLabel, MAX_RECORD_PARTICIPANTS).forEach((participant, index) => {
+      assertArray(participants, participantsLabel).forEach((participant, index) => {
         fields(participant, `${participantsLabel}[${index}]`, PARTICIPANT_CHECKS);
         const id = (participant as Record<string, unknown>).id;
         if (participantIds.has(id)) {

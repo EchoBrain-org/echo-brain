@@ -1,5 +1,6 @@
 import {
-  createAgenticAskProgressRequestV1, createAgenticAskV5, type AgenticAskAnswerWithReceiptV3, type AgenticAskProgressSinkV3,
+  AGENTIC_READ_SILENCE_MS_V1, AgenticAskStalledErrorV1, createAgenticAskProgressRequestV1, createAgenticAskV5, type AgenticAskAnswerWithReceiptV3,
+  type AgenticAskProgressSinkV3, type AgenticFollowUpCarryV1, type AgenticFollowUpResolvedV1,
 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { PersonAnswerResponseV8 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -8,6 +9,8 @@ import type { AgenticAskAuditRequestContextV1 } from '../adapters/persistence/sq
 import type { PersonLiveConnectorSourceV1 } from '../application/ports/person-context-live-runtime-v1.js';
 import { samePersonV1 } from '../application/person-release-authorization-v1.js';
 import type { PersonAnswerHttpInputV1, PersonAnswerV7HttpApplication } from '../presentation/person-live-answer-http-application.js';
+import type { PersonAskCheckHttpApplicationV1 } from '../presentation/person-ask-check-http-application.js';
+import { readablePreviousV1 } from './person-ask-previous-check-v1.js';
 import { askerOf, runPersonAskV1, scopeOf, type CreatePersonAnswerV3RouteOptions } from './person-answer-v3-route.js';
 import { createPersonEvidenceDeskV1, type PersonEvidenceDeskExclusionsV1 } from './person-evidence-desk-v1.js';
 import { createPersonFollowUpsEvidenceSourceV1, type PersonFollowUpsSourcesV1 } from './person-follow-ups-evidence-v1.js';
@@ -25,6 +28,28 @@ export interface CreatePersonLiveAnswerRouteOptionsV1 extends CreatePersonAnswer
    * cite them.
    */
   readonly workspace?: PersonWorkspaceSourcesV1;
+  /**
+   * The Ask source check (ADR-0047) a request's previous turn goes through before any model reads it
+   * (`readablePreviousV1`). Without it no earlier sentence is known readable, so a previous turn carries its question only.
+   */
+  readonly previous_check?: Pick<PersonAskCheckHttpApplicationV1, 'check'>;
+}
+
+/**
+ * One live source's binding watched for silence, as the kernel watches every desk read after it: a verification that
+ * answers nothing for AGENTIC_READ_SILENCE_MS_V1 is told to stop (`stop`), and the binding fails with the stall, even
+ * when the connection never looks at its signal. Nothing else bounds how long a binding that keeps answering takes.
+ */
+function watchedBinding<T>(stop: AbortController, operation: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const stall = new AgenticAskStalledErrorV1('read', AGENTIC_READ_SILENCE_MS_V1);
+      stop.abort(stall);
+      reject(stall);
+    }, AGENTIC_READ_SILENCE_MS_V1);
+    timer.unref?.();
+    operation().then(value => { clearTimeout(timer); resolve(value); }, (error: unknown) => { clearTimeout(timer); reject(error); });
+  });
 }
 
 /**
@@ -54,17 +79,19 @@ export async function bindPersonLiveEvidenceDeskV1(
   // One release witness for the request's live sources: two sources on one connection (a tool's items and its containers)
   // share its sequence, so two empty releases in the same millisecond never write the same witness.
   const liveAudit = options.audit.forLiveRequest(context);
+  // A binding that stalls stops every binding of the request, with the caller's own cancel.
+  const stop = new AbortController();
+  const signal = input.signal === undefined ? stop.signal : AbortSignal.any([input.signal, stop.signal]);
   // Each binding verifies its own connection, so sources bind concurrently.
   // They register in catalog order, and the first failure in that order is
   // the request's failure, exactly as when they bound one after another.
   const settled = await Promise.allSettled(compatible.map(selected =>
     observePersonLiveEvidenceV1('evidence_connection', selected.descriptor.kind, async (): Promise<RegisteredPersonLiveEvidenceSourceV2 | undefined> => {
       if (!selected.scopes.includes(scope.kind)) { annotateCoreRuntimeV1({ result: 'out_of_scope' }); return undefined; }
-      const source = await selected.application.source({
+      const source = await watchedBinding(stop, () => selected.application.source({
         ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}),
-        access_token: input.access_token, audit: liveAudit,
-        ...(input.signal === undefined ? {} : { signal: input.signal }),
-      });
+        access_token: input.access_token, audit: liveAudit, signal,
+      }));
       input.signal?.throwIfAborted();
       annotateCoreRuntimeV1({ result: source === undefined ? (scope.kind === 'project' ? 'unavailable' : 'unlinked') : 'verified' });
       return source === undefined ? undefined : { descriptor: selected.descriptor, source, scope };
@@ -128,11 +155,20 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
     // A streamed request spans every attempt a snapshot restart runs: one stream, each item named once, timed from here.
     const streamed = progress === undefined ? undefined : { on_progress: progress.on_progress, request: createAgenticAskProgressRequestV1() };
     const scope = scopeOf(input.request);
-    // The asker's previous turn (ADR-0047), when the request carries it.
-    const { previous } = input.request;
+    // The asker's previous turn (ADR-0047), when the request carries it: as sent, until the Authority has checked it.
+    const sent = input.request.previous;
     input.signal?.throwIfAborted();
+    // A follow-up's resolution, a paid call, kept with the checked previous turn it was made from: a snapshot restart whose
+    // check keeps exactly the same sentences uses it again, and one whose check keeps any other resolves anew.
+    let resolved: { readonly turn: string; readonly value: AgenticFollowUpResolvedV1 } | undefined;
     // Authenticated and validated once it starts: anything that fails from then on fails inside the stream.
     return runPersonAskV1(options, input, async ({ authorization, context, signal }) => {
+      // Checked for the caller at the start of every attempt, a snapshot restart's included: only its sentences whose every
+      // citation they read then reach the follow-up resolver or any model of that attempt.
+      const previous = sent === undefined ? undefined
+        : await readablePreviousV1(sent, { access_token: input.access_token, check: options.previous_check, signal });
+      const turn = JSON.stringify(previous ?? null);
+      const follow_up: AgenticFollowUpCarryV1 = resolved?.turn === turn ? { resolved: resolved.value } : { on_resolved: value => { resolved = { turn, value }; } };
       const desk = await bindPersonLiveEvidenceDeskV1(options, options.live_sources ?? [], { access_token: input.access_token, scope, ask: true, signal }, context);
       const asker = askerOf(options, authorization);
       // The follow-ups an answer drafts (ADR-0053) are saved for this asker, under this request's id, which every attempt shares.
@@ -147,9 +183,9 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
       // names may be follow-ups, workspace items and tool containers.
       const ask = createAgenticAskV5(askOptions);
       if (streamed !== undefined) {
-        return ask.answerWithReceipt({ question: input.request.question, signal, request: streamed.request, on_progress: streamed.on_progress, ...(previous === undefined ? {} : { previous }) });
+        return ask.answerWithReceipt({ question: input.request.question, signal, request: streamed.request, on_progress: streamed.on_progress, ...(previous === undefined ? {} : { previous, follow_up }) });
       }
-      return ask.answer({ question: input.request.question, signal, ...(previous === undefined ? {} : { previous }) });
+      return ask.answer({ question: input.request.question, signal, ...(previous === undefined ? {} : { previous, follow_up }) });
     }, progress === undefined ? undefined : () => progress.on_start());
   }
   return Object.freeze({

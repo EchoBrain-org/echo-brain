@@ -185,37 +185,6 @@ describe("research result beside Ask", () => {
     ]));
   });
 
-  it("keeps preloaded evidence and records a budget stop when a required revalidation consumes the next planner step", async () => {
-    let time = 0;
-    let checks = 0;
-    const full = record("budget-preload", "Approved: preserve the already released evidence.");
-    const { research, generate } = harness([
-      step([part("Current approved evidence", [need("current record", "open")])], [{ tool: "search", args: { query: "current record" } }]),
-    ], {
-      openCitation: async () => result([full]),
-      revalidate: async () => {
-        checks += 1;
-        if (checks === 2) time = 86_001;
-        return checked;
-      },
-    }, { now_ms: () => time });
-
-    const view = await research.research({
-      trigger: "approved_record",
-      brief: {
-        goal: { kind: "task", task: "Find the current approved evidence." },
-        starting: [{ citation: full.citation, if_unreadable: "fail" }],
-        budget: { deadline_ms: 90_000, max_rounds: 10, max_model_calls: 24, writer_reserve_ms: 25_000, max_receipts: 128 },
-        options: {},
-      },
-    });
-
-    expect(view.stop).toEqual({ reason: "budget", completed: false, admission: "post_revalidation_no_time" });
-    expect(view.items).toEqual([expect.objectContaining({ id: "E1", preloaded: true, read_in_full: true })]);
-    expect(view.cost).toMatchObject({ model_calls: 1, repairs: 0, fallbacks: 0 });
-    expect(generate).toHaveBeenCalledTimes(1);
-  });
-
   it("keeps a personal imported meeting distinct from approved decisions through Ask research and writing", async () => {
     const imported = importedMeeting("cohort", "Imported notes: ship the cohort on Friday.");
     const h = harness([
@@ -303,17 +272,20 @@ describe("research-only triggers", () => {
     expect(openCitation).not.toHaveBeenCalled();
   });
 
-  it("runs up to the background round limit", async () => {
+  it("has no round limit: a background trigger researches while each step reads something new, then finishes", async () => {
     const approved = record("anchor", "Approved: anchor.");
     let hit = 0;
-    const h = harness((_input, index) => step([part("Part", [need("everything", "open")])], [{ tool: "search", args: { query: `query ${index}` } }]), {
+    const words = Array.from({ length: 40 }, (_value, index) => `topic${String.fromCharCode(97 + (index % 26))}${String.fromCharCode(97 + Math.floor(index / 26))}`);
+    const h = harness((_input, index) => index < 40
+      ? step([part("Part", [need("everything", "open")])], [{ tool: "search", args: { query: `${words[index]} design` } }])
+      : step([part("Part", [need("everything", "found", ["E2"])])], [{ tool: "finish", args: {} }]), {
       openCitation: async () => result([approved]),
       search: async () => result([record(`hit-${hit += 1}`)]),
     });
     const view = await h.research.research({ trigger: "approved_record", brief: taskBrief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
-    expect(view.rounds).toHaveLength(AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1.max_rounds);
-    expect(view.stop).toEqual({ reason: "step_limit", completed: false });
-    expect(h.audit[0]).toMatchObject({ trigger: "approved_record", rounds: 20, model_calls: 20, outcome: "partial" });
+    expect(view.rounds).toHaveLength(41);
+    expect(view.stop).toEqual({ reason: "finished", completed: true });
+    expect(h.audit[0]).toMatchObject({ trigger: "approved_record", rounds: 41, model_calls: 41 });
   });
 });
 
@@ -356,9 +328,10 @@ describe("task briefs with a renderer", () => {
     expect(audit[0]!.generations.map(entry => entry.role)).toEqual(["step", "step", "answer"]);
   });
 
-  // The impact card's call: a cancel or the deadline still throws, never a not-assessed result.
+  // The impact card's call: a cancel still throws, never a not-assessed result. A stalled model call is a model failure:
+  // the card falls back to what research released (research loop tests).
   it.each([
-    ["approved_record", "timed_out"], ["approved_record", "cancelled"],
+    ["approved_record", "cancelled"],
   ] as const)("writes one %s %s witness and releases nothing when the renderer's model call is cut off", async (trigger, outcome) => {
     vi.useFakeTimers();
     try {
@@ -377,8 +350,8 @@ describe("task briefs with a renderer", () => {
       const event = defined.parseEvent({ record: decision.citation });
       const pending = h.research.renderWithResearch({ trigger: defined.name, brief: defined.brief(event, h.port.scope), renderer: defined.renderer!, trigger_input: event, signal: controller.signal });
       await started;
-      const rejected = expect(pending).rejects.toMatchObject({ name: outcome === "timed_out" ? "AgenticAskDeadlineErrorV1" : "AbortError" });
-      if (outcome === "timed_out") await vi.advanceTimersByTimeAsync(AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1.deadline_ms); else controller.abort();
+      const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      controller.abort();
       await rejected;
       // The witness binds the check before the renderer's call; no release check follows.
       expect(checks).toBe(plannerCalls + 1);

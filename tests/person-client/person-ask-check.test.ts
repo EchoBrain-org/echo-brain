@@ -62,7 +62,7 @@ describe('person Ask source check client (ADR-0047)', () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
     for (const value of [
       { ...REQUEST, items: [] },
-      { ...REQUEST, items: [{ asked_at: '2026-10-20T09:00:00.000Z', citation: { kind: 'project', project_id: 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' } }] },
+      { ...REQUEST, items: [{ asked_at: '2026-10-20T09:00:00.000Z', citation: { kind: 'person', membership_id: 'mem_0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e' } }] },
       { ...REQUEST, items: [{ asked_at: '2026-10-20T09:00:00.000Z', citation: TICKET, marker: MARKER }] },
     ]) await expect(client(fetch).askCheck('bearer', value as never)).rejects.toThrow();
     expect(fetch).not.toHaveBeenCalled();

@@ -11,7 +11,6 @@ import {
   resolveAgenticFollowUpV1,
 } from "../../src/answer-composition/agentic-follow-up-resolver-v1.js";
 import { createAgenticModelGateV1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
-import { AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
@@ -49,12 +48,11 @@ async function observed<T>(operation: () => Promise<T>): Promise<{ readonly valu
   const value = await observeCoreRuntimeV1("research_run", operation, { observer: event => { events.push(event); } });
   return { value, events, corrections: events.find(event => event.phase === "research_run" && event.event !== "started")!.model_corrections ?? {} };
 }
-function resolver(replies: readonly unknown[], options: { readonly remaining?: number; readonly max_model_calls?: number } = {}) {
+function resolver(replies: readonly unknown[]) {
   const trace: string[] = [];
-  const { gate, inputs } = scriptedGate(replies, AGENTIC_RESEARCH_LIVE_BUDGET_V1, trace);
+  const { gate, inputs } = scriptedGate(replies, trace);
   const run = () => resolveAgenticFollowUpV1({
-    gate, previous: PREVIOUS, question: "what are the details on that ticket?", today: "2026-10-25", time_zone: "America/Los_Angeles",
-    max_model_calls: options.max_model_calls ?? 24, remaining: () => options.remaining ?? 80_000, writer_reserve_ms: 25_000, signal: new AbortController().signal,
+    gate, previous: PREVIOUS, question: "what are the details on that ticket?", today: "2026-10-25", time_zone: "America/Los_Angeles", signal: new AbortController().signal,
   });
   return { run, gate, inputs, trace };
 }
@@ -80,14 +78,29 @@ describe("follow-up resolution: reading a reply (ADR-0047)", () => {
     });
   });
 
-  it("normalizes only what cannot change the meaning: a resolution's spelling, a source as a string, a repeated source, a long label", async () => {
+  it("keeps a long resolved question or choice: no 240-character cap and no per-term rule", () => {
+    const question = `What did Lin and the supplier agree about THERM-482 ${"and the thermal DVT retest schedule ".repeat(10)}before Friday's build review?`;
+    expect([...question].length).toBeGreaterThan(240);
+    expect(parseFollowUpResolutionV1({ ...RESOLVED, question }, 2)).toEqual({ resolution: "resolved", question, about: [0] });
+    const long = "é".repeat(33);
+    expect(parseFollowUpResolutionV1({ resolution: "clarify", choices: [{ label: "A", question: long }, { label: "B", question }] }, 0))
+      .toMatchObject({ choices: [{ question: long }, { question }] });
+    // No length of its own, in the parser or the schema the model is given.
+    const huge = `What ${"x".repeat(10_000)}?`;
+    expect(parseFollowUpResolutionV1({ ...RESOLVED, question: huge }, 2)).toEqual({ resolution: "resolved", question: huge, about: [0] });
+    expect(JSON.stringify(followUpResolutionSchema)).not.toMatch(/"question":\{"type":"string","maxLength"/u);
+  });
+
+  it("normalizes only what cannot change the meaning: a resolution's spelling, a source as a string, a repeated source; a long label and five choices stand", async () => {
     const { value, corrections } = await observed(async () => [
       parseFollowUpResolutionV1({ ...RESOLVED, resolution: " Resolved ", about: ["2", 2, "S1"] }, 2),
       parseFollowUpResolutionV1({ resolution: "clarify", choices: [{ label: "L".repeat(80), question: "What is A?" }, { label: "B", question: "What is B?" }] }, 0),
+      parseFollowUpResolutionV1({ resolution: "clarify", choices: ["A", "B", "C", "D", "E"].map(name => ({ label: name, question: `What is ${name}?` })) }, 0),
     ]);
     expect(value[0]).toEqual({ resolution: "resolved", question: "What are the details on THERM-482?", about: [1, 0] });
-    expect(value[1]).toMatchObject({ choices: [{ label: `${"L".repeat(59)}…` }, { label: "B" }] });
-    expect(corrections).toEqual({ model_enum_respelled: 1, model_id_respelled: 2, model_repeat_dropped: 1, model_text_truncated: 1 });
+    expect(value[1]).toMatchObject({ choices: [{ label: "L".repeat(80) }, { label: "B" }] });
+    expect((value[2] as { readonly choices: readonly unknown[] }).choices).toHaveLength(5);
+    expect(corrections).toEqual({ model_enum_respelled: 1, model_id_respelled: 2, model_repeat_dropped: 1 });
   });
 
   it.each([
@@ -96,12 +109,9 @@ describe("follow-up resolution: reading a reply (ADR-0047)", () => {
     ["same with choices", { resolution: "same", choices: [{ label: "A", question: "What is A?" }] }, /offers no choices/u],
     ["resolved with choices", { ...RESOLVED, choices: [{ label: "A", question: "What is A?" }, { label: "B", question: "What is B?" }] }, /offers no choices/u],
     ["resolved with no question", { resolution: "resolved", about: [1] }, /full question/u],
-    ["resolved with a question too long", { ...RESOLVED, question: `What ${"x".repeat(240)}?` }, /at most 240/u],
-    ["resolved with an overlong term", { ...RESOLVED, question: "é".repeat(33) }, /at most 64 UTF-8 bytes/u],
     ["resolved about a source not shown", { ...RESOLVED, about: [3] }, /from 1 to 2/u],
     ["resolved about no list", { ...RESOLVED, about: 1 }, /list of source numbers/u],
-    ["clarify with one choice", { resolution: "clarify", choices: [{ label: "A", question: "What is A?" }] }, /2 to 4/u],
-    ["clarify with five choices", { resolution: "clarify", choices: ["A", "B", "C", "D", "E"].map(name => ({ label: name, question: `What is ${name}?` })) }, /2 to 4/u],
+    ["clarify with no choice", { resolution: "clarify", choices: [] }, /needs "choices"/u],
     ["clarify with no label", { resolution: "clarify", choices: [{ label: " ", question: "What is A?" }, { label: "B", question: "What is B?" }] }, /needs a "label"/u],
     ["clarify asking one thing twice", { resolution: "clarify", choices: [{ label: "A", question: "What is A?" }, { label: "B", question: "what is a?" }] }, /different thing/u],
   ])("sends back %s for its one repair", (_name, reply, reason) => {
@@ -151,11 +161,12 @@ describe("follow-up resolution: the call (ADR-0047)", () => {
     expect(failed.gate.stats()).toMatchObject({ calls: 2, repairs: 1 });
   });
 
-  it("makes no call, and leaves the question as asked, when research and the writer would lose their time or no call is left", async () => {
-    for (const run of [resolver([RESOLVED], { remaining: 25_000 + 2_000 + 2_999 }), resolver([RESOLVED], { max_model_calls: 0 })]) {
-      expect(await run.run()).toEqual({ resolution: { resolution: "same" }, fallback: true });
-      expect(run.trace).toEqual([]);
-    }
+  it("makes no call, and leaves the question as asked, once a permanent provider failure has stopped the gate", async () => {
+    const denied = Object.assign(new Error("denied"), { diagnostic: { failure_class: "adapter_http", http_status: 401, finish_reason: null } });
+    const run = resolver([denied, RESOLVED]);
+    await run.gate.call({ role: "answer", span: "ask_answer" }, "system", {}, {}).catch(() => undefined);
+    expect(await run.run()).toEqual({ resolution: { resolution: "same" }, fallback: true });
+    expect(run.trace).toEqual(["revalidate", "generate"]);
   });
 
   it("stops on a cancel, and on a failed access check, as any model call does", async () => {
@@ -164,10 +175,9 @@ describe("follow-up resolution: the call (ADR-0047)", () => {
       let generated = 0;
       const gate = createAgenticModelGateV1({
         generation, model: { generate: async () => { generated += 1; return RESOLVED; } }, desk_revalidate: () => revalidate(controller), on_checked: () => undefined,
-        budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, now: () => 0, deadline: 90_000, signal: controller.signal, input_signal: controller.signal, is_deadline_expired: () => false,
+        now: () => 0, signal: controller.signal, input_signal: controller.signal,
       });
-      const resolved = resolveAgenticFollowUpV1({ gate, previous: PREVIOUS, question: "who owns it?", today: "2026-10-25", time_zone: "UTC", max_model_calls: 24,
-        remaining: () => 80_000, writer_reserve_ms: 25_000, signal: controller.signal });
+      const resolved = resolveAgenticFollowUpV1({ gate, previous: PREVIOUS, question: "who owns it?", today: "2026-10-25", time_zone: "UTC", signal: controller.signal });
       return { resolved, generated: () => generated };
     };
     const cancelled = run(async controller => { controller.abort(); return { checked_at: "2026-10-25T00:00:00.000Z" }; });

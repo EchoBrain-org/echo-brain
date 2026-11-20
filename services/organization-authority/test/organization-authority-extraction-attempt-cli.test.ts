@@ -68,7 +68,7 @@ describe("extraction attempt operator recovery", () => {
     expect(f.invoke(f.retry.map(value => value === "1" ? "2" : value)).value.outcome).toBe("conflict");
     const store = openExtractionAttemptStoreV1(f.ledger, f.binding);
     try { expect(store.reserve(key).status).toBe("blocked"); } finally { store.close(); }
-    expect(() => f.invoke(["status", "--limit", "101"])).toThrow(/usage:/);
+    expect(() => f.invoke(["status", "--limit", "0"])).toThrow(/usage:/);
   });
 
   it("reports pending and successful calls without exposing claim handles or source contents", () => {

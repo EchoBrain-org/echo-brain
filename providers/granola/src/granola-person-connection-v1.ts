@@ -39,7 +39,7 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
     const identity = Object.freeze({ kind: 'meeting-source' as const, adapter_id: 'granola-person-mcp', version: '1.0.0',
       instance_id: `granola-${canonicalSha256({ person, account: account.email, workspace: account.workspace_id }).slice(7)}`,
     });
-    /** Every meeting of a watch's window: the ones the person captured, or one folder's. Past 200 it fails closed. */
+    /** Every meeting of a watch's window, however many: the ones the person captured, or one folder's. */
     async function windowed(input: { readonly mode: 'mine' | 'folder'; readonly folder: string | null; readonly from_date: string; readonly to_date: string }) {
       if ((input.mode === 'folder') !== (input.folder !== null)) fail('invalid_request');
       // Search includes upcoming calendar events for future ranges. Intake reads recorded notes only.
@@ -72,15 +72,14 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
           if (total !== null && (seen.size > total || (page.next_cursor === null && seen.size !== total))) fail('unavailable');
           if (meetings.length >= 50 || page.next_cursor === null) break;
           if (cursors.has(page.next_cursor)) fail('invalid_output');
-          if (cursors.size >= 10) fail('unavailable');
           cursors.add(page.next_cursor); cursor = page.next_cursor;
         }
         await verify();
         return meetings.slice(0, 50);
       },
       /**
-       * A watch checked at Save with the listing its worker uses: a folder the person no longer lists, or a window over
-       * 200 meetings, refuses it now rather than failing every later pull.
+       * A watch checked at Save with the listing its worker uses: a folder the person no longer lists, or a window
+       * Granola cannot list completely, refuses it now rather than failing every later pull.
        */
       async watchable(watch: GranolaWatchV1) {
         if (watch.watch === 'off') fail('invalid_request');
@@ -139,7 +138,7 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
       const gone = (error: unknown) => error instanceof Error && 'code' in error && (error.code === 'not_found' || error.code === 'unauthorized');
       const read = (meeting: GranolaMeetingV1) => result.set(meeting.id, meeting.updated_at ?? canonicalSha256(meeting));
       // A cited id that is no Granola id is simply not readable; it never fails the check.
-      const pages = [...new Set(input.page_ids)].slice(0, 100).filter(page => GRANOLA_ID_V1.test(page));
+      const pages = [...new Set(input.page_ids)].filter(page => GRANOLA_ID_V1.test(page));
       for (let at = 0; at < pages.length; at += 10) {
         const batch = pages.slice(at, at + 10);
         try { (await session.api.present(batch, input.signal)).forEach(read); }

@@ -1,4 +1,4 @@
-import { LAYOUT_CAPTION_MAX_BYTES, LAYOUT_CELL_MAX_BYTES, LAYOUT_COLUMN_MAX_BYTES, layoutIndexes, layoutLine, layoutTable } from './person-answer-layout-checks.js';
+import { layoutIndexes, layoutLine, layoutTable } from './person-answer-layout-checks.js';
 import { assertExactKeys, asEnumerableRecord as object, fail, isCalendarDay } from './validation.js';
 
 /**
@@ -15,24 +15,18 @@ import { assertExactKeys, asEnumerableRecord as object, fail, isCalendarDay } fr
 
 /** The answer is the conclusion: one or two statements. How many blocks, and items in a block, has no cap of its own. */
 export const PERSON_ANSWER_BLOCKS_ANSWER_MAX_STATEMENTS_V2 = 2;
-/** A points, table, timeline or card block shows at least two items; fewer read as text. */
-export const PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2 = 2;
-export const PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2 = 200;
-/** A table's column, cell and caption, in bytes, as answer layout v1 (ADR-0045) bounded them. */
-export const PERSON_ANSWER_COLUMN_MAX_BYTES_V1 = LAYOUT_COLUMN_MAX_BYTES;
-export const PERSON_ANSWER_CELL_MAX_BYTES_V1 = LAYOUT_CELL_MAX_BYTES;
-export const PERSON_ANSWER_CAPTION_MAX_BYTES_V1 = LAYOUT_CAPTION_MAX_BYTES;
-export const PERSON_ANSWER_EVENT_TEXT_MAX_BYTES_V2 = 2_048;
-export const PERSON_ANSWER_WHO_MAX_BYTES_V2 = 200;
-export const PERSON_ANSWER_FACT_LABEL_MAX_BYTES_V2 = LAYOUT_COLUMN_MAX_BYTES;
-export const PERSON_ANSWER_FACT_VALUE_MAX_BYTES_V2 = LAYOUT_CELL_MAX_BYTES;
-export const PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2 = 2_048;
-export const PERSON_ANSWER_QUOTE_FROM_MAX_BYTES_V2 = 200;
+/*
+ * No block field (title, column, cell, caption, event, who, label, value, quote, from) has a length of its own, and a
+ * block may show one item: the response's transport bound is what limits an answer.
+ */
 /** The blocks a part reads as, in the catalog's order: every kind of PersonAnswerBlockV2. */
 export const PERSON_ANSWER_BLOCK_KINDS_V2 = Object.freeze(['answer', 'text', 'points', 'table', 'timeline', 'card', 'quote'] as const) satisfies readonly PersonAnswerBlockV2['kind'][];
 /** What a card shows: one person, project, ticket or decision. */
+/** Card kinds a client draws with their own word and icon. Any other kind word is accepted too, and drawn plainly. */
 export const PERSON_ANSWER_CARD_ENTITIES_V2 = Object.freeze(['person', 'project', 'ticket', 'decision'] as const);
-export type PersonAnswerCardEntityV2 = (typeof PERSON_ANSWER_CARD_ENTITIES_V2)[number];
+export type PersonAnswerCardEntityV2 = (typeof PERSON_ANSWER_CARD_ENTITIES_V2)[number] | (string & {});
+/** A card's kind: one lowercase word of letters and underscores (a document, a meeting, a customer). */
+export const PERSON_ANSWER_CARD_ENTITY_PATTERN_V2 = /^[a-z][a-z_]{0,39}$/u;
 
 /** One timeline event: the day it happened (YYYY-MM-DD), what happened, and who, when the evidence says. */
 export interface PersonAnswerEventV2 {
@@ -108,7 +102,7 @@ export function validatePersonAnswerBlocksV2(
       }
       return own;
     };
-    const title = () => Object.hasOwn(input, 'title') ? { title: layoutLine(input.title, `${label} title`, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2) } : {};
+    const title = () => Object.hasOwn(input, 'title') ? { title: layoutLine(input.title, `${label} title`) } : {};
     const all = statements.length;
     switch (input.kind) {
       case 'answer':
@@ -121,48 +115,51 @@ export function validatePersonAnswerBlocksV2(
       case 'points':
         keys(['ordered'], ['title']);
         if (typeof input.ordered !== 'boolean') fail(`${label} ordered is invalid`);
-        return Object.freeze({ kind: 'points', ...title(), ordered: input.ordered as boolean, statements: shown(PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, all) });
+        return Object.freeze({ kind: 'points', ...title(), ordered: input.ordered as boolean, statements: shown(1, all) });
       case 'table': {
         keys(['columns', 'rows'], ['title', 'caption']);
         const titled = title();
         const own = shown(1, all);
         // Two or more rows, and as many rows and columns as its statements hold.
-        return Object.freeze({ kind: 'table', ...titled, statements: own, ...layoutTable(input, own, statements, citationCount, label, PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2) });
+        return Object.freeze({ kind: 'table', ...titled, statements: own, ...layoutTable(input, own, statements, citationCount, label, 1) });
       }
       case 'timeline': {
         keys(['events'], ['title']);
         const titled = title();
-        const own = shown(PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, all);
+        const own = shown(1, all);
         if (!Array.isArray(input.events) || input.events.length !== own.length) fail(`${label} events is invalid`);
         const events = Object.freeze((input.events as unknown[]).map((rawEvent): PersonAnswerEventV2 => {
           const event = object(rawEvent, `${label} event`);
           assertExactKeys(event, ['date', 'text', ...(Object.hasOwn(event, 'who') ? ['who'] : [])], `${label} event`);
           return Object.freeze({
-            date: calendarDay(event.date, `${label} event date`), text: layoutLine(event.text, `${label} event text`, PERSON_ANSWER_EVENT_TEXT_MAX_BYTES_V2),
-            ...(Object.hasOwn(event, 'who') ? { who: layoutLine(event.who, `${label} event who`, PERSON_ANSWER_WHO_MAX_BYTES_V2) } : {}),
+            date: calendarDay(event.date, `${label} event date`), text: layoutLine(event.text, `${label} event text`),
+            ...(Object.hasOwn(event, 'who') ? { who: layoutLine(event.who, `${label} event who`) } : {}),
           });
         }));
-        if (events.some((event, at) => at > 0 && event.date < events[at - 1]!.date)) fail(`${label} events are out of date order`);
+        // Oldest first or newest first ("what changed recently"), never mixed.
+        const forward = events.every((event, at) => at === 0 || event.date >= events[at - 1]!.date);
+        const backward = events.every((event, at) => at === 0 || event.date <= events[at - 1]!.date);
+        if (!forward && !backward) fail(`${label} events are out of date order`);
         return Object.freeze({ kind: 'timeline', ...titled, statements: own, events });
       }
       case 'card': {
         keys(['title', 'entity', 'facts']);
-        const titled = { title: layoutLine(input.title, `${label} title`, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2) };
-        if (!(PERSON_ANSWER_CARD_ENTITIES_V2 as readonly unknown[]).includes(input.entity)) fail(`${label} entity is invalid`);
-        const own = shown(PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, all);
+        const titled = { title: layoutLine(input.title, `${label} title`) };
+        if (typeof input.entity !== 'string' || !PERSON_ANSWER_CARD_ENTITY_PATTERN_V2.test(input.entity)) fail(`${label} entity is invalid`);
+        const own = shown(1, all);
         if (!Array.isArray(input.facts) || input.facts.length !== own.length) fail(`${label} facts is invalid`);
         const facts = Object.freeze((input.facts as unknown[]).map((rawFact): PersonAnswerFactV2 => {
           const fact = object(rawFact, `${label} fact`);
           assertExactKeys(fact, ['label', 'value'], `${label} fact`);
-          return Object.freeze({ label: layoutLine(fact.label, `${label} fact label`, PERSON_ANSWER_FACT_LABEL_MAX_BYTES_V2), value: layoutLine(fact.value, `${label} fact value`, PERSON_ANSWER_FACT_VALUE_MAX_BYTES_V2) });
+          return Object.freeze({ label: layoutLine(fact.label, `${label} fact label`), value: layoutLine(fact.value, `${label} fact value`) });
         }));
         return Object.freeze({ kind: 'card', ...titled, entity: input.entity as PersonAnswerCardEntityV2, statements: own, facts });
       }
       case 'quote':
         keys(['text'], ['from']);
         return Object.freeze({
-          kind: 'quote', statements: shown(1, 1), text: layoutLine(input.text, `${label} text`, PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2),
-          ...(Object.hasOwn(input, 'from') ? { from: layoutLine(input.from, `${label} from`, PERSON_ANSWER_QUOTE_FROM_MAX_BYTES_V2) } : {}),
+          kind: 'quote', statements: shown(1, 1), text: layoutLine(input.text, `${label} text`),
+          ...(Object.hasOwn(input, 'from') ? { from: layoutLine(input.from, `${label} from`) } : {}),
         });
       default:
         return fail('Ask answer block kind is invalid');

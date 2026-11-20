@@ -43,6 +43,9 @@ it('owns lifecycle, project mapping, and permission-filtered space picker routes
   await expect(f.application.accept(request('confluence-spaces-list', PERSON_CONFLUENCE_SPACES_LIST_PATH_V1, { schema_version: 1 }))).resolves.toMatchObject({ body: { items: [{ id: '123', key: '~person' }] } });
   await expect(f.application.accept(request('confluence-project-set', PERSON_CONFLUENCE_PROJECT_SET_PATH_V1, { schema_version: 1, project_id: project, request_id: '00000000-0000-4000-8000-000000000012', expected_revision: revision, space_ids: ['123'] }))).resolves.toMatchObject({ body: { revision } });
   expect(f.connection.spacesList).toHaveBeenCalledWith(expect.objectContaining({ access_token: 'synthetic-person' }));
+  // A project maps any number of spaces: the reader lists them a filter's worth at a time.
+  const many = Array.from({ length: 150 }, (_, index) => String(1000 + index));
+  await expect(f.application.accept(request('confluence-project-set', PERSON_CONFLUENCE_PROJECT_SET_PATH_V1, { schema_version: 1, project_id: project, request_id: '00000000-0000-4000-8000-000000000013', expected_revision: revision, space_ids: many }))).resolves.toMatchObject({ body: { revision } });
 });
 
 it('rejects caller-selected identity, invalid personal-space picker cursors, and missing auth before provider work', async () => {

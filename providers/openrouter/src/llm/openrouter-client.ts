@@ -2,7 +2,9 @@ import { AdapterError } from "@echo-brain/organization-processing/core";
 import { annotateCoreRuntimeV1, observeCoreModelMetadataV1, observeCoreRuntimeSyncV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import {
   DEFAULT_LLM_REQUEST_TIMEOUT_MS,
+  ExtractionInputTooLongError,
   invalidProviderResponse,
+  isContextWindowRefusal,
   isRecord,
   nonEmptyString,
   optionalPositiveInteger,
@@ -14,6 +16,9 @@ import {
   type StructuredGenerationRequest,
   type StructuredGenerationResult,
 } from "@echo-brain/organization-processing/llm/llm-provider";
+
+import { UNBILLED_REFUSAL_STATUSES_V1 } from '../unbilled-refusal-v1.js';
+import { callOpenRouterV1, OpenRouterCallFailureV1, type OpenRouterReplyV1 } from '../openrouter-stream-v1.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -64,8 +69,12 @@ export class OpenRouterClient implements LlmProviderClient {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
-  /** One request with the resolved bearer credential and this client's timeout: the reply's JSON, or the provider's refusal. */
-  private async request(path: string, init: RequestInit, signal?: AbortSignal): Promise<{ readonly payload: unknown; readonly response: Response }> {
+  /**
+   * One request with the resolved bearer credential: the reply's JSON (a streamed reply assembled into the same shape),
+   * or the provider's refusal. The call stalls only when the model sends nothing for `requestTimeoutMs`
+   * (`callOpenRouterV1`), and its reply is held to what `maxOutputTokens` can produce.
+   */
+  private async request(path: string, init: RequestInit, signal: AbortSignal | undefined, maxOutputTokens: number): Promise<{ readonly payload: unknown; readonly response: Response; readonly streamed: boolean }> {
     let credential: string | undefined;
     try {
       credential = this.options.credentialResolver(this.options.credentialRef);
@@ -73,33 +82,46 @@ export class OpenRouterClient implements LlmProviderClient {
       throw new AdapterError('unauthorized', 'OpenRouter credential is unreadable', false);
     }
     if (!nonEmptyString(credential)) throw new AdapterError('unauthorized', 'OpenRouter credential is unavailable', false);
-    const signals = [AbortSignal.timeout(this.requestTimeoutMs)];
-    if (signal !== undefined) signals.push(signal);
     let response: Response;
+    let reply: OpenRouterReplyV1;
     try {
-      response = await this.fetchImpl(`${OPENROUTER_BASE_URL}${path}`, {
-        ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}`, ...init.headers }, signal: AbortSignal.any(signals),
-      });
+      ({ response, reply } = await callOpenRouterV1({ fetch: this.fetchImpl, url: `${OPENROUTER_BASE_URL}${path}`,
+        init: { ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}`, ...init.headers } },
+        ...(signal === undefined ? {} : { signal }), silence_ms: this.requestTimeoutMs, max_output_tokens: maxOutputTokens }));
     } catch (error) {
-      if (signal?.aborted === true) throw new DOMException('OpenRouter request was cancelled', 'AbortError');
-      if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
-        throw new AdapterError('timeout', 'OpenRouter request timed out or was cancelled', true);
+      if (!(error instanceof OpenRouterCallFailureV1)) throw error;
+      // Every failure after sending is retryable and never unbilled: the model may have run.
+      switch (error.kind) {
+        case 'cancelled': throw new DOMException('OpenRouter request was cancelled', 'AbortError');
+        case 'timeout': throw new AdapterError('timeout', 'OpenRouter sent nothing for the silence period', true);
+        case 'too_large': throw invalidProviderResponse('OpenRouter', 'reply passed its transport capacity');
+        case 'redirect': throw new AdapterError('temporarily_unavailable', `OpenRouter answered with a redirect (${error.response?.status}); the request is not re-sent`, true);
+        case 'not_json': throw new AdapterError('temporarily_unavailable', 'OpenRouter returned a non-JSON response body', true);
+        case 'cut': throw new AdapterError('temporarily_unavailable', 'OpenRouter stream closed in the middle of an event', true);
+        default: throw new AdapterError('temporarily_unavailable', 'OpenRouter is unreachable', true);
       }
-      throw new AdapterError('temporarily_unavailable', 'OpenRouter is unreachable', true);
     }
-    annotateCoreRuntimeV1({ counts: { http_status: response.status } });
-    // OpenRouter bills no non-2xx reply; a billing, rate-limit or 5xx refusal is the transient, unbilled kind.
-    if (!response.ok) throw providerStatusError('OpenRouter', response.status, response.status === 402 || response.status === 429 || response.status >= 500);
+    // A prompt past the model's own context window: the one real limit on how long a meeting one call can read.
+    if (response.status === 400 && !reply.streamed) {
+      let refusal: unknown;
+      try { refusal = JSON.parse(reply.text) as unknown; } catch { refusal = undefined; }
+      if (isContextWindowRefusal(response.status, refusal)) throw new ExtractionInputTooLongError('OpenRouter');
+    }
+    // Known unbilled only when the status says the request was refused before generation.
+    if (!response.ok) throw providerStatusError('OpenRouter', response.status, UNBILLED_REFUSAL_STATUSES_V1.has(response.status));
+    return this.parsed(reply, response);
+  }
+
+  private parsed(reply: OpenRouterReplyV1, response: Response): { readonly payload: unknown; readonly response: Response; readonly streamed: boolean } {
     try {
-      const body = await response.text();
-      const payload: unknown = observeCoreRuntimeSyncV1("model_parse", () => JSON.parse(body) as unknown);
+      const payload: unknown = observeCoreRuntimeSyncV1("model_parse", () => reply.streamed ? reply.payload : JSON.parse(reply.text) as unknown);
       try {
         // Usage is observational, never a business input.
         const usage = isRecord(payload) ? generationUsageObservation(payload) : {};
         annotateCoreRuntimeV1({ counts: { input_tokens: optionalPositiveInteger(usage.inputTokens) ?? null,
           output_tokens: optionalPositiveInteger(usage.outputTokens) ?? null, total_tokens: optionalPositiveInteger(usage.totalTokens) ?? null } });
       } catch { /* provider usage is not a business input */ }
-      return { payload, response };
+      return { payload, response, streamed: reply.streamed };
     } catch {
       throw new AdapterError('temporarily_unavailable', 'OpenRouter returned a non-JSON response body', true);
     }
@@ -108,7 +130,7 @@ export class OpenRouterClient implements LlmProviderClient {
   async generateStructured(
     request: StructuredGenerationRequest,
   ): Promise<StructuredGenerationResult> {
-    const { payload, response } = await this.request(
+    const { payload, response, streamed } = await this.request(
       '/chat/completions',
       {
         method: 'POST',
@@ -118,7 +140,8 @@ export class OpenRouterClient implements LlmProviderClient {
             { role: 'system', content: request.systemPrompt },
             { role: 'user', content: request.userPrompt },
           ],
-          stream: false,
+          // Streamed, so a long reply shows it is alive as it arrives (see `request`).
+          stream: true,
           max_tokens: request.maxOutputTokens,
           response_format: {
             type: 'json_schema',
@@ -132,6 +155,7 @@ export class OpenRouterClient implements LlmProviderClient {
         }),
       },
       request.signal,
+      request.maxOutputTokens,
     );
     if (!isRecord(payload)) {
       throw invalidProviderResponse(
@@ -171,11 +195,22 @@ export class OpenRouterClient implements LlmProviderClient {
         'response generation failed',
       );
     }
-    if (finishReason === 'length') {
+    // A stream that closed before the provider's terminal outcome (its finish reason) was cut off in transit: the
+    // content that arrived is not a finished reply, and the call may have been billed.
+    if (streamed && !nonEmptyString(finishReason)) {
       throw new StructuredGenerationAttemptError(
         'temporarily_unavailable',
-        'OpenRouter response reached the configured output-token limit',
+        'OpenRouter stream closed before it finished',
         true,
+        attemptObservation,
+      );
+    }
+    // A reply that stopped at the model's own output limit was billed and would stop there again: never retried.
+    if (finishReason === 'length') {
+      throw new StructuredGenerationAttemptError(
+        'permanently_rejected',
+        'OpenRouter response reached the configured output-token limit',
+        false,
         { ...attemptObservation, stopReason: finishReason },
       );
     }
@@ -237,6 +272,8 @@ export class OpenRouterClient implements LlmProviderClient {
       `/model/${path}`,
       { method: 'GET' },
       signal,
+      // A model lookup generates nothing: its reply fits in the capacity's framing alone.
+      0,
     );
     const data = isRecord(payload) ? payload['data'] : undefined;
     if (!isRecord(data) || !nonEmptyString(data['id'])) {

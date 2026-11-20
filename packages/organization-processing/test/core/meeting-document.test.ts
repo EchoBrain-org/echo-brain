@@ -34,6 +34,16 @@ const minimalMeeting: MeetingDocument = {
 };
 
 describe('canonical meeting document validator', () => {
+  it('accepts a meeting with as many participants and blocks, and as much text, as its source sends', () => {
+    const participants = Array.from({ length: 10_001 }, (_, index) => ({ id: `p-${index}`, display_name: `Person ${index}` }));
+    const content = [
+      { id: 'b-long', kind: 'transcript' as const, text: 'w'.repeat(5 * 1024 * 1024) },
+      ...Array.from({ length: 10_001 }, (_, index) => ({ id: `b-${index}`, kind: 'note' as const, text: `Line ${index}` })),
+      ...Array.from({ length: 3 }, (_, index) => ({ id: `b-big-${index}`, kind: 'note' as const, text: 'n'.repeat(4 * 1024 * 1024) })),
+    ];
+    expect(() => assertCanonicalMeetingDocument({ ...minimalMeeting, participants, content } as MeetingDocument, source)).not.toThrow();
+  });
+
   it('accepts a minimal document with optional source context absent', () => {
     expect(() => assertCanonicalMeetingDocument(minimalMeeting, source)).not.toThrow();
   });

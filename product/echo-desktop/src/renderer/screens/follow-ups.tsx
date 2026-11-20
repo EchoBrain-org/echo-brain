@@ -103,7 +103,7 @@ export function OwnerPicker({ state, picker, item }: { state: State; picker: Pic
   const choices = ownerChoices(picker, item, meOf(state));
   return (
     <div class="picker" data-testid="owner-picker">
-      <input ref={field} class="field small" type="search" autocomplete="off" maxLength={240} placeholder="Find a person" aria-label="Find a person"
+      <input ref={field} class="field small" type="search" autocomplete="off" placeholder="Find a person" aria-label="Find a person"
         value={picker.query} onInput={event => void findOwner((event.target as HTMLInputElement).value)} />
       <div class="picker-list" role="listbox" aria-label="People" aria-busy={picker.loading}>
         {choices.map(({ person, me }) => (

@@ -122,7 +122,8 @@ describe('person ask --previous (ADR-0047)', () => {
 
   it('refuses a turn it cannot send before anything is sent, as invalid_request, so a caller can ask without it', async () => {
     // An Ask again asks the earlier question itself: one of another question is refused too.
-    for (const previous of ['{not json', JSON.stringify({ ...PREVIOUS, purpose: 'guess' }), JSON.stringify({ ...PREVIOUS, statements: [{ text: 'x'.repeat(401), citation_indexes: [] }] }),
+    // An earlier sentence of any length is a sentence: only its shape is checked.
+    for (const previous of ['{not json', JSON.stringify({ ...PREVIOUS, purpose: 'guess' }), JSON.stringify({ ...PREVIOUS, statements: [{ text: ' padded', citation_indexes: [] }] }),
       JSON.stringify({ ...PREVIOUS, purpose: 'ask_again' })]) {
       const fetch = vi.fn<typeof globalThis.fetch>();
       const run = cli(fetch);
@@ -130,10 +131,10 @@ describe('person ask --previous (ADR-0047)', () => {
       expect(lines(run.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_request', error: expect.stringMatching(/^Ask previous (JSON )?is invalid/u) });
       expect(fetch).not.toHaveBeenCalled();
     }
-    // Its question's own errors stay its own.
+    // Its question's own error stays its own: an empty question is the client's one question check.
     const bad = cli(vi.fn<typeof globalThis.fetch>());
-    expect(await bad.run(['ask', '--question= padded ', `--previous=${JSON.stringify(PREVIOUS)}`])).toBe(2);
-    expect(lines(bad.output.stderr).at(-1)).not.toHaveProperty('code');
+    expect(await bad.run(['ask', '--question=  ', `--previous=${JSON.stringify(PREVIOUS)}`])).toBe(2);
+    expect(lines(bad.output.stderr).at(-1)).toMatchObject({ code: 'question_empty' });
   });
 
   it('reports an Authority that refuses the turn as invalid_request', async () => {

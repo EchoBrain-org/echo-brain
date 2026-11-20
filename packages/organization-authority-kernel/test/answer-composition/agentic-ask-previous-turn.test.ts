@@ -12,12 +12,11 @@ import { createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answe
 import { ANSWER_PROMPT, ANSWER_SINCE_PROMPT, answerBlocksSchema, answerBlocksSinceSchema } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { agenticAskAnswerSha256V1, compactAndValidateAgenticAskResponseV1 } from "../../src/answer-composition/agentic-ask-v1-response.js";
 import { FOLLOW_UP_RESOLVER_PROMPT, followUpResolutionSchema } from "../../src/answer-composition/agentic-follow-up-resolver-v1.js";
-import { AgenticAskDeadlineErrorV1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
-import { checked, generation, record, result, writerReply } from "./fixtures/agentic-scenarios.js";
+import { checked, generation, record, recorded, result, writerReply } from "./fixtures/agentic-scenarios.js";
 
 /**
  * The previous turn on a V8 Ask (ADR-0047): a follow-up resolved before research and answered from where it points, or
@@ -57,7 +56,7 @@ function scripted(script: { readonly resolver?: readonly unknown[]; readonly ste
   return {
     inputs, of: (role: "resolver" | "step" | "writer") => inputs.filter(input => roleOf(input) === role),
     model: { generate: async (input: StructuredGenerationInput) => {
-      inputs.push(input);
+      inputs.push(recorded(input));
       const reply = queue[roleOf(input)].shift();
       if (reply === undefined) throw new Error(`unscripted ${roleOf(input)} call`);
       return reply;
@@ -168,10 +167,10 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
 
   // Which earlier sources a resolved follow-up starts from, and how research goes on or stops when one cannot be read, are
   // agenticFollowUpStartingV1's and the brief's rules: agentic-follow-up-resolver-v1.test.ts and agentic-brief-v1.test.ts.
-  it("still fails on a starting read that a cancel or the deadline ends", async () => {
+  it("still fails on a starting read that a cancel ends", async () => {
     const resolved = () => scripted({ resolver: [{ resolution: "resolved", question: RESOLVED, about: [1] }] });
-    // A cancel or the deadline that ends the read stays what it is, whatever the tool said as it stopped.
-    for (const reason of [new DOMException("Ask cancelled", "AbortError"), new AgenticAskDeadlineErrorV1()]) {
+    // A cancel that ends the read stays what it is, whatever the tool said as it stopped.
+    for (const reason of [new DOMException("Ask cancelled", "AbortError")]) {
       const controller = new AbortController();
       const run = resolved();
       const { ask, audits } = askV8(desk({ openCitation: vi.fn(async () => {
@@ -180,7 +179,7 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
       }) }), run);
       await expect(ask.answer({ question: QUESTION, previous: FOLLOW_UP, signal: controller.signal }), reason.name).rejects.toMatchObject({ name: reason.name });
       expect(run.of("step"), reason.name).toEqual([]);
-      expect(audits, reason.name).toEqual([expect.objectContaining({ outcome: reason instanceof AgenticAskDeadlineErrorV1 ? "timed_out" : "cancelled" })]);
+      expect(audits, reason.name).toEqual([expect.objectContaining({ outcome: "cancelled" })]);
     }
   });
 });
@@ -207,7 +206,7 @@ describe("Ask again on the V8 Ask (ADR-0047)", () => {
     const [writer] = run.of("writer");
     expect(writer!.system_prompt.endsWith(`\n\n${ANSWER_SINCE_PROMPT}`)).toBe(true);
     expect(writer!.schema).toBe(answerBlocksSinceSchema);
-    expect(writer!.max_output_tokens).toBe(2_500);
+    expect(writer!.max_output_tokens).toBe(16_000);
     const prompt = JSON.parse(writer!.user_prompt) as Record<string, unknown>;
     // The earlier answer, on its day where the asker is, right after the question.
     expect(prompt.earlier).toEqual({ asked_on: "2026-10-14", statements: [{ text: "Priya Nair owns the THERM-482 fix, due Oct 25.", sources: ["Meeting dvt-gate"] }] });
@@ -244,7 +243,7 @@ describe("Ask again on the V8 Ask (ADR-0047)", () => {
     const { run, ask } = again({ lists: [], blocks: [{ block: "answer", sentences: [{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"] }] }], since: [{ text: "The owner changed to Dev Patel.", evidence: ["E1"] }], not_found: [] });
     const response = await ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN });
     expect(run.of("writer")[0]!.schema).toBe(answerBlocksSinceSchema);
-    expect(run.of("writer")[0]!.max_output_tokens).toBe(2_500);
+    expect(run.of("writer")[0]!.max_output_tokens).toBe(16_000);
     expect(response.parts[0]!.blocks).toEqual([{ kind: "answer", statements: [0] }]);
     expect(response.since).toEqual({ statements: [{ text: "The owner changed to Dev Patel.", citation_indexes: [0], private: false }] });
   });
@@ -274,14 +273,17 @@ describe("fitting an Ask again's answer to its byte bound (ADR-0047)", () => {
     kind: "decision" as const, label: "Decision", visibility: "team" as const };
   const long = (index: number) => `${index} ${"x".repeat(4_080)}.`;
   const statement = (index: number) => ({ text: long(index), citation_indexes: [0], private: false });
+  // The answer's sentences take a little over half the byte bound, so its since list alone can take it past the bound.
+  const SAID = Math.ceil(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 / 2 / 4_096);
+  const SINCE = Math.ceil(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 / 2 / 4_096);
   const response = (since: number): PersonAnswerResponseV8 => ({
     schema_version: 8, kind: "echo-clean-person-answer-v8", scope: { kind: "global" }, outcome: "answered", citations: [citation],
-    parts: [{ question: "Q", status: "answered", statements: Array.from({ length: 10 }, (_, index) => statement(index)), blocks: [{ kind: "answer", statements: [0] }, { kind: "text", statements: Array.from({ length: 9 }, (_, index) => index + 1) }] }],
-    question: "Who owns the THERM-482 fix?", since: { statements: Array.from({ length: since }, (_, index) => statement(100 + index)) },
+    parts: [{ question: "Q", status: "answered", statements: Array.from({ length: SAID }, (_, index) => statement(index)), blocks: [{ kind: "answer", statements: [0] }, { kind: "text", statements: Array.from({ length: SAID - 1 }, (_, index) => index + 1) }] }],
+    question: "Who owns the THERM-482 fix?", since: { statements: Array.from({ length: since }, (_, index) => statement(1_000 + index)) },
   });
 
   it("preserves typed actionable reasons when byte compaction removes the since list", () => {
-    const base = response(6);
+    const base = response(SINCE);
     const gap_details = { unsupported_action: true as const, interrupted: true as const, not_found: "Not found: the reviewer." };
     const over: PersonAnswerResponseV8 = { ...base, outcome: "partial", parts: [{ ...base.parts[0]!, status: "partial", gap: "Some list rows did not fit.", gap_details }] };
     expect(canonicalJsonBytes(over).byteLength).toBeGreaterThan(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
@@ -289,18 +291,32 @@ describe("fitting an Ask again's answer to its byte bound (ADR-0047)", () => {
     expect(fitted).not.toHaveProperty("since");
     expect(fitted.outcome).toBe("partial");
     expect(fitted.parts[0]!.gap_details).toEqual(gap_details);
-    // A part compaction rebuilds reads as one text block (ADR-0051).
-    expect(fitted.parts[0]!.blocks).toEqual([{ kind: "text", statements: Array.from({ length: 10 }, (_, index) => index) }]);
+    // Dropping since cuts no statement: the part keeps the blocks it was arranged in (ADR-0051).
+    expect(fitted.parts[0]!.blocks).toEqual(over.parts[0]!.blocks);
     expect(canonicalJsonBytes(fitted).byteLength).toBeLessThanOrEqual(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
   });
 
+  it("keeps every block a cut leaves whole, turns only the block cut part way into text, and counts that collapse", async () => {
+    // The answer, then points: too many statements to fit, so statements are cut from the end, inside the points block.
+    const said = 2 * SAID + 4;
+    const over: PersonAnswerResponseV8 = { ...response(0), parts: [{ question: "Q", status: "answered", statements: Array.from({ length: said }, (_, index) => statement(index)),
+      blocks: [{ kind: "answer", statements: [0] }, { kind: "points", ordered: false, statements: Array.from({ length: said - 1 }, (_, index) => index + 1) }] }] };
+    const { since: _since, ...plain } = over;
+    const events: CoreRuntimeObservationV1[] = [];
+    const fitted = await observeCoreRuntimeV1("research_run", async () => compactAndValidateAgenticAskResponseV1(plain as PersonAnswerResponseV8), { observer: event => { events.push(event); } });
+    const kept = fitted.parts[0]!.statements.length;
+    expect(kept).toBeLessThan(said);
+    expect(fitted.parts[0]!.blocks).toEqual([{ kind: "answer", statements: [0] }, { kind: "text", statements: Array.from({ length: kept - 1 }, (_, index) => index + 1) }]);
+    expect(events.find(event => event.event !== "started")!.model_corrections).toMatchObject({ writer_layout_collapsed: 1 });
+  });
+
   it("drops since first and whole, keeping the answer, its outcome and its question", () => {
-    const over = response(6);
+    const over = response(SINCE);
     expect(canonicalJsonBytes(over).byteLength).toBeGreaterThan(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
     const fitted = compactAndValidateAgenticAskResponseV1(over);
     expect(fitted).not.toHaveProperty("since");
     expect(fitted).toMatchObject({ outcome: "answered", question: "Who owns the THERM-482 fix?", citations: [citation] });
-    expect(fitted.parts[0]!.statements).toHaveLength(10);
+    expect(fitted.parts[0]!.statements).toHaveLength(SAID);
     // One that fits keeps its since.
     expect(compactAndValidateAgenticAskResponseV1(response(1)).since!.statements).toHaveLength(1);
   });

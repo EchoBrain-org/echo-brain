@@ -135,6 +135,7 @@ export function Reader({ state, reader, backTo }: { state: State; reader: Reader
       {reader.failure && <div class="error">{message(reader.failure)}</div>}
       {content && <div class="body selectable" data-testid="reader-text">{content.text}</div>}
       {reader.ref.kind === 'imported_meeting' && reader.importedNext && <button class="plain-button" disabled={reader.loading} onClick={moreImportedMeeting}>More notes</button>}
+      {reader.ref.kind === 'note' && reader.importedNext && <button class="plain-button" data-testid="reader-more" disabled={reader.loading} onClick={moreImportedMeeting}>Read more</button>}
       {document && (document.chunks.length === 0 ? (
         <div class="body notice" data-testid="reader-text">Original saved · {EXTRACTION[document.document.extraction]}.</div>
       ) : (

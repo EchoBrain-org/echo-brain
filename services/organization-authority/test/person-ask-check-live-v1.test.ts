@@ -108,11 +108,11 @@ describe('Ask source check through the Jira connection', () => {
     expect(f.failures).toEqual([]);
   });
 
-  it('reads at most a hundred tickets in two bulk calls of fifty, asking for one field only', async () => {
-    const ids = Array.from({ length: 100 }, (_, index) => String(20_000 + index));
+  it('reads every ticket in bulk calls of Jira\'s own maximum, a hundred, asking for one field only', async () => {
+    const ids = Array.from({ length: 250 }, (_, index) => String(20_000 + index));
     const f = jira(new Map(ids.map(id => [id, fields(id)])));
     expect(await f.check(ids.map(id => item(ticket(id))))).toEqual(ids.map(() => ({ state: 'same' })));
-    expect(f.bulk).toEqual([{ ids: ids.slice(0, 50), fields: ['status'] }, { ids: ids.slice(50), fields: ['status'] }]);
+    expect(f.bulk).toEqual([{ ids: ids.slice(0, 100), fields: ['status'] }, { ids: ids.slice(100, 200), fields: ['status'] }, { ids: ids.slice(200), fields: ['status'] }]);
   });
 
   it('answers unknown when Jira fails or answers something malformed, or the owner is not connected, reporting only where and why', async () => {
@@ -235,15 +235,15 @@ describe('Ask source check through the Confluence connection', () => {
     expect(f.failures).toEqual([]);
   });
 
-  it('reads sixty pages in two metadata calls of fifty and no body', async () => {
-    const ids = Array.from({ length: 60 }, (_, index) => String(300 + index));
+  it('reads every page in metadata calls of Confluence\'s own maximum, 250, and no body', async () => {
+    const ids = Array.from({ length: 300 }, (_, index) => String(300 + index));
     const pages = new Map(ids.map(id => [id, { id, status: 'current', version: 3, paragraphs: [`Gate ${id}.`] }] as const));
     const f = confluence(pages);
     const page = (id: string) => ({ kind: 'page', tool_id: 'confluence', external_scope_id: FIXTURE_CONFLUENCE_CLOUD_V1, page_id: id, section_id: 's1', version: '2',
       permalink: `${FIXTURE_CONFLUENCE_SITE_V1}/wiki/pages/viewpage.action?pageId=${id}`, text_sha256: sha256Digest(`Gate ${id}.`) });
     const answers = await f.check(ids.map(id => item(page(id))));
     expect(answers.map(answer => answer.state)).toEqual(ids.map(() => 'same'));
-    expect(f.reads().metadata).toEqual([ids.slice(0, 50), ids.slice(50)]);
+    expect(f.reads().metadata).toEqual([ids.slice(0, 250), ids.slice(250)]);
     expect(f.reads().bodies).toEqual([]);
   });
 

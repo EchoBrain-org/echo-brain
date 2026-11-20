@@ -23,7 +23,7 @@ afterEach(closeAskServers);
 const BODY = 'The PVT fixture is ready.\nManufacturing approved it.';
 const QUERY = 'pvt fixture';
 
-function fixture(options: { readonly writer?: (attempt: number, written: () => unknown) => Promise<unknown> } = {}) {
+function fixture(options: { readonly writer?: (attempt: number, written: () => unknown) => Promise<unknown>; readonly silence_ms?: number } = {}) {
   let revoked = false;
   const checked_at = '2026-10-16T20:00:00.000Z';
   const authenticateAccess = vi.fn(({ access_token }: { access_token: string }) => {
@@ -64,7 +64,7 @@ function fixture(options: { readonly writer?: (attempt: number, written: () => u
   const options_ = {
     authority_id: 'authority-1', organization_id: 'organization-1', state_lineage_id: 'lineage-1', sessions: { authenticateAccess }, originals,
     records: { initializeDesk: () => { throw new PersonRecordSearchIndexLagV1(); } }, model: { generate },
-    generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 },
+    generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: options.silence_ms ?? 25_000, context_tokens: 32_768, max_output_tokens: 8_000 },
     audit: { forRequest: () => ({ append: (entry: AgenticAskAuditEntryV1) => { audits.push(entry); } }), forLiveRequest: () => ({ record: async () => canonicalSha256('live release') }) },
   } as unknown as CreatePersonLiveAnswerRouteOptionsV1;
   return {
@@ -144,6 +144,15 @@ describe('Ask progress over HTTP', () => {
     expect(events.at(-1)).toEqual({ type: 'error', status: 401, error: { code: 'unauthorized', message: 'request failed' } });
     // The request's span records the status the error event carries, as the JSON route's failure would: the wire's 200 says nothing.
     await vi.waitFor(() => expect(observed.filter(event => event.phase === 'http_request' && event.event !== 'started').map(event => event.counts.http_status)).toEqual([401]));
+  });
+
+  it('ends a stream whose answer writer sends nothing: the silence stops the call on the server, and the client gets a terminal event', async () => {
+    // The writer never answers and never looks at its signal; the heartbeat alone would keep the client waiting.
+    const f = fixture({ silence_ms: 50, writer: () => new Promise(() => {}) });
+    const response = await ask(await origin(f));
+    expect(response.status).toBe(200);
+    const events = decode(await response.text());
+    expect(['answer', 'error']).toContain(events.at(-1)!.type);
   });
 
   it('cancels the Ask when the client disconnects mid-stream, and audits what was named on the cancelled witness', async () => {

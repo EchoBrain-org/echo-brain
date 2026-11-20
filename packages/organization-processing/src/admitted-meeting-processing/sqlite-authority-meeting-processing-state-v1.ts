@@ -499,7 +499,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       if (
         input.approved_snapshot === null || typeof input.approved_snapshot !== "object" ||
         input.approved_snapshot.approval_id !== current.approval_id ||
-        !Array.isArray(projects) || projects.length > 20 ||
+        !Array.isArray(projects) ||
         !projects.every((project, index) => typeof project === "string" &&
           (index === 0 || (projects[index - 1] as string) < project))
       ) {

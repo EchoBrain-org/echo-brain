@@ -198,7 +198,8 @@ describe('workspace projects as an Ask source (research tool contract v1)', () =
     await expect(projects.list({ source: 'projects', limit: 1, role: 'member', cursor: one.next_cursor! })).rejects.toThrow(INVALID);
     await expect(projects.list({ source: 'projects', cursor: 'projects_99' })).rejects.toThrow(INVALID);
     await expect(people.list({ source: 'people', cursor: one.next_cursor! })).rejects.toThrow(INVALID);
-    for (const limit of [0, 51, 1.5]) await expect(projects.list({ source: 'projects', limit })).rejects.toThrow(INVALID);
+    for (const limit of [0, -1, 1.5]) await expect(projects.list({ source: 'projects', limit })).rejects.toThrow(INVALID);
+    expect(labels((await projects.list({ source: 'projects', limit: 500 })).items)).toEqual(['Echo', 'Comet', 'Beacon', 'Atlas']);
   });
 
   it('finds projects by the words of their names and their members\' names, best match first, and never one the asker is not in', async () => {
@@ -245,7 +246,7 @@ describe('workspace projects as an Ask source (research tool contract v1)', () =
     await expect(people.open({ item: person(OKAFOR) })).rejects.toThrow(NOT_FOUND);
   });
 
-  it('names at most fifty members of a project, releases at most a hundred people beside one result, and links only people it released', async () => {
+  it('names every member of a project, releases every person beside one result, and links only people it released', async () => {
     const w = world();
     const hires = w.hire(177);
     // North, South and West each have Ari and 59 people of their own.
@@ -257,16 +258,14 @@ describe('workspace projects as an Ask source (research tool contract v1)', () =
     const result = await projects.list({ source: 'projects' });
     expect(labels(result.items)).toEqual(['West', 'South', 'North', 'Echo', 'Comet', 'Beacon', 'Atlas']);
     const north = result.items[2]!;
-    expect(north.text!.split('\n')[0]).toMatch(/^Members: Ari \(lead\), .+, and 10 more$/);
-    expect(result.linked).toHaveLength(100);
+    expect(north.text!.split('\n')[0]).toMatch(/^Members: Ari \(lead\), (?:Zed Hire \d+ \(member\), ){58}Zed Hire \d+ \(member\)$/);
+    // Every member of every listed project, each released once beside the page.
+    expect(result.linked!.length).toBeGreaterThan(177);
     const released = new Set([...result.items, ...result.linked!].map(item => item.id));
     for (const item of result.items) for (const id of item.links!.members!) expect(released.has(id)).toBe(true);
-    // West and South fill the hundred, so North links only what was released beside the page.
-    expect(north.links!.members).toEqual([person(ARI), `person_${hires[0]!.membership_id}`]);
-    // Opened on its own, North links every member it names.
+    expect(north.links!.members).toHaveLength(60);
     const opened = await projects.open({ item: north.id });
-    expect(opened.items[0]!.links!.members).toHaveLength(50);
-    expect(opened.linked).toHaveLength(50);
+    expect(opened.items[0]!.links!.members).toHaveLength(60);
   });
 
   it("reads only the Ask's project in a project scope", async () => {
@@ -310,9 +309,11 @@ describe('workspace people and tools as Ask sources (research tool contract v1)'
     const w = world();
     w.hire(21);
     const { people } = w.sources();
-    const first = await people.list({ source: 'people' });
+    // Every person when no page is named; a named page pages on with its cursor.
+    expect(labels((await people.list({ source: 'people' })).items)).toHaveLength(25);
+    const first = await people.list({ source: 'people', limit: 20 });
     expect(first.items).toHaveLength(20);
-    const second = await people.list({ source: 'people', cursor: first.next_cursor! });
+    const second = await people.list({ source: 'people', limit: 20, cursor: first.next_cursor! });
     expect(second.next_cursor).toBeUndefined();
     const names = labels([...first.items, ...second.items]);
     expect(names).toHaveLength(25);

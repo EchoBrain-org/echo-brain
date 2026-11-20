@@ -5,7 +5,7 @@ import type {
   ApprovedRecord, OpenItemView, RecordItem, TimelineTurn, ToolContainerKind,
 } from '../../shared/protocol.js';
 import {
-  answerGaps, answerSays, answerSentences, blockTitle, CARD_WORDS, documentName, externalSourceProvider, partShows, passageBlocks, rowId, rowStatement, shownArranged,
+  answerGaps, answerSays, answerSentences, blockTitle, cardWord, documentName, drawnBlocks, externalSourceProvider, partShows, passageBlocks, rowId, rowStatement, shownArranged,
   shownItems, statementGroups, tableDay, type AnswerTable, type Inline, type Sentence, type Shows, type SourceGroup,
 } from '../answer.js';
 import { askedToday, askedWhen, identity, initial, meetingTime } from '../format.js';
@@ -13,21 +13,17 @@ import { message } from '../messages.js';
 import { ownerAndStatus } from '../needs.js';
 import { announceAfter, announcement, duration, headline, lookedThrough, PROGRESS_AFTER_MS, type AskProgress } from '../progress.js';
 import {
-  activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
+  activeTurn, askAgain, askAgainOffered, askEverywhere, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
   fullPageOffered, litAtoms, nothingLine, openCompose, openFullPage, openExternalSource, pageCovered, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, setBarText, sourceName, submitBar, suggestionsShown, toggleEarlier, toggleSourceList, toggleTurn, turnOf, widenScope,
   UNTITLED,
   type AskClarify, type AskTook, type PaneTarget, type Read, type State,
 } from '../store.js';
-import { MAX_QUESTION, questionCount } from '../bar.js';
 import {
   allOmitted, behindEarlierLine, shownInFull, showsOf, turnGroups, type Suggestion, type TurnChecks,
 } from '../timeline.js';
 import { AskFollowUps } from './ask-follow-ups.js';
 import { Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
-
-/** What an original source may show: 2,000 characters. */
-const MAX_EVIDENCE = 2_000;
 
 /**
  * "Try asking": the empty bar's suggestions, over the page just above the bar.
@@ -91,7 +87,6 @@ export function Bar({ state }: { state: State }) {
     // Escape closes the suggestions only: the window's Escape would go back a level.
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setSuggesting(CLOSED); }
   };
-  const count = covered ? null : questionCount(text);
   return (
     <div class={`bar-wrap${state.ask && !covered ? ' with-ask' : ''}`}>
       {shown.length > 0 && <Suggestions suggestions={shown} active={active} onPick={pick} />}
@@ -106,19 +101,16 @@ export function Bar({ state }: { state: State }) {
         )}
         <label for="ask-field" class="sr-only">{name}</label>
         <input
-          id="ask-field" data-testid="ask-field" type="text" autocomplete="off" spellcheck maxLength={MAX_QUESTION} placeholder={name}
+          id="ask-field" data-testid="ask-field" type="text" autocomplete="off" spellcheck placeholder={name}
           role="combobox" aria-autocomplete="list" aria-expanded={shown.length > 0} aria-controls={shown.length > 0 ? 'ask-suggestions' : undefined}
-          aria-activedescendant={active >= 0 ? `ask-suggestion-${active}` : undefined} aria-describedby={count?.full ? 'ask-limit' : undefined}
+          aria-activedescendant={active >= 0 ? `ask-suggestion-${active}` : undefined}
           value={text} readOnly={covered} onMouseDown={() => { if (text === '') setSuggesting({ open: true, active: -1 }); }} onKeyDown={onKeyDown}
           onBlur={() => setSuggesting(CLOSED)}
           onInput={event => { setSuggesting(CLOSED); setBarText((event.target as HTMLInputElement).value); }}
         />
-        {count && <span class={`bar-count${count.full ? ' full' : ''}`} data-testid="ask-count" aria-hidden="true">{count.words}</span>}
         <button type="submit" class="circle primary" aria-label="Ask" data-testid="ask-send"
           disabled={text.trim() === '' || Boolean(state.ask?.asking)}><Up /></button>
       </form>
-      {/* Always there, so a screen reader hears it when the limit is reached; the page's one status line stays the toast's. */}
-      <div id="ask-limit" class={count?.full ? 'bar-note' : 'sr-only'} aria-live="polite" data-testid="ask-limit">{count?.full ? `Questions are up to ${MAX_QUESTION} characters` : ''}</div>
     </div>
   );
 }
@@ -294,11 +286,12 @@ function Table({ state, view, index, block, place, opens, label }: {
   </>;
 }
 
-/** A card's kind, as its icon: a person, a project's folder, a ticket's stub, or a decision's diamond, as Home marks one. */
+/** A card's kind, as its icon: a person, a project's folder, a ticket's stub, or a decision's diamond, as Home marks one; another kind has none. */
 function EntityIcon({ entity }: { entity: CardEntity }) {
   if (entity === 'person') return <OnePerson />;
   if (entity === 'project') return <Folder />;
-  return entity === 'ticket' ? <Ticket /> : <KindMark kind="approve" />;
+  if (entity === 'ticket') return <Ticket />;
+  return entity === 'decision' ? <KindMark kind="approve" /> : null;
 }
 
 /**
@@ -367,7 +360,7 @@ function ArrangedItems({ state, view, part, index, block, place, opens }: {
         </ol>
       );
     case 'card': {
-      const kind = CARD_WORDS[block.entity];
+      const kind = cardWord(block.entity);
       return (
         <div class="answer-card selectable" role="group" aria-label={`${kind} ${block.title}`}>
           <div class="answer-card-head">
@@ -401,10 +394,11 @@ function ArrangedItems({ state, view, part, index, block, place, opens }: {
 function Arranged({ state, view, part, index, blocks, opening }: {
   state: State; view: TurnView; part: AnswerPart; index: number; blocks: readonly ArrangedBlock[]; opening: boolean;
 }) {
-  const showing = shownArranged(part, blocks, view.shows);
+  const drawn = drawnBlocks(blocks);
+  const showing = shownArranged(part, drawn, view.shows);
   return (
     <div class="answer-layout">
-      {blocks.map((block, place) => {
+      {drawn.map((block, place) => {
         if (!showing[place]) return null;
         const title = blockTitle(block);
         return (
@@ -634,7 +628,7 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
         </div>
       )}
       {/* With every sentence left out, its sources go too; a fixed capability or retry explanation can still be copied. */}
-      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={took} again={!current} copy={!omitted} />
+      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={took} again={!current && askAgainOffered(turn)} copy={!omitted} />
     </div>
   );
 }
@@ -1069,12 +1063,11 @@ function OriginalSource({ state, target, source }: { state: State; target: PaneT
       {places.map((index, at) => {
         const read = all[at]!;
         if (read.loading || !('value' in read)) return null;
-        const text = read.value.text.length > MAX_EVIDENCE ? `${read.value.text.slice(0, MAX_EVIDENCE)}…` : read.value.text;
         return (
           <Fragment key={index}>
             {sharedReview === undefined && read.value.imported_meeting_review !== undefined && <SourceReviewBadge review={read.value.imported_meeting_review} />}
             <div class={`passage selectable${light && lit.includes(index) ? ' on' : ''}`} data-testid="evidence-text">
-              <Passage text={text} label={read.value.label} />
+              <Passage text={read.value.text} label={read.value.label} />
             </div>
           </Fragment>
         );

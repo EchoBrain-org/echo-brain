@@ -4,14 +4,14 @@ import { DocumentFileError } from './document-file.js';
 import { validatePersonDocumentSearchV2, parseCanonicalAssociationProjectIdsJsonV1, validatePersonUploadAudienceV3 } from '@echo-brain/organization-api';
 import { readUpdateFile } from './update-file.js';
 import { validatePersonUpdateRequestId, validateProjectIdV1 } from '@echo-brain/organization-api';
-import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
+import { PersonQueryInputError, personQuestionToSend, validatePersonAnswerPreviousV1, validatePersonQueryText } from "@echo-brain/organization-api";
 import { validatePersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonRunsRequestV1, type PersonRunsRequestV1 } from '@echo-brain/organization-api';
 import { personCitedRecordV1, type PersonCitedRecordV1 } from '@echo-brain/organization-api';
 import { validatePersonAskCheckRequestV1, type PersonAskCheckRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3 } from '@echo-brain/organization-api';
-import { validatePersonAnswerRequestV3, type PersonAnswerPreviousV1 } from '@echo-brain/organization-api';
+import type { PersonAnswerPreviousV1 } from '@echo-brain/organization-api';
 import { PersonToolOutcomeErrorV1, type PersonToolProviderV1, type PersonToolVerbNameV1, type PersonToolVerbV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
@@ -230,13 +230,13 @@ Removes the local session. A revoked session is also removed locally.
 `,
   ask: `usage: echo-brain person ask --question <text> [--project <project-id>] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>]
 
-Ask one question using at most 240 Unicode code points, with at least one letter or number and at most 64 UTF-8 bytes per normalized term. Use NFC text on one line without edge whitespace. Without --project, ECHO retrieves across context you may read. With --project, only context associated with that project. Answers include typed citations; each opens with person open --ref when it carries a ref, except a meeting's meeting:sha256:<digest>, which reads with person records --record-sha256 sha256:<digest> --brief, a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
+Ask one question in plain language, of any length that fits the Ask's 64 KiB request; line breaks and tabs are fine, other control characters are not. It is sent as NFC text without edge whitespace. Without --project, ECHO retrieves across context you may read. With --project, only context associated with that project. Answers include typed citations; each opens with person open --ref when it carries a ref, except a meeting's meeting:sha256:<digest>, which reads with person records --record-sha256 sha256:<digest> --brief, a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
 
 Ask asks POST /v7/person/ask, with every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings.
 
---progress prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them, follow-ups, projects, people, tools and tool containers included. The last line is the usual {"ok":true,"result":...} with the answer's receipt. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
+--progress prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them, follow-ups, projects, people, tools and tool containers included. Between steps, each heartbeat from the Authority prints one {"ok":true,"alive":true} line, so a caller can tell a long Ask from a stalled one. The last line is the usual {"ok":true,"result":...} with the answer's receipt. Ask has no time limit: it waits as long as the Authority keeps sending, and fails with code "stalled" after 40 seconds with nothing from it. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
 
---previous carries your previous turn as JSON: {"purpose":"follow_up" or "ask_again","question":...,"asked_at":...,"statements":[{"text":...,"citation_indexes":[...]}],"citations":[...]}, with at most 8 sentences of at most 400 characters each and at most 12 of that answer's citations, as it carried them. It is your own context, never evidence, and is not stored. A follow-up answers the full question it worked out, naming it as "question", or, when more than one thing could fit, has the outcome "clarify" and one full question per thing in "choices". Ask again also says what is different "since" the earlier answer. One that is not valid is refused with invalid_request.
+--previous carries your previous turn as JSON: {"purpose":"follow_up" or "ask_again","question":...,"asked_at":...,"statements":[{"text":...,"citation_indexes":[...]}],"citations":[...]}, with that answer's sentences and citations as it carried them, within the Ask's request body. It is your own context, never evidence, and is not stored. A follow-up answers the full question it worked out, naming it as "question", or, when more than one thing could fit, has the outcome "clarify" and one full question per thing in "choices". Ask again also says what is different "since" the earlier answer. One that is not valid is refused with invalid_request.
 `,
   list: `usage: echo-brain person list (--project <project-id> | --only-me) [--cursor <next_cursor>]
 
@@ -247,7 +247,7 @@ notice "meetings_unavailable" means meetings are still being indexed and come on
 `,
   open: `usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]
 
-Reads one item under your current access: a note's full text, an imported meeting's notes, or a document's extracted text. Imported meetings and documents are paged. Refs come from person list and from ask citations; an approved meeting (meeting:sha256:<digest>) is not opened here but read with person records --record-sha256 sha256:<digest> --brief. Anything you cannot read returns not_found. Pass next_cursor as --cursor with the same --ref for the next page.
+Reads one item under your current access: a note's text, an imported meeting's notes, or a document's extracted text. Each is paged. Refs come from person list and from ask citations; an approved meeting (meeting:sha256:<digest>) is not opened here but read with person records --record-sha256 sha256:<digest> --brief. Anything you cannot read returns not_found. Pass next_cursor as --cursor with the same --ref for the next page.
 `,
   reviews: `usage: echo-brain person reviews --request <json>
 
@@ -405,7 +405,7 @@ Uploads preserve the original text. Only me is the default; Team explicitly shar
 `,
   "updates-submit-v3": `usage: echo-brain person updates submit-v3 --request-id <uuid> --title <title> --file <utf8-text-file> [--association-project-ids-json <canonical-project-id-array>] [--audience <only-me|team|project|projects>] [--audience-project-id <project-id>] [--audience-project-ids-json <canonical-project-id-array>]
 
-Saves one UTF-8 text original (at most 8 KiB) with independent initial association and audience sets. Only me and no association are the defaults. Project requires --audience-project-id; projects requires --audience-project-ids-json. Both project ID arrays are canonical JSON: sorted, unique project IDs, at most 20. An association never widens the audience. Keep the same request ID and immutable fields for exact V3 status/replay after an unknown outcome.
+Saves one UTF-8 text original (of any size that fits one 1 MiB request) with independent initial association and audience sets. Only me and no association are the defaults. Project requires --audience-project-id; projects requires --audience-project-ids-json. Both project ID arrays are canonical JSON: sorted, unique project IDs, at most 20. An association never widens the audience. Keep the same request ID and immutable fields for exact V3 status/replay after an unknown outcome.
 `,
   "updates-status-v3": `usage: echo-brain person updates status-v3 --request-id <uuid>
 
@@ -687,19 +687,18 @@ async function readBoundedLine(input: NodeJS.ReadableStream, output: NodeJS.Writ
 /** A `--previous` this client refuses before anything is sent (ADR-0047). */
 class AskPreviousError extends Error {}
 
-/** `--previous` as the Ask request would carry it, validated with the whole request; anything wrong with it is an AskPreviousError. */
+/**
+ * `--previous` as the Ask request would carry it, checked on its own against the question as it is sent; anything wrong
+ * with it is an AskPreviousError. The question itself is the Authority's to judge.
+ */
 function askPreviousOf(values: Record<Option, string | boolean | undefined>): PersonAnswerPreviousV1 {
   let previous: unknown;
   try { previous = JSON.parse(requiredText(values, "previous")); }
   catch { throw new AskPreviousError("Ask previous JSON is invalid"); }
-  // The question and project are checked on their own first, so their own errors are reported as today.
-  validatePersonQueryText(values.question);
+  const question = personQuestionToSend(requiredText(values, "question"));
   if (values.project !== undefined) validateProjectIdV1(requiredText(values, "project"));
   try {
-    return validatePersonAnswerRequestV3({
-      schema_version: 3, question: values.question,
-      ...(typeof values.project === "string" ? { project_id: values.project } : {}), previous,
-    }).previous!;
+    return validatePersonAnswerPreviousV1(previous, question);
   } catch (error) {
     throw new AskPreviousError(`Ask previous is invalid: ${(error as Error).message}`);
   }
@@ -720,18 +719,19 @@ function requestOf<T>(values: Record<Option, string | boolean | undefined>, vali
   catch (error) { if (error instanceof SyntaxError) throw new Error(`${name} request JSON is invalid`); throw error; }
 }
 
+/** A positive --limit; `maximum` only where it is a paged list's page size (the rest follows by --cursor). */
 function optionalRecordLimit(
   values: Record<Option, string | boolean | undefined>,
-  maximum = 100,
+  maximum = Number.MAX_SAFE_INTEGER,
 ): number | undefined {
   const value = values.limit;
   if (value === undefined) return undefined;
   if (
     typeof value !== "string" ||
-    !/^[1-9][0-9]{0,2}$/.test(value) ||
+    !/^[1-9][0-9]*$/.test(value) ||
     Number(value) > maximum
   ) {
-    throw new PersonQueryInputError("invalid_limit", `--limit must be an integer from 1 to ${maximum}`);
+    throw new PersonQueryInputError("invalid_limit", maximum === Number.MAX_SAFE_INTEGER ? "--limit must be a positive integer" : `--limit must be an integer from 1 to ${maximum}`);
   }
   return Number(value);
 }
@@ -1060,8 +1060,7 @@ export async function runPersonClientCli(
       throw new Error("--expected-membership-id and --expected-authority require --progress with `echo-brain person ask`");
     }
     pin = accountPin(values);
-    // The previous turn (ADR-0047) is validated with the whole request, its 16 KiB bound included, before any network or
-    // session use.
+    // The previous turn (ADR-0047) is validated before any network or session use.
     if (action === "ask" && values.previous !== undefined) askPrevious = askPreviousOf(values);
     // List and open requests are complete and validated before any network or session use.
     if (action === "list") {
@@ -1096,6 +1095,7 @@ export async function runPersonClientCli(
       error: (error as Error).message,
       // A previous turn this client refuses fails as one an Authority refuses (ADR-0047), so a caller can ask without it.
       ...(error instanceof AskPreviousError ? { action, code: "invalid_request" } : {}),
+      ...(error instanceof PersonQueryInputError ? { action, code: error.code } : {}),
       ...(employeeMutation
         ? {
             action,
@@ -1258,14 +1258,16 @@ export async function runPersonClientCli(
         print(stdout, { ok: true });
         break;
       case "ask": {
-        validatePersonQueryText(values.question);
-        const question = requiredText(values, "question");
+        // Not empty is the client's only check: the Authority says which question rule a question breaks.
+        const question = personQuestionToSend(requiredText(values, "question"));
         const scope = values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, "project"));
         if (values.progress === true) {
           // One line per step event as it arrives; the last line is the answer's, with its receipt.
           // Progress V3 lines: a step may name a follow-up, a project, a person, a tool or a tool container.
+          // Each heartbeat prints an alive line, so a caller waits on liveness, not on a clock.
           const answer = await client.askWithLiveProgress(question, scope, dependencies.abort_signal,
-            progress => print(stdout, validatePersonAskProgressLineV3({ ok: true, progress })), askPrevious);
+            progress => print(stdout, validatePersonAskProgressLineV3({ ok: true, progress })), askPrevious,
+            () => print(stdout, { ok: true, alive: true }));
           print(stdout, validatePersonAskProgressResultLineV3({ ok: true, result: answer.result, receipt: answer.receipt }));
           break;
         }
@@ -1321,7 +1323,7 @@ export async function runPersonClientCli(
         const recordSha256 = values["record-sha256"];
         if (query !== undefined) validatePersonQueryText(query);
         const records = await client.records(
-          optionalRecordLimit(values, query === undefined ? 100 : 10),
+          optionalRecordLimit(values),
           typeof query === "string" ? query : undefined,
           typeof recordSha256 === "string" ? recordSha256 as `sha256:${string}` : undefined,
         );

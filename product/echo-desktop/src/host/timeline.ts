@@ -1,30 +1,41 @@
 // The Ask timeline's file (ADR-0047): one per account, beside the person
 // session, readable by its owner only. The Authority never sees it. A put
-// keeps one turn (a new one at the end, an old one in its place), then drops
-// turns past 90 days and all but the newest 200; it writes a private temporary
-// file and renames it over the old one, so a reader never meets half a file.
-// A file that cannot be read, or is not what a put writes, reads as empty and
-// is replaced by the next put; a turn an older desktop saved that no page
-// draws now goes on its own (so does a malformed one that merely looks like
-// it, rather than emptying the file), and the next put writes the rest. Our own
-// sign-out deletes the account's file; reading one account's timeline deletes
-// any other account's, so an account change leaves nothing of the last one
-// here. Kept apart from host.ts so all of it is tested on a real folder.
-import { PERSON_ANSWER_CARD_ENTITIES_V2, PERSON_ANSWER_FOLLOW_UPS_MAX_V1, validatePersonAnswerGapDetailsV1, validateProjectIdV1 } from '@echo-brain/organization-api';
+// keeps one turn (a new one at the end, an old one in its place). Every turn
+// stays, however old and however many, until the file would pass what this
+// computer can read back as one file; only then do the oldest go. A put writes
+// a private temporary file and renames it over the old one, so a reader never
+// meets half a file.
+// A file that cannot be read at all, or is not a timeline file, reads as empty
+// and is replaced by the next put. Inside a timeline file, one turn the page
+// cannot show is skipped on read and the others show; a put keeps it in the
+// file as it was (a newer desktop may read it), so saving a turn never loses
+// another. Only a turn an older desktop saved that no page draws now goes for
+// good. Our own sign-out deletes the account's file; reading one account's
+// timeline deletes any other account's, so an account change leaves nothing of
+// the last one here. Kept apart from host.ts so all of it is tested on a real
+// folder.
+import { validatePersonAnswerGapDetailsV1, validateProjectIdV1 } from '@echo-brain/organization-api';
+import { constants as buffer } from 'node:buffer';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  ITEM_ID, MAX_TIMELINE_PUT_BYTES, MAX_TIMELINE_TURNS, TIMELINE_DAYS, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect,
+  ITEM_ID, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect,
   type TimelineAnswer, type TimelineTurn,
 } from '../shared/protocol.js';
 
 /** The folder's name, inside the person client's own data folder. */
 const TIMELINE_FOLDER = 'ask-timeline-v1';
 const KIND = 'echo-desktop-ask-timeline-v1';
-/** More than 200 turns of the largest answers: anything bigger is not a file a put wrote. */
-const MAX_FILE_BYTES = MAX_TIMELINE_TURNS * MAX_TIMELINE_PUT_BYTES;
-const DAY_MS = 24 * 60 * 60_000;
+/**
+ * Storage capacity: the file is read back whole as one string, and no string
+ * here can be longer than the runtime's MAX_STRING_LENGTH. A UTF-8 file of at
+ * most that many bytes always decodes into one, so a put keeps the file within
+ * it, and a bigger file is not one a put wrote.
+ */
+export const MAX_TIMELINE_FILE_BYTES = buffer.MAX_STRING_LENGTH;
+/** The file's own bytes around its turns: `{"schema_version":1,"kind":"…","turns":[]}`. */
+export const TIMELINE_FILE_FRAME_BYTES = Buffer.byteLength(JSON.stringify({ schema_version: 1, kind: KIND, turns: [] }));
 
 /** Where an account's timeline is: `<person data dir>/ask-timeline-v1/<hex sha256 of "<authority> <membership_id>">.json`. */
 export function timelinePath(personDirectory: string, account: Expect): string {
@@ -55,30 +66,51 @@ function folder(personDirectory: string, use: 'read' | 'write' | 'delete'): stri
   }
 }
 
-/** The account's turns, oldest first. A missing, unreadable or malformed file is empty. */
-export function readTimeline(personDirectory: string, account: Expect): TimelineTurn[] {
+/** A turn as the file holds it, whether or not this page can show it: what a put needs to keep it in its place and prune it. */
+type StoredTurn = Json & { readonly id: string; readonly asked_at: string };
+const stored = (value: unknown): value is StoredTurn => record(value) && typeof value.id === 'string' && time(value.asked_at);
+
+/**
+ * Every turn the account's file holds, oldest first, as it holds them, less
+ * those an older desktop saved that no page draws now; each id once, its
+ * first. A missing or unreadable file, or one that is not a timeline file,
+ * holds none.
+ */
+function storedTurns(personDirectory: string, account: Expect): StoredTurn[] {
   if (folder(personDirectory, 'read') === null) return [];
   const path = timelinePath(personDirectory, account);
   try {
     const found = lstatSync(path);
-    if (!found.isFile() || found.size > MAX_FILE_BYTES) return [];
+    if (!found.isFile() || found.size > MAX_TIMELINE_FILE_BYTES) return [];
     const value = JSON.parse(readFileSync(path, 'utf8')) as unknown;
     const file = value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
     if (Object.keys(file).sort().join() !== 'kind,schema_version,turns' || file.schema_version !== 1 || file.kind !== KIND || !Array.isArray(file.turns)) return [];
-    const turns = file.turns.filter(turn => !retired(turn)).map(timelineTurn);
-    return turns.every((turn): turn is TimelineTurn => turn !== null) && new Set(turns.map(turn => turn.id)).size === turns.length ? turns : [];
+    const seen = new Set<string>();
+    return file.turns.filter((turn): turn is StoredTurn => stored(turn) && !retired(turn) && !seen.has(turn.id) && Boolean(seen.add(turn.id)));
   } catch {
     return [];
   }
 }
 
 /**
- * The turns a timeline keeps at `now`: none asked more than 90 days ago, and
- * the newest 200 of the rest, in their order.
+ * The account's turns the page can show, oldest first. One it cannot is
+ * skipped, never the others; a missing or unreadable file is empty.
  */
-export function pruneTurns(turns: readonly TimelineTurn[], now: number): TimelineTurn[] {
-  const kept = turns.filter(turn => now - Date.parse(turn.asked_at) <= TIMELINE_DAYS * DAY_MS);
-  return kept.slice(Math.max(0, kept.length - MAX_TIMELINE_TURNS));
+export function readTimeline(personDirectory: string, account: Expect): TimelineTurn[] {
+  return storedTurns(personDirectory, account).map(timelineTurn).filter((turn): turn is TimelineTurn => turn !== null);
+}
+
+/**
+ * The turns a timeline keeps, in their order: all of them while the file holds
+ * them in `bytes`, else the newest that fit, and always the newest one.
+ */
+export function pruneTurns<T>(turns: readonly T[], bytes = MAX_TIMELINE_FILE_BYTES): T[] {
+  // Each turn with the comma after it.
+  const sizes = turns.map(turn => Buffer.byteLength(JSON.stringify(turn)) + 1);
+  let total = sizes.reduce((sum, size) => sum + size, TIMELINE_FILE_FRAME_BYTES);
+  let from = 0;
+  while (from < turns.length - 1 && total > bytes) total -= sizes[from++]!;
+  return turns.slice(from);
 }
 
 /**
@@ -87,13 +119,15 @@ export function pruneTurns(turns: readonly TimelineTurn[], now: number): Timelin
  * store writes its own: every byte and then the new name on disk before it
  * returns, so a crash leaves the old file or the new one, never part of one.
  */
-export function putTimeline(personDirectory: string, account: Expect, turn: TimelineTurn, now: number): void {
+export function putTimeline(personDirectory: string, account: Expect, turn: TimelineTurn): void {
   const directory = folder(personDirectory, 'write');
   if (directory === null) throw new Error('The Ask timeline folder is not private');
-  const turns = readTimeline(personDirectory, account);
+  // Every turn the file holds stays, a turn this page cannot show included.
+  const turns: StoredTurn[] = storedTurns(personDirectory, account);
   const at = turns.findIndex(kept => kept.id === turn.id);
-  if (at >= 0) turns[at] = turn; else turns.push(turn);
-  const bytes = Buffer.from(JSON.stringify({ schema_version: 1, kind: KIND, turns: pruneTurns(turns, now) }), 'utf8');
+  const put = turn as unknown as StoredTurn;
+  if (at >= 0) turns[at] = put; else turns.push(put);
+  const bytes = Buffer.from(JSON.stringify({ schema_version: 1, kind: KIND, turns: pruneTurns(turns) }), 'utf8');
   const path = timelinePath(personDirectory, account);
   const temporary = join(directory, `.${randomBytes(12).toString('hex')}.tmp`);
   // Created here, owner-only, never through a link: then its bytes on disk before it takes the name.
@@ -150,18 +184,15 @@ export function deleteOtherTimelines(personDirectory: string, account: Expect): 
 
 type Json = Record<string, unknown>;
 const record = (value: unknown): value is Json => value !== null && typeof value === 'object' && !Array.isArray(value);
-const string = (value: unknown, maximum = 20_000): value is string => typeof value === 'string' && value.length <= maximum;
+// No length or count of its own: the file's size bounds a turn, and the answer's contract was checked when it came.
+const string = (value: unknown): value is string => typeof value === 'string';
 const index = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
-/** How many statements, places or sources a stored answer may hold: far more than an answer's 64 KiB carries, as an answer has no count of its own (ADR-0051). */
-const MOST = 1_000;
-const indexes = (value: unknown, maximum = MOST): value is number[] => Array.isArray(value) && value.length <= maximum && value.every(index);
+const indexes = (value: unknown): value is number[] => Array.isArray(value) && value.every(index);
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const projectId = (value: unknown): boolean => { try { validateProjectIdV1(value); return true; } catch { return false; } };
-const time = (value: unknown): value is string => string(value, 64) && !Number.isNaN(Date.parse(value));
+const time = (value: unknown): value is string => string(value) && !Number.isNaN(Date.parse(value));
 const STATUSES: ReadonlySet<unknown> = new Set(['answered', 'partial', 'not_found', 'records_only']);
 const OUTCOMES: ReadonlySet<unknown> = new Set(['answered', 'partial', 'not_found']);
-/** What a card may show (answer layout v2, ADR-0051). */
-const ENTITIES: ReadonlySet<unknown> = new Set(PERSON_ANSWER_CARD_ENTITIES_V2);
 
 function scope(value: unknown): value is AskScope {
   if (!record(value)) return false;
@@ -172,7 +203,7 @@ function scope(value: unknown): value is AskScope {
 function statement(value: unknown): value is AnswerStatement {
   return record(value) && string(value.text) && indexes(value.citation_indexes) && typeof value.private === 'boolean';
 }
-const statements = (value: unknown, maximum = MOST): value is AnswerStatement[] => Array.isArray(value) && value.length <= maximum && value.every(statement);
+const statements = (value: unknown): value is AnswerStatement[] => Array.isArray(value) && value.every(statement);
 
 /**
  * A source, by what the page reads of its kind to show and open it: anything
@@ -181,7 +212,7 @@ const statements = (value: unknown, maximum = MOST): value is AnswerStatement[] 
  * asks about it.
  */
 function source(value: unknown): value is AnswerSource {
-  if (!record(value) || !string(value.label, 2_000)) return false;
+  if (!record(value) || !string(value.label)) return false;
   if (value.cited !== undefined && !(record(value.cited) && record(value.cited.citation) && string(value.cited.citation.kind))) return false;
   if (value.private !== undefined && value.private !== true) return false;
   switch (value.kind) {
@@ -192,8 +223,8 @@ function source(value: unknown): value is AnswerSource {
     case 'project': return string(value.project_id);
     case 'person': return string(value.membership_id);
     case 'tool': return string(value.tool_id);
-    case 'ticket': case 'page': return string(value.tool_id) && string(value.permalink, 2_048);
-    case 'container': return string(value.tool_id) && string(value.permalink, 2_048) && string(value.container) && (value.key === undefined || string(value.key));
+    case 'ticket': case 'page': return string(value.tool_id) && string(value.permalink);
+    case 'container': return string(value.tool_id) && string(value.permalink) && string(value.container) && (value.key === undefined || string(value.key));
     default: return false;
   }
 }
@@ -219,19 +250,22 @@ const each = (block: Json, items: unknown, item: (entry: Json) => boolean) => Ar
  */
 const ARRANGED: Readonly<Record<ArrangedBlock['kind'], (block: Json) => boolean>> = {
   answer: () => true, text: () => true, points: block => typeof block.ordered === 'boolean', table,
-  timeline: block => each(block, block.events, event => string(event.date, 64) && string(event.text) && (event.who === undefined || string(event.who))),
-  card: block => string(block.title) && ENTITIES.has(block.entity) && each(block, block.facts, fact => string(fact.label) && string(fact.value)),
+  timeline: block => each(block, block.events, event => string(event.date) && string(event.text) && (event.who === undefined || string(event.who))),
+  // Any entity the answer named: the page words one it does not know by its own name.
+  card: block => string(block.title) && string(block.entity) && each(block, block.facts, fact => string(fact.label) && string(fact.value)),
   quote: block => (block.statements as unknown[]).length === 1 && string(block.text) && (block.from === undefined || string(block.from)),
 };
 
 /**
- * A part's blocks (answer layout v2, ADR-0051), each of a kind the page
- * draws, its sentences among the part's own and its title a text: the page
- * reads an item by its sentence's place.
+ * A part's blocks (answer layout v2, ADR-0051), each with its sentences among
+ * the part's own and its title a text: the page reads an item by its
+ * sentence's place. A kind the page draws has what it reads of it; one it
+ * does not know is shown as its sentences' text.
  */
 function arranged(value: unknown, count: number): boolean {
-  return Array.isArray(value) && value.length <= MOST && value.every(block => record(block) && typeof block.kind === 'string' && Object.hasOwn(ARRANGED, block.kind)
-    && within(block.statements, count) && (block.title === undefined || string(block.title)) && ARRANGED[block.kind as ArrangedBlock['kind']](block));
+  return Array.isArray(value) && value.every(block => record(block) && typeof block.kind === 'string'
+    && within(block.statements, count) && (block.title === undefined || string(block.title))
+    && (!Object.hasOwn(ARRANGED, block.kind) || ARRANGED[block.kind as ArrangedBlock['kind']](block)));
 }
 
 function gapDetails(value: unknown): boolean {
@@ -242,8 +276,8 @@ function gapDetails(value: unknown): boolean {
  * The follow-ups an answer drafted (ADR-0053): their ids alone, at least one and each once. The page reads each card live
  * whenever the turn shows, so a saved turn never keeps what one said.
  */
-const followUps = (value: unknown): boolean => Array.isArray(value) && value.length >= 1 && value.length <= PERSON_ANSWER_FOLLOW_UPS_MAX_V1
-  && value.every(id => string(id, 64) && ITEM_ID.test(id)) && new Set(value).size === value.length;
+const followUps = (value: unknown): boolean => Array.isArray(value) && value.length >= 1
+  && value.every(id => string(id) && ITEM_ID.test(id)) && new Set(value).size === value.length;
 
 /**
  * An answer as the timeline keeps it: what the page reads back of a turn
@@ -252,10 +286,10 @@ const followUps = (value: unknown): boolean => Array.isArray(value) && value.len
  */
 function answer(value: unknown): value is TimelineAnswer {
   if (!record(value) || !scope(value.scope) || !OUTCOMES.has(value.outcome)) return false;
-  if (!Array.isArray(value.sources) || value.sources.length > MOST || !value.sources.every(source)) return false;
+  if (!Array.isArray(value.sources) || !value.sources.every(source)) return false;
   if (value.direct !== undefined && !statement(value.direct)) return false;
   if (value.follow_ups !== undefined && !followUps(value.follow_ups)) return false;
-  return Array.isArray(value.parts) && value.parts.length <= 64 && value.parts.every(part => record(part) && string(part.question) && STATUSES.has(part.status)
+  return Array.isArray(value.parts) && value.parts.every(part => record(part) && string(part.question) && STATUSES.has(part.status)
     && statements(part.statements) && (part.gap === undefined || string(part.gap)) && (part.gap_details === undefined || gapDetails(part.gap_details)) && (part.records === undefined || statements(part.records))
     && (part.blocks === undefined ? part.statements.length === 0 : part.statements.length > 0 && arranged(part.blocks, part.statements.length)));
 }
@@ -265,8 +299,7 @@ function answer(value: unknown): value is TimelineAnswer {
  * the rest of its file stays: one asked in Mine (ADR-0049), or one with a part
  * whose statements have no blocks, plain or laid out by answer layout v1
  * (ADR-0045, ADR-0051). Release 1441d68 still keeps and rewrites Mine turns
- * asked around 2026-10-26 to 10-31. Remove after about 2027-01-25, once 90
- * days of turn retention have passed every such turn (noted 2026-11-11).
+ * asked around 2026-10-26 to 10-31; the first put after them leaves them out.
  */
 function retired(turn: unknown): boolean {
   const parts = record(turn) && record(turn.answer) && Array.isArray(turn.answer.parts) ? turn.answer.parts : [];
@@ -276,13 +309,16 @@ function retired(turn: unknown): boolean {
 
 /** A turn as a put writes it, or null for anything else. */
 export function timelineTurn(value: unknown): TimelineTurn | null {
-  if (!record(value) || !string(value.id) || !ID.test(value.id) || !time(value.asked_at) || !string(value.text, 2_000) || !string(value.question, 2_000)
+  if (!record(value) || !string(value.id) || !ID.test(value.id) || !time(value.asked_at) || !string(value.text) || !string(value.question)
       || !scope(value.scope) || !answer(value.answer)) return null;
   if (value.since !== undefined && !statements(value.since)) return null;
   if (value.again_of !== undefined && !(string(value.again_of) && ID.test(value.again_of))) return null;
+  if (value.citations_complete !== undefined && value.citations_complete !== true) return null;
+  if (value.typed !== undefined && !string(value.typed)) return null;
+  if (value.follows !== undefined && value.follows !== null && !(string(value.follows) && ID.test(value.follows))) return null;
   // The sources a check found unreadable: distinct places among the answer's own sources.
   const sources = (value.answer as TimelineAnswer).sources.length;
-  if (value.unreadable !== undefined && !(indexes(value.unreadable, 256) && new Set(value.unreadable).size === value.unreadable.length
+  if (value.unreadable !== undefined && !(indexes(value.unreadable) && new Set(value.unreadable).size === value.unreadable.length
       && value.unreadable.every(at => at < sources))) {
     return null;
   }

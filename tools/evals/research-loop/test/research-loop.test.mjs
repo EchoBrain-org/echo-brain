@@ -196,9 +196,8 @@ test("start requests are envelopes the API and each trigger definition accept; a
     assert.equal(Object.hasOwn(request, "project_id"), entry.scope.kind === "project", entry.id);
     const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === request.trigger);
     assert.ok(definition !== undefined, entry.id);
-    // The product's question limit now refuses an overlong question on the Authority, which the runner counts as rejected at ingress.
-    if (entry.id === "overlong-dvt-schedule-check") assert.throws(() => definition.parseEvent(request.input), { code: "invalid_request" });
-    else assert.doesNotThrow(() => definition.parseEvent(request.input), entry.id);
+    // Every case's question passes the product's question rule: the long DVT schedule question (over 240 characters) is asked.
+    assert.doesNotThrow(() => definition.parseEvent(request.input), entry.id);
   }
   // Only an Ask question has a product ingress limit; any other refusal is the runner's or the bindings' error.
   const overlong = caseById("overlong-dvt-schedule-check");
@@ -684,19 +683,18 @@ test("duplicate facts accept the renderer's field-specific truncation", () => {
   }
 });
 
-test("a title cut at 120 characters stays apart from a whole title equal to what stands before its ellipsis", () => {
+test("a title named whole stays apart from a longer title that begins with it", () => {
   const short = "Probe drift ".repeat(10).trim();
-  assert.equal([...short].length, 119);
   const pages = [["700011", short, "1"], ["700012", `${short} and battery sag`, "1"]];
   const rows = pages.map((page, index) => pageRow(page, index));
-  const testCase = { ...caseById(OCT4_CASE), id: "synthetic-cut-titles", parts: [{ id: "p1", type: "list", requirement: "Both pages.", evidence: pages.map(([page]) => ({ page })) }] };
+  const testCase = { ...caseById(OCT4_CASE), id: "synthetic-whole-titles", parts: [{ id: "p1", type: "list", requirement: "Both pages.", evidence: pages.map(([page]) => ({ page })) }] };
   const named = (names, cites) => namedBy(`2 Confluence pages created on October 4, 2026: ${names}.`, cites, rows, testCase)[1];
-  // Code's names; the long title whole, as a writer may give it; and code's cut name alone, which is not the short title.
-  assert.deepEqual([named(`${short}; ${short}…`, rows), named(`${short}; ${pages[1][1]}`, rows), named(`${short}…`, rows.slice(0, 1))], [2, 2, 0]);
+  // Code names each title whole, so both titles are named.
+  assert.equal(named(`${short}; ${pages[1][1]}`, rows), 2);
 });
 
-test("past 25 names, cut, merged and lowercased names match, and a list is named only when every member is", () => {
-  // 30 pages: a title past 120 characters, which code cuts, two pages sharing a label, which code names once, and 27 others.
+test("past 25 names, whole, merged and lowercased names match, and a list is named only when every member is", () => {
+  // 30 pages: a title past 120 characters, which code names whole, two pages sharing a label, which code names once, and 27 others.
   const long = "Field return analysis for the mock digital thermometer: probe drift, battery sag, display rounding and fixture tolerances, with owners";
   assert.ok([...long].length > 120);
   const pages = [["800001", long, "1"], ["800002", "Weekly notes", "1"], ["800003", "weekly  notes", "2"],
@@ -704,8 +702,8 @@ test("past 25 names, cut, merged and lowercased names match, and a list is named
   const testCase = { ...caseById(OCT4_CASE), id: "synthetic-thirty-pages", parts: [{ id: "p1", type: "list", requirement: "All 30 pages.", evidence: pages.map(([page]) => ({ page })) }] };
   const rows = pages.map(pageRow);
   const title = ([, value]) => value;
-  // Code's names for 25 members (the cut long title, and a merged label covering two) name those 25, not the list.
-  const names = [`${[...long].slice(0, 119).join("").trimEnd()}…`, "Weekly notes (2 pages)", ...pages.slice(3, 25).map(title)];
+  // Code's names for 25 members (the long title whole, and a merged label covering two) name those 25, not the list.
+  const names = [long, "Weekly notes (2 pages)", ...pages.slice(3, 25).map(title)];
   assert.deepEqual(namedBy(`30 Confluence pages created on October 4, 2026: ${names.join("; ")}.`, rows.slice(0, 25), rows, testCase), [false, 25]);
   // A writer's sentence naming every member, the long title whole and in lowercase, names the list without any count.
   assert.deepEqual(namedBy(`The pages are ${[long.toLowerCase(), "Weekly Notes", ...pages.slice(3).map(title)].join(", ")}.`, rows, rows, testCase), [true, 30]);

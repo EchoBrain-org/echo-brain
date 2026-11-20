@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { validatePersonToolConnectV1, type PersonToolHostV1, type PersonToolVerbContextV1 } from '@echo-brain/organization-api';
+import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, validatePersonToolConnectV1, type PersonToolHostV1, type PersonToolVerbContextV1 } from '@echo-brain/organization-api';
 import { createConfluencePersonToolProviderV1 } from '@echo-brain/provider-confluence-client/person/confluence-tool-provider';
 import { createJiraPersonToolProviderV1 } from '@echo-brain/provider-jira-client/person/jira-tool-provider';
 import { validateConfluenceSpacesPageV1 } from '@echo-brain/provider-confluence-client/organization-api/confluence-project-mapping-v1';
@@ -80,7 +80,7 @@ describe('Person tool response byte budgets', () => {
   });
 
   it('rejects oversized collection streams without retrying under a larger budget', async () => {
-    const fixture = hostFor({ schema_version: 1, items: [], next_cursor: null }, 128 * 1024);
+    const fixture = hostFor({ schema_version: 1, items: [], next_cursor: null }, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
     await expect(callTool(fixture.host, 'confluence', 'project', { spaces: true })).rejects.toMatchObject({ code: 'response_too_large' });
     expect(fixture.fetch).toHaveBeenCalledOnce();
   });

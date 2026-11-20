@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4,
+  PERSON_EVIDENCE_TEXT_MAX_BYTES_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
   validatePersonSourceEvidenceReadRequestV1,
   validatePersonSourceEvidenceV1,
@@ -26,6 +28,15 @@ describe('cited original public contracts', () => {
       citation: { ...citation, label: 'MRD' },
       text: 'MRD\n\nReview before launch.',
     })).toMatchObject({ citation: { label: 'MRD' }, text: 'MRD\n\nReview before launch.' });
+  });
+
+  it("carries a cited original's text whole, at any length, and still refuses empty text", () => {
+    // A released answer's fallback record keeps its own, shorter cut.
+    expect(PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4).toBe(3 * 1024);
+    const packet = { schema_version: 1, kind: 'echo-person-source-evidence-v1', scope: { kind: 'global' }, citation: { ...sourceCitation, label: 'MRD' } };
+    const long = 'x'.repeat(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 * 4);
+    expect(validatePersonSourceEvidenceV1({ ...packet, text: long }).text).toHaveLength(long.length);
+    expect(() => validatePersonSourceEvidenceV1({ ...packet, text: '' })).toThrow();
   });
 
   it('never reads a cited original under the mine scope', () => {

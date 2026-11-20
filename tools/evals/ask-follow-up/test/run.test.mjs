@@ -9,7 +9,7 @@ import { help, parseArgs, run, runTrial } from "../run.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const document = loadCases();
-const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
+const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 32_768, max_output_tokens: 8_000 };
 
 function privateRoot(t) {
   const root = mkdtempSync(join(tmpdir(), "echo-ask-follow-up-eval-"));
@@ -50,6 +50,9 @@ test("makes no request, and reads no credential, unless asked to run with a priv
   assert.throws(() => parseArgs(["--run", "--credential-file", credential, "--out", join(ROOT, "tools", "evals", "ask-follow-up")]), /outside the repository/u);
   assert.throws(() => parseArgs(["--run", "--credential-file", credential]), /--out must be an absolute private directory/u);
   assert.throws(() => parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out"), "--trials", "4"]), /--trials/u);
+  // A trial waits as long as the operator says; only one shorter than the resolver's own 15 s call is refused.
+  assert.equal(parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out-long"), "--timeout-ms", "3600000"]).timeoutMs, 3_600_000);
+  assert.throws(() => parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out-long"), "--timeout-ms", "14999"]), /--timeout-ms/u);
   assert.throws(() => parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out"), "--cases", "no-such-case"]), /known cases/u);
   const options = parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out")]);
   assert.deepEqual({ trials: options.trials, caseIds: options.caseIds, timeoutMs: options.timeoutMs }, { trials: 3, caseIds: null, timeoutMs: 60_000 });

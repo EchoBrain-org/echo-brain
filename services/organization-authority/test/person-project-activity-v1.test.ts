@@ -352,6 +352,37 @@ describe('project activity: only what the caller can read', () => {
     expect(await activityOf(f).latest('mina')).toEqual({ [f.projectA]: arrivalOf(f) });
   });
 
+  it('reads a long filed history a page at a time: no follow-up lookup holds more than a page of records, and the oldest still counts', async () => {
+    const f = await openItemsFixture();
+    afterArrival(f);
+    const route = recordRoute(f);
+    await f.finishImpactRun();
+    const unsent = (await f.runItems()).items;
+    const sentAt = tick(f);
+    await sendAll(f, unsent);
+    // A thousand newer records filed ahead of the meeting's, none with follow-ups: the meeting's record is the oldest page's.
+    const newer = Array.from({ length: 1_000 }, (_, at) => canonicalSha256(`newer-${at}`));
+    let pagesRead = 0;
+    const padded: CreatePersonProjectActivityV1Options['records'] = {
+      readableDecisionProjects: route.readableDecisionProjects,
+      projectRecordActivity: input => new Map([...route.projectRecordActivity(input)].map(([project, records]) => [project, {
+        meeting_at: records.meeting_at,
+        *filed() {
+          for (let at = 0; at < newer.length; at += 100) { pagesRead += 1; yield newer.slice(at, at + 100); }
+          for (const page of records.filed()) { pagesRead += 1; yield page; }
+        },
+      }])),
+    };
+    const sizes: number[] = [];
+    const items: CreatePersonProjectActivityV1Options['items'] = {
+      movedByOthers: (organization, membership, records, page) => { sizes.push(records.length); return f.items.movedByOthers(organization, membership, records, page); },
+    };
+    expect(await activityOf(f, { records: padded, items }).latest('rafael')).toEqual({ [f.projectA]: sentAt });
+    expect(pagesRead).toBe(11);
+    expect(sizes.length).toBeGreaterThan(1);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(100);
+  });
+
   it('never counts a follow-up whose decision the caller cannot read, even one sent to them', async () => {
     const f = await openItemsFixture();
     afterArrival(f);
@@ -563,6 +594,9 @@ describe('project activity HTTP route', () => {
   });
 });
 
+/** A project's filed records as one list, every page taken. */
+const listed = (records: { readonly meeting_at: string | null; filed(): Iterable<readonly Sha256Digest[]> }) => ({ meeting_at: records.meeting_at, filed: [...records.filed()].flat() });
+
 describe('records route: what was filed in a person\'s projects (Ask timeline v1, C2)', () => {
   it('lists each held project\'s records newest first, and when the newest the reader reads and did not approve arrived, auditing nothing', async () => {
     const w = await meetingWorld();
@@ -570,7 +604,7 @@ describe('records route: what was filed in a person\'s projects (Ask timeline v1
       const route = w.route();
       const projectsOf = (access_token: string) => createRecordProjectAuthorizationV1(new SqliteProjectContextRepositoryV1(w.authority))(w.sessions.authenticateAccess({ access_token }));
       const activity = (access_token: string, own: readonly string[] = [], project_ids: readonly string[] = [SHARED, UNJOINED, PROJ_X]) =>
-        Object.fromEntries(route.projectRecordActivity({ access_token, projects: projectsOf(access_token), project_ids, own: new Set(own) }));
+        Object.fromEntries([...route.projectRecordActivity({ access_token, projects: projectsOf(access_token), project_ids, own: new Set(own) })].map(([project, records]) => [project, listed(records)]));
       const arrival = (name: string) => w.record.prepare('SELECT receipt_issued_at FROM organization_record_log WHERE record_sha256 = ?').pluck().get(w.digest(name)) as string;
       const audits = w.authority.prepare('SELECT count(*) FROM authority_person_read_decision_audit_v2').pluck().get();
       // SHARED holds r4 (approved by EMP_A) and r3 (by OWNER); EMP_A left PROJ_X and never joined UNJOINED, so neither is listed.
@@ -593,7 +627,7 @@ describe('records route: what was filed in a person\'s projects (Ask timeline v1
     } finally { w.close(); }
   });
 
-  it('looks for a meeting among a project\'s newest 500 records alone: one of only the reader\'s own has none, however many it holds', async () => {
+  it('looks for a meeting past a project\'s newest 500 records: every filed record is listed and looked through', async () => {
     const w = await meetingWorld();
     try {
       // SHARED holds r3 (OWNER's) and r4 (EMP_A's); then OWNER approves 500 more into it.
@@ -601,14 +635,21 @@ describe('records route: what was filed in a person\'s projects (Ask timeline v1
       const route = w.route();
       const projectsOf = (access_token: string) => createRecordProjectAuthorizationV1(new SqliteProjectContextRepositoryV1(w.authority))(w.sessions.authenticateAccess({ access_token }));
       const activity = (access_token: string, own: readonly string[] = []) =>
-        route.projectRecordActivity({ access_token, projects: projectsOf(access_token), project_ids: [SHARED], own: new Set(own) }).get(SHARED);
-      const newest = w.record.prepare('SELECT record_sha256 FROM organization_record_project_association_v1 WHERE project_id = ? ORDER BY record_position DESC LIMIT 500').pluck().all(SHARED) as string[];
+        listed(route.projectRecordActivity({ access_token, projects: projectsOf(access_token), project_ids: [SHARED], own: new Set(own) }).get(SHARED)!);
+      const filed = w.record.prepare('SELECT record_sha256 FROM organization_record_project_association_v1 WHERE project_id = ? ORDER BY record_position DESC').pluck().all(SHARED) as string[];
+      const newest = filed.slice(0, 500);
       const arrival = (name: string) => w.record.prepare('SELECT receipt_issued_at FROM organization_record_log WHERE record_sha256 = ?').pluck().get(w.digest(name)) as string;
-      // EMP_A's r4 is the 501st newest: OWNER's newest 500 are all his own, so the read stops there, with no meeting time.
-      expect(activity('owner')).toEqual({ meeting_at: null, filed: newest });
-      expect(activity('owner', newest)).toEqual({ meeting_at: null, filed: newest });
+      // EMP_A's r4 is the 501st newest: past OWNER's newest 500, all his own, it is still found, and every record is listed.
+      expect(filed.length).toBeGreaterThan(500);
+      expect(activity('owner')).toEqual({ meeting_at: arrival('r4'), filed });
+      expect(activity('owner', newest)).toEqual({ meeting_at: arrival('r4'), filed });
       // To EMP_A, OWNER's newest is news.
-      expect(activity('emp_a')).toEqual({ meeting_at: arrival('own-499'), filed: newest });
+      expect(activity('emp_a')).toEqual({ meeting_at: arrival('own-499'), filed });
+      // The history comes a page at a time, each read as it is taken: never all of it at once.
+      const pages = [...route.projectRecordActivity({ access_token: 'owner', projects: projectsOf('owner'), project_ids: [SHARED], own: new Set() }).get(SHARED)!.filed()];
+      expect(pages.length).toBeGreaterThan(1);
+      expect(pages.every(page => page.length > 0 && page.length <= 100)).toBe(true);
+      expect(pages.flat()).toEqual(filed);
     } finally { w.close(); }
   });
 });

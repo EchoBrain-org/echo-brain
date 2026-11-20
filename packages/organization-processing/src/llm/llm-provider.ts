@@ -3,6 +3,7 @@ import {
   type AdapterErrorCode,
   type JsonObject,
 } from "../core/index.js";
+import { EXTRACTION_MODEL_MAX_OUTPUT_TOKENS_V1 } from "./extraction-model-v1.js";
 
 export type LlmProviderId = string;
 
@@ -76,10 +77,15 @@ export interface LlmProviderClient {
 
 export type LlmCredentialResolver = (reference: string) => string | undefined;
 
+/**
+ * A provider call's silence period: a call that receives nothing this long is stalled. A client that streams (OpenRouter)
+ * resets it at every piece of the reply, so a reply that keeps arriving runs as long as it needs.
+ */
 export const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 120_000;
 export const MAX_LLM_REQUEST_TIMEOUT_MS = 600_000;
-export const DEFAULT_MAX_OUTPUT_TOKENS = 4_096;
-export const MAX_OUTPUT_TOKENS = 131_072;
+/** A configuration that sets no output allowance gets the extraction model's own maximum; none may ask for more. */
+export const DEFAULT_MAX_OUTPUT_TOKENS = EXTRACTION_MODEL_MAX_OUTPUT_TOKENS_V1;
+export const MAX_OUTPUT_TOKENS = EXTRACTION_MODEL_MAX_OUTPUT_TOKENS_V1;
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -129,6 +135,29 @@ export function providerStatusError(
   unbilled = false,
 ): AdapterError {
   return new ProviderStatusError(provider, status, unbilled);
+}
+
+/**
+ * The provider refused the prompt because it, with the output allowance, passes the model's own context window: the
+ * meeting is too long for one extraction call. Nothing was generated, so it is unbilled; the same prompt would be
+ * refused again, so it is never retried. The window is the provider's, never an ECHO estimate.
+ */
+export class ExtractionInputTooLongError extends AdapterError {
+  constructor(provider: string) {
+    super('permanently_rejected', `${provider} refused the meeting: it is longer than the model's context window`, false, { unbilled: true });
+    this.name = 'ExtractionInputTooLongError';
+  }
+}
+
+/** A provider's own words for a prompt past the model's context window (OpenRouter, and Anthropic through it). */
+const CONTEXT_WINDOW_REFUSAL = /maximum context length|context length exceeded|prompt is too long|context window/iu;
+
+/** True when a 400 reply's error message says the prompt is past the model's context window. */
+export function isContextWindowRefusal(status: number, body: unknown): boolean {
+  if (status !== 400 || !isRecord(body)) return false;
+  const error = body['error'];
+  const message = isRecord(error) ? error['message'] : undefined;
+  return typeof message === 'string' && CONTEXT_WINDOW_REFUSAL.test(message);
 }
 
 export function invalidProviderResponse(

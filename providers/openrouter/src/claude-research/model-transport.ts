@@ -3,25 +3,61 @@ import { request } from 'node:https';
 import { randomBytes } from 'node:crypto';
 import { messageUsageObserverV1, type ClaudeMessageMetadataV1 } from './message-usage.js';
 import { observeCoreModelMetadataV1, observeCoreRuntimeV1, annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { isContextWindowRefusal } from '@echo-brain/organization-processing/llm/llm-provider';
+import { UNBILLED_REFUSAL_STATUSES_V1 } from '../unbilled-refusal-v1.js';
 
 interface ClaudeModelForwardV1 {
   readonly req: IncomingMessage; readonly res: ServerResponse; readonly body: Buffer; readonly path: string; readonly signal: AbortSignal;
+  /**
+   * Called at each piece of model output in the provider's reply (a content, tool-input or thinking delta, or the stop;
+   * never a `ping` keep-alive), and at each piece of a reply that is not a stream: liveness for a caller timing silence,
+   * never a clock.
+   */
+  readonly alive?: () => void;
 }
 export type ClaudeModelForwarderV1 = (input: ClaudeModelForwardV1) => Promise<ClaudeMessageMetadataV1>;
 
 /** The SDK already received this HTTP response and owns its retry policy. The shared limiter still observes the failure. */
 export class ClaudeModelResponseErrorV1 extends Error {
   readonly diagnostic;
-  constructor(status: number) {
+  /**
+   * `contextWindow`: the provider refused a prompt past the model's own context window (its error message says so).
+   * Carried as a content-free flag, never the message itself.
+   */
+  constructor(status: number, contextWindow = false) {
     super('Research provider request failed');
-    this.diagnostic = { failure_class: 'adapter_http' as const, http_status: status };
+    // A rate-limited or overloaded refusal generated nothing: marked unbilled where the model gate reads it.
+    this.diagnostic = { failure_class: 'adapter_http' as const, http_status: status, ...(contextWindow ? { context_window: true as const } : {}),
+      ...(UNBILLED_REFUSAL_STATUSES_V1.has(status) ? { unbilled: true as const } : {}) };
   }
 }
 
-/** Content-free network failure; the SDK may retry through fresh admission. */
+/**
+ * Content-free network failure. `unbilled`: no connection to the provider was ever established (refused, DNS, TLS), so
+ * no byte of the request reached it; any later failure, or a stream cut before its terminal event, leaves the
+ * generation's billing unknown.
+ */
 export class ClaudeModelTransportErrorV1 extends Error {
-  readonly diagnostic = { failure_class: 'adapter_transport' as const, http_status: null };
-  constructor() { super('Research provider transport failed'); }
+  readonly diagnostic: { readonly failure_class: 'adapter_transport'; readonly http_status: null; readonly unbilled?: true };
+  constructor(readonly unbilled = false) {
+    super('Research provider transport failed');
+    // Where the model gate reads it; a failure whose billing is unknown carries no flag.
+    this.diagnostic = { failure_class: 'adapter_transport', http_status: null, ...(unbilled ? { unbilled: true as const } : {}) };
+  }
+}
+
+
+/**
+ * True only for a failed model request that provably cost nothing: refused before the upstream accepted it, or refused
+ * with an explicit rate-limit or overloaded status. The SDK's retry of anything else could repeat a billed generation.
+ */
+export function claudeModelFailureUnbilledV1(error: unknown): boolean {
+  return (error instanceof ClaudeModelTransportErrorV1 || error instanceof ClaudeModelResponseErrorV1) && error.diagnostic.unbilled === true;
+}
+
+/** A model request refused because an earlier one in the same session failed with its billing unknown. */
+export class ClaudeModelRepeatRefusedErrorV1 extends Error {
+  constructor() { super('A model request after a possibly billed failure is not repeated'); this.name = 'ClaudeModelRepeatRefusedErrorV1'; }
 }
 
 /** Fixed upstream, no redirects; the service credential never enters the SDK child, logs or returned errors. */
@@ -55,25 +91,54 @@ function providerForwarderV1(options: {
     const call = async () => {
     observeCoreModelMetadataV1({ provider, model });
     const result = await new Promise<ClaudeMessageMetadataV1>((resolve, reject) => {
-      const transportFailed = () => reject(input.signal.aborted ? input.signal.reason : new ClaudeModelTransportErrorV1());
+      // Never delivered only while no connection to the provider was established (refused, DNS, TLS before the request):
+      // once one is, any byte of the request may have reached it, whatever the local write reported.
+      let connected = false;
+      const transportFailed = () => reject(input.signal.aborted ? input.signal.reason : new ClaudeModelTransportErrorV1(!connected));
       const headers: Record<string, string> = { authorization: options.authorization(input.req), 'content-type': 'application/json',
         'content-length': String(input.body.length), 'accept-encoding': 'identity' };
       for (const key of ['anthropic-version', 'anthropic-beta', ...(provider === 'anthropic' ? ['user-agent', 'x-app'] : [])]) {
         const value = input.req.headers[key]; if (typeof value === 'string') headers[key] = value;
       }
       const upstream = request({ hostname: options.hostname, port: 443, method: 'POST', path: `${options.path_prefix}${input.path}`, headers, signal: input.signal }, reply => {
+        // A reply means the upstream received the request.
+        connected = true;
         annotateCoreRuntimeV1({ counts: { http_status: reply.statusCode ?? 0 } });
-        const usage = messageUsageObserverV1(true);
-        reply.on('data', chunk => usage.write(chunk));
+        // A redirect is never followed or handed to the SDK to follow: the first endpoint may have run the request, so
+        // it is a failure whose billing is unknown.
+        if ((reply.statusCode ?? 0) >= 300 && (reply.statusCode ?? 0) < 400) { reply.resume(); reject(new ClaudeModelTransportErrorV1(false)); return; }
+        const streamed = String(reply.headers['content-type'] ?? '').includes('text/event-stream');
+        const usage = messageUsageObserverV1(true, streamed ? input.alive : undefined);
+        // A refusal's body is read only to tell a context-window refusal by its message; it never leaves this function.
+        const refusal: Buffer[] = [];
+        reply.on('data', chunk => { if (!streamed) input.alive?.(); usage.write(chunk); if ((reply.statusCode ?? 502) >= 400) refusal.push(Buffer.from(chunk)); });
         input.res.writeHead(reply.statusCode ?? 502, { 'content-type': reply.headers['content-type'] ?? 'application/json' });
-        reply.pipe(input.res);
+        // The SDK's response is ended here only once the reply is known finished: a cut stream must reach it as a broken
+        // connection, not a clean end it could read as complete.
+        reply.pipe(input.res, { end: false });
         reply.on('end', () => {
           const status = reply.statusCode ?? 502;
-          if (status >= 400) reject(new ClaudeModelResponseErrorV1(status));
-          else resolve(usage.end());
+          if (status >= 400) {
+            let body: unknown;
+            try { body = JSON.parse(Buffer.concat(refusal).toString('utf8')) as unknown; } catch { body = undefined; }
+            input.res.end();
+            reject(new ClaudeModelResponseErrorV1(status, isContextWindowRefusal(status, body)));
+            return;
+          }
+          const metadata = usage.end();
+          // A stream that ended cleanly before the message's terminal event was cut in transit after the model ran:
+          // a failed call whose billing is unknown, never a finished reply.
+          if (streamed && !usage.finished()) { reject(new ClaudeModelTransportErrorV1(false)); return; }
+          input.res.end();
+          resolve(metadata);
         });
         reply.on('error', transportFailed);
         reply.on('aborted', transportFailed);
+      });
+      upstream.on('socket', socket => {
+        // A reused connection is already established; a new one is once its TLS handshake completes.
+        if (!socket.connecting) connected = true;
+        else socket.once('secureConnect', () => { connected = true; });
       });
       upstream.on('error', transportFailed);
       upstream.end(input.body);
@@ -90,7 +155,13 @@ function providerForwarderV1(options: {
 export async function startClaudeModelTransportV1(input: {
   readonly signal: AbortSignal;
   readonly forward: ClaudeModelForwarderV1;
-  readonly admit: (body: Buffer, operation: 'messages' | 'count_tokens', forward: (signal: AbortSignal) => Promise<ClaudeMessageMetadataV1>) => Promise<unknown>;
+  /**
+   * `forward` takes the admission's signal and its `progress`, which it calls at each piece of model output in the
+   * forwarded reply, so the admitting gate restarts its silence timer for this request.
+   */
+  readonly admit: (body: Buffer, operation: 'messages' | 'count_tokens', forward: (signal: AbortSignal, progress?: () => void) => Promise<ClaudeMessageMetadataV1>) => Promise<unknown>;
+  /** Called at each piece of model output in any forwarded reply (see ClaudeModelForwardV1). */
+  readonly alive?: () => void;
 }) {
   input.signal.throwIfAborted();
   const prefix = `/${randomBytes(24).toString('hex')}`, pending = new Set<AbortController>();
@@ -109,11 +180,11 @@ export async function startClaudeModelTransportV1(input: {
       signal.throwIfAborted();
       const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk));
       const body = Buffer.concat(chunks);
-      await input.admit(body, path.endsWith('count_tokens') ? 'count_tokens' : 'messages', async admittedSignal => {
+      await input.admit(body, path.endsWith('count_tokens') ? 'count_tokens' : 'messages', async (admittedSignal, progress) => {
         const checked = AbortSignal.any([signal, admittedSignal]); checked.throwIfAborted();
         if (stopped) throw new Error('Research stopped');
         forwarded++;
-        return input.forward({ req, res, path: `${path}${url.search}`, body, signal: checked });
+        return input.forward({ req, res, path: `${path}${url.search}`, body, signal: checked, alive: () => { input.alive?.(); progress?.(); } });
       });
     } catch (error) {
       // A provider refusal has already been delivered to the SDK. A retry must

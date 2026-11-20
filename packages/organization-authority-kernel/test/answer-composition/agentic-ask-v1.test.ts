@@ -2,25 +2,25 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import { validatePersonAnswerResponseV8 } from "@echo-brain/organization-api";
+import { PERSON_EVIDENCE_TEXT_MAX_BYTES_V1, validatePersonAnswerResponseV8 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
 import {
-  AGENTIC_ASK_DEADLINE_MS_V1,
+  AGENTIC_READ_SILENCE_MS_V1,
   agenticAskContextBudgetBytesV1,
   createAgenticAskV5,
   type AgenticAskAuditEntryV1,
 } from "../../src/answer-composition/agentic-ask-v1.js";
-import { ANSWER_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
-import { AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
-import { AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
+import { queryRefusal } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
 import type { StructuredGenerationInput, StructuredGenerationPort } from "../../src/answer-composition/structured-generation-v1.js";
 import type { EvidenceDeskItemV1, EvidenceDeskListInputV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from "../../src/shared/evidence-desk-v1.js";
 import type { EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
 import { writerReply } from "./fixtures/agentic-scenarios.js";
 
-const generation = { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 30_000 };
+const generation = { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 180_000, context_tokens: 32_768, max_output_tokens: 8_000 };
 const checked = "2026-09-27T00:00:00.000Z";
+/** A window just large enough to leave a research step about 16 KiB of evidence beside its prompt and reply. */
+const SMALL_WINDOW = 21_645;
 
 function item(id: string, text: string | undefined = `Released body for ${id}.`, options: Partial<EvidenceDeskItemV1> = {}): EvidenceDeskItemV1 {
   return Object.freeze({
@@ -167,7 +167,7 @@ describe("agentic Ask: research loop", () => {
       step([{}], [search('quoted')]),
       (input: StructuredGenerationInput) => {
         const prompt = JSON.parse(input.user_prompt);
-        expect(Buffer.byteLength(input.user_prompt)).toBeLessThanOrEqual(agenticAskContextBudgetBytesV1(4_096, input.system_prompt, input.max_output_tokens));
+        expect(Buffer.byteLength(input.user_prompt)).toBeLessThanOrEqual(agenticAskContextBudgetBytesV1(SMALL_WINDOW, input.system_prompt, input.max_output_tokens));
         // Entries are kept in id order, so the budget leaves out the newest packets first.
         const ids = prompt.seen.map((entry: { id: string }) => entry.id);
         expect(ids).toEqual(Array.from({ length: ids.length }, (_, index) => `E${index + 1}`));
@@ -180,18 +180,7 @@ describe("agentic Ask: research loop", () => {
       },
       answer([], ['launch date']),
     ]);
-    await ask({ desk: desk({ search: () => packets }), model: script.model, context_tokens: 4_096 }).answer({ question: 'When is launch?' });
-  });
-
-  it('does not mark short text read when the research time budget prevents prompt admission', async () => {
-    let clock = 0;
-    const evidence = desk({ search: () => { clock = 60_001; return [item('launch', 'Launch is Tuesday.')]; } });
-    const script = scripted([step([{}], [search('launch')]), { wrong: true }, { still: 'wrong' }]);
-    const result = await ask({ desk: evidence, model: script.model, now: () => clock }).answer({ question: 'When is launch?' });
-    expect(script.inputs).toHaveLength(3);
-    expect(script.prompt(1)).toHaveProperty('evidence');
-    expect(result.citations).toEqual([]);
-    expect(result.parts[0]).not.toHaveProperty('records');
+    await ask({ desk: desk({ search: () => packets }), model: script.model, context_tokens: SMALL_WINDOW }).answer({ question: 'When is launch?' });
   });
 
   it('does not accept opened text that never fits a research prompt as read evidence', async () => {
@@ -211,7 +200,7 @@ describe("agentic Ask: research loop", () => {
       // The writer sees the listed row, never the body that did not fit, and finds no launch date in it.
       answer([], ['launch date']),
     ]);
-    const result = await ask({ desk: desk({ list: () => [metadata], open: () => [body] }), model: script.model, context_tokens: 4_096 }).answer({ question: 'When is launch?' });
+    const result = await ask({ desk: desk({ list: () => [metadata], open: () => [body] }), model: script.model, context_tokens: SMALL_WINDOW }).answer({ question: 'When is launch?' });
     expect(result.citations).toEqual([]);
     expect(result.parts[0]).not.toHaveProperty('records');
   });
@@ -402,7 +391,8 @@ describe("agentic Ask: research loop", () => {
   });
 
   it("keeps oversized search hits as previews until opened, and refuses to cite unread text", async () => {
-    const long = item("long", `${"Context. ".repeat(400)}Owner is Colin.`);
+    // Past the bound a released passage may carry whole, so search shows only a preview.
+    const long = item("long", `${"Context. ".repeat(Math.ceil(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 / 9))}Owner is Colin.`);
     const script = scripted([
       step([{ needs: [{ need: "owner" }] }], [search("owner")]),
       finish([found(["E1"], "owner")]),
@@ -506,26 +496,30 @@ describe("agentic Ask: research loop", () => {
   it("fits unopened search passages after cited and read evidence within the writer budget", async () => {
     const read = item("read", "Released background.");
     const cited = item("cited", "Launch is Tuesday.");
-    const unopened = Array.from({ length: 8 }, (_, index) => item(`unopened-${index}`, `Passage ${index}. ${"Detailed background. ".repeat(150)}`, { kind: "document_passage" }));
+    // Each passage is past the bound research reads whole from a search, so research sees only its preview.
+    const unopened = Array.from({ length: 8 }, (_, index) => item(`unopened-${index}`, `Passage ${index}. ${"Detailed background. ".repeat(Math.ceil(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 / 21))}`, { kind: "document_passage" }));
+    const context_tokens = 48_000;
     const script = scripted([
       step([{}], [search("launch")]),
       finish([found(["E2"])]),
       answer([{ text: "Launch is Tuesday.", evidence: ["E2"] }, { text: "Excluded passage.", evidence: ["E3"] }]),
     ]);
-    const result = await ask({ desk: desk({ search: () => [read, cited, ...unopened] }), model: script.model, context_tokens: 4_096 }).answer({ question: "When is launch?" });
+    const result = await ask({ desk: desk({ search: () => [read, cited, ...unopened] }), model: script.model, context_tokens }).answer({ question: "When is launch?" });
     const supplied = script.prompt(2).evidence as { id: string; text: string }[];
     expect(supplied.slice(0, 2).map(value => value.id)).toEqual(["E2", "E1"]);
     expect(supplied.length).toBeGreaterThan(2);
     expect(supplied.length).toBeLessThan(unopened.length + 2);
     expect(new Set(supplied.map(value => value.id)).size).toBe(supplied.length);
-    expect(supplied.reduce((total, value) => total + Buffer.byteLength(value.text) + 200, 0)).toBeLessThanOrEqual(16 * 1_024);
+    // Within the window less the writer's 16,000-token reply, at 3 bytes a token.
+    expect(supplied.reduce((total, value) => total + Buffer.byteLength(value.text) + 200, 0)).toBeLessThanOrEqual((context_tokens - 16_000) * 3);
     expect(supplied.some(value => value.id === "E3")).toBe(false);
     expect(result.parts[0]!.statements.map(value => value.text)).toEqual(["Launch is Tuesday."]);
   });
 
   it("previews a long search hit where the query matched, not only its head", async () => {
-    const transcript = item("transcript", `Transcript: Calibration\n${"Anika: We reviewed the pilot numbers. ".repeat(100)}Jules: I will publish the dashboard by September 11.\n\nZhen: Thanks.`, { kind: "note", label: "Transcript: Calibration" });
-    const unmatched = item("unmatched", `${"Nothing relevant here at all. ".repeat(120)}The end.`);
+    // Both hits are past the bound research reads whole from a search, so each shows as a preview.
+    const transcript = item("transcript", `Transcript: Calibration\n${"Anika: We reviewed the pilot numbers. ".repeat(Math.ceil(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 / 38))}Jules: I will publish the dashboard by September 11.\n\nZhen: Thanks.`, { kind: "note", label: "Transcript: Calibration" });
+    const unmatched = item("unmatched", `${"Nothing relevant here at all. ".repeat(Math.ceil(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 / 30))}The end.`);
     const script = scripted([
       step([{ needs: [{ need: "what Jules took on" }] }], [
         search([...Array.from({ length: 32 }, (_, index) => `tag${index}`), "Jules", "dashboard"].join(" ")),
@@ -549,13 +543,16 @@ describe("agentic Ask: research loop", () => {
   });
 
   it("rejects repeated premature finish and reports incomplete research", async () => {
+    // The one search did not complete (the source could not be read), so nothing establishes absence.
     const script = scripted([
       step([{}], [search("launch")]),
       finish([missing()]),
       finish([missing()]),
     ]);
-    const result = await ask({ desk: desk(), model: script.model }).answer({ question: "When is launch?" });
-    expect(script.prompt(2).validation_error).toContain("fewer than two completed searches or a completed list");
+    const evidence = desk();
+    evidence.search.mockImplementation(async () => ({ items: [], truncated: false, receipt_digests: [], notice: "Meeting records are unavailable." }));
+    const result = await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
+    expect(script.prompt(2).validation_error).toContain("before any completed search or list");
     expect(result).toMatchObject({ outcome: "partial", citations: [], parts: [{ status: "not_found", gap: expect.any(String) }] });
     expect(script.inputs).toHaveLength(3); // no answer call without evidence
   });
@@ -571,7 +568,8 @@ describe("agentic Ask: research loop", () => {
     const result = await ask({ desk: desk({ search: () => [launch] }), model: script.model }).answer({ question: "When is launch and who owns it?" });
     expect(script.prompt(2).validation_error).toContain("need N2 \"launch owner\" is still open");
     expect(script.prompt(2).plan[0].needs.map((need: { need: string }) => need.need)).toEqual(["launch date", "launch owner"]);
-    expect(result).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "I couldn't complete the search. Please try again. Missing context: launch owner." }] });
+    // One completed search establishes that the owner was not found.
+    expect(result).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not found: launch owner." }] });
   });
 
   it("keeps metadata-only search hits available for the planner to open", async () => {
@@ -649,7 +647,7 @@ describe("agentic Ask: research loop", () => {
     const evidence = desk();
     await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
     expect(script.prompt(1).last_results).toEqual([
-      expect.objectContaining({ tool: "search", error: expect.stringContaining("at most 240 Unicode code points") }),
+      expect.objectContaining({ tool: "search", error: queryRefusal("!!!") }),
     ]);
     expect(evidence.open).not.toHaveBeenCalled();
   });
@@ -735,7 +733,7 @@ describe("agentic Ask: research loop", () => {
       const script = scripted([step([{}], [{ tool: 'list', args: { source: 'meetings' } }]), finish([missing()]), finish([missing()])]);
       const result = await ask({ desk: desk({ list: () => page }), model: script.model }).answer({ question: 'When is launch?' });
       expect(result.outcome).toBe('partial');
-      expect(script.prompt(2).validation_error).toContain('completed list');
+      expect(script.prompt(2).validation_error).toContain('before any completed search or list');
     }
   });
 
@@ -843,30 +841,31 @@ describe("agentic Ask: research loop", () => {
     expect(script.prompt(2).lists.find((list: { args: { source: string } }) => list.args.source === 'meetings')).toMatchObject({ id: 'L1', more: false, complete: true });
   });
 
-  it('stops stale synonym searches after evidence and lets the writer name the requested gap', async () => {
+  it('stops repeated searches after evidence and lets the writer name the requested gap', async () => {
     const launch = item('launch', 'Launch is Tuesday.');
     const script = scripted([
-      step([{}], [search('launch')]), step([found(['E1'])], [search('launch status')]), step([found(['E1'])], [search('launch gate')]),
+      step([{}], [search('launch')]), step([found(['E1'])], [search('launch')]), step([found(['E1'])], [search('launch')]),
       answer([{ text: 'Launch is Tuesday.', evidence: ['E1'] }], ['launch owner']),
     ]);
     const evidence = desk({ search: () => [launch] });
     const result = await ask({ desk: evidence, model: script.model }).answer({ question: 'When is launch and who owns it?' });
-    expect(evidence.search).toHaveBeenCalledTimes(3);
+    // A repeated search is answered from what research already holds: the desk is read once.
+    expect(evidence.search).toHaveBeenCalledTimes(1);
     expect(script.inputs).toHaveLength(4);
     expect(result).toMatchObject({ outcome: 'partial', parts: [{ status: 'partial', gap: expect.stringContaining('launch owner') }] });
   });
 
-  it('continues after a search admits new evidence, then stops after two stale searches', async () => {
+  it('continues after a search admits new evidence, then stops after two repeated searches', async () => {
     const launch = item('launch', 'Launch is Tuesday.');
     const owner = item('owner', 'Jules owns the launch follow-up.');
     const script = scripted([
       step([{}], [search('launch')]), step([found(['E1'])], [search('launch owner')]),
-      step([found(['E1'])], [search('launch owner status')]), step([found(['E1'])], [search('launch owner update')]),
+      step([found(['E1'])], [search('launch owner')]), step([found(['E1'])], [search('launch owner')]),
       answer([{ text: 'Launch is Tuesday.', evidence: ['E1'] }]),
     ]);
     const evidence = desk({ search: query => query === 'launch' ? [launch] : [owner] });
     const result = await ask({ desk: evidence, model: script.model }).answer({ question: 'When is launch?' });
-    expect(evidence.search).toHaveBeenCalledTimes(4);
+    expect(evidence.search).toHaveBeenCalledTimes(2);
     expect(script.inputs).toHaveLength(5);
     expect(result).toMatchObject({ outcome: 'partial', parts: [{ statements: [{ text: 'Launch is Tuesday.' }] }] });
     expect(result.notice).toContain('Research stopped before it finished');
@@ -1011,7 +1010,13 @@ describe("agentic Ask: research loop", () => {
 
   it("sizes the scratchpad from the model's context window", async () => {
     expect(agenticAskContextBudgetBytesV1(131_072, "x".repeat(9_000), 1_500)).toBeGreaterThan(300_000);
-    expect(agenticAskContextBudgetBytesV1(undefined, "", 1_500)).toBeLessThan(90_000);
+    // No window is assumed: a small one gives a small budget, and a prompt larger than the window leaves none.
+    expect(agenticAskContextBudgetBytesV1(32_768, "", 1_500)).toBeLessThan(90_000);
+    expect(agenticAskContextBudgetBytesV1(1_000, "x".repeat(9_000), 1_500)).toBe(0);
+    // The model's window less the output the call requests, once: 1,000,000 tokens at 90%, less 128,000, at 3 bytes a token.
+    expect(agenticAskContextBudgetBytesV1(1_000_000, "", 128_000)).toBe((900_000 - 128_000) * 3);
+    expect(agenticAskContextBudgetBytesV1(1_000_000, "x".repeat(3_000), 128_000)).toBe((900_000 - 1_000 - 128_000) * 3);
+    expect(agenticAskContextBudgetBytesV1(1_000_000, "", 128_000)).toBeGreaterThan(2_000_000);
     const passages = Array.from({ length: 12 }, (_, index) => item(`p${index}`, `${index} `.repeat(1_400).trim(), { kind: "document_passage" }));
     const actions = passages.map((_, index) => open(`E${index + 1}`));
     const script = scripted([
@@ -1022,7 +1027,7 @@ describe("agentic Ask: research loop", () => {
       answer([{ text: "x.", evidence: ["E12"] }]),
     ]);
     const evidence = desk({ search: () => passages, open: id => passages.filter(value => value.id === id) });
-    await ask({ desk: evidence, model: script.model, context_tokens: 16_000 }).answer({ question: "When is launch?" });
+    await ask({ desk: evidence, model: script.model, context_tokens: SMALL_WINDOW }).answer({ question: "When is launch?" });
     // A small window cannot hold 12 opened passages of about 3 KB each;
     // other entries shrink to previews while there is remaining room.
     const shown = script.prompt(4).opened.length;
@@ -1030,19 +1035,25 @@ describe("agentic Ask: research loop", () => {
     expect(shown).toBeLessThan(12);
     const researchInput = script.inputs[4]!;
     expect(Buffer.byteLength(researchInput.user_prompt, "utf8")).toBeLessThanOrEqual(
-      agenticAskContextBudgetBytesV1(16_000, researchInput.system_prompt, researchInput.max_output_tokens),
+      agenticAskContextBudgetBytesV1(SMALL_WINDOW, researchInput.system_prompt, researchInput.max_output_tokens),
     );
     expect(script.prompt(4).seen.length).toBeLessThanOrEqual(12 - shown);
     const shownIds = script.prompt(4).opened.map((entry: { id: string }) => entry.id);
     expect(script.prompt(4).seen.every((entry: { id: string }) => !shownIds.includes(entry.id))).toBe(true);
+    // Nothing read is dropped silently: whatever the window could not hold is named, with how to read it.
+    const listed = [...shownIds, ...script.prompt(4).seen.map((entry: { id: string }) => entry.id), ...(script.prompt(4).left_out?.ids ?? [])];
+    expect(new Set(listed).size).toBe(12);
+    if (shown + script.prompt(4).seen.length < 12) expect(script.prompt(4).left_out.note).toContain("Open one by its id");
   });
 });
 
 describe("agentic Ask: failures never lose found evidence", () => {
-  const unavailable = () => Object.assign(new Error("OpenRouter request failed"), { diagnostic: { failure_class: "adapter_timeout" } });
+  // A silence before the request was sent: unbilled, so it earns the one retry.
+  const unavailable = () => Object.assign(new Error("OpenRouter request failed"), { diagnostic: { failure_class: "adapter_timeout", unbilled: true } });
 
   it("does not dump unopened search passages when the writer fails or call that completed absence", async () => {
-    const passage = item("unread", "Potentially relevant launch background. ".repeat(100), { kind: "document_passage" });
+    // Past the bound research reads whole from a search: research saw only its preview.
+    const passage = item("unread", "Potentially relevant launch background. ".repeat(Math.ceil(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 / 40)), { kind: "document_passage" });
     const script = scripted([
       step([{}], [search("launch"), search("launch date")]),
       finish([missing()]),
@@ -1077,7 +1088,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
     expect(result).toMatchObject({ outcome: "partial", parts: [{ status: "records_only", records: [{ text: "Atlas launches in October." }] }] });
   });
 
-  it("retries a timed-out research step once unchanged, then answers from what was found", async () => {
+  it("retries a timed-out research step once unchanged, then stops research as stalled and answers from what was found", async () => {
     const script = scripted([
       step([{}], [search("launch")]),
       () => { throw unavailable(); },
@@ -1088,15 +1099,15 @@ describe("agentic Ask: failures never lose found evidence", () => {
     const result = await ask({ desk: desk({ search: () => [item("a")] }), model: script.model, audit }).answer({ question: "When is launch?" });
     expect(result).toMatchObject({ outcome: "partial", parts: [{ statements: [{ text: "Tuesday." }] }] });
     expect(script.inputs[2]!.system_prompt).toBe(script.inputs[1]!.system_prompt);
-    expect(audit[0]).toMatchObject({ outcome: "partial", fallbacks: 1, repairs: 1, model_calls: 4 });
+    // A stall is not an unusable step: no fallback is counted.
+    expect(audit[0]).toMatchObject({ outcome: "partial", fallbacks: 0, repairs: 1, model_calls: 4 });
   });
 
   it.each([
-    ["adapter_timeout", null], ["adapter_transport", null],
-    ["adapter_http", 408], ["adapter_http", 429], ["adapter_http", 503],
-    ["adapter_provider_error", 500], ["adapter_provider_error", 200],
-  ])("retries temporary %s/%s once without changing the prompt", async (failure_class, http_status) => {
-    const failure = Object.assign(new Error("provider detail must stay private"), { diagnostic: { failure_class, http_status } });
+    ["adapter_timeout", null, true], ["adapter_transport", null, true],
+    ["adapter_http", 429, false], ["adapter_http", 503, false], ["adapter_provider_error", 529, false],
+  ])("retries unbilled %s/%s once without changing the prompt", async (failure_class, http_status, unbilled) => {
+    const failure = Object.assign(new Error("provider detail must stay private"), { diagnostic: { failure_class, http_status, ...(unbilled ? { unbilled: true } : {}) } });
     const script = scripted([
       () => { throw failure; },
       step([{}], [search("launch")]),
@@ -1110,6 +1121,25 @@ describe("agentic Ask: failures never lose found evidence", () => {
     expect(script.inputs[1]!.system_prompt).toBe(script.inputs[0]!.system_prompt);
     expect(script.inputs[1]!.user_prompt).toBe(script.inputs[0]!.user_prompt);
     expect(evidence.revalidate).toHaveBeenCalledTimes(6);
+  });
+
+  // The gate's own tests classify every failure; here, one that may have been billed still leaves the writer its answer.
+  it.each([["adapter_timeout", null], ["adapter_http", 500]])("never repeats %s/%s, which may have been billed, and still answers from what was found", async (failure_class, http_status) => {
+    const failure = Object.assign(new Error("provider detail must stay private"), { diagnostic: { failure_class, http_status } });
+    const script = scripted([
+      step([{}], [search("launch")]),
+      () => { throw failure; },
+      answer([{ text: "Tuesday.", evidence: ["E1"] }]),
+    ]);
+    const evidence = desk({ search: () => [item("a")] });
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const result = await ask({ desk: evidence, model: script.model, audit }).answer({ question: "When is launch?" });
+    // The failed step is not sent again; the writer, a different call, still answers from the search it read.
+    expect(script.inputs).toHaveLength(3);
+    expect(script.inputs[2]!.system_prompt).not.toBe(script.inputs[1]!.system_prompt);
+    expect(result).toMatchObject({ outcome: "partial", parts: [{ statements: [{ text: "Tuesday." }] }] });
+    expect(JSON.stringify(result)).not.toContain(failure.message);
+    expect(audit[0]).toMatchObject({ model_calls: 3, repairs: 0 });
   });
 
   it.each([
@@ -1152,26 +1182,19 @@ describe("agentic Ask: failures never lose found evidence", () => {
     expect(script.inputs).toHaveLength(2);
   });
 
-  it("reports an incomplete search when slow retrieval consumes the research reserve", async () => {
-    let clock = 0;
-    const script = scripted([step([{}], [search("launch")])]);
-    const evidence = desk({ search: () => { clock = 60_000.25; return []; } });
-    const result = await ask({ desk: evidence, model: script.model, now: () => clock }).answer({ question: "When is launch?" });
-    expect(result.parts[0]!.gap).toContain("couldn't complete the search");
-    expect(script.inputs).toHaveLength(1);
-  });
-
-  it("reports an incomplete search when research reaches the step limit and the writer cannot use its search passages", async () => {
+  it("reports an incomplete search when research stops on repeated reads and the writer cannot use its search passages", async () => {
     let queries = 0;
     const model: StructuredGenerationPort = { generate: vi.fn(async input =>
       (input.schema.properties as Readonly<Record<string, unknown>>)?.blocks !== undefined
         ? { wrong: true }
-        : step([{}], [search(`launch ${++queries}`)])) };
-    const evidence = desk({ search: query => [item(query, "Unread background. ".repeat(200))] });
+        : (queries++, step([{}], [search("launch")]))) };
+    // Each hit is past the bound research reads whole from a search, so research sees only previews.
+    const evidence = desk({ search: query => [item(query, "Unread background. ".repeat(Math.ceil(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 / 19)))] });
     const result = await ask({ desk: evidence, model }).answer({ question: "When is launch?" });
     expect(result.parts[0]!.gap).toContain("couldn't complete the search");
     expect(result.citations).toEqual([]);
-    expect(queries).toBe(10);
+    // The first search is new work; the two that repeat it add nothing and stop research.
+    expect(queries).toBe(3);
   });
 
   it.each([
@@ -1185,51 +1208,19 @@ describe("agentic Ask: failures never lose found evidence", () => {
     expect(audit).toEqual([]);
   });
 
-  it("recomputes research and answer timeouts after slow permission revalidation", async () => {
+  it("retries a failed step after a slow permission check: no clock skips the retry", async () => {
     let clock = 0;
-    let checks = 0;
-    const launch = item("a");
-    const evidence = desk({ search: () => [launch], open: () => [launch], revalidate: async () => {
-      checks += 1;
-      // Steps of 10 s leave the third step room to start; its permission check then takes 30 s, which still leaves the 12.5 s
-      // the step needs after the longest step call so far.
-      if (checks === 3) clock += 30_000.25;
-      if (checks === 4) clock += 15_000.25;
-      return { checked_at: checked };
-    } });
-    const timeouts: number[] = [];
-    const script = scripted([
-      () => { clock += 10_000; return step([{}], [search("launch")]); },
-      () => { clock += 10_000; return step([{}], [open("E1")]); },
-      (input: StructuredGenerationInput) => { timeouts.push(input.timeout_ms); clock += 10_000; return finish([found(["E1"])]); },
-      (input: StructuredGenerationInput) => { timeouts.push(input.timeout_ms); return answer([{ text: "Tuesday.", evidence: ["E1"] }]); },
-    ]);
-    const result = await ask({ desk: evidence, model: script.model, now: () => clock }).answer({ question: "When is launch?" });
-    expect(result.outcome).toBe("answered");
-    expect(timeouts).toEqual([12_999, 12_999]);
-  });
-
-  it("skips a retry if its permission check consumes the remaining research budget", async () => {
-    let clock = 0;
-    let checks = 0;
-    const evidence = desk({ search: () => [item("a")], revalidate: async () => {
-      checks += 1;
-      if (checks === 3) clock = 60_000.25;
-      return { checked_at: checked };
-    } });
+    const evidence = desk({ search: () => [item("a")], revalidate: async () => { clock += 176_000.25; return { checked_at: checked }; } });
     const script = scripted([
       step([{}], [search("launch")]),
       () => { throw unavailable(); },
-      (input: StructuredGenerationInput) => {
-        expect(input.system_prompt.startsWith(ANSWER_PROMPT)).toBe(true);
-        return answer([{ text: "Tuesday.", evidence: ["E1"] }]);
-      },
+      finish([found(["E1"])]),
+      answer([{ text: "Tuesday.", evidence: ["E1"] }]),
     ]);
     const audit: AgenticAskAuditEntryV1[] = [];
     const result = await ask({ desk: evidence, model: script.model, now: () => clock, audit }).answer({ question: "When is launch?" });
-    expect(result).toMatchObject({ outcome: "partial", parts: [{ statements: [{ text: "Tuesday." }] }] });
-    expect(script.inputs).toHaveLength(3);
-    expect(audit[0]).toMatchObject({ model_calls: 3, repairs: 0 });
+    expect(result).toMatchObject({ outcome: "answered", parts: [{ statements: [{ text: "Tuesday." }] }] });
+    expect(audit[0]).toMatchObject({ model_calls: 4, repairs: 1 });
   });
 
   it("opens by title when the model passes a seen title instead of an id", async () => {
@@ -1247,78 +1238,11 @@ describe("agentic Ask: failures never lose found evidence", () => {
     expect(script.prompt(2).last_results[0]).toMatchObject({ tool: "open", opened: ["E1"] });
   });
 
-  it("keeps research inside its budget so the answer always has its reserve", async () => {
-    let clock = 0;
-    const timeouts: Array<{ role: string; timeout: number; at: number }> = [];
-    const model: StructuredGenerationPort = {
-      generate: vi.fn(async (input: StructuredGenerationInput) => {
-        const role = input.system_prompt.startsWith(ANSWER_PROMPT) ? "answer" : "step";
-        timeouts.push({ role, timeout: input.timeout_ms, at: clock });
-        if (role === "answer") { clock += 5_000; return answer([{ text: "Tuesday.", evidence: ["E1"] }]); }
-        // A slow provider: every research step runs to its timeout.
-        clock += input.timeout_ms;
-        if (timeouts.length === 1) return step([{}], [search("launch")]);
-        throw unavailable();
-      }),
-    };
-    const audit: AgenticAskAuditEntryV1[] = [];
-    const result = await ask({ desk: desk({ search: () => [item("a")] }), model, audit, now: () => clock }).answer({ question: "When is launch?" });
-    expect(result).toMatchObject({ outcome: "partial", parts: [{ statements: [{ text: "Tuesday." }] }] });
-    for (const call of timeouts.filter(value => value.role === "step")) expect(call.at + call.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_RESEARCH_LIVE_BUDGET_V1.writer_reserve_ms);
-    expect(timeouts.at(-1)!.role).toBe("answer");
-    expect(audit[0]!.outcome).toBe("partial");
-  });
-
-  it("keeps fractional-clock research and answer budgets valid for an integer-only adapter", async () => {
-    const startedAt = 100.125;
-    let clock = startedAt;
-    const monotonic = vi.spyOn(performance, "now").mockImplementation(() => clock);
-    const launch = item("launch", "Launch is Tuesday.");
-    const evidence = desk({ search: () => [launch], open: () => [launch] });
-    const audit: AgenticAskAuditEntryV1[] = [];
-    const script = scripted([
-      // The third step starts with less than a whole step's time, but more than it needs after 19.5 s steps.
-      () => { clock += 19_000.25; return step([{}], [search("launch")]); },
-      () => { clock += 19_500.125; return step([{}], [open("E1")]); },
-      () => { clock += 21_000.25; return finish([found(["E1"])]); },
-      answer([{ text: "Launch is Tuesday.", evidence: ["E1"] }]),
-    ]);
-    const calls: Array<{ timeout: number; at: number }> = [];
-    const model: StructuredGenerationPort = {
-      generate: async input => {
-        // Enforce the adapter boundary before any provider request, as OpenRouter does.
-        if (!Number.isSafeInteger(input.timeout_ms) || input.timeout_ms < 1) {
-          throw Object.assign(new Error("adapter requires a positive integer timeout"), {
-            diagnostic: { failure_class: "adapter_response", http_status: null },
-          });
-        }
-        calls.push({ timeout: input.timeout_ms, at: clock - startedAt });
-        return script.model.generate(input);
-      },
-    };
-    try {
-      // Use the default performance.now clock, including its fractional milliseconds.
-      const result = await ask({ desk: evidence, model, audit }).answer({ question: "When is launch?" });
-      expect(result).toMatchObject({ outcome: "answered", citations: [{ citation: launch.citation }] });
-      expect(calls).toHaveLength(4);
-      expect(calls[2]!.timeout).toBeLessThan(25_000);
-      expect(calls[3]!.timeout).toBeLessThan(generation.timeout_ms);
-      for (const call of calls.slice(0, 3)) {
-        expect(call.at + call.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_RESEARCH_LIVE_BUDGET_V1.writer_reserve_ms - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
-      }
-      expect(calls[3]!.at + calls[3]!.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
-      expect(evidence.revalidate).toHaveBeenCalledTimes(6);
-      expect(audit[0]).toMatchObject({ outcome: "answered", model_calls: 4, repairs: 0, fallbacks: 0 });
-      expect(audit[0]!.generations.map(value => value.role)).toEqual(["step", "step", "step", "answer"]);
-    } finally {
-      monotonic.mockRestore();
-    }
-  });
-
-  it("never exceeds the model-call budget under repeated invalid output", async () => {
+  it("ends under repeated invalid output after each call's one repair, with no call budget", async () => {
     const model: StructuredGenerationPort = { generate: vi.fn(async () => ({ nonsense: true })) };
     const result = await ask({ desk: desk(), model }).answer({ question: "When is launch?" });
-    expect((model.generate as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls);
+    // The step and its repair are unusable, so research stops with nothing found and no writer call.
+    expect((model.generate as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
     expect(result.outcome).toBe("partial");
   });
 
@@ -1332,17 +1256,30 @@ describe("agentic Ask: failures never lose found evidence", () => {
     expect(audit).toEqual([]);
   });
 
-  it("audits a hung model at the hard deadline as timed_out", async () => {
+  it("stops a model that sends nothing: the silent step is never sent again, and research stops as stalled with nothing for a writer", async () => {
     vi.useFakeTimers();
     try {
       const audit: AgenticAskAuditEntryV1[] = [];
-      let entered!: () => void;
-      const started = new Promise<void>(resolve => { entered = resolve; });
-      const model: StructuredGenerationPort = { generate: vi.fn(async () => { entered(); return new Promise<never>(() => undefined); }) };
+      const model: StructuredGenerationPort = { generate: vi.fn(async () => new Promise<never>(() => undefined)) };
       const pending = ask({ desk: desk(), model, audit }).answer({ question: "When is launch?" });
-      await started;
-      const rejected = expect(pending).rejects.toMatchObject({ name: "AgenticAskDeadlineErrorV1" });
-      await vi.advanceTimersByTimeAsync(AGENTIC_ASK_DEADLINE_MS_V1);
+      await vi.advanceTimersByTimeAsync(2 * generation.timeout_ms);
+      const result = await pending;
+      expect(result.outcome).toBe("partial");
+      expect(audit).toEqual([expect.objectContaining({ outcome: "partial", model_calls: 1, repairs: 0 })]);
+      expect(model.generate).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("audits an evidence read that sends nothing for its silence period as timed_out, and names the stall", async () => {
+    vi.useFakeTimers();
+    try {
+      const audit: AgenticAskAuditEntryV1[] = [];
+      const evidence = desk();
+      evidence.search.mockImplementation(() => new Promise(() => undefined));
+      const script = scripted([step([{}], [search("launch")])]);
+      const pending = ask({ desk: evidence, model: script.model, audit }).answer({ question: "When is launch?" });
+      const rejected = expect(pending).rejects.toMatchObject({ name: "AgenticAskStalledErrorV1", message: "an evidence read sent nothing for 120 s" });
+      await vi.advanceTimersByTimeAsync(AGENTIC_READ_SILENCE_MS_V1);
       await rejected;
       expect(audit).toEqual([expect.objectContaining({ outcome: "timed_out", model_calls: 1, prompt_sha256: null, response_sha256: null })]);
     } finally { vi.useRealTimers(); }

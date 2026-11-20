@@ -33,6 +33,10 @@
       "types": "./dist/core/processing/owner-proposals-v1.d.ts",
       "import": "./dist/core/processing/owner-proposals-v1.js"
     },
+    "./llm/extraction-model-v1": {
+      "types": "./dist/llm/extraction-model-v1.d.ts",
+      "import": "./dist/llm/extraction-model-v1.js"
+    },
     "./llm/llm-decision-processor": {
       "types": "./dist/llm/llm-decision-processor.d.ts",
       "import": "./dist/llm/llm-decision-processor.js"

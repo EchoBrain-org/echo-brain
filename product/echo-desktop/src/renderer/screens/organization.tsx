@@ -116,7 +116,7 @@ export function Organization({ state, page }: { state: State; page: Organization
       onClick={event => { if (page.menu && !within(event, '.menu, [data-testid="employee-more"]')) toggleEmployeeMenu(page.menu); }}>
       {account && <div class="org-context">Owner: {account.display_name} · {account.authority}</div>}
       <form class="invite-row" onSubmit={event => { event.preventDefault(); void inviteEmployee(); }}>
-        <input class="field small" data-testid="invite-name" type="text" autocomplete="off" maxLength={200} placeholder="Employee name"
+        <input class="field small" data-testid="invite-name" type="text" autocomplete="off" placeholder="Employee name"
           aria-label="Employee name" value={page.name} disabled={sending}
           onInput={event => setOrganizationField('name', (event.target as HTMLInputElement).value)} />
         <input class="field small" data-testid="invite-email" type="email" autocomplete="off" maxLength={254} placeholder="Email address"

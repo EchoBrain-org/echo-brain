@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, ArrangedBlock } from '../../src/shared/protocol.js';
 import {
-  answerMarkdown, answerSentences, answerText, documentName, externalSourceProvider, passageBlocks, sourceGroups, statementGroups, tableDay,
+  answerMarkdown, answerSentences, answerText, cardWord, documentName, drawnBlocks, externalSourceProvider, passageBlocks, sourceGroups, statementGroups, tableDay,
 } from '../../src/renderer/answer.js';
 import { blocksAnswer, paragraphs } from '../fixtures/authority.js';
 import { answerView } from '../../src/host/views.js';
@@ -329,5 +329,41 @@ describe('an arranged answer (answer layout v2, ADR-0051)', () => {
     expect(written).toContain('\n\n### \\# Soak \\*draft\\*\n\n- Oct 20, Noor \\| QA: Approved the soak plan. [1]\n');
     expect(written).toContain('\n\n**Ticket: THERM-48 \\<b\\>**\n\n- 1\\. Owner\\_1: \\- Tomas [4]\n- Owner: Tomas Okafor [4]\n\n');
     expect(written).toContain('\n\n> Start \\`now\\`, not \\[later\\]. [3]\n>\n> Noor\\_H\n\n');
+  });
+});
+
+describe('an answer from an Authority newer than this desktop', () => {
+  /** The fixture's THERM answer line with its blocks changed by `change`, as the client printed it. */
+  const line = (change: (blocks: Record<string, unknown>[]) => Record<string, unknown>[]) => {
+    const result = blocksAnswer(BLOCKS_QUESTION, GLOBAL);
+    const [part] = result.parts as Record<string, unknown>[];
+    return askLine({ ...result, parts: [{ ...part, blocks: change([...(part!.blocks as Record<string, unknown>[])]) }] });
+  };
+
+  it('shows a block of a kind it does not know as text, its sentences and title kept, and the rest as they came', () => {
+    const view = answerView(line(blocks => blocks.map(block => (block.kind === 'points' ? { kind: 'checklist', title: 'Next steps', statements: block.statements, done: [true, false] } : block))), GLOBAL);
+    const blocks = view.parts[0]!.blocks!;
+    expect(blocks.map(block => block.kind)).toEqual(['answer', 'table', 'timeline', 'card', 'text', 'text', 'quote']);
+    expect(blocks[4]).toEqual({ kind: 'text', title: 'Next steps', statements: [6, 7] });
+  });
+
+  it('keeps a card of an entity it does not know as a card, named by that entity\'s own name', () => {
+    // Card entities are an open set: the contract takes any lowercase word, and the page names it plainly with no icon.
+    const view = answerView(line(blocks => blocks.map(block => (block.kind === 'card' ? { ...block, entity: 'risk_item' } : block))), GLOBAL);
+    expect(view.parts[0]!.blocks![3]).toMatchObject({ kind: 'card', entity: 'risk_item', statements: [4, 5] });
+    expect(cardWord('risk_item')).toBe('Risk item');
+    expect(cardWord('ticket')).toBe('Ticket');
+    // A block the page does not draw, as one a saved turn may hold, reads as its sentences in Copy answer too.
+    const unknown = rearranged(blocks => blocks.map(block => (block.kind === 'quote' ? { kind: 'callout', statements: block.statements } as unknown as ArrangedBlock : block)));
+    expect(drawnBlocks(unknown.parts[0]!.blocks!).at(-1)).toEqual({ kind: 'text', statements: [9] });
+    expect(markdown(unknown, BLOCK_NAMES)).toContain('Noor Haddad, Oct 23 review: “Start PVT once the soak passes.” [3]');
+  });
+
+  it('carries the count the Authority gave, however large, with no bound of its own', () => {
+    expect(answerView(askLine(blocksAnswer(BLOCKS_QUESTION, GLOBAL), { looked_through: 25_000, elapsed_ms: 0, rows: [] }), GLOBAL).receipt).toEqual({ looked_through: 25_000 });
+  });
+
+  it('still refuses an answer that is wrong in a way no newer kind explains', () => {
+    expect(() => answerView(line(blocks => blocks.map(block => (block.kind === 'points' ? { kind: 'checklist', statements: [99] } : block))), GLOBAL)).toThrow();
   });
 });

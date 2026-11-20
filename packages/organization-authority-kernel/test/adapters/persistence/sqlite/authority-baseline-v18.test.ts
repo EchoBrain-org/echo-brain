@@ -69,9 +69,9 @@ function seededWithSources(): Database.Database {
   return database;
 }
 
-describe("Authority baseline V17", () => {
+describe("Authority baseline V18", () => {
   it("is fresh-only and stamps the Authority application id", () => {
-    expect(authorityBaselineSha256()).toBe("sha256:d037af1328e0719532506c732e13db649082aaf5c3a9c770dadc09265568a3cb");
+    expect(authorityBaselineSha256()).toBe("sha256:0a28c3b5ebeab6dd8d35f7b86eb52218bbfbd626a7eea7262f5eb48db14e7a85");
     const database = seeded();
     expect(() => applyAuthorityBaseline(database)).toThrow("completely empty");
     expect(database.pragma("application_id", { simple: true })).toBe(AUTHORITY_BASELINE_APPLICATION_ID_V1);
@@ -80,12 +80,12 @@ describe("Authority baseline V17", () => {
     expect(database.pragma("foreign_key_check")).toEqual([]);
   });
 
-  it("stamps user_version 17 on a fresh database", () => {
+  it("stamps user_version 18 on a fresh database", () => {
     const database = new Database(":memory:");
     databases.push(database);
     applyAuthorityBaseline(database);
-    expect(database.pragma("user_version", { simple: true })).toBe(17);
-    expect(AUTHORITY_BASELINE_SCHEMA_VERSION).toBe(17);
+    expect(database.pragma("user_version", { simple: true })).toBe(18);
+    expect(AUTHORITY_BASELINE_SCHEMA_VERSION).toBe(18);
   });
 
   it("does not install storage for the removed pasted-meeting input", () => {
@@ -153,7 +153,7 @@ describe("Authority baseline V17", () => {
       expect(() => insert(database, chatRow({ relation: "conflicts" }))).toThrow(/CHECK/u);
       expect(() => insert(database, chatRow({ relation: null, expected: null }))).toThrow(/CHECK/u);
       expect(() => insert(database, chatRow({ expected: null }))).toThrow(/CHECK/u);
-      expect(() => insert(database, chatRow({ expected: "x".repeat(121) }))).toThrow(/CHECK/u);
+      expect(() => insert(database, chatRow({ expected: "" }))).toThrow(/CHECK/u);
       for (const due_on of ["2026-02-30", "2026-1-01", "tomorrow", "2026-12-01T00:00:00Z", ""]) expect(() => insert(database, chatRow({ due_on }))).toThrow(/CHECK/u);
       expect(() => insert(database, chatRow({ state: "open" }))).toThrow(/CHECK|starts unsent/u);
       expect(() => insert(database, chatRow({ state: "unsent", state_set_by: MEMBERSHIP, state_set_at: NOW }))).toThrow("starts unsent with its creator");
@@ -192,6 +192,11 @@ describe("Authority baseline V17", () => {
       update("expected = ?, due_on = ?", "Send the vendor the final plan", null);
       update("due_on = ?", "2027-01-15");
       expect(database.prepare("SELECT expected, due_on FROM authority_impact_items_v1").get()).toEqual({ expected: "Send the vendor the final plan", due_on: "2027-01-15" });
+      // A line has no stored length of its own; the request that carries it bounds it.
+      const long = `Send the vendor ${"the final plan ".repeat(60)}`.trim();
+      update("expected = ?", long);
+      expect(database.prepare("SELECT expected FROM authority_impact_items_v1").pluck().get()).toBe(long);
+      update("expected = ?", "Send the vendor the final plan");
       expect(() => update("due_on = ?", "2027-02-30")).toThrow(/CHECK/u);
       expect(() => update("expected = NULL")).toThrow(/CHECK/u);
       // It never gains a run or a record, nor changes what it points at, who made it or its relation.
