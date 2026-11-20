@@ -543,12 +543,12 @@ describe("SQLite project context V1", () => {
     ))).toThrow(expect.objectContaining({ code: "conflict" }));
   });
 
-  it("holds the 100-item retained-corpus limit while exact retry wins before capacity", () => {
+  it("keeps more than a hundred notes, as only bytes bound them, and an exact retry returns its receipt", () => {
     const { repository } = open();
-    for (let index = 0; index < 99; index += 1) submit(repository, null, { kind: "only_me" }, 1000 + index);
-    const receipt = submit(repository, null, { kind: "only_me" }, 1100);
-    expect(submit(repository, null, { kind: "only_me" }, 1100)).toEqual(receipt);
-    expect(() => submit(repository, null, { kind: "only_me" }, 1101)).toThrow(expect.objectContaining({ code: "rate_limited" }));
+    for (let index = 0; index < 120; index += 1) submit(repository, null, { kind: "only_me" }, 1000 + index);
+    const receipt = submit(repository, null, { kind: "only_me" }, 1200);
+    expect(submit(repository, null, { kind: "only_me" }, 1200)).toEqual(receipt);
+    expect(submit(repository, null, { kind: "only_me" }, 1201)).toMatchObject({ state: "received" });
   });
 
   it("round-trips the largest valid original byte-for-byte through open, filed in its project", () => {

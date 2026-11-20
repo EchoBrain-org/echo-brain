@@ -170,10 +170,18 @@ describe('Document custody and retrieval V1',()=>{
   const {app,db}=setup();db.exec(`CREATE TRIGGER fail_document_receipt BEFORE INSERT ON authority_person_document_receipts_v1 BEGIN SELECT RAISE(ABORT,'receipt unavailable'); END;`);const bytes=Buffer.from('atomic');expect(()=>app.uploadV2('owner',input(bytes),bytes)).toThrow('receipt unavailable');
   for(const table of ['authority_person_documents_v1','authority_person_document_originals_v1','authority_person_document_work_v1','authority_person_document_associations_v1'])expect(db.prepare(`SELECT count(*) n FROM ${table}`).get()).toEqual({n:0});
  });
- it('enforces count quota over V2 uploads and stored V1 documents while replay remains permitted',()=>{
-  const {app,db}=setup();const bytes=Buffer.from('count');const request=input(bytes);const first=app.uploadV2('owner',request,bytes);for(let n=1;n<100;n++){if(n%2===0)storedV1(db,OWNER,bytes);else app.uploadV2('owner',input(bytes),bytes);}expect(()=>app.uploadV2('owner',input(bytes),bytes)).toThrow(expect.objectContaining({code:'quota_exceeded'}));expect(app.uploadV2('owner',request,bytes)).toEqual(first);
+ it('keeps any number of documents and notes: bytes alone bound them, and replay remains permitted',()=>{
+  const {app,db}=setup();const bytes=Buffer.from('count');const request=input(bytes);const first=app.uploadV2('owner',request,bytes);for(let n=1;n<150;n++){if(n%2===0)storedV1(db,OWNER,bytes);else app.uploadV2('owner',input(bytes),bytes);}expect(app.uploadV2('owner',input(bytes),bytes)).toMatchObject({request_id:expect.any(String)});expect(app.uploadV2('owner',request,bytes)).toEqual(first);
+  const projects=createProjectContextApplicationV1({authenticate:()=>authorization(OWNER),repository:new SqliteProjectContextRepositoryV1(db,()=>PROJECT_CONTEXT_NOW)});
+  for(let n=0;n<120;n++)expect(projects.submitUploadV3('owner',{schema_version:3,kind:'echo-person-update-submit-v3',request_id:randomUUID(),title:`Note ${n}`,text:'x',audience:{kind:'team'},association_project_ids:[]})).toMatchObject({state:'received'});
  });
- it('enforces document-only byte quota over V2 uploads and stored V1 documents while retaining the shared note/document count cap',()=>{
+ it('holds notes to their own byte quota, the same figures as documents',()=>{
+  const {db}=setup();const projects=createProjectContextApplicationV1({authenticate:()=>authorization(OWNER),repository:new SqliteProjectContextRepositoryV1(db,()=>PROJECT_CONTEXT_NOW)});
+  const note=(text:string)=>projects.submitUploadV3('owner',{schema_version:3,kind:'echo-person-update-submit-v3',request_id:randomUUID(),title:'Big note',text,audience:{kind:'team'},association_project_ids:[]});
+  const big='x'.repeat(1000*1024);for(let n=0;n<256;n++)expect(note(big)).toMatchObject({state:'received'});
+  expect(()=>note('x')).toThrow(expect.objectContaining({code:'rate_limited'}));
+ });
+ it('enforces document-only byte quota over V2 uploads and stored V1 documents, apart from notes',()=>{
   const {app,db}=setup();const bytes=Buffer.alloc(25*1024*1024,0x61);for(let n=0;n<10;n++){if(n%2===0)storedV1(db,OWNER,bytes);else app.uploadV2('owner',input(bytes),bytes);}
   expect(()=>app.uploadV2('owner',input(Buffer.from('x')),Buffer.from('x'))).toThrow(expect.objectContaining({code:'quota_exceeded'}));
   const projects=createProjectContextApplicationV1({authenticate:()=>authorization(OWNER),repository:new SqliteProjectContextRepositoryV1(db,()=>PROJECT_CONTEXT_NOW)});expect(projects.submitUploadV3('owner',{schema_version:3,kind:'echo-person-update-submit-v3',request_id:randomUUID(),title:'Project note',text:'x',audience:{kind:'team'},association_project_ids:[]})).toMatchObject({state:'received'});
