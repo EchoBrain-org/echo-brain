@@ -401,6 +401,12 @@ export interface TimelineTurn {
    * a check finds them readable again (C5). A check that cannot tell (`unknown`) changes nothing.
    */
   readonly unreadable?: readonly number[];
+  /**
+   * Kept by a desktop whose answers cite, on each sentence, every item it rests on (rows included). Only such a turn's
+   * sentences go into a follow-up or Ask again; a turn saved before has no mark and carries its question only, since a
+   * sentence of it may rest on a row it no longer cites, which no check can then ask about. It shows as it always did.
+   */
+  readonly citations_complete?: true;
 }
 
 /**

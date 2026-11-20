@@ -241,13 +241,15 @@ export function answeredNow(turn: TimelineTurn): TurnChecks {
  * reach it. A source no check asks about (a person, a tool, a tool
  * container), one the answer has no source for, and one the check gave no
  * state for are not known readable, so a sentence citing one stays back, and
- * so does its label. Sentences go from the end until the request, asking
+ * so does its label. A turn an older desktop saved (no `citations_complete`)
+ * carries its question only: a sentence of it may rest on a row it no longer
+ * cites. Sentences go from the end until the request, asking
  * `question` in `scope`, fits the Ask body's bound.
  */
 export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope): AskPrevious {
   const sources = turn.answer.sources;
   const read = (at: number) => sources[at] !== undefined && checkOf(sources[at]) !== undefined && known?.[at] === 'same';
-  const readable = known === null ? [] : [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
+  const readable = known === null || turn.citations_complete !== true ? [] : [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
     .filter((statement): statement is AnswerStatement => statement !== undefined && statement.text.trim() !== '' && statement.citation_indexes.every(read));
   const build = (chosen: readonly AnswerStatement[]): AskPrevious => {
     // Each citation once, by what it names (an answer may cite the same item at two places), and each sentence citing it once.

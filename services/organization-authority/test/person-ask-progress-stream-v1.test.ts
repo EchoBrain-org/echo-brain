@@ -89,8 +89,8 @@ describe('Ask progress stream', () => {
     expect(r.writes.slice(before)).toEqual([PERSON_ASK_PROGRESS_HEARTBEAT_V1]);
     const answered = { type: 'answer', response: ASK_ANSWER, receipt: { looked_through: 1, elapsed_ms: 1, rows: [] } } as unknown as PersonAskProgressEventV3;
     stream.end(answered);
-    // The events, which clients count against the stream bound (comments they drop unkept), stay within it.
-    const bytes = r.writes.filter(write => !write.startsWith(':')).reduce((total, write) => total + Buffer.byteLength(write), 0);
+    // Exactly what a client counts: each `data: ` line with its newline, never comments or blank separators.
+    const bytes = r.writes.join('').split('\n').filter(line => line.startsWith('data: ')).reduce((total, line) => total + Buffer.byteLength(line) + 1, 0);
     expect(bytes).toBeLessThanOrEqual(PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1);
     expect(r.writes.filter(write => write.startsWith('data: {"type":"read"')).length).toBeLessThan(sends);
     expect(r.writes.filter(write => write === PERSON_ASK_PROGRESS_SHORTENED_V1)).toHaveLength(1);

@@ -106,9 +106,13 @@ export interface OpenItemDecisionsReaderV1<D extends DecisionProjects> {
  * Which records the viewer reads, with their projects (`readableDecisionProjects`), from the grants `projects` gives (read in
  * the caller's own read transaction, once a record is looked up); each record is looked up once per reader.
  */
-export function openItemDecisionsReaderV1(records: PersonReadableDecisionProjectsV1, access_token: string, projects: () => RecordProjectAuthorizationV1): OpenItemDecisionsReaderV1<DecisionProjects> {
+export function openItemDecisionsReaderV1(records: PersonReadableDecisionProjectsV1, access_token: string, projects: () => RecordProjectAuthorizationV1): OpenItemDecisionsReaderV1<DecisionProjects> & {
+  /** How many records this reader holds what it learned of: its whole working set, which lives as long as the reader. */
+  retained(): number;
+} {
   const known = new Map<Sha256Digest, DecisionProjects | null>();
   return {
+    retained: () => known.size,
     readableDecisions: ({ record_sha256s }) => {
       const missing = [...new Set(record_sha256s)].filter(record => !known.has(record));
       if (missing.length > 0) {

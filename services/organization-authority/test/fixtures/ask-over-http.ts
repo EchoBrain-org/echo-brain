@@ -7,6 +7,9 @@ import { SqlitePersonAgenticAskAuditV1 } from '../../src/adapters/persistence/sq
 import { SqlitePersonOriginalContextRetrievalV1 } from '../../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
 import { SqlitePersonSessionRepository } from '../../src/adapters/persistence/sqlite/sqlite-person-session-repository.js';
 import { JIRA_LIVE_CONNECTOR_V1 } from '../../src/composition/person-live-connector-registry-v1.js';
+import { createPersonAskCheckV1 } from '../../src/composition/person-ask-check-v1.js';
+import { SqliteProjectContextRepositoryV1 } from '../../src/adapters/persistence/sqlite/project-context-v1.js';
+import { CLOUD } from './open-items.js';
 import type { CreatePersonLiveAnswerRouteOptionsV1 } from '../../src/composition/person-live-answer-route-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../../src/composition/person-record-search-route.js';
 import { createOrganizationAuthorityHttpServer, type OrganizationAuthorityHttpServerOptions } from '../../src/presentation/organization-authority-http-server.js';
@@ -41,6 +44,12 @@ export function liveAskOptions(f: OpenItemsFixtureV1, model: StructuredGeneratio
     memberships: { membership: (id: string) => repository.read(transaction => transaction.membership(id)) },
     live_sources: [{ ...JIRA_LIVE_CONNECTOR_V1, application: { source: async ({ access_token }) => jira(access_token as FixturePerson) } }],
     follow_ups: { runs: f.runs, items: f.items, people: f.directory, records: f.records, on_live_failure: () => {} },
+    // A previous turn goes through the real Ask source check; the fixture's Jira lets each person read the tickets it opens.
+    previous_check: createPersonAskCheckV1({
+      database: f.db, sessions, projects: new SqliteProjectContextRepositoryV1(f.db), records: f.records,
+      originals: new SqlitePersonOriginalContextRetrievalV1(f.db, sessions, f.person.organization_id), items: f.items, people: f.directory,
+      live: [{ kind: 'ticket', tool_id: 'jira', external_scope_id: CLOUD, readable: async ({ ticket_ids }) => new Set(ticket_ids) }],
+    }),
   };
 }
 

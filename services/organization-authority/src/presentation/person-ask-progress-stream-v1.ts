@@ -14,11 +14,13 @@ import {
  * per event, a comment heartbeat after a quiet interval, and exactly one
  * terminal event last. Headers go out at once, so a proxy sees the stream
  * start before research does. Nothing is written once the client has gone.
- * Its event frames stay within PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1, the
- * bound its clients hold an Ask's events to (comment lines, which no client
- * keeps, are not counted on either side): room for the largest terminal frame
- * is kept back, and once the next step would reach into it, progress stops
- * (one comment says so), heartbeats go on, and the terminal event still goes.
+ * Its event payload lines (each `data: ` line with its newline) stay within
+ * PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1, the bound its clients hold an Ask's
+ * events to; comment lines and the blank lines that separate events, which no
+ * client keeps, are counted on neither side. Room for the largest terminal
+ * payload line is kept back, and once the next step would reach into it,
+ * progress stops (one comment says so), heartbeats go on, and the terminal
+ * event still goes.
  */
 export interface PersonAskProgressStreamV1 {
   /** A step event; one the contract refuses is dropped, never written. */
@@ -32,11 +34,13 @@ export interface PersonAskProgressStreamV1 {
 /** The comment a stream writes once, when progress stops so that the answer still fits the stream's byte bound. */
 export const PERSON_ASK_PROGRESS_SHORTENED_V1 = ': progress shortened: the rest of the stream is kept for the answer\n\n';
 /**
- * Transport: the event bytes steps may take, the stream's bound less the largest terminal frame (a valid terminal event's
- * `data: ` line is under the decoder's line bound in bytes as in characters, and its blank line follows), so the answer
- * always fits the bound its clients read to.
+ * Transport: the payload bytes steps may take, the stream's bound less the largest terminal payload line (a valid terminal
+ * event's `data: ` line is under the decoder's line bound in bytes as in characters, and its newline follows), so the
+ * answer always fits the bound its clients read to.
  */
-const STEPS_MAX_BYTES = PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1 - (PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1 + Buffer.byteLength('\n\n'));
+const STEPS_MAX_BYTES = PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1 - (PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1 + 1);
+/** An event frame's payload line with its newline, as clients count it: the frame less its blank separator line. */
+const payloadBytes = (frame: string): number => Buffer.byteLength(frame) - 1;
 
 /**
  * Starts one stream with the framing, heartbeat and terminal rules Ask progress has kept since V1; each event is
@@ -49,7 +53,7 @@ export function startPersonAskProgressStreamV1(response: ServerResponse, options
   response.flushHeaders();
   let ended = false;
   let timer: NodeJS.Timeout | undefined;
-  /** Event bytes written so far, and whether progress stopped to keep room for the terminal frame. */
+  /** Payload bytes written so far, and whether progress stopped to keep room for the terminal frame. */
   let written = 0;
   let shortened = false;
   const open = () => !ended && !response.destroyed && !response.writableEnded;
@@ -66,7 +70,7 @@ export function startPersonAskProgressStreamV1(response: ServerResponse, options
       if (!open() || shortened) return;
       let frame: string;
       try { frame = formatPersonAskProgressEventV3(event); } catch { return; }
-      const bytes = Buffer.byteLength(frame);
+      const bytes = payloadBytes(frame);
       // The first step that would reach into the terminal frame's room stops progress for good, and says so once.
       if (written + bytes > STEPS_MAX_BYTES) { shortened = true; response.write(PERSON_ASK_PROGRESS_SHORTENED_V1); }
       else { response.write(frame); written += bytes; }

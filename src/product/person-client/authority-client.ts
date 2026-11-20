@@ -289,8 +289,9 @@ function readableAnswer(response: unknown): unknown {
  * The text of a progress stream as this client reads it, frame by frame: a step event it cannot read is left out (a
  * progress step is only a view of the work, so the Ask goes on without it), and an answer's blocks become ones it can
  * show (readableAnswer). Everything else, framing included, passes unchanged to the progress V3 decoder. Each comment
- * line (the Authority's heartbeat) is reported to `onComment` as it is read; every other whole line's UTF-8 bytes, its
- * newline included, to `onLine`, as the Authority counts its event frames against the stream's bound.
+ * line (the Authority's heartbeat) is reported to `onComment` as it is read; each event payload (`data: `) line's UTF-8
+ * bytes, its newline included, to `onLine`, exactly what the Authority counts against the stream's bound. Comment lines
+ * and the blank lines that separate events are counted by neither side.
  */
 function tolerantAskFrames(onComment: () => void = () => undefined, onLine: (bytes: number) => void = () => undefined): (text: string, end?: boolean) => string {
   let partial = "";
@@ -306,8 +307,8 @@ function tolerantAskFrames(onComment: () => void = () => undefined, onLine: (byt
     partial = lines.pop()!;
     const read = lines.map(line => {
       if (line.startsWith(":")) onComment();
-      else onLine(Buffer.byteLength(line) + 1);
       if (!line.startsWith("data: ")) return `${line}\n`;
+      onLine(Buffer.byteLength(line) + 1);
       const kept = data(line.slice("data: ".length));
       return kept === null ? "" : `data: ${kept}\n`;
     }).join("");
@@ -325,9 +326,9 @@ function tolerantAskFrames(onComment: () => void = () => undefined, onLine: (byt
  * event. A step event it cannot read is skipped, and an answer block it does not
  * know reads as text (tolerantAskFrames). Otherwise it fails closed: a malformed
  * frame or answer, invalid UTF-8, or an end without exactly one terminal event
- * is `invalid_response`, and a stream whose event lines pass its byte bound
- * (PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1, the bound the Authority keeps its
- * events within; comment lines are not kept, so not counted) is
+ * is `invalid_response`, and a stream whose event payload lines pass its byte
+ * bound (PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1, the bound the Authority keeps
+ * them within; comments and separators are not kept, so not counted) is
  * `response_too_large`. Either failure cancels the body, so the Authority sees
  * the disconnect and stops the Ask. Every chunk read is reported to `onBytes` (liveness), and every heartbeat to
  * `onHeartbeat`.

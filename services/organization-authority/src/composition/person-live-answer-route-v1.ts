@@ -9,6 +9,8 @@ import type { AgenticAskAuditRequestContextV1 } from '../adapters/persistence/sq
 import type { PersonLiveConnectorSourceV1 } from '../application/ports/person-context-live-runtime-v1.js';
 import { samePersonV1 } from '../application/person-release-authorization-v1.js';
 import type { PersonAnswerHttpInputV1, PersonAnswerV7HttpApplication } from '../presentation/person-live-answer-http-application.js';
+import type { PersonAskCheckHttpApplicationV1 } from '../presentation/person-ask-check-http-application.js';
+import { readablePreviousV1 } from './person-ask-previous-check-v1.js';
 import { askerOf, runPersonAskV1, scopeOf, type CreatePersonAnswerV3RouteOptions } from './person-answer-v3-route.js';
 import { createPersonEvidenceDeskV1, type PersonEvidenceDeskExclusionsV1 } from './person-evidence-desk-v1.js';
 import { createPersonFollowUpsEvidenceSourceV1, type PersonFollowUpsSourcesV1 } from './person-follow-ups-evidence-v1.js';
@@ -26,6 +28,11 @@ export interface CreatePersonLiveAnswerRouteOptionsV1 extends CreatePersonAnswer
    * cite them.
    */
   readonly workspace?: PersonWorkspaceSourcesV1;
+  /**
+   * The Ask source check (ADR-0047) a request's previous turn goes through before any model reads it
+   * (`readablePreviousV1`). Without it no earlier sentence is known readable, so a previous turn carries its question only.
+   */
+  readonly previous_check?: Pick<PersonAskCheckHttpApplicationV1, 'check'>;
 }
 
 /**
@@ -148,11 +155,16 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
     // A streamed request spans every attempt a snapshot restart runs: one stream, each item named once, timed from here.
     const streamed = progress === undefined ? undefined : { on_progress: progress.on_progress, request: createAgenticAskProgressRequestV1() };
     const scope = scopeOf(input.request);
-    // The asker's previous turn (ADR-0047), when the request carries it.
-    const { previous } = input.request;
+    // The asker's previous turn (ADR-0047), when the request carries it: as sent, until the Authority has checked it.
+    const sent = input.request.previous;
     input.signal?.throwIfAborted();
+    // Checked once a request, for the caller at request time: only its sentences whose every citation they read now reach the
+    // follow-up resolver or any model. Every attempt of the request carries the same checked turn.
+    let checked: Promise<NonNullable<typeof sent>> | undefined;
     // Authenticated and validated once it starts: anything that fails from then on fails inside the stream.
     return runPersonAskV1(options, input, async ({ authorization, context, signal }) => {
+      const previous = sent === undefined ? undefined
+        : await (checked ??= readablePreviousV1(sent, { access_token: input.access_token, check: options.previous_check, signal }));
       const desk = await bindPersonLiveEvidenceDeskV1(options, options.live_sources ?? [], { access_token: input.access_token, scope, ask: true, signal }, context);
       const asker = askerOf(options, authorization);
       // The follow-ups an answer drafts (ADR-0053) are saved for this asker, under this request's id, which every attempt shares.
