@@ -507,6 +507,8 @@ describe("V4 organization-record append", () => {
         project_ids: [FIXTURE_PROJECT_ID],
       };
       expect(reader.list({ ...readerInput, limit: 100 }).map((r) => r.position)).not.toContain(1);
+      // The caller's page has no ceiling of its own: a larger page reaches the oldest record.
+      expect(reader.list({ ...readerInput, limit: 10_000 }).map((r) => r.position)).toContain(1);
       expect(reader.list({
         ...readerInput,
         principal_id: "principal-1",
