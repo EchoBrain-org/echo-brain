@@ -54,7 +54,8 @@ describe('Sonnet receives supported schemas for the real Ask protocol', () => {
     expect(unsupportedBounds(sentSchema(body))).toEqual([]);
     expect(body.response_format).toMatchObject({ type: 'json_schema', json_schema: { strict: true } });
     expect(sentSchema(body)).toMatchObject({ type: 'object', additionalProperties: false, required: schema.required });
-    expect(JSON.stringify(sentSchema(body))).toContain('maxItems'); // Bounds survive as descriptions.
+    // Any bound the schema still states survives as a description.
+    if (/"(maxItems|maxLength|maximum)"/u.test(before)) expect(JSON.stringify(sentSchema(body))).toContain('Constraints');
     expect(JSON.stringify(schema)).toBe(before);
   });
 
@@ -91,15 +92,15 @@ describe('Sonnet receives supported schemas for the real Ask protocol', () => {
   });
 
   // The provider test covers 1,500 tokens, medium reasoning, and no temperature.
-  it.each([1, 256, 4_096])('leaves reasoning headroom even for a %i-token background or Ask call', async allowance => {
+  // The caller's allowance is the model's whole output, reasoning included: the adapter adds nothing to it.
+  it.each([1, 256, 4_096])('sends a %i-token allowance as the whole max_tokens', async allowance => {
     const body = await wireRequest(answerBlocksSchema, 'anthropic/claude-sonnet-5.5', allowance);
-    expect(body.max_tokens).toBe(allowance + 4_096);
+    expect(body.max_tokens).toBe(allowance);
   });
 
-  it('keeps local action bounds and the caller output ceiling enforced', async () => {
-    expect(parseStep({ parts: [{ question: 'fixture', needs: [], notes: '' }], actions: Array.from({ length: 5 }, () => ({ tool: 'search', args: { query: 'fixture' } })) }).actions).toHaveLength(4);
-    // The adapter's ceiling (32,000) sits under the model's own 64k output maximum.
-    expect((await wireRequest(answerBlocksSchema, 'anthropic/claude-sonnet-5.5', 32_000)).max_tokens).toBe(32_000 + 4_096);
-    await expect(wireRequest(answerBlocksSchema, 'anthropic/claude-sonnet-5.5', 32_001)).rejects.toThrow('output limit');
+  it('keeps every action a step asks for, and sends the model\'s own maximum output whole', async () => {
+    expect(parseStep({ parts: [{ question: 'fixture', needs: [], notes: '' }], actions: Array.from({ length: 12 }, () => ({ tool: 'search', args: { query: 'fixture' } })) }).actions).toHaveLength(12);
+    // The generation profile states the model's own maximum (128,000 for Sonnet 5.5); the adapter has no ceiling of its own.
+    expect((await wireRequest(answerBlocksSchema, 'anthropic/claude-sonnet-5.5', 128_000)).max_tokens).toBe(128_000);
   });
 });

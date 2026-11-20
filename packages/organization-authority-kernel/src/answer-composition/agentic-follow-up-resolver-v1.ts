@@ -1,8 +1,4 @@
 import {
-  PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1,
-  PERSON_ANSWER_CHOICES_MAX_V1,
-  PERSON_ANSWER_CHOICES_MIN_V1,
-  PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1,
   PersonQueryInputError,
   validatePersonAnswerResponseV8,
   validatePersonQuestionText,
@@ -17,15 +13,12 @@ import { evidenceDayV1 } from "../shared/temporal-query-v1.js";
 import { AgenticAskOutputErrorV1, cleanLine, cleanModelLine, respelled } from "./agentic-ask-v1-model-protocol.js";
 import type { AgenticBriefStartingItemV1 } from "./agentic-brief-v1.js";
 import {
-  AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
-  AGENTIC_ASK_MIN_ANSWER_MS_V1,
   createAgenticModelGateV1,
   isAbort,
   object,
   type AgenticModelCallV1,
   type AgenticModelGateV1,
 } from "./agentic-model-gate-v1.js";
-import { AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "./agentic-research-v1.js";
 import type { StructuredGenerationJsonSchema, StructuredGenerationPort } from "./structured-generation-v1.js";
 
 /**
@@ -47,8 +40,6 @@ import type { StructuredGenerationJsonSchema, StructuredGenerationPort } from ".
 
 /** The resolver runs in its own span; the audit records it as an `answer` call. */
 const RESOLVE_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_resolve" });
-/** One resolver call's time at most, so research keeps the rest. */
-const RESOLVE_TIMEOUT_MS = 15_000;
 const RESOLUTIONS = ["same", "resolved", "clarify"] as const;
 /** Kinds research opens from a citation before its first step: approved records, originals, tickets and pages. */
 const OPENABLE: ReadonlySet<string> = new Set(["approved_record", "source_revision", "ticket", "page"]);
@@ -78,7 +69,7 @@ export const FOLLOW_UP_RESOLVER_PROMPT = [
   "Return one resolution:",
   "- \"same\": the new question stands on its own. It names its own subject, or does not refer to the earlier question or answer at all. Leave such a question exactly as it is; never rewrite it.",
   "- \"resolved\": the new question refers to something in the earlier question or answer (\"it\", \"that ticket\", \"the second one\", \"her ticket\", \"that meeting\") and exactly one thing there fits. Give \"question\": the new question rewritten as one full question that stands on its own, naming that thing the way the earlier answer names it (a ticket key, a title, a person's name) and keeping everything else the person asked. Give \"about\": the numbers of the sources that are that thing or that the sentences naming it cite; [] when only the earlier question names it.",
-  "- \"clarify\": two or more things in the earlier question or answer could fit. Give \"choices\": one for each thing that could fit, 2 to 4 of them, each a short \"label\" naming the thing (at most 60 characters) and a \"question\": the new question asked about that thing alone, as one full question that stands on its own.",
+  "- \"clarify\": two or more things in the earlier question or answer could fit. Give \"choices\": one for each thing that could fit, each a short \"label\" naming the thing and a \"question\": the new question asked about that thing alone, as one full question that stands on its own.",
   "",
   "Rules:",
   "- Resolve only when exactly one thing fits. When two or more could fit, return \"clarify\" with one choice for each. Never guess, and never pick the one that seems likelier.",
@@ -97,10 +88,10 @@ export const followUpResolutionSchema: StructuredGenerationJsonSchema = Object.f
   type: "object", additionalProperties: false, required: ["resolution"], properties: {
     resolution: { type: "string", enum: [...RESOLUTIONS] },
     question: { type: "string" },
-    about: { type: "array", maxItems: PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, items: { type: "integer" } },
-    choices: { type: "array", maxItems: PERSON_ANSWER_CHOICES_MAX_V1, items: {
+    about: { type: "array", items: { type: "integer" } },
+    choices: { type: "array", items: {
       type: "object", additionalProperties: false, required: ["label", "question"], properties: {
-        label: { type: "string", maxLength: PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1 }, question: { type: "string" },
+        label: { type: "string" }, question: { type: "string" },
       },
     } },
   },
@@ -152,12 +143,11 @@ export function parseFollowUpResolutionV1(value: unknown, sources: number): Agen
   }
   if (resolution === "same") return SAME;
   if (resolution === "resolved") return Object.freeze({ resolution, question: fullQuestion(body.question, "\"question\""), about: aboutOf(body.about, sources) });
-  if (offered.length < PERSON_ANSWER_CHOICES_MIN_V1 || offered.length > PERSON_ANSWER_CHOICES_MAX_V1) {
-    throw new AgenticAskOutputErrorV1(`"clarify" needs ${PERSON_ANSWER_CHOICES_MIN_V1} to ${PERSON_ANSWER_CHOICES_MAX_V1} "choices", one for each thing that could fit`);
-  }
+  // As many choices as things could fit; the prompt asks for two or more, since one thing that fits is "resolved".
+  if (offered.length === 0) throw new AgenticAskOutputErrorV1(`"clarify" needs "choices", one for each thing that could fit`);
   const choices = offered.map((raw, index): PersonAnswerChoiceV1 => {
     const entry = object(raw);
-    const label = entry === null ? "" : cleanModelLine(entry.label, PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1);
+    const label = entry === null ? "" : cleanModelLine(entry.label, Number.POSITIVE_INFINITY);
     if (label.length === 0) throw new AgenticAskOutputErrorV1(`choice ${index + 1} needs a "label" naming the thing it is about`);
     return Object.freeze({ label, question: fullQuestion(entry!.question, `choice ${index + 1}'s "question"`) });
   });
@@ -169,7 +159,7 @@ export function parseFollowUpResolutionV1(value: unknown, sources: number): Agen
 }
 
 interface AgenticFollowUpResolverInputV1 {
-  /** The request's model gate: access check, call and time budget, fingerprints, one repair. */
+  /** The request's model gate: access check, fingerprints, one repair. */
   readonly gate: AgenticModelGateV1;
   readonly previous: PersonAnswerPreviousV1;
   /** The new question, as asked. */
@@ -177,13 +167,7 @@ interface AgenticFollowUpResolverInputV1 {
   /** Today in the request's time zone, and that zone, in which the earlier question's day is named. */
   readonly today: string;
   readonly time_zone: string;
-  /** The request's model-call budget. */
-  readonly max_model_calls: number;
-  /** Milliseconds before the request deadline. */
-  readonly remaining: () => number;
-  /** Time held back for the writer after research. */
-  readonly writer_reserve_ms: number;
-  /** The request's signal: aborted when the caller cancels or the deadline passes. */
+  /** The request's signal: aborted when the caller cancels or the request stalls. */
   readonly signal: AbortSignal;
 }
 
@@ -208,21 +192,19 @@ function resolverInput(input: Pick<AgenticFollowUpResolverInputV1, "previous" | 
 }
 
 /**
- * One resolution through the request's gate. A reply no repair makes usable, or no call left to make, leaves the
- * question as asked (`same`, `fallback`). A cancel or the deadline still throws, and so does a failed access check.
+ * One resolution through the request's gate. A reply no repair makes usable, or a gate stopped by a permanent provider
+ * failure, leaves the question as asked (`same`, `fallback`). A cancel or a stall still throws, and so does a failed
+ * access check.
  */
 export async function resolveAgenticFollowUpV1(input: AgenticFollowUpResolverInputV1): Promise<AgenticFollowUpResolvedV1> {
   const fallback = Object.freeze({ resolution: SAME, fallback: true });
-  // Research and the writer keep their time: the resolver takes at most its own share of what is left after them.
-  const time = () => Math.min(RESOLVE_TIMEOUT_MS, input.remaining() - input.writer_reserve_ms - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
-  const stats = input.gate.stats();
-  if (stats.stopped || stats.calls >= input.max_model_calls || time() < AGENTIC_ASK_MIN_ANSWER_MS_V1) return fallback;
+  if (input.gate.stats().stopped) return fallback;
   try {
-    const resolution = await input.gate.withRepair(RESOLVE_CALL, FOLLOW_UP_RESOLVER_PROMPT, resolverInput(input), followUpResolutionSchema, time,
+    const resolution = await input.gate.withRepair(RESOLVE_CALL, FOLLOW_UP_RESOLVER_PROMPT, resolverInput(input), followUpResolutionSchema,
       value => parseFollowUpResolutionV1(value, input.previous.citations.length));
     return Object.freeze({ resolution, fallback: false });
   } catch (error) {
-    // The request's signal is aborted exactly when the caller cancelled or the deadline passed.
+    // The request's signal is aborted exactly when the caller cancelled or the request stalled.
     if (isAbort(error, input.signal) || !(error instanceof AgenticAskOutputErrorV1)) throw error;
     observeCoreModelCorrectionV1("resolver_fallback");
     return fallback;
@@ -250,7 +232,7 @@ export function agenticClarifyResponseV1(scope: PersonAnswerScopeV3, question: s
 
 /**
  * One resolution as the follow-up resolution eval runs it (Ask timeline v1): the product's prompt, schema, reply
- * reading and one repair, through a gate of its own with the live budget and no evidence desk, so nothing is read,
+ * reading and one repair, through a gate of its own with no evidence desk, so nothing is read,
  * released or audited. `calls` and `repairs` are that gate's.
  */
 export async function resolveAgenticFollowUpOnceV1(input: {
@@ -262,20 +244,16 @@ export async function resolveAgenticFollowUpOnceV1(input: {
   readonly time_zone?: string;
   readonly signal?: AbortSignal;
 }): Promise<AgenticFollowUpResolvedV1 & { readonly calls: number; readonly repairs: number }> {
-  const budget = AGENTIC_RESEARCH_LIVE_BUDGET_V1;
   const now = () => performance.now();
-  const deadline = now() + budget.deadline_ms;
   const signal = input.signal ?? new AbortController().signal;
   const gate = createAgenticModelGateV1({
     generation: input.generation, model: input.model,
     // Nothing is read, so the check before the call has nothing to re-read.
     desk_revalidate: async () => ({ checked_at: new Date().toISOString() }), on_checked: () => undefined,
-    budget, now, deadline, signal, ...(input.signal === undefined ? {} : { input_signal: input.signal }),
-    is_deadline_expired: () => now() >= deadline,
+    now, signal, ...(input.signal === undefined ? {} : { input_signal: input.signal }),
   });
   const resolved = await resolveAgenticFollowUpV1({
-    gate, previous: input.previous, question: input.question, today: input.today, time_zone: input.time_zone ?? "UTC",
-    max_model_calls: budget.max_model_calls, remaining: () => deadline - now(), writer_reserve_ms: budget.writer_reserve_ms, signal,
+    gate, previous: input.previous, question: input.question, today: input.today, time_zone: input.time_zone ?? "UTC", signal,
   });
   const { calls, repairs } = gate.stats();
   return Object.freeze({ ...resolved, calls, repairs });

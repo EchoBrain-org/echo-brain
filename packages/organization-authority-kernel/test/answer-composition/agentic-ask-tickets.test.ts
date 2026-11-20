@@ -62,7 +62,7 @@ function fixture(options: {
     auditEntries.push(entry);
     return options.append?.(entry);
   });
-  const ask = createAgenticAskV5({ desk, model: { generate }, audit: { append }, generation: { generation_adapter_id: 'fixture', planner_model: 'ignored', answer_model: 'fixture', timeout_ms: 30_000 } });
+  const ask = createAgenticAskV5({ desk, model: { generate }, audit: { append }, generation: { generation_adapter_id: 'fixture', planner_model: 'ignored', answer_model: 'fixture', timeout_ms: 30_000, context_tokens: 32_768, max_output_tokens: 8_000 } });
   return { desk, inputs, fenceSnapshots, auditEntries, append, generate, run: (signal?: AbortSignal) => ask.answer({ question: 'When is launch?', signal }) };
 }
 
@@ -96,7 +96,7 @@ describe('Agentic Ask ticket release', () => {
     };
     await createAgenticAskV5({ desk,
       model: { generate: async input => { inputs.push(input); return { parts: [{ question: 'What exists?', needs: [], notes: '' }], actions: [{ tool: 'finish', args: {} }] }; } },
-      audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 },
+      audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000, context_tokens: 32_768, max_output_tokens: 8_000 },
     }).answer({ question: 'What exists?' });
     expect(JSON.parse(inputs[0]!.user_prompt).source_catalog.map((value: { source: string }) => value.source)).toEqual(['meetings', 'documents']);
     expect(JSON.stringify(inputs[0]!.schema)).not.toContain('tickets');
@@ -126,7 +126,7 @@ describe('Agentic Ask ticket release', () => {
       replies[3],
     ];
     const ask = createAgenticAskV5({ desk, model: { generate: async input => { inputs.push(input); return script[inputs.length - 1]; } },
-      audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 } });
+      audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000, context_tokens: 32_768, max_output_tokens: 8_000 } });
     const result = await ask.answer({ question: `When is launch according to ${identifier}?` });
     expect(validatePersonAnswerResponseV8(result)).toMatchObject({ outcome: 'answered', citations: [{ citation: ticket.citation }] });
     expect(desk.search).toHaveBeenCalledWith(expect.objectContaining({ query: identifier, kinds: ['ticket'] }));

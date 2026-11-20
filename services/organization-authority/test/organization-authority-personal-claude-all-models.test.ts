@@ -58,7 +58,7 @@ const nativeProcessor = processor(), sharedProcessor = processor();
 const nativeWriter = vi.fn(async (_input: StructuredGenerationInput) => ({ answer: 'synthetic native result' }));
 const nativeResearch = vi.fn(async (_session: AgenticResearchDriverSessionV1) => {});
 const native: AnswerCompositionGenerationBindingV1 = {
-  generation: { generation_adapter_id: 'claude-account-research-writer-v1', planner_model: 'claude-sonnet-5-5', answer_model: 'claude-sonnet-5-5', timeout_ms: 60_000 },
+  generation: { generation_adapter_id: 'claude-account-research-writer-v1', planner_model: 'claude-sonnet-5-5', answer_model: 'claude-sonnet-5-5', timeout_ms: 60_000, context_tokens: 32_768, max_output_tokens: 8_000 },
   structured_output: {
     generate: async () => { throw new Error('Native writing requires per-request admission'); },
     generate_with_admission: nativeWriter,
@@ -66,7 +66,7 @@ const native: AnswerCompositionGenerationBindingV1 = {
   research_driver: { run: nativeResearch },
 };
 const shared: AnswerCompositionGenerationBindingV1 = {
-  generation: { generation_adapter_id: 'openrouter', planner_model: 'anthropic/claude-sonnet-5.5', answer_model: 'anthropic/claude-sonnet-5.5', timeout_ms: 60_000 },
+  generation: { generation_adapter_id: 'openrouter', planner_model: 'anthropic/claude-sonnet-5.5', answer_model: 'anthropic/claude-sonnet-5.5', timeout_ms: 60_000, context_tokens: 32_768, max_output_tokens: 8_000 },
   structured_output: { generate: async () => { throw new Error('Shared model must not run in this composition fixture'); } },
 };
 beforeEach(() => {
@@ -129,7 +129,7 @@ it('selects native extraction and default generation for interactive and backgro
     expect(nativeWriter).toHaveBeenCalledTimes(2);
     const initial = { authenticated_membership: 'mem_another_person', question: 'Synthetic question' };
     const session: AgenticResearchDriverSessionV1 = { initial, question: true, list_available: false,
-      signal: new AbortController().signal, remaining: () => 1_000, call: async () => ({}), model_request: vi.fn() };
+      signal: new AbortController().signal, silence_ms: 1_000, call: async () => ({}), model_request: vi.fn() };
     await api.answer_composition_generation.research_driver!.run(session);
     await api.research_background_driver!.run(session);
     expect(nativeResearch).toHaveBeenCalledTimes(2);
@@ -173,7 +173,7 @@ it('shares the SDK session cap between default writers and research, reserving c
     }
     pending.push(api.answer_composition_generation.structured_output.generate_with_admission!({ ...input, user_prompt: 'interactive-writer' }, vi.fn()));
     pending.push(api.answer_composition_generation.research_driver!.run({ initial: {}, question: true, list_available: false,
-      signal: new AbortController().signal, remaining: () => 1_000, call: async () => ({}), model_request: vi.fn() }));
+      signal: new AbortController().signal, silence_ms: 1_000, call: async () => ({}), model_request: vi.fn() }));
     await flush();
     expect(started).toEqual(['background-1', 'background-2', 'interactive-writer']);
     releases.get('background-1')!(); await flush();

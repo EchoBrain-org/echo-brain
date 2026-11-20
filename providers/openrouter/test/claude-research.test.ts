@@ -131,7 +131,7 @@ it('delivers provider errors to the SDK and freshly admits its retry without lat
     },
   });
   await driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
-    remaining: () => 60_000, call: async () => ({}), model_request: async (_request, send) => {
+    silence_ms: 60_000, call: async () => ({}), model_request: async (_request, send) => {
       checks++;
       try { return (await send(new AbortController().signal)).value; }
       catch (error) { errors.push(error); throw error; }
@@ -170,7 +170,7 @@ it('classifies exhausted SDK provider retries for ECHO research fallback without
     },
   });
   const pending = driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
-    remaining: () => 60_000, call: async () => ({}), model_request: async (_request, send) => (await send(new AbortController().signal)).value });
+    silence_ms: 60_000, call: async () => ({}), model_request: async (_request, send) => (await send(new AbortController().signal)).value });
   await expect(pending).rejects.toMatchObject({ recovery: 'fallback' });
   await expect(pending).rejects.not.toThrow('private provider detail');
 });
@@ -206,7 +206,7 @@ it.each(['request error', 'response error', 'response aborted'] as const)('prese
     },
   });
   const pending = driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
-    remaining: () => 60_000, call: async () => ({}), model_request: async (_request, send) => {
+    silence_ms: 60_000, call: async () => ({}), model_request: async (_request, send) => {
       try { return (await send(new AbortController().signal)).value; }
       catch (error) { errors.push(error); throw error; }
     } });
@@ -230,7 +230,7 @@ it('recovers on a successful SDK retry after a network failure', async () => {
     },
   });
   await driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
-    remaining: () => 60_000, call: async () => ({}), model_request: async (_request, send) => {
+    silence_ms: 60_000, call: async () => ({}), model_request: async (_request, send) => {
       admissions++; return (await send(new AbortController().signal)).value;
     } });
   expect(calls).toBe(2); expect(admissions).toBe(2);
@@ -255,7 +255,7 @@ it.each([
     },
   });
   await expect(driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
-    remaining: () => 60_000, call: async () => ({}), model_request: async (_request, send) => {
+    silence_ms: 60_000, call: async () => ({}), model_request: async (_request, send) => {
       if (++requests === 2) throw terminal;
       return (await send(new AbortController().signal)).value;
     } })).rejects.toBe(terminal);
@@ -269,14 +269,14 @@ it('classifies a provider refusal reported by the actual packaged SDK', async ()
     throw new ClaudeModelResponseErrorV1(400);
   } });
   await expect(driver.run({ initial: { question: 'Synthetic refusal fixture' }, question: true, list_available: false, signal,
-    remaining: () => 20_000, call: async () => ({}), model_request: async (_request, send) => (await send(signal)).value })).rejects.toMatchObject({ recovery: 'fallback' });
+    silence_ms: 20_000, call: async () => ({}), model_request: async (_request, send) => (await send(signal)).value })).rejects.toMatchObject({ recovery: 'fallback' });
 }, 25_000);
 
 it('admits the exact initial packet and refuses an unexpected model before forwarding', async () => {
   const initial = { question: 'synthetic only' }, requests: unknown[] = [];
   let forwarded = 0;
   const session: AgenticResearchDriverSessionV1 = { initial, question: true, list_available: true,
-    signal: new AbortController().signal, remaining: () => 60_000, call: async () => ({}),
+    signal: new AbortController().signal, silence_ms: 60_000, call: async () => ({}),
     model_request: async (request, send) => { requests.push(request); return (await send(new AbortController().signal)).value; },
   };
   const make = (requestedModel: string) => createClaudeResearchDriverV1({ model,

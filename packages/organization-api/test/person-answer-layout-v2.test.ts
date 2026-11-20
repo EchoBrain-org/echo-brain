@@ -103,20 +103,22 @@ describe('Answer layout v2 (ADR-0051)', () => {
     expect(check([{ kind: 'text', statements: [0, 1] }], two)).toHaveLength(1);
   });
 
-  it('takes a title on text, points, a table and a timeline: one line, within its bytes', () => {
+  it('takes a title on text, points, a table and a timeline: one line, of any length', () => {
     expect(check([{ kind: 'text', title: 'Why', statements: [0, 1] }], two)[0]).toEqual({ kind: 'text', title: 'Why', statements: [0, 1] });
-    for (const title of ['', ' Why', 'Two\nlines', 'x'.repeat(201)]) expect(() => check([{ kind: 'text', title, statements: [0, 1] }], two)).toThrow('title is invalid');
+    expect(check([{ kind: 'text', title: 'x'.repeat(5_000), statements: [0, 1] }], two)[0]).toMatchObject({ title: 'x'.repeat(5_000) });
+    for (const title of ['', ' Why', 'Two\nlines']) expect(() => check([{ kind: 'text', title, statements: [0, 1] }], two)).toThrow('title is invalid');
     expect(() => check([{ kind: 'text', statements: [0, 1], extra: true }], two)).toThrow('unexpected shape');
   });
 
-  it('shows two or more points, ordered or not', () => {
+  it('shows one or more points, ordered or not', () => {
     expect(check(changed(3, { ordered: false }))[3]).toMatchObject({ kind: 'points', ordered: false });
     expect(() => check(changed(3, { ordered: undefined }))).toThrow('unexpected shape');
     expect(() => check(changed(3, { ordered: 'yes' }))).toThrow('ordered is invalid');
-    expect(() => check([{ kind: 'points', ordered: false, statements: [0] }, { kind: 'text', statements: [1] }], two)).toThrow();
+    // One point is a points block too: no count forces it into text.
+    expect(check([{ kind: 'points', ordered: false, statements: [0] }, { kind: 'text', statements: [1] }], two)[0]).toMatchObject({ kind: 'points', statements: [0] });
   });
 
-  it('checks a table: its columns, one cell each, rows that cite exactly what its statements cite, two or more of them, an optional title, and no cap on its columns', () => {
+  it('checks a table: its columns, one cell each, rows that cite exactly what its statements cite, one or more of them, an optional title, and no cap on its columns or cells', () => {
     expect(check(changed(4, { title: 'Open actions' }))[4]).toMatchObject({ kind: 'table', title: 'Open actions', caption: '2 actions are open' });
     expect(check(changed(4, { caption: undefined }))[4]).not.toHaveProperty('caption');
     expect(() => check(changed(4, { caption: '' }))).toThrow('caption is invalid');
@@ -127,8 +129,9 @@ describe('Answer layout v2 (ADR-0051)', () => {
     const wide = Array.from({ length: 8 }, (_, at) => `Column ${at + 1}`);
     const cells = (first: string) => wide.map((_, at) => at === 0 ? first : `${at}`);
     expect(check(changed(4, { columns: wide, rows: [{ cells: cells('TRACE-01'), citation_indexes: [1] }, { cells: cells('DVT-R2'), citation_indexes: [2] }] }))[4]).toMatchObject({ kind: 'table', columns: wide });
-    expect(() => check(changed(4, { rows: [{ cells: ['TRACE-01', '2026-10-14'], citation_indexes: [1, 2] }] }))).toThrow('rows is invalid');
-    expect(() => check(changed(4, { columns: ['Action'] }))).toThrow('columns is invalid');
+    expect(() => check(changed(4, { columns: [] }))).toThrow('columns is invalid');
+    expect(check(changed(4, { columns: ['Action'], rows: [{ cells: ['TRACE-01'], citation_indexes: [1] }, { cells: ['DVT-R2'], citation_indexes: [2] }] }))[4]).toMatchObject({ kind: 'table', columns: ['Action'] });
+    expect(check(changed(4, { rows: [{ cells: ['x'.repeat(2_000), '2026-10-14'], citation_indexes: [1, 2] }] }))[4]).toMatchObject({ kind: 'table' });
     expect(() => check(changed(4, { rows: [{ cells: ['TRACE-01', ''], citation_indexes: [0] }, { cells: ['DVT-R2', ''], citation_indexes: [2] }] }))).toThrow('cites what its statements do not');
     expect(() => check(changed(4, { rows: [{ cells: ['TRACE-01', ''], citation_indexes: [1] }, { cells: ['DVT-R2', ''], citation_indexes: [1] }] }))).toThrow('leave a citation of its statements out');
   });
@@ -137,7 +140,7 @@ describe('Answer layout v2 (ADR-0051)', () => {
     const events = (blocks[1] as { events: readonly Record<string, unknown>[] }).events;
     expect(check(changed(1, { events: [{ date: '2026-10-20', text: 'Started the 72-hour soak.' }, events[1]] }))[1]).toMatchObject({ events: [{ date: '2026-10-20', text: 'Started the 72-hour soak.' }, events[1]] });
     expect(check(changed(1, { events: [events[0], { ...events[1], date: '2026-10-20' }] }))[1]).toMatchObject({ kind: 'timeline' });
-    expect(() => check(changed(1, { events: [events[0]] }))).toThrow('events is invalid');
+    expect(() => check(changed(1, { events: [] }))).toThrow('events is invalid');
     // Newest first is a timeline too ("what changed recently").
     expect(check(changed(1, { events: [events[1], events[0]] }))[1]).toMatchObject({ kind: 'timeline', events: [events[1], events[0]] });
     // Any real day the kernel reads, years 0000 to 0099 too.
@@ -145,7 +148,8 @@ describe('Answer layout v2 (ADR-0051)', () => {
     for (const date of ['2026-02-30', '2026-10-2', 'Oct 20', '2026-10-20T00:00:00Z']) expect(() => check(changed(1, { events: [{ ...events[0], date }, events[1]] }))).toThrow('date is invalid');
     expect(() => check(changed(1, { events: [{ ...events[0], who: '' }, events[1]] }))).toThrow('who is invalid');
     expect(() => check(changed(1, { events: [{ ...events[0], link: 'x' }, events[1]] }))).toThrow('unexpected shape');
-    expect(() => check([{ kind: 'timeline', statements: [0], events: [events[0]] }, { kind: 'text', statements: [1] }], two)).toThrow();
+    // One event is a timeline too.
+    expect(check([{ kind: 'timeline', statements: [0], events: [events[0]] }, { kind: 'text', statements: [1] }], two)[0]).toMatchObject({ kind: 'timeline' });
   });
 
   it('checks a card: its title, what it shows, and one fact a statement', () => {

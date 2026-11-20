@@ -83,7 +83,7 @@ function fixture(options: { readonly membership?: (id: string) => Membership | u
     authority_id: "oau_project_fixture", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
     sessions: { authenticateAccess } as never, originals,
     records: { initializeDesk() { recordProbes += 1; throw new PersonRecordSearchIndexLagV1(); } } as never,
-    model, generation: { generation_adapter_id: "fixture", planner_model: "unused", answer_model: "fixture", timeout_ms: 1000 },
+    model, generation: { generation_adapter_id: "fixture", planner_model: "unused", answer_model: "fixture", timeout_ms: 1000, context_tokens: 32_768, max_output_tokens: 8_000 },
     audit: new SqlitePersonAgenticAskAuditV1(database),
     ...(options.membership === undefined ? {} : { memberships: { membership: options.membership } }),
   };
@@ -226,7 +226,7 @@ describe("Agentic Ask combined request-local sources", () => {
     authority_id: "oau_fixture", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
     sessions: { authenticateAccess: () => authorization(OWNER) } as never,
     originals: f.originals, records: { initializeDesk() { throw new PersonRecordSearchIndexLagV1(); } } as never,
-    model, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 1_000 },
+    model, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 1_000, context_tokens: 32_768, max_output_tokens: 8_000 },
     audit: { forRequest: () => ({ append: () => undefined }), forLiveRequest: () => ({ record: async () => canonicalSha256("live-audit") }) } as never,
     live_sources,
   });

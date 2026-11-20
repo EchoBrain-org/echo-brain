@@ -9,7 +9,7 @@ import { help, parseArgs, run, runTrial } from "../run.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const document = loadCases();
-const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
+const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 32_768, max_output_tokens: 8_000 };
 
 function privateRoot(t) {
   const root = mkdtempSync(join(tmpdir(), "echo-ask-follow-up-eval-"));

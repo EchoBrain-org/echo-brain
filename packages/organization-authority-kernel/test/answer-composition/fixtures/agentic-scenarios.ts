@@ -3,7 +3,7 @@ import { vi } from "vitest";
 import { createAgenticAskV5, createAgenticResearchV1, type AgenticAskAuditEntryV1 } from "../../../src/answer-composition/agentic-ask-v1.js";
 import type { AgenticEvidenceBundleV1 } from "../../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import { createAgenticModelGateV1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
-import { AGENTIC_RESEARCH_LIVE_BUDGET_V1, type AgenticResearchBudgetV1 } from "../../../src/answer-composition/agentic-research-v1.js";
+import { AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../../src/answer-composition/agentic-research-v1.js";
 import type { StructuredGenerationInput, StructuredGenerationPort, StructuredGenerationUsageV1 } from "../../../src/answer-composition/structured-generation-v1.js";
 import type { EvidenceDeskItemV1, EvidenceDeskPortV1 } from "../../../src/shared/evidence-desk-v1.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../../src/shared/evidence-desk-v2.js";
@@ -13,7 +13,7 @@ import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } fro
  * replies, Ask scenarios and their replay, a research core over a
  * scripted desk, and a model gate over scripted replies for renderer tests.
  */
-export const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 180_000, context_tokens: 131_072 };
+export const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 180_000, context_tokens: 131_072, max_output_tokens: 16_000 };
 export const checked = { checked_at: "2026-10-06T00:00:00.000Z" };
 /** The pinned wall clock: when a fixture's lists are read (ADR-0041). */
 export const LIST_READ_AT = "2026-10-06T09:30:00.000Z";
@@ -201,7 +201,7 @@ export const EMPTY_BUNDLE: AgenticEvidenceBundleV1 = {
 };
 
 /** A renderer's gate: scripted replies in order (an Error is thrown, as the provider's failure) and no desk; every access check and model call lands in `trace`. */
-export function scriptedGate(replies: readonly unknown[], budget: AgenticResearchBudgetV1, trace: string[]) {
+export function scriptedGate(replies: readonly unknown[], trace: string[]) {
   const inputs: StructuredGenerationInput[] = [];
   const gate = createAgenticModelGateV1({
     generation,
@@ -215,8 +215,7 @@ export function scriptedGate(replies: readonly unknown[], budget: AgenticResearc
       },
     },
     desk_revalidate: async () => { trace.push("revalidate"); return checked; }, on_checked: () => undefined,
-    budget, now: () => 0, deadline: budget.deadline_ms,
-    signal: new AbortController().signal, is_deadline_expired: () => false,
+    now: () => 0, signal: new AbortController().signal,
   });
   return { gate, inputs };
 }

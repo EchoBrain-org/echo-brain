@@ -3,9 +3,9 @@ import type { WorkspaceSourceDescriptorV1, WorkspaceSourceIdV1 } from '@echo-bra
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 import { appendAuditRowV1 } from "./audit-row-v1.js";
-import { type AgenticAskAuditEntryV1, type AgenticAskAuditPortV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
+import type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { AGENTIC_TRIGGER_NAMES_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
-import { PERSON_ANSWER_OUTCOMES_V8, PERSON_ASK_PROGRESS_NAMED_MAX_V1, validatePersonWorkspaceCitationV1 } from "@echo-brain/organization-api";
+import { PERSON_ANSWER_OUTCOMES_V8, validatePersonWorkspaceCitationV1 } from "@echo-brain/organization-api";
 
 export interface AgenticAskAuditRequestContextV1 {
   readonly authority_id: string;
@@ -159,9 +159,9 @@ export class SqlitePersonAgenticAskAuditV1 {
   }
 
   private appendBound(context: AgenticAskAuditRequestContextV1, entry: AgenticAskAuditEntryV1): Sha256Digest {
-    // The audit records what the run did, whatever its size: how many rounds, calls, receipts and citations a run may take is
-    // the research loop's rule, checked there once. Here only consistency: a native harness has no ECHO planner-step counter
-    // and reports its outbound research calls, so its rounds never exceed its calls.
+    // Research has no round, call or receipt budget, so the row carries counts, not limits: each is checked for its shape
+    // and for agreement with the others, and the row is as large as the run made it.
+    // A native harness has no ECHO planner-step counter; it reports its outbound research calls as rounds.
     const external = Array.isArray(entry.generations) && entry.generations.some(value => value.engine === 'external_research');
     if (
       entry.kind !== "echo-agentic-ask-audit-v1" ||
@@ -174,7 +174,7 @@ export class SqlitePersonAgenticAskAuditV1 {
       !entry.receipt_digests.every((digest) => /^sha256:[a-f0-9]{64}$/.test(digest)) ||
       ![entry.rounds, entry.model_calls, entry.repairs, entry.fallbacks, entry.citation_count]
         .every((value) => Number.isSafeInteger(value) && value >= 0) ||
-      (external && entry.rounds > entry.model_calls) ||
+      (external && entry.rounds > entry.model_calls) || entry.repairs > entry.model_calls ||
       (entry.checked_at !== null && new Date(entry.checked_at).toISOString() !== entry.checked_at) ||
       ![entry.prompt_sha256, entry.answer_sha256, entry.response_sha256]
         .every((digest) => digest === null || /^sha256:[a-f0-9]{64}$/.test(digest)) ||
@@ -191,7 +191,7 @@ export class SqlitePersonAgenticAskAuditV1 {
       Object.entries(entry.finish_reason_counts).some(([reason, count]) => reason.length === 0 || reason.length > 128 || !Number.isSafeInteger(count) || count < 1 || count > entry.model_calls) ||
       // A streamed request's named items (ADR-0039): distinct citation commitments, never labels.
       (entry.named_citation_digests !== undefined && (!Array.isArray(entry.named_citation_digests) ||
-        entry.named_citation_digests.length > PERSON_ASK_PROGRESS_NAMED_MAX_V1 || new Set(entry.named_citation_digests).size !== entry.named_citation_digests.length ||
+        new Set(entry.named_citation_digests).size !== entry.named_citation_digests.length ||
         !entry.named_citation_digests.every((digest) => typeof digest === "string" && /^sha256:[a-f0-9]{64}$/.test(digest))))
     ) throw new Error("Agentic Ask audit entry is invalid");
 

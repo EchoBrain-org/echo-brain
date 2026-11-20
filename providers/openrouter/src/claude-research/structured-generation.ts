@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import type { StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import type { ClaudeAccountProfileV1 } from './account-profile.js';
 import { ClaudeResearchResultErrorV1, runClaudeStructuredV1 } from './sdk-client.js';
-import { REASONING_HEADROOM_TOKENS } from '../adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js';
 import { claudeAccountForwarderV1, ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1, startClaudeModelTransportV1, type ClaudeModelForwarderV1 } from './model-transport.js';
 
 export class ClaudeSingleGenerationLimitErrorV1 extends Error {
@@ -22,13 +21,13 @@ export function createClaudeAccountStructuredGenerationV1(options: {
     async generate() { throw new Error('Native structured generation requires per-request admission'); },
     async generate_with_admission(input, admit) {
       if (input.model !== options.model) throw new Error('Unexpected native writer model');
-      // The writer thinks before it answers, and Claude Code's max_tokens holds both: give it the same reasoning headroom
-      // OpenRouter does, so thinking never comes out of the answer's allowance. Extraction's single attempt keeps its own.
-      const allowance = input.max_output_tokens + (options.max_model_requests === 1 ? 0 : REASONING_HEADROOM_TOKENS);
+      // Claude Code's max_tokens holds thinking and the answer together; the caller's allowance is the model's own maximum.
+      const allowance = input.max_output_tokens;
+      // `timeout_ms` is the silence period: the session (one generation, or the SDK's own retry) sends nothing until its
+      // reply is whole, so a session silent past it is stalled.
       const stop = new AbortController();
       const timeout = AbortSignal.timeout(input.timeout_ms);
       const signal = AbortSignal.any([...(input.signal === undefined ? [] : [input.signal]), stop.signal, timeout]);
-      const deadline = performance.now() + input.timeout_ms;
       let terminal: unknown;
       let providerFailure: unknown;
       let messages = 0;
@@ -52,10 +51,10 @@ export function createClaudeAccountStructuredGenerationV1(options: {
             // Native framing may surround these strings; it must preserve the exact admitted writer inputs.
             if (![input.system_prompt, input.user_prompt].every(text => strings.some(value => value.includes(text)))) throw new Error('Native writer changed its evidence input');
             return await admit({ model: input.model, body_sha256: `sha256:${createHash('sha256').update(body).digest('hex')}`, operation,
-              timeout: () => deadline - performance.now(), signal,
+              signal,
               ...(operation === 'messages' ? { diagnostic_input: { model: input.model, system_prompt: JSON.stringify(payload.system ?? []),
                 user_prompt: JSON.stringify(payload.messages ?? []), schema: { tools: payload.tools ?? [] }, max_output_tokens: payload.max_tokens ?? 0,
-                timeout_ms: Math.max(1, Math.floor(deadline - performance.now())) } } : {}),
+                timeout_ms: input.timeout_ms } } : {}),
             }, async admittedSignal => {
               const result = await forward(admittedSignal);
               providerFailure = undefined;

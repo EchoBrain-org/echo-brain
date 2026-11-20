@@ -25,27 +25,22 @@ import type { PersonAnswerCitationV8 } from './person-answer-v8.js';
  */
 
 /**
- * The earlier answer a request carries is the whole answer as it was released, so a follow-up can point at any of it.
- * Its statements: far more than one answer holds in its 64 KiB; the request's own byte bound decides what fits.
+ * The earlier answer a request carries is the whole answer as it was released, so a follow-up can point at any of it:
+ * the API counts none of its sentences or citations; the request's transport bound decides what fits. The three counts
+ * below are no longer read by the API; the desktop still imports them for its own check of a turn it sends, and they
+ * go with that check.
  */
 export const PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1 = 200;
-/** UTF-8 bytes of one earlier sentence: a released statement's own bound (PERSON_ANSWER_STATEMENT_MAX_BYTES_V4). */
 export const PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1 = 4 * 1024;
-/** The earlier answer's citations a request carries; its sentences index into them. */
 export const PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1 = 400;
-/** Citations one earlier sentence names: a released statement's own bound (PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4). */
 export const PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1 = 40;
-export const PERSON_ANSWER_CHOICES_MIN_V1 = 2;
-export const PERSON_ANSWER_CHOICES_MAX_V1 = 4;
-/** Unicode characters (code points) of a choice's label. */
-export const PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1 = 60;
 
 export type PersonAnswerPreviousPurposeV1 = 'follow_up' | 'ask_again';
 
 /** One sentence of the earlier answer, citing the request's `citations` by index. */
 export interface PersonAnswerPreviousStatementV1 {
   readonly text: string;
-  /** 0 to 4 distinct indexes into the previous turn's `citations`. */
+  /** Distinct indexes into the previous turn's `citations`. */
   readonly citation_indexes: readonly number[];
 }
 
@@ -55,9 +50,9 @@ export interface PersonAnswerPreviousV1 {
   readonly question: string;
   /** When the earlier turn was asked: ISO-8601 UTC with milliseconds. */
   readonly asked_at: string;
-  /** 0 to 8 sentences of the earlier answer the asker can still read, each at most 400 characters. */
+  /** The sentences of the earlier answer the asker can still read. */
   readonly statements: readonly PersonAnswerPreviousStatementV1[];
-  /** 0 to 12 of the earlier answer's citations, as its response carried them, each once. */
+  /** The earlier answer's citations, as its response carried them, each once. */
   readonly citations: readonly PersonAnswerCitationV8[];
 }
 

@@ -204,7 +204,7 @@ async function disclosureWorld() {
     person_answer_v7: createPersonLiveAnswerRouteV1({
       authority_id: COORDINATES.authority_id, organization_id: org, state_lineage_id: COORDINATES.state_lineage_id,
       sessions: sessions as never, originals, records, model: everything,
-      generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000 },
+      generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000, context_tokens: 32_768, max_output_tokens: 8_000 },
       audit: new SqlitePersonAgenticAskAuditV1(w.authority),
     }),
   }));

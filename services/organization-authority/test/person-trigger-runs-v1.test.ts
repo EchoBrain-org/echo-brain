@@ -1,7 +1,7 @@
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
 import { RESTRICTED_REVIEWER_PERSON_POLICY_ID } from '@echo-brain/organization-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import { AgenticAskStalledErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { describe, expect, it, vi } from 'vitest';
 import { SqliteImpactItemsV1 } from '../src/adapters/persistence/sqlite/impact-items-v1.js';
@@ -155,7 +155,7 @@ describe('durable approved-record trigger runs', () => {
     const refused = await fixture({ anchor: () => { throw new AuthorityOperationError('unauthorized', 'not allowed'); } });
     await refused.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: refused.row.run_id } }); await refused.settled();
     expect(refused.runs.readUnfenced(refused.row.run_id)).toMatchObject({ state: 'failed', error_code: 'no_access' });
-    const timeout = await fixture({ render: async () => { throw new AgenticAskDeadlineErrorV1(); } });
+    const timeout = await fixture({ render: async () => { throw new AgenticAskStalledErrorV1("read", 120_000); } });
     for (let at = 0; at < 3; at++) { await timeout.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: timeout.row.run_id } }); await timeout.settled(); }
     expect(timeout.runs.read(timeout.person, timeout.row.run_id)).toMatchObject({ state: 'failed', error_code: 'timed_out', attempts: 3 });
     const lost = await fixture({ anchor: () => { throw new AuthorityOperationError('not_found', 'record is no longer readable'); } });

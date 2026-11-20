@@ -1,9 +1,5 @@
 import {
-  PERSON_ANSWER_CAPTION_MAX_BYTES_V1,
-  PERSON_ANSWER_STATEMENT_MAX_BYTES_V4,
-  PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4,
   PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4,
-  PERSON_ANSWER_PART_GAP_MAX_BYTES_V4,
   personAnswerCitationKeyV8,
   validatePersonAnswerBlocksV2,
   type PersonAnswerBlockV2,
@@ -26,7 +22,6 @@ import {
   cleanId,
   cleanLine,
   cleanModelId,
-  FOLLOW_UP_TASK_CHARS,
   parseBlocksAnswer,
   partQuestion,
   textItem,
@@ -63,7 +58,7 @@ import {
   type AgenticWriterListMemberV1,
   type AgenticWriterListV1,
 } from "../agentic-list-evidence-v1.js";
-import { AGENTIC_ASK_MIN_ANSWER_MS_V1, AGENTIC_MODEL_OUTPUT_TOKENS_V1, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
+import type { AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
 import { agenticNotShownNoticeV1, agenticResearchNotesV1, type AgenticResearchNotesV1 } from "../agentic-research-notes-v1.js";
 import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
 import { observeCoreModelCorrectionV1, type CoreRuntimeModelCorrectionV1 } from "../../shared/core-runtime-observation-v1.js";
@@ -107,11 +102,8 @@ const FIT_GAP = "Some evidence could not fit in this response.";
  * A sentence left out whole because, with the private rows its lists carry, it cites more items than one statement may
  * (ADR-0054): the response had room; the sentence could not stand with only some of its citations.
  */
-const OVER_CITED_GAP = "Part of the answer was left out because it rests on more items than one sentence can cite.";
-/** A part's gap as one line, cut only at the Person protocol's own bound for it. */
-function gapLine(text: string): string { return boundedBytes(cleanLine(text, PERSON_ANSWER_PART_GAP_MAX_BYTES_V4), PERSON_ANSWER_PART_GAP_MAX_BYTES_V4); }
-/** UTF-8 bytes of the response's notice, as the Person protocol bounds it. */
-const NOTICE_MAX_BYTES = 2 * 1024;
+/** A part's gap as one line, whole: a gap has no length of its own. */
+function gapLine(text: string): string { return cleanLine(text, Number.POSITIVE_INFINITY); }
 /** What an answer that drafted follow-ups (ADR-0053) and found nothing about them says, after it says what it drafted. */
 const FOLLOW_UP_NOT_FOUND_GAP = "I couldn't find anything more about it in the sources you can access.";
 /** What an answer says it drafted: the drafts are the question, so it never asks. */
@@ -146,11 +138,10 @@ const ECHO_CITATION_KINDS: ReadonlySet<string> = new Set(["approved_record", "so
 /** A list that is not complete: its statement says "at least" (ADR-0041). */
 function listEndGap(noun: string): string { return `The list of ${noun} could not be read to its end, so more may exist.`; }
 /**
- * The writer runs in Ask's answer span; the audit records it as an `answer` call, with the answer role's allowance
- * (`AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer`). Its answer in blocks has no count limit (ADR-0051), so the allowance is
- * sized for a long answer, an Ask again's `since` included, and the response's byte bound decides what is released.
+ * The writer runs in Ask's answer span; the audit records it as an `answer` call. Like every call, it may write up to the
+ * model's own maximum output, and the response's transport bound decides what is released.
  */
-const WRITER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_answer", output_tokens: AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer });
+const WRITER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_answer" });
 
 type Entry = AgenticEvidenceBundleItemV1;
 /** A statement's shape before its citations are known: prose, or a list statement's table, whose rows name the items they cite. */
@@ -401,7 +392,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // Only a writer whose follow-ups the request saves is told to draft them (ADR-0053); any other's prompt is unchanged.
       const writerPrompt = [options.answer_prompt, ANSWER_BLOCKS_PROMPT, ...(earlier === undefined ? [] : [ANSWER_SINCE_PROMPT]), ...(drafting ? [ANSWER_FOLLOW_UPS_PROMPT] : [])].join("\n\n");
       const writerSchema = earlier === undefined ? (drafting ? answerBlocksFollowUpsSchema : answerBlocksSchema) : (drafting ? answerBlocksSinceFollowUpsSchema : answerBlocksSinceSchema);
-      const promptBudget = input.prompt_budget(writerPrompt, WRITER_CALL.output_tokens);
+      const promptBudget = input.prompt_budget(writerPrompt);
       // Research's notes (ADR-0054) never take room from evidence: lists and evidence are admitted against the whole room,
       // and the notes take only what they leave.
       const contextBudget = Math.max(0, promptBudget - bytes(JSON.stringify({ ...answerContext, lists: [], evidence: [] })));
@@ -458,14 +449,14 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         if (list !== null) return writerById.has(list) ? [list] : [];
         return shownRows.has(id) ? writerLists.filter(view => view.members.some(member => member.id === id)).map(view => view.id) : [];
       }))];
-      // A list block code cannot read takes the writer's one repair when a repair can still run; the repaired reply, or a
-      // first reply no repair can follow, is kept.
+      // A list block code cannot read takes the writer's one repair when the first reply was its only call; the repaired
+      // reply, or a first reply no repair can follow, is kept.
       const callsBefore = input.gate.stats().calls;
       /** The last reply parsed: kept when the repair's reply is unusable. */
       const last: { answer: Answer | null } = { answer: null };
       const repairable = () => {
         const stats = input.gate.stats();
-        return stats.calls === callsBefore + 1 && stats.calls < bundle.budget.max_model_calls && input.remaining() >= AGENTIC_ASK_MIN_ANSWER_MS_V1;
+        return stats.calls === callsBefore + 1;
       };
       const parse = (value: unknown): Answer => {
         const since = earlier === undefined ? {} : { since: true };
@@ -526,7 +517,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           }
           const screened = screen.names(line);
           if (screened) observeCoreModelCorrectionV1("follow_up_task_screened");
-          const task = screened ? screen.scrub(line, FOLLOW_UP_TASK_CHARS) : line;
+          const task = screened ? screen.scrub(line, Number.POSITIVE_INFINITY) : line;
           // A task that was only an outside title says nothing of ECHO's own.
           if (task.length === 0 || /^a cited item[.!]?$/iu.test(task)) { observeCoreModelCorrectionV1("follow_up_dropped"); continue; }
           let owner = draft.owner ?? "";
@@ -557,8 +548,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // One citation per key, the key the Ask response checks for duplicates: a listed ticket's row and its opened body
       // are two items with one key, so they share one citation.
       const keyOf = (short: string) => personAnswerCitationKeyV8(byShort.get(short)!.item.citation);
-      /** Whether a statement citing `shorts` would cite more items than one statement may, in blocks too (ADR-0051). */
-      const overCited = (shorts: readonly string[]) => new Set(shorts.map(keyOf)).size > PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4;
       const question = partQuestion(askedQuestion);
       /** The lists whose block a reply that takes the fallback placed and code dropped (ADR-0054): the fallback never states them. */
       let withheld: ReadonlySet<AgenticListIdV1> = new Set();
@@ -657,13 +646,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const shown = list === null ? undefined : writerById.get(list);
           return shown === undefined ? [] : [...new Set([...shown.members.map(member => member.id), ...(placedRows.get(shown.id) ?? [])])];
         };
-        /** The sentence with code's note within a statement's 4 KiB: one too long to take the note whole, a wide row, is cut, never the note. */
-        const fittedNote = (text: string, note: string) => {
-          const whole = withNote(text, note);
-          if (bytes(whole) <= PERSON_ANSWER_STATEMENT_MAX_BYTES_V4) return whole;
-          correct("model_text_truncated");
-          return `${boundedBytes(text, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 - bytes(` ${note}`))} ${note}`;
-        };
+        /** The sentence with code's note, whole: a statement has no length of its own. */
+        const fittedNote = (text: string, note: string) => withNote(text, note);
         /**
          * A writer's or `since` sentence as code keeps it (W1): on the text the writer read, then the rows it may carry, and
          * the lists it uses; with no text, on the rows or lists it cites (rowFacts); or, citing nothing it saw, none.
@@ -794,7 +778,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const fitted: Laid[] = [];
         const fittedKeys = new Set<string>();
         let dropped = false;
-        let overCitedDropped = false;
         for (const sentence of [...listStatements, ...placedStatements, ...writerSentences] as readonly Laid[]) {
           // Temporary model guardrail (ADR-0041): only exact text with the same cited objects and privacy is a repeat.
           // Shared sources or planner kinds never establish that two sentences say the same thing.
@@ -805,7 +788,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             continue;
           }
           const fresh = new Set(sentence.shorts.map(keyOf).filter(key => !fittedKeys.has(key)));
-          if (overCited(sentence.shorts)) { overCitedDropped = true; continue; }
           statementKeys.add(statementKey);
           for (const key of fresh) fittedKeys.add(key);
           fitted.push(sentence);
@@ -824,7 +806,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             if (kept === undefined) return [];
             const key = JSON.stringify([sentence.text, [...new Set(kept.shorts.map(keyOf))].sort()]);
             if (keys.has(key)) { correct("writer_repeat_dropped"); return []; }
-            if (overCited(kept.shorts)) { correct("model_entry_dropped"); return []; }
             keys.add(key);
             return [kept];
           });
@@ -874,7 +855,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const note = sentence.listed === undefined ? undefined : agenticListShownNoteV1(shownOf.get(sentence.group!)!, sentence.listed.selected);
           if (note === undefined) return sentence;
           const shape: DraftShape = sentence.shape.kind !== "list" ? sentence.shape
-            : { ...sentence.shape, caption: `${boundedBytes(sentence.shape.caption, PERSON_ANSWER_CAPTION_MAX_BYTES_V1 - bytes(` ${note}`))} ${note}` };
+            : { ...sentence.shape, caption: `${sentence.shape.caption} ${note}` };
           return { ...sentence, text: fittedNote(sentence.text, note), shape };
         });
         const statements: Statement[] = order.map(sentence => statementOf(sentence.text, sentence.shorts));
@@ -886,7 +867,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           : notFound.length === 0 ? undefined : gapLine(`Not found: ${notFound.join("; ")}.`);
         // What the lists add to the gap: a list the answer uses not read to its end or not fully tested by its filter, a list
         // kind with no list, a sentence left out for resting on rows, and what did not fit.
-        const extraGaps = [...new Set([...listGaps.map(gap => gap.text), ...(overCitedDropped ? [OVER_CITED_GAP] : []), ...(dropped ? [FIT_GAP] : [])])];
+        const extraGaps = [...new Set([...listGaps.map(gap => gap.text), ...(dropped ? [FIT_GAP] : [])])];
         const withGaps = (base: string | undefined) => {
           // Keep capability and unfinished-research explanations ahead of variable-length missing-fact text.
           const gaps = [...(unsupportedAction ? [READ_ONLY_GAP] : []),
@@ -968,7 +949,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           })]),
           citations: Object.freeze(anyEvidence ? used.map(entry => citationOfAgenticEvidenceItemV8(entry.item, timeZone)) : []),
           // The response holds a notice of 2 KiB: whole notices in order while they fit, the first that does not cut.
-          ...(responseNotices.length === 0 ? {} : { notice: boundedBytes(responseNotices.join(" "), NOTICE_MAX_BYTES) }),
+          ...(responseNotices.length === 0 ? {} : { notice: responseNotices.join(" ") }),
           // Only an answer to a request that carried its previous turn names its question and says what is different since (ADR-0047).
           ...(options.answers === undefined ? {} : { question: options.answers }),
           ...(since === undefined ? {} : { since: Object.freeze({ statements: released(since) }) }),

@@ -1,13 +1,8 @@
 import {
-  PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2,
-  PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2,
-  PERSON_ANSWER_CAPTION_MAX_BYTES_V1,
-  PERSON_ANSWER_CELL_MAX_BYTES_V1,
-  PERSON_ANSWER_COLUMN_MAX_BYTES_V1,
   type PersonAnswerBlockV2,
   type PersonAnswerTableRowV1,
 } from "@echo-brain/organization-api";
-import { boundedBytes, type AnswerItem } from "../agentic-ask-v1-model-protocol.js";
+import type { AnswerItem } from "../agentic-ask-v1-model-protocol.js";
 
 /**
  * How Ask lays out a V8 answer part with answer layout v2 (ADR-0051). The
@@ -67,26 +62,26 @@ export function orderAskBlocksV2<L extends { readonly block?: number }, S extend
   ]);
 }
 
-/** A table's columns, each within the contract's bytes. */
+/** A table's columns, whole. */
 function columnsOf(columns: readonly string[]): string[] {
-  return columns.map(column => boundedBytes(column, PERSON_ANSWER_COLUMN_MAX_BYTES_V1));
+  return [...columns];
 }
 
-/** A table's cells, one per column, each within the contract's bytes. */
+/** A table's cells, one per column, whole. */
 function cellsOf(cells: readonly string[], columns: readonly string[]): readonly string[] {
-  return Object.freeze(columns.map((_, at) => boundedBytes(cells[at] ?? "", PERSON_ANSWER_CELL_MAX_BYTES_V1)));
+  return Object.freeze(columns.map((_, at) => cells[at] ?? ""));
 }
 
-/** A list statement's table (ADR-0041): its columns, its rows and its caption, when it has one, each within the contract's bytes. */
+/** A list statement's table (ADR-0041): its columns, its rows and its caption, when it has one, whole. */
 function listTable(shape: AskListShapeV2): { readonly columns: string[]; readonly rows: PersonAnswerTableRowV1[]; readonly caption?: string } {
   const columns = columnsOf(shape.columns);
-  const caption = boundedBytes(shape.caption, PERSON_ANSWER_CAPTION_MAX_BYTES_V1);
+  const caption = shape.caption;
   return { columns, rows: shape.rows.map(row => Object.freeze({ cells: cellsOf(row.cells, columns), citation_indexes: Object.freeze([...row.citation_indexes]) })), ...(caption.length === 0 ? {} : { caption }) };
 }
 
 type Run = { readonly shape: AskBlockShapeV2; readonly statements: number[] };
 const blockOf = (shape: AskBlockShapeV2) => "block" in shape ? shape.block : undefined;
-const titleOf = (shape: AskBlockShapeV2) => "title" in shape && shape.title !== undefined ? { title: boundedBytes(shape.title, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2) } : {};
+const titleOf = (shape: AskBlockShapeV2) => "title" in shape && shape.title !== undefined ? { title: shape.title } : {};
 
 /**
  * The blocks of the statements a v2 answer kept, in their order: the answer; each list statement as its own table, or
@@ -120,7 +115,8 @@ export function buildAskBlocksV2(statements: readonly AskBlockStatementV2[]): re
     const title = opens ? titleOf(shape) : {};
     // A run's statements are all of its kind.
     const items = run.statements.map(at => statements[at]!);
-    const enough = run.statements.length >= PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2;
+    // A block may show one item: no count forces it into text.
+    const enough = run.statements.length >= 1;
     if (shape.kind === "answer") blocks.push({ kind: "answer", statements: run.statements });
     else if (shape.kind === "list") blocks.push({ kind: "table", statements: run.statements, ...listTable({ ...shape,
       rows: items.flatMap(({ shape: item }) => item.kind === "list" ? item.rows : []),
@@ -135,7 +131,7 @@ export function buildAskBlocksV2(statements: readonly AskBlockStatementV2[]): re
       blocks.push({ kind: "timeline", ...title, statements: run.statements, events: items.flatMap(({ shape: event }) => event.kind !== "event" ? []
         : [Object.freeze({ date: event.date, text: event.text, ...(event.who === undefined ? {} : { who: event.who }) })]) });
     } else if (shape.kind === "fact" && enough) {
-      blocks.push({ kind: "card", title: boundedBytes(shape.title, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2), entity: shape.entity, statements: run.statements,
+      blocks.push({ kind: "card", title: shape.title, entity: shape.entity, statements: run.statements,
         facts: items.flatMap(({ shape: fact }) => fact.kind !== "fact" ? [] : [Object.freeze({ label: fact.label, value: fact.value })]) });
     } else text(run, title);
   }

@@ -7,7 +7,7 @@ import { caseAsk, caseItems, scriptedModel } from "../../shared/ask-cases.mjs";
 import { CASE_IDS, PASS, caseProblems, decide, gradeTrial, loadCases, placedLists, releasedLists, summarize } from "../lists.mjs";
 import { parseArgs, run } from "../run.mjs";
 
-const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072 };
+const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072, max_output_tokens: 16_000 };
 const document = loadCases();
 const caseOf = (id) => document.cases.find((entry) => entry.id === id);
 const whichItems = caseOf("which-items");

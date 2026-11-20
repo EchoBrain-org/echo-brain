@@ -16,10 +16,10 @@ it('uses native account writing with the original evidence/schema and fresh admi
   const port = createClaudeAccountStructuredGenerationV1({ account, model,
     forward: async ({ res }) => { expect(admitted).toBe(++forwarded); res.end('{}'); return { content: [{ type: 'text', text: 'synthetic' }], finish_reason: 'stop' }; },
     run: async request => {
-      // The writer's allowance plus the same reasoning headroom OpenRouter gives it: thinking never comes out of the answer's room.
-      expect(request).toMatchObject({ account, schema: input.schema, prompt: input.user_prompt, system: input.system_prompt, max_output_tokens: 5596 });
-      for (const [index, path] of ['messages', 'messages/count_tokens', 'messages'].entries()) {
-        const response = await fetch(`${request.base_url}/v1/${path}`, { method: 'POST', body: index === 2 ? body.replace('1500', '5596') : body });
+      // The caller's allowance is the model's whole output, thinking included: nothing is added to it.
+      expect(request).toMatchObject({ account, schema: input.schema, prompt: input.user_prompt, system: input.system_prompt, max_output_tokens: 1500 });
+      for (const path of ['messages', 'messages/count_tokens', 'messages']) {
+        const response = await fetch(`${request.base_url}/v1/${path}`, { method: 'POST', body });
         expect(response.status).toBe(200); await response.text();
       }
       return { answer: 'Synthetic E1' };

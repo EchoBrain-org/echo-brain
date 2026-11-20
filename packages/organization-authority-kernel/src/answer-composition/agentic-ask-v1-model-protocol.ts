@@ -1,22 +1,9 @@
 import {
   PERSON_ANSWER_BLOCKS_ANSWER_MAX_STATEMENTS_V2,
   PERSON_ANSWER_BLOCK_KINDS_V2,
-  PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2,
   PERSON_ANSWER_CARD_ENTITIES_V2,
-  PERSON_ANSWER_CELL_MAX_BYTES_V1,
-  PERSON_ANSWER_COLUMN_MAX_BYTES_V1,
-  PERSON_ANSWER_EVENT_TEXT_MAX_BYTES_V2,
-  PERSON_ANSWER_FACT_LABEL_MAX_BYTES_V2,
-  PERSON_ANSWER_FACT_VALUE_MAX_BYTES_V2,
-  PERSON_ANSWER_FOLLOW_UPS_MAX_V1,
-  PERSON_ANSWER_QUOTE_FROM_MAX_BYTES_V2,
-  PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2,
-  PERSON_ANSWER_STATEMENT_MAX_BYTES_V4,
-  PERSON_ANSWER_WHO_MAX_BYTES_V2,
   validatePersonQueryText,
   type PersonAnswerCardEntityV2,
-  PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4,
-  PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1,
   PERSON_ANSWER_CARD_ENTITY_PATTERN_V2,
 } from "@echo-brain/organization-api";
 import { observeCoreModelCorrectionV1 } from "../shared/core-runtime-observation-v1.js";
@@ -36,43 +23,20 @@ import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.
  * prompt can correct it before a tool runs. Each normalization is counted by
  * name (observeCoreModelCorrectionV1), never with the text it changed.
  */
-export const AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1 = 4;
-/** Ask looks at several sources at once (research tool contract v1); a task goal keeps four. */
-export const AGENTIC_ASK_MAX_ACTIONS_PER_ASK_STEP_V1 = 20;
-/** The most rows a list call with `limit` asks for: one list page, as many as one desk fetch returns. */
-export const AGENTIC_ASK_LIST_LIMIT_MAX_V1 = 50;
-/** Distinct items one need, or one writer entry, may cite: a statement's own citation bound (PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4). */
-export const AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 = PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4;
+/** Rows one list page holds: as many as one desk fetch returns (the desk's page). A longer list says more and continues on the next call. */
+export const AGENTIC_ASK_LIST_PAGE_ROWS_V1 = 50;
 /** Hits one search returns: the desks' own maximum for one search (records, originals and live sources each return up to 25). */
 export const AGENTIC_ASK_SEARCH_LIMIT_V1 = 25;
 const QUESTION_CHARS = 400;
 const NEED_CHARS = 200;
 const NEED_ID_CHARS = 8;
-const NOTES_CHARS = 800;
 const ARG_CHARS = 240;
-/** A writer's sentence: as long as a statement may be (PERSON_ANSWER_STATEMENT_MAX_BYTES_V4), cut there by its bytes. */
-const SENTENCE_CHARS = PERSON_ANSWER_STATEMENT_MAX_BYTES_V4;
-const NOT_FOUND_CHARS = 200;
-const SELECTION_CHARS = 120;
 /**
- * Answer layout v2 (ADR-0051): what a block shows is bounded only by the contract's own bytes for it (a character is at
- * least one byte, so these never cut before the bytes do). How many blocks, and how many items a block holds, has no cap
- * of its own (the founder, 2026-11-02): only the part's bounds limit them.
+ * Answer layout v2 (ADR-0051): no writer field (sentence, title, column, cell, event, who, label, value, quote, from,
+ * not-found phrase, list selection, follow-up owner) has a length of its own, and no count caps how many blocks or items
+ * an answer holds: the response's transport bound is what limits it.
  */
-const TITLE_CHARS = PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2;
-const COLUMN_CHARS = PERSON_ANSWER_COLUMN_MAX_BYTES_V1;
-const CELL_CHARS = PERSON_ANSWER_CELL_MAX_BYTES_V1;
-const CARD_TITLE_CHARS = PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2;
-const WHO_CHARS = PERSON_ANSWER_WHO_MAX_BYTES_V2;
-const EVENT_CHARS = PERSON_ANSWER_EVENT_TEXT_MAX_BYTES_V2;
-const QUOTE_CHARS = PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2;
 const EVENT_ACTOR = "the person explicitly recorded as performing or reporting this particular event. A current owner, assignee or participant does not establish who created, updated or completed an item. Omit who when the event's actor is not recorded; show current ownership separately as a fact";
-const LABEL_CHARS = PERSON_ANSWER_FACT_LABEL_MAX_BYTES_V2;
-const VALUE_CHARS = PERSON_ANSWER_FACT_VALUE_MAX_BYTES_V2;
-const FROM_CHARS = PERSON_ANSWER_QUOTE_FROM_MAX_BYTES_V2;
-/** A drafted follow-up's task as a follow-up stores what is expected (ADR-0053), and the longest owner name it keeps. */
-export const FOLLOW_UP_TASK_CHARS = PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1.expected_chars;
-const FOLLOW_UP_OWNER_CHARS = 200;
 
 /** A model response failed its closed, request-local protocol. */
 export class AgenticAskOutputErrorV1 extends Error {
@@ -144,7 +108,7 @@ const ASK_ACTION_ARGS = {
   list: ["source", "kind", "status", "owner", "role", "channel", "since", "until", "date_field", "limit"],
 } as const satisfies Readonly<Record<StepTool, readonly (keyof StepArgs)[]>>;
 function actionArgs(ask: boolean): Readonly<Record<StepTool, readonly (keyof StepArgs)[]>> { return ask ? ASK_ACTION_ARGS : ACTION_ARGS; }
-const ids = { type: "array", maxItems: AGENTIC_ASK_MAX_EVIDENCE_IDS_V1, items: { type: "string", maxLength: 16 } } as const;
+const ids = { type: "array", items: { type: "string", maxLength: 16 } } as const;
 const selectionIds = { type: "array", items: ids.items } as const;
 const argString = { type: "string", minLength: 1, maxLength: ARG_CHARS } as const;
 const calendarDateArgument = { type: "string", minLength: 10, maxLength: 10, format: "date", pattern: "^\\d{4}-\\d{2}-\\d{2}$" } as const;
@@ -161,7 +125,7 @@ const ARGUMENT_DESCRIPTIONS = Object.freeze({
   since: "Inclusive lower calendar-day bound, exactly YYYY-MM-DD in the request time_zone, without a time or UTC offset. Use equal since and until for one day.",
   until: "Inclusive upper calendar-day bound, exactly YYYY-MM-DD in the request time_zone, without a time or UTC offset. Use equal since and until for one day.",
   date_field: "One of the source's capabilities.dates. Leave it out with since or until to match any of an item's dates, where the source's capabilities.any_date is true. Search requires source when this is set.",
-  limit: `List only: return at most this many items (1 to ${AGENTIC_ASK_LIST_LIMIT_MAX_V1}), for a short look at a source.`,
+  limit: `List only: return at most this many items of the next page (a page holds up to ${AGENTIC_ASK_LIST_PAGE_ROWS_V1}), for a short look at a source.`,
 } as const satisfies Readonly<Record<keyof StepArgs, string>>);
 
 /**
@@ -181,7 +145,7 @@ function argumentSchema(argument: keyof StepArgs, sources: readonly StepSource[]
     : argument === "date_field" ? closedString(EVIDENCE_DATE_FIELDS_V1)
     : argument === "status" ? closedString(["open", "done", "active", "archived"])
     : argument === "role" ? closedString(["lead", "member"])
-    : argument === "limit" ? { type: "integer", minimum: 1, maximum: AGENTIC_ASK_LIST_LIMIT_MAX_V1 }
+    : argument === "limit" ? { type: "integer", minimum: 1 }
     : argString;
   return { ...base, description: ARGUMENT_DESCRIPTIONS[argument] };
 }
@@ -208,10 +172,10 @@ export function createStepSchema(sources: readonly StepSource[], openIds?: reado
             evidence: ask ? selectionIds : ids,
           },
         } },
-        notes: { type: "string", maxLength: NOTES_CHARS },
+        notes: { type: "string" },
       },
     } },
-    actions: { type: "array", minItems: 1, maxItems: ask ? AGENTIC_ASK_MAX_ACTIONS_PER_ASK_STEP_V1 : AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1, items: {
+    actions: { type: "array", minItems: 1, items: {
       anyOf: Object.entries(actionArgs(ask)).filter(([name]) => (name !== 'open' || openIds?.length !== 0) && (name !== 'finish' || finishAvailable) && (name !== 'list' || listAvailable)).map(([name, names]) => ({
         type: "object", additionalProperties: false, required: ["tool", "args"], properties: {
           tool: closedString([name]),
@@ -227,12 +191,12 @@ export function createStepSchema(sources: readonly StepSource[], openIds?: reado
  * date within since and until.
  */
 const listWhere = { type: "object", additionalProperties: false, required: ["field"], properties: {
-  field: closedString(AGENTIC_LIST_SELECTION_FIELDS_V1), value: { type: "string", maxLength: SELECTION_CHARS }, since: { type: "string", maxLength: 10 }, until: { type: "string", maxLength: 10 },
+  field: closedString(AGENTIC_LIST_SELECTION_FIELDS_V1), value: { type: "string" }, since: { type: "string", maxLength: 10 }, until: { type: "string", maxLength: 10 },
 } } as const;
 
 /** A writer's sentence: its text, and the evidence it stands on. */
 const citedSentence = {
-  type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string", maxLength: SENTENCE_CHARS }, evidence: ids },
+  type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string" }, evidence: ids },
 } as const;
 
 /** What is different since the earlier answer (ADR-0047): cited sentences, as many as changed; the response's bytes bound them. */
@@ -243,7 +207,7 @@ function withSince(schema: StructuredGenerationJsonSchema): StructuredGeneration
 }
 
 // ---- answer layout v2 (ADR-0051): the writer arranges its answer from the block catalog ----
-const blockTitle = { type: "string", maxLength: TITLE_CHARS } as const;
+const blockTitle = { type: "string" } as const;
 const eventDate = { type: "string", format: "date", pattern: "^\\d{4}-\\d{2}-\\d{2}$" } as const;
 /** One block's shape: its name, the fields it requires, and every field it takes. */
 function blockShape(name: string, required: readonly string[], properties: Readonly<Record<string, unknown>>): StructuredGenerationJsonSchema {
@@ -262,28 +226,28 @@ export const answerBlocksSchema: StructuredGenerationJsonSchema = Object.freeze(
       blockShape("text", ["sentences"], { title: blockTitle, sentences: { type: "array", minItems: 1, items: citedSentence } }),
       blockShape("points", ["ordered", "items"], { title: blockTitle, ordered: { type: "boolean" }, items: { type: "array", minItems: 1, items: citedSentence } }),
       blockShape("table", ["columns", "rows"], {
-        title: blockTitle, columns: { type: "array", minItems: 2, items: { type: "string", maxLength: COLUMN_CHARS } },
+        title: blockTitle, columns: { type: "array", minItems: 1, items: { type: "string" } },
         rows: { type: "array", minItems: 1, items: {
           type: "object", additionalProperties: false, required: ["cells", "evidence"],
-          properties: { cells: { type: "array", minItems: 2, items: { type: "string", maxLength: CELL_CHARS } }, evidence: ids },
+          properties: { cells: { type: "array", minItems: 1, items: { type: "string" } }, evidence: ids },
         } },
       }),
       blockShape("timeline", ["events"], { title: blockTitle, events: { type: "array", minItems: 1, items: {
         type: "object", additionalProperties: false, required: ["date", "text", "evidence"],
-        properties: { date: eventDate, text: { type: "string", maxLength: EVENT_CHARS }, who: { type: "string", maxLength: WHO_CHARS, description: EVENT_ACTOR }, evidence: ids },
+        properties: { date: eventDate, text: { type: "string" }, who: { type: "string", description: EVENT_ACTOR }, evidence: ids },
       } } }),
       blockShape("card", ["title", "kind", "facts"], {
-        title: { type: "string", maxLength: CARD_TITLE_CHARS }, kind: { type: "string", description: `What the card is about, one lowercase word: ${PERSON_ANSWER_CARD_ENTITIES_V2.join(", ")}, or another such as document, meeting or customer.` },
+        title: { type: "string" }, kind: { type: "string", description: `What the card is about, one lowercase word: ${PERSON_ANSWER_CARD_ENTITIES_V2.join(", ")}, or another such as document, meeting or customer.` },
         facts: { type: "array", minItems: 1, items: {
           type: "object", additionalProperties: false, required: ["label", "value", "evidence"],
-          properties: { label: { type: "string", maxLength: LABEL_CHARS }, value: { type: "string", maxLength: VALUE_CHARS }, evidence: ids },
+          properties: { label: { type: "string" }, value: { type: "string" }, evidence: ids },
         } },
       }),
-      blockShape("quote", ["text", "from", "evidence"], { text: { type: "string", maxLength: QUOTE_CHARS }, from: { type: "string", maxLength: FROM_CHARS }, evidence: ids }),
+      blockShape("quote", ["text", "from", "evidence"], { text: { type: "string" }, from: { type: "string" }, evidence: ids }),
       // A list block has no title (ADR-0054): code fills it from the list and writes its caption.
       blockShape("list", ["list"], { list: { type: "string", maxLength: 8 }, where: listWhere, members: { type: "array", items: { type: "string", maxLength: 16 } } }),
     ] } },
-    not_found: { type: "array", items: { type: "string", maxLength: NOT_FOUND_CHARS } },
+    not_found: { type: "array", items: { type: "string" } },
   },
 });
 /** Ask's answer when it is asked again (ADR-0047): answerBlocksSchema, with what is different since the earlier answer. */
@@ -293,9 +257,9 @@ export const answerBlocksSinceSchema: StructuredGenerationJsonSchema = withSince
  * The follow-ups a writer drafts (ADR-0053): at most 10, each a task, and optionally the owner's name, the day it is due
  * and the id of the one evidence item it is about.
  */
-const followUpDrafts = { type: "array", maxItems: PERSON_ANSWER_FOLLOW_UPS_MAX_V1, items: {
+const followUpDrafts = { type: "array", items: {
   type: "object", additionalProperties: false, required: ["task"], properties: {
-    task: { type: "string", maxLength: FOLLOW_UP_TASK_CHARS }, owner: { type: "string", maxLength: FOLLOW_UP_OWNER_CHARS }, due_on: eventDate, about: { type: "string", maxLength: 16 },
+    task: { type: "string" }, owner: { type: "string" }, due_on: eventDate, about: { type: "string", maxLength: 16 },
   },
 } } as const;
 /** `schema` with the follow-ups an answer drafts (ADR-0053), which the reply must give, [] when it drafts none. */
@@ -344,12 +308,9 @@ export function boundedBytes(text: string, maximumBytes: number): string {
   do { chars.pop(); cut = `${chars.join("").trimEnd()}…`; } while (chars.length > 0 && Buffer.byteLength(cut, "utf8") > maximumBytes);
   return cut;
 }
-/** cleanModelLine within both a character and a byte cap: one count for a cut to either. */
-function boundedModelLine(value: unknown, maximumChars: number, maximumBytes: number): string {
-  const line = oneLine(value);
-  const bounded = boundedBytes(truncate(line, maximumChars), maximumBytes);
-  if (bounded !== line) observeCoreModelCorrectionV1("model_text_truncated");
-  return bounded;
+/** A writer's field as one line, whole: no writer field has a length of its own. */
+function modelLine(value: unknown): string {
+  return oneLine(value);
 }
 
 /** A response part's question: V4 bounds part questions to 1 KiB of single-line text. */
@@ -371,21 +332,14 @@ export function cleanModelId(value: unknown): string | null {
   if (id !== null && id !== value) observeCoreModelCorrectionV1("model_id_respelled");
   return id;
 }
-/** Raw entries read from one evidence array before the cap. */
-const EVIDENCE_IDS_READ = 64;
 /**
- * A need's evidence ids, each once. Without `lists` (a task's need) the first 12 ids are kept, as before ADR-0041. With
- * `lists` (Ask), list ids such as L1 are read beside item ids from a bounded read, and a list id, which carries meaning
- * there (the finish check reads it), never takes an item's place: past 12 ids every list id stays and item ids fill the
- * rest, in their order. `all` preserves a which_items need's complete selection intent; presentation bounds never trim
- * that member set.
+ * A need's evidence ids, each once, in their order: every id a need names is kept. With `lists` (Ask), list ids such as
+ * L1 are read beside item ids.
  */
-function cleanIds(value: unknown, lists = false, all = false): readonly string[] {
+function cleanIds(value: unknown, lists = false): readonly string[] {
   if (!Array.isArray(value)) return Object.freeze([]);
   const result: string[] = [];
-  const read = lists && !all ? value.slice(0, EVIDENCE_IDS_READ) : value;
-  if (read.length < value.length) observeCoreModelCorrectionV1("model_items_capped", value.length - read.length);
-  for (const [index, raw] of read.entries()) {
+  for (const raw of value) {
     const id = (lists ? parseAgenticListIdV1(raw) : null) ?? cleanId(raw);
     if (id === null) observeCoreModelCorrectionV1("model_entry_dropped");
     else if (result.includes(id)) observeCoreModelCorrectionV1("model_repeat_dropped");
@@ -393,35 +347,23 @@ function cleanIds(value: unknown, lists = false, all = false): readonly string[]
       result.push(id);
       if (id !== raw) observeCoreModelCorrectionV1("model_id_respelled");
     }
-    if (!lists && !all && result.length === AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) {
-      if (index + 1 < read.length) observeCoreModelCorrectionV1("model_items_capped", read.length - index - 1);
-      break;
-    }
   }
-  if (all || result.length <= AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) return Object.freeze(result);
-  const listIds = result.filter(id => parseAgenticListIdV1(id) !== null).slice(0, AGENTIC_ASK_MAX_EVIDENCE_IDS_V1);
-  let items = AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 - listIds.length;
-  const kept = result.filter(id => listIds.includes(id) || (parseAgenticListIdV1(id) === null && items-- > 0));
-  if (kept.length < result.length) observeCoreModelCorrectionV1("model_items_capped", result.length - kept.length);
-  return Object.freeze(kept);
+  return Object.freeze(result);
 }
 /**
  * The evidence of a writer's sentence, item, row, event, fact, quote or since sentence: its ids, each once, list ids such
  * as L1 beside its item ids. Its list ids support nothing (W1), so a list id is no item and takes no item's slot; the
  * writer's repair reads them, and they bring their lists' private rows into the entry's citations. Repeats and ids code
- * cannot read are dropped first. Null when the entry cites more than 12 distinct items: it is then dropped whole, never
- * kept with some of its citations (ADR-0054).
+ * cannot read are dropped; every other id is kept, however many: a statement cites everything it rests on.
  */
-function writerIds(value: unknown): readonly string[] | null {
+function writerIds(value: unknown): readonly string[] {
   if (!Array.isArray(value)) return Object.freeze([]);
   const result: string[] = [];
-  let items = 0;
   for (const raw of value) {
     const id = parseAgenticListIdV1(raw) ?? cleanId(raw);
     if (id === null) observeCoreModelCorrectionV1("model_entry_dropped");
     else if (result.includes(id)) observeCoreModelCorrectionV1("model_repeat_dropped");
     else {
-      if (parseAgenticListIdV1(id) === null && ++items > AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) return null;
       result.push(id);
       if (id !== raw) observeCoreModelCorrectionV1("model_id_respelled");
     }
@@ -519,7 +461,7 @@ function needs(value: unknown, lists: boolean): readonly StepNeed[] {
     if (kind !== undefined && entry !== null) respelled(entry.kind, kind);
     result.push(Object.freeze({
       ...(id === undefined ? {} : { id }), need, ...(kind === undefined ? {} : { kind }),
-      status: entry === null ? "open" : needStatus(entry.status), evidence: entry === null ? Object.freeze([]) : cleanIds(entry.evidence, lists, kind === "which_items"),
+      status: entry === null ? "open" : needStatus(entry.status), evidence: entry === null ? Object.freeze([]) : cleanIds(entry.evidence, lists),
     }));
   }
   return Object.freeze(result);
@@ -540,20 +482,16 @@ export function parseStep(value: unknown, options: { readonly lists?: boolean } 
     if (entry === null) throw new AgenticAskOutputErrorV1("each item in \"parts\" must be an object with question, needs, notes");
     const question = cleanModelLine(entry.question, QUESTION_CHARS);
     if (question.length === 0) throw new AgenticAskOutputErrorV1("each part needs a non-empty \"question\"");
-    parts.push(Object.freeze({ question, needs: needs(entry.needs, options.lists === true), notes: cleanModelLine(entry.notes, NOTES_CHARS) }));
+    parts.push(Object.freeze({ question, needs: needs(entry.needs, options.lists === true), notes: cleanModelLine(entry.notes, Number.POSITIVE_INFINITY) }));
   }
   const actions: StepAction[] = [];
-  const most = options.lists === true ? AGENTIC_ASK_MAX_ACTIONS_PER_ASK_STEP_V1 : AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1;
-  for (const [index, raw] of body.actions.entries()) {
+  // A step may make as many reads as it needs; each is a read the person could make.
+  for (const raw of body.actions) {
     const entry = object(raw);
     if (entry === null) throw new AgenticAskOutputErrorV1("each item in \"actions\" must be an object with tool and args");
     const name = tool(entry.tool);
     if (name === null) throw new AgenticAskOutputErrorV1(`unknown tool ${JSON.stringify(String(entry.tool).slice(0, 32))}; use search, open, list, or finish`);
     actions.push(Object.freeze({ tool: name, args: args(name, entry, options.lists === true) }));
-    if (actions.length === most) {
-      if (index + 1 < body.actions.length) observeCoreModelCorrectionV1("model_items_capped", body.actions.length - index - 1);
-      break;
-    }
   }
   return Object.freeze({ parts: Object.freeze(parts), actions: Object.freeze(actions) });
 }
@@ -598,7 +536,7 @@ function selectionOf(where: Record<string, unknown> | null): AgenticListSelectio
   if (where === null || !(AGENTIC_LIST_SELECTION_FIELDS_V1 as readonly string[]).includes(field)) return null;
   respelled(where.field, field);
   if (field === "owner" || field === "status") {
-    const value = cleanModelLine(where.value, SELECTION_CHARS);
+    const value = cleanModelLine(where.value, Number.POSITIVE_INFINITY);
     return value.length === 0 ? null : Object.freeze({ field, value });
   }
   const bounds: { since?: string; until?: string } = {};
@@ -663,7 +601,7 @@ function notFoundOf(body: Record<string, unknown>): readonly string[] {
   const notFound: string[] = [];
   const missing: readonly unknown[] = Array.isArray(body.not_found) ? body.not_found : [];
   for (const raw of missing) {
-    const text = cleanModelLine(raw, NOT_FOUND_CHARS);
+    const text = cleanModelLine(raw, Number.POSITIVE_INFINITY);
     if (text.length === 0) observeCoreModelCorrectionV1("model_entry_dropped");
     else if (notFound.includes(text)) observeCoreModelCorrectionV1("model_repeat_dropped");
     else notFound.push(text);
@@ -687,11 +625,11 @@ const QUOTE_MARKS = /^["“”'‘’]+|["“”'‘’]+$/gu;
 
 /** A writer's sentence: one line within a sentence's characters, evidence ids dropped. */
 function writtenSentence(value: unknown): string {
-  return writtenLine(value, SENTENCE_CHARS, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4);
+  return writtenLine(value);
 }
-/** A writer's line in a row or a block: one line within its caps, evidence ids dropped. */
-function writtenLine(value: unknown, maximumChars: number, maximumBytes: number): string {
-  return stripEvidenceIds(boundedModelLine(value, maximumChars, maximumBytes), true);
+/** A writer's line in a row or a block: one line, whole, evidence ids dropped. */
+function writtenLine(value: unknown): string {
+  return stripEvidenceIds(modelLine(value), true);
 }
 
 /**
@@ -744,7 +682,7 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
       continue;
     }
     // A card's title is its name, read below within a name's caps; another block's is a heading.
-    const title = name === "card" ? "" : boundedModelLine(entry.title, TITLE_CHARS, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2);
+    const title = name === "card" ? "" : modelLine(entry.title);
     const titled = title.length === 0 ? {} : { title };
     /** What reads as text in the block: its sentences, and an item it cannot show. */
     const prose: AnswerItem = { block, kind: "text", ...titled };
@@ -762,31 +700,27 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
     } else if (name === "table") {
       const columns: string[] = [];
       for (const column of Array.isArray(entry.columns) ? entry.columns : []) {
-        const text = boundedModelLine(column, COLUMN_CHARS, PERSON_ANSWER_COLUMN_MAX_BYTES_V1);
+        const text = modelLine(column);
         if (text.length === 0) observeCoreModelCorrectionV1("model_entry_dropped");
         else if (columns.some(existing => existing.toLowerCase() === text.toLowerCase())) observeCoreModelCorrectionV1("model_repeat_dropped");
         else columns.push(text);
       }
       for (const row of entries(entry.rows)) {
-        // A row says its cells under their columns when its claim fits one statement. One whose cells do not match its
-        // columns, or too wide for a statement, is text, cut to a statement's bytes.
+        // A row says its cells under their columns. One whose cells do not match its columns is text.
         const given: readonly unknown[] = Array.isArray(row.cells) ? row.cells : [];
         const cells = rowCells(given);
-        const matches = columns.length >= 2 && given.length === columns.length && cells.some(cell => cell.length > 0);
+        const matches = columns.length >= 1 && given.length === columns.length && cells.some(cell => cell.length > 0);
         const claim = matches ? rowClaim(cells, columns) : rowClaim(cells);
-        if (matches && Buffer.byteLength(claim, "utf8") <= PERSON_ANSWER_STATEMENT_MAX_BYTES_V4) {
-          add(claim, row.evidence, { block, kind: "row", ...titled, columns: Object.freeze([...columns]), cells: Object.freeze(cells) });
-        } else {
+        if (matches) add(claim, row.evidence, { block, kind: "row", ...titled, columns: Object.freeze([...columns]), cells: Object.freeze(cells) });
+        else {
           observeCoreModelCorrectionV1("model_enum_respelled");
-          const cut = boundedBytes(claim, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4);
-          if (cut !== claim) observeCoreModelCorrectionV1("model_text_truncated");
-          add(cut, row.evidence, prose);
+          add(claim, row.evidence, prose);
         }
       }
     } else if (name === "timeline") {
       for (const event of entries(entry.events)) {
-        const text = writtenLine(event.text, EVENT_CHARS, PERSON_ANSWER_EVENT_TEXT_MAX_BYTES_V2);
-        const who = boundedModelLine(event.who, WHO_CHARS, PERSON_ANSWER_WHO_MAX_BYTES_V2);
+        const text = writtenLine(event.text);
+        const who = modelLine(event.who);
         const date = typeof event.date === "string" ? calendarDay(event.date.trim()) : undefined;
         if (text.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
         const said = who.length === 0 ? {} : { who };
@@ -796,20 +730,20 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
         } else add(sentenceOf(`${date}${who.length === 0 ? "" : `, ${who}`}: ${text}`), event.evidence, { block, kind: "event", ...titled, date, text, ...said });
       }
     } else if (name === "card") {
-      const named = boundedModelLine(entry.title, CARD_TITLE_CHARS, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2);
+      const named = modelLine(entry.title);
       const entity = cardEntity(entry.kind);
       if (named.length === 0 || entity === undefined) observeCoreModelCorrectionV1("model_enum_respelled");
       // Every fact names its card, so each is a whole claim, however the others fare (W1, a repeat, a note).
       for (const fact of entries(entry.facts)) {
-        const label = writtenLine(fact.label, LABEL_CHARS, PERSON_ANSWER_FACT_LABEL_MAX_BYTES_V2);
-        const said = writtenLine(fact.value, VALUE_CHARS, PERSON_ANSWER_FACT_VALUE_MAX_BYTES_V2);
+        const label = writtenLine(fact.label);
+        const said = writtenLine(fact.value);
         if (label.length === 0 || said.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
         if (named.length === 0 || entity === undefined) add(sentenceOf(`${label}: ${said}`), fact.evidence, { block, kind: "text", ...(named.length === 0 ? {} : { title: named }) });
         else add(sentenceOf(`${entityWord(entity)}: ${named}; ${label}: ${said}`), fact.evidence, { block, kind: "fact", title: named, entity, label, value: said });
       }
     } else if (name === "quote") {
-      const text = writtenLine(entry.text, QUOTE_CHARS, PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2).replace(QUOTE_MARKS, "").trim();
-      const from = boundedModelLine(entry.from, FROM_CHARS, PERSON_ANSWER_QUOTE_FROM_MAX_BYTES_V2);
+      const text = writtenLine(entry.text).replace(QUOTE_MARKS, "").trim();
+      const from = modelLine(entry.from);
       add(text.length === 0 ? "" : `${from.length === 0 ? "" : `${from}: `}“${text}”`, entry.evidence, { block, kind: "quote", text, ...(from.length === 0 ? {} : { from }) });
     }
   }
@@ -820,19 +754,19 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
 }
 
 /**
- * A reply's "follow_ups" (ADR-0053): the first 10 entries with a task, each field one line within its schema bound, a
+ * A reply's "follow_ups" (ADR-0053): every entry with a task, each field one line within its schema bound, a
  * field that is not text left out. Only their shape is read here: the renderer checks each task, owner, day and id.
  */
 function followUpsOf(body: Record<string, unknown>): readonly AnswerFollowUp[] {
   const given: readonly unknown[] = Array.isArray(body.follow_ups) ? body.follow_ups : [];
   const drafts: AnswerFollowUp[] = [];
-  for (const [index, raw] of given.entries()) {
-    if (drafts.length === PERSON_ANSWER_FOLLOW_UPS_MAX_V1) { observeCoreModelCorrectionV1("model_items_capped", given.length - index); break; }
+  for (const raw of given) {
     const entry = object(raw);
-    const task = entry === null ? "" : cleanModelLine(entry.task, FOLLOW_UP_TASK_CHARS);
+    // A task of any length: the item it is saved as stores the writer's whole line.
+    const task = entry === null ? "" : cleanModelLine(entry.task, Number.POSITIVE_INFINITY);
     if (task.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
     const field = (value: unknown, maximum: number) => { const line = cleanModelLine(value, maximum); return line.length === 0 ? undefined : line; };
-    const [owner, due, about] = [field(entry!.owner, FOLLOW_UP_OWNER_CHARS), field(entry!.due_on, 64), field(entry!.about, 16)];
+    const [owner, due, about] = [field(entry!.owner, Number.POSITIVE_INFINITY), field(entry!.due_on, 64), field(entry!.about, 16)];
     drafts.push(Object.freeze({ task, ...(owner === undefined ? {} : { owner }), ...(due === undefined ? {} : { due_on: due }), ...(about === undefined ? {} : { about }) }));
   }
   return Object.freeze(drafts);
@@ -860,7 +794,7 @@ function sinceOf(given: readonly unknown[]): readonly Pick<AnswerSentence, "text
 function rowCells(given: readonly unknown[]): string[] {
   return given.map(cell => {
     if (typeof cell !== "string") { observeCoreModelCorrectionV1("model_entry_dropped"); return ""; }
-    return writtenLine(cell, CELL_CHARS, PERSON_ANSWER_CELL_MAX_BYTES_V1);
+    return writtenLine(cell);
   });
 }
 
@@ -916,7 +850,7 @@ const NEED_FIELDS = "A need's \"id\" is its id from plan; leave it out in step 1
  * it names no list tool, no inventory rule and no way to browse a source. Ask has its own (askStepPrompt).
  */
 function stepPrompt(list: boolean): string { return [
-  `You are Echo's research agent. A person asked a question about their organization's work. The supplied source_catalog describes the sources they can read and which connected tools provide them. You work in steps: each step you update your plan and notes and choose up to 4 actions; the system runs them and shows you the results at the next step. Each step shows opened (items you opened, in full) and seen (every other item found so far, with its details and any text or preview), then your plan, ${list ? "inventories, " : ""}last_results (what your last actions returned, by item id) and searches_done.`,
+  `You are Echo's research agent. A person asked a question about their organization's work. The supplied source_catalog describes the sources they can read and which connected tools provide them. You work in steps: each step you update your plan and notes and choose the actions it needs; the system runs them and shows you the results at the next step. Each step shows opened (items you opened, in full) and seen (every other item found so far, with its details and any text or preview), then your plan, ${list ? "inventories, " : ""}last_results (what your last actions returned, by item id) and searches_done.`,
   "",
   "How to work:",
   `1. In step 1, split the question into ${PARTS_AND_NEEDS}`,
@@ -1002,7 +936,7 @@ export const SEARCH_ONLY_STEP_PROMPT = stepPrompt(false);
 export const ASK_STEP_PROMPT = askStepPrompt();
 
 function askStepPrompt(): string { return [
-  `You are Echo's research agent. A person asked a question about their organization's work. You can see what they can see in ECHO and in the tools they connected, through three tools: search, list and open. You work in steps: each step you update your plan and notes and choose up to ${AGENTIC_ASK_MAX_ACTIONS_PER_ASK_STEP_V1} actions, which the system runs together and shows you at the next step. Each step shows source_catalog (the map: every source you can read, what it holds and what it can do), opened (items you opened, in full) and seen (every other item found so far, with its details and any text or preview), then your plan, lists, last_results (what your last actions returned, by id) and searches_done.`,
+  `You are Echo's research agent. A person asked a question about their organization's work. You can see what they can see in ECHO and in the tools they connected, through three tools: search, list and open. You work in steps: each step you update your plan and notes and choose the actions it needs, which the system runs together and shows you at the next step. Each step shows source_catalog (the map: every source you can read, what it holds and what it can do), opened (items you opened, in full) and seen (every other item found so far, with its details and any text or preview), then your plan, lists, last_results (what your last actions returned, by id) and searches_done.`,
   "",
   "How to look, as a person would:",
   `1. Understand the question. In step 1, split it into ${PARTS_AND_NEEDS} Work out the time window, the people (asked_by for \"I\" and \"my\"), the projects and the named items the question means.`,
@@ -1192,18 +1126,14 @@ export function repairInstruction(reason: string): string {
 }
 
 /**
- * The longest rejected reply a repair is shown, in characters: the largest output allowance (16,000 tokens) at about four
- * characters per token, so any reply the model could write is shown whole.
- */
-export const REJECTED_REPLY_MAX_CHARS_V1 = 64_000;
-/**
  * A repair's user content: the rejected call's, then the rejected reply, when there was one, as one line, and the repair
  * instruction. Both go last, so the repair repeats the rejected call's prompt as its prefix.
  */
 export function repairInput(user: unknown, rejected: unknown, reason: string): Record<string, unknown> {
   return {
     ...object(user),
-    ...(rejected === undefined ? {} : { rejected_response: cleanLine(JSON.stringify(rejected), REJECTED_REPLY_MAX_CHARS_V1) }),
+    // The whole rejected reply, as one line: it is the model's own output, so it fits beside the prompt it answered.
+    ...(rejected === undefined ? {} : { rejected_response: oneLine(JSON.stringify(rejected)) }),
     validation_error: repairInstruction(reason),
   };
 }

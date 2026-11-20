@@ -41,7 +41,7 @@ it('catalogs, connects, maps, cites, and disconnects Confluence page evidence th
     confluence_person_live: { enabled: true, cloud_id: CLOUD, integration_id: 'confluence', nango_authorization: () => 'synthetic-nango-key-0000000000000000' },
     openrouter_credential_file: privateFile('openrouter.key', 'synthetic-openrouter-key-000000000000'),
   }, {
-    api: { oidc_provider, answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 } } },
+    api: { oidc_provider, answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000, context_tokens: 32_768, max_output_tokens: 8_000 } } },
     confluence_person_live_seams: { nango: confluence.nango, fetch: confluenceFetch },
     slack: { nango: {} as never, manifest_provider: {} as never, provider: {} as never },
   });

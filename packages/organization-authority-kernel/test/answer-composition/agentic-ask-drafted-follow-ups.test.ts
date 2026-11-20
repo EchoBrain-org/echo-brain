@@ -18,7 +18,7 @@ import { checked, generation, record, result, writerReply } from './fixtures/age
 const REQUEST = 'ask_6b0f8a52-55a4-4f6e-9a39-0000000000aa';
 const evidence = record('vendor', 'Approved: Sam Lee calls the vendor about the fixture delay.');
 const packets = new WeakMap<AgenticResearchDriverSessionV1, unknown[]>();
-const admit = (session: AgenticResearchDriverSessionV1, label = 'request') => session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256({ label }), payload_digests: (packets.get(session) ?? []).map(canonicalSha256), operation: 'messages', timeout: () => 10_000 }, async () => ({ value: undefined }));
+const admit = (session: AgenticResearchDriverSessionV1, label = 'request') => session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256({ label }), payload_digests: (packets.get(session) ?? []).map(canonicalSha256), operation: 'messages' }, async () => ({ value: undefined }));
 const found = { completed: true, follow_up_requested: true, parts: [{ question: 'The vendor call', notes: 'Approved.', needs: [{ need: 'who calls the vendor', kind: 'content', status: 'found', evidence: ['E1'] }] }] };
 const drafted = [{ task: 'Call the vendor about the fixture delay', owner: 'Sam Lee', due_on: '2026-11-20', about: 'E1' }];
 

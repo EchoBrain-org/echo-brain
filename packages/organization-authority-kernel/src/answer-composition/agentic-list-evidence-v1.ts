@@ -1,4 +1,3 @@
-import { PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4 } from "@echo-brain/organization-api";
 import type { EvidenceDeskDateKindV1 } from "../shared/evidence-desk-v1.js";
 import type { EvidenceDeskItemV2 } from "../shared/evidence-desk-v2.js";
 import { evidenceDayV1, matchesEvidenceDateV1, type EvidenceDateFieldV1, type EvidenceDateSelectionV1, type EvidenceDatesV1 } from "../shared/temporal-query-v1.js";
@@ -493,8 +492,6 @@ export type AgenticListSelectionV1 =
 
 // ---- the statement code writes ----------------------------------------
 
-/** UTF-8 bytes of one code-written statement: the response's statement bound. */
-export const AGENTIC_LIST_STATEMENT_BYTES_V1 = 4 * 1024;
 
 const MONTHS = Object.freeze(["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]);
 const CALENDAR_DAY = /^(\d{4})-(\d{2})-(\d{2})$/u;
@@ -784,8 +781,14 @@ function listCaption(input: AgenticListStatementInputV1): string {
 }
 
 /**
+ * Members one list statement names: a long list reads as several statements of this many names, so each sentence stays
+ * one a person can read. A presentation choice, not a limit on what is named: every selected member is named.
+ */
+const LIST_NAMES_PER_STATEMENT = 40;
+
+/**
  * The statements code writes for a list the answer uses: every selected member, named in list order, split only at a
- * statement's byte and citation bounds; the renderer groups them as one table with one caption. No statement changes the
+ * every LIST_NAMES_PER_STATEMENT names; the renderer groups them as one table with one caption. No statement changes the
  * selected set or counts its tail as omitted.
  */
 export function agenticListStatementsV2(input: AgenticListStatementInputV1): readonly ListBlockStatement[] {
@@ -793,7 +796,7 @@ export function agenticListStatementsV2(input: AgenticListStatementInputV1): rea
   const caption = listCaption(input);
   const groups = (input.by_id ? input.selected.map((_, index) => [index]) : nameGroups(input.selected)).flatMap(group => {
     const parts: number[][] = [];
-    for (let at = 0; at < group.length; at += PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4) parts.push(group.slice(at, at + PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4));
+    for (let at = 0; at < group.length; at += LIST_NAMES_PER_STATEMENT) parts.push(group.slice(at, at + LIST_NAMES_PER_STATEMENT));
     return parts;
   });
   const textOf = (names: readonly (readonly number[])[]) => `${caption}: ${(input.by_id
@@ -807,7 +810,7 @@ export function agenticListStatementsV2(input: AgenticListStatementInputV1): rea
   };
   for (const group of groups) {
     const next = [...names, group];
-    if (names.length > 0 && (next.flat().length > PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4 || Buffer.byteLength(textOf(next), "utf8") > AGENTIC_LIST_STATEMENT_BYTES_V1)) flush();
+    if (names.length > 0 && (next.flat().length > LIST_NAMES_PER_STATEMENT)) flush();
     names.push(group);
   }
   flush();

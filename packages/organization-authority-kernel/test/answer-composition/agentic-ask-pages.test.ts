@@ -14,7 +14,7 @@ const citation = (body: string) => ({ kind: 'page' as const, tool_id: 'knowledge
 const inventory: EvidenceDeskItemV2 = Object.freeze({ id: 'opaque-page-section', kind: 'page', label: 'Launch plan, section 1', visibility: 'only_me', receipt_sha256: canonicalSha256('page-inventory'), citation: citation('') });
 const opened: EvidenceDeskItemV2 = Object.freeze({ ...inventory, text, receipt_sha256: canonicalSha256('page-open'), citation: citation(text) });
 const pageResult = (item: EvidenceDeskItemV2): EvidenceDeskResultV2 => ({ items: [item], truncated: false, receipt_digests: [item.receipt_sha256] });
-const fixtureGeneration = { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 };
+const fixtureGeneration = { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000, context_tokens: 32_768, max_output_tokens: 8_000 };
 
 describe('Agentic Ask live pages', () => {
   it('discovers metadata then opens a request-owned page section and emits a V8 answer', async () => {

@@ -7,40 +7,22 @@ import type { AskFollowUpDraftV1 } from "./ask-follow-ups-v1.js";
  * Ask asks a question, every other trigger a task written from its definition.
  */
 
-/** Limits one trigger gives the research loop. */
+/**
+ * Who waits on a research run: a person in the app (`live`) or nobody (`background`). It sets no limit: research runs
+ * while it makes progress, and only a model call or read that stays silent past its silence period stops it
+ * (agentic-model-gate-v1.ts, agentic-ask-v1.ts). The audit row records a background run as such.
+ */
 export interface AgenticResearchBudgetV1 {
-  /** The whole request, research through the consumer's writer and audit. */
-  readonly deadline_ms: number;
-  readonly max_rounds: number;
-  /** Request-wide model calls, including retries, repairs and the writer. */
-  readonly max_model_calls: number;
-  /** Time research leaves for the consumer's writer call. */
-  readonly writer_reserve_ms: number;
-  /**
-   * Release receipts one request's audit row holds. The audit store's check of the row repeats this number and nothing
-   * else bounds the row, so it is sized never to be what stops research (a read adds at most 51); research stops reading,
-   * on every research path, before it would pass it.
-   */
-  readonly max_receipts: number;
+  readonly profile: "live" | "background";
 }
 
-/**
- * Ask in the app. Ask streams its progress with a heartbeat (ADR-0039), so no proxy bounds how long it runs: the
- * deadline is ECHO's own choice of how long a person waits. The writer's reserve lets a 16,000-token reply finish.
- */
-export const AGENTIC_RESEARCH_LIVE_BUDGET_V1: AgenticResearchBudgetV1 = Object.freeze({
-  deadline_ms: 300_000, max_rounds: 30, max_model_calls: 60, writer_reserve_ms: 120_000, max_receipts: 4_096,
-});
+/** Ask in the app: a person waits, and Ask streams its progress with a heartbeat (ADR-0039). */
+export const AGENTIC_RESEARCH_LIVE_BUDGET_V1: AgenticResearchBudgetV1 = Object.freeze({ profile: "live" });
 
-/**
- * Background triggers: never less room than an Ask in the app, and a longer deadline, since nobody waits on the
- * screen. A budget past the live one is what marks a run's audit row as background.
- */
-export const AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1: AgenticResearchBudgetV1 = Object.freeze({
-  deadline_ms: 600_000, max_rounds: 30, max_model_calls: 60, writer_reserve_ms: 120_000, max_receipts: 4_096,
-});
+/** Background triggers: nobody waits on the screen. */
+export const AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1: AgenticResearchBudgetV1 = Object.freeze({ profile: "background" });
 
-/** The one place a budget profile's label becomes its limits: trigger definitions and the staging request's override both read it. */
+/** The one place a profile's label becomes its value: trigger definitions and the staging request's override both read it. */
 export const AGENTIC_RESEARCH_BUDGETS_V1: Readonly<Record<"live" | "background", AgenticResearchBudgetV1>> = Object.freeze({
   live: AGENTIC_RESEARCH_LIVE_BUDGET_V1, background: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1,
 });
@@ -50,9 +32,8 @@ export type AgenticResearchGoalV1 =
   | { readonly kind: "question"; readonly question: string }
   | { readonly kind: "task"; readonly task: string };
 
-export type AgenticResearchStopReasonV1 = "finished" | "empty_catalog" | "no_progress" | "step_limit" | "budget" | "unusable_step";
-/** A content-free reason a planner call was not admitted after its access fence. */
-export type AgenticResearchAdmissionV1 = "post_revalidation_no_time";
+/** `stalled`: a research model call sent nothing for its silence period, twice. */
+export type AgenticResearchStopReasonV1 = "finished" | "empty_catalog" | "no_progress" | "stalled" | "unusable_step";
 
 /**
  * What an Ask need asks (ADR-0041), declared by research: `which_items`, which items exist in a source or in a set
@@ -154,7 +135,6 @@ export interface AgenticResearchResultV1 {
   readonly stop: {
     readonly reason: AgenticResearchStopReasonV1;
     readonly completed: boolean;
-    readonly admission?: AgenticResearchAdmissionV1;
     /** Ask only: the request includes a change or message that its read-only tools cannot execute. */
     readonly unsupported_action?: true;
     /** Ask only (ADR-0053): the person asked for a task to be handed to someone or tracked, which Ask's writer may draft. */

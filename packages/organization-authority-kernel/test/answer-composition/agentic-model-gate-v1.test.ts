@@ -1,13 +1,13 @@
 import { EvidenceDeskSnapshotChangedV1 } from "../../src/shared/evidence-desk-v1.js";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it, vi } from "vitest";
-import { AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, AgenticAskDeadlineErrorV1, AgenticAskPostRevalidationNoTimeErrorV1, AgenticResearchBudgetErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
+import { AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, AgenticAskStalledErrorV1, AgenticModelStalledErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
-import { AgenticAskOutputErrorV1, cleanLine, REJECTED_REPLY_MAX_CHARS_V1, repairInput, repairInstruction } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
+import { AgenticAskOutputErrorV1, cleanLine, repairInput, repairInstruction } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import type { StructuredGenerationInput, StructuredGenerationJsonSchema } from "../../src/answer-composition/structured-generation-v1.js";
 
-const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
+const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 32_768, max_output_tokens: 8_000 };
 const schema = { type: "object" } as unknown as StructuredGenerationJsonSchema;
 /** Ask's two calls: the role the audit records and the runtime span each runs in. */
 const STEP = { role: "step", span: "ask_planner" } as const;
@@ -15,10 +15,8 @@ const ANSWER = { role: "answer", span: "ask_answer" } as const;
 
 function harness(options: {
   readonly replies?: readonly (unknown | Error)[];
-  readonly max_model_calls?: number;
   readonly desk_revalidate?: () => Promise<{ readonly checked_at: string }>;
   readonly modes?: string[];
-  readonly deadline?: number;
   readonly signal?: AbortSignal;
   readonly model?: Parameters<typeof createAgenticModelGateV1>[0]["model"];
 } = {}) {
@@ -41,11 +39,8 @@ function harness(options: {
       return options.desk_revalidate?.() ?? { checked_at: `2026-10-06T00:00:0${checked.length}.000Z` };
     },
     on_checked: at => { checked.push(at); },
-    budget: { max_model_calls: options.max_model_calls ?? 24 },
     now: () => 0,
-    deadline: options.deadline ?? 90_000,
     signal: options.signal ?? new AbortController().signal,
-    is_deadline_expired: () => false,
   });
   return { gate, trace, inputs, checked };
 }
@@ -57,55 +52,55 @@ describe("agentic model gate", () => {
     const { gate, trace } = harness({ model: {
       generate: async () => false,
       generate_with_admission: async (input, admit) => admit({ model: input.model, operation: 'messages',
-        body_sha256: canonicalSha256('writer'), timeout: () => 20_000,
+        body_sha256: canonicalSha256('writer'),
         signal: attempts++ === 0 ? AbortSignal.abort(expired) : new AbortController().signal,
       }, async () => { forwarded++; return { value: true }; }),
     } });
-    await expect(gate.call(ANSWER, 'system', {}, schema, () => 20_000)).rejects.toBe(expired);
+    await expect(gate.call(ANSWER, 'system', {}, schema)).rejects.toBe(expired);
     expect(trace).toEqual([]); expect(gate.stats().calls).toBe(0);
-    await expect(gate.call(ANSWER, 'system', {}, schema, () => 20_000)).resolves.toBe(true);
+    await expect(gate.call(ANSWER, 'system', {}, schema)).resolves.toBe(true);
     expect(trace).toEqual(['revalidate']); expect(forwarded).toBe(1); expect(gate.stats().calls).toBe(1);
   });
   it('admits each native writer request as an answer, including retries and token counts, without double counting the session', async () => {
     const forwarded: string[] = [];
-    const { gate, trace } = harness({ max_model_calls: 3, model: {
+    const { gate, trace } = harness({ model: {
       generate: async () => { throw new Error('must use native admission'); },
       generate_with_admission: async (input, admit) => {
         for (const operation of ['messages', 'messages', 'count_tokens'] as const) {
-          await admit({ model: input.model, operation, body_sha256: canonicalSha256(operation), timeout: () => 20_000 }, async () => {
+          await admit({ model: input.model, operation, body_sha256: canonicalSha256(operation) }, async () => {
             forwarded.push(operation); return { value: true, finish_reason: 'stop' };
           });
         }
         return { answer: true };
       },
     } });
-    await expect(gate.call(ANSWER, 'system', {}, schema, () => 20_000)).resolves.toEqual({ answer: true });
+    await expect(gate.call(ANSWER, 'system', {}, schema)).resolves.toEqual({ answer: true });
     expect(trace).toEqual(['revalidate', 'revalidate', 'revalidate']);
     expect(forwarded).toEqual(['messages', 'messages', 'count_tokens']);
     expect(gate.stats()).toMatchObject({ calls: 3, generations: Array.from({ length: 3 }, () => ({ role: 'answer', engine: 'external_writer', model: generation.answer_model })) });
   });
 
-  it.each(['revoked', 'budget'] as const)('stops native writer requests after %s, including a subsequent SDK attempt', async reason => {
+  it('stops native writer requests after access is revoked, including a subsequent SDK attempt', async () => {
     let checks = 0, forwarded = 0;
-    const { gate } = harness({ max_model_calls: reason === 'budget' ? 1 : 24,
-      desk_revalidate: async () => { if (++checks === 2 && reason === 'revoked') throw new AuthorityOperationError('unauthorized', 'revoked'); return { checked_at: 'now' }; },
+    const { gate } = harness({
+      desk_revalidate: async () => { if (++checks === 2) throw new AuthorityOperationError('unauthorized', 'revoked'); return { checked_at: 'now' }; },
       model: { generate: async () => { throw new Error('shared writer must not run'); }, generate_with_admission: async (input, admit) => {
-        const send = () => admit({ model: input.model, operation: 'messages', body_sha256: canonicalSha256('writer'), timeout: () => 20_000 }, async () => { forwarded++; return { value: true }; });
+        const send = () => admit({ model: input.model, operation: 'messages', body_sha256: canonicalSha256('writer') }, async () => { forwarded++; return { value: true }; });
         await send();
         const errors = await Promise.allSettled([send(), send()]);
         expect(errors.map(value => value.status)).toEqual(['rejected', 'rejected']);
         throw (errors[0] as PromiseRejectedResult).reason;
       } },
     });
-    await expect(gate.call(ANSWER, 'system', {}, schema, () => 20_000)).rejects.toBeInstanceOf(Error);
+    await expect(gate.call(ANSWER, 'system', {}, schema)).rejects.toBeInstanceOf(Error);
     expect(forwarded).toBe(1); expect(gate.stats().calls).toBe(1);
-    expect(checks).toBe(reason === 'revoked' ? 2 : 1);
+    expect(checks).toBe(2);
   });
 
   it('pairs native SDK payloads and visible responses in the private trace without adding content to the audit', async () => {
     const { gate } = harness();
     const events: CoreRuntimeDiagnosticObservationV1[] = [];
-    const request = { model: 'claude-fixture', body_sha256: canonicalSha256('synthetic'), operation: 'messages' as const, timeout: () => 20_000,
+    const request = { model: 'claude-fixture', body_sha256: canonicalSha256('synthetic'), operation: 'messages' as const,
       diagnostic_input: { model: 'claude-fixture', system_prompt: 'synthetic system', user_prompt: 'private fixture', schema: {}, max_output_tokens: 100, timeout_ms: 20_000 } };
     await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => gate.external(request, async () => ({ value: [{ type: 'text', text: 'private answer' }], finish_reason: 'stop' })));
     expect(events.filter(event => event.kind === 'model_request')).toEqual([expect.objectContaining({ call_id: 1, input: request.diagnostic_input })]);
@@ -117,7 +112,7 @@ describe("agentic model gate", () => {
     const { gate, trace } = harness();
     const body_sha256 = canonicalSha256({ messages: ['synthetic evidence'] });
     for (const operation of ['messages', 'messages', 'count_tokens'] as const) {
-      await gate.external({ model: 'claude-fixture', body_sha256, operation, timeout: () => 20_000 }, async () => {
+      await gate.external({ model: 'claude-fixture', body_sha256, operation }, async () => {
         trace.push('forward'); return { value: true, finish_reason: 'end_turn' };
       });
     }
@@ -131,7 +126,7 @@ describe("agentic model gate", () => {
     const { gate } = harness({ desk_revalidate: async () => {
       if (revoked) throw new AuthorityOperationError('unauthorized', 'revoked'); return { checked_at: 'now' };
     } });
-    const send = () => gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('body'), operation: 'messages', timeout: () => 20_000 }, async () => { forwarded++; return { value: true }; });
+    const send = () => gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('body'), operation: 'messages' }, async () => { forwarded++; return { value: true }; });
     const results = await Promise.allSettled([send(), send()]);
     expect(results.every(result => result.status === 'rejected')).toBe(true);
     revoked = false;
@@ -139,52 +134,53 @@ describe("agentic model gate", () => {
     expect(forwarded).toBe(0); expect(gate.stats().calls).toBe(0);
   });
 
-  it('keeps the writer call reserve under concurrent external admissions', async () => {
-    const { gate } = harness({ max_model_calls: 3, replies: [{ answer: true }] });
+  it('counts no calls: concurrent external requests and the writer after them are all admitted', async () => {
+    const { gate } = harness({ replies: [{ answer: true }] });
     let forwarded = 0;
-    const send = () => gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('body'), operation: 'messages', timeout: () => 20_000 }, async () => { forwarded++; return { value: true }; });
-    const results = await Promise.allSettled([send(), send()]);
-    expect(results.map(result => result.status)).toEqual(['fulfilled', 'rejected']);
-    expect(forwarded).toBe(1);
-    await expect(gate.call(ANSWER, 'answer', {}, schema, () => 20_000)).resolves.toEqual({ answer: true });
+    const send = () => gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('body'), operation: 'messages' }, async () => { forwarded++; return { value: true }; });
+    const results = await Promise.allSettled(Array.from({ length: 80 }, send));
+    expect(results.every(result => result.status === 'fulfilled')).toBe(true);
+    expect(forwarded).toBe(80);
+    await expect(gate.call(ANSWER, 'answer', {}, schema)).resolves.toEqual({ answer: true });
   });
 
   it('does not forward an external request after cancellation during its access check', async () => {
     const controller = new AbortController(); let forwarded = false;
     const { gate } = harness({ signal: controller.signal, desk_revalidate: async () => { controller.abort(); return { checked_at: 'now' }; } });
-    await expect(gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('body'), operation: 'messages', timeout: () => 20_000 }, async () => { forwarded = true; return { value: true }; })).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('body'), operation: 'messages' }, async () => { forwarded = true; return { value: true }; })).rejects.toMatchObject({ name: 'AbortError' });
     expect(forwarded).toBe(false);
   });
 
-  it('keeps the writer available after an external request timeout', async () => {
+  it('names an external request that sent nothing for its silence period a stall, and keeps the writer available', async () => {
     const timer = new AbortController(), caller = new AbortController();
     const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timer.signal);
     const { gate } = harness({ signal: caller.signal, replies: [{ answer: true }] });
     const events: CoreRuntimeDiagnosticObservationV1[] = [];
     try {
       const pending = withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => gate.external({
-        model: 'claude-fixture', body_sha256: canonicalSha256('timeout'), operation: 'messages', timeout: () => 4_000,
+        model: 'claude-fixture', body_sha256: canonicalSha256('timeout'), operation: 'messages',
         diagnostic_input: { model: 'claude-fixture', system_prompt: '', user_prompt: '', schema: {}, max_output_tokens: 100, timeout_ms: 4_000 },
       }, signal => new Promise((_resolve, reject) => {
         signal.addEventListener('abort', () => reject(signal.reason), { once: true });
         queueMicrotask(() => timer.abort(new DOMException('local timer', 'TimeoutError')));
       })));
-      await expect(pending).rejects.toBeInstanceOf(AgenticResearchBudgetErrorV1);
+      await expect(pending).rejects.toBeInstanceOf(AgenticModelStalledErrorV1);
+      await expect(pending).rejects.toMatchObject({ message: 'the model sent nothing for 30 s', recovery: 'fallback' });
       await expect(pending).rejects.not.toHaveProperty('diagnostic');
       expect(caller.signal.aborted).toBe(false);
       expect(gate.stats()).toMatchObject({ calls: 1, stopped: false, generations: [{ role: 'step', finish_reason: null }] });
       expect(events.filter(event => event.kind === 'model_error')).toEqual([expect.objectContaining({ error_kind: 'adapter_timeout' })]);
-      await expect(gate.call(ANSWER, 'answer', {}, schema, () => 20_000)).resolves.toEqual({ answer: true });
+      await expect(gate.call(ANSWER, 'answer', {}, schema)).resolves.toEqual({ answer: true });
     } finally { timeout.mockRestore(); }
   });
 
-  it.each(['caller', 'deadline'] as const)('keeps an overall %s abort terminal when the external timer also fires', async reason => {
+  it.each(['caller', 'stall'] as const)('keeps an overall %s abort terminal when the external timer also fires', async reason => {
     const timer = new AbortController(), caller = new AbortController();
     const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timer.signal);
     const { gate } = harness({ signal: caller.signal });
-    const failure = reason === 'caller' ? new DOMException('cancelled', 'AbortError') : new AgenticAskDeadlineErrorV1();
+    const failure = reason === 'caller' ? new DOMException('cancelled', 'AbortError') : new AgenticAskStalledErrorV1('read', 120_000);
     try {
-      const pending = gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('abort'), operation: 'messages', timeout: () => 4_000 },
+      const pending = gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('abort'), operation: 'messages' },
         signal => new Promise((_resolve, reject) => {
           signal.addEventListener('abort', () => reject(signal.reason), { once: true });
           queueMicrotask(() => { caller.abort(failure); timer.abort(new DOMException('local timer', 'TimeoutError')); });
@@ -196,8 +192,8 @@ describe("agentic model gate", () => {
 
   it("revalidates the desk once before every model call and reports the check time", async () => {
     const { gate, trace, checked } = harness({ replies: [{ a: 1 }, { b: 2 }] });
-    await gate.call(STEP, "system", { q: 1 }, schema, () => 20_000);
-    await gate.call(ANSWER, "system", { q: 2 }, schema, () => 20_000);
+    await gate.call(STEP, "system", { q: 1 }, schema);
+    await gate.call(ANSWER, "system", { q: 2 }, schema);
     expect(trace).toEqual(["revalidate", "generate:0", "revalidate", "generate:1"]);
     expect(checked).toEqual(["2026-10-06T00:00:00.000Z", "2026-10-06T00:00:01.000Z"]);
     expect(gate.stats().calls).toBe(2);
@@ -206,11 +202,11 @@ describe("agentic model gate", () => {
   it("asks for an incremental check before every call, repairs included", async () => {
     const modes: string[] = [];
     const { gate, trace } = harness({ replies: [{ bad: true }, { good: true }, { c: 3 }], modes });
-    await gate.withRepair(STEP, "system", {}, schema, () => 20_000, reply => {
+    await gate.withRepair(STEP, "system", {}, schema, reply => {
       if ((reply as { bad?: boolean }).bad) throw new AgenticAskOutputErrorV1("needs are missing");
       return reply;
     });
-    await gate.call(ANSWER, "system", {}, schema, () => 20_000);
+    await gate.call(ANSWER, "system", {}, schema);
     expect(trace).toEqual(["revalidate", "generate:0", "revalidate", "generate:1", "revalidate", "generate:2"]);
     expect(modes).toEqual(["incremental", "incremental", "incremental"]);
   });
@@ -222,7 +218,7 @@ describe("agentic model gate", () => {
       return { checked_at: "2026-10-06T00:00:01.000Z" };
     } });
     const started = Date.now();
-    await expect(gate.call(STEP, "system", {}, schema, () => 20_000)).resolves.toEqual({ a: 1 });
+    await expect(gate.call(STEP, "system", {}, schema)).resolves.toEqual({ a: 1 });
     expect(Date.now() - started).toBeGreaterThanOrEqual(AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1 - 50);
     expect(trace).toEqual(["revalidate", "revalidate", "generate:0"]);
     expect(checked).toEqual(["2026-10-06T00:00:01.000Z"]);
@@ -230,85 +226,75 @@ describe("agentic model gate", () => {
 
   it("fails the call when the retried pre-call check fails again", async () => {
     const { gate, trace } = harness({ desk_revalidate: async () => { throw new AuthorityOperationError("unavailable", "Live evidence operation could not be completed"); } });
-    await expect(gate.call(STEP, "system", {}, schema, () => 20_000)).rejects.toMatchObject({ code: "unavailable" });
+    await expect(gate.call(STEP, "system", {}, schema)).rejects.toMatchObject({ code: "unavailable" });
     expect(trace).toEqual(["revalidate", "revalidate"]);
     expect(gate.stats().calls).toBe(0);
   });
 
   it.each(["unauthorized", "stale_access_state", "not_found", "invalid_output"] as const)("never retries a %s pre-call check", async code => {
     const { gate, trace } = harness({ desk_revalidate: async () => { throw new AuthorityOperationError(code, "Live evidence operation could not be completed"); } });
-    await expect(gate.call(STEP, "system", {}, schema, () => 20_000)).rejects.toMatchObject({ code });
+    await expect(gate.call(STEP, "system", {}, schema)).rejects.toMatchObject({ code });
     expect(trace).toEqual(["revalidate"]);
   });
 
   it('does not recheck an invalidated snapshot as a transient provider failure', async () => {
     const changed = new EvidenceDeskSnapshotChangedV1();
     const { gate, trace } = harness({ desk_revalidate: async () => { throw changed; } });
-    await expect(gate.call(STEP, 'system', {}, schema, () => 20_000)).rejects.toBe(changed);
+    await expect(gate.call(STEP, 'system', {}, schema)).rejects.toBe(changed);
     expect(trace.filter(value => value === 'revalidate')).toHaveLength(1);
     expect(gate.stats().calls).toBe(0);
   });
 
-  it("does not retry a transient pre-call check without time for the pause, or once the request stops", async () => {
-    const late = harness({ deadline: AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, desk_revalidate: async () => { throw new AuthorityOperationError("unavailable", "Live evidence operation could not be completed"); } });
-    await expect(late.gate.call(STEP, "system", {}, schema, () => 20_000)).rejects.toMatchObject({ code: "unavailable" });
-    expect(late.trace).toEqual(["revalidate"]);
+  it("does not retry a transient pre-call check once the request stops", async () => {
     const controller = new AbortController();
     const stopped = harness({ signal: controller.signal, desk_revalidate: async () => {
       setTimeout(() => controller.abort(), 10);
       throw new AuthorityOperationError("unavailable", "Live evidence operation could not be completed");
     } });
-    await expect(stopped.gate.call(STEP, "system", {}, schema, () => 20_000)).rejects.toMatchObject({ name: "AbortError" });
+    await expect(stopped.gate.call(STEP, "system", {}, schema)).rejects.toMatchObject({ name: "AbortError" });
     expect(stopped.trace).toEqual(["revalidate"]);
   });
 
-  it("enforces the request's call budget before revalidating", async () => {
-    const { gate, trace } = harness({ replies: [{ a: 1 }], max_model_calls: 1 });
-    await gate.call(STEP, "system", {}, schema, () => 20_000);
-    await expect(gate.call(STEP, "system", {}, schema, () => 20_000)).rejects.toThrow("call budget exhausted");
-    expect(trace).toEqual(["revalidate", "generate:0"]);
-    expect(gate.stats()).toMatchObject({ calls: 1, stopped: false });
+  it("counts no calls: a request may make as many as it needs", async () => {
+    const { gate, trace } = harness({ replies: Array.from({ length: 100 }, (_value, index) => ({ a: index })) });
+    for (let index = 0; index < 100; index += 1) await gate.call(STEP, "system", {}, schema);
+    expect(trace.filter(entry => entry === "revalidate")).toHaveLength(100);
+    expect(gate.stats()).toMatchObject({ calls: 100, stopped: false });
   });
 
-  it("reports a content-free admission failure when revalidation leaves too little time for a step", async () => {
-    let available = 20_000;
-    const { gate, trace } = harness({ desk_revalidate: async () => {
-      available = 3_999;
-      return { checked_at: "2026-10-06T00:00:00.000Z" };
-    } });
-
-    await expect(gate.call(STEP, "system", {}, schema, () => available))
-      .rejects.toBeInstanceOf(AgenticAskPostRevalidationNoTimeErrorV1);
-    expect(trace).toEqual(["revalidate"]);
-    expect(gate.stats()).toMatchObject({ calls: 0, repairs: 0, generations: [] });
+  it("retries a call that sent nothing for its silence period once, then names the stall", async () => {
+    vi.useFakeTimers();
+    try {
+      const { gate, trace } = harness({ model: { generate: () => new Promise<never>(() => undefined) } });
+      const pending = gate.withRepair(STEP, "system", {}, schema, value => value);
+      const stalled = expect(pending).rejects.toBeInstanceOf(AgenticModelStalledErrorV1);
+      await vi.advanceTimersByTimeAsync(generation.timeout_ms);
+      expect(trace).toEqual(["revalidate", "revalidate"]);
+      await vi.advanceTimersByTimeAsync(generation.timeout_ms);
+      await stalled;
+      await expect(pending).rejects.toMatchObject({ message: "the model sent nothing for 30 s" });
+      expect(gate.stats()).toMatchObject({ calls: 2, repairs: 1 });
+    } finally { vi.useRealTimers(); }
   });
 
-  it("preserves the post-revalidation admission reason on a repair attempt", async () => {
-    let available = 20_000;
-    let checks = 0;
-    const { gate, trace } = harness({
-      replies: [{ invalid: true }],
-      desk_revalidate: async () => {
-        checks += 1;
-        if (checks === 2) available = 3_999;
-        return { checked_at: `2026-10-06T00:00:0${checks}.000Z` };
-      },
-    });
-
-    await expect(gate.withRepair(STEP, "system", {}, schema, () => available, reply => {
-      if ((reply as { readonly invalid?: boolean }).invalid === true) {
-        throw new AgenticAskOutputErrorV1("parts are invalid");
+  it("lets a call that keeps working past any former clock finish", async () => {
+    vi.useFakeTimers();
+    try {
+      // Each call returns inside its silence period; together they run far past what a run deadline once allowed.
+      const { gate } = harness({ model: { generate: () => new Promise(resolve => setTimeout(() => resolve({ ok: true }), generation.timeout_ms - 1)) } });
+      for (let index = 0; index < 40; index += 1) {
+        const pending = gate.call(STEP, "system", {}, schema);
+        await vi.advanceTimersByTimeAsync(generation.timeout_ms - 1);
+        await expect(pending).resolves.toEqual({ ok: true });
       }
-      return reply;
-    })).rejects.toBeInstanceOf(AgenticAskPostRevalidationNoTimeErrorV1);
-    expect(trace).toEqual(["revalidate", "generate:0", "revalidate"]);
-    expect(gate.stats()).toMatchObject({ calls: 1, repairs: 0, generations: [{ role: "step" }] });
+      expect(gate.stats().calls).toBe(40);
+    } finally { vi.useRealTimers(); }
   });
 
   it("stops after a permanent provider failure and still records the call", async () => {
     const permanent = Object.assign(new Error("denied"), { diagnostic: { failure_class: "adapter_http", http_status: 401 } });
     const { gate } = harness({ replies: [permanent] });
-    await expect(gate.call(ANSWER, "system", {}, schema, () => 20_000)).rejects.toBeInstanceOf(AgenticAskOutputErrorV1);
+    await expect(gate.call(ANSWER, "system", {}, schema)).rejects.toBeInstanceOf(AgenticAskOutputErrorV1);
     expect(gate.stats()).toMatchObject({ calls: 1, stopped: true, generations: [{ role: "answer", finish_reason: null, usage: null }] });
   });
 
@@ -324,7 +310,7 @@ describe("agentic model gate", () => {
       },
       desk_revalidate: async () => ({ checked_at: '2026-10-06T00:00:00.000Z' }),
     });
-    const pending = withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => gate.withRepair(STEP, 'system', {}, schema, () => 20_000, value => value));
+    const pending = withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => gate.withRepair(STEP, 'system', {}, schema, value => value));
     if (finish_reason === 'length') await expect(pending).resolves.toEqual({ good: true });
     else await expect(pending).rejects.toMatchObject({ recovery: 'fallback' });
     const requests = events.filter(event => event.kind === 'model_request');
@@ -359,8 +345,8 @@ describe("agentic model gate", () => {
       },
     });
     await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, async () => {
-      await gate.call(STEP, 'system', {}, schema, () => 20_000);
-      await expect(gate.call(STEP, 'system', {}, schema, () => 20_000)).rejects.toMatchObject({ recovery: 'retry' });
+      await gate.call(STEP, 'system', {}, schema);
+      await expect(gate.call(STEP, 'system', {}, schema)).rejects.toMatchObject({ recovery: 'retry' });
     });
     expect(events.filter(event => event.kind === 'model_response' || event.kind === 'model_error')).toEqual([
       expect.objectContaining({ kind: 'model_response', call_id: 1, ...served }),
@@ -372,7 +358,7 @@ describe("agentic model gate", () => {
   it("repairs once with the validation error and the rejected reply", async () => {
     const { gate, inputs } = harness({ replies: [{ bad: true }, { good: true }] });
     const rejections: string[] = [];
-    const value = await gate.withRepair(STEP, "system", { question: "q" }, schema, () => 20_000, reply => {
+    const value = await gate.withRepair(STEP, "system", { question: "q" }, schema, reply => {
       if ((reply as { bad?: boolean }).bad) throw new AgenticAskOutputErrorV1("needs are missing");
       return reply;
     }, reason => rejections.push(reason));
@@ -386,33 +372,33 @@ describe("agentic model gate", () => {
     expect(gate.stats()).toMatchObject({ calls: 2, repairs: 1, stopped: false });
   });
 
-  it("sends a writer-sized rejected reply back whole, as one clean line, cut only past the output allowance", async () => {
+  it("sends a rejected reply back whole, as one clean line, however long it is", async () => {
     // A rejected reply of about 9,000 characters (a full writer reply), with a line separator and a double space.
     const refused = { blocks: [{ block: "text", sentences: [{ text: `Priya Raman owns it.\u2028Then  ${"more ".repeat(1_800)}end`, evidence: ["E1"] }] }], not_found: [] };
     const { gate, inputs } = harness({ replies: [refused, { good: true }] });
-    await gate.withRepair(STEP, "system", { question: "q" }, schema, () => 20_000, reply => {
+    await gate.withRepair(STEP, "system", { question: "q" }, schema, reply => {
       if ((reply as { good?: boolean }).good !== true) throw new AgenticAskOutputErrorV1("blocks[0] must be the answer block");
       return reply;
     }, () => undefined);
     expect(inputs[1]!.user_prompt).toBe(JSON.stringify(repairInput({ question: "q" }, refused, "blocks[0] must be the answer block")));
     const sent = (JSON.parse(inputs[1]!.user_prompt) as { readonly rejected_response: string }).rejected_response;
     // The whole reply, made one clean line: nothing of it is cut.
-    expect(sent).toBe(cleanLine(JSON.stringify(refused), REJECTED_REPLY_MAX_CHARS_V1));
+    expect(sent).toBe(cleanLine(JSON.stringify(refused), Number.POSITIVE_INFINITY));
     expect([sent.endsWith('"not_found":[]}'), sent.includes("\u2028"), sent.includes("  ")]).toEqual([true, false, false]);
-    // A reply past the largest output allowance is cut there.
-    const huge = { text: "word ".repeat(20_000) };
-    const cut = repairInput({}, huge, "x").rejected_response as string;
-    expect([[...cut].length <= REJECTED_REPLY_MAX_CHARS_V1, cut.endsWith("…")]).toEqual([true, true]);
+    // A reply as long as the model's whole output is still shown whole: it already fit beside the prompt it answered.
+    const huge = { text: "word ".repeat(100_000).trim() };
+    const sentHuge = repairInput({}, huge, "x").rejected_response as string;
+    expect([sentHuge, sentHuge.endsWith("…")]).toEqual([JSON.stringify(huge), false]);
   });
 
   describe("counts each retry and repair it makes, by why it was needed", () => {
     const failure = (failure_class: string, extra: Record<string, unknown> = {}) =>
       Object.assign(new Error("private provider text"), { diagnostic: { failure_class, http_status: null, finish_reason: null, ...extra } });
     /** The corrections the caller's span counted while the gate ran one call and its recovery. */
-    const corrected = async (options: Parameters<typeof harness>[0], timeout: () => number = () => 20_000) => {
+    const corrected = async (options: Parameters<typeof harness>[0]) => {
       const { gate } = harness(options);
       const events: CoreRuntimeObservationV1[] = [];
-      await observeCoreRuntimeV1("research_loop", () => gate.withRepair(STEP, "system", {}, schema, timeout, reply => {
+      await observeCoreRuntimeV1("research_loop", () => gate.withRepair(STEP, "system", {}, schema, reply => {
         if ((reply as { bad?: boolean }).bad) throw new AgenticAskOutputErrorV1("needs are missing");
         return reply;
       }), { observer: event => { events.push(event); } }).catch(() => undefined);
@@ -444,22 +430,14 @@ describe("agentic model gate", () => {
       } })).toEqual({ model_repair_unfinished: 1 });
     });
 
-    it("counts no repair the gate could not admit", async () => {
-      expect(await corrected({ replies: [{ bad: true }], max_model_calls: 1 })).toEqual({});
-      let available = 20_000;
-      let checks = 0;
-      expect(await corrected({ replies: [{ bad: true }], desk_revalidate: async () => {
-        if (++checks === 2) available = 3_999;
-        return { checked_at: "2026-10-06T00:00:00.000Z" };
-      } }, () => available)).toEqual({});
-    });
   });
 
   it("fingerprints every admitted call exactly as the Ask audit does", async () => {
     const { gate, inputs } = harness({ replies: [{ a: 1 }] });
-    await gate.call(STEP, "system", { q: 1 }, schema, () => 20_000);
+    await gate.call(STEP, "system", { q: 1 }, schema);
     const input = inputs[0]!;
-    expect(input.max_output_tokens).toBe(8_000);
+    // Every call's allowance is the model's own maximum output, from the profile.
+    expect(input.max_output_tokens).toBe(generation.max_output_tokens);
     expect(gate.stats().invocation_digests).toEqual([canonicalSha256({
       role: "step", model: input.model, system_prompt: input.system_prompt, user_prompt: input.user_prompt,
       schema: input.schema, max_output_tokens: input.max_output_tokens, timeout_ms: input.timeout_ms,
@@ -470,8 +448,8 @@ describe("agentic model gate", () => {
     const { gate } = harness({ replies: [{ a: 1 }, { b: 2 }] });
     const events: CoreRuntimeObservationV1[] = [];
     await observeCoreRuntimeV1("ask_request", async () => {
-      await gate.call({ role: "step", span: "ask_answer" }, "system", {}, schema, () => 20_000);
-      await gate.call({ role: "answer", span: "ask_planner" }, "system", {}, schema, () => 20_000);
+      await gate.call({ role: "step", span: "ask_answer" }, "system", {}, schema);
+      await gate.call({ role: "answer", span: "ask_planner" }, "system", {}, schema);
     }, { observer: event => { events.push(event); } });
     expect(events.filter(event => !event.root && event.event === "started").map(event => event.stage)).toEqual(["research_revalidation", "ask_answer", "research_revalidation", "ask_planner"]);
     expect(gate.stats().generations.map(entry => entry.role)).toEqual(["step", "answer"]);

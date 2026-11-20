@@ -22,9 +22,7 @@ import {
 import { agenticTaskSlotsFitV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
 import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
 import {
-  AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
-  AGENTIC_MODEL_OUTPUT_TOKENS_V1 as OUTPUT_TOKENS,
-  AgenticAskDeadlineErrorV1,
+  AgenticAskStalledErrorV1,
   abort,
   createAgenticModelGateV1,
   isAbort,
@@ -54,9 +52,9 @@ import {
 
 // Other workspaces reach these through this entry point.
 export { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticResearchResultV1 } from "./agentic-research-v1.js";
-export { AgenticAskDeadlineErrorV1, AgenticAskGenerationFailureV1 } from "./agentic-model-gate-v1.js";
+export { AgenticAskStalledErrorV1, AgenticAskGenerationFailureV1 } from "./agentic-model-gate-v1.js";
 // The SDK research driver describes the list tool by the same page bound.
-export { AGENTIC_ASK_LIST_LIMIT_MAX_V1 } from "./agentic-ask-v1-model-protocol.js";
+export { AGENTIC_ASK_LIST_PAGE_ROWS_V1 } from "./agentic-ask-v1-model-protocol.js";
 export type { AgenticResearchDriverV1, AgenticResearchDriverSessionV1 } from './agentic-research-driver-v1.js';
 export { ASK_FOLLOW_UP_ABOUT_KINDS_V1, askFollowUpItemIdV1, askFollowUpPointerV1, type AskFollowUpDraftV1, type AskFollowUpSinkV1 } from "./ask-follow-ups-v1.js";
 export type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "./agentic-release-v1.js";
@@ -68,24 +66,24 @@ export { createAgenticAskProgressRequestV1 } from "./agentic-ask-progress-record
 export { resolveAgenticFollowUpOnceV1, type AgenticFollowUpResolutionV1, type AgenticFollowUpResolvedV1 } from "./agentic-follow-up-resolver-v1.js";
 
 /**
- * The whole request, research through audit. Ask streams its progress with a
- * heartbeat from the first byte (ADR-0039), so the bound is ECHO's own choice
- * of how long a person waits; per-call time is also capped by the generation
- * profile.
+ * How long an evidence read or access check may send nothing before the request treats it as stalled and stops with
+ * that reason. No desk read streams, so this is the whole read. It is the only clock on a request: research and the
+ * writer run as long as they make progress, and a model call has its own silence period (the generation profile's
+ * `timeout_ms`). Ask streams its progress with a heartbeat (ADR-0039), so a person sees a long run is alive.
  */
-export const AGENTIC_ASK_DEADLINE_MS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.deadline_ms;
-/** Context window assumed when the generation profile does not state one. */
-const AGENTIC_ASK_DEFAULT_CONTEXT_TOKENS_V1 = 32_768;
-/** Conservative bytes per token for prompt budgeting. */
+export const AGENTIC_READ_SILENCE_MS_V1 = 120_000;
+/**
+ * Bytes a prompt token stands for, when ECHO measures a prompt in bytes: no tokenizer runs before the call, so this is
+ * an estimate, and it is low on purpose (most text is longer per token), so a prompt it admits fits the window.
+ */
 const BYTES_PER_TOKEN = 3;
-/** Share of the context window left unused as a safety margin. */
-const CONTEXT_MARGIN = 0.1;
+/** Share of the window the estimate may be wrong by: text that tokenizes worse than three bytes still fits. */
+const ESTIMATE_MARGIN = 0.1;
 
-/** Scratchpad bytes that fit beside a system prompt and an output reserve in the model's context window. */
-export function agenticAskContextBudgetBytesV1(contextTokens: number | undefined, systemPrompt: string, outputTokens: number): number {
-  const tokens = typeof contextTokens === "number" && Number.isSafeInteger(contextTokens) && contextTokens > 0 ? contextTokens : AGENTIC_ASK_DEFAULT_CONTEXT_TOKENS_V1;
-  const usable = Math.floor(tokens * (1 - CONTEXT_MARGIN)) - Math.ceil(Buffer.byteLength(systemPrompt, "utf8") / BYTES_PER_TOKEN) - outputTokens;
-  return Math.max(16 * 1024, usable * BYTES_PER_TOKEN);
+/** Scratchpad bytes that fit beside a system prompt and the reply in the model's own context window (the profile's). */
+export function agenticAskContextBudgetBytesV1(contextTokens: number, systemPrompt: string, outputTokens: number): number {
+  const usable = Math.floor(contextTokens * (1 - ESTIMATE_MARGIN)) - Math.ceil(Buffer.byteLength(systemPrompt, "utf8") / BYTES_PER_TOKEN) - outputTokens;
+  return Math.max(0, usable * BYTES_PER_TOKEN);
 }
 
 export interface CreateAgenticAskOptions {
@@ -255,7 +253,7 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
   const guided = (base: string, live: string, followUp: string) => [base, ...(toolSources.length === 0 ? [] : [live]), ...(followUps ? [followUp] : [])].join("\n\n");
   const answerPrompt = guided(ANSWER_PROMPT, liveGuidance(true), FOLLOW_UPS_ANSWER_GUIDANCE);
   /** A research step's system prompt, and the scratchpad bytes that fit beside it. */
-  const stepPrompt = (prompt: string) => Object.freeze({ prompt, prompt_budget: agenticAskContextBudgetBytesV1(options.generation.context_tokens, prompt, OUTPUT_TOKENS.step) });
+  const stepPrompt = (prompt: string) => Object.freeze({ prompt, prompt_budget: agenticAskContextBudgetBytesV1(options.generation.context_tokens, prompt, options.generation.max_output_tokens) });
   /**
    * The research step's prompts: Ask's question has its own, with list evidence (ADR-0041); every task-form goal keeps the
    * step prompt before it and adds the one shared task rule, and a search-only task brief (no list) has its own.
@@ -263,7 +261,7 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
   const taskPrompt = (list: boolean) => stepPrompt(`${guided(list ? STEP_PROMPT : SEARCH_ONLY_STEP_PROMPT, liveGuidance(list), FOLLOW_UPS_STEP_GUIDANCE)}\n\n${TASK_RULE_PROMPT}`);
   const prompts = Object.freeze({ ask: stepPrompt(guided(ASK_STEP_PROMPT, liveGuidance(true), FOLLOW_UPS_STEP_GUIDANCE)), task: taskPrompt(true), search_only_task: taskPrompt(false) });
   /** What a renderer's user prompt may fill beside its system prompt. */
-  const promptBudget = (system: string, outputTokens: number = OUTPUT_TOKENS.answer) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, system, outputTokens);
+  const promptBudget = (system: string) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, system, options.generation.max_output_tokens);
   /**
    * One agentic request: shared session state (deadline, model-call budget,
    * access fences, audit), the research loop, then a renderer (Ask's for a
@@ -286,15 +284,11 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
       }, value => ({ brief: value, output_kind: value.goal.kind === 'question' ? 'answer' : render === undefined ? 'research' : 'rendered' }));
       const { goal, budget } = brief;
       const researchOnly = goal.kind !== "question";
-      const beyondLive = budget.deadline_ms > AGENTIC_RESEARCH_LIVE_BUDGET_V1.deadline_ms || budget.max_rounds > AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_rounds || budget.max_model_calls > AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_model_calls;
+      const background = budget.profile === "background";
       const startedAt = now();
       const requestDay = today();
-      const deadline = startedAt + budget.deadline_ms;
       const terminalAbort = new AbortController();
       const activeSignal = input.signal === undefined ? terminalAbort.signal : AbortSignal.any([input.signal, terminalAbort.signal]);
-      let deadlineExpired = false;
-      const deadlineTimer = setTimeout(() => { deadlineExpired = true; terminalAbort.abort(new AgenticAskDeadlineErrorV1()); }, budget.deadline_ms);
-      deadlineTimer.unref?.();
       let writerFallbacks = 0; let checkedAt: string | null = null;
       // ---- research cost accounting; shared core spans own runtime observation ----
       let phase: "research" | "answer" | "final" = "research";
@@ -311,13 +305,24 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
         };
         return Promise.resolve().then(() => { assertLive(); return operation(); }).then(value => { settle(); return value; }, (error: unknown) => { settle(); throw error; });
       };
+      /**
+       * One desk call watched for silence: one that sends nothing for its silence period stops the request with a stall,
+       * which every wait on the request's signal (research's reads, the gate's checks, release) then throws.
+       */
+      const watched = <R, T>(stalled: "read" | "check", request: R, operation: (request: R) => Promise<T>): Promise<T> => timed(() => {
+        const timer = setTimeout(() => terminalAbort.abort(new AgenticAskStalledErrorV1(stalled, AGENTIC_READ_SILENCE_MS_V1)), AGENTIC_READ_SILENCE_MS_V1);
+        timer.unref?.();
+        const pending = operation(request);
+        pending.then(() => clearTimeout(timer), () => clearTimeout(timer));
+        return pending;
+      });
       const desk: EvidenceDeskPortV2 = Object.freeze({
         scope: options.desk.scope,
-        search: (request: Parameters<EvidenceDeskPortV2["search"]>[0]) => timed(() => options.desk.search(request)),
-        open: (request: Parameters<EvidenceDeskPortV2["open"]>[0]) => timed(() => options.desk.open(request)),
-        list: (request: Parameters<EvidenceDeskPortV2["list"]>[0]) => timed(() => options.desk.list(request)),
-        revalidate: (request: Parameters<EvidenceDeskPortV2["revalidate"]>[0]) => timed(() => options.desk.revalidate(request)),
-        ...(options.desk.openCitation === undefined ? {} : { openCitation: (request: Parameters<NonNullable<EvidenceDeskPortV2["openCitation"]>>[0]) => timed(() => options.desk.openCitation!(request)) }),
+        search: (request: Parameters<EvidenceDeskPortV2["search"]>[0]) => watched("read", request, value => options.desk.search(value)),
+        open: (request: Parameters<EvidenceDeskPortV2["open"]>[0]) => watched("read", request, value => options.desk.open(value)),
+        list: (request: Parameters<EvidenceDeskPortV2["list"]>[0]) => watched("read", request, value => options.desk.list(value)),
+        revalidate: (request: Parameters<EvidenceDeskPortV2["revalidate"]>[0]) => watched("check", request, value => options.desk.revalidate(value)),
+        ...(options.desk.openCitation === undefined ? {} : { openCitation: (request: Parameters<NonNullable<EvidenceDeskPortV2["openCitation"]>>[0]) => watched("read", request, value => options.desk.openCitation!(value)) }),
       });
       let terminalAudited = false;
       // A streamed Ask's record of what it searched and named (ADR-0039), in progress V3; it stops sending once the request's
@@ -328,10 +333,9 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
       let selectedTicketCount = 0; let ticketContextCount = 0; let ticketCitationCount = 0;
       const scope = scopeText(options.desk.scope);
 
-      const remaining = () => deadline - now();
       const assertLive = () => {
         if (input.signal?.aborted) abort(input.signal);
-        if (deadlineExpired || now() >= deadline) throw new AgenticAskDeadlineErrorV1();
+        if (activeSignal.aborted && activeSignal.reason instanceof AgenticAskStalledErrorV1) throw activeSignal.reason;
         if (activeSignal.aborted) throw new DOMException("Ask stopped", "AbortError");
       };
 
@@ -341,9 +345,8 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
         generation: options.generation, model: options.model,
         desk_revalidate: request => desk.revalidate(request),
         on_checked: at => { checkedAt = at; },
-        budget, now, deadline, signal: activeSignal,
+        now, signal: activeSignal,
         ...(input.signal === undefined ? {} : { input_signal: input.signal }),
-        is_deadline_expired: () => deadlineExpired,
         on_span: event => {
           if (event.phase === "enter") { if (event.role === "answer") ticketContextCount = selectedTicketCount; return; }
           if (event.role === "step") stepModelMs += event.elapsed_ms;
@@ -359,12 +362,12 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
         return {
           audit: options.audit, generation_adapter_id: options.generation.generation_adapter_id, gate_stats: gate.stats,
           ...(researchOnly ? { trigger: input.trigger } : {}),
-          background: beyondLive, receipts, rounds, fallbacks: fallbacks + writerFallbacks,
+          background, receipts, rounds, fallbacks: fallbacks + writerFallbacks,
           ...(progress === undefined ? {} : { named_citation_digests: progress.named_citation_digests() }),
         };
       };
       /**
-       * How every output leaves the request: the shared release step, its summary, and the deadline stopped. An Ask also
+       * How every output leaves the request: the shared release step and its summary. An Ask also
        * streams the access check and gets its receipt, rebuilt from the run's own record after every check passed, timed
        * from the request's start, before its first attempt, when the run is one attempt of a request.
        */
@@ -378,7 +381,6 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
           ...(onReleased === undefined ? {} : { on_released: onReleased }),
         });
         annotateCoreRuntimeV1({ result: outcome, counts: { citation_count: citationCount } });
-        clearTimeout(deadlineTimer);
         const receipt = asked?.receipt(input.progress_request?.elapsed() ?? now() - startedAt);
         return { released, ...(receipt === undefined ? {} : { receipt }) };
       };
@@ -389,8 +391,7 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
         let resolvedQuestion: string | undefined;
         if (previous?.purpose === "follow_up" && goal.kind === "question") {
           const { resolution } = await resolveAgenticFollowUpV1({
-            gate, previous, question: goal.question, today: requestDay, time_zone: temporal?.time_zone ?? "UTC",
-            max_model_calls: budget.max_model_calls, remaining, writer_reserve_ms: budget.writer_reserve_ms, signal: activeSignal,
+            gate, previous, question: goal.question, today: requestDay, time_zone: temporal?.time_zone ?? "UTC", signal: activeSignal,
           });
           if (resolution.resolution === "clarify") {
             // More than one thing could fit: no research runs, and the answer asks which one, released as every answer is.
@@ -417,21 +418,20 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
           ...(options.research_driver === undefined ? {} : { driver: options.research_driver }),
           ...researchStep, step_span: "ask_planner",
           context: context(requestDay), scope, catalog,
-          now, remaining, signal: activeSignal, assert_live: assertLive, ...(options.wall_ms === undefined ? {} : { wall_now: options.wall_ms }),
+          now, silence_ms: options.generation.timeout_ms, signal: activeSignal, assert_live: assertLive, ...(options.wall_ms === undefined ? {} : { wall_now: options.wall_ms }),
           observed: () => ({ checked_at: checkedAt, model_ms: stepModelMs, desk_ms: deskMs }),
           ...(progress === undefined ? {} : { report: progress.research }),
         });
         loop = researching;
         // The loop never sees the trigger; its name is a label for the audit and the evaluation.
         const { schema_version, kind, ...gathered } = await observeAgenticLifecycleV1('research', 'research_loop', {}, () => researching.run(gate), value => {
-          annotateCoreRuntimeV1({ research_stop_reason: value.stop.reason, ...(value.stop.admission === undefined ? {} : { research_admission: value.stop.admission }) });
+          annotateCoreRuntimeV1({ research_stop_reason: value.stop.reason });
           return { research: trimAgenticEvidenceBundleV1({ ...value, trigger: input.trigger }) };
         });
         const bundle: AgenticEvidenceBundleV1 = Object.freeze({ schema_version, kind, trigger: input.trigger, ...gathered });
         const researched = trimAgenticEvidenceBundleV1(bundle);
         // Back in the enclosing run span: one summary for every trigger.
         annotateCoreRuntimeV1({ research_stop_reason: bundle.stop.reason,
-          ...(bundle.stop.admission === undefined ? {} : { research_admission: bundle.stop.admission }),
           counts: { released_atom_count: bundle.items.length },
         });
         /** Ticket items among short ids: what a renderer was shown, and what its result cites. */
@@ -444,7 +444,6 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
           if (render === undefined) observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'renderer', event: 'skipped', data: { output_kind: 'research' } });
           const output = render === undefined ? researchOnlyOutput(bundle, researched) : await observeAgenticLifecycleV1('renderer', 'research_output', { output_kind: 'rendered' }, () => render.renderer.render({
             bundle, trigger_input: render.trigger_input, gate, signal: activeSignal, prompt_budget: promptBudget,
-            remaining: () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
             // Counted as renderer context only once its model call starts (its span), as Ask's writer is.
             on_context: ids => { selectedEvidence = ids; selectedTicketCount = ticketsAmong(ids); },
           }), value => ({ output_kind: 'rendered', selected_evidence: selectedEvidence, fallback_count: value.fallbacks, outcome: value.outcome, result: value.result }));
@@ -475,8 +474,6 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
         const rendered = await observeAgenticLifecycleV1('renderer', 'research_output', { output_kind: 'answer' }, () => writer.render({
           // The writer answers the resolved question; only the words the person typed (the brief's) vouch for a follow-up's task.
           bundle, trigger_input: { question: resolvedQuestion ?? goal.question, typed_question: goal.question }, gate, signal: activeSignal, prompt_budget: promptBudget,
-          // The release step keeps its reserve after the writer.
-          remaining: () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
           on_context: selected => {
             selectedEvidence = selected;
             // Counted as answer context only once the writer call starts (its span).
@@ -495,12 +492,13 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
         ticketCitationCount = response.citations.filter(value => value.citation.kind === "ticket").length;
         return Object.freeze({ response, research: researched, writer_evidence: rendered.result.writer_evidence, ...receipt, ...(save === undefined ? {} : { follow_ups: drafts }) });
       } catch (error) {
-        clearTimeout(deadlineTimer);
-        const inheritedDeadline = input.signal?.aborted && input.signal.reason instanceof AgenticAskDeadlineErrorV1 ? input.signal.reason : undefined;
-        if (deadlineExpired || error instanceof AgenticAskDeadlineErrorV1 || inheritedDeadline !== undefined) {
-          terminalAbort.abort();
+        // A stall stops the request with its reason; the audit records it as timed out.
+        const stall = error instanceof AgenticAskStalledErrorV1 ? error
+          : activeSignal.aborted && activeSignal.reason instanceof AgenticAskStalledErrorV1 ? activeSignal.reason : undefined;
+        if (stall !== undefined && input.signal?.aborted !== true) {
+          terminalAbort.abort(stall);
           if (!terminalAudited) await auditAgenticTerminalV1("timed_out", { ...auditContext(), checked_at: checkedAt });
-          throw error instanceof AgenticAskDeadlineErrorV1 ? error : inheritedDeadline ?? new AgenticAskDeadlineErrorV1();
+          throw stall;
         }
         if (input.signal?.aborted || isAbort(error, input.signal)) {
           terminalAbort.abort();

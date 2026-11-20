@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { AGENTIC_ASK_LIST_LIMIT_MAX_V1, AgenticAskGenerationFailureV1, type AgenticResearchDriverV1, type AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import { AGENTIC_ASK_LIST_PAGE_ROWS_V1, AgenticAskGenerationFailureV1, type AgenticResearchDriverV1, type AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { ClaudeResearchResultErrorV1, runClaudeResearchV1 } from './sdk-client.js';
 import type { ClaudeAccountProfileV1 } from './account-profile.js';
 import { ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1, startClaudeModelTransportV1, type ClaudeModelForwarderV1 } from './model-transport.js';
@@ -52,9 +52,9 @@ export function createClaudeResearchDriverV1(options: {
           collect(payload);
           const payload_digests = [...packets].filter(([text]) => strings.some(value => value.includes(text))).map(([, digest]) => digest);
           return await session.model_request({ model: options.model, body_sha256: `sha256:${createHash('sha256').update(body).digest('hex')}`, payload_digests,
-            operation, timeout: session.remaining,
+            operation,
             ...(operation === 'messages' ? { diagnostic_input: { model: options.model, system_prompt: JSON.stringify(payload.system ?? []),
-              user_prompt: JSON.stringify(payload.messages ?? []), schema: { tools: payload.tools ?? [] }, max_output_tokens: payload.max_tokens ?? 0, timeout_ms: session.remaining() } } : {}),
+              user_prompt: JSON.stringify(payload.messages ?? []), schema: { tools: payload.tools ?? [] }, max_output_tokens: payload.max_tokens ?? 0, timeout_ms: session.silence_ms } } : {}),
           }, async admittedSignal => { const result = await forward(admittedSignal); return { ...result, value: result.content ?? null }; });
         } catch (error) {
           // Provider replies already reached the SDK, which owns its one retry; anything else stops research.
@@ -75,7 +75,7 @@ export function createClaudeResearchDriverV1(options: {
       tool('open', 'Read a returned E id, including released related items. Use when the answer depends on content, or to follow a discovered link. Never guess an id or use a provider URL. A truncated/notice result is incomplete. Example: {"id":"E1"}.', { id: z.string() }, handler('open')),
       ...(session.list_available ? [tool('list', 'Enumerate one source using advertised filters. Use for all/which/count or a date window. Repeat identical arguments while more=true to read subsequent pages. Rows establish metadata, not body content; open relevant E ids. Server pages are bounded, the list can span pages. Example: {"source":"projects","status":"active"}.', {
         source, ...dates, kind: z.string().optional(), status: z.string().optional(), owner: z.string().optional(), role: z.string().optional(), channel: z.string().optional(),
-        limit: z.string().optional().describe(`Optional page size as decimal text, 1 to ${AGENTIC_ASK_LIST_LIMIT_MAX_V1}. Omit for the normal page.`),
+        limit: z.string().optional().describe(`Optional: at most this many rows of the next page, as decimal text; a page holds up to ${AGENTIC_ASK_LIST_PAGE_ROWS_V1}. Omit for the whole page.`),
       }, handler('list'))] : []),
       tool('finish', 'Submit research notes for ECHO\'s existing renderer. Only returned E/L ids are valid. completed=true includes validated not_found results; completed=false means open research remains. For Ask changes/messages set unsupported_action=true and keep only factual research in parts; for a task to hand to someone or track, set follow_up_requested=true instead. Validation feedback may require more reading. Once accepted, stop.', finish, handler('finish')),
     ];

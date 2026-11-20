@@ -13,7 +13,7 @@ import { loadCases } from "../grade.mjs";
 import { loadCases as loadWordingCases } from "../wording.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
-const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072 };
+const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072, max_output_tokens: 16_000 };
 const document = loadCases();
 /** The writer's answer that Priya Raman owns it, in blocks. */
 const REPLY = Object.freeze({ blocks: [{ block: "answer", sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }], not_found: [] });

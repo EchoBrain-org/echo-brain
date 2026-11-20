@@ -27,7 +27,7 @@ export type AgenticBriefGoalV1 =
 export interface AgenticBriefV1 {
   readonly goal: AgenticBriefGoalV1;
   readonly starting: readonly AgenticBriefStartingItemV1[];
-  /** The budget profile, including the time held back for the renderer. */
+  /** Who waits on the run (live or background), recorded in its audit; it sets no limit. */
   readonly budget: AgenticResearchBudgetV1;
   readonly options: {
     /**

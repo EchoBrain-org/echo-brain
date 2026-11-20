@@ -28,7 +28,7 @@ export interface AgenticTriggerDefinitionV1<Event> {
    * exist only once the loop has read them; the loop fills them in one pass.
    */
   brief(event: Event, scope: AgenticTriggerScopeV1): AgenticBriefV1;
-  /** The budget profile its brief runs on; `brief` always carries this profile's limits. */
+  /** Who waits on its runs (live or background); `brief` always carries this profile. It sets no limit. */
   readonly budget: keyof typeof AGENTIC_RESEARCH_BUDGETS_V1;
   /**
    * Turns the bundle and the trigger's event into the trigger's result. Ask's

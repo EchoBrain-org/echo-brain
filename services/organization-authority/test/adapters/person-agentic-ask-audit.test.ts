@@ -32,15 +32,15 @@ describe("agentic Ask audit", () => {
     expect(() => store.forRequest(requestContext).append(writer)).not.toThrow();
     expect(() => store.forRequest({ ...requestContext, request_id: 'bad-role' }).append({ ...writer, generations: [{ ...writer.generations[0]!, role: 'step' }] })).toThrow('audit entry is invalid');
   });
-  it('records native research calls under the call budget with their actual model identity', () => {
+  it('records any number of native research calls with their actual model identity', () => {
     const database = openedDatabase(), store = new SqlitePersonAgenticAskAuditV1(database);
     const native = { ...entry, rounds: 13, model_calls: 13, generations: Array.from({ length: 13 }, () => ({ role: 'step' as const, engine: 'external_research' as const, model: 'claude-sonnet-fixture', finish_reason: 'tool_use', usage: null })) };
     store.forRequest(requestContext).append(native);
     const row = database.prepare('SELECT body_json FROM authority_person_read_decision_audit_v2').get() as { body_json: string };
     expect(JSON.parse(row.body_json)).toMatchObject({ rounds: 13, model_calls: 13, generations: native.generations });
-    // Past the call budget the run is still recorded as it ran; a native run never reports more rounds than calls.
-    store.forRequest({ ...requestContext, request_id: 'over' }).append({ ...native, rounds: 61, model_calls: 61, generations: Array.from({ length: 61 }, () => native.generations[0]!) });
-    expect(() => store.forRequest({ ...requestContext, request_id: 'more_rounds' }).append({ ...native, rounds: 14 })).toThrow('audit entry is invalid');
+    // Research has no call budget: a long native run is recorded whole. Its rounds still cannot pass its calls.
+    store.forRequest({ ...requestContext, request_id: 'long' }).append({ ...native, rounds: 500, model_calls: 500, generations: Array.from({ length: 500 }, () => native.generations[0]!) });
+    expect(() => store.forRequest({ ...requestContext, request_id: 'more-rounds' }).append({ ...native, rounds: 14 })).toThrow('audit entry is invalid');
   });
 
   it("records a follow-up that asked which one as clarify, its resolver an answer generation, and never off_scope (ADR-0047)", () => {
@@ -74,29 +74,41 @@ describe("agentic Ask audit", () => {
     expect(row.body_json).not.toContain("question");
   });
 
-  it("records an Ask whatever it cited, read and spent: those counts are the research loop's rule, not the audit's", () => {
-    const database = openedDatabase();
-    const store = new SqlitePersonAgenticAskAuditV1(database);
+  it("records an Ask that cites any number of items, as an answer in blocks may (ADR-0051)", () => {
+    const store = new SqlitePersonAgenticAskAuditV1(openedDatabase());
     store.forRequest({ ...requestContext, request_id: "ask_wide" }).append({ ...entry, rounds: 2, citation_count: 45 });
-    store.forRequest({ ...requestContext, request_id: "ask_huge" }).append({ ...entry, rounds: 200, citation_count: 5_000, fallbacks: 40 });
-    expect(database.prepare("SELECT count(*) AS count FROM authority_person_read_decision_audit_v2").get()).toEqual({ count: 2 });
-    // A count that is not a count is still refused.
-    expect(() => store.forRequest({ ...requestContext, request_id: "ask_bad" }).append({ ...entry, citation_count: -1 })).toThrow("Agentic Ask audit entry is invalid");
+    store.forRequest({ ...requestContext, request_id: "ask_huge" }).append({ ...entry, rounds: 2, citation_count: 5_000 });
+    expect(() => store.forRequest({ ...requestContext, request_id: "ask_negative" }).append({ ...entry, rounds: 2, citation_count: -1 })).toThrow("Agentic Ask audit entry is invalid");
   });
 
-  it("records a research-only trigger under the background limits and keeps Ask limits for Ask", () => {
+  it("records any number of rounds, receipts and named items: the row carries counts, not limits", () => {
+    const database = openedDatabase();
+    const store = new SqlitePersonAgenticAskAuditV1(database);
+    const receipts = Array.from({ length: 6_000 }, (_value, index) => digest(`receipt ${index}`));
+    const named = Array.from({ length: 300 }, (_value, index) => digest(`named ${index}`));
+    store.forRequest(requestContext).append({ ...entry, rounds: 400, fallbacks: 40, receipt_digests: receipts, named_citation_digests: named });
+    const row = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2").get() as { body_json: string };
+    expect(JSON.parse(row.body_json)).toMatchObject({ rounds: 400, fallbacks: 40 });
+    expect(JSON.parse(row.body_json).receipt_digests).toHaveLength(6_000);
+    expect(JSON.parse(row.body_json).named_citation_digests).toHaveLength(300);
+    // Duplicate receipts are still refused: the row's shape is checked, never its size.
+    expect(() => store.forRequest({ ...requestContext, request_id: "dup" }).append({ ...entry, receipt_digests: [receipts[0]!, receipts[0]!] })).toThrow("Agentic Ask audit entry is invalid");
+  });
+
+  it("marks a research-only trigger and a background Ask as background, with no limit on either", () => {
     const database = openedDatabase();
     const store = new SqlitePersonAgenticAskAuditV1(database);
     store.forRequest(requestContext).append({ ...entry, trigger: "approved_record" });
     const row = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2").get() as { body_json: string };
     expect(JSON.parse(row.body_json)).toMatchObject({ trigger: "approved_record", rounds: 20, outcome: "partial" });
-    // A trigger's run is recorded at any size too.
+    store.forRequest({ ...requestContext, request_id: "ask_2" }).append({ ...entry, citation_count: 361 });
     store.forRequest({ ...requestContext, request_id: "ask_3" }).append({ ...entry, trigger: "approved_record", citation_count: 361 });
+    store.forRequest({ ...requestContext, request_id: "ask_6" }).append({ ...entry, rounds: 31 });
     // A background-budget Ask (the evaluation's diagnostic) carries its budget instead of a trigger.
     store.forRequest({ ...requestContext, request_id: "ask_4" }).append({ ...entry, budget: "background" });
     expect(() => store.forRequest({ ...requestContext, request_id: "ask_5" }).append({ ...entry, budget: "huge" as never })).toThrow("Agentic Ask audit entry is invalid");
     const rows = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2").all() as { body_json: string }[];
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(5);
     expect(rows.map(value => JSON.parse(value.body_json))).toEqual(expect.arrayContaining([expect.objectContaining({ trigger: "approved_record" }), expect.objectContaining({ budget: "background", rounds: 20 })]));
   });
 
@@ -146,13 +158,12 @@ describe("agentic Ask audit", () => {
     expect(byRequest.get("ask_plain")).not.toHaveProperty("named_citation_digests");
   });
 
-  it("refuses named citations that are not distinct commitments or exceed the naming bound", () => {
+  it("refuses named citations that are not distinct commitments, and takes any number of them", () => {
     const store = new SqlitePersonAgenticAskAuditV1(openedDatabase());
     const ask = { ...entry, rounds: 2 };
     const invalid = [
       { ...ask, named_citation_digests: [digest("same"), digest("same")] },
       { ...ask, named_citation_digests: ["Launch review" as Sha256Digest] },
-      { ...ask, named_citation_digests: Array.from({ length: 101 }, (_, index) => digest(`named ${index}`)) },
       { ...ask, named_citation_digests: "sha256:" as unknown as Sha256Digest[] },
     ];
     for (const [index, value] of invalid.entries()) {

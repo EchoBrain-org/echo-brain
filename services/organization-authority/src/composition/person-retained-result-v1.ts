@@ -1,4 +1,4 @@
-import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import { AgenticAskStalledErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 
 /** Completed results wait this long for their reader, then are dropped unread. */
@@ -13,7 +13,7 @@ export interface RetainedResultFailureV1 { readonly code: RetainedResultFailureC
 
 /** A deadline is timed_out, an Authority error keeps a code it names, anything else is unavailable; each code has its fixed message. */
 export function retainedResultFailureV1(messages: Readonly<Record<RetainedResultFailureCodeV1, string>>, error: unknown): RetainedResultFailureV1 {
-  const code = error instanceof AgenticAskDeadlineErrorV1 ? 'timed_out'
+  const code = error instanceof AgenticAskStalledErrorV1 ? 'timed_out'
     : error instanceof AuthorityOperationError && Object.hasOwn(messages, error.code) ? error.code as RetainedResultFailureCodeV1 : 'unavailable';
   return Object.freeze({ code, message: messages[code] });
 }

@@ -1,7 +1,7 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { validatePersonResearchEvalReadResponseV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import { AgenticAskStalledErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { describe, expect, it, vi } from 'vitest';
 import { createPersonResearchEvalV1 } from '../src/composition/person-research-eval-v1.js';
@@ -62,7 +62,7 @@ function harness(options: { readonly generate?: (input: StructuredGenerationInpu
       revalidateBatchRelease: () => ({ checked_at: '2026-10-06T00:00:00.000Z' }),
     },
     model: { generate },
-    generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 },
+    generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000, context_tokens: 32_768, max_output_tokens: 8_000 },
     audit: { forRequest: () => ({ append: (entry: unknown) => { audits.push(entry); } }), forLiveRequest: () => ({ record: async () => canonicalSha256('release') }),
       forWorkspaceRequest: () => ({ record: () => canonicalSha256('workspace release') }) },
     now: () => clock,
@@ -84,7 +84,7 @@ describe('staging research evaluation runs', () => {
     const run = vi.fn(async (session: Parameters<NonNullable<CreatePersonResearchEvalOptionsV1['research_driver']>['run']>[0]) => {
       catalogs.push((session.initial.source_catalog as { source: string }[]).map(value => value.source));
       expect(JSON.stringify(session.initial)).not.toContain('token-a');
-      await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('request'), operation: 'messages', timeout: () => 10_000 }, async () => ({ value: true }));
+      await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('request'), operation: 'messages' }, async () => ({ value: true }));
       await session.call('finish', { completed: false, parts: [{ question: 'Projects', notes: 'No data was read.', needs: [{ need: 'projects', kind: 'which_items', status: 'open', evidence: [] }] }] });
     });
     const h = harness({ extra: { research_driver: { run }, workspace: { projects: {} as never, grants: () => [], people: { people: () => new Map() } as never, tools: async () => [] } } });
@@ -140,7 +140,7 @@ describe('staging research evaluation runs', () => {
   });
 
   it('records a deadline as a timed_out failure and frees the person for another run', async () => {
-    const h = harness({ generate: async () => { throw new AgenticAskDeadlineErrorV1(); } });
+    const h = harness({ generate: async () => { throw new AgenticAskStalledErrorV1("read", 120_000); } });
     const run = await h.application.start({ access_token: 'token-a', request: ask('Too slow?') });
     await vi.waitFor(() => expect(h.generate).toHaveBeenCalled());
     const beforeRead = h.deskAuthorize.mock.calls.length;
@@ -191,7 +191,7 @@ describe('staging research evaluation runs', () => {
     const h = harness({ recordProjects: () => [PROJECT], openRecord: openedRecord });
     const run = await h.application.start({ access_token: 'token-a', request: approved() });
     const result = await h.settled('token-a', run.run_id);
-    expect(result).toMatchObject({ status: 'completed', research: { trigger: 'approved_record', budget: { deadline_ms: 600_000 }, items: [expect.objectContaining({ id: 'E1', text: 'Approved: firmware shows two decimals.' })] } });
+    expect(result).toMatchObject({ status: 'completed', research: { trigger: 'approved_record', budget: { profile: 'background' }, items: [expect.objectContaining({ id: 'E1', text: 'Approved: firmware shows two decimals.' })] } });
     expect(result).not.toHaveProperty('ask');
     // The scope comes from the record, looked up with the person's own access before the desk exists.
     expect(h.recordProjects).toHaveBeenCalledWith({ access_token: 'token-a', record_sha256: record.record_sha256 });
@@ -224,7 +224,7 @@ describe('staging research evaluation runs', () => {
       const h = harness({ recordProjects: () => projects, openRecord: openedRecord });
       const run = await h.application.start({ access_token: 'token-a', request: approved({ budget: 'live' }) });
       // The request's own budget still overrides the definition's profile.
-      expect(await h.settled('token-a', run.run_id), JSON.stringify(projects)).toMatchObject({ status: 'completed', research: { trigger: 'approved_record', budget: { deadline_ms: 300_000 } } });
+      expect(await h.settled('token-a', run.run_id), JSON.stringify(projects)).toMatchObject({ status: 'completed', research: { trigger: 'approved_record', budget: { profile: 'live' } } });
       expect(h.deskAuthorize).toHaveBeenCalledWith(expect.objectContaining({ scope: { kind: 'global' } }));
       expect(h.openDeskCitation).toHaveBeenCalledWith(expect.not.objectContaining({ project_id: expect.anything() }));
     }

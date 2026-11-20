@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { RESTRICTED_REVIEWER_PERSON_POLICY_ID } from '@echo-brain/organization-protocol';
 import { isOrganizationApiValidationError, validatePersonImpactCardV1, type PersonImpactCardV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
-import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import { AgenticAskStalledErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { impactCardLineV1, impactItemKeyV1, refreshImpactCardV1, storableImpactCardV1, type FreshImpactItemV1, type StoredImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -184,7 +184,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
       signal.throwIfAborted();
       // A timeout or an outage is tried again while the run has attempts left: a finished run is frozen, so falling back
       // on the first one would lose the impact check for good. Only the attempt that would fail the run falls back.
-      const triedAgain = (unavailable(error) || error instanceof AgenticAskDeadlineErrorV1) && row.attempts + 1 < TRIGGER_RUN_ATTEMPTS_MAX_V1;
+      const triedAgain = (unavailable(error) || error instanceof AgenticAskStalledErrorV1) && row.attempts + 1 < TRIGGER_RUN_ATTEMPTS_MAX_V1;
       if (triedAgain || !actions.some(action => actionLine(action.text) !== '') ||
           error instanceof PersonRecordSearchIndexLagV1 ||
           (error instanceof AuthorityOperationError && !['unavailable', 'invalid_output', 'quota_exceeded'].includes(error.code))) throw error;
@@ -245,7 +245,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
           && options.people.isActiveMember(row.actor.organization_id, row.actor.membership_id);
         if (error instanceof PersonRecordSearchIndexLagV1 || rotated) options.runs.release(row.run_id, lease_token, { counted: false });
         else if (error instanceof AuthorityOperationError && (error.code === 'unauthorized' || error.code === 'stale_access_state' || error.code === 'not_found')) options.runs.fail(row.run_id, lease_token, 'no_access');
-        else if (controller.signal.aborted || error instanceof AgenticAskDeadlineErrorV1) options.runs.release(row.run_id, lease_token, { counted: true, exhausted: 'timed_out' });
+        else if (controller.signal.aborted || error instanceof AgenticAskStalledErrorV1) options.runs.release(row.run_id, lease_token, { counted: true, exhausted: 'timed_out' });
         else if (unavailable(error)) options.runs.release(row.run_id, lease_token, { counted: true, exhausted: 'unavailable' });
         else options.runs.fail(row.run_id, lease_token, 'research_failed');
         throw error;

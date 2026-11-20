@@ -39,8 +39,8 @@ export interface AgenticResearchDriverSessionV1 {
   readonly list_available: boolean;
   readonly question: boolean;
   readonly signal: AbortSignal;
-  /** Research time left, with the unchanged writer/finalization reserves excluded. */
-  readonly remaining: () => number;
+  /** How long one model request may send nothing before the gate treats it as stalled. Research itself has no clock. */
+  readonly silence_ms: number;
   /** Every outbound model request, including retries/compaction, must use this gate. */
   readonly model_request: AgenticModelGateV1['external'];
   /** Read tools and finish return only request-owned evidence and validation feedback. */

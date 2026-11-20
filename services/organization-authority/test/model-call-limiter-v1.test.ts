@@ -25,7 +25,7 @@ describe('model call limiter', () => {
     const admit = vi.fn();
     const port = limitStructuredGenerationPortV1({ generate: async () => false,
       generate_with_admission: async (input, admission) => admission({ model: input.model, signal: stop.signal,
-        body_sha256: canonicalSha256('writer'), operation: 'messages', timeout: () => 20_000 }, async () => ({ value: true })),
+        body_sha256: canonicalSha256('writer'), operation: 'messages' }, async () => ({ value: true })),
     }, (signal, op) => calls.limiter.run('interactive', signal, op));
     let settled = false;
     const pending = port.generate_with_admission!({ model: 'fixture', system_prompt: 'system', user_prompt: '{}', schema: {}, max_output_tokens: 1500, timeout_ms: 20_000 }, async (_request, send) => {
@@ -45,7 +45,7 @@ describe('model call limiter', () => {
     const occupied = calls.call('occupied', 'interactive');
     let checks = 0, revoked = false, forwarded = false, activeSessions = 0;
     const port = limitStructuredGenerationPortV1({ generate: async () => { throw new Error('must use admission'); },
-      generate_with_admission: async (input, admit) => admit({ model: input.model, body_sha256: canonicalSha256('writer'), operation: 'messages', timeout: () => 20_000 }, async () => { forwarded = true; return { value: true }; }),
+      generate_with_admission: async (input, admit) => admit({ model: input.model, body_sha256: canonicalSha256('writer'), operation: 'messages' }, async () => { forwarded = true; return { value: true }; }),
     }, (signal, op) => calls.limiter.run('interactive', signal, op), async (_signal, op) => {
       activeSessions++; try { return await op(); } finally { activeSessions--; }
     });
@@ -64,14 +64,14 @@ describe('model call limiter', () => {
     let revoked = false, checks = 0, forwarded = false;
     const session: AgenticResearchDriverSessionV1 = {
       initial: {}, question: true, list_available: true, signal: new AbortController().signal,
-      remaining: () => 60_000, call: async () => ({}),
+      silence_ms: 60_000, call: async () => ({}),
       model_request: async (_request, send) => {
         checks++; if (revoked) throw new Error('revoked while queued');
         return (await send(new AbortController().signal)).value;
       },
     };
     const driver = limitResearchDriverV1({ run: async current => {
-      await current.model_request({ model: 'fixture', body_sha256: canonicalSha256({}), operation: 'messages', timeout: current.remaining }, async () => { forwarded = true; return { value: true }; });
+      await current.model_request({ model: 'fixture', body_sha256: canonicalSha256({}), operation: 'messages' }, async () => { forwarded = true; return { value: true }; });
     } }, (signal, op) => f.limiter.run('interactive', signal, op), (_signal, op) => op());
     const pending = driver.run(session);
     const rejected = expect(pending).rejects.toThrow('revoked while queued');
@@ -87,12 +87,12 @@ describe('model call limiter', () => {
     const calls = held(), sessions = createModelCallLimiterV1({ concurrent: 1, background: 1 });
     const running: string[] = [];
     const session = (): AgenticResearchDriverSessionV1 => ({
-      initial: {}, question: true, list_available: true, signal: new AbortController().signal, remaining: () => 60_000, call: async () => ({}),
+      initial: {}, question: true, list_available: true, signal: new AbortController().signal, silence_ms: 60_000, call: async () => ({}),
       model_request: async (_request, send) => (await send(new AbortController().signal)).value,
     });
     const driver = limitResearchDriverV1({ run: async current => {
       running.push('session');
-      const request = (label: string) => current.model_request({ model: 'fixture', body_sha256: canonicalSha256(label), operation: 'messages', timeout: current.remaining },
+      const request = (label: string) => current.model_request({ model: 'fixture', body_sha256: canonicalSha256(label), operation: 'messages' },
         () => calls.call(label, 'interactive').then(value => ({ value })));
       await Promise.all([request('a'), request('b')]);
     } }, (signal, op) => calls.limiter.run('interactive', signal, op), (signal, op) => sessions.run('interactive', signal, op));

@@ -64,7 +64,7 @@ function fixture(options: { readonly writer?: (attempt: number, written: () => u
   const options_ = {
     authority_id: 'authority-1', organization_id: 'organization-1', state_lineage_id: 'lineage-1', sessions: { authenticateAccess }, originals,
     records: { initializeDesk: () => { throw new PersonRecordSearchIndexLagV1(); } }, model: { generate },
-    generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 },
+    generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000, context_tokens: 32_768, max_output_tokens: 8_000 },
     audit: { forRequest: () => ({ append: (entry: AgenticAskAuditEntryV1) => { audits.push(entry); } }), forLiveRequest: () => ({ record: async () => canonicalSha256('live release') }) },
   } as unknown as CreatePersonLiveAnswerRouteOptionsV1;
   return {
