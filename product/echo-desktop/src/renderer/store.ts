@@ -2398,7 +2398,7 @@ export function toggleProjectPick(id: string, tool: PickTool): void {
   if (!settings || !setting || setting.status !== 'ready' || settings.project.role !== 'lead' ||
       (!setting.spaces.some(space => space.id === id) && !setting.selected.includes(id))) return;
   const selected = setting.selected.includes(id) ? setting.selected.filter(value => value !== id) : [...setting.selected, id];
-  if (selected.length <= 20) setMapping(settings, tool, { ...setting, selected });
+  setMapping(settings, tool, { ...setting, selected });
 }
 export async function moreProjectPicks(tool: PickTool): Promise<void> {
   const settings = state.projectSettings; const setting = settings?.[tool]; const account = expect();

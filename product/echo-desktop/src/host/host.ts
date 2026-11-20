@@ -483,7 +483,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const { expect, project_id, request_id, expected_revision, space_ids } = params as Params<'projects.confluenceSet'>;
       if (!valid(validateProjectIdV1, project_id) || !valid(validatePersonUpdateRequestId, request_id) ||
           (expected_revision !== null && !valid(validatePersonUpdateRequestId, expected_revision)) ||
-          (space_ids !== null && (!Array.isArray(space_ids) || space_ids.length < 1 || space_ids.length > 20 || !space_ids.every(id => typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id)) || new Set(space_ids).size !== space_ids.length))) return code('invalid_request', true);
+          (space_ids !== null && (!Array.isArray(space_ids) || space_ids.length < 1 || !space_ids.every(id => typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id)) || new Set(space_ids).size !== space_ids.length))) return code('invalid_request', true);
       return forAccount(method, expect, ['tools', 'project', '--tool=confluence', option('echo-project', project_id), option('mapping-request', request_id), option('mapping-revision', expected_revision ?? 'none'), ...(space_ids === null ? ['--clear'] : [option('space-ids', space_ids.join(','))])], stdout => projectConfluenceMappingView(lastJson(stdout), project_id), request_id);
     }
     case 'projects.confluenceSpaces': {
@@ -500,7 +500,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const { expect, project_id, request_id, expected_revision, folder_ids } = params as Params<'projects.granolaSet'>;
       if (!valid(validateProjectIdV1, project_id) || !valid(validatePersonUpdateRequestId, request_id) ||
           (expected_revision !== null && !valid(validatePersonUpdateRequestId, expected_revision)) ||
-          (folder_ids !== null && (!Array.isArray(folder_ids) || folder_ids.length < 1 || folder_ids.length > 20 || !folder_ids.every(id => typeof id === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id)) || new Set(folder_ids).size !== folder_ids.length))) return code('invalid_request', true);
+          (folder_ids !== null && (!Array.isArray(folder_ids) || folder_ids.length < 1 || !folder_ids.every(id => typeof id === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id)) || new Set(folder_ids).size !== folder_ids.length))) return code('invalid_request', true);
       return forAccount(method, expect, ['tools', 'project', '--tool=granola', option('echo-project', project_id), option('mapping-request', request_id), option('mapping-revision', expected_revision ?? 'none'), ...(folder_ids === null ? ['--clear'] : [option('folder-ids', folder_ids.join(','))])], stdout => projectGranolaMappingView(lastJson(stdout), project_id), request_id);
     }
     case 'projects.granolaFolders': {

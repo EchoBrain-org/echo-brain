@@ -15,6 +15,8 @@ import {
 
 /** Confluence's largest page: 250 results per search or page list, and 250 ids per page-id filter. */
 const CONFLUENCE_PAGE_MAX = 250;
+/** Confluence's largest space-id filter on a page list: 100 ids. More mapped spaces are listed 100 at a time, in turn. */
+const CONFLUENCE_SPACE_FILTER_MAX = 100;
 const LIST_STATUSES = Object.freeze(['current', 'archived', 'deleted', 'trashed']);
 const STATUSES = Object.freeze([...LIST_STATUSES, 'draft', 'historical']);
 const EMPTY_DIGEST = sha256Digest('');
@@ -32,7 +34,9 @@ type Item = Readonly<{ page: Page; section: string; offset: number; text?: strin
  * A list's continuation: Confluence's next page token (absent once its pages ended), and the pages already read that did
  * not fit the last result, which the next page releases first.
  */
-type Cursor = Readonly<{ selection: string; path: string; query: Readonly<Record<string, string | readonly string[]>>; token?: string; left_out: boolean; pending: readonly Page[]; full: boolean }>;
+type Cursor = Readonly<{ selection: string; path: string; query: Readonly<Record<string, string | readonly string[]>>; token?: string; left_out: boolean; pending: readonly Page[]; full: boolean;
+  /** The next group of mapped spaces to list once this group's pages end, when the mapped spaces take more than one filter. */
+  next_group?: number }>;
 
 /** Any positive limit: a page holds as many as are asked for, up to Confluence's page and what one result carries. */
 function limit(value: number): number {
@@ -360,23 +364,35 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
         let rows: readonly Page[];
         let token: string | undefined;
         let full: boolean;
+        // The mapped spaces, a filter's worth at a time: the group this read lists, and the next one once its pages end.
+        const groups = container === undefined && selected !== undefined ? Math.ceil(selected.length / CONFLUENCE_SPACE_FILTER_MAX) : 1;
+        const group = (index: number) => selected!.slice(index * CONFLUENCE_SPACE_FILTER_MAX, (index + 1) * CONFLUENCE_SPACE_FILTER_MAX);
+        let nextGroup: number | undefined;
         if (previous !== undefined && previous.pending.length > 0) {
           // Pages read for the last result that did not fit come first, with no new provider read.
           ({ path, query, left_out, token, full } = previous);
+          nextGroup = previous.next_group;
           rows = previous.pending;
         } else {
-          if (previous !== undefined) { path = previous.path; query = { ...previous.query, cursor: previous.token! }; left_out = previous.left_out; }
+          if (previous !== undefined && previous.token === undefined && previous.next_group !== undefined) {
+            // The last group's pages ended: the next group of mapped spaces starts from its first page.
+            path = previous.path; query = { ...previous.query, 'space-id': group(previous.next_group) }; left_out = previous.left_out;
+            nextGroup = previous.next_group + 1 < groups ? previous.next_group + 1 : undefined;
+          } else if (previous !== undefined) { path = previous.path; query = { ...previous.query, cursor: previous.token! }; left_out = previous.left_out; nextGroup = previous.next_group; }
           else if (input.since !== undefined || input.until !== undefined) {
             if (container !== undefined) confluenceFailure('invalid_request');
             const scoped = await cql(undefined, input.since, input.until, input.signal, input);
             if (scoped.expression === undefined) { await verify(input.signal); return Object.freeze({ items: Object.freeze([]), truncated: false, page_full: false, ...leftOut(scoped.left_out) }); }
             path = '/rest/api/search'; query = { cql: scoped.expression, limit: String(maximum), includeArchivedSpaces: 'true' }; left_out = scoped.left_out;
-          } else query = { limit: String(maximum), status: LIST_STATUSES, ...(container === undefined ? selected === undefined ? {} : { 'space-id': selected } : { 'space-id': container }) };
+          } else {
+            query = { limit: String(maximum), status: LIST_STATUSES, ...(container === undefined ? selected === undefined ? {} : { 'space-id': group(0) } : { 'space-id': container }) };
+            nextGroup = groups > 1 ? 1 : undefined;
+          }
           const result = await discover(path, query, maximum, input.signal);
           rows = result.pages.filter(page => matchesEvidenceDateV1(page.dates, input, "updated"));
           token = result.token;
           // A last page with no next link can still be exactly full (ADR-0041): counted before ECHO's own date filter.
-          full = result.token === undefined && result.pages.length >= maximum;
+          full = result.token === undefined && nextGroup === undefined && result.pages.length >= maximum;
         }
         await verify(input.signal);
         // As many pages as were asked for and one result carries; the rest wait in the cursor.
@@ -384,10 +400,11 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
         const shown = items.slice(0, fitting(items, wanted));
         const pending = Object.freeze(rows.slice(shown.length));
         let next_cursor: string | undefined;
-        if (token !== undefined || pending.length > 0) {
+        if (token !== undefined || pending.length > 0 || nextGroup !== undefined) {
           next_cursor = `confluence_cursor_${randomUUID()}`;
           const { cursor: _cursor, ...stable } = query;
-          cursors.set(next_cursor, Object.freeze({ selection, path, query: Object.freeze(stable), ...(token === undefined ? {} : { token }), left_out, pending, full }));
+          cursors.set(next_cursor, Object.freeze({ selection, path, query: Object.freeze(stable), ...(token === undefined ? {} : { token }), left_out, pending, full,
+            ...(nextGroup === undefined ? {} : { next_group: nextGroup }) }));
         }
         return Object.freeze({ items: Object.freeze(shown.map(remember)), truncated: next_cursor !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }), page_full: next_cursor === undefined && full, ...leftOut(left_out) });
       })();

@@ -251,6 +251,23 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(f.calls.find(call => call.path === '/rest/api/search')!.query.get('limit')).toBe('50');
   });
 
+  it('lists every page of more mapped spaces than one space-id filter takes, a filter of 100 at a time, through the cursor', async () => {
+    const selected = Array.from({ length: 230 }, (_, index) => String(1000 + index));
+    const pages = selected.map((spaceId, index) => page({ id: String(5000 + index), spaceId }));
+    const f = await fixture({ selected, pages });
+    const seen: string[] = [];
+    let result = await f.source.list({ limit: 1000 });
+    for (;;) {
+      seen.push(...result.items.map(item => item.citation.page_id));
+      if (result.next_cursor === undefined) break;
+      result = await f.source.list({ limit: 1000, cursor: result.next_cursor });
+    }
+    expect(seen.sort()).toEqual(pages.map(value => value.id).sort());
+    const filters = f.calls.filter(call => call.path === '/api/v2/pages' && call.query.get('id') === null).map(call => call.query.get('space-id')!.split(','));
+    expect(filters.map(filter => filter.length)).toEqual([100, 100, 30]);
+    expect(filters.flat()).toEqual(selected);
+  });
+
   it('spends no content reads on space keys, so many scoped searches run within the content budget', async () => {
     const selected = Array.from({ length: 20 }, (_, index) => String(100 + index));
     const f = await fixture({ selected: ['42', ...selected.slice(1)] });

@@ -5,7 +5,6 @@ export const PERSON_CONFLUENCE_PROJECT_READ_PATH_V1 = '/v1/person/tools/confluen
 export const PERSON_CONFLUENCE_PROJECT_SET_PATH_V1 = '/v1/person/tools/confluence/project/set';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SPACE_ID = /^[1-9][0-9]{0,19}$/;
-const CONFLUENCE_PROJECT_MAX_SPACES_V1 = 20;
 
 interface ConfluenceProjectReadV1 { readonly schema_version: 1; readonly project_id: string }
 export interface ConfluenceProjectSetV1 extends ConfluenceProjectReadV1 {
@@ -27,7 +26,8 @@ function base(record: Record<string, unknown>): ConfluenceProjectReadV1 {
   return { schema_version: 1, project_id: validateProjectIdV1(record.project_id) };
 }
 function spaces(value: unknown, label: string): readonly string[] {
-  if (!Array.isArray(value) || value.length < 1 || value.length > CONFLUENCE_PROJECT_MAX_SPACES_V1 ||
+  // At least one space and no count of its own: the reader lists more than Confluence's 100-id filter in turn.
+  if (!Array.isArray(value) || value.length < 1 ||
       !value.every(id => typeof id === 'string' && SPACE_ID.test(id)) || new Set(value).size !== value.length) fail(`${label} is invalid`);
   return Object.freeze([...value] as string[]);
 }
