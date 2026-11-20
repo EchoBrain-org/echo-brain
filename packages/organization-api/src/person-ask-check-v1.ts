@@ -18,8 +18,11 @@ export const PERSON_ASK_CHECK_PATH_V1 = '/v1/person/ask/check';
 export const PERSON_ASK_CHECK_REQUEST_KIND_V1 = 'echo-person-ask-check-request-v1';
 export const PERSON_ASK_CHECK_KIND_V1 = 'echo-person-ask-check-v1';
 
-/** The evidence citations a check reads; any other kind is `invalid_request`. */
-export const PERSON_ASK_CHECK_CITATION_KINDS_V1 = Object.freeze(['approved_record', 'source_revision', 'follow_up', 'ticket', 'page'] as const);
+/**
+ * The evidence citations a check reads; any other kind is `invalid_request`. A project is read as the caller's membership of
+ * it. A person, a tool and a tool container are not checked, so a client treats what cites them as not known readable.
+ */
+export const PERSON_ASK_CHECK_CITATION_KINDS_V1 = Object.freeze(['approved_record', 'source_revision', 'follow_up', 'ticket', 'page', 'project'] as const);
 export type PersonAskCheckCitationKindV1 = (typeof PERSON_ASK_CHECK_CITATION_KINDS_V1)[number];
 const PERSON_ASK_CHECK_STATES_V1 = Object.freeze(['same', 'unreadable', 'unknown'] as const);
 export type PersonAskCheckStateV1 = (typeof PERSON_ASK_CHECK_STATES_V1)[number];

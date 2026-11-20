@@ -235,11 +235,58 @@ describe('the earlier turn an Ask carries (C3)', () => {
     // Nothing known: its question alone.
     expect(previousOf(one, 'follow_up', null, 'Who owns it?', { kind: 'global' })).toEqual({ purpose: 'follow_up', question: 'What is open on THERM?',
       asked_at: one.asked_at, statements: [], citations: [] });
-    // A new turn's own answer read every source a check asks about; one no check asks about (a person) keeps nothing back.
+    // A new turn's own answer read every source a check asks about.
     expect(texts(answeredNow(one))).toHaveLength(3);
-    const named = turn('Who owns it?', HOUR, answerOf('Who owns it?', [ticket('THERM-482', '20482'), mara], [['Mara owns THERM-482.', [0, 1]]]));
-    expect(answeredNow(named)).toEqual({ 0: 'same' });
-    expect(previousOf(named, 'follow_up', { 0: 'same' }, 'And since?', { kind: 'global' }).statements).toHaveLength(1);
+  });
+
+  it('carries no sentence resting on a citation no check can test (a person), nor its label, whatever the check said of the rest', () => {
+    const named = turn('Who owns it?', HOUR, answerOf('Who owns it?', [ticket('THERM-482', '20482'), mara, page('31010')],
+      [['Mara owns THERM-482.', [0, 1]], ['The DVT plan moved.', [2]]]));
+    // No check asks about a person, so nothing says it is readable now.
+    expect(answeredNow(named)).toEqual({ 0: 'same', 2: 'same' });
+    for (const known of [answeredNow(named), { 0: 'same', 1: 'same', 2: 'same' } as const]) {
+      const previous = previousOf(named, 'follow_up', known, 'And since?', { kind: 'global' });
+      expect(previous.statements).toEqual([{ text: 'The DVT plan moved.', citation_indexes: [0] }]);
+      expect(previous.citations).toEqual([named.answer.sources[2]!.cited]);
+      expect(JSON.stringify(previous)).not.toContain('Mara');
+    }
+    // A sentence citing a place the answer has no source for is not known readable either.
+    const dangling = turn('Dangling?', HOUR, answerOf('Dangling?', [page('31010')], [['Cites nothing there.', [4]], ['The plan moved.', [0]]]));
+    expect(previousOf(dangling, 'follow_up', { 0: 'same' }, 'And?', { kind: 'global' }).statements.map(statement => statement.text)).toEqual(['The plan moved.']);
+  });
+
+  it('carries no roster sentence of a project the asker has left: the check asks about the project, and its answer decides', () => {
+    const roster: AnswerSource = { kind: 'project', label: 'Apollo', project_id: apollo.project_id,
+      cited: { citation: { kind: 'project', project_id: apollo.project_id }, kind: 'project', label: 'Apollo', visibility: 'team', ref: `project:${apollo.project_id}` } as PersonAnswerCitationV8 };
+    const members = turn('Who is on the project?', 2 * DAY, answerOf('Who is on the project?', [roster, ticket('THERM-482', '20482')],
+      [['Apollo\'s members are Mara Lind (lead) and Ivo Sand.', [0]], ['THERM-482 is open.', [1]]]));
+    // The project is asked about like any checkable source.
+    const plan = checkPlan([members]);
+    expect(plan.requests[0]!.items.map(item => item.citation.kind)).toEqual(['project', 'ticket']);
+    // Membership lost: the check says unreadable, so neither the roster sentence nor the project's label goes.
+    const after = checkedOf(plan, [[{ state: 'unreadable' }, { state: 'same' }]])[members.id]!;
+    const previous = previousOf(members, 'follow_up', after, 'And who leads it?', { kind: 'global' });
+    expect(previous.statements).toEqual([{ text: 'THERM-482 is open.', citation_indexes: [0] }]);
+    expect(JSON.stringify(previous)).not.toContain('Apollo');
+    expect(JSON.stringify(previous)).not.toContain(apollo.project_id);
+    expect(JSON.stringify(previous)).not.toContain('Mara');
+    // Still a member: it goes.
+    const still = checkedOf(plan, [[{ state: 'same' }, { state: 'same' }]])[members.id]!;
+    expect(previousOf(members, 'follow_up', still, 'And who leads it?', { kind: 'global' }).statements).toHaveLength(2);
+  });
+
+  it('carries no sentence whose citation a check returned no result for', () => {
+    const one = turn('What is open on THERM?', 2 * DAY, status());
+    const plan = checkPlan([one]);
+    // A successful check that answered only its first item: the other two sources have no state.
+    const partial = checkedOf(plan, [[{ state: 'same' }]])[one.id]!;
+    expect(partial).toEqual({ 0: 'same' });
+    expect(previousOf(one, 'follow_up', partial, 'Who owns it?', { kind: 'global' }).statements.map(statement => statement.text))
+      .toEqual(['THERM-482, Sensor drift, is open.']);
+    // A check that came back with no results at all carries only the question.
+    const none = checkedOf(plan, [[]])[one.id]!;
+    expect(previousOf(one, 'follow_up', none, 'Who owns it?', { kind: 'global' })).toEqual({ purpose: 'follow_up', question: 'What is open on THERM?',
+      asked_at: one.asked_at, statements: [], citations: [] });
   });
 
   it('carries every readable sentence whole, however long or however many it cites, with no count of its own', () => {

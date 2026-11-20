@@ -235,15 +235,18 @@ export function answeredNow(turn: TimelineTurn): TurnChecks {
  * carried them, renumbered in the order first cited. A sentence is never
  * cut, and the API counts none of them. A sentence goes only when what is known now
  * (`known`: what a check said in the last five minutes, or a new turn's own
- * answer) has each source it cites that a check asks about readable; with
- * nothing known (null), none goes, only the question (C5): `previous` is
- * read by the Authority's model, and a source this person may no longer read
- * must not reach it. Sentences go from the end until the request, asking
+ * answer) has every source it cites readable (`same`); with nothing known
+ * (null), none goes, only the question (C5): `previous` is read by the
+ * Authority's model, and a source this person may no longer read must not
+ * reach it. A source no check asks about (a person, a tool, a tool
+ * container), one the answer has no source for, and one the check gave no
+ * state for are not known readable, so a sentence citing one stays back, and
+ * so does its label. Sentences go from the end until the request, asking
  * `question` in `scope`, fits the Ask body's bound.
  */
 export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope): AskPrevious {
   const sources = turn.answer.sources;
-  const read = (at: number) => sources[at] === undefined || checkOf(sources[at]) === undefined || known?.[at] === 'same';
+  const read = (at: number) => sources[at] !== undefined && checkOf(sources[at]) !== undefined && known?.[at] === 'same';
   const readable = known === null ? [] : [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
     .filter((statement): statement is AnswerStatement => statement !== undefined && statement.text.trim() !== '' && statement.citation_indexes.every(read));
   const build = (chosen: readonly AnswerStatement[]): AskPrevious => {
