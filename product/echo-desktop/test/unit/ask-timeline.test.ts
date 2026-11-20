@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, AskScope, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
-import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, PREVIOUS_LIMITS } from '../../src/shared/protocol.js';
+import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_COPY_CHARACTERS, PREVIOUS_LIMITS } from '../../src/shared/protocol.js';
 import {
   allOmitted, answeredNow, askedSuggestions, checkedOf, checkPlan, followedTurn, knownStates, previousOf, shownInFull, showsOf, threadOf, turnGroups,
   unreadableAfter, visibleTurns,
@@ -745,7 +745,7 @@ describe('Ask on the timeline', () => {
 
   it('copies an Ask again whose every answer sentence a check left out as the page shows it, past what Copy answer takes: its "Since", then that nothing you can see matched', async () => {
     const sources = [followUp('itm_timeline-1'), page('31010')];
-    const long = 'x'.repeat(11_990);
+    const long = 'x'.repeat(MAX_COPY_CHARACTERS - 10);
     const answer = answerOf('What is open on THERM?', sources, [['Confirm the trace is still open.', [0]]]);
     const earlier = turn('What is open on THERM?', 3 * DAY, answer);
     const again = turn('What is open on THERM?', 2 * DAY, answer, { again_of: earlier.id,
