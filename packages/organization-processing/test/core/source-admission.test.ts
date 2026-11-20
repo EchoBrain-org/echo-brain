@@ -56,6 +56,17 @@ describe("common source admission", () => {
     expect(result.next_cursor).toBe("next");
   });
 
+  it("takes any batch size, a long cursor and any number of references: only the stored value's size bounds a source", async () => {
+    const many = Array.from({ length: 150 }, (_, index) => sourceEnvelope(`doc-${index}`));
+    const withRefs = sourceEnvelope("doc-refs");
+    const refs = Array.from({ length: 1_200 }, (_, index) => ({ artifact_id: `artifact-${index}`, media_type: "text/plain", sha256: "a".repeat(64), byte_length: 1 }));
+    const referenced = { ...withRefs, revision: { ...withRefs.revision, artifact_refs: refs } };
+    const source: SourceAdapterV1 = { identity, pull: vi.fn(async () => ({ sources: [...many, referenced], next_cursor: "c".repeat(20_000) })) };
+    const result = await pullAndAdmitSourceBatchV1({ source, request: { cursor: "p".repeat(20_000) } });
+    expect(result.sources).toHaveLength(151);
+    expect(result.next_cursor).toHaveLength(20_000);
+  });
+
   it("checks the whole batch before admitting anything, including hashes and source identity", async () => {
     const first = sourceEnvelope();
     const second = sourceEnvelope("doc-2");

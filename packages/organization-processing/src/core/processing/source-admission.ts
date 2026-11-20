@@ -9,8 +9,13 @@ import type {
 } from "../contracts/source.js";
 import type { SourceAdapterV1, SourceAdmissionBindingV1 } from "../ports/source.js";
 
-const MAXIMUM_SOURCE_BATCH = 100;
-const MAXIMUM_CONTENT_BYTES = 32 * 1024 * 1024;
+/**
+ * Storage: one source's canonical content is one SQLite TEXT value, which SQLite holds to 1,000,000,000 bytes
+ * (SQLITE_MAX_LENGTH). Checked here so admission refuses a larger one by name before the store does.
+ */
+const MAXIMUM_CONTENT_BYTES = 1_000_000_000;
+/** Host: the canonical walk recurses once per level, so a deeper value could exhaust the stack. */
+const MAXIMUM_CONTENT_DEPTH = 64;
 
 function object(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
@@ -22,8 +27,9 @@ function keys(value: Record<string, unknown>, allowed: readonly string[], label:
   if (Object.keys(value).some((key) => !allowed.includes(key))) throw new Error(`${label} has an unknown field`);
 }
 
+/** Non-empty text of any length: the content bound above and the store carry it. */
 function text(value: unknown, label: string): asserts value is string {
-  if (typeof value !== "string" || value.trim() === "" || value.length > 8192) throw new Error(`${label} must be a bounded non-empty string`);
+  if (typeof value !== "string" || value.trim() === "") throw new Error(`${label} must be a non-empty string`);
 }
 
 function digest(value: unknown, label: string): void {
@@ -31,7 +37,7 @@ function digest(value: unknown, label: string): void {
 }
 
 function canonical(value: unknown, depth: number): string {
-  if (depth > 64) throw new Error("source content exceeds the JSON depth limit");
+  if (depth > MAXIMUM_CONTENT_DEPTH) throw new Error("source content exceeds the JSON depth limit");
   if (value === null) return "null";
   if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number" && Number.isFinite(value)) return JSON.stringify(value);
@@ -50,7 +56,7 @@ function canonical(value: unknown, depth: number): string {
 /** Object key order is immaterial; array order, text and finite numbers are exact. */
 export function canonicalSourceContentV1(value: unknown): string {
   const encoded = canonical(value, 0);
-  if (Buffer.byteLength(encoded, "utf8") > MAXIMUM_CONTENT_BYTES) throw new Error("source content exceeds the safety limit");
+  if (Buffer.byteLength(encoded, "utf8") > MAXIMUM_CONTENT_BYTES) throw new Error("source content exceeds what one stored value can hold");
   return encoded;
 }
 
@@ -106,7 +112,7 @@ export function assertSourceEnvelopeV1(value: unknown, expectedIdentity: SourceA
   if (sourceContentSha256V1(envelope["content"]) !== revision["content_sha256"]) throw new Error("source content does not match its revision digest");
   for (const field of ["artifact_refs", "representation_refs"] as const) {
     const references = revision[field];
-    if (!Array.isArray(references) || references.length > 1000) throw new Error(`source.revision.${field} must be a bounded array`);
+    if (!Array.isArray(references)) throw new Error(`source.revision.${field} must be an array`);
     const seen = new Set<string>();
     for (const reference of references) {
       const ref = object(reference, `source.revision.${field}`);
@@ -148,14 +154,15 @@ export async function pullAndAdmitSourceBatchV1<TContent>(options: {
   readonly context?: AdapterOperationContext;
 }): Promise<AdmittedSourceBatchV1<TContent>> {
   assertNotAborted(options.context);
-  const limit = options.request.limit ?? MAXIMUM_SOURCE_BATCH;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAXIMUM_SOURCE_BATCH) throw new Error("source pull limit is invalid");
+  // A pull takes any positive count, or none; a source pages the rest through its cursor.
+  const limit = options.request.limit;
+  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) throw new Error("source pull limit is invalid");
   if (options.request.cursor !== undefined) text(options.request.cursor, "source pull cursor");
   const pulled = await options.source.pull(options.request, options.context);
   assertNotAborted(options.context);
   const raw = object(pulled, "source batch");
   keys(raw, ["sources", "next_cursor"], "source batch");
-  if (!Array.isArray(raw["sources"]) || raw["sources"].length > limit) throw new Error("source batch exceeds the requested pull limit");
+  if (!Array.isArray(raw["sources"]) || (limit !== undefined && raw["sources"].length > limit)) throw new Error("source batch exceeds the requested pull limit");
   if (raw["next_cursor"] !== undefined) text(raw["next_cursor"], "source batch next_cursor");
   // Capture a JSON snapshot so the provider cannot mutate content during an await.
   const batch = JSON.parse(canonicalSourceContentV1(pulled)) as SourceBatchV1<TContent>;

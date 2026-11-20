@@ -2251,7 +2251,7 @@ CREATE TABLE authority_source_contents_v1 (
   organization_id TEXT NOT NULL,
   source_id TEXT NOT NULL,
   revision_id TEXT NOT NULL,
-  content_json TEXT NOT NULL CHECK(json_valid(content_json) AND length(CAST(content_json AS BLOB))<=33554432),
+  content_json TEXT NOT NULL CHECK(json_valid(content_json)),
   PRIMARY KEY(organization_id,source_id,revision_id),
   FOREIGN KEY(organization_id,source_id,revision_id) REFERENCES authority_source_revisions_v1(organization_id,source_id,revision_id)
 ) STRICT, WITHOUT ROWID;
@@ -2262,7 +2262,7 @@ CREATE TABLE authority_source_representations_v1 (
   representation_id TEXT NOT NULL,
   processor_version TEXT NOT NULL,
   content_sha256 TEXT NOT NULL CHECK(length(content_sha256)=64 AND content_sha256 NOT GLOB '*[^0-9a-f]*'),
-  content_json TEXT NOT NULL CHECK(json_valid(content_json) AND length(CAST(content_json AS BLOB))<=33554432),
+  content_json TEXT NOT NULL CHECK(json_valid(content_json)),
   PRIMARY KEY(organization_id,source_id,revision_id,representation_id),
   FOREIGN KEY(organization_id,source_id,revision_id) REFERENCES authority_source_revisions_v1(organization_id,source_id,revision_id)
 ) STRICT, WITHOUT ROWID;
