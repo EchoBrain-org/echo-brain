@@ -1,5 +1,5 @@
 import { observeCoreModelCorrectionV1, observeCoreModelMetadataV1, annotateCoreRuntimeV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
-import { openRouterReplyCapacityBytesV1, OpenRouterReplyTooLargeErrorV1, readOpenRouterReplyV1, type OpenRouterReplyV1 } from "../../../openrouter-stream-v1.js";
+import { openRouterReplyCapacityBytesV1, OpenRouterReplyTooLargeErrorV1, openRouterSilenceV1, readOpenRouterReplyV1, type OpenRouterReplyV1 } from "../../../openrouter-stream-v1.js";
 import { claudeGrammarHolds, claudeStructuredSchema } from "./claude-structured-schema.js";
 import { UNBILLED_REFUSAL_STATUSES_V1 } from "../../../unbilled-refusal-v1.js";
 import {
@@ -373,13 +373,13 @@ export function createOpenRouterStructuredGenerationAdapter(
     // `timeout_ms`. A reply that keeps arriving runs as long as it needs.
     const silence = new AbortController();
     const timeoutSignal = silence.signal;
-    let silenceTimer: ReturnType<typeof setTimeout> | undefined;
-    const restart = (): void => {
-      clearTimeout(silenceTimer);
-      silenceTimer = setTimeout(() => silence.abort(new DOMException("OpenRouter sent nothing for the silence period", "TimeoutError")), input.timeout_ms);
-    };
+    const quiet = openRouterSilenceV1(input.timeout_ms, () => silence.abort(new DOMException("OpenRouter sent nothing for the silence period", "TimeoutError")));
+    const restart = quiet.output;
     // Model output restarts this call's silence period and is reported to the caller (the model gate times it too).
     const alive = (): void => { restart(); input.on_progress?.(); };
+    // Bytes of an event still arriving hold this call's period until the event ends, and tell the caller the call is alive;
+    // an event that ends with no model output gives the period back (openRouterSilenceV1), which ends this call if overdue.
+    const arriving = (): void => { quiet.arriving(); input.on_progress?.(); };
     const signals: AbortSignal[] = [timeoutSignal];
     if (input.signal !== undefined) signals.push(input.signal);
     const request: RequestInit = {
@@ -432,7 +432,7 @@ export function createOpenRouterStructuredGenerationAdapter(
     try {
       response = await fetchImpl(OPENROUTER_CHAT_COMPLETIONS_URL, request);
     } catch (error) {
-      clearTimeout(silenceTimer);
+      quiet.stop();
       const timedOut = isTimeoutFailure(error) || timeoutSignal.aborted;
       fail("OpenRouter request failed", {
         // The call's own timeout can surface as an AbortError through
@@ -444,19 +444,19 @@ export function createOpenRouterStructuredGenerationAdapter(
     }
     // A redirect answered a request the first endpoint may have run: a failure whose billing is unknown.
     if (response.status >= 300 && response.status < 400) {
-      clearTimeout(silenceTimer);
+      quiet.stop();
       fail("OpenRouter request failed", { failure_class: "adapter_transport", provider_latency_ms: elapsed(providerStartedAt, nowMs) });
     }
     let providerLatency: number | null = null;
     let reply: OpenRouterReplyV1;
     try {
       annotateCoreRuntimeV1({ counts: { http_status: response.status } });
-      reply = await readOpenRouterReplyV1(response, { capacity_bytes: openRouterReplyCapacityBytesV1(input.max_output_tokens), progress: alive });
-      clearTimeout(silenceTimer);
+      reply = await readOpenRouterReplyV1(response, { capacity_bytes: openRouterReplyCapacityBytesV1(input.max_output_tokens), progress: alive, arriving, nothing: quiet.nothing });
+      quiet.stop();
       annotateCoreRuntimeV1({ counts: { output_bytes: reply.bytes } });
       providerLatency = elapsed(providerStartedAt, nowMs);
     } catch (error) {
-      clearTimeout(silenceTimer);
+      quiet.stop();
       // A reply past its transport capacity, or a stream event that is not JSON, is an invalid reply, not a lost one.
       if (error instanceof OpenRouterReplyTooLargeErrorV1 || error instanceof SyntaxError) {
         fail(response.ok ? "OpenRouter response is invalid" : "OpenRouter request failed", {

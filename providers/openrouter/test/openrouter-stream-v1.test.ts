@@ -156,6 +156,31 @@ describe("OpenRouter progress inside one event", () => {
     await expect(adapter.generate({ ...request, timeout_ms: 80 })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_timeout" } });
   });
 
+  /** Usage-only events, each split into two pieces 10 ms apart, for 400 ms; then a whole reply. */
+  const splitUsage = () => stream(function* () {
+    for (let index = 0; index < 20; index += 1) { yield 'data: {"id":"gen-1","choices":[],"usa'; yield 'ge":{"prompt_tokens":1}}\n\n'; }
+    yield 'data: {"choices":[{"delta":{"content":"{\\"signals\\":[]}"},"finish_reason":"stop"}]}\n\n';
+  }, 10);
+
+  it("lets bytes of an unfinished data line hold the timer only provisionally: split usage-only events stall (answer adapter)", async () => {
+    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: splitUsage() });
+    await expect(adapter.generate({ ...request, timeout_ms: 80 })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_timeout" } });
+  });
+
+  it("lets bytes of an unfinished data line hold the timer only provisionally: split usage-only events stall (extraction)", async () => {
+    const client = new OpenRouterClient({ credentialRef: "openrouter", credentialResolver: () => "secret", requestTimeoutMs: 80, fetchImpl: splitUsage() });
+    await expect(client.generateStructured(extraction)).rejects.toMatchObject({ code: "timeout" });
+  });
+
+  it("stalls on usage-only events even when one piece ends an event and begins the next", async () => {
+    const joined = stream(function* () {
+      yield 'data: {"id":"gen-1","choices":[],"usa';
+      for (let index = 0; index < 40; index += 1) yield 'ge":{"prompt_tokens":1}}\n\ndata: {"id":"gen-1","choices":[],"usa';
+    }, 10);
+    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: joined });
+    await expect(adapter.generate({ ...request, timeout_ms: 80 })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_timeout" } });
+  });
+
   it("still does not count a keep-alive comment arriving in fragments", async () => {
     const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
       for (let index = 0; index < 20; index += 1) yield ": OPENROUTER";

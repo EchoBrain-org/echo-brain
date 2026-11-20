@@ -45,6 +45,29 @@ export class OpenRouterStreamCutErrorV1 extends Error {
   constructor() { super('OpenRouter stream closed in the middle of an event'); this.name = 'OpenRouterStreamCutErrorV1'; }
 }
 
+/**
+ * One call's silence period: `expire` runs when the model has produced nothing for `periodMs`. Model output restarts the
+ * period. Bytes of an event line still arriving hold it only until that line ends: when the finished event carried no
+ * model output (a usage-only event sent in pieces, say), the period is measured from the last model output again, so
+ * such events can never keep a call alive, while one long event (a large tool argument) still has time to arrive.
+ */
+export function openRouterSilenceV1(periodMs: number, expire: () => void): {
+  readonly output: () => void; readonly arriving: () => void; readonly nothing: () => void; readonly stop: () => void;
+} {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let last = Date.now();
+  let ended = false;
+  const end = (): void => { if (ended) return; ended = true; clearTimeout(timer); expire(); };
+  const arm = (ms: number): void => { if (ended) return; clearTimeout(timer); timer = setTimeout(end, ms); };
+  return {
+    output: () => { last = Date.now(); arm(periodMs); },
+    arriving: () => arm(periodMs),
+    // Ends at once when overdue, so the next line's first bytes cannot hold a period that has already run out.
+    nothing: () => { const left = last + periodMs - Date.now(); if (left <= 0) end(); else arm(left); },
+    stop: () => { ended = true; clearTimeout(timer); },
+  };
+}
+
 /** A streamed reply arrives assembled; any other reply arrives as its whole body text. */
 export type OpenRouterReplyV1 =
   | { readonly streamed: true; readonly payload: Record<string, unknown>; readonly bytes: number }
@@ -139,13 +162,16 @@ class OpenRouterStreamAssemblerV1 {
 /**
  * Reads the reply as it arrives, holding what it keeps to `capacity_bytes` while reading. A stream is parsed line by
  * line: a comment line is dropped as it arrives, an event is assembled and discarded once its line ends, and `progress`
- * is called for each event the model produced something in and for each piece of an event line still arriving. Any
- * other reply is the reply itself, so each piece of it is progress. Throws OpenRouterReplyTooLargeErrorV1 past the
+ * is called for each event the model produced something in. A piece of an event line still arriving calls `arriving`,
+ * and `nothing` follows when that line ends having carried no model output (see `openRouterSilenceV1`). Any other
+ * reply is the reply itself, so each piece of it is progress. Throws OpenRouterReplyTooLargeErrorV1 past the
  * capacity, SyntaxError on a stream event that is not JSON, and the reader's own error when the body fails or is aborted.
  */
 export async function readOpenRouterReplyV1(response: Response, options: {
   readonly capacity_bytes: number;
   readonly progress: () => void;
+  readonly arriving: () => void;
+  readonly nothing: () => void;
 }): Promise<OpenRouterReplyV1> {
   const streamed = isOpenRouterStreamV1(response);
   const decoder = new TextDecoder();
@@ -155,6 +181,8 @@ export async function readOpenRouterReplyV1(response: Response, options: {
   // The stream line being read, unless it is a comment, which is dropped as it arrives.
   let text = '';
   let comment = false;
+  // Whether `arriving` was called for the line being read.
+  let provisional = false;
   const hold = (more: string): void => {
     if (comment) return;
     if (text === '' && more.startsWith(':')) { comment = true; return; }
@@ -168,25 +196,33 @@ export async function readOpenRouterReplyV1(response: Response, options: {
       return;
     }
     let produced = false;
+    // A line whose arriving bytes held the silence period ended with no model output in it.
+    let empty = false;
+    const ended = (output: boolean): void => {
+      if (output) produced = true; else if (provisional) empty = true;
+      provisional = false;
+    };
     let rest = piece;
     let end: number;
     while ((end = rest.indexOf('\n')) !== -1) {
       hold(rest.slice(0, end));
       rest = rest.slice(end + 1);
-      if (!comment && assembler.line(text.replace(/\r$/u, ''))) produced = true;
+      ended(!comment && assembler.line(text.replace(/\r$/u, '')));
       text = ''; comment = false;
     }
     hold(rest);
     if (final && text !== '') {
       // The stream closed with an event line unfinished: if it does not parse, the connection was cut mid-event (a
       // transport loss, billing unknown), not a malformed reply.
-      try { if (assembler.line(text.replace(/\r$/u, ''))) produced = true; }
+      try { ended(assembler.line(text.replace(/\r$/u, ''))); }
       catch (error) { if (error instanceof SyntaxError) throw new OpenRouterStreamCutErrorV1(); throw error; }
       text = '';
     }
-    // Bytes of a data line still arriving are progress too: one large event (a long tool argument) can take longer than
-    // the silence period to arrive. A keep-alive comment or a control field (`event:`, `id:`, `retry:`) never is.
-    if (produced || (rest !== '' && text.startsWith('data:'))) options.progress();
+    if (produced) options.progress(); else if (empty) options.nothing();
+    // Bytes of a data line still arriving hold the silence period until the line ends: one large event (a long tool
+    // argument) can take longer than the period to arrive. A keep-alive comment or a control field (`event:`, `id:`,
+    // `retry:`) never does.
+    if (rest !== '' && text.startsWith('data:')) { provisional = true; options.arriving(); }
   };
   if (response.body !== null) {
     const reader = response.body.getReader();

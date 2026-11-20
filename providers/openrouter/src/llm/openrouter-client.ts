@@ -18,7 +18,7 @@ import {
 } from "@echo-brain/organization-processing/llm/llm-provider";
 
 import { UNBILLED_REFUSAL_STATUSES_V1 } from '../unbilled-refusal-v1.js';
-import { openRouterReplyCapacityBytesV1, OpenRouterReplyTooLargeErrorV1, OpenRouterStreamCutErrorV1, readOpenRouterReplyV1, type OpenRouterReplyV1 } from '../openrouter-stream-v1.js';
+import { openRouterReplyCapacityBytesV1, OpenRouterReplyTooLargeErrorV1, OpenRouterStreamCutErrorV1, openRouterSilenceV1, readOpenRouterReplyV1, type OpenRouterReplyV1 } from '../openrouter-stream-v1.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -85,11 +85,8 @@ export class OpenRouterClient implements LlmProviderClient {
     }
     if (!nonEmptyString(credential)) throw new AdapterError('unauthorized', 'OpenRouter credential is unavailable', false);
     const silence = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const alive = (): void => {
-      clearTimeout(timer);
-      timer = setTimeout(() => silence.abort(new DOMException('OpenRouter sent nothing for the silence period', 'TimeoutError')), this.requestTimeoutMs);
-    };
+    const quiet = openRouterSilenceV1(this.requestTimeoutMs, () => silence.abort(new DOMException('OpenRouter sent nothing for the silence period', 'TimeoutError')));
+    const alive = quiet.output;
     const stalled = (error: unknown): never => {
       if (signal?.aborted === true) throw new DOMException('OpenRouter request was cancelled', 'AbortError');
       if (silence.signal.aborted || (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError'))) {
@@ -116,7 +113,7 @@ export class OpenRouterClient implements LlmProviderClient {
       }
       let reply: OpenRouterReplyV1;
       try {
-        reply = await readOpenRouterReplyV1(response, { capacity_bytes: openRouterReplyCapacityBytesV1(maxOutputTokens), progress: alive });
+        reply = await readOpenRouterReplyV1(response, { capacity_bytes: openRouterReplyCapacityBytesV1(maxOutputTokens), progress: alive, arriving: quiet.arriving, nothing: quiet.nothing });
       } catch (error) {
         if (error instanceof OpenRouterReplyTooLargeErrorV1) throw invalidProviderResponse('OpenRouter', `reply passed its ${error.capacity_bytes}-byte transport capacity`);
         if (error instanceof SyntaxError) throw new AdapterError('temporarily_unavailable', 'OpenRouter returned a non-JSON response body', true);
@@ -134,7 +131,7 @@ export class OpenRouterClient implements LlmProviderClient {
       // any other 5xx, a gateway 504 included, can arrive after the model ran.
       if (!response.ok) throw providerStatusError('OpenRouter', response.status, UNBILLED_REFUSAL_STATUSES_V1.has(response.status));
       return this.parsed(reply, response);
-    } finally { clearTimeout(timer); }
+    } finally { quiet.stop(); }
   }
 
   private parsed(reply: OpenRouterReplyV1, response: Response): { readonly payload: unknown; readonly response: Response; readonly streamed: boolean } {
