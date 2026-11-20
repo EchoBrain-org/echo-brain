@@ -6,7 +6,6 @@ import {
   extractionGroundingFailureStage,
   extractionSchemaFailureStage,
 } from '../llm/llm-decision-processor.js';
-import { ExtractionInputTooLongError, StructuredGenerationAttemptError } from '../llm/llm-provider.js';
 import { EXTRACTION_ATTEMPT_FAILURE_CODES_V1 } from './extraction-attempt-store-v1.js';
 
 /**
@@ -49,8 +48,9 @@ export function classifyExtractionFailureStageV1(
   const schema = extractionSchemaFailureStage(error);
   if (schema !== undefined) return `schema_${schema}`;
   if (!(error instanceof AdapterError)) return 'unknown';
-  if (error instanceof StructuredGenerationAttemptError && error.observation.stopReason === 'length') return 'output_too_long';
-  if (error instanceof ExtractionInputTooLongError) return 'input_too_long';
+  // Read structurally: this layer may not import the provider port (llm-provider.ts).
+  if ((error as { readonly observation?: { readonly stopReason?: unknown } }).observation?.stopReason === 'length') return 'output_too_long';
+  if (error.name === 'ExtractionInputTooLongError') return 'input_too_long';
   return error.message === EXTRACTION_OUTPUT_JSON_FAILURE_MESSAGE ? 'output_json' : error.code;
 }
 

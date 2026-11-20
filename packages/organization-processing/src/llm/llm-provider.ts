@@ -140,6 +140,7 @@ export function providerStatusError(
 export class ExtractionInputTooLongError extends AdapterError {
   constructor(provider: string) {
     super('permanently_rejected', `${provider} refused the meeting: it is longer than the model's context window`, false, { unbilled: true });
+    this.name = 'ExtractionInputTooLongError';
   }
 }
 
