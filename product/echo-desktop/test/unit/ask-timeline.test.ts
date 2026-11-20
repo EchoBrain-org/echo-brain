@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, AskScope, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
-import { MAX_COPY_CHARACTERS, MAX_REQUEST_BYTES, PREVIOUS_LIMITS } from '../../src/shared/protocol.js';
+import { MAX_COPY_CHARACTERS, MAX_REQUEST_BYTES } from '../../src/shared/protocol.js';
 import {
   allOmitted, answeredNow, askedSuggestions, checkedOf, checkPlan, followedTurn, knownStates, previousOf, shownInFull, showsOf, threadOf, turnGroups,
   unreadableAfter, visibleTurns,
@@ -242,34 +242,16 @@ describe('the earlier turn an Ask carries (C3)', () => {
     expect(previousOf(named, 'follow_up', { 0: 'same' }, 'And since?', { kind: 'global' }).statements).toHaveLength(1);
   });
 
-  it('carries each sentence whole within the API\'s bounds, leaving out only one that does not fit, never cutting one', () => {
-    const { statements: most, statement_bytes: chars, citations: cites, statement_citations: own } = PREVIOUS_LIMITS;
-    // A sentence longer than the API takes, and one citing more than one sentence may, are left out whole; the rest go, uncut.
-    const sources = Array.from({ length: own + 2 }, (_, at) => followUp(`itm_wide-${at}`));
-    const answer = answerOf('Wide?', sources, [['x'.repeat(chars + 1), [0]], ['Cites too much.', Array.from({ length: own + 1 }, (_, at) => at)], ['Kept.', [own + 1]]]);
+  it('carries every readable sentence whole, however long or however many it cites, with no count of its own', () => {
+    const sources = Array.from({ length: 60 }, (_, at) => followUp(`itm_wide-${at}`));
+    const answer = answerOf('Wide?', sources, [['x'.repeat(5_000), [0]], ['Cites them all.', Array.from({ length: 60 }, (_, at) => at)],
+      ...Array.from({ length: 250 }, (_, at) => [`Sentence ${at}.`, [at % 60]] as [string, number[]])]);
     const wide = turn('Wide?', HOUR, answer);
     const previous = previousOf(wide, 'ask_again', answeredNow(wide), 'Wide?', { kind: 'global' });
-    expect(previous.statements).toEqual([{ text: 'Kept.', citation_indexes: [0] }]);
-    expect(previous.citations).toEqual([sources[own + 1]!.cited]);
-    expect(previous.statements.some(statement => statement.text.includes('…'))).toBe(false);
-    // A sentence of exactly the API's length goes whole.
-    const full = turn('Full?', HOUR, answerOf('Full?', [followUp('itm_full-0')], [['y'.repeat(chars), [0]]]));
-    expect(previousOf(full, 'follow_up', answeredNow(full), 'And?', { kind: 'global' }).statements[0]!.text).toBe('y'.repeat(chars));
-    // No more sentences than the API takes.
-    const many = turn('Many?', HOUR, answerOf('Many?', [followUp('itm_many-0')], Array.from({ length: most + 1 }, (_, at) => [`Sentence ${at}.`, [0]] as [string, number[]])));
-    expect(previousOf(many, 'follow_up', answeredNow(many), 'And?', { kind: 'global' }).statements).toHaveLength(most);
-    // A sentence that would take the citations past the API's bound is left out; a later one citing what already goes still goes.
-    const groups = Math.floor(cites / own);
-    const all = Array.from({ length: (groups + 1) * own }, (_, at) => followUp(`itm_c-${at}`));
-    const sentences: [string, number[]][] = [
-      ...Array.from({ length: groups + 1 }, (_, group) => [`Group ${group}.`, Array.from({ length: own }, (_, at) => group * own + at)] as [string, number[]]),
-      ['Again the first.', [0]],
-    ];
-    const cited = turn('Cited?', HOUR, answerOf('Cited?', all, sentences));
-    const carried = previousOf(cited, 'follow_up', answeredNow(cited), 'And?', { kind: 'global' });
-    expect(carried.citations.length).toBeLessThanOrEqual(cites);
-    expect(carried.statements.map(statement => statement.text)).toEqual([...Array.from({ length: groups }, (_, group) => `Group ${group}.`), 'Again the first.']);
-    expect(carried.statements.flatMap(statement => statement.citation_indexes).every(at => at < carried.citations.length)).toBe(true);
+    expect(previous.statements).toHaveLength(252);
+    expect(previous.statements[0]!.text).toBe('x'.repeat(5_000));
+    expect(previous.statements[1]!.citation_indexes).toHaveLength(60);
+    expect(previous.citations).toHaveLength(60);
   });
 
   it('sends each citation once, however many places of the answer cite it, and each sentence citing it once', () => {

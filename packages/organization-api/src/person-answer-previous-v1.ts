@@ -26,14 +26,8 @@ import type { PersonAnswerCitationV8 } from './person-answer-v8.js';
 
 /**
  * The earlier answer a request carries is the whole answer as it was released, so a follow-up can point at any of it:
- * the API counts none of its sentences or citations; the request's transport bound decides what fits. The three counts
- * below are no longer read by the API; the desktop still imports them for its own check of a turn it sends, and they
- * go with that check.
+ * the API counts none of its sentences or citations; the request's transport bound decides what fits.
  */
-export const PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1 = 200;
-export const PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1 = 4 * 1024;
-export const PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1 = 400;
-export const PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1 = 40;
 
 export type PersonAnswerPreviousPurposeV1 = 'follow_up' | 'ask_again';
 

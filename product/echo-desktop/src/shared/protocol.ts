@@ -4,10 +4,6 @@ import type {
   PersonAskCheckCitationKindV1, PersonAskCheckItemV1, PersonAskCheckRequestItemV1, PersonAskCheckStateV1, PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2,
   PersonMeetingResultsV2, PersonReviewRequestV1, PersonReviewResultsV1, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonProjectActivityItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
-import {
-  PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1,
-  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
-} from '@echo-brain/organization-api/person-answer-previous-v1';
 // The only shapes that cross process boundaries. Everything here is
 // token-free: the person host builds these view models from the client's
 // validated output, and the renderer never sees a token, a path or a
@@ -432,11 +428,6 @@ export const MAX_REQUEST_BYTES = 1024 * 1024;
  * `ask_again` has the writer say what is different since `asked_at`.
  */
 export type AskPrevious = PersonAnswerPreviousV1;
-/** C3's bounds on `previous`, as the API states them. */
-export const PREVIOUS_LIMITS = {
-  statements: PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1, statement_bytes: PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1,
-  citations: PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, statement_citations: PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
-} as const;
 
 /** The newest thing that arrived in one of your projects from someone else that you can read, or null (C2). */
 export type ProjectActivity = PersonProjectActivityItemV1;

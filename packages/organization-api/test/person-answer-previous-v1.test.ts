@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
   PERSON_ANSWER_REQUEST_MAX_BYTES_V3,
-  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1,
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV8,
 } from '../src/index.js';
@@ -45,7 +44,7 @@ describe('the previous turn on the Ask request (ADR-0047)', () => {
       { text: `${'é'.repeat(1_000)}`, citation_indexes: Array.from({ length: 60 }, (_, index) => index) }];
     expect(validatePersonAnswerRequestV3(ask(previous({ citations, statements }))).previous!.statements).toHaveLength(250);
     // A sentence of any length: only the request's own transport bound limits it.
-    expect(validatePersonAnswerRequestV3(ask(previous({ statements: [{ text: 'é'.repeat(PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1), citation_indexes: [] }] }))).previous!.statements).toHaveLength(1);
+    expect(validatePersonAnswerRequestV3(ask(previous({ statements: [{ text: 'é'.repeat(4 * 1024), citation_indexes: [] }] }))).previous!.statements).toHaveLength(1);
     // A sentence may cite nothing the asker can still read; one that cites nothing at all is still the asker's context.
     expect(validatePersonAnswerRequestV3(ask(previous({ statements: [{ text: 'It is on hold.', citation_indexes: [] }] }))).previous!.statements[0]!.citation_indexes).toEqual([]);
   });

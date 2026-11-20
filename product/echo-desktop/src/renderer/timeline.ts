@@ -6,7 +6,7 @@
 import type {
   Answer, AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskScope, CheckCitation, TimelineTurn,
 } from '../shared/protocol.js';
-import { checkOf, MAX_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
+import { checkOf, MAX_REQUEST_BYTES } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerSentences, sourceGroups, type Sentence, type Shows, type SourceGroup } from './answer.js';
 
@@ -213,9 +213,6 @@ export function followedTurn(turns: readonly TimelineTurn[], opened: string | nu
 }
 
 /** Unicode characters (code points) of `text`, as the API counts a sentence. */
-/** UTF-8 bytes, as the API bounds an earlier sentence. */
-const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length;
-
 /** An Ask request's body as the client sends it (`PersonAnswerRequestV3`), for its bytes. */
 function bodyBytes(question: string, scope: AskScope, previous: AskPrevious): number {
   const body = { schema_version: 3, question, ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}), previous };
@@ -235,11 +232,8 @@ export function answeredNow(turn: TimelineTurn): TurnChecks {
  * The earlier turn an Ask carries (C3): its full question and when it was
  * asked; its sentences you can still read, in the order the answer says
  * them, each whole, with the citations they cite, as the answer's response
- * carried them, renumbered in the order first cited, all within the API's
- * bounds on `previous` (PREVIOUS_LIMITS). A sentence is never cut: one over a
- * bound (its length, or its own citations) is left out whole, and so is one
- * that would take the citations past theirs, while later sentences citing
- * what already goes still go. A sentence goes only when what is known now
+ * carried them, renumbered in the order first cited. A sentence is never
+ * cut, and the API counts none of them. A sentence goes only when what is known now
  * (`known`: what a check said in the last five minutes, or a new turn's own
  * answer) has each source it cites that a check asks about readable; with
  * nothing known (null), none goes, only the question (C5): `previous` is
@@ -271,15 +265,7 @@ export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], 
     });
     return { purpose, question: askText(turn.question), asked_at: turn.asked_at, statements, citations };
   };
-  const chosen: AnswerStatement[] = [];
-  for (const statement of readable) {
-    if (chosen.length === PREVIOUS_LIMITS.statements) break;
-    const next = build([...chosen, statement]);
-    const own = next.statements.at(-1)!;
-    if (utf8Bytes(own.text) > PREVIOUS_LIMITS.statement_bytes || own.citation_indexes.length > PREVIOUS_LIMITS.statement_citations
-        || next.citations.length > PREVIOUS_LIMITS.citations) continue;
-    chosen.push(statement);
-  }
+  const chosen: AnswerStatement[] = [...readable];
   let previous = build(chosen);
   // A little short of the bound, for how the client writes the same body.
   while (chosen.length > 0 && bodyBytes(question, scope, previous) > MAX_REQUEST_BYTES - 256) {

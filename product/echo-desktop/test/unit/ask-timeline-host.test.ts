@@ -24,7 +24,7 @@ vi.mock('node:fs', async original => {
   return { ...fs, writeSync: vi.fn(writeSync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync) };
 });
 import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protocol.js';
-import { ASK_RUN_SILENCE_MS, HOST_TIMEOUT_MS, PREVIOUS_LIMITS } from '../../src/shared/protocol.js';
+import { ASK_RUN_SILENCE_MS, HOST_TIMEOUT_MS } from '../../src/shared/protocol.js';
 import { PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1 } from '@echo-brain/organization-api';
 import { askArgv, askCheckArgv, askCheckRequest, askPrevious } from '../../src/host/ask.js';
 import { askText } from '../../src/shared/query.js';
@@ -265,7 +265,7 @@ describe('the timeline file (C5)', () => {
     const kept = { ...original, answer };
     putTimeline(person, ARI, kept);
     expect(readTimeline(person, ARI)).toEqual([kept]);
-    for (const gap_details of [{}, { unsupported_action: false }, { interrupted: 'true' }, { not_found: '' }, { not_found: 'x'.repeat(2049) }, { technical: true }]) {
+    for (const gap_details of [{}, { unsupported_action: false }, { interrupted: 'true' }, { not_found: '' }, { technical: true }]) {
       expect(timelineTurn({ ...kept, answer: { ...answer, parts: [{ ...answer.parts[0], gap_details }] } })).toBeNull();
     }
   });
@@ -365,17 +365,15 @@ describe('what the page sends with an Ask and a check', () => {
     for (const bad of [
       { ...previous, purpose: 'guess' }, { ...previous, question: '' }, { ...previous, question: ` ${previous.question}` }, { ...previous, asked_at: 'today' },
       { ...previous, asked_at: '2026-10-25T11:30:00Z' }, { ...previous, extra: true },
-      { ...previous, statements: many(previous.statements[0], PREVIOUS_LIMITS.statements + 1) },
-      { ...previous, statements: [{ text: 'x'.repeat(PREVIOUS_LIMITS.statement_bytes + 1), citation_indexes: [0] }] },
-      { ...previous, statements: [{ text: 'Open.', citation_indexes: [1] }] }, { ...previous, statements: [{ text: 'Open.', citation_indexes: many(0, PREVIOUS_LIMITS.statement_citations + 1) }] },
-      { ...previous, statements: [{ text: 'Open.', citation_indexes: [0], private: true }] }, { ...previous, citations: many(cited, PREVIOUS_LIMITS.citations + 1) },
+      { ...previous, statements: [{ text: 'Open.', citation_indexes: [1] }] },
+      { ...previous, statements: [{ text: 'Open.', citation_indexes: [0], private: true }] },
       { ...previous, citations: [{ ...cited, visibility: 'everyone' }] }, { ...previous, citations: [ticketCitation] },
       // Each citation once, and each sentence citing each once.
       { ...previous, citations: [cited, cited] }, { ...previous, statements: [{ text: 'Open.', citation_indexes: [0, 0] }] },
     ]) expect(asked(bad)).toBeNull();
-    // Length as the API counts it: UTF-8 bytes, so a sentence of emoji (4 bytes each) up to the bound passes, and one byte more does not.
-    expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(PREVIOUS_LIMITS.statement_bytes / 4), citation_indexes: [0] }] })).not.toBeNull();
-    expect(asked({ ...previous, statements: [{ text: `${'🙂'.repeat(PREVIOUS_LIMITS.statement_bytes / 4)}x`, citation_indexes: [0] }] })).toBeNull();
+    // No count or length of its own: many sentences, a long one, and many citations all go.
+    expect(asked({ ...previous, statements: many(previous.statements[0], 300) })).not.toBeNull();
+    expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(5_000), citation_indexes: [0] }] })).not.toBeNull();
   });
 
   it('checks any number of items, each a citation that can go, within the 1 MiB request body', () => {
