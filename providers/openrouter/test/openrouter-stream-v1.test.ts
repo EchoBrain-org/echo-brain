@@ -113,6 +113,14 @@ describe("OpenRouter progress inside one event", () => {
     await expect(adapter.generate({ ...request, schema, max_output_tokens: 100, timeout_ms: 80 })).resolves.toEqual({ f0: "x".repeat(60) });
   });
 
+  it("counts only the bytes of a data line: control fields such as event: ping split across chunks are not progress", async () => {
+    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
+      for (let index = 0; index < 20; index += 1) { yield "event: pi"; yield "ng\n\n"; }
+      yield 'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}\n\n';
+    }, 10) });
+    await expect(adapter.generate({ ...request, timeout_ms: 80 })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_timeout" } });
+  });
+
   it("still does not count a keep-alive comment arriving in fragments", async () => {
     const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
       for (let index = 0; index < 20; index += 1) yield ": OPENROUTER";

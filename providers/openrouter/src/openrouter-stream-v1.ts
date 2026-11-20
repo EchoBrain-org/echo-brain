@@ -169,9 +169,9 @@ export async function readOpenRouterReplyV1(response: Response, options: {
       catch (error) { if (error instanceof SyntaxError) throw new OpenRouterStreamCutErrorV1(); throw error; }
       text = '';
     }
-    // Bytes of an event still arriving are progress too: one large event (a long tool argument) can take longer than
-    // the silence period to arrive. A keep-alive comment never is.
-    if (produced || (rest !== '' && text !== '')) options.progress();
+    // Bytes of a data line still arriving are progress too: one large event (a long tool argument) can take longer than
+    // the silence period to arrive. A keep-alive comment or a control field (`event:`, `id:`, `retry:`) never is.
+    if (produced || (rest !== '' && text.startsWith('data:'))) options.progress();
   };
   if (response.body !== null) {
     const reader = response.body.getReader();
