@@ -34,8 +34,11 @@ export const LLM_DECISION_PROCESSOR_ADAPTER_VERSION = '2.0.0';
 export const LLM_DECISION_PROCESSOR_PROMPT_VERSION = 'decision-extraction-v11';
 export const LLM_DECISION_PROCESSOR_SCHEMA_VERSION =
   'decision-extraction-schema-v8';
-/** Most cited unit text kept per item, in characters. */
-const EVIDENCE_CHARACTERS_PER_SIGNAL = 3_000;
+/**
+ * Most cited unit text kept per item, in characters (25 full 600-character units). It keeps one item from taking the
+ * meeting's whole evidence allowance below; owner and status are judged before it applies.
+ */
+const EVIDENCE_CHARACTERS_PER_SIGNAL = 15_000;
 /** Most evidence per meeting, as the UTF-8 bytes of each span's JSON, which keeps the approved record under 256 KiB. */
 const EVIDENCE_BYTES_PER_MEETING = 160_000;
 
@@ -112,6 +115,8 @@ interface CheckedSignal {
   readonly confidence: number | null;
   /** Known cited units, de-duplicated, in citation order, within EVIDENCE_CHARACTERS_PER_SIGNAL. */
   readonly units: readonly MeetingEvidenceUnitV1[];
+  /** Known cited units the item budget left out. */
+  readonly trimmed: number;
   /** The model's raw decision indexes; only those of surviving decisions are kept. */
   readonly supports: readonly unknown[];
 }
@@ -495,8 +500,9 @@ function checkedSignal(
     return 'evidence_shape';
   }
   const citations = cited.map((id) => { const unit = citedUnitId(id); return { id, unit, parts: targets.get(unit) }; });
-  const units = withinEvidenceBudget([...new Set(citations.flatMap(({ parts }) => parts ?? []))]);
-  if (units.length === 0) return 'evidence_id';
+  const known = [...new Set(citations.flatMap(({ parts }) => parts ?? []))];
+  if (known.length === 0) return 'evidence_id';
+  const units = withinEvidenceBudget(known);
   // How code read a kept item's citations: another spelling, a split unit's parent, an ID that names no unit.
   for (const { id, unit, parts } of citations) {
     if (parts === undefined) observeCoreModelCorrectionV1('extraction_unknown_unit_dropped');
@@ -506,8 +512,8 @@ function checkedSignal(
     }
   }
   const supports = record['supports_decision_indexes'];
-  // A choice cited only from questions was not made in the meeting.
-  const downgraded = status === 'decided' && units.every((unit) => unit.question);
+  // A choice cited only from questions was not made in the meeting. Judged on every known cited unit, so no trim changes it.
+  const downgraded = status === 'decided' && known.every((unit) => unit.question);
   if (downgraded) observeCoreModelCorrectionV1('extraction_decided_downgraded');
   // A proposed owner is offered to the approver, who confirms or clears it (ADR-0021); it is never recorded unconfirmed.
   // A malformed proposal is dropped, never an extraction failure.
@@ -529,6 +535,7 @@ function checkedSignal(
     dueAt,
     confidence,
     units,
+    trimmed: known.length - units.length,
     supports: kind === 'rationale' && Array.isArray(supports) ? supports : [],
   };
 }
@@ -567,26 +574,29 @@ interface KeptSignal {
 /**
  * While the meeting's evidence is over EVIDENCE_BYTES_PER_MEETING, drops the
  * last span of the item with the most evidence bytes that still has more than
- * one span (the lower model index on a tie). Every item keeps one span.
+ * one span (the lower model index on a tie). Every item keeps one span. Returns how many spans it dropped.
  */
-function fitEvidenceCeiling(kept: readonly KeptSignal[]): void {
+function fitEvidenceCeiling(kept: readonly KeptSignal[]): number {
   const sized = kept.map((item) => {
     const sizes = item.spans.map((span) => Buffer.byteLength(JSON.stringify(span)));
     return { item, sizes, bytes: sizes.reduce((sum, size) => sum + size, 0) };
   });
   let total = sized.reduce((sum, { bytes }) => sum + bytes, 0);
+  let dropped = 0;
   while (total > EVIDENCE_BYTES_PER_MEETING) {
     let largest: (typeof sized)[number] | undefined;
     for (const entry of sized) {
       if (entry.sizes.length > 1 && (largest === undefined || entry.bytes > largest.bytes
         || (entry.bytes === largest.bytes && entry.item.signal.index < largest.item.signal.index))) largest = entry;
     }
-    if (largest === undefined) return;
+    if (largest === undefined) break;
     const removed = largest.sizes.pop()!;
     largest.item.spans.pop();
     largest.bytes -= removed;
     total -= removed;
+    dropped += 1;
   }
+  return dropped;
 }
 
 /**
@@ -660,7 +670,9 @@ function groundedSignals(
     if (isGroundingStage(first.reason)) extractionGroundingFailure(first.reason, { signal_index: first.index });
     extractionSchemaFailure(first.reason);
   }
-  fitEvidenceCeiling(kept);
+  // Cited units left out by the item budget or the meeting ceiling; owner and status were judged before either trim.
+  const trimmed = kept.reduce((sum, { signal }) => sum + signal.trimmed, 0) + fitEvidenceCeiling(kept);
+  if (trimmed > 0) observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'grounding', event: 'succeeded', data: { evidence_units_trimmed: trimmed } });
   // Ids hash the final evidence. An item trimmed into a repeat of an earlier one
   // shares its id, so it is dropped and links to it follow the earlier one.
   const ids = new Map(kept.map((entry) => [entry, stableSignalId(meeting, entry.signal, entry.spans)]));
@@ -678,11 +690,10 @@ function groundedSignals(
     .sort((left, right) => left.signal.index - right.signal.index)
     .map((entry): ExtractedSignal => {
       const { signal, spans, supports } = entry;
-      const retained = signal.units.slice(0, spans.length);
       const base = { id: ids.get(entry)!, text: signal.text, subject: null, confidence: signal.confidence, evidence: spans };
       switch (signal.kind) {
         case 'decision':
-          return { ...base, kind: 'decision', status: signal.status === 'decided' && retained.every(unit => unit.question) ? 'proposed' : signal.status };
+          return { ...base, kind: 'decision', status: signal.status };
         case 'action':
           return { ...base, kind: 'action', owner: signal.owner, due_at: signal.dueAt };
         case 'rationale': {
