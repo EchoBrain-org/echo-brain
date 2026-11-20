@@ -106,7 +106,10 @@ describe("a meeting item kept private inside a project (ADR-0049)", () => {
     }
     const route = w.route();
     const projectsOf = (access_token: ReaderToken) => createRecordProjectAuthorizationV1(new SqliteProjectContextRepositoryV1(w.authority))(w.sessions.authenticateAccess({ access_token }));
-    const activity = (access_token: ReaderToken) => route.projectRecordActivity({ access_token, projects: projectsOf(access_token), project_ids: [SHARED], own: new Set() }).get(SHARED);
+    const activity = (access_token: ReaderToken) => {
+      const records = route.projectRecordActivity({ access_token, projects: projectsOf(access_token), project_ids: [SHARED], own: new Set() }).get(SHARED)!;
+      return { meeting_at: records.meeting_at, filed: [...records.filed()].flat() };
+    };
     const arrival = (name: string) => w.record.prepare("SELECT receipt_issued_at FROM organization_record_log WHERE record_sha256 = ?").pluck().get(w.digest(name)) as string;
     const kept = Array.from({ length: 500 }, (_, index) => w.digest(`kept-${499 - index}`));
     // To EMP_A they are not filed in SHARED at all: OWNER's r3 is still the news, past none of them.
