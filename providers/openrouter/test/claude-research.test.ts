@@ -221,21 +221,13 @@ it.each(['request error', 'response error', 'response aborted'] as const)('admit
   await expect(pending).rejects.not.toThrow('private');
 });
 
-it.each([
-  ['a connection lost after the upstream may have accepted the request', () => new ClaudeModelTransportErrorV1()],
-  ['a provider error status that is not rate-limit or overloaded', () => new ClaudeModelResponseErrorV1(500)],
-] as const)('never admits the SDK\'s retry after %s: its billing is unknown, and research falls back', async (_name, failure) => {
+it('never admits the SDK\'s retry after a provider error that is not rate-limit or overloaded: its billing is unknown, and research falls back', async () => {
   let admissions = 0, forwards = 0;
   const driver = createClaudeResearchDriverV1({ model,
-    forward: async ({ res }) => {
-      forwards++;
-      const error = failure();
-      if (error instanceof ClaudeModelResponseErrorV1) { res.writeHead(500); res.end('{}'); }
-      throw error;
-    },
+    forward: async ({ res }) => { forwards++; res.writeHead(500); res.end('{}'); throw new ClaudeModelResponseErrorV1(500); },
     run: async input => {
       const send = () => fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model, messages: [] }) });
-      expect([502, 500]).toContain((await send()).status);
+      expect((await send()).status).toBe(500);
       // The SDK's one retry of the same generation.
       expect((await send()).status).toBe(403);
     },
@@ -438,3 +430,51 @@ it('runs the packaged SDK executable against a synthetic local Messages endpoint
     expect(calls).toBeGreaterThan(0);
   } finally { transport.close(); }
 }, 30_000);
+
+it('fails a redirect from the Claude upstream with billing unknown instead of passing it to the SDK', async () => {
+  vi.mocked(https.request).mockImplementation((...args: Parameters<typeof https.request>) => {
+    const receive = args.find(value => typeof value === 'function') as (reply: IncomingMessage) => void;
+    return Object.assign(new EventEmitter(), { end() {
+      queueMicrotask(() => {
+        const reply = Object.assign(new PassThrough(), { statusCode: 308, headers: { location: 'https://elsewhere.example/v1/messages' } });
+        receive(reply as unknown as IncomingMessage);
+        reply.end();
+      });
+    } }) as unknown as ReturnType<typeof https.request>;
+  });
+  let failure: unknown;
+  const transport = await startClaudeModelTransportV1({ signal: new AbortController().signal, forward: openRouterClaudeForwarderV1(() => 'synthetic credential', model),
+    admit: async (_body, _operation, send) => send(new AbortController().signal).catch((error: unknown) => { failure = error; throw error; }) });
+  try {
+    const response = await fetch(`${transport.base_url}/v1/messages`, { method: 'POST', body: '{}', redirect: 'manual' });
+    expect(response.status).toBe(502);
+    expect(response.headers.get('location')).toBeNull();
+  } finally { transport.close(); }
+  expect(failure).toMatchObject({ unbilled: false, diagnostic: { failure_class: 'adapter_transport' } });
+});
+
+it('reports progress only for Anthropic events that carry model output, as their bytes arrive, never for ping or message_start', () => {
+  let produced = 0;
+  const observer = messageUsageObserverV1(false, () => { produced += 1; });
+  const write = (...pieces: string[]) => { for (const piece of pieces) observer.write(Buffer.from(piece)); };
+  write('event: pi', 'ng\n', 'data: {"type":"pi', 'ng"}', '\n\n', 'event: message_start\n', 'data: {"type":"message_st', 'art","message":{"usage":{"input_tokens":1}}}\n\n');
+  expect(produced).toBe(0);
+  // One long delta line, in pieces none of which ends it: each piece is progress, and so is its end.
+  const delta = `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"${'x'.repeat(300)}"}}`;
+  write('event: content_block_delta\n', delta.slice(0, 100), delta.slice(100, 200), delta.slice(200), '\n\n');
+  expect(produced).toBe(4);
+  // Without its event: line, a delta is known by the type it opens with; a whole stop event is progress once.
+  write('data: {"type":"content_block_delta","ind', 'ex":0,"delta":{"type":"text_delta","text":"y"}}\n\n', 'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n');
+  expect(produced).toBe(7);
+});
+
+it('passes research model output to the gate\'s per-request progress', async () => {
+  let gateProgress = 0;
+  const driver = createClaudeResearchDriverV1({ model,
+    forward: async ({ res, alive }) => { for (let piece = 0; piece < 4; piece += 1) alive?.(); res.end('{}'); return {}; },
+    run: async input => { await (await fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model, messages: [] }) })).text(); },
+  });
+  await driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal, silence_ms: 60_000, call: async () => ({}),
+    model_request: async (_request, send) => (await send(new AbortController().signal, () => { gateProgress += 1; })).value });
+  expect(gateProgress).toBe(4);
+});

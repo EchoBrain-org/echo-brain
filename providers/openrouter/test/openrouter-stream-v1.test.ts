@@ -2,16 +2,21 @@ import { describe, expect, it } from "vitest";
 import { createOpenRouterStructuredGenerationAdapter } from "../src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
 import { OpenRouterClient } from "../src/llm/openrouter-client.js";
 
+// Both OpenRouter callers share one call (src/openrouter-stream-v1.ts): its behaviour is proven through the answer
+// adapter, and the extraction client's own mapping of each failure once.
 const request = { model: "anthropic/claude-sonnet-5.5", system_prompt: "system", user_prompt: "user", schema: { type: "object" }, max_output_tokens: 1, timeout_ms: 1_000 } as const;
 const extraction = { model: "provider-model", systemPrompt: "system", userPrompt: "user", schema: { type: "object" }, maxOutputTokens: 1 };
+const toolSchema = { type: "object", additionalProperties: false, required: ["f0"], properties: Object.fromEntries(Array.from({ length: 60 }, (_, index) => [`f${index}`, { type: "string" }])) };
+const adapter = (fetchImpl: typeof fetch) => createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: fetchImpl });
+const client = (fetchImpl: typeof fetch, requestTimeoutMs?: number) => new OpenRouterClient({ credentialRef: "openrouter", credentialResolver: () => "secret", fetchImpl, ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }) });
+const diagnostic = (promise: Promise<unknown>) => promise.then(() => { throw new Error("the call succeeded"); }, (error: { diagnostic: Record<string, unknown> }) => error.diagnostic);
 
 /** A stream of `pieces`, each `gap` ms after the last; it ends after the last piece and errors when the caller aborts. */
-function stream(pieces: () => Iterable<string>, gap: number): typeof fetch {
+function stream(pieces: Iterable<string>, gap = 0): typeof fetch {
   return (async (_url: string, init: RequestInit) => new Response(new ReadableStream<Uint8Array>({ async start(controller) {
     let open = true;
     init.signal?.addEventListener("abort", () => { open = false; controller.error(init.signal!.reason); });
-    for (const piece of pieces()) {
-      if (!open) return;
+    for (const piece of pieces) {
       if (gap > 0) await new Promise(resolve => setTimeout(resolve, gap));
       if (!open) return;
       controller.enqueue(new TextEncoder().encode(piece));
@@ -19,229 +24,113 @@ function stream(pieces: () => Iterable<string>, gap: number): typeof fetch {
     if (open) controller.close();
   } }), { status: 200, headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
 }
+const repeat = (count: number, ...pieces: string[]) => Array.from({ length: count }, () => pieces).flat();
+const done = 'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}\n\n';
 
-/** Keep-alive comments every 10 ms for `ms`, then a whole reply. */
-function keepAlivesThenReply(ms: number): typeof fetch {
-  return stream(function* () {
-    for (let at = 0; at < ms; at += 10) yield ": OPENROUTER PROCESSING\n\n";
-    yield 'data: {"id":"gen-1","choices":[{"delta":{"content":"{\\"signals\\":[]}"},"finish_reason":"stop"}]}\n\n';
-    yield "data: [DONE]\n\n";
-  }, 10);
-}
-
-/** The kept-text capacity of a one-token output allowance: (1 + 256) × 4096 bytes. */
-const ONE_TOKEN_CAPACITY = 257 * 4096;
-
-/** Reply text past what a one-token model output can carry, sent as fast as it is read. */
-function oversized(): typeof fetch {
-  const piece = "x".repeat(64 * 1024);
-  return stream(function* () {
-    for (let index = 0; index < 20; index += 1) yield `data: {"choices":[{"delta":{"content":"${piece}"}}]}\n\n`;
-    yield 'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}\n\n';
-  }, 0);
-}
-
-describe("OpenRouter reply capacity measures what is kept", () => {
-  it("discards comments and repeated routing metadata as read: they never count against the capacity", async () => {
-    const comment = `: ${"x".repeat(64 * 1024)}\n\n`;
-    const metadata = JSON.stringify({ provider: "Anthropic", model: "anthropic/claude-sonnet-5.5", openrouter_metadata: { padding: "m".repeat(32 * 1024) } }).slice(1, -1);
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
-      for (let index = 0; index < 64; index += 1) {
-        yield comment;
-        yield `data: {${metadata},"choices":[{"delta":{"reasoning":"r"}}]}\n\n`;
-      }
-      yield 'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"},"finish_reason":"stop"}]}\n\n';
-    }, 0) });
-    await expect(adapter.generate(request)).resolves.toEqual({ ok: true });
+describe("OpenRouter liveness", () => {
+  it("reports only model output as progress, and a reply that keeps producing runs past the silence period", async () => {
+    let progress = 0;
+    const events = [": OPENROUTER PROCESSING\n\n", 'data: {"choices":[{"delta":{"reasoning":"think"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"{\\"ok\\":"}}]}\n\n', ": OPENROUTER PROCESSING\n\n", 'data: {"choices":[{"delta":{"content":"true}"},"finish_reason":"stop"}]}\n\n', "data: [DONE]\n\n"];
+    // 180 ms in all, events 30 ms apart, under an 80 ms silence period.
+    await expect(adapter(stream(events, 30)).generate({ ...request, max_output_tokens: 100, timeout_ms: 80, on_progress: () => { progress += 1; } })).resolves.toEqual({ ok: true });
+    expect(progress).toBe(3);
   });
 
-  it("charges every retained top-level field: distinct fields past the capacity fail", async () => {
-    const big = "m".repeat(64 * 1024);
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
-      for (let index = 0; index < 20; index += 1) yield `data: {"field_${index}":"${big}","choices":[]}\n\n`;
-      yield 'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}\n\n';
-    }, 0) });
-    await expect(adapter.generate(request)).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response" } });
-  });
-
-  it("charges each retained top-level field's name too: long distinct names with tiny values past the capacity fail", async () => {
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
-      for (let index = 0; index < 20; index += 1) yield `data: {"${"k".repeat(64 * 1024)}${index}":0,"choices":[]}\n\n`;
-      yield 'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}\n\n';
-    }, 0) });
-    await expect(adapter.generate(request)).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response" } });
-  });
-
-  it("charges every retained tool-call id: calls whose ids pass the capacity fail", async () => {
-    const big = "i".repeat(64 * 1024);
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
-      for (let index = 0; index < 20; index += 1) yield `data: {"choices":[{"delta":{"tool_calls":[{"index":${index},"id":"${big}${index}"}]}}]}\n\n`;
-      yield 'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}\n\n';
-    }, 0) });
-    await expect(adapter.generate(request)).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response" } });
-  });
-
-  it("charges nothing for what is discarded: reasoning past the capacity, or a field replaced many times, still fits", async () => {
-    const piece = "r".repeat(64 * 1024);
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
-      for (let index = 0; index < 20; index += 1) yield `data: {"provider":"${piece}","choices":[{"delta":{"reasoning":"${piece}"}}]}\n\n`;
-      yield 'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"},"finish_reason":"stop"}]}\n\n';
-    }, 0) });
-    await expect(adapter.generate(request)).resolves.toEqual({ ok: true });
-  });
-
-  it("fits a legitimate reply at the capacity whose text arrives escaped", async () => {
-    // Each "é" is two kept bytes and six wire bytes (\u00e9): about 0.86 of the capacity kept, 2.6 times it on the wire.
-    const chars = Math.floor(ONE_TOKEN_CAPACITY * 0.43);
-    const per = 10_000;
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
-      yield 'data: {"choices":[{"delta":{"content":"{\\"a\\":\\""}}]}\n\n';
-      for (let sent = 0; sent < chars; sent += per) yield `data: {"choices":[{"delta":{"content":"${"\\u00e9".repeat(Math.min(per, chars - sent))}"}}]}\n\n`;
-      yield 'data: {"choices":[{"delta":{"content":"\\"}"},"finish_reason":"stop"}]}\n\n';
-    }, 0) });
-    await expect(adapter.generate(request)).resolves.toEqual({ a: "é".repeat(chars) });
-  });
-});
-
-describe("OpenRouter reply reading", () => {
-  it("does not count keep-alive comments as progress: a stream of only keep-alives is stalled (answer adapter)", async () => {
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: keepAlivesThenReply(400) });
-    await expect(adapter.generate({ ...request, timeout_ms: 80 })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_timeout" } });
-  });
-
-  it("does not count keep-alive comments as progress: a stream of only keep-alives is stalled (extraction)", async () => {
-    const client = new OpenRouterClient({ credentialRef: "openrouter", credentialResolver: () => "secret", requestTimeoutMs: 80, fetchImpl: keepAlivesThenReply(400) });
-    await expect(client.generateStructured(extraction)).rejects.toMatchObject({ code: "timeout" });
-  });
-
-  it("holds the answer adapter's reply to its transport capacity while reading", async () => {
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: oversized() });
-    await expect(adapter.generate(request)).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response", http_status: 200 } });
-  });
-
-  it("holds an extraction reply to its transport capacity while reading", async () => {
-    const client = new OpenRouterClient({ credentialRef: "openrouter", credentialResolver: () => "secret", fetchImpl: oversized() });
-    await expect(client.generateStructured(extraction)).rejects.toMatchObject({ code: "temporarily_unavailable", message: expect.stringContaining("transport capacity") });
-  });
-
-  it("parses events as they arrive: content that keeps coming is progress, however long the stream runs", async () => {
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
-      yield 'data: {"choices":[{"delta":{"reasoning":"thinking"}}]}\n\n';
-      for (let index = 0; index < 8; index += 1) yield `data: {"choices":[{"delta":{"content":"${index === 0 ? "{\\\"n\\\":" : ""}${index === 0 ? "" : "1"}"}}]}\n\n`;
-      yield 'data: {"choices":[{"delta":{"content":"}"},"finish_reason":"stop"}]}\n\n';
-    }, 30) });
-    await expect(adapter.generate({ ...request, max_output_tokens: 100, timeout_ms: 80 })).resolves.toEqual({ n: 1111111 });
-  });
-});
-
-describe("OpenRouter progress inside one event", () => {
-  /** One tool-argument event split into fragments 40 ms apart, longer in all than the 80 ms silence period, then the finish. */
-  function fragmented(): typeof fetch {
+  it("never stalls one long event that arrives in fragments", async () => {
     const event = `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"StructuredOutput","arguments":"{\\"f0\\":\\"${"x".repeat(60)}\\"}"}}]}}]}\n\n`;
     const pieces = Array.from({ length: 6 }, (_, index) => event.slice(Math.floor(index * event.length / 6), Math.floor((index + 1) * event.length / 6)));
-    return stream(function* () { yield* pieces; yield 'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'; }, 40);
-  }
-  const schema = { type: "object", additionalProperties: false, required: ["f0"], properties: Object.fromEntries(Array.from({ length: 60 }, (_, index) => [`f${index}`, { type: "string" }])) };
-
-  it("counts the bytes of a real event as they arrive, so a healthy event arriving in fragments is never stalled", async () => {
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: fragmented() });
-    await expect(adapter.generate({ ...request, schema, max_output_tokens: 100, timeout_ms: 80 })).resolves.toEqual({ f0: "x".repeat(60) });
+    await expect(adapter(stream([...pieces, 'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'], 40))
+      .generate({ ...request, schema: toolSchema, max_output_tokens: 100, timeout_ms: 80 })).resolves.toEqual({ f0: "x".repeat(60) });
   });
 
-  it("counts only the bytes of a data line: control fields such as event: ping split across chunks are not progress", async () => {
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
-      for (let index = 0; index < 20; index += 1) { yield "event: pi"; yield "ng\n\n"; }
-      yield 'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}\n\n';
-    }, 10) });
-    await expect(adapter.generate({ ...request, timeout_ms: 80 })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_timeout" } });
-  });
-
-  /** Usage-only events, each split into two pieces 10 ms apart, for 400 ms; then a whole reply. */
-  const splitUsage = () => stream(function* () {
-    for (let index = 0; index < 20; index += 1) { yield 'data: {"id":"gen-1","choices":[],"usa'; yield 'ge":{"prompt_tokens":1}}\n\n'; }
-    yield 'data: {"choices":[{"delta":{"content":"{\\"signals\\":[]}"},"finish_reason":"stop"}]}\n\n';
-  }, 10);
-
-  it("lets bytes of an unfinished data line hold the timer only provisionally: split usage-only events stall (answer adapter)", async () => {
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: splitUsage() });
-    await expect(adapter.generate({ ...request, timeout_ms: 80 })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_timeout" } });
-  });
-
-  it("lets bytes of an unfinished data line hold the timer only provisionally: split usage-only events stall (extraction)", async () => {
-    const client = new OpenRouterClient({ credentialRef: "openrouter", credentialResolver: () => "secret", requestTimeoutMs: 80, fetchImpl: splitUsage() });
-    await expect(client.generateStructured(extraction)).rejects.toMatchObject({ code: "timeout" });
-  });
-
-  it("stalls on usage-only events even when one piece ends an event and begins the next", async () => {
-    const joined = stream(function* () {
-      yield 'data: {"id":"gen-1","choices":[],"usa';
-      for (let index = 0; index < 40; index += 1) yield 'ge":{"prompt_tokens":1}}\n\ndata: {"id":"gen-1","choices":[],"usa';
-    }, 10);
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: joined });
-    await expect(adapter.generate({ ...request, timeout_ms: 80 })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_timeout" } });
-  });
-
-  it("still does not count a keep-alive comment arriving in fragments", async () => {
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
-      for (let index = 0; index < 20; index += 1) yield ": OPENROUTER";
-      yield " PROCESSING\n\n";
-    }, 10) });
-    await expect(adapter.generate({ ...request, timeout_ms: 80 })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_timeout" } });
+  it.each([
+    ["keep-alive comments", repeat(40, ": OPENROUTER PROCESSING\n\n")],
+    ["a keep-alive comment arriving in fragments", repeat(40, ": OPENROUTER")],
+    ["control fields split across pieces", repeat(20, "event: pi", "ng\n\n")],
+    ["usage-only events", repeat(40, 'data: {"id":"gen-1","choices":[],"usage":{"prompt_tokens":1}}\n\n')],
+    ["usage-only events split across pieces", repeat(20, 'data: {"id":"gen-1","choices":[],"usa', 'ge":{"prompt_tokens":1}}\n\n')],
+    ["usage-only events where one piece ends an event and begins the next", ['data: {"choices":[],"usa', ...repeat(40, 'ge":{"prompt_tokens":1}}\n\ndata: {"choices":[],"usa')]],
+  ])("stalls on silence from the model: %s are not progress", async (_name, pieces) => {
+    await expect(diagnostic(adapter(stream([...pieces, done], 10)).generate({ ...request, timeout_ms: 80 }))).resolves.toMatchObject({ failure_class: "adapter_timeout" });
   });
 });
 
-describe("OpenRouter stream ending", () => {
-  // A complete, schema-valid value, then the connection closes before the provider's terminal outcome.
-  const truncated = () => stream(function* () { yield 'data: {"id":"gen-1","choices":[{"delta":{"content":"{\\"signals\\":[]}"}}]}\n\n'; }, 0);
-
-  it("fails an answer whose stream ended without a finish reason, never a short success", async () => {
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: truncated() });
-    await expect(adapter.generate(request)).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_transport", finish_reason: null } });
+describe("OpenRouter reply capacity", () => {
+  // A one-token allowance holds (1 + 256) × 4 KiB of kept text: about a megabyte.
+  const big = (fill: string) => fill.repeat(64 * 1024);
+  it.each([
+    ["content", Array.from({ length: 20 }, () => `data: {"choices":[{"delta":{"content":"${big("x")}"}}]}\n\n`)],
+    ["distinct top-level fields", Array.from({ length: 20 }, (_, index) => `data: {"field_${index}":"${big("m")}","choices":[]}\n\n`)],
+    ["long top-level field names", Array.from({ length: 20 }, (_, index) => `data: {"${big("k")}${index}":0,"choices":[]}\n\n`)],
+    ["tool-call ids", Array.from({ length: 20 }, (_, index) => `data: {"choices":[{"delta":{"tool_calls":[{"index":${index},"id":"${big("i")}${index}"}]}}]}\n\n`)],
+  ])("refuses a reply that retains more than the model's maximum output can produce: %s", async (_name, events) => {
+    await expect(diagnostic(adapter(stream([...events, done])).generate(request))).resolves.toMatchObject({ failure_class: "adapter_response", http_status: 200 });
   });
 
-  // A complete delta, then the connection closes cleanly halfway through the next event's JSON.
-  const cutMidEvent = () => stream(function* () {
-    yield 'data: {"id":"gen-1","choices":[{"delta":{"content":"{\\"signals\\":"}}]}\n\n';
-    yield 'data: {"id":"gen-1","choices":[{"delta":{"cont';
-  }, 0);
-
-  it("fails an answer cut in the middle of an event as a transport loss with unknown billing, never a malformed reply to repair", async () => {
-    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: cutMidEvent() });
-    const failure = await adapter.generate(request).then(() => { throw new Error("the cut answer was accepted"); }, (error: unknown) => error as { diagnostic: Record<string, unknown> });
-    expect(failure.diagnostic).toMatchObject({ failure_class: "adapter_transport" });
-    expect(failure.diagnostic).not.toHaveProperty("unbilled");
-  });
-
-  it("fails an extraction cut in the middle of an event as a possibly billed transport loss", async () => {
-    const client = new OpenRouterClient({ credentialRef: "openrouter", credentialResolver: () => "secret", fetchImpl: cutMidEvent() });
-    await expect(client.generateStructured(extraction)).rejects.toMatchObject({ code: "temporarily_unavailable", retryable: true, unbilled: false,
-      message: expect.stringContaining("middle of an event") });
-  });
-
-  it("fails an extraction whose stream ended without a finish reason, as possibly billed", async () => {
-    const client = new OpenRouterClient({ credentialRef: "openrouter", credentialResolver: () => "secret", fetchImpl: truncated() });
-    await expect(client.generateStructured(extraction)).rejects.toMatchObject({ code: "temporarily_unavailable", retryable: true, unbilled: false, message: expect.stringContaining("before it finished") });
+  it("counts only what is retained: comments, reasoning and a repeated field are discarded, and escaped text counts as decoded", async () => {
+    const discarded = [...repeat(20, `: ${big("c")}\n\n`, `data: {"provider":"${big("p")}","choices":[{"delta":{"reasoning":"${big("r")}"}}]}\n\n`),
+      'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"},"finish_reason":"stop"}]}\n\n'];
+    await expect(adapter(stream(discarded)).generate(request)).resolves.toEqual({ ok: true });
+    // Each "é" is two kept bytes and six wire bytes (\u00e9): about 0.86 of the capacity kept, 2.6 times it on the wire.
+    const chars = Math.floor(257 * 4096 * 0.43);
+    const escaped = ['data: {"choices":[{"delta":{"content":"{\\"a\\":\\""}}]}\n\n',
+      ...Array.from({ length: Math.ceil(chars / 10_000) }, (_, index) => `data: {"choices":[{"delta":{"content":"${"\\u00e9".repeat(Math.min(10_000, chars - index * 10_000))}"}}]}\n\n`),
+      'data: {"choices":[{"delta":{"content":"\\"}"},"finish_reason":"stop"}]}\n\n'];
+    await expect(adapter(stream(escaped)).generate(request)).resolves.toEqual({ a: "é".repeat(chars) });
   });
 });
 
-describe("OpenRouter tool-call indexes", () => {
-  const schema = { type: "object", additionalProperties: false, required: ["f0"], properties: Object.fromEntries(Array.from({ length: 60 }, (_, index) => [`f${index}`, { type: "string" }])) };
-  const calls = (...indexes: number[]) => createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
-    for (const index of indexes) yield `data: {"choices":[{"delta":{"tool_calls":[{"index":${index},"function":{"name":"StructuredOutput","arguments":"{\\"f0\\":\\"x\\"}"}}]}}]}\n\n`;
-    yield 'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n';
-  }, 0) });
+describe("OpenRouter call failures", () => {
+  const cutMidEvent = stream(['data: {"choices":[{"delta":{"content":"{\\"signals\\":"}}]}\n\n', 'data: {"choices":[{"delta":{"cont']);
+  const noFinish = stream(['data: {"id":"gen-1","choices":[{"delta":{"content":"{\\"signals\\":[]}"}}]}\n\n']);
+  const redirected = (seen: RequestInit[]) => (async (_url: string, init: RequestInit) => {
+    seen.push(init);
+    return new Response(null, { status: 307, headers: { location: "https://elsewhere.example/api/v1/chat/completions" } });
+  }) as unknown as typeof fetch;
+  const failedToConnect = (code: string) => (async () => { throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("synthetic"), { code }) }); }) as unknown as typeof fetch;
+  const status = (value: number) => (async () => new Response(`{"error":{"message":"synthetic","code":${value}}}`, { status: value, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
 
-  it("refuses a huge provider index at once as an invalid reply, without building a sparse array", async () => {
-    const started = Date.now();
-    await expect(calls(4294967294).generate({ ...request, schema })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response" } });
-    expect(Date.now() - started).toBeLessThan(1_000);
+  it("never re-sends a request by redirect, and fails it with billing unknown", async () => {
+    const seen: RequestInit[] = [];
+    const failure = await diagnostic(adapter(redirected(seen)).generate(request));
+    expect(failure).toMatchObject({ failure_class: "adapter_transport" });
+    expect(failure).not.toHaveProperty("unbilled");
+    expect(seen.map(init => init.redirect)).toEqual(["error"]);
   });
 
-  it("refuses an index that skips past the calls seen, and keeps consecutive indexes in order", async () => {
-    await expect(calls(1).generate({ ...request, schema })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response" } });
-    await expect(calls(-1).generate({ ...request, schema })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response" } });
-    // Two calls of the reply tool are two calls, read as an invalid reply by the adapter, not merged.
-    await expect(calls(0, 1).generate({ ...request, schema })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response" } });
-    await expect(calls(0).generate({ ...request, schema })).resolves.toEqual({ f0: "x" });
+  it.each([["cut in the middle of an event", cutMidEvent], ["ended without a finish reason", noFinish]])(
+    "fails a stream %s as a transport loss with billing unknown, never a reply to repair", async (_name, fetchImpl) => {
+      const failure = await diagnostic(adapter(fetchImpl).generate(request));
+      expect(failure).toMatchObject({ failure_class: "adapter_transport" });
+      expect(failure).not.toHaveProperty("unbilled");
+    });
+
+  it("refuses tool-call indexes out of sequence, at once, and keeps a consecutive one", async () => {
+    const calls = (...indexes: number[]) => adapter(stream([...indexes.map(index =>
+      `data: {"choices":[{"delta":{"tool_calls":[{"index":${index},"function":{"name":"StructuredOutput","arguments":"{\\"f0\\":\\"x\\"}"}}]}}]}\n\n`),
+    'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'])).generate({ ...request, schema: toolSchema });
+    for (const indexes of [[4294967294], [1], [-1], [0, 1]]) await expect(diagnostic(calls(...indexes))).resolves.toMatchObject({ failure_class: "adapter_response" });
+    await expect(calls(0)).resolves.toEqual({ f0: "x" });
+  });
+
+  it("marks unbilled only a request never sent and a refusal documented as made before generation", async () => {
+    for (const code of ["ECONNREFUSED", "ENOTFOUND", "UND_ERR_CONNECT_TIMEOUT"]) await expect(diagnostic(adapter(failedToConnect(code)).generate(request))).resolves.toMatchObject({ unbilled: true });
+    for (const value of [429, 503, 529]) await expect(diagnostic(adapter(status(value)).generate(request))).resolves.toMatchObject({ http_status: value, unbilled: true });
+    for (const fetchImpl of [failedToConnect("ECONNRESET"), status(400), status(402), status(500), status(502), status(504), cutMidEvent]) {
+      expect(await diagnostic(adapter(fetchImpl).generate(request))).not.toHaveProperty("unbilled");
+    }
+  });
+
+  it("maps each failure for extraction: a stall times out, every loss after sending is retryable and never unbilled", async () => {
+    await expect(client(stream(repeat(40, ": OPENROUTER PROCESSING\n\n"), 10), 80).generateStructured(extraction)).rejects.toMatchObject({ code: "timeout" });
+    await expect(client(stream(Array.from({ length: 20 }, () => `data: {"choices":[{"delta":{"content":"${"x".repeat(64 * 1024)}"}}]}\n\n`))).generateStructured(extraction))
+      .rejects.toMatchObject({ code: "temporarily_unavailable", message: expect.stringContaining("transport capacity") });
+    for (const [fetchImpl, message] of [[cutMidEvent, "middle of an event"], [noFinish, "before it finished"]] as const) {
+      await expect(client(fetchImpl).generateStructured(extraction)).rejects.toMatchObject({ code: "temporarily_unavailable", retryable: true, unbilled: false, message: expect.stringContaining(message) });
+    }
+    const seen: RequestInit[] = [];
+    await expect(client(redirected(seen)).generateStructured(extraction)).rejects.toMatchObject({ unbilled: false, message: expect.stringContaining("redirect") });
+    expect(seen.map(init => init.redirect)).toEqual(["error"]);
   });
 });

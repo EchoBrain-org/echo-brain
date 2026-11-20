@@ -67,7 +67,7 @@ it('preserves a native provider failure instead of switching to a shared account
       throw new ClaudeResearchResultErrorV1();
     },
   });
-  await expect(port.generate_with_admission!(input, async (_request, send) => (await send(new AbortController().signal)).value)).rejects.toMatchObject({ diagnostic: { http_status: 429 } });
+  await expect(port.generate_with_admission!(input, async (_request, send) => (await send(new AbortController().signal)).value)).rejects.toMatchObject({ diagnostic: { http_status: 429, unbilled: true } });
 });
 
 it('never admits the SDK\'s retry of a writer request whose billing is unknown, and reports the original failure', async () => {
@@ -142,4 +142,23 @@ it('turns a native writer stopped at its output allowance into an unfinished rep
   await expect(port.generate_with_admission!(input, async (_request, send) => (await send(new AbortController().signal)).value)).rejects.toMatchObject({
     diagnostic: { failure_class: 'adapter_finish', finish_reason: 'length', http_status: 200, sdk_subtype: 'error_max_structured_output_retries', sdk_stop_reason: 'max_tokens' },
   });
+});
+
+it('passes model output to the admitting gate per request and to the caller, and honours the gate\'s abort', async () => {
+  let callerProgress = 0, gateProgress = 0, seenSignal: AbortSignal | undefined;
+  const gateAbort = new AbortController();
+  const port = createClaudeAccountStructuredGenerationV1({ account, model,
+    forward: async ({ res, alive, signal }) => {
+      seenSignal = signal;
+      for (let piece = 0; piece < 3; piece += 1) alive?.();
+      res.end('{}');
+      return { content: [], finish_reason: 'stop' };
+    },
+    run: async request => { await (await fetch(`${request.base_url}/v1/messages`, { method: 'POST', body })).text(); return { answer: 'x' }; },
+  });
+  await port.generate_with_admission!({ ...input, on_progress: () => { callerProgress += 1; } },
+    async (_request, forward) => (await forward(gateAbort.signal, () => { gateProgress += 1; })).value);
+  expect([callerProgress, gateProgress]).toEqual([3, 3]);
+  gateAbort.abort();
+  expect(seenSignal?.aborted).toBe(true);
 });
