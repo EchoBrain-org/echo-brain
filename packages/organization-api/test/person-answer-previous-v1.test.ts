@@ -5,7 +5,8 @@ import {
   PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1,
   PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1,
   PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1,
-  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1,
+  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1,
+  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV8,
 } from '../src/index.js';
@@ -40,15 +41,16 @@ describe('the previous turn on the Ask request (ADR-0047)', () => {
     expect(validatePersonAnswerRequestV3({ ...ask(previous()), project_id })).toMatchObject({ project_id, previous: previous() });
   });
 
-  it('holds 8 sentences of 400 characters, 4 citations each, among 12 citations of its answer', () => {
-    const citations = Array.from({ length: PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1 }, (_, index) => ({ ...ticket, citation: { ...ticket.citation, ticket_id: String(10_000 + index) }, label: `THERM-${index}` }));
-    const statements = Array.from({ length: PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1 }, (_, index) => ({ text: `${'é'.repeat(PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1 - 1)}${index}`, citation_indexes: [index, index + 1, index + 2, index + 3] }));
-    expect(validatePersonAnswerRequestV3(ask(previous({ citations, statements }))).previous!.statements).toHaveLength(8);
+  it('holds the whole earlier answer: its statements as released, each with a statement\'s own citations, inside the request', () => {
+    expect([PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1, PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1]).toEqual([200, 4 * 1024, 400, 40]);
+    const citations = Array.from({ length: 41 }, (_, index) => ({ ...ticket, citation: { ...ticket.citation, ticket_id: String(10_000 + index) }, label: `THERM-${index}` }));
+    // Twelve sentences, past the old 8; one of 1,000 characters, past the old 400; one citing 40 of 41 citations, past the old 4 and 12.
+    const statements = [...Array.from({ length: 11 }, (_, index) => ({ text: `Sentence ${index}.`, citation_indexes: [index] })),
+      { text: `${'é'.repeat(1_000)}`, citation_indexes: Array.from({ length: 40 }, (_, index) => index) }];
+    expect(validatePersonAnswerRequestV3(ask(previous({ citations, statements }))).previous!.statements).toHaveLength(12);
     for (const value of [
-      previous({ citations, statements: [...statements, statements[0]] }),
-      previous({ citations: [...citations, { ...ticket, citation: { ...ticket.citation, ticket_id: '99999' } }] }),
-      previous({ statements: [{ text: 'x'.repeat(PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1 + 1), citation_indexes: [] }] }),
-      previous({ citations, statements: [{ text: 'Five citations.', citation_indexes: [0, 1, 2, 3, 4] }] }),
+      previous({ citations, statements: [{ text: 'é'.repeat(2_049), citation_indexes: [] }] }),
+      previous({ citations, statements: [{ text: 'Forty-one citations.', citation_indexes: Array.from({ length: 41 }, (_, index) => index) }] }),
     ]) expect(() => validatePersonAnswerRequestV3(ask(value))).toThrow();
     // A sentence may cite nothing the asker can still read; one that cites nothing at all is still the asker's context.
     expect(validatePersonAnswerRequestV3(ask(previous({ statements: [{ text: 'It is on hold.', citation_indexes: [] }] }))).previous!.statements[0]!.citation_indexes).toEqual([]);

@@ -18,7 +18,7 @@ import {
   PERSON_ANSWER_CHOICES_MIN_V1,
   PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1,
   PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1,
-  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1,
+  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1,
   PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
   type PersonAnswerChoiceV1,
   type PersonAnswerPreviousStatementV1,
@@ -344,9 +344,9 @@ function citationIndexes(value: unknown, label: string, bound: number, maximum: 
 }
 
 /**
- * The asker's previous turn (ADR-0047): its purpose, full question and time, 0 to 8 of its answer's sentences of at
- * most 400 characters, and 0 to 12 of its citations, each once, as that answer carried them, which each sentence cites
- * by index (at most 4). The whole request keeps its 16 KiB bound.
+ * The asker's previous turn (ADR-0047): its purpose, full question and time, its answer's sentences as released (each
+ * within a statement's bytes), and its citations, each once, as that answer carried them, which each sentence cites by
+ * index (at most a statement's 40). The whole request keeps the request byte bound.
  */
 function previousTurn(value: unknown): PersonAnswerPreviousV1 {
   const input = object(value, 'Ask previous');
@@ -361,8 +361,7 @@ function previousTurn(value: unknown): PersonAnswerPreviousV1 {
     const item = object(raw, 'Ask previous statement');
     assertExactKeys(item, ['text', 'citation_indexes'], 'Ask previous statement');
     // An answer's sentence as it was released: trimmed NFC text, line breaks allowed.
-    text(item.text, 'Ask previous statement text', 4 * PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1, true);
-    if ([...item.text as string].length > PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1) fail('Ask previous statement text is invalid');
+    text(item.text, 'Ask previous statement text', PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1, true);
     return Object.freeze({
       text: item.text as string,
       citation_indexes: citationIndexes(item.citation_indexes, 'Ask previous statement citation_indexes', citations.length, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1),

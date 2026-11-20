@@ -24,14 +24,17 @@ import type { PersonAnswerCitationV8 } from './person-answer-v8.js';
  * sends it never meets them.
  */
 
-/** Sentences of the earlier answer a request carries. */
-export const PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1 = 8;
-/** Unicode characters (code points) of one earlier sentence. */
-export const PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1 = 400;
+/**
+ * The earlier answer a request carries is the whole answer as it was released, so a follow-up can point at any of it.
+ * Its statements: far more than one answer holds in its 64 KiB; the request's own byte bound decides what fits.
+ */
+export const PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1 = 200;
+/** UTF-8 bytes of one earlier sentence: a released statement's own bound (PERSON_ANSWER_STATEMENT_MAX_BYTES_V4). */
+export const PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1 = 4 * 1024;
 /** The earlier answer's citations a request carries; its sentences index into them. */
-export const PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1 = 12;
-/** Citations one earlier sentence names. */
-export const PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1 = 4;
+export const PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1 = 400;
+/** Citations one earlier sentence names: a released statement's own bound (PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4). */
+export const PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1 = 40;
 export const PERSON_ANSWER_CHOICES_MIN_V1 = 2;
 export const PERSON_ANSWER_CHOICES_MAX_V1 = 4;
 /** Unicode characters (code points) of a choice's label. */
