@@ -646,7 +646,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const auditText = JSON.stringify(f.releases);
     for (const hidden of ['Ship connector', 'Launch Friday', 'launch', 'jira_item_', 'never-return', 'emailAddress']) expect(auditText).not.toContain(hidden);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, body: { issueIdsOrKeys: ['10001'], fields: ['summary', 'project', 'created', 'updated', 'status', 'assignee', 'duedate'] } }));
-    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ fields: ['id'], maxResults: 10 }) }));
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ fields: ['id'], maxResults: 100 }) }));
     expect(f.request.mock.calls.filter(([request]) => request.path.includes('/issue/')).every(([request]) => !(request.body?.fields as string[] | undefined)?.includes('description'))).toBe(true);
     expect(f.request.mock.calls.filter(([request]) => request.path.includes('/issue/')).every(([request]) => !request.query?.fields?.includes('description'))).toBe(true);
     const opened = await source.open({ item: item.id });

@@ -12,12 +12,6 @@ import type {
   PersonLiveEvidenceResultV1, PersonLiveEvidenceSourceV1, PersonLiveEvidenceValueV1, PersonLiveEvidenceCoordinatesV1,
 } from './person-live-evidence-v1.js';
 
-/**
- * The most one call asks a provider reader for: the largest page the readers accept (providers/*), each of which clamps
- * it further to its provider's own page maximum. A caller asking for more, or naming no count, gets one full reader page;
- * the rest follows through the reader's cursor or `truncated`. Never a refusal.
- */
-const PERSON_LIVE_EVIDENCE_READER_PAGE_V1 = 50;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const ERROR_CODES = new Set(['conflict', 'invalid_request', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable']);
 /** Each attribute a live item may carry: a tool item's owner, due date and status, a container's key and tool. */
@@ -46,10 +40,14 @@ function boundedString(value: unknown, bytes = Number.POSITIVE_INFINITY, multili
 function day(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) !== value) invalidOutput();
 }
-/** What one reader call asks for: the caller's count, at most one reader page; one full page when it names none. */
+/**
+ * What one reader call asks for: the caller's count, passed through whole; everything when it names none. Each reader
+ * (providers/*) fills one page to its provider's own page maximum and what one result carries, and the rest follows
+ * through its cursor or `truncated`. Never a refusal of a positive count.
+ */
 function limit(value: number | undefined): number {
   if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) invalid('Live evidence limit must be a positive whole number');
-  return Math.min(value ?? PERSON_LIVE_EVIDENCE_READER_PAGE_V1, PERSON_LIVE_EVIDENCE_READER_PAGE_V1);
+  return value ?? Number.MAX_SAFE_INTEGER;
 }
 
 /** Never propagate provider exception messages, causes, URLs or raw response bodies. */

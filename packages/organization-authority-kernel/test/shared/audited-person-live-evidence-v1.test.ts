@@ -151,7 +151,7 @@ describe('shared audited live evidence source V1', () => {
     expect(inventory.items[0]).not.toHaveProperty('text');
     f.select(page([ticket()]));
     await source.open({ item: inventory.items[0]!.id });
-    expect(f.reader.open).toHaveBeenCalledWith({ handle: ticket().handle, limit: 50 });
+    expect(f.reader.open).toHaveBeenCalledWith({ handle: ticket().handle, limit: Number.MAX_SAFE_INTEGER });
     f.select(page([ticket('The ticket was edited')]));
     await source.search({ query: 'edited' });
     await source.revalidate({});
@@ -263,7 +263,7 @@ describe('shared audited live evidence source V1', () => {
     expect(first.next_cursor).not.toBe('private-provider-cursor');
     expect(JSON.stringify(f.releases)).not.toContain('private-provider-cursor');
     await source.list({ container: 'ECHO', since: '2026-09-01', cursor: first.next_cursor });
-    expect(f.reader.list).toHaveBeenLastCalledWith({ container: 'ECHO', since: '2026-09-01', limit: 50, cursor: 'private-provider-cursor' });
+    expect(f.reader.list).toHaveBeenLastCalledWith({ container: 'ECHO', since: '2026-09-01', limit: Number.MAX_SAFE_INTEGER, cursor: 'private-provider-cursor' });
     for (const input of [{ container: 'another-project', since: '2026-09-01', cursor: first.next_cursor }, { container: 'ECHO', cursor: first.next_cursor }, { cursor: 'private-provider-cursor' }]) {
       await expect(source.list(input)).rejects.toMatchObject({ code: 'invalid_request' });
     }
@@ -281,7 +281,7 @@ describe('shared audited live evidence source V1', () => {
     expect(f.reader.open).not.toHaveBeenCalled();
     const result = await source.search({ query: 'ship' });
     await source.open({ item: result.items[0]!.id });
-    expect(f.reader.open).toHaveBeenCalledWith({ handle: 'private:ECHO-42', limit: 50 });
+    expect(f.reader.open).toHaveBeenCalledWith({ handle: 'private:ECHO-42', limit: Number.MAX_SAFE_INTEGER });
     await expect(f.make().open({ item: result.items[0]!.id })).rejects.toMatchObject({ code: 'not_found' });
   });
 
@@ -356,10 +356,11 @@ describe('shared audited live evidence source V1', () => {
     const f = fixture('tickets', page([ticket()]));
     const source = f.make();
     for (const value of [0, -1, 1.5, NaN]) await expect(source.search({ query: 'ship', limit: value })).rejects.toMatchObject({ code: 'invalid_request' });
-    // A count past one reader page is asked of the reader as one full page, never refused; so is no count at all.
+    // The caller's count reaches the reader whole, never clamped or refused; no count asks for everything, and the
+    // reader fills one page to its provider's maximum and what one result carries, with a cursor for the rest.
     await source.search({ query: 'ship', limit: 500 });
     await source.search({ query: 'ship' });
-    expect(vi.mocked(f.reader.search).mock.calls.map(([input]) => input.limit)).toEqual([50, 50]);
+    expect(vi.mocked(f.reader.search).mock.calls.map(([input]) => input.limit)).toEqual([500, Number.MAX_SAFE_INTEGER]);
     vi.mocked(f.reader.search).mockClear();
     f.audit.record.mockClear();
     await expect(source.list({ since: '2026-02-30' })).rejects.toMatchObject({ code: 'invalid_request' });
