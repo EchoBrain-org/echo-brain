@@ -513,7 +513,7 @@ describe('llm decision processor extraction', () => {
     expect(await correctionsWith(output)).toEqual({});
   });
 
-  it('links rationales only to surviving decisions and sets aside one with none left', async () => {
+  it('links rationales only to surviving decisions and keeps one with none left unlinked', async () => {
     const output = modelOutput([
       modelSignal({ kind: 'rationale', text: 'Vendor X was cheaper and faster', evidence_units: ['S1'], supports_decision_indexes: [2, 2, 1, 3, 99, -1, 0.5] }),
       modelSignal({ text: 'Adopt vendor Y', evidence_units: ['T999'] }),
@@ -524,17 +524,29 @@ describe('llm decision processor extraction', () => {
     const instance = processor(new FakeLlmClient(output));
     const result = await instance.extract(meeting, extractionContext(instance));
 
-    expect(result.signals.map((signal) => signal.text)).toEqual(['Vendor X was cheaper and faster', 'Use vendor X for hosting']);
+    expect(result.signals.map((signal) => signal.text)).toEqual([
+      'Vendor X was cheaper and faster', 'Use vendor X for hosting', 'Vendor Y was cheaper', 'Vendor X was faster',
+    ]);
     expect(result.signals[0]).toMatchObject({ kind: 'rationale', supports_signal_ids: [result.signals[1]!.id] });
+    // A rationale whose decision did not survive, or that names none, is kept unlinked.
+    expect(result.signals.slice(2)).toMatchObject([
+      { kind: 'rationale', supports_signal_ids: [] }, { kind: 'rationale', supports_signal_ids: [] },
+    ]);
     expect(() => assertCanonicalDecisionSet(result, meeting, instance.identity)).not.toThrow();
-    // The kept rationale's six links other than its one to item 2 are dropped; three items are set aside.
-    expect(await correctionsWith(output)).toEqual({ extraction_item_set_aside: 3, extraction_rationale_link_dropped: 6 });
+    // The first rationale's six links other than its one to item 2 and the fourth item's link to item 1 are dropped;
+    // only item 1, which cites no known unit, is set aside.
+    expect(await correctionsWith(output)).toEqual({ extraction_item_set_aside: 1, extraction_rationale_link_dropped: 7 });
+    const orphan = await extractWith(modelOutput([
+      modelSignal({ kind: 'rationale', evidence_units: ['S1'], supports_decision_indexes: [1] }),
+      modelSignal({ evidence_units: ['T999'] }),
+    ]));
+    expect(orphan.signals).toMatchObject([{ kind: 'rationale', supports_signal_ids: [] }]);
   });
 
   it('fails the meeting with the first set-aside reason when no item survives', async () => {
     const instance = processor(new FakeLlmClient(modelOutput([
       modelSignal({ evidence_units: ['T999'] }),
-      modelSignal({ kind: 'rationale', text: 'Vendor X was cheaper', evidence_units: ['S1'], supports_decision_indexes: [0] }),
+      modelSignal({ kind: 'rationale', text: 'Vendor X was cheaper', evidence_units: ['S9'], supports_decision_indexes: [0] }),
     ])));
     const metadata: CoreRuntimeObservationV1[] = [];
     const failure = await observeCoreRuntimeV1('extraction', () => instance.extract(meeting, extractionContext(instance)), {
@@ -550,10 +562,6 @@ describe('llm decision processor extraction', () => {
     })]));
     await expect(extractWith(modelOutput([modelSignal({ kind: 'bogus' }), modelSignal({ evidence_units: ['T999'] })])))
       .rejects.toMatchObject({ message: `${SCHEMA}kind` });
-    await expect(extractWith(modelOutput([
-      modelSignal({ kind: 'rationale', evidence_units: ['S1'], supports_decision_indexes: [1] }),
-      modelSignal({ evidence_units: ['T999'] }),
-    ]))).rejects.toMatchObject({ message: `${GROUNDING}rationale_supports` });
   });
 
   it('returns an empty set without calling the model when the meeting has no units', async () => {

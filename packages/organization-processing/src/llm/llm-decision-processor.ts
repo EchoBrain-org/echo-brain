@@ -276,8 +276,8 @@ function checkedDueAt(
 
 /**
  * Both stage lists are fixed: the Authority V17 CHECK and the pre-Slack evaluator
- * depend on them. Since v11 some stages (quote checks, corrected fields) are
- * no longer produced but stay listed.
+ * depend on them. Some stages (quote checks, corrected fields, rationale links)
+ * are never produced but stay listed.
  */
 export const EXTRACTION_SCHEMA_FAILURE_STAGES = [
   'top_level',
@@ -645,11 +645,8 @@ function groundedSignals(
       if (signal.kind === 'decision') decisions.set(signal.index, twin);
       continue;
     }
+    // A rationale whose decisions did not survive is kept unlinked: the reason still stands on its own evidence.
     const supports = [...new Set(signal.supports)].flatMap((index) => decisions.get(index) ?? []);
-    if (signal.kind === 'rationale' && supports.length === 0) {
-      setAside.push({ index: signal.index, reason: 'rationale_supports' });
-      continue;
-    }
     const entry = { signal, spans, supports };
     keptBy.set(key, entry).set(untrimmedId, entry);
     if (signal.kind === 'decision') decisions.set(signal.index, entry);
