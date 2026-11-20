@@ -8,6 +8,7 @@ import { createPersonLiveAnswerRouteV1 } from '../src/composition/person-live-an
 import { createPersonAskCheckV1 } from '../src/composition/person-ask-check-v1.js';
 import { readablePreviousV1 } from '../src/composition/person-ask-previous-check-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
+import { PersonRecordSearchSnapshotChangedV1 } from '../src/composition/person-record-search-route.js';
 import { SqlitePersonImportedMeetingsV1 } from '../src/adapters/persistence/sqlite/person-imported-meetings-v1.js';
 import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
 import { askClient, auditBodies, closeAskServers, decodeAll, liveAskOptions, myOpenTasksPlanner, serveAsk, streamedAnswer } from './fixtures/ask-over-http.js';
@@ -223,6 +224,25 @@ describe('the previous turn as the Authority lets its model read it (ADR-0047)',
     const { previous_check: _check, ...unchecked } = liveAskOptions(f, run.model);
     await streamedAnswer(await ask(await serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(unchecked) }), { body: body(previousOf(f), 'And who leads it?') }));
     expect(run.seen()).not.toContain(ROSTER);
+    expect(run.seen()).toContain(EARLIER);
+  });
+
+  it('checks the previous turn again on a snapshot restart: access lost after the first attempt keeps the roster from the second', async () => {
+    const f = await sentFixture();
+    const run = recording();
+    const options = liveAskOptions(f, run.model);
+    const [jira] = options.live_sources!;
+    let first = true;
+    // The first attempt's desk sees the snapshot move, and Mina leaves the project before the restart.
+    const live_sources = [{ ...jira!, application: { source: async (input: Parameters<typeof jira.application.source>[0]) => {
+      if (first) { first = false; leave(f); throw new PersonRecordSearchSnapshotChangedV1(); }
+      return jira!.application.source(input);
+    } } }];
+    const base = await serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1({ ...options, live_sources }) });
+    expect((await streamedAnswer(await ask(base, { body: body(previousOf(f), 'And who leads it?') }))).outcome).toBe('answered');
+    expect(first).toBe(false);
+    expect(run.seen()).not.toContain(ROSTER);
+    expect(run.seen()).not.toContain(LABEL);
     expect(run.seen()).toContain(EARLIER);
   });
 
