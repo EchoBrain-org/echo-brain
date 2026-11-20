@@ -102,6 +102,9 @@ const STARTING_READS_AT_ONCE = 4;
 const LIST_UNAVAILABLE = "list is unavailable in this run; use search and open";
 
 /** One source research can read: the selector the model uses, the desk kinds behind it, and its list options. */
+/** Told to a step whose prompt could not hold every entry read so far (the model's context window, from the profile). */
+const LEFT_OUT_NOTE = "These evidence entries were read but did not fit this step's prompt, which is held to the model's context window. They are not shown above. Open one by its id to read it.";
+
 export interface AgenticResearchSourceV1 {
   readonly source_id: string;
   readonly selector: string;
@@ -1183,7 +1186,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
    * The scratchpad: opened bodies, then every other entry, each in E-id order and never re-sorted between steps, so a
    * step's prompt repeats the evidence of the step before as its prefix (prompt caching). Exact released bodies when
    * opened or packet-sized; previews are always explicitly incomplete. When the budget binds, what the latest reads
-   * returned is kept first (last_results names it only by id), then entries in id order: the newest others are left out.
+   * returned is kept first (last_results names it only by id), then entries in id order: the newest others are left out,
+   * and `left_out` names each by id so the step is told what it cannot see and can open it.
    */
   const scratchpad = (budget: number, latest: ReadonlySet<string>) => {
     // Entries are never removed, so their insertion order is id order.
@@ -1211,7 +1215,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       used += cost; seen.push({ entry, value });
     }
     shown.sort(idOrder); seen.sort((left, right) => idOrder(left.entry, right.entry));
+    const included = new Set([...shownIds, ...seen.map(({ entry }) => entry.short)]);
     return {
+      left_out: all.filter(entry => !included.has(entry.short)).sort(idOrder).map(entry => entry.short),
       opened: shown.map(entry => ({ ...describe(entry), text: entry.item.text })), seen: seen.map(({ value }) => value),
       read: [...shown, ...seen.filter(({ value }) => value.full === true).map(({ entry }) => entry)],
       entries: [...shown, ...seen.map(({ entry }) => entry)],
@@ -1397,9 +1403,16 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const tailWith = (shownNow?: ReadonlySet<Entry>) => ({
         step: steps + 1, plan: planView(true), ...(ask ? { lists: listView(shownNow) } : { inventories: inventoryView() }), last_results: results, searches_done: [...searchesRun],
       });
-      const pad = scratchpad(researchBudget - bytes(JSON.stringify({ ...head, opened: [], seen: [], ...tailWith() })), latest);
+      const room = researchBudget - bytes(JSON.stringify({ ...head, opened: [], seen: [], ...tailWith() }));
+      let pad = scratchpad(room, latest);
+      // When something is left out, the note naming it takes room too: at most every entry's id, reserved before fitting.
+      if (pad.left_out.length > 0) {
+        pad = scratchpad(room - bytes(JSON.stringify({ left_out: { ids: [...entries.values()].map(entry => entry.short), note: LEFT_OUT_NOTE } })), latest);
+      }
       researchPromptEntries = pad.read; researchPromptShown = pad.entries;
-      const user = { ...head, opened: pad.opened, seen: pad.seen, ...tailWith(new Set(pad.entries)) };
+      // What did not fit the model's window is named, never dropped silently: the step may open any of it by id.
+      const leftOut = pad.left_out.length === 0 ? {} : { left_out: { ids: pad.left_out, note: LEFT_OUT_NOTE } };
+      const user = { ...head, opened: pad.opened, seen: pad.seen, ...leftOut, ...tailWith(new Set(pad.entries)) };
       const openIds = [...entries.values()].map(entry => entry.short);
       const finishAvailable = researchObservations.length > 0 || pad.read.length > 0 || [...entries.values()].some(entry => entry.full);
       const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable, listAvailable, ask);

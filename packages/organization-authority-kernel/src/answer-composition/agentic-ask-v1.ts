@@ -80,7 +80,13 @@ const BYTES_PER_TOKEN = 3;
 /** Share of the window the estimate may be wrong by: text that tokenizes worse than three bytes still fits. */
 const ESTIMATE_MARGIN = 0.1;
 
-/** Scratchpad bytes that fit beside a system prompt and the reply in the model's own context window (the profile's). */
+/**
+ * Scratchpad bytes that fit beside a system prompt and the reply in the model's own context window (the profile's):
+ * (context_tokens x 0.9 - system prompt bytes / 3 - outputTokens) x 3. `outputTokens` is the allowance every call
+ * actually requests (the profile's max_output_tokens, which the model gate sends as max_output_tokens), so the reply's
+ * reservation is taken out once and evidence fills the rest: with Sonnet's 1,000,000-token window and its 128,000-token
+ * output, about (900,000 - 128,000) x 3 = 2,316,000 bytes less the system prompt.
+ */
 export function agenticAskContextBudgetBytesV1(contextTokens: number, systemPrompt: string, outputTokens: number): number {
   const usable = Math.floor(contextTokens * (1 - ESTIMATE_MARGIN)) - Math.ceil(Buffer.byteLength(systemPrompt, "utf8") / BYTES_PER_TOKEN) - outputTokens;
   return Math.max(0, usable * BYTES_PER_TOKEN);

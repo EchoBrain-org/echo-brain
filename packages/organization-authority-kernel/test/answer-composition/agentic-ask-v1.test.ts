@@ -1013,6 +1013,9 @@ describe("agentic Ask: research loop", () => {
     // No window is assumed: a small one gives a small budget, and a prompt larger than the window leaves none.
     expect(agenticAskContextBudgetBytesV1(32_768, "", 1_500)).toBeLessThan(90_000);
     expect(agenticAskContextBudgetBytesV1(1_000, "x".repeat(9_000), 1_500)).toBe(0);
+    // The model's window less the output the call requests, once: 1,000,000 tokens at 90%, less 128,000, at 3 bytes a token.
+    expect(agenticAskContextBudgetBytesV1(1_000_000, "", 128_000)).toBe((900_000 - 128_000) * 3);
+    expect(agenticAskContextBudgetBytesV1(1_000_000, "x".repeat(3_000), 128_000)).toBe((900_000 - 1_000 - 128_000) * 3);
     expect(agenticAskContextBudgetBytesV1(1_000_000, "", 128_000)).toBeGreaterThan(2_000_000);
     const passages = Array.from({ length: 12 }, (_, index) => item(`p${index}`, `${index} `.repeat(1_400).trim(), { kind: "document_passage" }));
     const actions = passages.map((_, index) => open(`E${index + 1}`));
@@ -1037,6 +1040,10 @@ describe("agentic Ask: research loop", () => {
     expect(script.prompt(4).seen.length).toBeLessThanOrEqual(12 - shown);
     const shownIds = script.prompt(4).opened.map((entry: { id: string }) => entry.id);
     expect(script.prompt(4).seen.every((entry: { id: string }) => !shownIds.includes(entry.id))).toBe(true);
+    // Nothing read is dropped silently: whatever the window could not hold is named, with how to read it.
+    const listed = [...shownIds, ...script.prompt(4).seen.map((entry: { id: string }) => entry.id), ...(script.prompt(4).left_out?.ids ?? [])];
+    expect(new Set(listed).size).toBe(12);
+    if (shown + script.prompt(4).seen.length < 12) expect(script.prompt(4).left_out.note).toContain("Open one by its id");
   });
 });
 
