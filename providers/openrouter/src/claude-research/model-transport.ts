@@ -105,6 +105,9 @@ function providerForwarderV1(options: {
         // A reply means the upstream received the request.
         connected = true;
         annotateCoreRuntimeV1({ counts: { http_status: reply.statusCode ?? 0 } });
+        // A redirect is never followed or handed to the SDK to follow: the first endpoint may have run the request, so
+        // it is a failure whose billing is unknown.
+        if ((reply.statusCode ?? 0) >= 300 && (reply.statusCode ?? 0) < 400) { reply.resume(); reject(new ClaudeModelTransportErrorV1(false)); return; }
         const streamed = String(reply.headers['content-type'] ?? '').includes('text/event-stream');
         const usage = messageUsageObserverV1(true, streamed ? input.alive : undefined);
         // A refusal's body is read only to tell a context-window refusal by its message; it never leaves this function.

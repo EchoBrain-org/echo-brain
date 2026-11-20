@@ -104,9 +104,16 @@ export class OpenRouterClient implements LlmProviderClient {
         response = await this.fetchImpl(`${OPENROUTER_BASE_URL}${path}`, {
           ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}`, ...init.headers },
           signal: signal === undefined ? silence.signal : AbortSignal.any([silence.signal, signal]),
+          // A model request is never re-sent by a redirect: the first endpoint may already have run (and billed) it.
+          redirect: 'error',
         });
       } catch (error) { return stalled(error); }
       annotateCoreRuntimeV1({ counts: { http_status: response.status } });
+      // A redirect answered a request the first endpoint may have run: retryable, never unbilled.
+      if (response.status >= 300 && response.status < 400) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new AdapterError('temporarily_unavailable', `OpenRouter answered with a redirect (${response.status}); the request is not re-sent`, true);
+      }
       let reply: OpenRouterReplyV1;
       try {
         reply = await readOpenRouterReplyV1(response, { capacity_bytes: openRouterReplyCapacityBytesV1(maxOutputTokens), progress: alive });

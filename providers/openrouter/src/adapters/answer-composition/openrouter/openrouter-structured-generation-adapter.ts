@@ -391,6 +391,8 @@ export function createOpenRouterStructuredGenerationAdapter(
         "x-openrouter-metadata": "enabled",
       },
       signal: AbortSignal.any(signals),
+      // A model request is never re-sent by a redirect: the first endpoint may already have run (and billed) it.
+      redirect: "error",
       body: JSON.stringify({
         model: input.model,
         messages: [
@@ -439,6 +441,11 @@ export function createOpenRouterStructuredGenerationAdapter(
         provider_latency_ms: elapsed(providerStartedAt, nowMs),
         ...(!timedOut && failedBeforeSending(error) ? { unbilled: true as const } : {}),
       });
+    }
+    // A redirect answered a request the first endpoint may have run: a failure whose billing is unknown.
+    if (response.status >= 300 && response.status < 400) {
+      clearTimeout(silenceTimer);
+      fail("OpenRouter request failed", { failure_class: "adapter_transport", provider_latency_ms: elapsed(providerStartedAt, nowMs) });
     }
     let providerLatency: number | null = null;
     let reply: OpenRouterReplyV1;
