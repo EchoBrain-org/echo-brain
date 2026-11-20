@@ -460,12 +460,12 @@ describe("research loop: search only (a record in no project)", () => {
 
   it("never tells a search-only planner to list, even when it refuses a finish", async () => {
     const h = harness([
-      reads("open", [{ tool: "search", args: { query: "canary" } }]),
       affects("not_found"), affects("not_found"),
     ], { openCitation: async () => result([approved]) });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation], { list: false }) });
-    // One search is not enough to conclude absence; the refusal says what to do without naming list.
-    expect(view.rounds[1]!.rejected).toEqual([
+    // Absence before any completed search is refused; the refusal says what to do without naming list.
+    expect(view.rounds.flatMap(round => round.rejected).join(" ")).toContain("before any completed search.");
+    expect(view.rounds[0]!.rejected).toEqual([
       expect.stringContaining("Search or open more, or correct the need status and evidence."), expect.stringContaining("Search or open more"),
     ]);
     expect(view.rounds.flatMap(round => round.rejected).join(" ")).not.toMatch(/\blist\b/u);

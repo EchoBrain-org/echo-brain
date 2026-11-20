@@ -669,7 +669,7 @@ function groundedSignals(
   }
   // Cited units left out by the item budget or the meeting ceiling; owner and status were judged before either trim.
   const trimmed = kept.reduce((sum, { signal }) => sum + signal.trimmed, 0) + fitEvidenceCeiling(kept);
-  if (trimmed > 0) observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'grounding', event: 'succeeded', data: { evidence_units_trimmed: trimmed } });
+  if (trimmed > 0) observeCoreModelCorrectionV1('extraction_evidence_trimmed', trimmed);
   // Ids hash the final evidence. An item trimmed into a repeat of an earlier one
   // shares its id, so it is dropped and links to it follow the earlier one.
   const ids = new Map(kept.map((entry) => [entry, stableSignalId(meeting, entry.signal, entry.spans)]));

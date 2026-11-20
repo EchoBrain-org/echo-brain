@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   formatPersonAskProgressEventV3,
+  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1,
   validatePersonAskProgressResultLineV3,
   type OrganizationPersonSessionV2,
   type PersonAnswerPreviousV1,
@@ -122,7 +123,9 @@ describe('person ask --previous (ADR-0047)', () => {
 
   it('refuses a turn it cannot send before anything is sent, as invalid_request, so a caller can ask without it', async () => {
     // An Ask again asks the earlier question itself: one of another question is refused too.
-    for (const previous of ['{not json', JSON.stringify({ ...PREVIOUS, purpose: 'guess' }), JSON.stringify({ ...PREVIOUS, statements: [{ text: 'x'.repeat(401), citation_indexes: [] }] }),
+    // A sentence one byte over a released statement's bound cannot be an earlier answer's sentence.
+    const overlong = 'x'.repeat(PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1 + 1);
+    for (const previous of ['{not json', JSON.stringify({ ...PREVIOUS, purpose: 'guess' }), JSON.stringify({ ...PREVIOUS, statements: [{ text: overlong, citation_indexes: [] }] }),
       JSON.stringify({ ...PREVIOUS, purpose: 'ask_again' })]) {
       const fetch = vi.fn<typeof globalThis.fetch>();
       const run = cli(fetch);

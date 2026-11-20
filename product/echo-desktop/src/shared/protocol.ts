@@ -5,7 +5,7 @@ import type {
   PersonMeetingResultsV2, PersonReviewRequestV1, PersonReviewResultsV1, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonProjectActivityItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
 import {
-  PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1,
+  PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1,
   PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
 } from '@echo-brain/organization-api/person-answer-previous-v1';
 // The only shapes that cross process boundaries. Everything here is
@@ -410,11 +410,13 @@ export interface TimelineTurn {
 export const MAX_TIMELINE_TURNS = 200;
 export const TIMELINE_DAYS = 90;
 /**
- * The most a put may send: one turn, whose answer is at most the API's 64 KiB
- * with its sources' citations kept beside them. Every other call keeps the
- * broker's MAX_PARAMS_BYTES.
+ * The most a put may send: one turn, whose answer is at most the API's 256 KiB
+ * (PERSON_ANSWER_RESPONSE_MAX_BYTES_V4) with its sources' citations kept
+ * beside them, so four times the answer's bound. Every other call keeps the
+ * broker's MAX_PARAMS_BYTES. A literal, as the sandboxed renderer imports this
+ * file; a test holds it above the API's bound.
  */
-export const MAX_TIMELINE_PUT_BYTES = 256 * 1024;
+export const MAX_TIMELINE_PUT_BYTES = 1024 * 1024;
 
 /** What a check says of one cited source (C1): readable by you (`same`), no longer readable, or not known now. */
 export type AskCheckState = PersonAskCheckStateV1;
@@ -434,7 +436,7 @@ export const MAX_CHECK_REQUEST_BYTES = 64 * 1024;
 export type AskPrevious = PersonAnswerPreviousV1;
 /** C3's bounds on `previous`, as the API states them. */
 export const PREVIOUS_LIMITS = {
-  statements: PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1, statement_chars: PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1,
+  statements: PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1, statement_bytes: PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1,
   citations: PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, statement_citations: PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
 } as const;
 /** The Ask request body's bound, which `previous` shares: the Authority's own request body bound. */

@@ -347,9 +347,10 @@ describe('an answer from an Authority newer than this desktop', () => {
     expect(blocks[4]).toEqual({ kind: 'text', title: 'Next steps', statements: [6, 7] });
   });
 
-  it('shows a card of an entity it does not know as text, or by that entity\'s own name once the contract takes it', () => {
+  it('keeps a card of an entity it does not know as a card, named by that entity\'s own name', () => {
+    // Card entities are an open set: the contract takes any lowercase word, and the page names it plainly with no icon.
     const view = answerView(line(blocks => blocks.map(block => (block.kind === 'card' ? { ...block, entity: 'risk_item' } : block))), GLOBAL);
-    expect(view.parts[0]!.blocks![3]).toMatchObject({ kind: 'text', statements: [4, 5] });
+    expect(view.parts[0]!.blocks![3]).toMatchObject({ kind: 'card', entity: 'risk_item', statements: [4, 5] });
     expect(cardWord('risk_item')).toBe('Risk item');
     expect(cardWord('ticket')).toBe('Ticket');
     // A block the page does not draw, as one a saved turn may hold, reads as its sentences in Copy answer too.

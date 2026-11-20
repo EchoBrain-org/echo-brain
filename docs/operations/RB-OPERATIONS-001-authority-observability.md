@@ -718,7 +718,6 @@ Meeting extraction (`llm-decision-processor.ts`):
 | --- | --- |
 | `extraction_item_set_aside` | Set aside a malformed or ungrounded item; its reason and cited units reach only the extraction's LangSmith trace, while staging tracing is on |
 | `extraction_repeat_dropped` | Dropped a repeated item: the same kind, text and units, or the same id after evidence trimming |
-| `extraction_owner_cleared` | Cleared a proposed action owner that no cited unit names |
 | `extraction_due_cleared` | Cleared a due date that is not a date or falls before the meeting |
 | `extraction_due_coerced` | Stored a date-only due date as the meeting's local noon |
 | `extraction_decided_downgraded` | Stored a decided decision that cites only questions as proposed |
@@ -727,6 +726,7 @@ Meeting extraction (`llm-decision-processor.ts`):
 | `extraction_unknown_unit_dropped` | Dropped a cited unit id that names no unit from an item it kept |
 | `extraction_confidence_cleared` | Cleared a confidence that is not a number from 0 to 1 |
 | `extraction_rationale_link_dropped` | Dropped a rationale's repeated link, or a link to no kept decision |
+| `extraction_evidence_trimmed` | Left cited units out of kept items, by the item's evidence budget or the meeting's ceiling; counts the units left out |
 
 Research steps and the research loop (`agentic-research-loop-v1.ts`):
 

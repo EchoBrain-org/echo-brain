@@ -238,7 +238,7 @@ describe('the earlier turn an Ask carries (C3)', () => {
   });
 
   it('carries each sentence whole within the API\'s bounds, leaving out only one that does not fit, never cutting one', () => {
-    const { statements: most, statement_chars: chars, citations: cites, statement_citations: own } = PREVIOUS_LIMITS;
+    const { statements: most, statement_bytes: chars, citations: cites, statement_citations: own } = PREVIOUS_LIMITS;
     // A sentence longer than the API takes, and one citing more than one sentence may, are left out whole; the rest go, uncut.
     const sources = Array.from({ length: own + 2 }, (_, at) => followUp(`itm_wide-${at}`));
     const answer = answerOf('Wide?', sources, [['x'.repeat(chars + 1), [0]], ['Cites too much.', Array.from({ length: own + 1 }, (_, at) => at)], ['Kept.', [own + 1]]]);

@@ -1,6 +1,8 @@
 // Runs one person-client command in this process, exactly as the terminal CLI
 // would, and captures its bounded output.
 
+import { PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1 } from '@echo-brain/organization-api';
+
 /** runPersonClientCli from the person client; argv starts after `person`. */
 export type PersonCli = (argv: readonly string[], dependencies: Record<string, unknown>) => Promise<number>;
 
@@ -11,8 +13,11 @@ export interface CliRun {
   readonly overflow: boolean;
 }
 
-/** More than the largest bounded client output (32 KiB documents, answers). */
-const MAX_OUTPUT_BYTES = 1024 * 1024;
+/**
+ * More than the largest bounded client output: an Ask prints each step and its answer, which together stay under one
+ * Ask stream's bound, so twice that bound leaves room for the printed lines' own keys.
+ */
+export const MAX_OUTPUT_BYTES = 2 * PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1;
 
 export async function runCli(
   cli: PersonCli,

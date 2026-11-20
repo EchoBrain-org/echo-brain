@@ -64,7 +64,11 @@ export function validatePersonAskTimeContextV1(now: unknown, timeZone: unknown):
   return Object.freeze({ now, time_zone: timeZone });
 }
 
-export const PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 = 64 * 1024;
+/**
+ * Canonical JSON bytes of one whole answer: room for a long multi-part answer. Every bound above it in the chain (the
+ * Ask progress answer event and stream, the desktop's CLI output, timeline put and copy) is sized from this one.
+ */
+export const PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 = 256 * 1024;
 /** UTF-8 bytes of a part's gap, and of its not-found explanation: what was not found, said in full. */
 export const PERSON_ANSWER_PART_GAP_MAX_BYTES_V4 = 2 * 1024;
 /** A released answer's fallback record: the evidence's own words, cut to a short quotation (evidence text in transit is `PERSON_EVIDENCE_TEXT_MAX_BYTES_V1`). */

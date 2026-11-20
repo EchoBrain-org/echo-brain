@@ -218,7 +218,8 @@ export function followedTurn(turns: readonly TimelineTurn[], opened: string | nu
 }
 
 /** Unicode characters (code points) of `text`, as the API counts a sentence. */
-const characters = (text: string): number => [...text].length;
+/** UTF-8 bytes, as the API bounds an earlier sentence. */
+const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length;
 
 /** An Ask request's body as the client sends it (`PersonAnswerRequestV3`), for its bytes. */
 function bodyBytes(question: string, scope: AskScope, previous: AskPrevious): number {
@@ -280,7 +281,7 @@ export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], 
     if (chosen.length === PREVIOUS_LIMITS.statements) break;
     const next = build([...chosen, statement]);
     const own = next.statements.at(-1)!;
-    if (characters(own.text) > PREVIOUS_LIMITS.statement_chars || own.citation_indexes.length > PREVIOUS_LIMITS.statement_citations
+    if (utf8Bytes(own.text) > PREVIOUS_LIMITS.statement_bytes || own.citation_indexes.length > PREVIOUS_LIMITS.statement_citations
         || next.citations.length > PREVIOUS_LIMITS.citations) continue;
     chosen.push(statement);
   }
