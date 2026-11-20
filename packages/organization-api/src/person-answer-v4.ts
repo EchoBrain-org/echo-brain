@@ -137,7 +137,8 @@ export interface PersonAnswerCitationV4 {
 export interface PersonEvidenceOpenRequestV1 {
   readonly schema_version: 1;
   readonly citation: PersonAnswerCitationV3;
-  readonly neighbours?: 0 | 1 | 2;
+  /** How many neighbouring passages to read around the cited one; the desk reads as many as one open's byte budget holds. */
+  readonly neighbours?: number;
   readonly project_id?: ProjectIdV1;
 }
 
@@ -455,6 +456,6 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
 export function validatePersonEvidenceOpenRequestV1(value: unknown): PersonEvidenceOpenRequestV1 {
   const input = object(value, 'Evidence open request');
   assertExactKeys(input, ['schema_version', 'citation', ...(Object.hasOwn(input, 'neighbours') ? ['neighbours'] : []), ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : [])], 'Evidence open request');
-  if (input.schema_version !== 1 || (Object.hasOwn(input, 'neighbours') && (!Number.isSafeInteger(input.neighbours) || (input.neighbours as number) < 0 || (input.neighbours as number) > 2))) fail('Evidence open request is invalid');
-  return boundedRequest({ schema_version: 1 as const, citation: evidenceCitation(input.citation) as PersonAnswerCitationV3, ...(Object.hasOwn(input, 'neighbours') ? { neighbours: input.neighbours as 0 | 1 | 2 } : {}), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Evidence open request project_id') } : {}) }, 'Evidence open request');
+  if (input.schema_version !== 1 || (Object.hasOwn(input, 'neighbours') && (!Number.isSafeInteger(input.neighbours) || (input.neighbours as number) < 0))) fail('Evidence open request is invalid');
+  return boundedRequest({ schema_version: 1 as const, citation: evidenceCitation(input.citation) as PersonAnswerCitationV3, ...(Object.hasOwn(input, 'neighbours') ? { neighbours: input.neighbours as number } : {}), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Evidence open request project_id') } : {}) }, 'Evidence open request');
 }
