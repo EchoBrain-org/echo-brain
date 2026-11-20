@@ -100,7 +100,7 @@ export function createConfluencePersonConnectionV1(options: {
     }, input),
     /**
      * The Ask source check's pages (Ask timeline v1, C1; ADR-0047): each page's current version by its id, read by id with this
-     * person's own connection, at most 100 ids in two calls. A page they cannot read now, trashed or deleted included, is left out.
+     * person's own connection, 250 ids per call (Confluence's id-filter maximum). A page they cannot read now, trashed or deleted included, is left out.
      */
     async pageVersions(input: { readonly access_token: string; readonly page_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string>> {
       const page_ids = [...new Set(input.page_ids)].filter(id => CONFLUENCE_ID.test(id));
