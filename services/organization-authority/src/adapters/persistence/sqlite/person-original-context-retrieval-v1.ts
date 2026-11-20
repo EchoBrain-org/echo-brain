@@ -218,20 +218,13 @@ function packets(title: string, body: string): readonly string[] {
  * next, so a source paged by its reader is still read whole, open by open.
  */
 function openWindowV1(anchor: number, count: number, neighbours: number): { readonly read: readonly number[]; readonly offered: readonly number[] } {
-  const read = [anchor];
-  let before = anchor - 1;
-  let after = anchor + 1;
-  while (read.length - 1 < neighbours && (before >= 0 || after < count)) {
-    for (const side of ["before", "after"] as const) {
-      if (read.length - 1 >= neighbours) break;
-      const index = side === "before" ? before : after;
-      if (index < 0 || index >= count) continue;
-      read.push(index);
-      if (side === "before") before -= 1; else after += 1;
-    }
-  }
-  const offered = neighbours === 0 ? [] : [before, after].filter((index) => index >= 0 && index < count);
-  return Object.freeze({ read: Object.freeze([anchor, ...read.slice(1).sort((left, right) => left - right)]), offered: Object.freeze(offered) });
+  const others = [...Array(count).keys()].filter((index) => index !== anchor)
+    .sort((left, right) => Math.abs(left - anchor) - Math.abs(right - anchor) || left - right)
+    .slice(0, neighbours).sort((left, right) => left - right);
+  const first = Math.min(anchor, others[0] ?? anchor);
+  const last = Math.max(anchor, others.at(-1) ?? anchor);
+  const offered = neighbours === 0 ? [] : [first - 1, last + 1].filter((index) => index >= 0 && index < count);
+  return Object.freeze({ read: Object.freeze([anchor, ...others]), offered: Object.freeze(offered) });
 }
 
 /** Notes and filenames are immutable; imported notes supply their source title rather than the UI's label. */
@@ -364,68 +357,14 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     }
     const neighbours = input.neighbours ?? Number.POSITIVE_INFINITY;
     const actor = this.reader(input.access_token, input.scope);
-    if (input.citation.document_id === undefined) {
-      // A note or an imported meeting: its packets in order, the cited one first.
-      const row = this.textByCitation(actor, input.scope, input.citation);
-      if (row === undefined) denied();
-      this.assertTextSourceRevision(row);
-      const atoms = packets(packetTitle(row), row.text).map((text, index) => originalPacketAtomV1(row, { index, text }));
-      const anchor = atoms.findIndex((atom) => this.citationMatches(atom, input.citation));
-      if (anchor < 0) denied();
-      const window = openWindowV1(anchor, atoms.length, neighbours);
-      const read = window.read.map((index) => atoms[index]!);
-      const offered = window.offered.map((index) => atoms[index]!);
-      return this.commitDeskRelease(actor, input.access_token, input.scope,
-        [...read.map((atom) => this.deskItem(row, atom, true)), ...offered.map((atom) => this.deskItem(row, atom, false))], [...read, ...offered]);
-    }
-    const meta = this.documentSourceMeta(actor, input.scope, input.citation.source_id, input.citation.revision_id, input.citation.document_id, input.citation.representation_sha256);
-    if (meta === undefined) denied();
-    // Parse and verify the immutable representation once.  The anchor scan is
-    // streaming; it never materializes every extracted chunk or repeats the
-    // representation parse for each candidate in a large document.
-    const representation = this.representationChunks(meta as DocumentRow);
-    let anchorRow: DocumentRow | undefined;
-    let anchor: ReleasedSourceContextAtomV1 | undefined;
-    for (const chunk of this.database.prepare("SELECT ordinal,anchor_kind,anchor_start,text,extractor FROM authority_person_document_text_v1 WHERE document_id=? AND extractor=? ORDER BY ordinal").iterate(input.citation.document_id, meta.extractor) as Iterable<Pick<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text" | "extractor">>) {
-      const row = Object.freeze({ ...meta, ...chunk }) as DocumentRow;
-      const candidate = this.documentAnchorForCitation(row, input.citation, representation);
-      if (candidate !== undefined) { anchorRow = row; anchor = candidate; break; }
-    }
-    if (anchorRow === undefined || anchor === undefined) denied();
-    // Preceding and following chunks, nearest first: every one for a whole open, else only as many as the named
-    // packets could reach (each chunk holds at least one) plus the one beyond, which is offered as a continuation.
-    type Chunk = Pick<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text" | "extractor">;
-    const side = (sql: string): Chunk[] => {
-      const chunks: Chunk[] = [];
-      if (neighbours === 0) return chunks;
-      for (const chunk of this.database.prepare(sql).iterate(input.citation.document_id, meta.extractor, anchorRow.ordinal) as Iterable<Chunk>) {
-        chunks.push(chunk);
-        if (chunks.length > neighbours) break;
-      }
-      return chunks;
-    };
-    const before = side("SELECT ordinal,anchor_kind,anchor_start,text,extractor FROM authority_person_document_text_v1 WHERE document_id=? AND extractor=? AND ordinal<? ORDER BY ordinal DESC");
-    const after = side("SELECT ordinal,anchor_kind,anchor_start,text,extractor FROM authority_person_document_text_v1 WHERE document_id=? AND extractor=? AND ordinal>? ORDER BY ordinal ASC");
-    // Preserve the exact requested segment.  A large extracted chunk can have
-    // several 3 KiB packets, and recomputing the anchor with an empty query
-    // would otherwise silently substitute packet zero. Every chunk is read packet by packet.
-    this.assertIntegrity(meta);
-    this.assertDocumentSourceRevision(meta as DocumentRow);
-    const rows = [...before.reverse(), anchorRow, ...after].map((chunk) => chunk === anchorRow ? anchorRow : Object.freeze({ ...meta, ...chunk }) as DocumentRow);
-    const units: { readonly row: DocumentRow; readonly atom: ReleasedSourceContextAtomV1 }[] = [];
-    let anchorIndex = -1;
-    for (const row of rows) {
-      if (row !== anchorRow) this.assertDocumentChunk(row, representation);
-      for (const [index, text] of packets(row.title, row.text).entries()) {
-        const atom = originalPacketAtomV1(row, { index, text });
-        if (row === anchorRow && atom.anchor_sha256 === anchor.anchor_sha256) anchorIndex = units.length;
-        units.push({ row, atom: row === anchorRow && atom.anchor_sha256 === anchor.anchor_sha256 ? anchor : atom });
-      }
-    }
-    if (anchorIndex < 0) denied();
-    const window = openWindowV1(anchorIndex, units.length, neighbours);
-    const items = [...window.read.map((index) => this.deskItem(units[index]!.row, units[index]!.atom, true)), ...window.offered.map((index) => this.deskItem(units[index]!.row, units[index]!.atom, false))];
-    return this.commitDeskRelease(actor, input.access_token, input.scope, items, [...window.read, ...window.offered].map((index) => units[index]!.atom));
+    // The exact cited packet, never a recomputed one: a large chunk holds several packets.
+    const units = this.sourcePackets(actor, input.scope, input.citation) ?? denied();
+    const anchor = units.findIndex(({ atom }) => this.citationMatches(atom, input.citation));
+    if (anchor < 0) denied();
+    const { read, offered } = openWindowV1(anchor, units.length, neighbours);
+    const item = (index: number, includeText: boolean) => this.deskItem(units[index]!.row, units[index]!.atom, includeText);
+    return this.commitDeskRelease(actor, input.access_token, input.scope,
+      [...read.map((index) => item(index, true)), ...offered.map((index) => item(index, false))], [...read, ...offered].map((index) => units[index]!.atom));
   }
 
   revalidateDeskRelease(input: {
@@ -479,16 +418,10 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   read(input: { readonly access_token: string; readonly scope: PersonAskScopeV2; readonly citation: OriginalContextCitationV1 }) {
     const actor = this.reader(input.access_token, input.scope);
-    let atom: ReleasedSourceContextAtomV1 | undefined;
-    let imported_meeting_review: PersonImportedMeetingReviewV1 | undefined;
-    if (input.citation.document_id === undefined) {
-      const row = this.textByCitation(actor, input.scope, input.citation);
-      atom = row === undefined ? undefined : this.textAnchorForCitation(row, input.citation);
-      if (atom !== undefined && row?.api_version === 0) imported_meeting_review = this.imported.reviewState(actor, row);
-    } else {
-      atom = this.documentAnchorByCitation(actor, input.scope, input.citation);
-    }
-    if (atom === undefined) denied();
+    const found = this.sourcePackets(actor, input.scope, input.citation)?.find(({ atom }) => this.citationMatches(atom, input.citation)) ?? denied();
+    const { row, atom } = found;
+    const imported_meeting_review: PersonImportedMeetingReviewV1 | undefined =
+      !("document_id" in row) && row.api_version === 0 ? this.imported.reviewState(actor, row) : undefined;
     this.auditProofRead(actor, input.scope, atom);
     return Object.freeze({ scope: Object.freeze({ ...input.scope }), atom, ...(imported_meeting_review === undefined ? {} : { imported_meeting_review }) });
   }
@@ -801,67 +734,40 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
    * whole-source open re-reads and re-packets its source once, not once per packet.
    */
   private assertReleasedAtomsReadable(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, atoms: readonly ReleasedSourceContextAtomV1[]): void {
-    const sources = new Map<string, ReleasedSourceContextAtomV1[]>();
+    const sources = new Map<string, ReadonlyMap<Sha256Digest, ReleasedSourceContextAtomV1>>();
     for (const atom of atoms) {
       if (!SOURCE_ID.test(atom.source_id) || !SHA256.test(atom.source_sha256) || !SHA256.test(atom.representation_sha256) || !SHA256.test(atom.anchor_sha256)) denied();
       const key = canonicalJson([atom.source_id, atom.revision_id, atom.source_sha256, atom.representation_sha256, atom.document_id ?? null]);
-      const group = sources.get(key);
-      if (group === undefined) sources.set(key, [atom]); else group.push(atom);
-    }
-    for (const group of sources.values()) {
-      const current = this.currentPackets(actor, scope, group[0]!);
-      for (const atom of group) {
-        const packet = current?.get(atom.anchor_sha256);
-        if (packet === undefined || !this.citationMatches(packet, atom) || packet.text !== atom.text) denied();
-      }
+      const current = sources.get(key) ?? new Map((this.sourcePackets(actor, scope, atom) ?? []).map((unit) => [unit.atom.anchor_sha256, unit.atom]));
+      sources.set(key, current);
+      const packet = current.get(atom.anchor_sha256);
+      if (packet === undefined || !this.citationMatches(packet, atom) || packet.text !== atom.text) denied();
     }
   }
 
-  /** A cited source revision's packets as the caller may read them now, by anchor; undefined when it cannot read it. */
-  private currentPackets(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, citation: OriginalContextCitationV1): ReadonlyMap<Sha256Digest, ReleasedSourceContextAtomV1> | undefined {
-    const found = new Map<Sha256Digest, ReleasedSourceContextAtomV1>();
+  /**
+   * A cited source revision's packets in source order, each with its row, as the caller may read them now (its integrity
+   * verified); undefined when the caller cannot read that revision. Every open, proof read and recheck goes through it.
+   */
+  private sourcePackets(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, citation: OriginalContextCitationV1): readonly { readonly row: SourceRow | DocumentRow; readonly atom: ReleasedSourceContextAtomV1 }[] | undefined {
     if (citation.document_id === undefined) {
       const row = this.textByCitation(actor, scope, citation);
       if (row === undefined) return undefined;
       this.assertTextSourceRevision(row);
-      for (const [index, text] of packets(packetTitle(row), row.text).entries()) {
-        const atom = originalPacketAtomV1(row, { index, text });
-        found.set(atom.anchor_sha256, atom);
-      }
-      return found;
+      return packets(packetTitle(row), row.text).map((text, index) => ({ row, atom: originalPacketAtomV1(row, { index, text }) }));
     }
     const meta = this.documentSourceMeta(actor, scope, citation.source_id, citation.revision_id, citation.document_id, citation.representation_sha256);
     if (meta === undefined) return undefined;
+    this.assertIntegrity(meta);
     this.assertDocumentSourceRevision(meta as DocumentRow);
     const chunks = this.representationChunks(meta as DocumentRow);
-    for (const chunk of this.database.prepare("SELECT ordinal,anchor_kind,anchor_start,text,extractor FROM authority_person_document_text_v1 WHERE document_id=? ORDER BY ordinal").iterate(citation.document_id) as Iterable<Pick<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text" | "extractor">>) {
+    const units: { readonly row: DocumentRow; readonly atom: ReleasedSourceContextAtomV1 }[] = [];
+    for (const chunk of this.database.prepare("SELECT ordinal,anchor_kind,anchor_start,text,extractor FROM authority_person_document_text_v1 WHERE document_id=? AND extractor=? ORDER BY ordinal").iterate(citation.document_id, meta.extractor) as Iterable<Pick<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text" | "extractor">>) {
       const row = Object.freeze({ ...meta, ...chunk }) as DocumentRow;
-      if (row.extractor !== meta.extractor) continue;
       this.assertDocumentChunk(row, chunks);
-      for (const [index, text] of packets(row.title, row.text).entries()) {
-        const atom = originalPacketAtomV1(row, { index, text });
-        found.set(atom.anchor_sha256, atom);
-      }
+      for (const [index, text] of packets(row.title, row.text).entries()) units.push({ row, atom: originalPacketAtomV1(row, { index, text }) });
     }
-    return found;
-  }
-
-  private textAnchorForCitation(row: SourceRow, citation: OriginalContextCitationV1): ReleasedSourceContextAtomV1 | undefined {
-    this.assertTextSourceRevision(row);
-    for (const [segment, text] of packets(packetTitle(row), row.text).entries()) {
-      const atom = originalPacketAtomV1(row, { index: segment, text });
-      if (this.citationMatches(atom, citation)) return atom;
-    }
-    return undefined;
-  }
-
-  private documentAnchorForCitation(row: DocumentRow, citation: OriginalContextCitationV1, chunks: readonly unknown[]): ReleasedSourceContextAtomV1 | undefined {
-    this.assertDocumentChunk(row, chunks);
-    for (const [segment, text] of packets(row.title, row.text).entries()) {
-      const atom = originalPacketAtomV1(row, { index: segment, text });
-      if (this.citationMatches(atom, citation)) return atom;
-    }
-    return undefined;
+    return units;
   }
 
   private citationMatches(atom: ReleasedSourceContextAtomV1, citation: OriginalContextCitationV1): boolean {
@@ -924,20 +830,6 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   private textByCitation(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, citation: OriginalContextCitationV1): SourceRow | undefined {
     const row = this.textBySource(actor, scope, citation.source_id, citation.revision_id);
     return row?.source_sha256 === citation.source_sha256 && row.representation_sha256 === citation.representation_sha256 ? row : undefined;
-  }
-
-  private documentAnchorByCitation(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, citation: OriginalContextCitationV1): ReleasedSourceContextAtomV1 | undefined {
-    const meta = this.documentSourceMeta(actor, scope, citation.source_id, citation.revision_id, citation.document_id!, citation.representation_sha256);
-    if (meta === undefined) return undefined;
-    this.assertDocumentSourceRevision(meta as DocumentRow);
-    const chunks = this.representationChunks(meta as DocumentRow);
-    for (const chunk of this.database.prepare("SELECT ordinal,anchor_kind,anchor_start,text,extractor FROM authority_person_document_text_v1 WHERE document_id=? ORDER BY ordinal").iterate(citation.document_id!) as Iterable<Pick<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text" | "extractor">>) {
-      const row = Object.freeze({ ...meta, ...chunk }) as DocumentRow;
-      if (row.extractor !== meta.extractor) continue;
-      const atom = this.documentAnchorForCitation(row, citation, chunks);
-      if (atom !== undefined) return atom;
-    }
-    return undefined;
   }
 
   private documentSourceMeta(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, sourceId: string, revisionId: string, documentId: string, representationSha256: Sha256Digest): DocumentMeta | undefined {
