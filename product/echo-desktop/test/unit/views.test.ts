@@ -354,7 +354,7 @@ describe('failures carry a code, never text', () => {
 });
 
 describe('text the API accepts', () => {
-  it('titles are the first non-empty line, tabs and controls made spaces, at most 200 bytes', () => {
+  it('titles are the first non-empty line, whole, tabs and controls made spaces', () => {
     expect(noteTitle('\n\n  Northwind call  \nsecond')).toBe('Northwind call');
     expect(noteTitle('a\tb\u0007c\r\nnext')).toBe('a b c');
     // The first line whole, however long.
