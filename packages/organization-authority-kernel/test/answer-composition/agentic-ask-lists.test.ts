@@ -69,7 +69,7 @@ const COVERAGE = "Some source coverage was incomplete, so relevant context may b
 const INCOMPLETE = "I couldn't complete the search. Please try again.";
 const UNLISTED = "cites no list: cite the id of the list that holds its items";
 const HINT = 'is found but cites no item whose full text you have read: a list shows which items exist and each member\'s title, dates, status and owner, never what an item says; open the items for what they say';
-const ABSENT = "is not_found after fewer than two completed searches or a completed list";
+const ABSENT = "is not_found before any completed search or list";
 const leg = (noun: string) => `The list of ${noun} could not be read to its end, so more may exist.`;
 const ownerNotice = (noun: string) => `${noun} could not be filtered by owner, so this list is not limited to that owner.`;
 const partialNotice = (noun: string) => `${noun} were filtered by status only where they record one the filter can match, so this list also includes items it could not filter.`;
@@ -835,7 +835,9 @@ describe("the finish check for a question goal (ADR-0041)", () => {
     expect([
       askResearchCompletionProblemsV1(settled(undefined, "found", ["E5", "E9"]), [], full), askResearchCompletionProblemsV1(settled(undefined, "found", ["E1"]), [], full),
       askResearchCompletionProblemsV1(settled(WI, "found", ["L1"]), [], full), askResearchCompletionProblemsV1(settled(undefined, "not_found", []), searches, full),
+      // One completed search is enough; an incomplete one (an error, a notice) never counts as absence.
       askResearchCompletionProblemsV1(settled(undefined, "not_found", ["E1"]), searches.slice(0, 1), full, false),
-    ]).toEqual([[], [unreadTask], [unreadTask], [], [`${label} is not_found after fewer than two completed searches`]]);
+      askResearchCompletionProblemsV1(settled(undefined, "not_found", ["E1"]), [{ ...searches[0]!, complete: false }], full, false),
+    ]).toEqual([[], [unreadTask], [unreadTask], [], [], [`${label} is not_found before any completed search`]]);
   });
 });

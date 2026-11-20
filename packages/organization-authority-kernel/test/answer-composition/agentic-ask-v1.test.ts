@@ -554,13 +554,16 @@ describe("agentic Ask: research loop", () => {
   });
 
   it("rejects repeated premature finish and reports incomplete research", async () => {
+    // The one search did not complete (the source could not be read), so nothing establishes absence.
     const script = scripted([
       step([{}], [search("launch")]),
       finish([missing()]),
       finish([missing()]),
     ]);
-    const result = await ask({ desk: desk(), model: script.model }).answer({ question: "When is launch?" });
-    expect(script.prompt(2).validation_error).toContain("fewer than two completed searches or a completed list");
+    const evidence = desk();
+    evidence.search.mockImplementation(async () => ({ items: [], truncated: false, receipt_digests: [], notice: "Meeting records are unavailable." }));
+    const result = await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
+    expect(script.prompt(2).validation_error).toContain("before any completed search or list");
     expect(result).toMatchObject({ outcome: "partial", citations: [], parts: [{ status: "not_found", gap: expect.any(String) }] });
     expect(script.inputs).toHaveLength(3); // no answer call without evidence
   });
@@ -576,7 +579,8 @@ describe("agentic Ask: research loop", () => {
     const result = await ask({ desk: desk({ search: () => [launch] }), model: script.model }).answer({ question: "When is launch and who owns it?" });
     expect(script.prompt(2).validation_error).toContain("need N2 \"launch owner\" is still open");
     expect(script.prompt(2).plan[0].needs.map((need: { need: string }) => need.need)).toEqual(["launch date", "launch owner"]);
-    expect(result).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "I couldn't complete the search. Please try again. Missing context: launch owner." }] });
+    // One completed search establishes that the owner was not found.
+    expect(result).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not found: launch owner." }] });
   });
 
   it("keeps metadata-only search hits available for the planner to open", async () => {
@@ -740,7 +744,7 @@ describe("agentic Ask: research loop", () => {
       const script = scripted([step([{}], [{ tool: 'list', args: { source: 'meetings' } }]), finish([missing()]), finish([missing()])]);
       const result = await ask({ desk: desk({ list: () => page }), model: script.model }).answer({ question: 'When is launch?' });
       expect(result.outcome).toBe('partial');
-      expect(script.prompt(2).validation_error).toContain('completed list');
+      expect(script.prompt(2).validation_error).toContain('before any completed search or list');
     }
   });
 
