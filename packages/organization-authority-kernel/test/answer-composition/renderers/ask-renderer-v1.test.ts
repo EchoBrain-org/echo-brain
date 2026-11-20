@@ -907,11 +907,18 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.fallbacks).toBe(0);
       expect(corrections).not.toHaveProperty("writer_fallback");
     });
-    it("drops a list block whose narrowing could not be read and says so", async () => {
-      const rendered = await alone({ bundle: eightAnd1([C(["E9"])]), replies: [placing({ block: "list", list: "L1", members: "E5" })] }).render("Which tickets?");
+    it("sends a list block whose narrowing could not be read back through the one repair, then drops it and says so", async () => {
+      const unreadable = placing({ block: "list", list: "L1", members: "E5" });
+      const run = alone({ bundle: eightAnd1([C(["E9"])]), replies: [unreadable, unreadable] });
+      const rendered = await run.render("Which tickets?");
+      expect(run.prompt(1).validation_error).toContain("selection could not be read");
       expect(statementsOf(rendered)).toEqual([REVIEW.text]);
       expect(rendered.result.response.parts[0]).toMatchObject({ status: "partial", gap: LIST_DROPPED });
       expect(rendered.result.response.citations).toHaveLength(1);
+      // A repair that reads places the list; it never widens an unreadable one.
+      const repaired = await alone({ bundle: eightAnd1([C(["E9"])]), replies: [unreadable, placing({ block: "list", list: "L1", members: ["E5"] })] }).render("Which tickets?");
+      expect(blocksOf(repaired).map(block => block.kind)).not.toContain("table");
+      expect(repaired.result.response.parts[0]!.gap ?? "").not.toContain(LIST_DROPPED);
     });
     it("releases a placed list where the writer put it", async () => {
       const again = { block: "text", sentences: [{ text: "The review closed the fixture work.", evidence: ["E9"] }] };
@@ -989,12 +996,12 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     it("never has the fallback state a list whose placement was dropped, and says something was left out", async () => {
       // The reply's only content is a block narrowing L1 code cannot read: nothing survives, and the fallback runs.
       const dropped = { blocks: [{ block: "list", list: "L1", members: "E2" }], not_found: [] };
-      const alone1 = await alone({ bundle: eightAnd1([WI(["L1"])]), replies: [dropped] }).render(Q);
+      const alone1 = await alone({ bundle: eightAnd1([WI(["L1"])]), replies: [dropped, dropped] }).render(Q);
       const part = alone1.result.response.parts[0]!;
       expect([alone1.fallbacks, statementsOf(alone1), part.status, part.records?.map(value => value.text)]).toEqual([1, [], "records_only", ["Approved record 1."]]);
       expect(part.gap).toBe(`${RECORDS} ${LIST_DROPPED}`);
       // The fallback still states every other list the plan's which_items needs cite.
-      const two = await alone({ bundle: listBundle(16, 0, [list("L1", ids(1, 8)), list("L2", ids(9, 8))], [WI(["L1", "L2"])]), replies: [dropped] }).render(Q);
+      const two = await alone({ bundle: listBundle(16, 0, [list("L1", ids(1, 8)), list("L2", ids(9, 8))], [WI(["L1", "L2"])]), replies: [dropped, dropped] }).render(Q);
       expect([statementsOf(two), two.result.response.parts[0]!.gap]).toEqual([[`8 tickets created on October 4, 2026: ${names(9, 8)}.`], `${LIST_FALLBACK} ${LIST_DROPPED}`]);
     });
     it("releases an answer with no list as written, though a which_items need cites one", async () => {

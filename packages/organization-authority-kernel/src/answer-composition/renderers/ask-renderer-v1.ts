@@ -103,6 +103,8 @@ const LIST_DROPPED_GAP = "A list was left out because its selection could not be
 const UNRECORDED_GAP = "Some list items do not record the fact used to select them.";
 /** The writer's one repair for a sentence resting on list rows or list ids alone. */
 const ROWS_REASON = "a sentence cites list rows or list ids but no evidence text: place a \"list\" block to show which items exist and members' title, dates, status and owner (whole, with \"where\" or with \"members\"); what no evidence text says belongs in \"not_found\"";
+/** The writer's one repair for a list block whose selection code cannot read (ADR-0054): it is never widened. */
+const LIST_REASON = "a \"list\" block's selection could not be read: give the whole list with only \"list\", or narrow it with \"where\" ({\"field\": owner or status with a \"value\", or a date field with \"since\" and \"until\" as YYYY-MM-DD}) or with \"members\" (an array of item ids it shows), and no other keys";
 const FIT_GAP = "Some evidence could not fit in this response.";
 /** A part's gap as one line, cut only at the Person protocol's own bound for it. */
 function gapLine(text: string): string { return boundedBytes(cleanLine(text, PERSON_ANSWER_PART_GAP_MAX_BYTES_V4), PERSON_ANSWER_PART_GAP_MAX_BYTES_V4); }
@@ -470,7 +472,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const since = earlier === undefined ? {} : { since: true };
         const parsed = parseBlocksAnswer(value, since);
         last.answer = parsed;
-        if (parsed.sentences.some(restsOnRows) && repairable()) throw new AgenticAskOutputErrorV1(ROWS_REASON);
+        // A list block code cannot read, or a sentence resting on rows, takes the writer's one repair; a list block still
+        // unreadable after it is dropped, never widened.
+        const reasons = [...(parsed.placed.some(placed => placed.unreadable === true) ? [LIST_REASON] : []), ...(parsed.sentences.some(restsOnRows) ? [ROWS_REASON] : [])];
+        if (reasons.length > 0 && repairable()) throw new AgenticAskOutputErrorV1(reasons.join("; "));
         return parsed;
       };
 
