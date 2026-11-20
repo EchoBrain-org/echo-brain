@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonPageCitationV1, validatePersonTicketCitationV1, validatePersonWorkspaceCitationV1, type PersonConnectorAccessV1, type PersonPageCitationV1, type PersonTicketCitationV1, type PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '../../src/domain/errors.js';
-import { createAuditedPersonLiveEvidenceSourceV1 } from '../../src/shared/audited-person-live-evidence-v1.js';
+import { createAuditedPersonLiveEvidenceSourceV1, PERSON_LIVE_EVIDENCE_CAPACITY_NOTICE_V1 } from '../../src/shared/audited-person-live-evidence-v1.js';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceCitationV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceReleaseV1, PersonLiveEvidenceValueV1 } from '../../src/shared/person-live-evidence-v1.js';
 
 const actor = { organization_id: 'org_00000000-0000-4000-8000-000000000001', principal_id: 'person-one', membership_id: 'mem_00000000-0000-4000-8000-000000000001' };
@@ -314,7 +314,7 @@ describe('shared audited live evidence source V1', () => {
     expect(f.audit.record).not.toHaveBeenCalled();
   });
 
-  it('reserves request capacity across releases waiting for their audits', async () => {
+  it('reserves request capacity across releases waiting for their audits, and returns what fits once it is full', async () => {
     const f = fixture('tickets', page([]));
     const source = f.make();
     vi.mocked(f.reader.search).mockImplementation(async input => page(Array.from({ length: 50 }, (_, index) =>
@@ -328,14 +328,20 @@ describe('shared audited live evidence source V1', () => {
       return canonicalSha256(release);
     });
 
-    const reads = Array.from({ length: 11 }, (_, index) => source.search({ query: `batch-${index}`, limit: 50 }));
-    await vi.waitFor(() => expect(f.reader.search).toHaveBeenCalledTimes(11), { interval: 1 });
+    // 103 reads of 50 while every audit waits: 5,150 items against a request capacity of 5,120.
+    const reads = Array.from({ length: 103 }, (_, index) => source.search({ query: `batch-${index}`, limit: 50 }));
+    await vi.waitFor(() => expect(f.reader.search).toHaveBeenCalledTimes(103), { interval: 1 });
     releaseAudit();
-    const outcomes = await Promise.allSettled(reads);
+    const results = await Promise.all(reads);
 
-    expect(outcomes.filter(value => value.status === 'fulfilled')).toHaveLength(10);
-    expect(outcomes.filter(value => value.status === 'rejected')).toHaveLength(1);
-    expect(f.audit.record).toHaveBeenCalledTimes(10);
+    expect(results.reduce((sum, result) => sum + result.items.length, 0)).toBe(5_120);
+    const cut = results.filter(result => result.items.length < 50);
+    expect(cut).toHaveLength(1);
+    expect(cut[0]).toMatchObject({ truncated: true, notice: PERSON_LIVE_EVIDENCE_CAPACITY_NOTICE_V1 });
+    expect(cut[0]!.items).toHaveLength(20);
+    // Every read is audited, each with exactly what it released.
+    expect(f.audit.record).toHaveBeenCalledTimes(103);
+    expect(f.releases.reduce((sum, release) => sum + release.citations.length, 0)).toBe(5_120);
   });
 
   it('keeps a shared reservation until its last pending audit settles', async () => {
@@ -343,7 +349,7 @@ describe('shared audited live evidence source V1', () => {
     const source = f.make();
     vi.mocked(f.reader.search).mockImplementation(async input => {
       if (input.query === 'shared') return page([ticket('Shared evidence', 'ECHO-SHARED')]);
-      const count = input.query === 'fill-final' ? 12 : input.query === 'recovered' ? 11 : 50;
+      const count = input.query === 'fill-final' ? 19 : input.query === 'over' ? 1 : 50;
       return page(Array.from({ length: count }, (_, index) => ticket(`Evidence ${input.query} ${index}`, `ECHO-${input.query}-${index}`)));
     });
     let failFirstAudit!: () => void;
@@ -365,12 +371,14 @@ describe('shared audited live evidence source V1', () => {
     failFirstAudit();
     await expect(first).rejects.toMatchObject({ code: 'unavailable' });
 
-    for (let index = 0; index < 10; index += 1) await source.search({ query: `fill-${index}`, limit: 50 });
-    await expect(source.search({ query: 'fill-final', limit: 12 })).rejects.toMatchObject({ code: 'invalid_output' });
+    // The shared item still holds one place: 102 pages of 50 and 19 more fill the request exactly.
+    for (let index = 0; index < 102; index += 1) await source.search({ query: `fill-${index}`, limit: 50 });
+    expect((await source.search({ query: 'fill-final', limit: 19 })).items).toHaveLength(19);
+    await expect(source.search({ query: 'over', limit: 1 })).resolves.toMatchObject({ items: [], truncated: true, notice: PERSON_LIVE_EVIDENCE_CAPACITY_NOTICE_V1 });
     finishSecondAudit();
     await expect(second).resolves.toMatchObject({ items: [expect.objectContaining({ label: 'ECHO-SHARED' })] });
-    const recovered = await source.search({ query: 'recovered', limit: 11 });
-    expect(recovered.items).toHaveLength(11);
+    // An item this request already released takes no new place.
+    await expect(source.search({ query: 'shared' })).resolves.toMatchObject({ items: [expect.objectContaining({ label: 'ECHO-SHARED' })], truncated: false });
   });
 
   it('retains immutable release bytes while an asynchronous audit is pending', async () => {

@@ -13,6 +13,14 @@ import type {
 } from './person-live-evidence-v1.js';
 
 const PERSON_LIVE_EVIDENCE_MAX_ITEMS_V1 = 50;
+/**
+ * What one request may hold per live source: released items, citations and list cursors. It bounds the request's
+ * memory and audit work, sized to the providers' own per-request read budgets. Past it a read returns what fits,
+ * with `truncated` and the notice below, never an error.
+ */
+const PERSON_LIVE_EVIDENCE_REQUEST_MAX_V1 = 5_120;
+/** What research is told when a read reached this request's capacity for one source. */
+export const PERSON_LIVE_EVIDENCE_CAPACITY_NOTICE_V1 = 'This request has read as much from this tool as it can hold, so these results stop here.';
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const ERROR_CODES = new Set(['conflict', 'invalid_request', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable']);
 /** Each attribute a live item may carry, with its UTF-8 bound: a tool item's owner, due date and status, a container's key and tool. */
@@ -181,14 +189,34 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       boundedString(page.notice, 1024);
       if (page.notice.trim() !== page.notice) invalidOutput();
     }
-    const prepared = page.items.map(prepare);
-    const ids = prepared.map(value => `live_${canonicalSha256({ request_id: requestId, binding, kind: value.citation.kind, coordinates: value.coordinates }).slice(7)}`);
+    let prepared = page.items.map(prepare);
+    let ids = prepared.map(value => `live_${canonicalSha256({ request_id: requestId, binding, kind: value.citation.kind, coordinates: value.coordinates }).slice(7)}`);
     if (new Set(ids).size !== ids.length) invalidOutput();
-    const citationKeys = prepared.map(value => canonicalSha256(value.citation));
+    let citationKeys = prepared.map(value => canonicalSha256(value.citation));
+    /**
+     * Keeps what this request can still hold, in the page's order: an item it already released takes no new place. Once
+     * the request is full the rest of the page, and its cursor (which would skip them), are left out, and the result says
+     * so. Synchronous with `reserve`, so concurrent releases never admit against the same stale snapshot.
+     */
+    const fit = () => {
+      const storedIds = new Set([...stored.keys(), ...reservedStored.keys()]);
+      const releasedKeys = new Set([...released.keys(), ...reservedReleased.keys()]);
+      let count = 0;
+      for (; count < ids.length; count += 1) {
+        if ((!storedIds.has(ids[count]!) && storedIds.size >= PERSON_LIVE_EVIDENCE_REQUEST_MAX_V1) ||
+            (!releasedKeys.has(citationKeys[count]!) && releasedKeys.size >= PERSON_LIVE_EVIDENCE_REQUEST_MAX_V1)) break;
+        storedIds.add(ids[count]!);
+        releasedKeys.add(citationKeys[count]!);
+      }
+      const cursorFull = nextCursor !== undefined && cursors.size + reservedCursors >= PERSON_LIVE_EVIDENCE_REQUEST_MAX_V1;
+      if (count === ids.length && !cursorFull) return;
+      if (count < ids.length && operation === 'open' && count === 0) anchorTruncated = true;
+      prepared = prepared.slice(0, count); ids = ids.slice(0, count); citationKeys = citationKeys.slice(0, count);
+      nextCursor = undefined; nextProviderCursor = undefined;
+      truncated = true;
+      notice = notice === undefined ? PERSON_LIVE_EVIDENCE_CAPACITY_NOTICE_V1 : `${notice} ${PERSON_LIVE_EVIDENCE_CAPACITY_NOTICE_V1}`;
+    };
     const reserve = () => {
-      if (new Set([...released.keys(), ...reservedReleased.keys(), ...citationKeys]).size > 512 ||
-          new Set([...stored.keys(), ...reservedStored.keys(), ...ids]).size > 512 ||
-          cursors.size + reservedCursors >= 512) invalidOutput();
       const heldStored = ids.filter(id => !stored.has(id));
       const heldReleased = citationKeys.filter(key => !released.has(key));
       for (const id of heldStored) reservedStored.set(id, (reservedStored.get(id) ?? 0) + 1);
@@ -206,9 +234,11 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
         if (nextCursor !== undefined) reservedCursors -= 1;
       };
     };
-    const nextProviderCursor = page.next_cursor;
-    const truncated = page.truncated || nextProviderCursor !== undefined;
-    const nextCursor = nextProviderCursor === undefined ? undefined : `live_cursor_${requestId}_${++cursorSequence}`;
+    let nextProviderCursor = page.next_cursor;
+    let truncated = page.truncated || nextProviderCursor !== undefined;
+    let nextCursor = nextProviderCursor === undefined ? undefined : `live_cursor_${requestId}_${++cursorSequence}`;
+    let notice = page.notice;
+    let anchorTruncated = page.anchor_truncated;
     const withReceipt = (receipt: `sha256:${string}`): PersonLiveEvidenceResultV1<C> => Object.freeze({
       items: Object.freeze(prepared.map((value, index) => Object.freeze({
         id: ids[index]!, kind: value.citation.kind as C['kind'], citation: value.citation, label: value.label, visibility: value.visibility,
@@ -216,11 +246,12 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
         ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at }), ...(value.date_kind === undefined ? {} : { date_kind: value.date_kind }), ...(value.dates === undefined ? {} : { dates: value.dates }), receipt_sha256: receipt,
       }))),
       truncated, receipt_digests: Object.freeze([receipt]), ...(nextCursor === undefined ? {} : { next_cursor: nextCursor }),
-      ...(page.notice === undefined ? {} : { notice: page.notice }), ...(page.page_full === undefined ? {} : { page_full: page.page_full }),
-      ...(page.anchor_truncated === undefined ? {} : { anchor_truncated: page.anchor_truncated }),
+      ...(notice === undefined ? {} : { notice }), ...(page.page_full === undefined ? {} : { page_full: page.page_full }),
+      ...(anchorTruncated === undefined ? {} : { anchor_truncated: anchorTruncated }),
     });
     if (canonicalJsonBytes(withReceipt(`sha256:${'0'.repeat(64)}`)).byteLength > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1) invalidOutput();
     current(signal);
+    fit();
     const releaseReservation = reserve();
     try {
       const receipt = await safeCall(() => audit.record(Object.freeze({ schema_version: 1, binding, operation, coordinates: Object.freeze(prepared.map(value => value.coordinates)), value_digests: Object.freeze(prepared.map(({ handle: _handle, coordinates: _coordinates, ...value }) => canonicalSha256(value))), citations: Object.freeze(prepared.map(value => value.citation)) })), signal);
