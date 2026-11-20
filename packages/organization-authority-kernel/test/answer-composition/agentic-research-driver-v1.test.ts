@@ -57,6 +57,44 @@ describe('native research harness shares the real ECHO tool state', () => {
     expect(fallbackCorrections).toBe(corrections);
   });
 
+  it.each(['before its first request', 'between its requests'] as const)('stops a native harness that sends nothing %s as stalled, and tells it to stop', async when => {
+    let signal: AbortSignal | undefined;
+    const h = harness(async session => {
+      signal = session.signal;
+      if (when === 'between its requests') await admit(session);
+      await new Promise<never>(() => undefined);
+    });
+    vi.useFakeTimers();
+    try {
+      const pending = h.ask();
+      await vi.advanceTimersByTimeAsync(generation.timeout_ms);
+      const output = await pending;
+      expect(output.research.stop.reason).toBe('stalled');
+      expect(signal?.aborted).toBe(true);
+      expect(h.audit).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('never stalls a native harness that keeps making requests past its silence period', async () => {
+    const h = harness(async session => {
+      // Each request comes back inside the silence period; together they run far past it.
+      for (let index = 0; index < 6; index += 1) {
+        await new Promise(resolve => setTimeout(resolve, generation.timeout_ms / 2));
+        await admit(session, `turn ${index}`);
+      }
+      await session.call('search', { query: 'calibrate' });
+      await admit(session, 'read');
+      await session.call('finish', finish());
+    });
+    vi.useFakeTimers();
+    try {
+      const pending = h.ask();
+      await vi.advanceTimersByTimeAsync(4 * generation.timeout_ms);
+      const output = await pending;
+      expect(output.research.stop.reason).toBe('finished');
+    } finally { vi.useRealTimers(); }
+  });
+
   it.each(['search', 'list'] as const)('does not let unseen %s results establish absence, including same-turn tool batches', async tool => {
     const h = harness(async session => {
       await admit(session);

@@ -81,7 +81,8 @@ export class AgenticModelUnsettledErrorV1 extends AgenticAskGenerationFailureV1 
  * billed. The writer answers from what was released.
  */
 export class AgenticModelStalledErrorV1 extends AgenticModelUnsettledErrorV1 {
-  constructor(silenceMs: number) { super(`the model sent nothing for ${Math.round(silenceMs / 1000)} s`); this.name = "AgenticModelStalledErrorV1"; }
+  /** `who` names what went silent: the model by default, or a native research harness between its requests. */
+  constructor(silenceMs: number, who = "the model") { super(`${who} sent nothing for ${Math.round(silenceMs / 1000)} s`); this.name = "AgenticModelStalledErrorV1"; }
 }
 
 /**

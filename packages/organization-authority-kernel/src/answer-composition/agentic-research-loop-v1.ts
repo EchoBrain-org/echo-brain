@@ -1558,9 +1558,35 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       return payload;
     };
     const initial = view([...entries.values()], { ...goalFields(), ...context, scope, source_catalog: sourceCatalog });
+    // The harness is held to the same liveness as its calls: before its first request and between requests and tool
+    // calls it may send nothing for the silence period; a request or tool call in flight has its own. A harness that
+    // stays silent is told to stop, and research stops as stalled with what it released.
+    const harness = new AbortController();
+    let inFlight = 0;
+    let harnessTimer: ReturnType<typeof setTimeout> | undefined;
+    let harnessStalled: AgenticModelStalledErrorV1 | undefined;
+    /** Research is over: no silence is timed after it. */
+    let closed = false;
+    let stallHarness: (error: AgenticModelStalledErrorV1) => void = () => undefined;
+    const silentHarness = new Promise<never>((_resolve, reject) => { stallHarness = reject; });
+    silentHarness.catch(() => undefined);
+    const quiet = () => {
+      clearTimeout(harnessTimer);
+      if (closed || inFlight > 0 || harnessStalled !== undefined) return;
+      harnessTimer = setTimeout(() => {
+        harnessStalled = new AgenticModelStalledErrorV1(options.silence_ms, 'the research harness');
+        harness.abort(harnessStalled); stallHarness(harnessStalled);
+      }, options.silence_ms);
+    };
+    const busy = async <T>(work: () => Promise<T>): Promise<T> => {
+      if (harnessStalled !== undefined) throw harnessStalled;
+      inFlight += 1; clearTimeout(harnessTimer);
+      try { return await work(); } finally { inFlight -= 1; quiet(); }
+    };
+    quiet();
     try {
-      await driver.run({ initial, list_available: listAvailable, question: ask, signal: activeSignal, silence_ms: options.silence_ms,
-        model_request: (request, forward) => gate.external({ ...request, before_forward: () => {
+      await Promise.race([silentHarness, driver.run({ initial, list_available: listAvailable, question: ask, signal: AbortSignal.any([activeSignal, harness.signal]), silence_ms: options.silence_ms,
+        model_request: (request, forward) => busy(() => gate.external({ ...request, before_forward: () => {
           closeTurn(); steps += 1;
           const present = (request.payload_digests ?? []).map(digest => packets.get(digest)).filter(value => value !== undefined);
           researchPromptEntries = [...new Set(present.flatMap(value => value.read))];
@@ -1568,8 +1594,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           // Only an admitted inference carrying the actual result observes a read.
           // Same-turn tools, token counting and omitted packets cannot establish absence.
           for (const observation of present.flatMap(value => value.observations)) seenObservations.add(observation);
-        } }, forward),
-        call(tool, args) {
+        } }, forward)),
+        call: (tool, args) => busy(() => {
           const next = serial.then(async () => {
             if (terminal !== undefined) throw terminal;
             assertLive();
@@ -1626,8 +1652,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           });
           serial = next.catch(() => undefined);
           return next;
-        },
-      });
+        }),
+      })]);
       await serial;
       if (terminal !== undefined) throw terminal;
       assertLive();
@@ -1641,7 +1667,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         researchStop = error instanceof AgenticModelStalledErrorV1 ? 'stalled' : 'unusable_step';
         if (researchStop !== 'stalled') { fallbacks += 1; observeCoreModelCorrectionV1('research_unusable_step_stop'); }
       }
-    } finally { closeTurn(); }
+    } finally { closed = true; clearTimeout(harnessTimer); closeTurn(); }
     if (plan.length === 0 && !unsupportedAction) plan = proposedPlan([{ question: partQuestion(goal.kind === 'question' ? goal.question : goal.task), needs: [], notes: '' }]);
   };
 
