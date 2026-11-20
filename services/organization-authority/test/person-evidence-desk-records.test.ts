@@ -339,13 +339,13 @@ describe('Person evidence desk over the real approved-record route', () => {
     expect(result.notice_kind).toBe('informational');
   });
 
-  it('asks the records for as many hits as the desk search, up to twenty-five', async () => {
+  it('asks the records for the desk search's own page, any size, and for every match when it names none', async () => {
     const value = await fixture();
     const searchBatch = vi.fn(value.route.searchBatch);
     const desk = createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, originals: emptyOriginals(), records: { ...value.route, searchBatch } });
     await desk.search({ query: 'Decision' });
-    await desk.search({ query: 'Decision', limit: 50 });
-    expect(searchBatch.mock.calls.map(([input]) => input.limit)).toEqual([25, 25]);
+    await desk.search({ query: 'Decision', limit: 500 });
+    expect(searchBatch.mock.calls.map(([input]) => input.limit)).toEqual([undefined, 500]);
   });
 
   it('writes one final record-read audit for a fresh citation open', async () => {

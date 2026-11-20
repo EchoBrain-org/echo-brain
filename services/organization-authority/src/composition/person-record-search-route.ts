@@ -33,8 +33,6 @@ import {
   clearReadableSearchActiveGenerationV1,
   listReadableSearchGenerationRecordsV1,
   listReadableSearchGenerationV1,
-  READABLE_SEARCH_LIST_MAX_V1,
-  READABLE_SEARCH_RESPONSE_MAX_V1,
   readReadableSearchGenerationAtomsV1,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
   searchReadableSearchGenerationV1,
@@ -97,15 +95,6 @@ interface ActiveGenerationRow {
 }
 
 type SearchGeneration = typeof searchReadableSearchGenerationV1;
-/**
- * One record open's text budget: what one open hands the research prompt. The anchor is always whole; the record's
- * other items follow in its order until the next would pass it, and `truncated` says more exist.
- */
-const RECORD_OPEN_MAX_UTF8_BYTES_V1 = 96 * 1024;
-/** How many of a record's items one open reads from the index; the byte budget above binds first. */
-const RECORD_OPEN_MAX_ITEMS_V1 = READABLE_SEARCH_LIST_MAX_V1;
-/** A list row's one line of a record's own text, in characters (ADR-0041). */
-const DESK_LIST_LINE_MAX_CHARACTERS_V1 = 300;
 
 /** Only an observed head/pointer lag may put the request in originals-only mode. Diagnostics name it `index_lag` by its name. */
 export class PersonRecordSearchIndexLagV1 extends AuthorityOperationError {
@@ -550,8 +539,7 @@ function assertValidBatch(input: PersonRecordSearchBatchInputV1): void {
     (input.kinds !== undefined && (!Array.isArray(input.kinds) || input.kinds.length < 1 || new Set(input.kinds).size !== input.kinds.length || input.kinds.some((kind) => kind !== "decision" && kind !== "action" && kind !== "rationale"))) ||
     (input.limit !== undefined &&
       (!Number.isSafeInteger(input.limit) ||
-        input.limit < 1 ||
-        input.limit > READABLE_SEARCH_RESPONSE_MAX_V1))
+        input.limit < 1))
   ) {
     invalidRequest();
   }
@@ -612,15 +600,14 @@ function deskLabel(title: string | undefined, time: DeskMeetingTime): string {
 }
 
 /**
- * How Ask's list rows name a meeting record (ADR-0041): one line of its own text, at most 300 characters, then its
- * meeting, since every record of a meeting carries the meeting's label. "Send fixture drawings to vendor (THERM DVT
- * sync, 2026-10-04)". `text` is the record's own text, without the owner the row already states.
+ * How Ask's list rows name a meeting record (ADR-0041): its own text whole, on one line, then its meeting, since every
+ * record of a meeting carries the meeting's label. "Send fixture drawings to vendor (THERM DVT sync, 2026-10-04)".
+ * `text` is the record's own text, without the owner the row already states.
  */
 function deskListLabel(text: string, title: string | undefined, time: DeskMeetingTime): string {
   const date = meetingStamp(time);
-  const own = [...text.normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/gu, " ").trim()];
-  const line = own.length <= DESK_LIST_LINE_MAX_CHARACTERS_V1 ? own.join("") : `${own.slice(0, DESK_LIST_LINE_MAX_CHARACTERS_V1 - 1).join("").trimEnd()}…`;
-  return boundedLabel(`${line} (${title ?? "Approved meeting"}${date === undefined ? "" : `, ${date.slice(0, 10)}`})`);
+  const line = text.normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/gu, " ").trim();
+  return `${line} (${title ?? "Approved meeting"}${date === undefined ? "" : `, ${date.slice(0, 10)}`})`;
 }
 
 /** Store-raw: only the list route collapses these tokens (ADR-0024). */
@@ -1269,18 +1256,10 @@ export function createPersonRecordSearchRouteV1(
       resolvedAnchor.policy_id !== input.anchor.policy_id) unavailable();
     // The anchor's record in its own order: decisions, actions, then rationales. The anchor read already admitted it.
     const record = generationRead(input.pointer, () => listReadableSearchGenerationV1({
-      ...generationInput(input.pointer, input.current, input.projects, input.project_id), record_sha256s: [resolvedAnchor.record_sha256], limit: RECORD_OPEN_MAX_ITEMS_V1,
+      ...generationInput(input.pointer, input.current, input.projects, input.project_id), record_sha256s: [resolvedAnchor.record_sha256],
     }));
-    // The anchor whole, then the record's other items in order until the next would pass the open's byte budget.
-    const items = [resolvedAnchor];
-    let used = Buffer.byteLength(resolvedAnchor.text, "utf8");
-    const others = record.items.filter((item) => item.atom_id !== resolvedAnchor.atom_id);
-    for (const item of others) {
-      const bytes = Buffer.byteLength(item.text, "utf8");
-      if (used + bytes > RECORD_OPEN_MAX_UTF8_BYTES_V1) break;
-      items.push(item);
-      used += bytes;
-    }
+    // The anchor first, then every other item of the record in its order: an open reads the whole record.
+    const items = [resolvedAnchor, ...record.items.filter((item) => item.atom_id !== resolvedAnchor.atom_id)];
     const released = fence(input.access_token, [input.current], input.projects.grants_sha256, input.project_id);
     assertCurrentSnapshot(input.pointer);
     const response = asResponse({ items });
@@ -1289,10 +1268,8 @@ export function createPersonRecordSearchRouteV1(
       initial_authorization: input.initial_authorization,
       current: released, pointer: input.pointer, projects: input.projects, scope: input, response, desk_items: projection,
     });
-    // A record's text is released whole, so the anchor is never cut; truncated says the record has items this open left
-    // out (ADR-0041).
-    return Object.freeze({ response, release, desk_items: projection, truncated: record.truncated === true || items.length - 1 < others.length,
-      anchor_truncated: false });
+    // A record's text is released whole and the open reads every item of it, so nothing is cut (ADR-0041).
+    return Object.freeze({ response, release, desk_items: projection, truncated: false, anchor_truncated: false });
   }
 
   return Object.freeze({
@@ -1328,8 +1305,9 @@ export function createPersonRecordSearchRouteV1(
       readonly kinds?: readonly ReadableSearchResultItemV1["item_kind"][];
       readonly exclude?: PersonRecordDeskExclusionV1;
     }): PersonRecordSearchBatchResultV1 {
-      const limit = input.limit ?? 50;
-      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) invalidRequest();
+      // A named limit is the caller's page, any size; with none, every admitted item. More set `truncated`.
+      const { limit } = input;
+      if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) invalidRequest();
       const { authorization, projects } = reader(input.access_token, input.project_id);
       if (input.expected_pointer !== undefined) assertReleaseSnapshot(input.expected_pointer);
       const pointer = exactPointer();
@@ -1337,7 +1315,7 @@ export function createPersonRecordSearchRouteV1(
       const dated = datedSelection(input, authorization, projects, pointer, input.project_id);
       const excluded = engineExclusion(input.exclude);
       const inventory = generationRead(pointer, () => listReadableSearchGenerationV1({
-        ...generationInput(pointer, authorization, projects, input.project_id), limit,
+        ...generationInput(pointer, authorization, projects, input.project_id), ...(limit === undefined ? {} : { limit }),
         ...(dated.records === undefined ? {} : { record_sha256s: dated.records }),
         ...(dated.atom_orders === undefined ? {} : { atom_orders: dated.atom_orders }),
         ...(input.kinds === undefined ? {} : { kinds: input.kinds }),

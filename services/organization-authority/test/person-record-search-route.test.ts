@@ -523,7 +523,10 @@ describe("Person Layer 2 route", () => {
         access_token: "owner-bearer",
         query: "benchmark0 benchmark1 benchmark2 benchmark3",
       });
-      expect(benchmark.response.items).toHaveLength(10);
+      // No limit named: every matching item, past the ten one page used to hold.
+      expect(benchmark.response.items).toHaveLength(12);
+      expect(benchmark.truncated).toBe(false);
+      expect(route.searchBatch({ access_token: "owner-bearer", query: "benchmark0 benchmark1 benchmark2 benchmark3", limit: 5 })).toMatchObject({ truncated: true });
       // The same read again, a millisecond later (its audit row differs only by that time), answers the same bytes.
       const ownerTuple = authorizations["owner-bearer"];
       const again = createRoute(value, { record, sessions: { authenticateAccess: () => ({ ...ownerTuple, checked_at: new Date(Date.parse(ownerTuple.checked_at) + 1).toISOString() }) } });
@@ -556,7 +559,8 @@ describe("Person Layer 2 route", () => {
         access_token: "owner-bearer",
         query: `decision ${Array.from({ length: 31 }, (_, index) => `term${index}`).join(" ")}`,
       });
-      expect(maximumCallerTermDecisionQuery.items).toHaveLength(10);
+      // Every readable decision, with no page named.
+      expect(maximumCallerTermDecisionQuery.items).toHaveLength(14);
 
       const employee = route.search({
         access_token: "employee-bearer",
@@ -982,8 +986,8 @@ describe("Person Layer 2 route: a desk open reads the anchor's own record", () =
     } finally { w.close(); }
   });
 
-  it("stops a record's open at its byte budget, keeping the anchor and saying more exist", async () => {
-    // Thirty 4,000-byte decisions are about 117 KiB, more than one open's 96 KiB.
+  it("opens a record whole, however long, with the anchor first", async () => {
+    // Thirty 4,000-byte decisions are about 117 KiB: an open reads every one of them.
     const w = await meetingWorld({ extra: [{
       name: "wide", approval_id: "apr_wide", projects: [SHARED], final_approver: EMP_A, issued_at: T(9), signals: { decisions: 30 },
       brief: (brief) => ({ ...brief, decisions: brief.decisions.map((signal, index) => ({ ...signal, text: `Decision ${index} ${"y".repeat(3_980)}` })) }),
@@ -994,10 +998,9 @@ describe("Person Layer 2 route: a desk open reads the anchor's own record", () =
       const opened = route.openDeskCitation({ access_token: "emp_a", atom_id: anchor.atom_id, record_sha256: anchor.record_sha256, policy_id: anchor.policy_id });
       const bytes = opened.response.items.reduce((sum, item) => sum + Buffer.byteLength(item.text, "utf8"), 0);
       expect(opened.response.items[0]!.atom_id).toBe(anchor.atom_id);
-      expect(opened.response.items.length).toBeGreaterThan(10);
-      expect(opened.response.items.length).toBeLessThan(30);
-      expect(bytes).toBeLessThanOrEqual(96 * 1024);
-      expect(opened).toMatchObject({ truncated: true, anchor_truncated: false });
+      expect(opened.response.items).toHaveLength(30);
+      expect(bytes).toBeGreaterThan(96 * 1024);
+      expect(opened).toMatchObject({ truncated: false, anchor_truncated: false });
     } finally { w.close(); }
   });
 });
@@ -1260,7 +1263,7 @@ describe("Person Layer 2 route: an approved record's anchor (runs store v1)", ()
 
 describe("Person Layer 2 route: Ask's list rows name each meeting record by its own line (ADR-0041)", () => {
   it("gives every decision, action and rationale a list label of its own text and its meeting, released and audited with the row", async () => {
-    // Over 300 characters, so its line is cut.
+    // Over 300 characters: the row still carries the record's own text whole.
     const long = "Keep the DVT gate on hold until the probe reads within 0.1 C at 42 C across every fixture position and both firmware builds. ".repeat(3).trim();
     const w = await meetingWorld({ extra: [{
       name: "r9", approval_id: "apr_r9", projects: [SHARED], final_approver: EMP_A, issued_at: T(9), signals: { decisions: 1, actions: 1, rationales: 1 },
@@ -1275,7 +1278,7 @@ describe("Person Layer 2 route: Ask's list rows name each meeting record by its 
       expect(r9.map((item) => item.item_kind).sort()).toEqual(["action", "decision", "rationale"]);
       // The label stays the meeting's; the list label is one line of the record's own text, then its meeting.
       for (const item of r9) expect(item.label).toBe("THERM DVT sync (2026-10-04)");
-      expect(r9.find((item) => item.item_kind === "decision")!.list_label).toBe(`${[...long].slice(0, 299).join("").trimEnd()}… (THERM DVT sync, 2026-10-04)`);
+      expect(r9.find((item) => item.item_kind === "decision")!.list_label).toBe(`${long} (THERM DVT sync, 2026-10-04)`);
       // An action's line is its own text: its owner is the row's own fact, not part of its line.
       const action = r9.find((item) => item.item_kind === "action")!;
       expect(action.text).toMatch(/ Owner: Ari Employee\.$/u);
