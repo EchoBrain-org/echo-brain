@@ -289,9 +289,10 @@ function readableAnswer(response: unknown): unknown {
  * The text of a progress stream as this client reads it, frame by frame: a step event it cannot read is left out (a
  * progress step is only a view of the work, so the Ask goes on without it), and an answer's blocks become ones it can
  * show (readableAnswer). Everything else, framing included, passes unchanged to the progress V3 decoder. Each comment
- * line (the Authority's heartbeat) is reported to `onComment` as it is read.
+ * line (the Authority's heartbeat) is reported to `onComment` as it is read; every other whole line's UTF-8 bytes, its
+ * newline included, to `onLine`, as the Authority counts its event frames against the stream's bound.
  */
-function tolerantAskFrames(onComment: () => void = () => undefined): (text: string, end?: boolean) => string {
+function tolerantAskFrames(onComment: () => void = () => undefined, onLine: (bytes: number) => void = () => undefined): (text: string, end?: boolean) => string {
   let partial = "";
   const data = (json: string): string | null => {
     let value: unknown;
@@ -305,6 +306,7 @@ function tolerantAskFrames(onComment: () => void = () => undefined): (text: stri
     partial = lines.pop()!;
     const read = lines.map(line => {
       if (line.startsWith(":")) onComment();
+      else onLine(Buffer.byteLength(line) + 1);
       if (!line.startsWith("data: ")) return `${line}\n`;
       const kept = data(line.slice("data: ".length));
       return kept === null ? "" : `data: ${kept}\n`;
@@ -323,7 +325,9 @@ function tolerantAskFrames(onComment: () => void = () => undefined): (text: stri
  * event. A step event it cannot read is skipped, and an answer block it does not
  * know reads as text (tolerantAskFrames). Otherwise it fails closed: a malformed
  * frame or answer, invalid UTF-8, or an end without exactly one terminal event
- * is `invalid_response`, and a stream past its byte bound is
+ * is `invalid_response`, and a stream whose event lines pass its byte bound
+ * (PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1, the bound the Authority keeps its
+ * events within; comment lines are not kept, so not counted) is
  * `response_too_large`. Either failure cancels the body, so the Authority sees
  * the disconnect and stops the Ask. Every chunk read is reported to `onBytes` (liveness), and every heartbeat to
  * `onHeartbeat`.
@@ -339,7 +343,13 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
   signal.addEventListener("abort", cancel, { once: true });
   const utf8 = new TextDecoder("utf-8", { fatal: true });
   const frames = createPersonAskProgressDecoderV3();
-  const tolerant = tolerantAskFrames(onHeartbeat);
+  let size = 0;
+  const tolerant = tolerantAskFrames(onHeartbeat, bytes => {
+    size += bytes;
+    if (size > PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1) {
+      throw new PersonAuthorityClientError("response_too_large", response.status, "Person Authority response exceeded its bound");
+    }
+  });
   const decode = (chunk: Uint8Array | undefined) => {
     try {
       if (chunk !== undefined) return frames.push(tolerant(utf8.decode(chunk, { stream: true })));
@@ -352,20 +362,13 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
     }
   };
   let terminal: PersonAskProgressTerminalEventV3 | undefined;
-  let size = 0;
   try {
     // Nothing is handed on once the request is cancelled, even from bytes already received.
     if (signal.aborted) throw lostAskStream();
     for (;;) {
       const next = await reader.read().catch(() => { throw lostAskStream(); });
       if (signal.aborted) throw lostAskStream();
-      if (!next.done) {
-        onBytes();
-        size += next.value.byteLength;
-        if (size > PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1) {
-          throw new PersonAuthorityClientError("response_too_large", response.status, "Person Authority response exceeded its bound");
-        }
-      }
+      if (!next.done) onBytes();
       for (const event of decode(next.done ? undefined : next.value)) {
         // The decoder refuses anything after the terminal event, so a step event always precedes it.
         if (event.type === "answer" || event.type === "error") terminal = event;
