@@ -756,3 +756,63 @@ describe("adversarial original-context retrieval", () => {
     expect(inventory.items.every(item => item.text === undefined)).toBe(true);
   });
 });
+
+describe("Person original context: an open reads the whole source, open by open", () => {
+  const global = { kind: "global" as const };
+
+  it("opens a note's cited packet with its neighbours, offers the next packet, and reaches every packet by following it", async () => {
+    const f = fixture();
+    // About 7.6 KB, near the note limit: three or more 3 KiB packets.
+    const paragraphs = Array.from({ length: 16 }, (_, index) => `paragraph-${index}-marker ${"word ".repeat(90)}`);
+    await f.admitTeamNote("Long sync", paragraphs.join("\n"));
+    const found = f.retrieval.deskSearch({ access_token: "member", scope: global, query: "paragraph-0-marker" });
+    const first = found.items.find(item => item.text?.includes("paragraph-0-marker "))!;
+    // No neighbours asked for: the cited packet alone.
+    expect(f.retrieval.deskOpen({ access_token: "member", scope: global, citation: first.citation }).items).toHaveLength(1);
+    // Its neighbour is read too, and the packet after them is offered without its text.
+    const opened = f.retrieval.deskOpen({ access_token: "member", scope: global, citation: first.citation, neighbours: 1 });
+    expect(opened.items[0]!.citation.anchor_sha256).toBe(first.citation.anchor_sha256);
+    expect(opened.items.filter(item => item.text !== undefined)).toHaveLength(2);
+    expect(opened.items.filter(item => item.text === undefined)).toHaveLength(1);
+    expect(opened.truncated).toBe(false);
+    // Following each offered packet reads the note to its last paragraph.
+    const readAnchors = new Set<string>();
+    const readTexts: string[] = [];
+    let page = opened;
+    for (let step = 0; step < 20; step += 1) {
+      for (const item of page.items) if (item.text !== undefined) { readAnchors.add(item.citation.anchor_sha256); readTexts.push(item.text); }
+      const next = page.items.find(item => item.text === undefined && !readAnchors.has(item.citation.anchor_sha256));
+      if (next === undefined) break;
+      page = f.retrieval.deskOpen({ access_token: "member", scope: global, citation: next.citation, neighbours: 1 });
+    }
+    expect(readTexts.some(text => text.includes("paragraph-15-marker"))).toBe(true);
+  });
+
+  it("reads many neighbours up to the open's byte budget, then offers the next", () => {
+    const f = fixture();
+    const chunks = Array.from({ length: 60 }, (_, index) => `chunk-${index}-marker `.padEnd(3_000, "y"));
+    f.uploadChunks("Budget proof", chunks);
+    const found = f.retrieval.deskSearch({ access_token: "member", scope: global, query: "chunk-0-marker" });
+    const anchor = found.items.find(item => item.text?.includes("chunk-0-marker "))!;
+    const opened = f.retrieval.deskOpen({ access_token: "member", scope: global, citation: anchor.citation, neighbours: 1_000 });
+    const read = opened.items.filter(item => item.text !== undefined);
+    expect(read.length).toBeGreaterThan(10);
+    expect(read.length).toBeLessThan(60);
+    expect(read.reduce((sum, item) => sum + Buffer.byteLength(item.text!, "utf8"), 0)).toBeLessThanOrEqual(96 * 1024);
+    // The anchor first, the rest in document order, and the next chunk offered for the next open.
+    expect(read[0]!.text).toContain("chunk-0-marker ");
+    expect(read.slice(1).map(item => Number(/chunk-(\d+)-marker/u.exec(item.text!)![1]))).toEqual(read.slice(1).map((_, index) => index + 1));
+    expect(opened.items.filter(item => item.text === undefined)).toHaveLength(1);
+    // A negative count is still refused, with its reason.
+    expect(() => f.retrieval.deskOpen({ access_token: "member", scope: global, citation: anchor.citation, neighbours: -1 }))
+      .toThrow(expect.objectContaining({ code: "invalid_request", message: expect.stringContaining("neighbours") }));
+  });
+
+  it("clamps a search asking for more than one page instead of refusing it", () => {
+    const f = fixture();
+    for (let index = 0; index < 30; index += 1) f.upload(`Hit ${index}`, `clampmarker document ${index}`);
+    const found = f.retrieval.deskSearch({ access_token: "member", scope: global, query: "clampmarker", limit: 100 });
+    expect(found.items).toHaveLength(25);
+    expect(found.truncated).toBe(true);
+  });
+});

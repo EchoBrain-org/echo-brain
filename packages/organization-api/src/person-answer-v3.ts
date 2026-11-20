@@ -18,7 +18,11 @@ import {
  * path keeps its V2 name because installed clients open citations there.
  */
 export const PERSON_SOURCE_EVIDENCE_PATH_V1 = '/v2/person/ask/source';
-const PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1 = 3 * 1024;
+/**
+ * The most text one evidence item carries in transit (a cited original's read, a desk item, a live source's passage):
+ * room for a long live passage. Stored packets stay their own size (3 KiB, RFC-0002); this bounds only what moves.
+ */
+export const PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 = 16 * 1024;
 
 /**
  * An imported meeting revision's review, as its source pane shows it: not reviewed yet, reviewed, or nothing to
@@ -179,8 +183,8 @@ export function validatePersonSourceEvidenceV1(value: unknown): PersonSourceEvid
     text: input.text as string,
     ...(imported ? { imported_meeting_review: input.imported_meeting_review as PersonImportedMeetingReviewV1 } : {}),
   };
-  assertEvidenceText(result.text, 'Ask source evidence text', PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1);
-  if (canonicalJsonBytes(result).byteLength > PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1 + 2048) {
+  assertEvidenceText(result.text, 'Ask source evidence text', PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
+  if (canonicalJsonBytes(result).byteLength > PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 + 2048) {
     fail('Ask source evidence response exceeds JSON byte bound');
   }
   return Object.freeze(result);

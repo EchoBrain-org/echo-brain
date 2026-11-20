@@ -738,9 +738,11 @@ describe("Person Layer 2 route", () => {
     const authenticateAccess = vi.fn(() => authorization());
     try {
       const route = createRoute(value, { sessions: { authenticateAccess }, search_generation: search });
-      expect(() =>
-        route.searchBatch({ access_token: "bearer-only", query }),
-      ).toThrow("request is invalid");
+      // The refusal carries the shared query rule's own reason, so research can be told why.
+      let refusal: unknown;
+      try { route.searchBatch({ access_token: "bearer-only", query }); } catch (error) { refusal = error; }
+      expect(refusal).toMatchObject({ code: "invalid_request" });
+      expect((refusal as Error).message).not.toBe("request is invalid");
       expect(authenticateAccess).not.toHaveBeenCalled();
       expect(search).not.toHaveBeenCalled();
       expect(auditCount(value.authority)).toBe(0);
@@ -936,7 +938,7 @@ describe("Person Layer 2 route: a project narrows the desk to its own records (A
 describe("Person Layer 2 route: a desk open reads the anchor's own record", () => {
   const ids = (items: readonly { readonly atom_id: Sha256Digest }[]) => items.map((item) => item.atom_id);
 
-  it("returns the anchor, then at most nine more items of its record in the record's order, never another record's", async () => {
+  it("returns the anchor, then every other item of its record in the record's order, never another record's", async () => {
     const w = await meetingWorld({ extra: [
       { name: "big", approval_id: "apr_big", projects: [SHARED], final_approver: EMP_A, issued_at: T(9), signals: { decisions: 4, actions: 5, rationales: 3 } },
       // Another record that the same readers read in the same project.
@@ -953,10 +955,10 @@ describe("Person Layer 2 route: a desk open reads the anchor's own record", () =
       expect(big.map((item) => item.item_kind)).toEqual([...Array<string>(4).fill("decision"), ...Array<string>(5).fill("action"), ...Array<string>(3).fill("rationale")]);
       for (const anchor of [0, 6, 11]) {
         const opened = open(big[anchor]!);
-        expect(ids(opened.response.items)).toEqual(ids([big[anchor]!, ...big.filter((_, index) => index !== anchor).slice(0, 9)]));
+        expect(ids(opened.response.items)).toEqual(ids([big[anchor]!, ...big.filter((_, index) => index !== anchor)]));
         expect(ids(opened.desk_items!)).toEqual(ids(opened.response.items));
-        // Twelve items are more than one open releases; the anchor itself is whole.
-        expect(opened).toMatchObject({ truncated: true, anchor_truncated: false });
+        // All twelve items fit one open; the anchor itself is whole.
+        expect(opened).toMatchObject({ truncated: false, anchor_truncated: false });
       }
       const pair = of("pair");
       const opened = open(pair[1]!);
@@ -965,17 +967,37 @@ describe("Person Layer 2 route: a desk open reads the anchor's own record", () =
     } finally { w.close(); }
   });
 
-  it("leaves out an anchor longer than a desk item and says so, keeping the rest of its record", async () => {
+  it("carries a long anchor whole, with the rest of its record", async () => {
+    const longText = `Decision 0 ${"x".repeat(3_100)}`;
     const w = await meetingWorld({ extra: [{
       name: "long", approval_id: "apr_long", projects: [SHARED], final_approver: EMP_A, issued_at: T(9), signals: { decisions: 2, actions: 1 },
-      brief: (brief) => ({ ...brief, decisions: brief.decisions.map((signal, index) => (index === 0 ? { ...signal, text: `Decision 0 ${"x".repeat(3_100)}` } : signal)) }),
+      brief: (brief) => ({ ...brief, decisions: brief.decisions.map((signal, index) => (index === 0 ? { ...signal, text: longText } : signal)) }),
     }] });
     try {
       const route = w.route();
       const anchor = route.recordAnchor({ access_token: "emp_a", record_sha256: w.digest("long") });
       const opened = route.openDeskCitation({ access_token: "emp_a", atom_id: anchor.atom_id, record_sha256: anchor.record_sha256, policy_id: anchor.policy_id });
-      expect(opened.response.items.map((item) => item.text)).toEqual(["Decision 1", "Action 0"]);
-      expect(opened).toMatchObject({ truncated: true, anchor_truncated: true });
+      expect(opened.response.items.map((item) => item.text)).toEqual([longText, "Decision 1", "Action 0"]);
+      expect(opened).toMatchObject({ truncated: false, anchor_truncated: false });
+    } finally { w.close(); }
+  });
+
+  it("stops a record's open at its byte budget, keeping the anchor and saying more exist", async () => {
+    // Thirty 4,000-byte decisions are about 117 KiB, more than one open's 96 KiB.
+    const w = await meetingWorld({ extra: [{
+      name: "wide", approval_id: "apr_wide", projects: [SHARED], final_approver: EMP_A, issued_at: T(9), signals: { decisions: 30 },
+      brief: (brief) => ({ ...brief, decisions: brief.decisions.map((signal, index) => ({ ...signal, text: `Decision ${index} ${"y".repeat(3_980)}` })) }),
+    }] });
+    try {
+      const route = w.route();
+      const anchor = route.recordAnchor({ access_token: "emp_a", record_sha256: w.digest("wide") });
+      const opened = route.openDeskCitation({ access_token: "emp_a", atom_id: anchor.atom_id, record_sha256: anchor.record_sha256, policy_id: anchor.policy_id });
+      const bytes = opened.response.items.reduce((sum, item) => sum + Buffer.byteLength(item.text, "utf8"), 0);
+      expect(opened.response.items[0]!.atom_id).toBe(anchor.atom_id);
+      expect(opened.response.items.length).toBeGreaterThan(10);
+      expect(opened.response.items.length).toBeLessThan(30);
+      expect(bytes).toBeLessThanOrEqual(96 * 1024);
+      expect(opened).toMatchObject({ truncated: true, anchor_truncated: false });
     } finally { w.close(); }
   });
 });
@@ -1238,8 +1260,8 @@ describe("Person Layer 2 route: an approved record's anchor (runs store v1)", ()
 
 describe("Person Layer 2 route: Ask's list rows name each meeting record by its own line (ADR-0041)", () => {
   it("gives every decision, action and rationale a list label of its own text and its meeting, released and audited with the row", async () => {
-    // Over 80 characters, so its line is cut.
-    const long = "Keep the DVT gate on hold until the probe reads within 0.1 C at 42 C across every fixture position and both firmware builds.";
+    // Over 300 characters, so its line is cut.
+    const long = "Keep the DVT gate on hold until the probe reads within 0.1 C at 42 C across every fixture position and both firmware builds. ".repeat(3).trim();
     const w = await meetingWorld({ extra: [{
       name: "r9", approval_id: "apr_r9", projects: [SHARED], final_approver: EMP_A, issued_at: T(9), signals: { decisions: 1, actions: 1, rationales: 1 },
       action_owners: [{ signal_id: "action-apr_r9-0", owner: "Ari Employee" }],
@@ -1253,7 +1275,7 @@ describe("Person Layer 2 route: Ask's list rows name each meeting record by its 
       expect(r9.map((item) => item.item_kind).sort()).toEqual(["action", "decision", "rationale"]);
       // The label stays the meeting's; the list label is one line of the record's own text, then its meeting.
       for (const item of r9) expect(item.label).toBe("THERM DVT sync (2026-10-04)");
-      expect(r9.find((item) => item.item_kind === "decision")!.list_label).toBe(`${[...long].slice(0, 79).join("").trimEnd()}… (THERM DVT sync, 2026-10-04)`);
+      expect(r9.find((item) => item.item_kind === "decision")!.list_label).toBe(`${[...long].slice(0, 299).join("").trimEnd()}… (THERM DVT sync, 2026-10-04)`);
       // An action's line is its own text: its owner is the row's own fact, not part of its line.
       const action = r9.find((item) => item.item_kind === "action")!;
       expect(action.text).toMatch(/ Owner: Ari Employee\.$/u);

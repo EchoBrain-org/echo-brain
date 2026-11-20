@@ -21,6 +21,7 @@ import {
 import { validateOrganizationRecordEnvelopeV4, type OrganizationRecordDecisionBriefV1, type RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import {
   PERSON_LIST_TEXT_MAX_BYTES_V1,
+  PersonQueryInputError,
   validatePersonQueryText,
   validateProjectIdV1,
   type PersonAnswerCitationV3,
@@ -32,6 +33,8 @@ import {
   clearReadableSearchActiveGenerationV1,
   listReadableSearchGenerationRecordsV1,
   listReadableSearchGenerationV1,
+  READABLE_SEARCH_LIST_MAX_V1,
+  READABLE_SEARCH_RESPONSE_MAX_V1,
   readReadableSearchGenerationAtomsV1,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
   searchReadableSearchGenerationV1,
@@ -94,7 +97,15 @@ interface ActiveGenerationRow {
 }
 
 type SearchGeneration = typeof searchReadableSearchGenerationV1;
-const EVIDENCE_DESK_MAX_ITEM_UTF8_BYTES_V1 = 3_072;
+/**
+ * One record open's text budget: what one open hands the research prompt. The anchor is always whole; the record's
+ * other items follow in its order until the next would pass it, and `truncated` says more exist.
+ */
+const RECORD_OPEN_MAX_UTF8_BYTES_V1 = 96 * 1024;
+/** How many of a record's items one open reads from the index; the byte budget above binds first. */
+const RECORD_OPEN_MAX_ITEMS_V1 = READABLE_SEARCH_LIST_MAX_V1;
+/** A list row's one line of a record's own text, in characters (ADR-0041). */
+const DESK_LIST_LINE_MAX_CHARACTERS_V1 = 300;
 
 /** Only an observed head/pointer lag may put the request in originals-only mode. Diagnostics name it `index_lag` by its name. */
 export class PersonRecordSearchIndexLagV1 extends AuthorityOperationError {
@@ -517,12 +528,12 @@ function releaseAuthorization(
   return Object.freeze({ ...authorization });
 }
 
-function validBatchQuery(query: string): boolean {
+/** The shared query rule; a refusal carries the rule's own content-free reason, so research can be told why. */
+function assertBatchQuery(query: string): void {
   try {
     validatePersonQueryText(query);
-    return true;
-  } catch {
-    return false;
+  } catch (error) {
+    throw new AuthorityOperationError("invalid_request", error instanceof PersonQueryInputError ? error.message : "request is invalid");
   }
 }
 
@@ -534,13 +545,13 @@ function engineExclusion(exclude: PersonRecordDeskExclusionV1 | undefined): Read
 }
 
 function assertValidBatch(input: PersonRecordSearchBatchInputV1): void {
+  assertBatchQuery(input.query);
   if (
-    !validBatchQuery(input.query) ||
     (input.kinds !== undefined && (!Array.isArray(input.kinds) || input.kinds.length < 1 || new Set(input.kinds).size !== input.kinds.length || input.kinds.some((kind) => kind !== "decision" && kind !== "action" && kind !== "rationale"))) ||
     (input.limit !== undefined &&
       (!Number.isSafeInteger(input.limit) ||
         input.limit < 1 ||
-        input.limit > 10))
+        input.limit > READABLE_SEARCH_RESPONSE_MAX_V1))
   ) {
     invalidRequest();
   }
@@ -601,14 +612,14 @@ function deskLabel(title: string | undefined, time: DeskMeetingTime): string {
 }
 
 /**
- * How Ask's list rows name a meeting record (ADR-0041): one line of its own text, at most 80 characters, then its
+ * How Ask's list rows name a meeting record (ADR-0041): one line of its own text, at most 300 characters, then its
  * meeting, since every record of a meeting carries the meeting's label. "Send fixture drawings to vendor (THERM DVT
  * sync, 2026-10-04)". `text` is the record's own text, without the owner the row already states.
  */
 function deskListLabel(text: string, title: string | undefined, time: DeskMeetingTime): string {
   const date = meetingStamp(time);
   const own = [...text.normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/gu, " ").trim()];
-  const line = own.length <= 80 ? own.join("") : `${own.slice(0, 79).join("").trimEnd()}…`;
+  const line = own.length <= DESK_LIST_LINE_MAX_CHARACTERS_V1 ? own.join("") : `${own.slice(0, DESK_LIST_LINE_MAX_CHARACTERS_V1 - 1).join("").trimEnd()}…`;
   return boundedLabel(`${line} (${title ?? "Approved meeting"}${date === undefined ? "" : `, ${date.slice(0, 10)}`})`);
 }
 
@@ -631,14 +642,13 @@ type RecordEnvelopeV4 = ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
 
 /**
  * The one envelope reader: an admitted record's stored approved row, bound to its digests (and to `envelopeSha256` when
- * given), parsed and validated as an approved record. Any mismatch is unavailable metadata. `digest: false` skips the
- * stored-digest check, for the desk open's atom count only, which reads after its audit and never checked it.
+ * given), parsed and validated as an approved record. Any mismatch is unavailable metadata.
  */
-function approvedEnvelope(record: Database.Database, codecs: RecordInputCodecRegistryV4, position: number, recordSha256: Sha256Digest, envelopeSha256?: Sha256Digest, digest = true) {
+function approvedEnvelope(record: Database.Database, codecs: RecordInputCodecRegistryV4, position: number, recordSha256: Sha256Digest, envelopeSha256?: Sha256Digest) {
   const row = record.prepare("SELECT canonical_envelope, envelope_sha256, receipt_issued_at, approval_id FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'").get(position, recordSha256) as
     | { readonly canonical_envelope: string; readonly envelope_sha256: Sha256Digest; readonly receipt_issued_at: string; readonly approval_id: string }
     | undefined;
-  if (row === undefined || (digest && sha256Digest(row.canonical_envelope) !== row.envelope_sha256) || (envelopeSha256 !== undefined && row.envelope_sha256 !== envelopeSha256)) metadataUnavailable();
+  if (row === undefined || sha256Digest(row.canonical_envelope) !== row.envelope_sha256 || (envelopeSha256 !== undefined && row.envelope_sha256 !== envelopeSha256)) metadataUnavailable();
   let parsed: JsonObject;
   let envelope: RecordEnvelopeV4;
   try {
@@ -692,12 +702,6 @@ function deskItems(record: Database.Database, items: readonly ReadableSearchResu
     const dates = { ...(stamp === undefined ? {} : { occurred: time?.all_day ? stamp.slice(0, 10) : stamp }), approved: meeting.approved_at, ...(due === null ? {} : { due }) };
     return Object.freeze({ atom_id: item.atom_id, record_sha256: item.record_sha256, item_kind: item.item_kind, text: item.text, policy_id: item.policy_id, record_position: item.record_position, envelope_sha256: item.envelope_sha256, atom_order: item.atom_order, audience_project_count: item.audience_project_count, label: deskLabel(brief.meeting.title, brief.meeting.time), list_label: deskListLabel(signal.text, brief.meeting.title, brief.meeting.time), visibility, ...(occurred_at === undefined ? {} : { occurred_at }), dates: Object.freeze(dates), ...(Object.keys(attributes).length === 0 ? {} : { attributes: Object.freeze(attributes) }) });
   }));
-}
-
-function boundedDeskItems(items: readonly ReadableSearchResultItemV1[]): readonly ReadableSearchResultItemV1[] {
-  return items.filter((item) =>
-    Buffer.byteLength(item.text, "utf8") <= EVIDENCE_DESK_MAX_ITEM_UTF8_BYTES_V1,
-  );
 }
 
 function hasExpectedGenerationIdentity(input: {
@@ -1220,13 +1224,10 @@ export function createPersonRecordSearchRouteV1(
     const items = result.items.filter((item, index) => result.items.findIndex((other) => other.atom_id === item.atom_id) === index);
     const released = fence(input.access_token, [authorization], projects.grants_sha256, input.project_id);
     assertCurrentSnapshot(pointer);
-    const deskSourceItems = input.desk === true
-      ? boundedDeskItems(items)
+    const response = asResponse({ items });
+    const deskProjection = input.desk === true
+      ? deskItems(options.record, items, options)
       : undefined;
-    const response = asResponse({ items: deskSourceItems ?? items });
-    const deskProjection = deskSourceItems === undefined
-      ? undefined
-      : deskItems(options.record, deskSourceItems, options);
     // What a dated read could not test is a desk read's, released and audited beside its items.
     const unchecked = deskProjection === undefined ? undefined : dated.unchecked;
     const release = commitBatchRelease({
@@ -1240,8 +1241,7 @@ export function createPersonRecordSearchRouteV1(
       release,
       ...(unchecked === undefined ? {} : { unchecked }),
       ...(deskProjection === undefined ? {} : { desk_items: deskProjection }),
-      truncated: result.truncated === true ||
-        (deskSourceItems !== undefined && deskSourceItems.length !== items.length),
+      truncated: result.truncated === true,
     });
   }
 
@@ -1267,26 +1267,32 @@ export function createPersonRecordSearchRouteV1(
       resolvedAnchor.item_kind !== input.anchor.item_kind ||
       resolvedAnchor.text !== input.anchor.text ||
       resolvedAnchor.policy_id !== input.anchor.policy_id) unavailable();
-    // The anchor's record in its own order: decisions, actions, then rationales. The anchor read already admitted
-    // it, and its first ten atoms always hold the nine that join the anchor.
+    // The anchor's record in its own order: decisions, actions, then rationales. The anchor read already admitted it.
     const record = generationRead(input.pointer, () => listReadableSearchGenerationV1({
-      ...generationInput(input.pointer, input.current, input.projects, input.project_id), record_sha256s: [resolvedAnchor.record_sha256], limit: 10,
+      ...generationInput(input.pointer, input.current, input.projects, input.project_id), record_sha256s: [resolvedAnchor.record_sha256], limit: RECORD_OPEN_MAX_ITEMS_V1,
     }));
-    const items = [resolvedAnchor, ...record.items.filter((item) => item.atom_id !== resolvedAnchor.atom_id).slice(0, 9)];
+    // The anchor whole, then the record's other items in order until the next would pass the open's byte budget.
+    const items = [resolvedAnchor];
+    let used = Buffer.byteLength(resolvedAnchor.text, "utf8");
+    const others = record.items.filter((item) => item.atom_id !== resolvedAnchor.atom_id);
+    for (const item of others) {
+      const bytes = Buffer.byteLength(item.text, "utf8");
+      if (used + bytes > RECORD_OPEN_MAX_UTF8_BYTES_V1) break;
+      items.push(item);
+      used += bytes;
+    }
     const released = fence(input.access_token, [input.current], input.projects.grants_sha256, input.project_id);
     assertCurrentSnapshot(input.pointer);
-    const deskSourceItems = boundedDeskItems(items);
-    const response = asResponse({ items: deskSourceItems });
-    const projection = deskItems(options.record, deskSourceItems, options);
+    const response = asResponse({ items });
+    const projection = deskItems(options.record, items, options);
     const release = commitBatchRelease({
       initial_authorization: input.initial_authorization,
       current: released, pointer: input.pointer, projects: input.projects, scope: input, response, desk_items: projection,
     });
-    // A record's text is released whole or not at all, so the anchor is cut only when its bound left it out; truncated
-    // also covers the meeting's other records (ADR-0041).
-    const { brief } = approvedEnvelope(options.record, options.record_input_codecs, resolvedAnchor.record_position, resolvedAnchor.record_sha256, undefined, false);
-    return Object.freeze({ response, release, desk_items: projection, truncated: brief.decisions.length + brief.actions.length + brief.rationales.length > 10 || deskSourceItems.length !== items.length,
-      anchor_truncated: !deskSourceItems.includes(resolvedAnchor) });
+    // A record's text is released whole, so the anchor is never cut; truncated says the record has items this open left
+    // out (ADR-0041).
+    return Object.freeze({ response, release, desk_items: projection, truncated: record.truncated === true || items.length - 1 < others.length,
+      anchor_truncated: false });
   }
 
   return Object.freeze({
@@ -1339,15 +1345,14 @@ export function createPersonRecordSearchRouteV1(
       }));
       const released = fence(input.access_token, [authorization], projects.grants_sha256, input.project_id);
       assertCurrentSnapshot(pointer);
-      const deskSourceItems = boundedDeskItems(inventory.items);
-      const response = asResponse({ items: deskSourceItems });
-      const projection = deskItems(options.record, deskSourceItems, options);
+      const response = asResponse({ items: inventory.items });
+      const projection = deskItems(options.record, inventory.items, options);
       const { unchecked } = dated;
       const release = commitBatchRelease({
         initial_authorization: releaseAuthorization(authorization),
         current: released, pointer, projects, scope: input, response, desk_items: projection, ...(unchecked === undefined ? {} : { unchecked }),
       });
-      return Object.freeze({ response, release, desk_items: projection, ...(unchecked === undefined ? {} : { unchecked }), truncated: inventory.truncated === true || deskSourceItems.length !== inventory.items.length });
+      return Object.freeze({ response, release, desk_items: projection, ...(unchecked === undefined ? {} : { unchecked }), truncated: inventory.truncated === true });
     },
     openDeskCitation(input: {
       readonly access_token: string;

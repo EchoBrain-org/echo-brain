@@ -118,7 +118,7 @@ describe('shared audited live evidence source V1', () => {
       { ...ticket(), citation: { ...ticket().citation, external_scope_id: 'tenant-two' } },
       { ...ticket(), citation: { ...ticket().citation, tool_id: 'another-tool' } },
       { ...ticket(), citation: { ...ticket().citation, text_sha256: textDigest('different bytes') } },
-      { ...ticket(), text: 'x'.repeat(3073) },
+      ticket('x'.repeat(16 * 1024 + 1)),
       { ...ticket(), label: 'x'.repeat(1025) },
       { ...ticket(), occurred_at: '2026-02-30' },
       { ...ticket(), date_kind: 'completed' as never },
@@ -136,6 +136,12 @@ describe('shared audited live evidence source V1', () => {
     const s = fixture('pages', page([{ ...wikiPage(), citation: { ...wikiPage().citation, external_scope_id: 'tenant-2' } }]));
     await expect(s.make().search({ query: 'launch' })).rejects.toMatchObject({ code: 'invalid_output' });
     expect(s.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('carries a live passage longer than a stored packet, up to the 16 KiB transit bound', async () => {
+    const long = 'x'.repeat(16 * 1024);
+    const f = fixture('tickets', page([ticket(long)]));
+    await expect(f.make().search({ query: 'launch' })).resolves.toMatchObject({ items: [expect.objectContaining({ text: long })] });
   });
 
   it('revalidates inventory metadata, repeated revisions and provider item visibility before reuse', async () => {
