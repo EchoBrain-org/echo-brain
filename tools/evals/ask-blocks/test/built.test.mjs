@@ -9,7 +9,7 @@ import { sha256 } from "../../shared/runner.mjs";
 import { decideGate, evidenceOf, gradeTrial, loadCases, readReleased } from "../grade.mjs";
 import { captureWriterPrompts, deskItem, evidenceIdsOf, run } from "../run.mjs";
 
-const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072 };
+const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072, max_output_tokens: 16_000 };
 const document = loadCases();
 const caseOf = (id) => document.cases.find((entry) => entry.id === id);
 const itemsOf = (caseDefinition) => caseDefinition.items.map((item, index) => deskItem(caseDefinition.id, index, item));

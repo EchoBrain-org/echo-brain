@@ -129,6 +129,8 @@ describe("Agentic Ask and OpenRouter timeout contract", () => {
           planner_model: "openai/gpt-4.1-mini",
           answer_model: "openai/gpt-4.1-mini",
           timeout_ms: 180_000,
+          context_tokens: 131_072,
+          max_output_tokens: 16_000,
         },
         audit: { append: entry => { audit.push(entry); } },
         now_ms: () => clock,

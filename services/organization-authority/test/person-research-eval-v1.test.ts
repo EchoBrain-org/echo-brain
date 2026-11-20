@@ -62,7 +62,7 @@ function harness(options: { readonly generate?: (input: StructuredGenerationInpu
       revalidateBatchRelease: () => ({ checked_at: '2026-10-06T00:00:00.000Z' }),
     },
     model: { generate },
-    generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 },
+    generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000, context_tokens: 32_768, max_output_tokens: 8_000 },
     audit: { forRequest: () => ({ append: (entry: unknown) => { audits.push(entry); } }), forLiveRequest: () => ({ record: async () => canonicalSha256('release') }),
       forWorkspaceRequest: () => ({ record: () => canonicalSha256('workspace release') }) },
     now: () => clock,

@@ -22,7 +22,6 @@ import {
 import { agenticTaskSlotsFitV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
 import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
 import {
-  AGENTIC_MODEL_OUTPUT_TOKENS_V1 as OUTPUT_TOKENS,
   AgenticAskStalledErrorV1,
   abort,
   createAgenticModelGateV1,
@@ -73,18 +72,18 @@ export { resolveAgenticFollowUpOnceV1, type AgenticFollowUpResolutionV1, type Ag
  * `timeout_ms`). Ask streams its progress with a heartbeat (ADR-0039), so a person sees a long run is alive.
  */
 export const AGENTIC_READ_SILENCE_MS_V1 = 120_000;
-/** Context window assumed when the generation profile does not state one. */
-const AGENTIC_ASK_DEFAULT_CONTEXT_TOKENS_V1 = 32_768;
-/** Conservative bytes per token for prompt budgeting. */
+/**
+ * Bytes a prompt token stands for, when ECHO measures a prompt in bytes: no tokenizer runs before the call, so this is
+ * an estimate, and it is low on purpose (most text is longer per token), so a prompt it admits fits the window.
+ */
 const BYTES_PER_TOKEN = 3;
-/** Share of the context window left unused as a safety margin. */
-const CONTEXT_MARGIN = 0.1;
+/** Share of the window the estimate may be wrong by: text that tokenizes worse than three bytes still fits. */
+const ESTIMATE_MARGIN = 0.1;
 
-/** Scratchpad bytes that fit beside a system prompt and an output reserve in the model's context window. */
-export function agenticAskContextBudgetBytesV1(contextTokens: number | undefined, systemPrompt: string, outputTokens: number): number {
-  const tokens = typeof contextTokens === "number" && Number.isSafeInteger(contextTokens) && contextTokens > 0 ? contextTokens : AGENTIC_ASK_DEFAULT_CONTEXT_TOKENS_V1;
-  const usable = Math.floor(tokens * (1 - CONTEXT_MARGIN)) - Math.ceil(Buffer.byteLength(systemPrompt, "utf8") / BYTES_PER_TOKEN) - outputTokens;
-  return Math.max(16 * 1024, usable * BYTES_PER_TOKEN);
+/** Scratchpad bytes that fit beside a system prompt and the reply in the model's own context window (the profile's). */
+export function agenticAskContextBudgetBytesV1(contextTokens: number, systemPrompt: string, outputTokens: number): number {
+  const usable = Math.floor(contextTokens * (1 - ESTIMATE_MARGIN)) - Math.ceil(Buffer.byteLength(systemPrompt, "utf8") / BYTES_PER_TOKEN) - outputTokens;
+  return Math.max(0, usable * BYTES_PER_TOKEN);
 }
 
 export interface CreateAgenticAskOptions {
@@ -254,7 +253,7 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
   const guided = (base: string, live: string, followUp: string) => [base, ...(toolSources.length === 0 ? [] : [live]), ...(followUps ? [followUp] : [])].join("\n\n");
   const answerPrompt = guided(ANSWER_PROMPT, liveGuidance(true), FOLLOW_UPS_ANSWER_GUIDANCE);
   /** A research step's system prompt, and the scratchpad bytes that fit beside it. */
-  const stepPrompt = (prompt: string) => Object.freeze({ prompt, prompt_budget: agenticAskContextBudgetBytesV1(options.generation.context_tokens, prompt, OUTPUT_TOKENS.step) });
+  const stepPrompt = (prompt: string) => Object.freeze({ prompt, prompt_budget: agenticAskContextBudgetBytesV1(options.generation.context_tokens, prompt, options.generation.max_output_tokens) });
   /**
    * The research step's prompts: Ask's question has its own, with list evidence (ADR-0041); every task-form goal keeps the
    * step prompt before it and adds the one shared task rule, and a search-only task brief (no list) has its own.
@@ -262,7 +261,7 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
   const taskPrompt = (list: boolean) => stepPrompt(`${guided(list ? STEP_PROMPT : SEARCH_ONLY_STEP_PROMPT, liveGuidance(list), FOLLOW_UPS_STEP_GUIDANCE)}\n\n${TASK_RULE_PROMPT}`);
   const prompts = Object.freeze({ ask: stepPrompt(guided(ASK_STEP_PROMPT, liveGuidance(true), FOLLOW_UPS_STEP_GUIDANCE)), task: taskPrompt(true), search_only_task: taskPrompt(false) });
   /** What a renderer's user prompt may fill beside its system prompt. */
-  const promptBudget = (system: string, outputTokens: number = OUTPUT_TOKENS.answer) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, system, outputTokens);
+  const promptBudget = (system: string) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, system, options.generation.max_output_tokens);
   /**
    * One agentic request: shared session state (deadline, model-call budget,
    * access fences, audit), the research loop, then a renderer (Ask's for a

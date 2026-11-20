@@ -20,7 +20,7 @@ const allSourceFixture = () => allSourceAskFixture(roots);
 
 function finishingModel() {
   const generate = vi.fn(async () => ({ parts: [{ question: 'What changed?', needs: [{ need: 'changes', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] }));
-  return { generate, answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 } } };
+  return { generate, answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000, context_tokens: 32_768, max_output_tokens: 8_000 } } };
 }
 
 it('registers two page connectors through one lifecycle, catalog, HTTP and Ask path', async () => {

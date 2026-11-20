@@ -68,7 +68,7 @@ it('uses the same native Sonnet account for default research and admitted writin
   });
   const binding = createClaudeAccountAnswerCompositionGenerationBundleV1({ account }).load();
   expect(binding.generation).toEqual({ generation_adapter_id: 'claude-account-research-writer-v1',
-    planner_model: 'claude-sonnet-5-5', answer_model: 'claude-sonnet-5-5', timeout_ms: 180_000, context_tokens: 131_072 });
+    planner_model: 'claude-sonnet-5-5', answer_model: 'claude-sonnet-5-5', timeout_ms: 600_000, context_tokens: 1_000_000, max_output_tokens: 128_000 });
   await binding.research_driver!.run(session);
   await expect(binding.structured_output.generate_with_admission!(writerInput, async (request, send) => {
     expect(request.model).toBe(model);

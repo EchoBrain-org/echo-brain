@@ -20,8 +20,8 @@ export interface AgenticRenderInputV1<In> {
   readonly trigger_input: In;
   /** The request's model gate: access check, fingerprints, one repair. */
   readonly gate: AgenticModelGateV1;
-  /** Bytes a user prompt may fill beside `system_prompt` and an answer reply (of `output_tokens`, else an answer's allowance) in the model's context window. */
-  readonly prompt_budget: (system_prompt: string, output_tokens?: number) => number;
+  /** Bytes a user prompt may fill beside `system_prompt` and the reply (the model's own maximum output) in the model's context window. */
+  readonly prompt_budget: (system_prompt: string) => number;
   /** The request's signal: aborted when the caller cancels or the request stalls. */
   readonly signal: AbortSignal;
   /**

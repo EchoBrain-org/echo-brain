@@ -44,7 +44,7 @@ function fixture(options: {
   const published = vi.fn();
   const ask = createAgenticAskV5({
     desk, model: { generate }, audit: { append },
-    generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 30_000 },
+    generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 30_000, context_tokens: 32_768, max_output_tokens: 8_000 },
   });
   return { generate, revalidate, append, published, run: (signal?: AbortSignal) => ask.answer({ question: "When is launch?", signal }).then(published) };
 }
@@ -101,7 +101,7 @@ describe("agentic Ask: final publication boundary", () => {
     const generate = vi.fn(async () => { if (calls === 1) revoked = true; return replies[calls++]; });
     const append = vi.fn();
     const ask = createAgenticAskV5({ desk, model: { generate }, audit: { append },
-      generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 30_000 } });
+      generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 30_000, context_tokens: 32_768, max_output_tokens: 8_000 } });
     await expect(ask.answer({ question: "When is launch?" })).rejects.toMatchObject({ code: "unauthorized" });
     // Three incremental pre-call checks (the writer's passes: launch was
     // already checked), then the full release check refuses the answer.

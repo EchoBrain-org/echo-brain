@@ -17,7 +17,7 @@ import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } f
 /** The answer model the Authority always binds, for a runtime whose test asks nothing. */
 export const UNUSED_ANSWER_MODEL: AnswerCompositionGenerationBindingV1 = {
   structured_output: { generate: async () => { throw new Error('this test asks nothing'); } },
-  generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1_000 },
+  generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1_000, context_tokens: 32_768, max_output_tokens: 8_000 },
 };
 
 /** A loopback port that was free a moment ago. */

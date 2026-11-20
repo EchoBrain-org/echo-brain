@@ -8,7 +8,7 @@ import { CASES_FILE, CASE_IDS, caseProblems, gradeTrial, loadCases, summarize } 
 import { parseArgs, run } from "../run.mjs";
 
 const document = loadCases();
-const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072 };
+const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072, max_output_tokens: 16_000 };
 const caseOf = (id) => document.cases.find((entry) => entry.id === id);
 
 test("holds the pre-registered set: a clear request, an implied task, an ordinary question, an unknown owner and a relative date", () => {

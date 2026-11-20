@@ -25,7 +25,7 @@ function fixture() {
     authority_id: "authority_fixture", organization_id: "organization_fixture", state_lineage_id: "lineage_fixture",
     sessions: { authenticateAccess } as never, originals: {} as never, records: {} as never,
     model: { generate },
-    generation: { generation_adapter_id: "fixture", planner_model: "anthropic/claude-sonnet-5.5", answer_model: "anthropic/claude-sonnet-5.5", timeout_ms: 25_000 },
+    generation: { generation_adapter_id: "fixture", planner_model: "anthropic/claude-sonnet-5.5", answer_model: "anthropic/claude-sonnet-5.5", timeout_ms: 25_000, context_tokens: 32_768, max_output_tokens: 8_000 },
     audit: { forRequest: () => ({ append }), forLiveRequest: () => ({}) } as never,
   });
   return {

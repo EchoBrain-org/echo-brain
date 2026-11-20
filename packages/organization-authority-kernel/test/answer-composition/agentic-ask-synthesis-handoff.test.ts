@@ -41,7 +41,7 @@ async function run(options: { truncated?: boolean; notice?: string; idle?: boole
       return writerReply([{ text: 'The gate decision is pending.', evidence: ['E1'] }]);
     } },
     audit: { append: entry => { audit.push(entry); } },
-    generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30000 },
+    generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30000, context_tokens: 32_768, max_output_tokens: 8_000 },
     ...(options.time_zone === undefined ? {} : { time_context: { now: '2026-10-18T23:28:09.000Z', time_zone: options.time_zone } }),
   }).answer({ question });
   return { writer, answer, audit, prompts };

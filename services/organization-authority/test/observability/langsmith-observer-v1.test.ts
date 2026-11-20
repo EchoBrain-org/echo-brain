@@ -202,7 +202,7 @@ describe('LangSmith projection of the shared observer', () => {
     let answer: unknown;
     const runs = await exported(async () => {
       answer = await createAgenticAskV5({ desk, model, audit: { append: () => {} }, today: () => '2026-10-16',
-        generation: { generation_adapter_id: 'openrouter', planner_model: 'deepseek/deepseek-v3.2', answer_model: 'deepseek/deepseek-v3.2', timeout_ms: 30_000 } })
+        generation: { generation_adapter_id: 'openrouter', planner_model: 'deepseek/deepseek-v3.2', answer_model: 'deepseek/deepseek-v3.2', timeout_ms: 30_000, context_tokens: 32_768, max_output_tokens: 8_000 } })
         .answer({ question: 'When is launch?' });
     });
     expect(answer).toMatchObject({ outcome: 'answered' });

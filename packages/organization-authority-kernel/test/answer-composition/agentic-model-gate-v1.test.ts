@@ -4,10 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import { AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, AgenticAskStalledErrorV1, AgenticModelStalledErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
-import { AgenticAskOutputErrorV1, cleanLine, REJECTED_REPLY_MAX_CHARS_V1, repairInput, repairInstruction } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
+import { AgenticAskOutputErrorV1, cleanLine, repairInput, repairInstruction } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import type { StructuredGenerationInput, StructuredGenerationJsonSchema } from "../../src/answer-composition/structured-generation-v1.js";
 
-const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
+const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 32_768, max_output_tokens: 8_000 };
 const schema = { type: "object" } as unknown as StructuredGenerationJsonSchema;
 /** Ask's two calls: the role the audit records and the runtime span each runs in. */
 const STEP = { role: "step", span: "ask_planner" } as const;
@@ -372,7 +372,7 @@ describe("agentic model gate", () => {
     expect(gate.stats()).toMatchObject({ calls: 2, repairs: 1, stopped: false });
   });
 
-  it("sends a writer-sized rejected reply back whole, as one clean line, cut only past the output allowance", async () => {
+  it("sends a rejected reply back whole, as one clean line, however long it is", async () => {
     // A rejected reply of about 9,000 characters (a full writer reply), with a line separator and a double space.
     const refused = { blocks: [{ block: "text", sentences: [{ text: `Priya Raman owns it.\u2028Then  ${"more ".repeat(1_800)}end`, evidence: ["E1"] }] }], not_found: [] };
     const { gate, inputs } = harness({ replies: [refused, { good: true }] });
@@ -383,12 +383,12 @@ describe("agentic model gate", () => {
     expect(inputs[1]!.user_prompt).toBe(JSON.stringify(repairInput({ question: "q" }, refused, "blocks[0] must be the answer block")));
     const sent = (JSON.parse(inputs[1]!.user_prompt) as { readonly rejected_response: string }).rejected_response;
     // The whole reply, made one clean line: nothing of it is cut.
-    expect(sent).toBe(cleanLine(JSON.stringify(refused), REJECTED_REPLY_MAX_CHARS_V1));
+    expect(sent).toBe(cleanLine(JSON.stringify(refused), Number.POSITIVE_INFINITY));
     expect([sent.endsWith('"not_found":[]}'), sent.includes("\u2028"), sent.includes("  ")]).toEqual([true, false, false]);
-    // A reply past the largest output allowance is cut there.
-    const huge = { text: "word ".repeat(20_000) };
-    const cut = repairInput({}, huge, "x").rejected_response as string;
-    expect([[...cut].length <= REJECTED_REPLY_MAX_CHARS_V1, cut.endsWith("…")]).toEqual([true, true]);
+    // A reply as long as the model's whole output is still shown whole: it already fit beside the prompt it answered.
+    const huge = { text: "word ".repeat(100_000).trim() };
+    const sentHuge = repairInput({}, huge, "x").rejected_response as string;
+    expect([sentHuge, sentHuge.endsWith("…")]).toEqual([JSON.stringify(huge), false]);
   });
 
   describe("counts each retry and repair it makes, by why it was needed", () => {
@@ -436,7 +436,8 @@ describe("agentic model gate", () => {
     const { gate, inputs } = harness({ replies: [{ a: 1 }] });
     await gate.call(STEP, "system", { q: 1 }, schema);
     const input = inputs[0]!;
-    expect(input.max_output_tokens).toBe(8_000);
+    // Every call's allowance is the model's own maximum output, from the profile.
+    expect(input.max_output_tokens).toBe(generation.max_output_tokens);
     expect(gate.stats().invocation_digests).toEqual([canonicalSha256({
       role: "step", model: input.model, system_prompt: input.system_prompt, user_prompt: input.user_prompt,
       schema: input.schema, max_output_tokens: input.max_output_tokens, timeout_ms: input.timeout_ms,

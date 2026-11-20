@@ -5,6 +5,10 @@ import { userInfo } from 'node:os';
 
 /** The exact native Anthropic model used for personal-account model work. */
 export const CLAUDE_ACCOUNT_MODEL_V1 = 'claude-sonnet-5-5' as const;
+/** That model's own context window, in tokens (Anthropic's model table). */
+export const CLAUDE_ACCOUNT_MODEL_CONTEXT_TOKENS_V1 = 1_000_000;
+/** That model's own maximum output, in tokens, thinking included (Anthropic's model table). */
+export const CLAUDE_ACCOUNT_MODEL_MAX_OUTPUT_TOKENS_V1 = 128_000;
 
 /** Non-secret operator selection. Only the unmodified Claude binary reads its own sign-in. */
 export interface ClaudeAccountProfileV1 {

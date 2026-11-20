@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { agenticAskContextBudgetBytesV1 } from "../../../src/answer-composition/agentic-ask-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from "../../../src/answer-composition/agentic-research-v1.js";
 import type { AgenticEvidenceBundleItemV1, AgenticEvidenceBundleV1 } from "../../../src/answer-composition/agentic-evidence-bundle-v1.js";
-import { AGENTIC_MODEL_OUTPUT_TOKENS_V1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
 import { IMPACT_CARD_PROMPT, IMPACT_CARD_RENDERER_V1, screenImpactLineV1 } from "../../../src/answer-composition/renderers/impact-card-renderer-v1.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../../src/shared/core-runtime-observation-v1.js";
 import type { EvidenceDeskItemV2 } from "../../../src/shared/evidence-desk-v2.js";
@@ -87,7 +86,7 @@ function alone(input: { readonly bundle?: AgenticEvidenceBundleV1; readonly repl
   const { gate, inputs } = scriptedGate(input.replies, trace);
   const render = () => IMPACT_CARD_RENDERER_V1.render({
     bundle: value, trigger_input: { record: recordCitation }, gate, signal: new AbortController().signal,
-    prompt_budget: system => input.prompt_budget ?? agenticAskContextBudgetBytesV1(undefined, system, AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer),
+    prompt_budget: system => input.prompt_budget ?? agenticAskContextBudgetBytesV1(32_768, system, 16_000),
     on_context: selected => { trace.push(`context:${selected.join(",")}`); },
   });
   return { render, trace, inputs, gate, prompt: (index: number) => JSON.parse(inputs[index]!.user_prompt) as Record<string, unknown> };

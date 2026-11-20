@@ -26,7 +26,7 @@ import { deferred } from "./fixtures/deferred.js";
  */
 
 const checked = { checked_at: "2026-10-16T00:00:00.000Z" };
-const generation = { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 30_000 };
+const generation = { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 30_000, context_tokens: 32_768, max_output_tokens: 8_000 };
 const CANARY = { query: "zebraquery", note: "NOTE-CANARY planner hunch", need: "NEED-CANARY hypothesis", body: "BODY-CANARY", neighbour: "Neighbour passage" } as const;
 
 const record = canonicalSha256("launch record");

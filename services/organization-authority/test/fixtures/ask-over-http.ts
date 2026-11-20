@@ -36,7 +36,7 @@ export function liveAskOptions(f: OpenItemsFixtureV1, model: StructuredGeneratio
     authority_id: 'authority', organization_id: f.person.organization_id, state_lineage_id: 'lineage',
     sessions: sessions as never, originals: new SqlitePersonOriginalContextRetrievalV1(f.db, sessions, f.person.organization_id),
     records: { initializeDesk() { throw new PersonRecordSearchIndexLagV1(); } } as never,
-    model, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1_000 },
+    model, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1_000, context_tokens: 32_768, max_output_tokens: 8_000 },
     audit: new SqlitePersonAgenticAskAuditV1(f.db),
     memberships: { membership: (id: string) => repository.read(transaction => transaction.membership(id)) },
     live_sources: [{ ...JIRA_LIVE_CONNECTOR_V1, application: { source: async ({ access_token }) => jira(access_token as FixturePerson) } }],

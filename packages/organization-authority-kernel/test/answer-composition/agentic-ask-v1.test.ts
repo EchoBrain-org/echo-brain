@@ -17,8 +17,10 @@ import type { EvidenceDeskItemV1, EvidenceDeskListInputV1, EvidenceDeskPortV1, E
 import type { EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
 import { writerReply } from "./fixtures/agentic-scenarios.js";
 
-const generation = { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 180_000 };
+const generation = { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 180_000, context_tokens: 32_768, max_output_tokens: 8_000 };
 const checked = "2026-09-27T00:00:00.000Z";
+/** A window just large enough to leave a research step about 16 KiB of evidence beside its prompt and reply. */
+const SMALL_WINDOW = 21_645;
 
 function item(id: string, text: string | undefined = `Released body for ${id}.`, options: Partial<EvidenceDeskItemV1> = {}): EvidenceDeskItemV1 {
   return Object.freeze({
@@ -165,7 +167,7 @@ describe("agentic Ask: research loop", () => {
       step([{}], [search('quoted')]),
       (input: StructuredGenerationInput) => {
         const prompt = JSON.parse(input.user_prompt);
-        expect(Buffer.byteLength(input.user_prompt)).toBeLessThanOrEqual(agenticAskContextBudgetBytesV1(4_096, input.system_prompt, input.max_output_tokens));
+        expect(Buffer.byteLength(input.user_prompt)).toBeLessThanOrEqual(agenticAskContextBudgetBytesV1(SMALL_WINDOW, input.system_prompt, input.max_output_tokens));
         // Entries are kept in id order, so the budget leaves out the newest packets first.
         const ids = prompt.seen.map((entry: { id: string }) => entry.id);
         expect(ids).toEqual(Array.from({ length: ids.length }, (_, index) => `E${index + 1}`));
@@ -178,7 +180,7 @@ describe("agentic Ask: research loop", () => {
       },
       answer([], ['launch date']),
     ]);
-    await ask({ desk: desk({ search: () => packets }), model: script.model, context_tokens: 4_096 }).answer({ question: 'When is launch?' });
+    await ask({ desk: desk({ search: () => packets }), model: script.model, context_tokens: SMALL_WINDOW }).answer({ question: 'When is launch?' });
   });
 
   it('does not accept opened text that never fits a research prompt as read evidence', async () => {
@@ -198,7 +200,7 @@ describe("agentic Ask: research loop", () => {
       // The writer sees the listed row, never the body that did not fit, and finds no launch date in it.
       answer([], ['launch date']),
     ]);
-    const result = await ask({ desk: desk({ list: () => [metadata], open: () => [body] }), model: script.model, context_tokens: 4_096 }).answer({ question: 'When is launch?' });
+    const result = await ask({ desk: desk({ list: () => [metadata], open: () => [body] }), model: script.model, context_tokens: SMALL_WINDOW }).answer({ question: 'When is launch?' });
     expect(result.citations).toEqual([]);
     expect(result.parts[0]).not.toHaveProperty('records');
   });
@@ -1008,7 +1010,10 @@ describe("agentic Ask: research loop", () => {
 
   it("sizes the scratchpad from the model's context window", async () => {
     expect(agenticAskContextBudgetBytesV1(131_072, "x".repeat(9_000), 1_500)).toBeGreaterThan(300_000);
-    expect(agenticAskContextBudgetBytesV1(undefined, "", 1_500)).toBeLessThan(90_000);
+    // No window is assumed: a small one gives a small budget, and a prompt larger than the window leaves none.
+    expect(agenticAskContextBudgetBytesV1(32_768, "", 1_500)).toBeLessThan(90_000);
+    expect(agenticAskContextBudgetBytesV1(1_000, "x".repeat(9_000), 1_500)).toBe(0);
+    expect(agenticAskContextBudgetBytesV1(1_000_000, "", 128_000)).toBeGreaterThan(2_000_000);
     const passages = Array.from({ length: 12 }, (_, index) => item(`p${index}`, `${index} `.repeat(1_400).trim(), { kind: "document_passage" }));
     const actions = passages.map((_, index) => open(`E${index + 1}`));
     const script = scripted([
@@ -1019,7 +1024,7 @@ describe("agentic Ask: research loop", () => {
       answer([{ text: "x.", evidence: ["E12"] }]),
     ]);
     const evidence = desk({ search: () => passages, open: id => passages.filter(value => value.id === id) });
-    await ask({ desk: evidence, model: script.model, context_tokens: 16_000 }).answer({ question: "When is launch?" });
+    await ask({ desk: evidence, model: script.model, context_tokens: SMALL_WINDOW }).answer({ question: "When is launch?" });
     // A small window cannot hold 12 opened passages of about 3 KB each;
     // other entries shrink to previews while there is remaining room.
     const shown = script.prompt(4).opened.length;
@@ -1027,7 +1032,7 @@ describe("agentic Ask: research loop", () => {
     expect(shown).toBeLessThan(12);
     const researchInput = script.inputs[4]!;
     expect(Buffer.byteLength(researchInput.user_prompt, "utf8")).toBeLessThanOrEqual(
-      agenticAskContextBudgetBytesV1(16_000, researchInput.system_prompt, researchInput.max_output_tokens),
+      agenticAskContextBudgetBytesV1(SMALL_WINDOW, researchInput.system_prompt, researchInput.max_output_tokens),
     );
     expect(script.prompt(4).seen.length).toBeLessThanOrEqual(12 - shown);
     const shownIds = script.prompt(4).opened.map((entry: { id: string }) => entry.id);

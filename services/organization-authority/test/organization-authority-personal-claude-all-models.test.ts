@@ -58,7 +58,7 @@ const nativeProcessor = processor(), sharedProcessor = processor();
 const nativeWriter = vi.fn(async (_input: StructuredGenerationInput) => ({ answer: 'synthetic native result' }));
 const nativeResearch = vi.fn(async (_session: AgenticResearchDriverSessionV1) => {});
 const native: AnswerCompositionGenerationBindingV1 = {
-  generation: { generation_adapter_id: 'claude-account-research-writer-v1', planner_model: 'claude-sonnet-5-5', answer_model: 'claude-sonnet-5-5', timeout_ms: 60_000 },
+  generation: { generation_adapter_id: 'claude-account-research-writer-v1', planner_model: 'claude-sonnet-5-5', answer_model: 'claude-sonnet-5-5', timeout_ms: 60_000, context_tokens: 32_768, max_output_tokens: 8_000 },
   structured_output: {
     generate: async () => { throw new Error('Native writing requires per-request admission'); },
     generate_with_admission: nativeWriter,
@@ -66,7 +66,7 @@ const native: AnswerCompositionGenerationBindingV1 = {
   research_driver: { run: nativeResearch },
 };
 const shared: AnswerCompositionGenerationBindingV1 = {
-  generation: { generation_adapter_id: 'openrouter', planner_model: 'anthropic/claude-sonnet-5.5', answer_model: 'anthropic/claude-sonnet-5.5', timeout_ms: 60_000 },
+  generation: { generation_adapter_id: 'openrouter', planner_model: 'anthropic/claude-sonnet-5.5', answer_model: 'anthropic/claude-sonnet-5.5', timeout_ms: 60_000, context_tokens: 32_768, max_output_tokens: 8_000 },
   structured_output: { generate: async () => { throw new Error('Shared model must not run in this composition fixture'); } },
 };
 beforeEach(() => {

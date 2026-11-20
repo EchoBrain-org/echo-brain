@@ -25,26 +25,17 @@ import { AuthorityOperationError } from '../domain/errors.js';
  * silence period (the generation profile's `timeout_ms`).
  */
 
-/**
- * Output allowance per role, in tokens. A research step rewrites its whole plan each turn; the writer's answer has no
- * count limit (ADR-0051). Both are sized so a long reply finishes; the provider adapters bound them by the model's own
- * maximum.
- */
-export const AGENTIC_MODEL_OUTPUT_TOKENS_V1 = Object.freeze({ step: 8_000, answer: 16_000 } as const);
-
 export type AgenticAskModelRoleV1 = "step" | "answer";
 
 /**
  * One model call as its caller names it: the role the audit records (research
  * steps are `step`, every renderer call is `answer`) and the runtime span the
- * call runs in (Ask uses `ask_planner` and `ask_answer`). `output_tokens` is
- * its own output allowance where it needs more than its role's (Ask's writer,
- * ADR-0051); without it the role's applies.
+ * call runs in (Ask uses `ask_planner` and `ask_answer`). Every call may write
+ * up to the model's own maximum output (the generation profile's).
  */
 export interface AgenticModelCallV1 {
   readonly role: AgenticAskModelRoleV1;
   readonly span: CoreRuntimePhaseV1;
-  readonly output_tokens?: number;
 }
 
 export interface AgenticAskGenerationObservationV1 {
@@ -240,9 +231,9 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     if (stalled()) throw activeSignal.reason;
     if (activeSignal.aborted) throw new DOMException("Ask stopped", "AbortError");
   };
-  const call = async ({ role, span, output_tokens }: AgenticModelCallV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, recovery = false): Promise<unknown> => {
+  const call = async ({ role, span }: AgenticModelCallV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, recovery = false): Promise<unknown> => {
     assertLive();
-    const maxOutputTokens = output_tokens ?? AGENTIC_MODEL_OUTPUT_TOKENS_V1[role];
+    const maxOutputTokens = options.generation.max_output_tokens;
     if (options.model.generate_with_admission !== undefined) {
       // The SDK is a session, not one model call. Its exact HTTP requests use the same
       // access fence, accounting and diagnostics as research, with the writer's role.

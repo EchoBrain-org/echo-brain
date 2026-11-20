@@ -37,7 +37,7 @@ afterEach(() => {
 });
 
 const generation: AnswerCompositionGenerationBindingV1 = {
-  generation: { generation_adapter_id: 'personal-only-generation', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1000 },
+  generation: { generation_adapter_id: 'personal-only-generation', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1000, context_tokens: 32_768, max_output_tokens: 8_000 },
   structured_output: { async generate() { throw new Error('the idle runtime must not generate'); } },
 };
 
