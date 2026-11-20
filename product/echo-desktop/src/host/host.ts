@@ -634,7 +634,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const turn = timelineTurn(given);
       if (turn === null) return code('invalid_request');
       // Pruned by this computer's clock, the one the page asked by.
-      return onDevice(expect, directory => { putTimeline(directory, expect, turn, Date.now()); return {}; });
+      return onDevice(expect, directory => { putTimeline(directory, expect, turn); return {}; });
     }
     case 'ask.check': {
       // The person client prints the check as its last line.

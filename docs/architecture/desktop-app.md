@@ -128,7 +128,7 @@ unresolved.
 | What | Where |
 | --- | --- |
 | Person session | `~/.local/share/echo-brain/person/`, owned by the Person client |
-| Ask timeline | `<person dir>/ask-timeline-v1/<digest>.json`, one file per account, at most 200 turns and 90 days, deleted at sign-out |
+| Ask timeline | `<person dir>/ask-timeline-v1/<digest>.json`, one file per account, every turn kept until the file would pass what the runtime can read back as one string (then the oldest go), deleted at sign-out |
 | Updater state | `<appData>/ECHO/desktop/updater/` |
 | Chromium data and log | `<appData>/ECHO/chromium`; `<userData>/logs/desktop.log` (codes only, rotated at 1 MiB) |
 | Renderer conveniences | Three `localStorage` keys: sidebar open, last Authority, projects seen |

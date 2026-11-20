@@ -406,9 +406,6 @@ export interface TimelineTurn {
   readonly unreadable?: readonly number[];
 }
 
-/** The most turns a timeline keeps, and for how long: older ones go on every put. */
-export const MAX_TIMELINE_TURNS = 200;
-export const TIMELINE_DAYS = 90;
 /**
  * The most a put may send: one turn, whose answer is at most the API's 256 KiB
  * (PERSON_ANSWER_RESPONSE_MAX_BYTES_V4) with its sources' citations kept

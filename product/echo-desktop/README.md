@@ -68,7 +68,7 @@ across everything you can see**, stays.
 
 Ask keeps a timeline (ADR-0047): every question you asked and its answer, on
 this computer only, in one owner-only file per account beside the person
-session (`ask-timeline-v1`), at most 200 turns and 90 days. Our own sign-out,
+session (`ask-timeline-v1`), every turn until the file would pass what the runtime can read back as one string. Our own sign-out,
 or another account signing in here, deletes it; a session that merely ended
 keeps it. The Authority never stores it. Ask opens over the page on the
 thread of its place (ADR-0049): from Home every turn, from a project only

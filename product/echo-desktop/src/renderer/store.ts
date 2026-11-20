@@ -11,7 +11,7 @@ import type {
   ProjectChange, ProjectGranolaMapping, ProjectConfluenceMapping, ConfluenceSpace, GranolaFolder, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_NOTE_REQUEST_BYTES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
+import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_NOTE_REQUEST_BYTES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
@@ -3576,7 +3576,7 @@ async function loadTimeline(): Promise<void> {
   const read = result.value.turns;
   const kept = state.timeline.turns.filter(turn => !read.some(other => other.id === turn.id));
   forgetChecks();
-  setTimeline({ turns: [...read, ...kept].slice(-MAX_TIMELINE_TURNS), checks: {} });
+  setTimeline({ turns: [...read, ...kept], checks: {} });
 }
 
 /** Nothing of the account's timeline stays on screen or in memory: signed out, or another account. Its file is the host's. */
@@ -3622,7 +3622,7 @@ function keepTurn(turn: TimelineTurn): void {
   if (!account) return;
   const turns = state.timeline.turns;
   const kept = turns.some(other => other.id === turn.id) ? turns.map(other => (other.id === turn.id ? turn : other)) : [...turns, turn];
-  setTimeline({ ...state.timeline, turns: kept.slice(-MAX_TIMELINE_TURNS) });
+  setTimeline({ ...state.timeline, turns: kept });
   // Said only while the same account is signed in: another's page never hears of it.
   const same = () => expect()?.membership_id === account.membership_id && expect()?.authority === account.authority;
   void rpc('timeline.put', { expect: account, turn }).then(result => {
