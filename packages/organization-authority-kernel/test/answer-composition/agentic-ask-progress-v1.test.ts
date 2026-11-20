@@ -1,8 +1,6 @@
 import { canonicalJsonBytes, canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import {
-  PERSON_ASK_PROGRESS_NAMED_MAX_V1,
   PERSON_EVIDENCE_TEXT_MAX_BYTES_V1,
-  PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1,
   PERSON_ASK_RECEIPT_MAX_BYTES_V1,
   validatePersonAnswerCitationV8,
   validatePersonAnswerResponseV8,
@@ -11,7 +9,7 @@ import {
   type PersonAskProgressStepEventV3,
 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
-import { AGENTIC_ASK_DEADLINE_MS_V1, createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
+import { AGENTIC_READ_SILENCE_MS_V1, createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { createAgenticAskProgressRecorderV1, createAgenticAskProgressRequestV1 } from "../../src/answer-composition/agentic-ask-progress-recorder-v1.js";
 import { citationOfAgenticEvidenceItemV8 } from "../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
@@ -238,21 +236,18 @@ describe("agentic Ask progress (ADR-0039)", () => {
     expect(f.audit).toEqual([expect.objectContaining({ outcome: "cancelled", named_citation_digests: [digest(launch), digest(prd)] })]);
   });
 
-  it("emits nothing after the deadline, and audits what was named on the timed-out witness", async () => {
+  it("emits nothing after a stalled read, and audits what was named on the timed-out witness", async () => {
     vi.useFakeTimers();
     try {
       const entered = deferred<void>();
-      // Step 2's call hangs after its check passed and named the launch review.
-      const f = fixture({ generate: (_input, index) => {
-        if (index !== 1) return undefined;
-        entered.resolve();
-        return new Promise<never>(() => undefined);
-      } });
+      // Step 2's call named the launch review after its check passed; the open it then asks for sends nothing back.
+      const f = fixture();
+      vi.mocked(f.desk.open).mockImplementation(() => { entered.resolve(); return new Promise<never>(() => undefined); });
       const pending = f.ask.answerWithReceipt({ question: "When is launch?", on_progress: f.sink });
       await entered.promise;
-      const rejected = expect(pending).rejects.toMatchObject({ name: "AgenticAskDeadlineErrorV1" });
+      const rejected = expect(pending).rejects.toMatchObject({ name: "AgenticAskStalledErrorV1" });
       const sent = f.events.length;
-      await vi.advanceTimersByTimeAsync(AGENTIC_ASK_DEADLINE_MS_V1);
+      await vi.advanceTimersByTimeAsync(AGENTIC_READ_SILENCE_MS_V1);
       await rejected;
       expect(f.events).toHaveLength(sent);
       expect(f.events.filter(event => event.type === "read")).toEqual([{ type: "read", items: [named(launch)] }]);
@@ -344,7 +339,7 @@ describe("agentic Ask progress recorder", () => {
     citation: { kind: "approved_record", atom_id: canonicalSha256(`atom ${index}`), record_sha256: record, policy_id: "project-members-readable-person-v1" },
   }));
 
-  it("names each item once, at most 100 in a run, in read events of at most 25, and keeps counting what it read", () => {
+  it("names each item once, every item one call reads in one event, with no count bound, and keeps counting what it read", () => {
     const events: PersonAskProgressStepEventV3[] = [];
     const recorder = createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal });
     const items = many(130);
@@ -357,11 +352,10 @@ describe("agentic Ask progress recorder", () => {
     recorder.research.before_check([...items.slice(0, 60), ...items]);
     recorder.research.given(items);
     const reads = events.filter(event => event.type === "read");
-    expect(reads.map(event => event.items.length)).toEqual([25, 25, 10, 25, 15]);
-    expect(reads.flatMap(event => event.items).map(item => item.label)).toEqual(items.slice(0, PERSON_ASK_PROGRESS_NAMED_MAX_V1).map(item => item.label));
+    expect(reads.map(event => event.items.length)).toEqual([60, 70]);
+    expect(reads.flatMap(event => event.items).map(item => item.label)).toEqual(items.map(item => item.label));
     expect(events.filter(event => event.type === "stage")).toEqual([{ type: "stage", stage: "reading", pending: 60 }, { type: "stage", stage: "reading", pending: 70 }]);
-    expect(Math.max(...reads.map(event => event.items.length))).toBeLessThanOrEqual(PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1);
-    expect(recorder.named_citation_digests()).toEqual(items.slice(0, 100).map(digest));
+    expect(recorder.named_citation_digests()).toEqual(items.map(digest));
     const receipt = recorder.receipt(1234.4);
     expect(receipt).toMatchObject({ looked_through: 130, elapsed_ms: 1234 });
     expect(receipt.rows).toHaveLength(1);
@@ -470,7 +464,7 @@ describe("agentic Ask progress recorder", () => {
     expect(receipt.looked_through).toBe(2);
   });
 
-  it("shares one request's names across its attempts: none named twice, all within the bound, each attempt's digests its own", () => {
+  it("shares one request's names across its attempts: none named twice, each attempt's digests its own", () => {
     const request = createAgenticAskProgressRequestV1();
     const events: PersonAskProgressStepEventV3[] = [];
     const attempt = () => createAgenticAskProgressRecorderV1({ sink: event => { events.push(event); }, sources, signal: new AbortController().signal, named: request.named });
@@ -481,14 +475,14 @@ describe("agentic Ask progress recorder", () => {
     second.research.before_check(items.slice(80, 95));
     second.research.given(items.slice(80, 120));
     const reads = events.filter(event => event.type === "read").flatMap(event => event.items);
-    expect(reads.map(item => item.label)).toEqual(items.slice(0, PERSON_ASK_PROGRESS_NAMED_MAX_V1).map(item => item.label));
+    expect(reads.map(item => item.label)).toEqual(items.map(item => item.label));
     expect(events.filter(event => event.type === "stage")).toEqual([{ type: "stage", stage: "reading", pending: 5 }]);
     expect(first.named_citation_digests()).toEqual(items.slice(0, 90).map(digest));
-    expect(second.named_citation_digests()).toEqual(items.slice(90, 100).map(digest));
-    expect(request.named.size).toBe(PERSON_ASK_PROGRESS_NAMED_MAX_V1);
+    expect(second.named_citation_digests()).toEqual(items.slice(90, 120).map(digest));
+    expect(request.named.size).toBe(120);
     // The second attempt read 40, ten of which the first had named; its receipt lists only its own names.
     const receipt = second.receipt(request.elapsed());
     expect(receipt.looked_through).toBe(40);
-    expect(receipt.rows.flatMap(row => row.type === "read" ? row.items : []).map(item => item.label)).toEqual(items.slice(90, 100).map(item => item.label));
+    expect(receipt.rows.flatMap(row => row.type === "read" ? row.items : []).map(item => item.label)).toEqual(items.slice(90, 120).map(item => item.label));
   });
 });

@@ -1,11 +1,5 @@
 import { canonicalJson, canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import {
-  PERSON_ASK_PROGRESS_COUNT_MAX_V1,
-  PERSON_ASK_PROGRESS_NAMED_MAX_V1,
-  PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1,
-  PERSON_ASK_PROGRESS_SOURCES_MAX_V3,
-  PERSON_ASK_RECEIPT_ELAPSED_MAX_MS_V1,
-  PERSON_ASK_RECEIPT_ROWS_MAX_V1,
   validatePersonAnswerCitationV8,
   validatePersonAskProgressStepEventV3,
   validatePersonAskReceiptV3,
@@ -96,8 +90,6 @@ function progressSource(source: AgenticAskProgressCatalogSourceV1): PersonAskPro
   return toolId === undefined ? undefined : Object.freeze({ kind: kind === "ticket" ? "tickets" : "pages", tool_id: toolId });
 }
 
-function bounded(value: number): number { return Math.min(PERSON_ASK_PROGRESS_COUNT_MAX_V1, Math.max(0, value)); }
-
 /** A streamed request, started now: each attempt of it is given the same one. */
 export function createAgenticAskProgressRequestV1(now: () => number = () => performance.now()): AgenticAskProgressRequestV1 {
   const startedAt = now();
@@ -107,7 +99,7 @@ export function createAgenticAskProgressRequestV1(now: () => number = () => perf
 /** Identity of one released item across reads: its citation's canonical bytes, as the receipt's validator compares them. */
 function itemKey(item: EvidenceDeskItemV2): string { return canonicalJson(item.citation); }
 
-/** Merges neighbouring rows of one type: sources united (at most a row's bound), found summed, items concatenated. */
+/** Merges neighbouring rows of one type: sources united, found summed, items concatenated. */
 function merged(rows: readonly PersonAskReceiptRowV3[]): PersonAskReceiptRowV3[] {
   const out: PersonAskReceiptRowV3[] = [];
   for (const row of rows) {
@@ -115,8 +107,8 @@ function merged(rows: readonly PersonAskReceiptRowV3[]): PersonAskReceiptRowV3[]
     if (last === undefined || last.type !== row.type) { out.push(row); continue; }
     if (last.type === "searched" && row.type === "searched") {
       const sources = new Map(last.sources.map(source => [canonicalJson(source), source]));
-      for (const source of row.sources) if (sources.size < PERSON_ASK_PROGRESS_SOURCES_MAX_V3) sources.set(canonicalJson(source), source);
-      out[out.length - 1] = { type: "searched", sources: [...sources.values()], found: bounded(last.found + row.found) };
+      for (const source of row.sources) sources.set(canonicalJson(source), source);
+      out[out.length - 1] = { type: "searched", sources: [...sources.values()], found: last.found + row.found };
     } else if (last.type === "read" && row.type === "read") out[out.length - 1] = { type: "read", items: [...last.items, ...row.items] };
   }
   return out;
@@ -128,7 +120,7 @@ interface AgenticAskProgressRecorderOptionsV1 {
   readonly signal: AbortSignal;
   /**
    * What earlier attempts of this request named (`AgenticAskProgressRequestV1.named`):
-   * none of it is named again, and it counts toward the named bound. Shared, so each item
+   * none of it is named again. Shared, so each item
    * this run names is added to it.
    */
   readonly named?: Set<string>;
@@ -136,7 +128,7 @@ interface AgenticAskProgressRecorderOptionsV1 {
 
 /**
  * The recorder of one streamed run. `signal` is the run's active signal: once
- * the caller cancels or the deadline passes, nothing more is sent, and after
+ * the caller cancels or the request stalls, nothing more is sent, and after
  * `settle` nothing at all. A sink's exception is ignored, and it receives only
  * events valid in progress V3.
  */
@@ -153,7 +145,7 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
   /** Items research was shown after an access check, as a row or in full: what the receipt counts as looked through. */
   const shownKeys = new Set<string>();
   const named: PersonAskProgressItemV3[] = [];
-  /** Every item the request named, an earlier attempt's included: each is named once, and the bound counts them all. */
+  /** Every item the request named, an earlier attempt's included: each is named once. */
   const namedKeys = options.named ?? new Set<string>();
   /** The searched and read rows sent, in order: the receipt's source. */
   const rows: PersonAskReceiptRowV3[] = [];
@@ -169,7 +161,7 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
     return valid;
   };
   const stage = (value: PersonAskProgressStageV1, pending?: number) => {
-    const counted = pending === undefined || pending < 1 ? undefined : bounded(pending);
+    const counted = pending === undefined || pending < 1 ? undefined : pending;
     const key = `${value}:${counted ?? ""}`;
     if (!live() || key === lastStage) return;
     lastStage = key;
@@ -191,8 +183,8 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
       }
       if (batch === undefined) return;
       const covered = sourceId === undefined ? everySource : [sourcesById.get(sourceId)].filter((value): value is PersonAskProgressSourceV3 => value !== undefined);
-      for (const source of covered) if (batch.sources.size < PERSON_ASK_PROGRESS_SOURCES_MAX_V3) batch.sources.set(canonicalJson(source), source);
-      batch.found = bounded(batch.found + fresh);
+      for (const source of covered) batch.sources.set(canonicalJson(source), source);
+      batch.found += fresh;
     },
     reads_done() {
       const done = batch;
@@ -209,7 +201,7 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
       stage("reading", fresh.size);
     },
     given(items: readonly EvidenceDeskItemV2[], shown: readonly EvidenceDeskItemV2[] = items) {
-      // Synchronous from here: a cancel or deadline cannot fall between the check and these names.
+      // Synchronous from here: a cancel or stall cannot fall between the check and these names.
       if (!live()) return;
       for (const item of [...items, ...shown]) shownKeys.add(itemKey(item));
       const fresh: { readonly key: string; readonly item: PersonAskProgressItemV3 }[] = [];
@@ -218,17 +210,16 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
         if (readKeys.has(key)) continue;
         readKeys.add(key);
         // Read in this run either way; an earlier attempt's name is never sent twice.
-        if (namedKeys.has(key) || namedKeys.size + fresh.length >= PERSON_ASK_PROGRESS_NAMED_MAX_V1) continue;
+        if (namedKeys.has(key)) continue;
         // The answer citation's projection: kind, label, visibility and the open ref. One that fails it is read, never named.
         try { fresh.push({ key, item: validatePersonAnswerCitationV8(citationOfAgenticEvidenceItemV8(item)) }); } catch { continue; }
       }
-      for (let start = 0; start < fresh.length; start += PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1) {
-        const chunk = fresh.slice(start, start + PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1);
-        const sent = send({ type: "read", items: chunk.map(value => value.item) });
-        if (sent === undefined || sent.type !== "read") continue;
-        for (const value of chunk) { namedKeys.add(value.key); named.push(value.item); }
-        rows.push(sent);
-      }
+      // Every item one call reads is named in one event; the stream's transport bound is what limits an event.
+      if (fresh.length === 0) return;
+      const sent = send({ type: "read", items: fresh.map(value => value.item) });
+      if (sent === undefined || sent.type !== "read") return;
+      for (const value of fresh) { namedKeys.add(value.key); named.push(value.item); }
+      rows.push(sent);
     },
   });
 
@@ -237,10 +228,10 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
     stage: (value: "writing" | "checking_access") => stage(value),
     named_citation_digests: () => Object.freeze(named.map(item => canonicalSha256(item.citation))),
     receipt(elapsedMs: number): PersonAskReceiptV3 {
-      const elapsed = Math.min(PERSON_ASK_RECEIPT_ELAPSED_MAX_MS_V1, Math.max(0, Math.round(elapsedMs)));
+      const elapsed = Math.max(0, Math.round(elapsedMs));
       // Every item research looked through, rows included.
-      const lookedThrough = bounded(shownKeys.size);
-      // Fit the byte bound by dropping named items from the end; looked_through stays.
+      const lookedThrough = shownKeys.size;
+      // Fit the receipt's transport bound by dropping named items from the end; looked_through stays.
       for (let keep = named.length; ; keep -= 1) {
         let left = keep;
         const kept = rows.flatMap((row): PersonAskReceiptRowV3[] => {
@@ -250,7 +241,7 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
           return items.length === 0 ? [] : [{ type: "read", items }];
         });
         try {
-          return validatePersonAskReceiptV3({ looked_through: lookedThrough, elapsed_ms: elapsed, rows: merged(kept).slice(0, PERSON_ASK_RECEIPT_ROWS_MAX_V1) });
+          return validatePersonAskReceiptV3({ looked_through: lookedThrough, elapsed_ms: elapsed, rows: merged(kept) });
         } catch (error) {
           if (keep === 0) throw error;
         }
