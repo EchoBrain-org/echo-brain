@@ -547,17 +547,13 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(corrections).not.toHaveProperty("model_entry_dropped");
     expect(corrections).not.toHaveProperty("model_items_capped");
   });
-  it("separates a missing fact from the rest of the gap, and keeps a sentence whose list id brings 45 private rows", async () => {
-    // The sentence's list id brings the list's 45 private rows: it stands, private, citing them all.
+  it("separates a missing fact from the rest of the gap", async () => {
     const rendered = await alone({ bundle: listBundle(45, 2, [list("L1", ids(1, 45))], [C(["E46", "E47"])]), replies: [writerReply([
       { text: REVIEW.text, evidence: ["E46"] }, { text: "The fixture work waits on the review.", evidence: ["L1", "E47"] },
     ], { not_found: ["the approver"] })] }).render("What did the review approve, and who approved it?");
     const part = rendered.result.response.parts[0]!;
     expect(part.gap_details).toEqual({ not_found: "Not found: the approver." });
     expect(part.gap).toBe("Not found: the approver.");
-    const waits = part.statements.find(statement => statement.text === "The fixture work waits on the review.")!;
-    expect(waits.private).toBe(true);
-    expect(waits.citation_indexes.length).toBeGreaterThanOrEqual(46);
   });
   type Rendered = Awaited<ReturnType<ReturnType<typeof alone>["render"]>>;
   interface Row {
@@ -825,21 +821,14 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(part).not.toHaveProperty("gap");
       expect(part.blocks).toEqual([{ kind: "answer", statements: [0] }, { kind: "points", ordered: false, statements: [1, 2] }]);
     });
-    it("keeps an Ask again's since whose list id cites 46 items, private for its rows", async () => {
-      const rendered = await alone({
-        bundle: pastOne(), replies: [{ lists: [], not_found: [], blocks: [{ block: "answer", sentences: [{ ...REVIEW, evidence: ["E46"] }] }], since: [WAITS_ON] }],
-        earlier: { asked_on: "2026-10-05", statements: [{ text: "The review had not met.", sources: ["Approved record 1"] }] }, answers: "What did the review approve?",
-      }).render("What did the review approve?");
-      expect(rendered.result.response.since!.statements.map(value => [value.text, value.citation_indexes.length, value.private])).toEqual([[WAITS_ON.text, 46, true]]);
-      expect(rendered.result.response.parts[0]!.statements.map(value => value.text)).toEqual([REVIEW.text]);
-    });
-    it("keeps every since sentence, however many items each cites", async () => {
+    it("keeps every since sentence of an Ask again, one whose list id cites 46 items private for its rows", async () => {
       const CLOSED = { text: "The review closed.", evidence: ["E47"] };
       const rendered = await alone({
         bundle: pastOne(), replies: [{ lists: [], not_found: [], blocks: [{ block: "answer", sentences: [{ ...REVIEW, evidence: ["E46"] }] }], since: [WAITS_ON, CLOSED] }],
         earlier: { asked_on: "2026-10-05", statements: [{ text: "The review had not met.", sources: ["Approved record 1"] }] }, answers: "What did the review approve?",
       }).render("What did the review approve?");
-      expect(rendered.result.response.since?.statements.map(value => value.text)).toEqual([WAITS_ON.text, CLOSED.text]);
+      expect(rendered.result.response.since!.statements.map(value => [value.text, value.citation_indexes.length, value.private])).toEqual([[WAITS_ON.text, 46, true], [CLOSED.text, 1, false]]);
+      expect(rendered.result.response.parts[0]!.statements.map(value => value.text)).toEqual([REVIEW.text]);
     });
   });
 

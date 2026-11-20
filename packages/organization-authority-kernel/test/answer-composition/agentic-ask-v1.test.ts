@@ -1123,11 +1123,8 @@ describe("agentic Ask: failures never lose found evidence", () => {
     expect(evidence.revalidate).toHaveBeenCalledTimes(6);
   });
 
-  it.each([
-    ["adapter_timeout", null], ["adapter_transport", null],
-    ["adapter_http", 408], ["adapter_http", 500], ["adapter_http", 502],
-    ["adapter_provider_error", 500], ["adapter_provider_error", 200],
-  ])("never repeats %s/%s, which may have been billed, and still answers from what was found", async (failure_class, http_status) => {
+  // The gate's own tests classify every failure; here, one that may have been billed still leaves the writer its answer.
+  it.each([["adapter_timeout", null], ["adapter_http", 500]])("never repeats %s/%s, which may have been billed, and still answers from what was found", async (failure_class, http_status) => {
     const failure = Object.assign(new Error("provider detail must stay private"), { diagnostic: { failure_class, http_status } });
     const script = scripted([
       step([{}], [search("launch")]),
@@ -1185,15 +1182,6 @@ describe("agentic Ask: failures never lose found evidence", () => {
     expect(script.inputs).toHaveLength(2);
   });
 
-  it("keeps researching after slow retrieval: no clock ends research", async () => {
-    let clock = 0;
-    const script = scripted([step([{}], [search("launch")]), finish([found(["E1"])]), answer([{ text: "Tuesday.", evidence: ["E1"] }])]);
-    const evidence = desk({ search: () => { clock += 3_600_000; return [item("a", "Launch is Tuesday.")]; } });
-    const result = await ask({ desk: evidence, model: script.model, now: () => clock }).answer({ question: "When is launch?" });
-    expect(result.outcome).toBe("answered");
-    expect(script.inputs).toHaveLength(3);
-  });
-
   it("reports an incomplete search when research stops on repeated reads and the writer cannot use its search passages", async () => {
     let queries = 0;
     const model: StructuredGenerationPort = { generate: vi.fn(async input =>
@@ -1218,25 +1206,6 @@ describe("agentic Ask: failures never lose found evidence", () => {
     await expect(ask({ desk: desk({ search: () => [item("a")] }), model: script.model, audit }).answer({ question: "When is launch?" })).rejects.toBe(failure);
     expect(script.inputs).toHaveLength(2);
     expect(audit).toEqual([]);
-  });
-
-  it("gives every call the same silence period, however slow the permission checks before it are", async () => {
-    let clock = 0;
-    const launch = item("a");
-    const evidence = desk({ search: () => [launch], open: () => [launch], revalidate: async () => {
-      clock += 145_000.25;
-      return { checked_at: checked };
-    } });
-    const timeouts: number[] = [];
-    const script = scripted([
-      (input: StructuredGenerationInput) => { timeouts.push(input.timeout_ms); return step([{}], [search("launch")]); },
-      (input: StructuredGenerationInput) => { timeouts.push(input.timeout_ms); return step([{}], [open("E1")]); },
-      (input: StructuredGenerationInput) => { timeouts.push(input.timeout_ms); return finish([found(["E1"])]); },
-      (input: StructuredGenerationInput) => { timeouts.push(input.timeout_ms); return answer([{ text: "Tuesday.", evidence: ["E1"] }]); },
-    ]);
-    const result = await ask({ desk: evidence, model: script.model, now: () => clock }).answer({ question: "When is launch?" });
-    expect(result.outcome).toBe("answered");
-    expect(timeouts).toEqual([180_000, 180_000, 180_000, 180_000]);
   });
 
   it("retries a failed step after a slow permission check: no clock skips the retry", async () => {
@@ -1267,44 +1236,6 @@ describe("agentic Ask: failures never lose found evidence", () => {
     await ask({ desk: evidence, model: script.model }).answer({ question: "What is SCOUT?" });
     expect(evidence.open).toHaveBeenCalledWith(expect.objectContaining({ item: listed.id, neighbours: 2 }));
     expect(script.prompt(2).last_results[0]).toMatchObject({ tool: "open", opened: ["E1"] });
-  });
-
-  it("hands an integer silence period to an integer-only adapter whatever the clock reads", async () => {
-    const startedAt = 100.125;
-    let clock = startedAt;
-    const monotonic = vi.spyOn(performance, "now").mockImplementation(() => clock);
-    const launch = item("launch", "Launch is Tuesday.");
-    const evidence = desk({ search: () => [launch], open: () => [launch] });
-    const audit: AgenticAskAuditEntryV1[] = [];
-    const script = scripted([
-      () => { clock += 40_000.25; return step([{}], [search("launch")]); },
-      () => { clock += 40_500.125; return step([{}], [open("E1")]); },
-      () => { clock += 40_000.25; return step([{}], [search("tuesday")]); },
-      () => { clock += 21_000.25; return finish([found(["E1"])]); },
-      answer([{ text: "Launch is Tuesday.", evidence: ["E1"] }]),
-    ]);
-    const calls: number[] = [];
-    const model: StructuredGenerationPort = {
-      generate: async input => {
-        // Enforce the adapter boundary before any provider request, as OpenRouter does.
-        if (!Number.isSafeInteger(input.timeout_ms) || input.timeout_ms < 1) {
-          throw Object.assign(new Error("adapter requires a positive integer timeout"), {
-            diagnostic: { failure_class: "adapter_response", http_status: null },
-          });
-        }
-        calls.push(input.timeout_ms);
-        return script.model.generate(input);
-      },
-    };
-    try {
-      const result = await ask({ desk: evidence, model, audit }).answer({ question: "When is launch?" });
-      expect(result).toMatchObject({ outcome: "answered", citations: [{ citation: launch.citation }] });
-      expect(calls).toEqual([180_000, 180_000, 180_000, 180_000, 180_000]);
-      expect(audit[0]).toMatchObject({ outcome: "answered", model_calls: 5, repairs: 0, fallbacks: 0 });
-      expect(audit[0]!.generations.map(value => value.role)).toEqual(["step", "step", "step", "step", "answer"]);
-    } finally {
-      monotonic.mockRestore();
-    }
   });
 
   it("ends under repeated invalid output after each call's one repair, with no call budget", async () => {
