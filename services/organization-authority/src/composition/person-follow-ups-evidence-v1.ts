@@ -12,7 +12,6 @@ import type { EvidenceDeskRevalidateInputV1, EvidenceDeskVisibilityV1 } from '@e
 import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskPortV2, EvidenceDeskResultV2, EvidenceDeskUncheckedV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import {
   FOLLOW_UP_EVIDENCE_KIND_V1,
-  FOLLOW_UPS_LIMITS_V1,
   FOLLOW_UPS_SOURCE_DESCRIPTOR_V1,
   followUpDeskFieldsV1,
   followUpInStatusV1,
@@ -140,21 +139,20 @@ const STATES: readonly ImpactItemStateV1[] = ['unsent', 'open', 'done', 'not_rel
 const STATE_ORDER: Readonly<Record<ImpactItemStateV1, number>> = Object.freeze({ open: 0, unsent: 1, done: 2, not_relevant: 3 });
 /** The organization's rows a global scope reads at a time; once a request, it reads every page, each through the policy, with no bound before it. */
 const ORGANIZATION_PAGE = 1000;
-/** A project scope reads what the runs API's project scope reads: the records the asker reads in it now, and their rows. */
-const PROJECT_RECORDS_MAX = 500;
-const PROJECT_ROWS_MAX = 5000;
+/**
+ * Live reads in flight at once for one request. Every follow-up's tool item is read (each once); this only paces them, so
+ * one request does not burst a provider into rate limiting (429) with a read per follow-up at the same moment.
+ */
 const LIVE_READS_AT_ONCE = 4;
 /** List owner words that name the asker, as their own display name does. */
 const ASKER = new Set(['me', 'myself', 'mine', 'i']);
 const TICKET_KEY = /^[A-Z][A-Z0-9_]{0,63}-[1-9][0-9]{0,19}$/u;
 const DEFAULT_TITLE = 'Follow-up';
 /**
- * Why a ticket key may have found less than every follow-up. Each turns on the
- * query and on the reads the request made before any key lookup, never on
- * whether a follow-up holds the key.
+ * Why a ticket key may have found less than every follow-up: it turns on the query alone, never on whether a follow-up
+ * holds the key.
  */
 export const FOLLOW_UPS_KEY_ACROSS_SOURCES_V1 = 'Follow-ups are found by a ticket key only when follow_ups is searched on its own.';
-export const FOLLOW_UPS_KEY_PAST_READS_V1 = 'This request has read as many follow-up items as it can, so a ticket key may not find every follow-up.';
 /** Private visibilities first: an answer statement citing any of them is private. */
 const NARROWEST: readonly EvidenceDeskVisibilityV1[] = ['only_me', 'approver_only', 'project', 'projects', 'team'];
 
@@ -282,12 +280,12 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
   /** The asker's display name in the directory, as the Ask route names them to research. */
   const askerName = (): string => sources.people.people(viewer.organization, [viewer.membership]).get(viewer.membership)?.name ?? '';
   const projectRecords = (project_id: string): ReadonlySet<Sha256Digest> =>
-    new Set(sources.records.projectRecords({ access_token: viewer.token, project_id, limit: PROJECT_RECORDS_MAX }));
+    new Set(sources.records.projectRecords({ access_token: viewer.token, project_id }));
 
   /** Every row this scope shows the asker, through the policy. */
   const scan = (): Context => {
     if (scope.kind === 'project') {
-      const context = assessOpenItemsV1(sources, viewer, sources.items.forRecords([...projectRecords(scope.project_id)], { states: STATES, limit: PROJECT_ROWS_MAX }));
+      const context = assessOpenItemsV1(sources, viewer, sources.items.forRecords([...projectRecords(scope.project_id)], { states: STATES, limit: Number.MAX_SAFE_INTEGER }));
       return { ...context, assessed: context.assessed.filter(entry => entry.access.see_row) };
     }
     // Every page of the organization, each through the same policy pass.
@@ -313,15 +311,14 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
   };
   /**
    * The row's tool item read once in this request, as the asker, through the
-   * request's desk; none for a meeting action (ECHO's own data) or past the
-   * request's bound. A read a cancelled call left unfinished is tried again.
+   * request's desk; none for a meeting action (ECHO's own data). A read a
+   * cancelled call left unfinished is tried again.
    */
   const liveRead = async (row: ImpactItemRowV1, signal?: AbortSignal): Promise<LiveRead | undefined> => {
     if (openItemIsOwnActionV1(row)) return undefined;
     for (let attempt = 0; ; attempt += 1) {
       let read = reads.get(row.item_key);
       if (read === undefined) {
-        if (reads.size >= FOLLOW_UPS_LIMITS_V1.live_reads) return undefined;
         read = (async () => {
           const release = await slot();
           try {
@@ -470,7 +467,7 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
 
     async search(input) {
       const window = windowOf(input);
-      const limit = evidencePageSizeV1(input.limit, FOLLOW_UPS_LIMITS_V1.search_hits);
+      const limit = evidencePageSizeV1(input.limit);
       if (typeof input.query !== 'string') invalid('query is required');
       const live = input.live !== false;
       const { terms, keys, days } = queryOf(input.query);
@@ -499,7 +496,6 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
       const worded = candidates.filter(value => !value.keyOnly).map(value => value.entry);
       const chosen = worded.slice(0, limit);
       const hits: Entry[] = live ? [...await withReads(chosen, input.signal)] : chosen.map(entry => ({ entry }));
-      const readBefore = reads.size;
       // Home shows an item's key only with the item opened: a hit its key alone matched ranks after every word match, and is a hit
       // only once the live read opened it. One that did not is as if it never matched, and never counts toward truncation.
       const keyOnly = live ? candidates.filter(value => value.keyOnly).map(value => value.entry) : [];
@@ -516,8 +512,8 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
         }
       }
       input.signal?.throwIfAborted();
-      // Each key may need one more read than the request had made before its lookup.
-      const notice = keys.length === 0 ? undefined : !live ? FOLLOW_UPS_KEY_ACROSS_SOURCES_V1 : readBefore + keys.length > FOLLOW_UPS_LIMITS_V1.live_reads ? FOLLOW_UPS_KEY_PAST_READS_V1 : undefined;
+      // Across sources nothing is read live, so a key cannot be checked there, and the search says so.
+      const notice = keys.length === 0 || live ? undefined : FOLLOW_UPS_KEY_ACROSS_SOURCES_V1;
       // What the window could not test is counted over every follow-up the asker sees, as a meeting search's is, whatever its words
       // match. A search across sources links nothing: the desk keeps only some of its hits, so nothing is opened for them.
       return release('search', view, hits.slice(0, limit), wordsCut || hits.length > limit,
@@ -527,9 +523,10 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
     async list(input) {
       const window = windowOf(input);
       if (input.kinds?.some(kind => kind !== FOLLOW_UP_EVIDENCE_KIND_V1)) invalid('follow-ups take only owner, status and their own dates');
-      const size = evidencePageSizeV1(input.limit, FOLLOW_UPS_LIMITS_V1.list_page);
+      const size = evidencePageSizeV1(input.limit);
       const owner = input.owner === undefined ? undefined : input.owner.normalize('NFC').trim().replace(/^@/u, '').trim();
-      if (owner !== undefined && (owner.length === 0 || owner.length > 80)) invalid('owner must be a person\'s name such as "Dana", or "me"');
+      // How long a name may be is the directory's rule; an owner no member is named matches nothing.
+      if (owner !== undefined && owner.length === 0) invalid('owner must be a person\'s name such as "Dana", or "me"');
       if (input.status !== undefined && input.status !== 'open' && input.status !== 'done') invalid('status must be "open" or "done"');
       const selection = JSON.stringify({ owner: owner?.toLowerCase() ?? null, status: input.status ?? null, window: window ?? null });
       const after = input.cursor === undefined ? undefined : cursors.after(input.cursor, selection);

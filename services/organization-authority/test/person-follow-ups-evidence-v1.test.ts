@@ -10,7 +10,7 @@ import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1 } from '@echo-brain/organization-author
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { createAskFollowUpSinksV1 } from '../src/composition/ask-follow-up-sink-v1.js';
 import { SqlitePersonAgenticAskAuditV1 } from '../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
-import { FOLLOW_UPS_KEY_ACROSS_SOURCES_V1, FOLLOW_UPS_KEY_PAST_READS_V1, createPersonFollowUpsEvidenceSourceV1 } from '../src/composition/person-follow-ups-evidence-v1.js';
+import { FOLLOW_UPS_KEY_ACROSS_SOURCES_V1, createPersonFollowUpsEvidenceSourceV1 } from '../src/composition/person-follow-ups-evidence-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { JIRA_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
 import { createRegisteredPersonLiveEvidenceDeskV2 } from '../src/composition/person-live-evidence-desk-v2.js';
@@ -125,13 +125,17 @@ describe('follow-ups as an Ask source: what a search finds (ADR-0040)', () => {
     expect(listed).toMatchObject({ truncated: false });
     expect(listed).not.toHaveProperty('next_cursor');
     expect(JSON.stringify([found, listed])).not.toMatch(/Pilot planning|The pilot starts next week|meeting:sha256/);
-    // A reader of the decision sees every one of them, as many hits at a time as research asks for (here 8), up to twenty-five.
+    // A reader of the decision sees every one of them: as many hits at a time as research asks for (here 8), any page size,
+    // and every hit when it names none.
     const mina = await search(askDesk(f, 'mina').desk, 'launch');
     expect(mina.items).toHaveLength(8);
-    const wide = await search(askDesk(f, 'mina').desk, 'launch', { limit: 50 });
-    expect(wide.items).toHaveLength(25);
-    expect(wide.truncated).toBe(true);
     expect(mina.truncated).toBe(true);
+    const all = await askDesk(f, 'mina').desk.search({ source: 'follow_ups', kinds: ['follow_up'], query: 'launch' });
+    expect(all.items.length).toBeGreaterThan(25);
+    expect(all.truncated).toBe(false);
+    const wide = await search(askDesk(f, 'mina').desk, 'launch', { limit: 500 });
+    expect(wide.items).toHaveLength(all.items.length);
+    expect(wide.truncated).toBe(false);
   });
 
   it('releases a match on a ticket key alone only when the live read opened it', async () => {
@@ -225,7 +229,7 @@ describe('follow-ups as an Ask source: what a search finds (ADR-0040)', () => {
 });
 
 describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () => {
-  it('lists by owner, "me" and status, newest first, twenty-five at a time', async () => {
+  it('lists by owner, "me" and status, newest first, a page of the size asked for, or every one', async () => {
     const f = await sentFixture();
     const { desk } = askDesk(f, 'mina');
     expect(titles(await list(desk, { owner: 'me' }))).toEqual([`ECHO-12 ${f.outsideText}`]);
@@ -241,20 +245,23 @@ describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () =
     const later = askDesk(f, 'mina').desk;
     expect(titles(await list(later, { owner: 'me', status: 'done' }))).toEqual([`ECHO-12 ${f.outsideText}`]);
     expect((await list(later, { owner: 'me', status: 'open' })).items).toEqual([]);
-    // Thirty more, unsent: newest first, twenty-five a page, then the rest; a cursor belongs to its own selection.
+    // Thirty more, unsent: newest first, every one when no page is named, else a page of the size asked for, then the rest;
+    // a cursor belongs to its own selection.
     f.advance(1_000);
     insertRows(f, 30);
     const paged = askDesk(f, 'mina').desk;
-    const first = await list(paged);
+    expect((await paged.list({ source: 'follow_ups' })).items).toHaveLength(32);
+    expect((await list(paged)).items).toHaveLength(32);
+    const first = await list(paged, { limit: 25 });
     expect(first.items).toHaveLength(25);
     expect(first.items.every(item => item.attributes?.status === 'not sent yet')).toBe(true);
-    const second = await list(paged, { cursor: first.next_cursor });
+    const second = await list(paged, { limit: 25, cursor: first.next_cursor });
     expect(second.items).toHaveLength(7);
     expect(second).not.toHaveProperty('next_cursor');
     // This source holds every matching follow-up, so no page leaves its list's end unverified (ADR-0041).
     expect([first.page_full, second.page_full]).toEqual([false, false]);
     expect(new Set([...first.items, ...second.items].map(item => item.id)).size).toBe(32);
-    await expect(list(paged, { cursor: first.next_cursor, owner: 'me' })).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(list(paged, { limit: 25, cursor: first.next_cursor, owner: 'me' })).rejects.toMatchObject({ code: 'invalid_request' });
     await expect(list(paged, { cursor: 'follow_ups_99' })).rejects.toMatchObject({ code: 'invalid_request' });
   });
 
@@ -311,31 +318,22 @@ describe('follow-ups as an Ask source: lists, opens and bounds (ADR-0040)', () =
     expect((await list(desk, { time_zone: 'America/Los_Angeles' })).items).toHaveLength(2);
   });
 
-  it('reads at most twenty tool items live in one request, each once, and releases the rest with ECHO text only', async () => {
+  it('reads every tool item live in one request, each once, with no request bound', async () => {
     const f = await sentFixture();
     insertRows(f, 30, 'pilot starts next week');
     const { desk } = askDesk(f, 'mina');
     const opens = f.opened.length;
-    const pages: EvidenceDeskResultV2[] = [];
-    for (let cursor: string | undefined; pages.length === 0 || cursor !== undefined;) {
-      const page = await list(desk, cursor === undefined ? {} : { cursor });
-      pages.push(page); cursor = page.next_cursor;
-    }
-    expect(pages.flatMap(page => page.items)).toHaveLength(32);
-    // Twenty tool items, and their one decision, once, for its link.
-    expect(f.opened.length - opens).toBe(21);
-    // The two oldest, past the bound, carry ECHO's phrases and no tool words.
-    const oldest = pages.flatMap(page => page.items).slice(-2);
-    expect(oldest.map(item => item.label).sort()).toEqual(['launch next week', 'pilot starts next week']);
-    expect(JSON.stringify(oldest)).not.toMatch(/ECHO-12|Kestrel|due_at/);
+    const items = (await list(desk)).items;
+    expect(items).toHaveLength(32);
+    const opened = f.opened.length - opens;
+    // Past the twenty one request used to read: every tool item, and their decision once for its link.
+    expect(opened).toBeGreaterThan(21);
+    // Each item is read once a request, however often it is listed or searched again.
     await search(desk, 'pilot');
     await list(desk);
-    expect(f.opened.length - opens).toBe(21);
-    // Past the bound a ticket key cannot be checked, and the search says so whether or not any follow-up holds that key.
-    for (const query of ['ECHO-12', 'ECHO-999']) expect([query, await search(desk, query)]).toEqual([query, expect.objectContaining({ items: [], notice: FOLLOW_UPS_KEY_PAST_READS_V1, notice_kind: 'informational' })]);
-    expect(f.opened.length - opens).toBe(21);
-    // Within it, a key no follow-up holds says nothing.
-    expect(await search(askDesk(f, 'mina').desk, 'ECHO-999')).not.toHaveProperty('notice');
+    expect(f.opened.length - opens).toBe(opened);
+    // A key no follow-up holds says nothing, however many reads came before.
+    expect(await search(desk, 'ECHO-999')).not.toHaveProperty('notice');
   });
 
   it('opens a released follow-up again through the policy, and refuses one the asker no longer sees', async () => {
@@ -542,14 +540,15 @@ describe("follow-ups as an Ask source: ECHO's own dates and links (research tool
     // Pages of a dated list share its window and its count; a cursor belongs to its own window.
     insertRows(f, 26);
     const later = askDesk(f, 'mina').desk;
-    const first = await list(later, { since: ticket.created_at.slice(0, 10), date_field: 'created' });
+    expect((await list(later, { since: ticket.created_at.slice(0, 10), date_field: 'created' })).items).toHaveLength(28);
+    const first = await list(later, { since: ticket.created_at.slice(0, 10), date_field: 'created', limit: 25 });
     expect(first.items).toHaveLength(25);
-    await expect(list(later, { cursor: first.next_cursor })).rejects.toMatchObject({ code: 'invalid_request' });
-    const rest = await list(later, { since: ticket.created_at.slice(0, 10), date_field: 'created', cursor: first.next_cursor });
+    await expect(list(later, { limit: 25, cursor: first.next_cursor })).rejects.toMatchObject({ code: 'invalid_request' });
+    const rest = await list(later, { since: ticket.created_at.slice(0, 10), date_field: 'created', limit: 25, cursor: first.next_cursor });
     expect(rest.items).toHaveLength(3);
     // The same window however it is spelled: no field is any of the dates.
-    const implied = await list(later, { since: ticket.created_at.slice(0, 10) });
-    expect((await list(later, { since: ticket.created_at.slice(0, 10), date_field: 'any', cursor: implied.next_cursor })).items).toHaveLength(3);
+    const implied = await list(later, { since: ticket.created_at.slice(0, 10), limit: 25 });
+    expect((await list(later, { since: ticket.created_at.slice(0, 10), date_field: 'any', limit: 25, cursor: implied.next_cursor })).items).toHaveLength(3);
     const sent = await list(later, { since: ticket.created_at.slice(0, 10), date_field: 'sent' });
     expect([ids(sent), sent.unchecked]).toEqual([[actionId, ticketId].sort(), { count: 26, dates: ['created'] }]);
   });

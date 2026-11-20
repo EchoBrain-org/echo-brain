@@ -2,7 +2,7 @@ import { EVIDENCE_ANY_DATE_V1, evidenceDateFilterV1 } from "@echo-brain/organiza
 import { validatePersonEvidenceOpenRequestV1, type PersonAnswerCitationV3 } from '@echo-brain/organization-api';
 import type { EvidenceDeskKindV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2, PersonLiveSourceDescriptorV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
-import { FOLLOW_UP_EVIDENCE_KIND_V1, FOLLOW_UPS_LIMITS_V1, FOLLOW_UPS_SOURCE_ID_V1 } from '@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1';
+import { FOLLOW_UP_EVIDENCE_KIND_V1, FOLLOW_UPS_SOURCE_ID_V1 } from '@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1';
 import { LOCAL_SOURCE_KINDS_V1 } from '@echo-brain/organization-authority-kernel/shared/source-capabilities-v1';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -13,12 +13,6 @@ import { WORKSPACE_SOURCE_IDS_V1, type WorkspaceSourceIdV1 } from '@echo-brain/o
 import { observePersonLiveEvidenceV1 } from './person-live-evidence-observation-v1.js';
 import { mergeUncheckedV1 } from '../application/evidence-unchecked-v1.js';
 
-/** Live inventory pages match the research loop's list fetch; each reader still applies its own smaller cap. */
-const LIVE_LIST_MAX = 50;
-/** A search's hits when research names no count: one page it reads in a step. More set `truncated`. */
-const SEARCH_DEFAULT = 25;
-/** The hits one live source gives a search: the same page, so one source's matches are not cut below another's. */
-const LIVE_SEARCH_MAX = 25;
 /**
  * The sources a search across sources names in a coverage notice. Only ECHO's meetings and documents, a tool's items,
  * follow-ups and the asker's projects join one: a tool's containers, people and tools are searched only when named.
@@ -120,14 +114,17 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       ...(workspaceSources === undefined ? [] : [...workspaceSources.values()].map(value => value.descriptor))]),
     async search(input) {
       input.signal?.throwIfAborted();
-      const maximum = input.limit ?? SEARCH_DEFAULT;
-      if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 50) throw new AuthorityOperationError('invalid_request', 'Evidence search limit is invalid');
+      // A named limit is research's page, any size, asked of every source; with none, each source gives what it holds (a
+      // live source, one full page of its reader) and every item is kept. More set `truncated`.
+      if (input.limit !== undefined && (!Number.isSafeInteger(input.limit) || input.limit < 1)) throw new AuthorityOperationError('invalid_request', 'Evidence search limit must be a positive whole number');
+      const maximum = input.limit ?? Number.POSITIVE_INFINITY;
+      const asked = input.limit === undefined ? {} : { limit: input.limit };
       const { kinds: requestedKinds, source: selectedId, ...request } = input;
       if (selectedId === FOLLOW_UPS_SOURCE_ID_V1) {
         if (followUpSource === undefined || requestedKinds?.some(kind => kind !== FOLLOW_UP_EVIDENCE_KIND_V1)) refused();
         const result = input.query === undefined
-          ? await followUpSource!.list({ ...evidenceDateFilterV1(input), source: FOLLOW_UPS_SOURCE_ID_V1, limit: Math.min(maximum, FOLLOW_UPS_LIMITS_V1.list_page), signal: input.signal })
-          : await followUpSource!.search({ ...evidenceDateFilterV1(input), query: input.query, limit: Math.min(maximum, FOLLOW_UPS_LIMITS_V1.search_hits), signal: input.signal });
+          ? await followUpSource!.list({ ...evidenceDateFilterV1(input), source: FOLLOW_UPS_SOURCE_ID_V1, ...asked, signal: input.signal })
+          : await followUpSource!.search({ ...evidenceDateFilterV1(input), query: input.query, ...asked, signal: input.signal });
         input.signal?.throwIfAborted();
         return remember(result, followUpSource!);
       }
@@ -135,8 +132,8 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       if (selectedWorkspace !== undefined) {
         if (requestedKinds?.some(kind => kind !== selectedWorkspace.descriptor.kind)) refused();
         const result = input.query === undefined
-          ? await selectedWorkspace.list({ ...evidenceDateFilterV1(input), source: selectedWorkspace.descriptor.source_id, limit: maximum, signal: input.signal })
-          : await selectedWorkspace.search({ ...evidenceDateFilterV1(input), query: input.query, limit: maximum, signal: input.signal });
+          ? await selectedWorkspace.list({ ...evidenceDateFilterV1(input), source: selectedWorkspace.descriptor.source_id, ...asked, signal: input.signal })
+          : await selectedWorkspace.search({ ...evidenceDateFilterV1(input), query: input.query, ...asked, signal: input.signal });
         input.signal?.throwIfAborted();
         return remember(result, selectedWorkspace);
       }
@@ -185,8 +182,8 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
             (dated && descriptor.capabilities !== undefined && Object.keys(descriptor.capabilities.dates).length === 0))) continue;
         const dates = selectedSource === undefined ? datesFor(descriptor.capabilities) : evidenceDateFilterV1(input);
         const live = page(registration, () => input.query === undefined
-          ? lookup('evidence_list', registration, () => source.list({ ...dates, limit: Math.min(maximum, LIVE_LIST_MAX), signal: input.signal }))
-          : lookup('evidence_search', registration, () => source.search({ ...dates, query: input.query!, limit: Math.min(maximum, LIVE_SEARCH_MAX), signal: input.signal })));
+          ? lookup('evidence_list', registration, () => source.list({ ...dates, ...asked, signal: input.signal }))
+          : lookup('evidence_search', registration, () => source.search({ ...dates, query: input.query!, ...asked, signal: input.signal })));
         lookups.push(selectedSource !== undefined || descriptor.kind === 'tool_container' ? live : tolerate(descriptor.kind, live));
       }
       // Follow-ups join a keyword search across sources, dated too, on the dates they record; they hold no inventory. Only some
@@ -194,7 +191,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       if (followUpSource !== undefined && selectedId === undefined && input.query !== undefined &&
           (requestedKinds === undefined || requestedKinds.includes(FOLLOW_UP_EVIDENCE_KIND_V1))) {
         const query = input.query;
-        lookups.push(tolerate(FOLLOW_UP_EVIDENCE_KIND_V1, page(followUpSource, () => followUpSource.search({ ...evidenceDateFilterV1(input), query, limit: Math.min(maximum, FOLLOW_UPS_LIMITS_V1.search_hits), live: false, signal: input.signal }))));
+        lookups.push(tolerate(FOLLOW_UP_EVIDENCE_KIND_V1, page(followUpSource, () => followUpSource.search({ ...evidenceDateFilterV1(input), query, ...asked, live: false, signal: input.signal }))));
       }
       // The asker's projects join a keyword search across sources as follow-ups do, dated too, on their creation (research tool
       // contract v1). People and tools are searched only when named: their names rarely answer a search for content, and
@@ -203,7 +200,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       if (projects !== undefined && selectedId === undefined && input.query !== undefined &&
           (requestedKinds === undefined || requestedKinds.includes(projects.descriptor.kind))) {
         const query = input.query;
-        lookups.push(tolerate('project', page(projects, () => projects.search({ ...evidenceDateFilterV1(input), query, limit: maximum, signal: input.signal }))));
+        lookups.push(tolerate('project', page(projects, () => projects.search({ ...evidenceDateFilterV1(input), query, ...asked, signal: input.signal }))));
       }
       const settled = await Promise.all(lookups);
       input.signal?.throwIfAborted();
@@ -289,7 +286,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       }
       const { source, descriptor } = registration;
       if (input.kinds?.some(kind => kind !== descriptor.kind)) refused();
-      const result = await lookup('evidence_list', registration, () => source.list({ ...evidenceDateFilterV1(input), limit: Math.min(input.limit ?? 20, LIVE_LIST_MAX), since: input.since, until: input.until, cursor: input.cursor, signal: input.signal }));
+      const result = await lookup('evidence_list', registration, () => source.list({ ...evidenceDateFilterV1(input), ...(input.limit === undefined ? {} : { limit: input.limit }), since: input.since, until: input.until, cursor: input.cursor, signal: input.signal }));
       input.signal?.throwIfAborted();
       return remember(result, registration);
     },
@@ -342,13 +339,11 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       // With live sources, the tools check is awaited beside the providers', before the second base check.
       if (workspace !== undefined) { await workspace.tools.revalidate(input); input.signal?.throwIfAborted(); }
       const providers = [...sources.values()];
-      // Bound independent provider I/O. Both local fences and the synchronous
-      // final grant checks remain in place; every provider must succeed.
-      for (let offset = 0; offset < providers.length; offset += 4) {
-        await Promise.all(providers.slice(offset, offset + 4).map(({ source, descriptor }) =>
-          observePersonLiveEvidenceV1('evidence_revalidate', descriptor.kind, () => source.revalidate(input))));
-        input.signal?.throwIfAborted();
-      }
+      // Each provider's check runs at once (one per connected tool). Both local fences and the synchronous final grant checks
+      // remain in place; every provider must succeed.
+      await Promise.all(providers.map(({ source, descriptor }) =>
+        observePersonLiveEvidenceV1('evidence_revalidate', descriptor.kind, () => source.revalidate(input))));
+      input.signal?.throwIfAborted();
       // Local snapshots and original grants may change while a live reader awaits provider I/O.
       const final = await base.revalidate(input);
       input.signal?.throwIfAborted();

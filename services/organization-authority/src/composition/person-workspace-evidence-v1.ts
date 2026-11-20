@@ -100,11 +100,6 @@ export interface PersonWorkspaceEvidenceSourcesV1 {
   readonly tools: PersonWorkspaceToolsSourceV1;
 }
 
-/**
- * Per call: the hits one search returns, the rows one list page returns, the names one item's text names, the leads its
- * attribute names, and the items released beside one result.
- */
-const PERSON_WORKSPACE_LIMITS_V1 = Object.freeze({ search_hits: 10, list_page: 20, names: 50, leads: 10, linked: 100 });
 
 /** The asker's project grants as the project repository holds them now, in a read transaction of their own with no release. */
 export function personWorkspaceGrantsV1(repository: Pick<ProjectContextRepositoryV1, 'withReadTransaction'>): PersonWorkspaceSourcesV1['grants'] {
@@ -172,9 +167,9 @@ function otherFilters(input: EvidenceDeskListInputV2, source: WorkspaceSourceIdV
     invalid(takes.length === 0 ? `${source} take no filters` : `${source} take only ${takes.join(' and ')}`);
   }
 }
-/** Names joined with ", ", then how many more; an attribute says only that there are more. */
-function named(values: readonly string[], maximum: number, counted = true): string {
-  return values.length <= maximum ? values.join(', ') : `${values.slice(0, maximum).join(', ')}, and ${counted ? `${values.length - maximum} ` : ''}more`;
+/** Every name, joined with ", ". */
+function named(values: readonly string[]): string {
+  return values.join(', ');
 }
 /** Newest first, as the project list orders them; then by id. */
 const newestFirst = newestFirstV1<ProjectSummaryV2>(project => project.project_id);
@@ -260,10 +255,10 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
     const roster = shown.members.get(value.project_id) ?? [];
     const leads = roster.filter(member => member.role === 'lead').map(member => member.display_name);
     // A project's Jira project and Confluence spaces are their own sources, which name the projects mapped to them.
-    const lines = [`Members: ${named(roster.map(member => `${member.display_name} (${member.role})`), PERSON_WORKSPACE_LIMITS_V1.names)}`];
+    const lines = [`Members: ${named(roster.map(member => `${member.display_name} (${member.role})`))}`];
     return item('project', value.project_id, { kind: 'project', project_id: value.project_id, grant: shown.grants.get(value.project_id)! }, {
       ref: `project:${value.project_id}` as const, label: value.name,
-      attributes: Object.freeze({ status: value.status, role: value.role, ...(leads.length === 0 ? {} : { leads: named(leads, PERSON_WORKSPACE_LIMITS_V1.leads, false) }) }),
+      attributes: Object.freeze({ status: value.status, role: value.role, ...(leads.length === 0 ? {} : { leads: named(leads) }) }),
       dates: Object.freeze({ created: value.created_at }), text: lines.join('\n'),
       ...(members === undefined ? {} : { links: Object.freeze({ members: Object.freeze([...members]) }) }),
       visibility: 'project' as const,
@@ -271,7 +266,7 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
   };
   const person = (shown: View, value: Person, projects?: readonly string[]): Shaped | undefined => {
     const shared = shown.memberships.get(value.membership_id) ?? [];
-    const roles = named(shared.map(entry => `${entry.project.name} (${entry.role})`), PERSON_WORKSPACE_LIMITS_V1.names);
+    const roles = named(shared.map(entry => `${entry.project.name} (${entry.role})`));
     const text = value.membership_id === bound.membership_id
       ? `This is you.\n${shared.length === 0 ? 'You belong to no project.' : `Your projects: ${roles}`}`
       : shared.length === 0 ? 'Shares no project with you.' : `Projects shared with you: ${roles}`;
@@ -298,14 +293,14 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
   };
 
   /**
-   * Rows with what each links to (a project's members, a person's shared projects), each linked item released once beside
-   * them, at most `linked` in all. A row links only to an item released here or before.
+   * Rows with what each links to (a project's members, a person's shared projects), every linked item released once beside
+   * them. A row links only to an item released here or before.
    */
   const withLinks = <R, L>(chosen: readonly R[], linksOf: (row: R) => readonly L[], idOf: (link: L) => string,
     beside: (link: L) => Shaped | undefined, row: (value: R, links: readonly string[]) => Shaped | undefined) => {
-    const links = chosen.map(value => linksOf(value).slice(0, PERSON_WORKSPACE_LIMITS_V1.names));
+    const links = chosen.map(linksOf);
     const kept = new Map<string, L>();
-    for (const list of links) for (const link of list) if (!kept.has(idOf(link)) && kept.size < PERSON_WORKSPACE_LIMITS_V1.linked) kept.set(idOf(link), link);
+    for (const list of links) for (const link of list) if (!kept.has(idOf(link))) kept.set(idOf(link), link);
     const linked = [...kept.values()].flatMap(link => beside(link) ?? []);
     const released = new Set(linked.map(value => value.id));
     const rows = chosen.flatMap((value, index) => row(value, links[index]!.map(idOf).filter(id => released.has(id) || issued.has(id))) ?? []);
@@ -358,7 +353,7 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
       descriptor,
       async search(input) {
         dates(input);
-        const limit = evidencePageSizeV1(input.limit, PERSON_WORKSPACE_LIMITS_V1.search_hits);
+        const limit = evidencePageSizeV1(input.limit);
         if (typeof input.query !== 'string') invalid('query is required');
         const terms = evidenceTermsV1(input.query);
         if (reads.load !== undefined) await reads.load(input.signal);
@@ -371,7 +366,7 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
       async list(input) {
         dates(input);
         filters(input);
-        const size = evidencePageSizeV1(input.limit, PERSON_WORKSPACE_LIMITS_V1.list_page);
+        const size = evidencePageSizeV1(input.limit);
         if (reads.load !== undefined) await reads.load(input.signal);
         const shown = reads.read(input.signal);
         // Filters apply before anything is released.
