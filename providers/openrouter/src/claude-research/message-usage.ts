@@ -10,7 +10,8 @@ const PRODUCED_EVENTS = new Set(['content_block_start', 'content_block_delta', '
 
 /**
  * Retains numeric usage and finish metadata while the unmodified SSE bytes pass through, and calls `produced` at each
- * event that carries model output (see PRODUCED_EVENTS): the liveness a caller timing silence reads.
+ * event that carries model output (see PRODUCED_EVENTS) and at each piece of such an event's data line as it arrives:
+ * the liveness a caller timing silence reads.
  */
 export function messageUsageObserverV1(capture = false, produced?: () => void) {
   const decoder = new StringDecoder('utf8');
@@ -40,7 +41,26 @@ export function messageUsageObserverV1(capture = false, produced?: () => void) {
     const stop = event?.type === 'message_delta' ? event.delta?.stop_reason : undefined;
     if (typeof stop === 'string') finish = stop === 'end_turn' || stop === 'tool_use' ? 'stop' : stop === 'max_tokens' ? 'length' : stop;
   };
-  const accept = (text: string) => { pending += text; let end; while ((end = pending.indexOf('\n')) !== -1) { line(pending.slice(0, end)); pending = pending.slice(end + 1); } };
+  // The current event's type, from its `event:` line or the `"type"` its data line opens with.
+  let eventName: string | undefined;
+  const accept = (text: string) => {
+    let rest = text;
+    let end;
+    while ((end = rest.indexOf('\n')) !== -1) {
+      const full = (pending + rest.slice(0, end)).replace(/\r$/u, '');
+      pending = ''; rest = rest.slice(end + 1);
+      if (full.startsWith('event:')) eventName = full.slice('event:'.length).trim();
+      else if (full === '') eventName = undefined;
+      line(full);
+    }
+    pending += rest;
+    // Bytes of a model-output event's data line still arriving are progress: one long delta can take longer than the
+    // silence period to arrive. Control fields, `ping` and `message_start` never are.
+    if (rest !== '' && pending.startsWith('data:')) {
+      const type = eventName ?? /"type"\s*:\s*"([a-z_]+)"/u.exec(pending.slice(0, 256))?.[1];
+      if (type !== undefined && PRODUCED_EVENTS.has(type)) produced?.();
+    }
+  };
   return {
     write: (chunk: Buffer) => accept(decoder.write(chunk)),
     /** True once the message's terminal event (`message_stop`) arrived: the reply finished rather than being cut. */

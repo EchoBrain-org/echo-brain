@@ -31,6 +31,25 @@ it('passes research model output to the gate\'s per-request progress', async () 
   expect(gateProgress).toBe(4);
 });
 
+it('reports Claude progress as bytes of a model-output event arrive, before its line completes, and never for ping', () => {
+  let produced = 0;
+  const observer = messageUsageObserverV1(false, () => { produced += 1; });
+  const delta = `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"${'x'.repeat(300)}"}}`;
+  observer.write(Buffer.from('event: content_block_delta\n'));
+  for (let at = 0; at < delta.length; at += 100) observer.write(Buffer.from(delta.slice(at, at + 100)));
+  // Four pieces of one delta line arrived, none yet ended by a newline.
+  expect(produced).toBe(Math.ceil(delta.length / 100));
+  observer.write(Buffer.from('\n\n'));
+  // A delta line without its event: line is known by the type it opens with.
+  produced = 0;
+  observer.write(Buffer.from('data: {"type":"content_block_delta","ind'));
+  expect(produced).toBe(1);
+  observer.write(Buffer.from('ex":0,"delta":{"type":"text_delta","text":"y"}}\n\n'));
+  produced = 0;
+  for (const piece of ['event: pi', 'ng\n', 'data: {"type":"pi', 'ng"}', '\n\n', 'event: message_start\n', 'data: {"type":"message_st', 'art","message":{}}\n\n']) observer.write(Buffer.from(piece));
+  expect(produced).toBe(0);
+});
+
 it('counts only Anthropic events that carry model output as progress, never ping or message_start', () => {
   let produced = 0;
   const observer = messageUsageObserverV1(false, () => { produced += 1; });
