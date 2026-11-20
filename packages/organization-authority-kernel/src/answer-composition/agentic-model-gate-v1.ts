@@ -28,7 +28,12 @@ export const AGENTIC_ASK_MIN_STEP_MS_V1 = 4_000;
 export const AGENTIC_ASK_MIN_ANSWER_MS_V1 = 3_000;
 /** Time kept after the answer call for final revalidation and the audit. */
 export const AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 = 2_000;
-export const AGENTIC_MODEL_OUTPUT_TOKENS_V1 = Object.freeze({ step: 1_500, answer: 1_500 } as const);
+/**
+ * Output allowance per role, in tokens. A research step rewrites its whole plan each turn; the writer's answer has no
+ * count limit (ADR-0051). Both are sized so a long reply finishes; the provider adapters bound them by the model's own
+ * maximum.
+ */
+export const AGENTIC_MODEL_OUTPUT_TOKENS_V1 = Object.freeze({ step: 8_000, answer: 16_000 } as const);
 
 export type AgenticAskModelRoleV1 = "step" | "answer";
 

@@ -63,7 +63,7 @@ import {
   type AgenticWriterListMemberV1,
   type AgenticWriterListV1,
 } from "../agentic-list-evidence-v1.js";
-import { AGENTIC_ASK_MIN_ANSWER_MS_V1, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
+import { AGENTIC_ASK_MIN_ANSWER_MS_V1, AGENTIC_MODEL_OUTPUT_TOKENS_V1, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
 import { agenticNotShownNoticeV1, agenticResearchNotesV1, type AgenticResearchNotesV1 } from "../agentic-research-notes-v1.js";
 import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
 import { observeCoreModelCorrectionV1, type CoreRuntimeModelCorrectionV1 } from "../../shared/core-runtime-observation-v1.js";
@@ -140,12 +140,11 @@ const ECHO_CITATION_KINDS: ReadonlySet<string> = new Set(["approved_record", "so
 /** A list that is not complete: its statement says "at least" (ADR-0041). */
 function listEndGap(noun: string): string { return `The list of ${noun} could not be read to its end, so more may exist.`; }
 /**
- * The writer runs in Ask's answer span; the audit records it as an `answer` call. It arranges its answer in blocks
- * (ADR-0051), a row's cells and an event's day among them: a longer reply, and longer again for an Ask again's writer
- * (ADR-0047), which also says what is different since.
+ * The writer runs in Ask's answer span; the audit records it as an `answer` call, with the answer role's allowance
+ * (`AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer`). Its answer in blocks has no count limit (ADR-0051), so the allowance is
+ * sized for a long answer, an Ask again's `since` included, and the response's byte bound decides what is released.
  */
-const WRITER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_answer", output_tokens: 2_000 });
-const SINCE_WRITER_CALL: AgenticModelCallV1 = Object.freeze({ ...WRITER_CALL, output_tokens: 2_500 });
+const WRITER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_answer", output_tokens: AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer });
 
 type Entry = AgenticEvidenceBundleItemV1;
 /** A statement's shape before its citations are known: prose, or a list statement's table, whose rows name the items they cite. */
@@ -365,12 +364,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         },
       };
       // The writer is also told how to arrange blocks (ADR-0051), and an Ask again's what to say is different since
-      // (ADR-0047), with a longer reply's room.
+      // (ADR-0047).
       // Only a writer whose follow-ups the request saves is told to draft them (ADR-0053); any other's prompt is unchanged.
       const writerPrompt = [options.answer_prompt, ANSWER_BLOCKS_PROMPT, ...(earlier === undefined ? [] : [ANSWER_SINCE_PROMPT]), ...(drafting ? [ANSWER_FOLLOW_UPS_PROMPT] : [])].join("\n\n");
-      const writerCall = earlier === undefined ? WRITER_CALL : SINCE_WRITER_CALL;
       const writerSchema = earlier === undefined ? (drafting ? answerBlocksFollowUpsSchema : answerBlocksSchema) : (drafting ? answerBlocksSinceFollowUpsSchema : answerBlocksSinceSchema);
-      const promptBudget = input.prompt_budget(writerPrompt, writerCall.output_tokens);
+      const promptBudget = input.prompt_budget(writerPrompt, WRITER_CALL.output_tokens);
       // Research's notes (ADR-0054) never take room from evidence: lists and evidence are admitted against the whole room,
       // and the notes take only what they leave.
       const contextBudget = Math.max(0, promptBudget - bytes(JSON.stringify({ ...answerContext, lists: [], evidence: [] })));
@@ -449,7 +447,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
 
       // A request for a follow-up (ADR-0053) runs the writer with no evidence too: it can draft one about nothing ECHO knows.
       const writerRuns = evidence.length > 0 || writerLists.some(list => list.count > 0) || (drafting && followUpRequested);
-      const written = !writerRuns ? null : await callRendererModelV1(input, writerCall, writerPrompt, {
+      const written = !writerRuns ? null : await callRendererModelV1(input, WRITER_CALL, writerPrompt, {
         ...answerContext,
         // Research's working notes are data, marked as research's own: never instructions, never the person's question and never evidence.
         // The writer assesses the original question against released text.

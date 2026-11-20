@@ -456,7 +456,7 @@ describe("agentic model gate", () => {
     const { gate, inputs } = harness({ replies: [{ a: 1 }] });
     await gate.call(STEP, "system", { q: 1 }, schema, () => 20_000);
     const input = inputs[0]!;
-    expect(input.max_output_tokens).toBe(1_500);
+    expect(input.max_output_tokens).toBe(8_000);
     expect(gate.stats().invocation_digests).toEqual([canonicalSha256({
       role: "step", model: input.model, system_prompt: input.system_prompt, user_prompt: input.user_prompt,
       schema: input.schema, max_output_tokens: input.max_output_tokens, timeout_ms: input.timeout_ms,

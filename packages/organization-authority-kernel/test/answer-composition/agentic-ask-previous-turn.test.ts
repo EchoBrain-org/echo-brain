@@ -207,7 +207,7 @@ describe("Ask again on the V8 Ask (ADR-0047)", () => {
     const [writer] = run.of("writer");
     expect(writer!.system_prompt.endsWith(`\n\n${ANSWER_SINCE_PROMPT}`)).toBe(true);
     expect(writer!.schema).toBe(answerBlocksSinceSchema);
-    expect(writer!.max_output_tokens).toBe(2_500);
+    expect(writer!.max_output_tokens).toBe(16_000);
     const prompt = JSON.parse(writer!.user_prompt) as Record<string, unknown>;
     // The earlier answer, on its day where the asker is, right after the question.
     expect(prompt.earlier).toEqual({ asked_on: "2026-10-14", statements: [{ text: "Priya Nair owns the THERM-482 fix, due Oct 25.", sources: ["Meeting dvt-gate"] }] });
@@ -244,7 +244,7 @@ describe("Ask again on the V8 Ask (ADR-0047)", () => {
     const { run, ask } = again({ lists: [], blocks: [{ block: "answer", sentences: [{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"] }] }], since: [{ text: "The owner changed to Dev Patel.", evidence: ["E1"] }], not_found: [] });
     const response = await ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN });
     expect(run.of("writer")[0]!.schema).toBe(answerBlocksSinceSchema);
-    expect(run.of("writer")[0]!.max_output_tokens).toBe(2_500);
+    expect(run.of("writer")[0]!.max_output_tokens).toBe(16_000);
     expect(response.parts[0]!.blocks).toEqual([{ kind: "answer", statements: [0] }]);
     expect(response.since).toEqual({ statements: [{ text: "The owner changed to Dev Patel.", citation_indexes: [0], private: false }] });
   });

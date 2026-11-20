@@ -20,6 +20,8 @@ function alone(input: {
   readonly bundle: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly remaining?: number;
   /** An Ask again (ADR-0047): the earlier answer, and the question the answer names, as Ask passes them together. */
   readonly earlier?: Parameters<typeof createAskRendererV1>[0]["earlier"]; readonly answers?: string;
+  /** The model's context window; without it, the kernel's default. */
+  readonly context_tokens?: number;
 }) {
   const trace: string[] = [];
   const { gate, inputs } = scriptedGate(input.replies, input.bundle.budget, trace);
@@ -30,7 +32,7 @@ function alone(input: {
   });
   const render = (question: string) => renderer.render({
     bundle: input.bundle, trigger_input: { question }, gate, remaining: () => input.remaining ?? 30_000, signal: new AbortController().signal,
-    prompt_budget: (system, output = AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer) => agenticAskContextBudgetBytesV1(undefined, system, output),
+    prompt_budget: (system, output = AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer) => agenticAskContextBudgetBytesV1(input.context_tokens, system, output),
     on_context: selected => { trace.push(`context:${selected.join(",")}`); },
   });
   return { render, trace, prompt: (index: number) => JSON.parse(inputs[index]!.user_prompt) as Record<string, any>, input: (index: number) => inputs[index]! };
@@ -1130,7 +1132,7 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
   it("gives every Ask's writer the block catalog beside the source catalog, its layout part and its schema, with a laid-out reply's allowance", async () => {
     const run = alone({ bundle: therm(), replies: [reply(ANSWER)] });
     await run.render("Can PVT start?");
-    expect(run.input(0)).toMatchObject({ system_prompt: `${ANSWER_PROMPT}\n\n${ANSWER_BLOCKS_PROMPT}`, schema: answerBlocksSchema, max_output_tokens: 2_000 });
+    expect(run.input(0)).toMatchObject({ system_prompt: `${ANSWER_PROMPT}\n\n${ANSWER_BLOCKS_PROMPT}`, schema: answerBlocksSchema, max_output_tokens: 16_000 });
     const keys = Object.keys(run.prompt(0));
     expect(keys.slice(keys.indexOf("source_catalog"), keys.indexOf("source_catalog") + 2)).toEqual(["source_catalog", "block_catalog"]);
     expect(run.prompt(0).block_catalog).toEqual(ANSWER_BLOCK_CATALOG);
@@ -1142,7 +1144,7 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
     expect(withoutBlocks).toEqual(inBlocks);
     const again = alone({ bundle: therm(), replies: [{ ...reply(ANSWER), since: [] }], earlier: { asked_on: "2026-10-05", statements: [{ text: "PVT waits on the soak.", sources: ["Soak log"] }] }, answers: "Can PVT start?" });
     await again.render("Can PVT start?");
-    expect(again.input(0)).toMatchObject({ system_prompt: `${ANSWER_PROMPT}\n\n${ANSWER_BLOCKS_PROMPT}\n\n${ANSWER_SINCE_PROMPT}`, schema: answerBlocksSinceSchema, max_output_tokens: 2_500 });
+    expect(again.input(0)).toMatchObject({ system_prompt: `${ANSWER_PROMPT}\n\n${ANSWER_BLOCKS_PROMPT}\n\n${ANSWER_SINCE_PROMPT}`, schema: answerBlocksSinceSchema, max_output_tokens: 16_000 });
   });
 
   it("arranges THERM's answer: the answer, a timeline oldest first, a card, numbered steps and a quote, each item a statement code wrote", async () => {
@@ -1251,7 +1253,8 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
       { block: "answer", sentences: [{ text: `${"𝔹".repeat(690)} 0.`, evidence: ["E1", "E2", "E3", "E4"] }] },
       { block: "table", columns, rows: Array.from({ length: 9 }, (_, index) => ({ cells: columns.map(column => `${column} ${"𝔸".repeat(70)} ${index + 1}`), evidence: [1, 2, 3, 4].map(n => `E${4 * (index + 1) + n}`) })) },
     );
-    const on = await alone({ bundle: research, replies: [big] }).render("What applies?");
+    // A production context window, so the writer is shown all forty records its rows cite.
+    const on = await alone({ bundle: research, replies: [big], context_tokens: 131_072 }).render("What applies?");
     const released = part(on);
     expect(released).not.toHaveProperty("gap_details");
     expect(released).toMatchObject({ status: "partial", gap: "Some evidence could not fit in this response." });
