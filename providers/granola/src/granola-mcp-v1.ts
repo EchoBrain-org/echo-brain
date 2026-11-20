@@ -40,14 +40,15 @@ const MAX_FOLDERS = 1_000;
 /** Notes, a summary or a description kept per meeting; longer ones keep their start and say where they were cut. */
 const MAX_TEXT = 256 * 1024;
 /**
- * Transcript kept per meeting: a full working day of talk. A longer one keeps its start and ends with TRANSCRIPT_CUT, so
+ * Transcript kept per meeting: a long day of talk. A longer one keeps its start and ends with TRANSCRIPT_CUT, so
  * extraction and the approver can see it was cut; the capture also records it.
  */
-const MAX_TRANSCRIPT = 2 * 1024 * 1024;
-/** Granola sends at most 80,000 transcript characters a call; 27 pages cover the 2 MiB kept. */
+/** Sized to the extraction model's 200k-token window (about 130k tokens, with room for prompt and reply); a cut is marked in the text. */
+const MAX_TRANSCRIPT = 512 * 1024;
+/** Granola sends at most 80,000 transcript characters a call; seven pages cover the 512 KiB kept. */
 const TRANSCRIPT_PAGE_CHARS = 80_000;
 const MAX_TRANSCRIPT_PAGES = Math.ceil(MAX_TRANSCRIPT / TRANSCRIPT_PAGE_CHARS) + 1;
-const TRANSCRIPT_CUT = '[ECHO cut this transcript here: the meeting ran longer than the 2 MiB of transcript ECHO keeps, and the rest was not captured.]';
+const TRANSCRIPT_CUT = '[ECHO cut this transcript here: the meeting ran longer than the 512 KiB of transcript ECHO keeps, and the rest was not captured.]';
 const noteCut = (what: string) => `[ECHO cut the ${what} here: past the 256 KiB ECHO keeps, the rest was not captured.]`;
 const TRANSCRIPT_PENDING = 'Granola is still processing this transcript';
 const MAX_TITLE = 1024;
@@ -112,7 +113,7 @@ function cutText(whole: string, maximum: number, marker: string): string {
   return `${(turn > 0 ? head.slice(0, turn) : line > 0 ? head.slice(0, line) : head).trimEnd()}\n\n${marker}`;
 }
 /**
- * A transcript's first whole turns (blank-line separated) within 2 MiB: a long meeting keeps its start rather than
+ * A transcript's first whole turns (blank-line separated) within 512 KiB: a long meeting keeps its start rather than
  * failing, and ends with TRANSCRIPT_CUT.
  */
 function transcriptText(value: unknown, cut: boolean): string {
@@ -400,7 +401,7 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
       return (await this.details([meetingId], signal))[0]!;
     },
     /**
-     * The transcript's first whole turns within 2 MiB, read page by page, or null when the meeting has none: Granola's
+     * The transcript's first whole turns within 512 KiB, read page by page, or null when the meeting has none: Granola's
      * `no_transcript` and `transcript_deleted` are final. A transcript still processing fails as pending, for a later try.
      */
     async transcript(meetingId: string, signal?: AbortSignal): Promise<Readonly<{ text: string; created_at: string; truncated?: true }> | null> {
