@@ -75,6 +75,19 @@ describe('Ask research tool contract v1', () => {
       .toEqual([['research_loop', { research_repeat_refusal: 1 }], ['research_output', { writer_fallback: 1 }]]);
   });
 
+  it('stops research that only gets refused, though each round words its refused read differently', async () => {
+    // Every round asks meetings for a date they do not record, in new words: each read is refused unsent, so no round
+    // produces anything, and two such rounds stop research.
+    const refused = (n: number) => step([{ tool: 'search', args: { source: 'meetings', query: `vendor change ${n}`, date_field: 'sent', since: '2026-10-18', until: '2026-10-18' } }]);
+    const port = desk();
+    const run = scripted([refused(1), refused(2), refused(3), refused(4), refused(5), step([{ tool: 'finish', args: {} }], 'not_found')]);
+    const events: CoreRuntimeObservationV1[] = [];
+    await observeCoreRuntimeV1('ask_request', () => ask(port, run.model).answer({ question }), { observer: event => { events.push(event); } }).catch(() => undefined);
+    expect(port.search).not.toHaveBeenCalled();
+    expect(run.steps()).toHaveLength(2);
+    expect(events.some(event => event.model_corrections?.research_no_progress_stop === 1)).toBe(true);
+  });
+
   it('reads a window with no date field on any of an item\'s dates where its source declares that, and shows which matched', async () => {
     const approvedYesterday = decision('canary', { approved: '2026-10-18T21:05:00.000Z' });
     const port = desk({ list: vi.fn(async () => result([approvedYesterday])) });

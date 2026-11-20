@@ -184,8 +184,9 @@ describe("research loop: open", () => {
     expect(open).not.toHaveBeenCalled();
     expect(h.prompt(0).opened).toEqual([expect.objectContaining({ id: "E1", text: therm.text })]);
     expect(h.prompt(1).last_results).toEqual([{ tool: "open", args: { id: "E1" }, note: "already open; its full text is in your scratchpad" }]);
-    // Re-opening adds nothing: the first open is new work, and two repeats of it stop research.
-    expect(h.generate).toHaveBeenCalledTimes(3);
+    // Re-opening adds nothing: an open answered from the scratchpad is no work, though its arguments are new, and two such
+    // steps stop research.
+    expect(h.generate).toHaveBeenCalledTimes(2);
     expect(view.stop).toEqual({ reason: "no_progress", completed: false });
   });
 

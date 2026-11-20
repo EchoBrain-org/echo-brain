@@ -556,6 +556,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const exhaustivelyEmptySources = new Set<EvidenceDeskSourceV2>();
   let retrievalProgress = 0;
   let evidenceNovelty = 0;
+  /**
+   * The results of reads the desk ran and finished (no refusal, error or availability notice). A read answered from
+   * memory or refused unsent is never here, so rewording it is not work.
+   */
+  const completedReads = new WeakSet<ToolResult>();
+  const completed = (value: ToolResult, finished: boolean): ToolResult => { if (finished) completedReads.add(value); return value; };
   /** List members no list had shown before (a question goal only): reading a list to its end is progress (ADR-0041). */
   let listNovelty = 0;
   /** Entries some list has shown: the same items listed again under other filters are not progress. */
@@ -707,10 +713,10 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       searchHits += found.length;
       sourcesLookedAt.add(source ?? '(all sources)');
       if (ask && result.unchecked !== undefined) uncheckedItems += result.unchecked.count;
-      return {
+      return completed({
         tool: "search", query, ...(source === undefined ? {} : { source }), results: found.map(entry => describe(entry)), ...(found.length === 0 ? { note: "no matches" } : {}), ...(result.truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }),
         ...(ask && linked.length > 0 ? { linked: linked.map(entry => describe(entry)) } : {}), ...(ask && result.unchecked !== undefined && result.unchecked.count > 0 ? { unchecked: result.unchecked } : {}),
-      };
+      }, result.notice === undefined);
     };
     return admit === undefined ? apply() : admit(apply);
   };
@@ -780,8 +786,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         .filter(item => item.text === undefined && item.id !== entry.item.id)
         .map(item => register(item));
       const linked = registerLinked(result);
-      return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(metadata.length === 0 ? {} : { results: metadata.map(value => describe(value)) }),
-        ...(ask && linked.length > 0 ? { linked: linked.map(value => describe(value)) } : {}), ...(truncated ? { truncated: true } : {}), ...(truncated && !cut ? { anchor_truncated: false } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
+      return completed({ tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(metadata.length === 0 ? {} : { results: metadata.map(value => describe(value)) }),
+        ...(ask && linked.length > 0 ? { linked: linked.map(value => describe(value)) } : {}), ...(truncated ? { truncated: true } : {}), ...(truncated && !cut ? { anchor_truncated: false } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }), ...(admitted.length === 0 ? { note: "no readable text" } : {}) },
+        result.notice === undefined);
     };
     return admit === undefined ? apply() : admit(apply);
   };
@@ -933,13 +940,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const allNotes = [...notes, ...(currentState.note === undefined ? [] : [currentState.note]), ...emptyNote, ...(!more && currentState.truncated ? ["more items exist than list can show; use search"] : []),
         ...(unverified && !currentState.truncated ? ["its last page was exactly full, so more items may exist than list can show; use search"] : [])];
       const filters = Object.keys(currentState.filter_applied).length === 0 ? undefined : { ...currentState.filter_applied };
-      return {
+      return completed({
         tool: "list", ...(ask && currentState.id !== undefined ? { list: currentState.id } : {}), source: request.source, ...(request.since === undefined ? {} : { since: request.since }),
         items: page.map(entry => describe(entry)), more, ...(allNotes.length === 0 ? {} : { note: allNotes.join("; ") }),
         ...(ask && result?.notice !== undefined ? { notice: result.notice } : {}), ...(ask && filters !== undefined ? { filters } : {}),
         ...(ask && currentState.unchecked !== undefined && currentState.unchecked.count > 0 ? { unchecked: currentState.unchecked } : {}),
         ...(ask && linked.length > 0 ? { linked: linked.map(entry => describe(entry)) } : {}),
-      };
+      }, (result !== undefined && result.notice === undefined) || page.length > 0);
     };
     return admit === undefined ? apply() : admit(apply);
   };
@@ -1480,12 +1487,14 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       // Once research has read some text, only new evidence is progress: new text, or, for a question goal, list members.
       const novelty = () => evidenceNovelty + listNovelty;
       const before = hadCitableEvidence ? novelty() : retrievalProgress;
-      // A read never made before is new work, whatever it returns: a search in other words, another source, a list page.
       const keys = reads.map(readKey);
-      const newWork = keys.some(key => !readsMade.has(key));
+      const unmade = keys.map(key => !readsMade.has(key));
       for (const key of keys) readsMade.add(key);
       report?.reads(reads.some(action => action.tool !== "open"));
       const raw = await runReads(reads);
+      // A read never made before is new work when the desk ran it to the end: a search in other words, another source, a
+      // list page. A read refused or answered unsent produces nothing, however its arguments change.
+      const newWork = raw.some((value, index) => unmade[index]! && completedReads.has(value));
       results = raw.map((value, index) => lastResult(reads[index]!, value));
       report?.reads_done();
       const actions = reads.map((action, index) => roundView(action.tool, action.args, results[index], raw[index]));
@@ -1502,7 +1511,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         break;
       }
       const progressed = (hadCitableEvidence ? novelty() : retrievalProgress) > before;
-      // Only repeated work is idle: a step whose every read was made before and that added nothing. Two in a row stop
+      // Only a step that produced nothing is idle: no new evidence and no new read the desk finished. Two in a row stop
       // research, since the planner is going round in circles; the writer answers from what was found.
       idleSteps = progressed || newWork ? 0 : idleSteps + 1;
       if (idleSteps >= 2) { researchStop = 'no_progress'; observeCoreModelCorrectionV1("research_no_progress_stop"); break; }
