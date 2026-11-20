@@ -318,10 +318,10 @@ function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): Per
 }
 
 /**
- * The Ask request's body bound: the Authority's own HTTP body bound, so a long question and the earlier turn it follows
- * up fit together. Other Person requests keep MAX_ORGANIZATION_API_BODY_BYTES.
+ * The Ask request's body bound: the Authority's own HTTP body bound (MAX_ORGANIZATION_API_BODY_BYTES), the only limit on
+ * a question and the earlier turn it follows up together.
  */
-export const PERSON_ANSWER_REQUEST_MAX_BYTES_V3 = 64 * 1024;
+export const PERSON_ANSWER_REQUEST_MAX_BYTES_V3 = MAX_ORGANIZATION_API_BODY_BYTES;
 
 function boundedRequest<T>(result: T, label: string, maximumBytes = MAX_ORGANIZATION_API_BODY_BYTES): T {
   if (canonicalJsonBytes(result).byteLength > maximumBytes) fail(`${label} exceeds JSON byte bound`);

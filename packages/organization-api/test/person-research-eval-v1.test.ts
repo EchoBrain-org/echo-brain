@@ -1,4 +1,5 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { MAX_ORGANIZATION_API_BODY_BYTES } from '../src/validation.js';
 import { describe, expect, it } from 'vitest';
 import {
   validatePersonResearchEvalReadRequestV1,
@@ -36,7 +37,7 @@ describe('research evaluation start request', () => {
       { schema_version: 1, trigger: 'check', input: { record: Number.NaN } },
       { schema_version: 1, trigger: 'check', input: { record: undefined } },
       { schema_version: 1, trigger: 'check', input: deep(9) },
-      { schema_version: 1, trigger: 'check', input: { text: 'x'.repeat(16 * 1024) } },
+      { schema_version: 1, trigger: 'check', input: { text: 'x'.repeat(MAX_ORGANIZATION_API_BODY_BYTES) } },
       { schema_version: 1, trigger: 'Check', input: {} },
       { schema_version: 1, trigger: 'drift-2', input: {} },
       { schema_version: 1, trigger: 'x'.repeat(65), input: {} },

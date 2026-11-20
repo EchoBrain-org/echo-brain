@@ -82,13 +82,14 @@ describe('the previous turn on the Ask request (ADR-0047)', () => {
 
   it('carries a long earlier question, and keeps the whole request within the Authority\'s 64 KiB body bound, not 16 KiB', () => {
     expect(PERSON_ANSWER_REQUEST_MAX_BYTES_V3).toBe(64 * 1024);
+    expect(MAX_ORGANIZATION_API_BODY_BYTES).toBe(PERSON_ANSWER_REQUEST_MAX_BYTES_V3);
     const long = `${'Who owns the thermal retest, '.repeat(130)}and when?\nAnd what is blocked?`;
     expect(validatePersonAnswerRequestV3(ask(previous({ question: long }))).previous!.question).toBe(long);
     const label = 'L'.repeat(1_000);
     const citations = Array.from({ length: 12 }, (_, index) => ({ ...ticket, citation: { ...ticket.citation, ticket_id: String(20_000 + index) }, label: `${index}${label}` }));
     const statements = Array.from({ length: 8 }, (_, index) => ({ text: `${index}${'s'.repeat(399)}`, citation_indexes: [index] }));
     const big = { ...ask(previous({ citations, statements, question: long })), question: '😀'.repeat(4_000) };
-    expect(canonicalJsonBytes(big).byteLength).toBeGreaterThan(MAX_ORGANIZATION_API_BODY_BYTES);
+    expect(canonicalJsonBytes(big).byteLength).toBeGreaterThan(16 * 1024);
     expect(validatePersonAnswerRequestV3(big).question).toBe(big.question);
   });
 });

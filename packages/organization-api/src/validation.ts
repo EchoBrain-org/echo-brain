@@ -7,8 +7,11 @@ import type {
   OrganizationAuthorityDescriptorResponseV1,
 } from './contracts.js';
 
-export const MAX_ORGANIZATION_API_BODY_BYTES = 16 * 1024;
-const MAX_ORGANIZATION_API_CURSOR_CHARACTERS = 512;
+/**
+ * A Person API request body's bound: what the Authority's HTTP server reads for one JSON request (its own body bound),
+ * the one bound on what a request may carry. A route with a larger transport (a note) names its own.
+ */
+export const MAX_ORGANIZATION_API_BODY_BYTES = 64 * 1024;
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const UUID_V4_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -240,9 +243,9 @@ export function assertEvidenceText(value: unknown, label: string, maximumBytes: 
   }
 }
 
-/** A page cursor: canonical unpadded base64url of at most MAX_ORGANIZATION_API_CURSOR_CHARACTERS. */
+/** A page cursor: canonical unpadded base64url. The Authority writes it; the request that carries it bounds its length. */
 export function pageCursor(value: unknown, label: string): string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_ORGANIZATION_API_CURSOR_CHARACTERS || !/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) fail(`${label} is invalid`);
+  if (typeof value !== 'string' || value.length === 0 || !/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) fail(`${label} is invalid`);
   const last = value.at(-1)!; const remainder = value.length % 4;
   if ((remainder === 2 && !/^[AQgw]$/.test(last)) || (remainder === 3 && !/^[AEIMQUYcgkosw048]$/.test(last))) fail(`${label} is invalid`);
   return value;
