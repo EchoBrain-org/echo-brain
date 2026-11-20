@@ -3612,10 +3612,13 @@ function keepChecks(checks: Readonly<Record<string, TurnCheck>>): void {
   if (Number.isFinite(next)) checksExpire = setTimeout(() => { checksExpire = null; keepChecks(state.timeline.checks); }, next - now);
 }
 
+/** What the person is told when a turn could not be kept on this computer. */
+export const TURN_NOT_SAVED = 'This answer could not be saved on this computer, so it will be gone after ECHO restarts.';
+
 /**
  * Keeps a turn, here and in the account's file: in place of the turn with its
- * id, or at the end. A put that fails is not retried: the turn shows until the
- * timeline is read again.
+ * id, or at the end. A put that fails is not retried, and says so: the turn
+ * shows until the timeline is read again.
  */
 function keepTurn(turn: TimelineTurn): void {
   const account = expect();
@@ -3623,7 +3626,11 @@ function keepTurn(turn: TimelineTurn): void {
   const turns = state.timeline.turns;
   const kept = turns.some(other => other.id === turn.id) ? turns.map(other => (other.id === turn.id ? turn : other)) : [...turns, turn];
   setTimeline({ ...state.timeline, turns: kept.slice(-MAX_TIMELINE_TURNS) });
-  void rpc('timeline.put', { expect: account, turn });
+  // Said only while the same account is signed in: another's page never hears of it.
+  const same = () => expect()?.membership_id === account.membership_id && expect()?.authority === account.authority;
+  void rpc('timeline.put', { expect: account, turn }).then(result => {
+    if (!result.ok && same()) set({ toast: TURN_NOT_SAVED });
+  }, () => { if (same()) set({ toast: TURN_NOT_SAVED }); });
 }
 
 /** A place's thread, as its checks are kept: Home's, or a project's by its id. */

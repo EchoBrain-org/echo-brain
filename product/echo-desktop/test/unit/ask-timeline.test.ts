@@ -319,6 +319,17 @@ describe('Ask on the timeline', () => {
     expect(byTestId(thread(store), 'question').map(text)).toEqual(['What now?', 'And next?']);
   });
 
+  it('says when a turn could not be saved on this computer, and still shows it', async () => {
+    const store = await startStore();
+    const timeline = rpc.getMockImplementation()!;
+    rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => (method === 'timeline.put' ? fail('invalid_output') : timeline(method, params)));
+    await store.ask('What now?');
+    await flush();
+    expect(store.getState().timeline.turns.map(each => each.question)).toEqual(['What now?']);
+    const { TURN_NOT_SAVED } = await import('../../src/renderer/store.js');
+    expect(store.getState().toast).toBe(TURN_NOT_SAVED);
+  });
+
   it.each([
     [1, ['Yesterday?']],
     [2, []],
