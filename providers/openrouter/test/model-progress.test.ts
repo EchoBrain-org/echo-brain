@@ -3,6 +3,7 @@ import type { StructuredGenerationInput } from '@echo-brain/organization-authori
 import { createOpenRouterStructuredGenerationAdapter } from '../src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js';
 import { messageUsageObserverV1 } from '../src/claude-research/message-usage.js';
 import { createClaudeAccountStructuredGenerationV1 } from '../src/claude-research/structured-generation.js';
+import { createClaudeResearchDriverV1 } from '../src/claude-research/driver.js';
 
 it('reports progress to the gate at each piece of OpenRouter model output, never at a keep-alive', async () => {
   const events = [': OPENROUTER PROCESSING', ': OPENROUTER PROCESSING', 'data: {"choices":[{"delta":{"reasoning":"think"}}]}',
@@ -16,6 +17,18 @@ it('reports progress to the gate at each piece of OpenRouter model output, never
   await expect(adapter.generate({ model: 'anthropic/claude-sonnet-5.5', system_prompt: 's', user_prompt: 'u', schema: { type: 'object' },
     max_output_tokens: 100, timeout_ms: 1_000, on_progress: () => { progress += 1; } })).resolves.toEqual({ ok: true });
   expect(progress).toBe(3);
+});
+
+it('passes research model output to the gate\'s per-request progress', async () => {
+  const model = 'anthropic/claude-sonnet-5.5';
+  let gateProgress = 0;
+  const driver = createClaudeResearchDriverV1({ model,
+    forward: async ({ res, alive }) => { for (let piece = 0; piece < 4; piece += 1) alive?.(); res.end('{}'); return {}; },
+    run: async input => { await (await fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model, messages: [] }) })).text(); },
+  });
+  await driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal, silence_ms: 60_000, call: async () => ({}),
+    model_request: async (_request, send) => (await send(new AbortController().signal, () => { gateProgress += 1; })).value });
+  expect(gateProgress).toBe(4);
 });
 
 it('counts only Anthropic events that carry model output as progress, never ping or message_start', () => {
