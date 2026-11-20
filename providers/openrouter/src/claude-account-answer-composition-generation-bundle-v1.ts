@@ -17,8 +17,8 @@ export function createClaudeAccountAnswerCompositionGenerationBundleV1(input: {
           generation_adapter_id: 'claude-account-research-writer-v1',
           planner_model: CLAUDE_ACCOUNT_MODEL_V1,
           answer_model: CLAUDE_ACCOUNT_MODEL_V1,
-          // How long one SDK session may send nothing: it returns nothing until its reply is whole, so ten minutes lets a
-          // long reply finish. Research and the writer have no clock of their own.
+          // How long one SDK session may receive nothing: each piece of a model reply streamed through the local transport
+          // resets it, so a long reply runs as long as it keeps arriving. Research and the writer have no clock of their own.
           timeout_ms: 600_000,
           context_tokens: CLAUDE_ACCOUNT_MODEL_CONTEXT_TOKENS_V1,
           max_output_tokens: CLAUDE_ACCOUNT_MODEL_MAX_OUTPUT_TOKENS_V1,

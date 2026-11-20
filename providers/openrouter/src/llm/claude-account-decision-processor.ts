@@ -1,6 +1,6 @@
 import { AdapterError, type AdapterConfig } from '@echo-brain/organization-processing/core';
 import { createLlmDecisionProcessor } from '@echo-brain/organization-processing/llm/llm-decision-processor';
-import { isRecord, providerStatusError, StructuredGenerationAttemptError, type LlmProviderClient, type StructuredGenerationFailureObservation } from '@echo-brain/organization-processing/llm/llm-provider';
+import { ExtractionInputTooLongError, isRecord, providerStatusError, StructuredGenerationAttemptError, type LlmProviderClient, type StructuredGenerationFailureObservation } from '@echo-brain/organization-processing/llm/llm-provider';
 import type { StructuredGenerationUsageV1 } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { annotateCoreRuntimeV1, observeCoreModelMetadataV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { CLAUDE_ACCOUNT_MODEL_V1, claudeAccountEnvironmentV1, type ClaudeAccountProfileV1 } from '../claude-research/account-profile.js';
@@ -34,6 +34,8 @@ function extractionFailure(error: unknown): AdapterError {
   if (error instanceof ClaudeSingleGenerationLimitErrorV1) return new AdapterError('permanently_rejected', 'Claude account extraction exceeded its single generation allowance', false);
   if (isRecord(error) && isRecord(error['diagnostic'])) {
     const diagnostic = error['diagnostic'];
+    // A prompt past the model's own context window: the one real limit on how long a meeting one call can read.
+    if (diagnostic['failure_class'] === 'adapter_http' && diagnostic['context_window'] === true) return new ExtractionInputTooLongError('Claude account');
     if (diagnostic['failure_class'] === 'adapter_http' && typeof diagnostic['http_status'] === 'number') {
       // A rate-limit (429) or overload/server refusal (5xx, including 529) arrives before any generation, so it is the
       // transient, unbilled kind that earns one automatic retry. Any other refusal waits for an operator.

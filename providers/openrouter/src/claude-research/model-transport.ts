@@ -3,18 +3,25 @@ import { request } from 'node:https';
 import { randomBytes } from 'node:crypto';
 import { messageUsageObserverV1, type ClaudeMessageMetadataV1 } from './message-usage.js';
 import { observeCoreModelMetadataV1, observeCoreRuntimeV1, annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import { isContextWindowRefusal } from '@echo-brain/organization-processing/llm/llm-provider';
 
 interface ClaudeModelForwardV1 {
   readonly req: IncomingMessage; readonly res: ServerResponse; readonly body: Buffer; readonly path: string; readonly signal: AbortSignal;
+  /** Called as each piece of the provider's reply arrives: liveness for a caller timing silence, never a clock. */
+  readonly alive?: () => void;
 }
 export type ClaudeModelForwarderV1 = (input: ClaudeModelForwardV1) => Promise<ClaudeMessageMetadataV1>;
 
 /** The SDK already received this HTTP response and owns its retry policy. The shared limiter still observes the failure. */
 export class ClaudeModelResponseErrorV1 extends Error {
   readonly diagnostic;
-  constructor(status: number) {
+  /**
+   * `contextWindow`: the provider refused a prompt past the model's own context window (its error message says so).
+   * Carried as a content-free flag, never the message itself.
+   */
+  constructor(status: number, contextWindow = false) {
     super('Research provider request failed');
-    this.diagnostic = { failure_class: 'adapter_http' as const, http_status: status };
+    this.diagnostic = { failure_class: 'adapter_http' as const, http_status: status, ...(contextWindow ? { context_window: true as const } : {}) };
   }
 }
 
@@ -64,12 +71,19 @@ function providerForwarderV1(options: {
       const upstream = request({ hostname: options.hostname, port: 443, method: 'POST', path: `${options.path_prefix}${input.path}`, headers, signal: input.signal }, reply => {
         annotateCoreRuntimeV1({ counts: { http_status: reply.statusCode ?? 0 } });
         const usage = messageUsageObserverV1(true);
-        reply.on('data', chunk => usage.write(chunk));
+        // A refusal's body is read only to tell a context-window refusal by its message; it never leaves this function.
+        const refusal: Buffer[] = [];
+        reply.on('data', chunk => { input.alive?.(); usage.write(chunk); if ((reply.statusCode ?? 502) >= 400) refusal.push(Buffer.from(chunk)); });
+        input.alive?.();
         input.res.writeHead(reply.statusCode ?? 502, { 'content-type': reply.headers['content-type'] ?? 'application/json' });
         reply.pipe(input.res);
         reply.on('end', () => {
           const status = reply.statusCode ?? 502;
-          if (status >= 400) reject(new ClaudeModelResponseErrorV1(status));
+          if (status >= 400) {
+            let body: unknown;
+            try { body = JSON.parse(Buffer.concat(refusal).toString('utf8')) as unknown; } catch { body = undefined; }
+            reject(new ClaudeModelResponseErrorV1(status, isContextWindowRefusal(status, body)));
+          }
           else resolve(usage.end());
         });
         reply.on('error', transportFailed);
@@ -91,6 +105,8 @@ export async function startClaudeModelTransportV1(input: {
   readonly signal: AbortSignal;
   readonly forward: ClaudeModelForwarderV1;
   readonly admit: (body: Buffer, operation: 'messages' | 'count_tokens', forward: (signal: AbortSignal) => Promise<ClaudeMessageMetadataV1>) => Promise<unknown>;
+  /** Called as each piece of a forwarded reply arrives (see ClaudeModelForwardV1). */
+  readonly alive?: () => void;
 }) {
   input.signal.throwIfAborted();
   const prefix = `/${randomBytes(24).toString('hex')}`, pending = new Set<AbortController>();
@@ -113,7 +129,7 @@ export async function startClaudeModelTransportV1(input: {
         const checked = AbortSignal.any([signal, admittedSignal]); checked.throwIfAborted();
         if (stopped) throw new Error('Research stopped');
         forwarded++;
-        return input.forward({ req, res, path: `${path}${url.search}`, body, signal: checked });
+        return input.forward({ req, res, path: `${path}${url.search}`, body, signal: checked, ...(input.alive === undefined ? {} : { alive: input.alive }) });
       });
     } catch (error) {
       // A provider refusal has already been delivered to the SDK. A retry must

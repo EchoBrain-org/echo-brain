@@ -23,15 +23,22 @@ export function createClaudeAccountStructuredGenerationV1(options: {
       if (input.model !== options.model) throw new Error('Unexpected native writer model');
       // Claude Code's max_tokens holds thinking and the answer together; the caller's allowance is the model's own maximum.
       const allowance = input.max_output_tokens;
-      // `timeout_ms` is the silence period: the session (one generation, or the SDK's own retry) sends nothing until its
-      // reply is whole, so a session silent past it is stalled.
+      // `timeout_ms` is a silence period, not a whole-session clock: the SDK streams each model reply through the local
+      // transport, and every piece that arrives resets it. A session that receives nothing for it is stalled.
       const stop = new AbortController();
-      const timeout = AbortSignal.timeout(input.timeout_ms);
+      const silence = new AbortController();
+      const timeout = silence.signal;
+      let silenceTimer: ReturnType<typeof setTimeout> | undefined;
+      const alive = (): void => {
+        clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(() => silence.abort(new DOMException('The native session sent nothing for the silence period', 'TimeoutError')), input.timeout_ms);
+      };
+      alive();
       const signal = AbortSignal.any([...(input.signal === undefined ? [] : [input.signal]), stop.signal, timeout]);
       let terminal: unknown;
       let providerFailure: unknown;
       let messages = 0;
-      const fence = await startClaudeModelTransportV1({ signal, forward: options.forward ?? claudeAccountForwarderV1(options.model),
+      const fence = await startClaudeModelTransportV1({ signal, alive, forward: options.forward ?? claudeAccountForwarderV1(options.model),
         admit: async (body, operation, forward) => {
           try {
             // Claim before awaiting admission, so concurrent SDK requests cannot share one attempt.
@@ -90,7 +97,7 @@ export function createClaudeAccountStructuredGenerationV1(options: {
           } });
         }
         throw error;
-      } finally { stop.abort(); fence.close(); }
+      } finally { clearTimeout(silenceTimer); stop.abort(); fence.close(); }
     },
   };
 }

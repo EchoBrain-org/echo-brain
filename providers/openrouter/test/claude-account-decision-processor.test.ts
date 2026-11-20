@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
-import { StructuredGenerationAttemptError } from '@echo-brain/organization-processing/llm/llm-provider';
+import { ExtractionInputTooLongError, StructuredGenerationAttemptError } from '@echo-brain/organization-processing/llm/llm-provider';
 import { createClaudeAccountDecisionProcessorBundleV1 } from '../src/claude-account-decision-processor-bundle-v1.js';
 import { claudeAccountDecisionProcessorConfigurationSha256V1, claudeAccountDecisionProcessorCredentialReferenceV1,
   CLAUDE_ACCOUNT_DECISION_PROCESSOR_RUNTIME_VERSION_V1, fixedClaudeAccountDecisionProcessorConfigV1 } from '../src/claude-account-decision-processor-config-v1.js';
@@ -119,6 +119,28 @@ it.each([
     run: async input => { await send(input); throw new ClaudeResearchResultErrorV1(); },
   });
   await expect(client.generateStructured(request)).rejects.toMatchObject({ code, unbilled, retryable: unbilled });
+});
+
+it('holds a meeting the provider refused as past the model\'s context window as input_too_long, never retried', async () => {
+  const client = createClaudeAccountLlmProviderClientV1({ account,
+    forward: async ({ res }) => { res.writeHead(400); res.end('{}'); throw new ClaudeModelResponseErrorV1(400, true); },
+    run: async input => { await send(input); throw new ClaudeResearchResultErrorV1(); },
+  });
+  const failure = await client.generateStructured(request).catch(error => error);
+  expect(failure).toBeInstanceOf(ExtractionInputTooLongError);
+  expect(failure).toMatchObject({ code: 'permanently_rejected', retryable: false });
+});
+
+it('keeps a session that keeps receiving its reply past the silence period, and stops one that goes silent', async () => {
+  // Pieces of the reply 30 ms apart for 150 ms, under a 50 ms silence period.
+  const client = createClaudeAccountLlmProviderClientV1({ account, request_timeout_ms: 50,
+    forward: async ({ res, alive }) => {
+      for (let piece = 0; piece < 5; piece += 1) { await new Promise(resolve => setTimeout(resolve, 30)); alive?.(); }
+      res.end('{}'); return { usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18, cached_input_tokens: null, reasoning_tokens: null }, finish_reason: 'end_turn' };
+    },
+    run: async input => { await send(input); return { signals: [] }; },
+  });
+  await expect(client.generateStructured(request)).resolves.toMatchObject({ content: '{"signals":[]}' });
 });
 
 it('holds a reply that stopped at the model\'s output limit as too long, never retried', async () => {
