@@ -1,3 +1,5 @@
+import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
+import { PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 
@@ -91,6 +93,32 @@ export function boundUtf8V1(value: string, bytes: number): string {
     size += next; text += point;
   }
   return text.normalize('NFC');
+}
+
+const RECEIPT_PLACEHOLDER = `sha256:${'0'.repeat(64)}`;
+/**
+ * The audited live source's envelope around a reader's items (ADR-0047): its flags, one receipt digest, its own list
+ * cursor and the longest notice it lets through (1 KiB).
+ */
+const LIVE_PAGE_ENVELOPE_BYTES = canonicalJsonBytes({ items: [], truncated: true, receipt_digests: [RECEIPT_PLACEHOLDER],
+  next_cursor: `live_cursor_${'0'.repeat(36)}_${Number.MAX_SAFE_INTEGER}`, notice: 'x'.repeat(1024), page_full: true, anchor_truncated: true }).byteLength;
+
+/**
+ * How many of `values`, from the first, fit one live evidence result: the transport bound on what one read may return
+ * (`PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1`), less the audited source's envelope. Each item is measured as that source
+ * sends it, with its release id and receipt. A reader releases these and pages or reports the rest; at least one item is
+ * always offered, so an item too large for any page fails at the boundary that owns the bound rather than looping.
+ */
+export function personLiveEvidencePageFitV1(values: readonly { readonly citation: { readonly kind: string } }[]): number {
+  let bytes = LIVE_PAGE_ENVELOPE_BYTES;
+  let count = 0;
+  for (const value of values) {
+    const { handle: _handle, ...shown } = value as { readonly handle?: unknown; readonly citation: { readonly kind: string } };
+    bytes += canonicalJsonBytes({ ...shown, id: `live_${'0'.repeat(64)}`, kind: value.citation.kind, receipt_sha256: RECEIPT_PLACEHOLDER }).byteLength + 1;
+    if (bytes > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1 && count > 0) break;
+    count += 1;
+  }
+  return count;
 }
 
 /** `operation` over each value, four at a time, results in order: bounded provider fan-out. */

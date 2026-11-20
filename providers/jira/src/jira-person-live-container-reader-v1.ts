@@ -8,8 +8,8 @@ import { JIRA_PROJECT_QUERY_MAX_BYTES_V1, type JiraCloudTransportV1 } from './ji
 import { parseJiraProject } from './jira-payload-v1.js';
 import { copyJiraBindingV1, JIRA_ID, JIRA_PERSON_PROVIDER_V1, jiraArray, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
 
-/** Projects one project search reads when a search looks for candidates. */
-const CANDIDATES_PAGE = 50;
+/** Jira's project search page: 50 projects (its default and the most the transport sends). */
+const PROJECT_PAGE = 50;
 
 
 /**
@@ -55,7 +55,7 @@ export async function createJiraPersonLiveContainerReaderV1(options: {
 
   return createPersonToolContainerReaderV1({
     provider: {
-      binding, tool: 'Jira', container: 'jira_project', noun: 'Jira project', failure: jiraFailure, fence,
+      binding, tool: 'Jira', container: 'jira_project', noun: 'Jira project', failure: jiraFailure, fence, page_max: PROJECT_PAGE,
       verify: async signal => (origin = await verification(signal)),
       permalink: (site, value) => `${site}/browse/${value.key}`,
       async page({ cursor, limit, signal }) {
@@ -68,8 +68,17 @@ export async function createJiraPersonLiveContainerReaderV1(options: {
       },
       async candidates({ probe, signal }) {
         // A keyword cut to what the transport admits matches every key or name the whole one does; the reader matches the whole query.
-        const { containers, left_out, last } = await search({ ...(probe === undefined ? {} : { query: boundUtf8V1(probe, JIRA_PROJECT_QUERY_MAX_BYTES_V1) }), maxResults: String(CANDIDATES_PAGE) }, CANDIDATES_PAGE, signal);
-        return { containers, left_out, more: !last };
+        // Every page of matching projects, to Jira's last: the reader then matches every word itself.
+        const found: PersonToolContainerV1[] = [];
+        let omitted = 0;
+        for (let startAt = 0; ;) {
+          const page = await search({ ...(probe === undefined ? {} : { query: boundUtf8V1(probe, JIRA_PROJECT_QUERY_MAX_BYTES_V1) }), startAt: String(startAt), maxResults: String(PROJECT_PAGE) }, PROJECT_PAGE, signal);
+          found.push(...page.containers);
+          omitted += page.left_out;
+          if (page.last) break;
+          startAt += page.rows;
+        }
+        return { containers: Object.freeze(found), left_out: omitted, more: false };
       },
       async exact(id, signal) {
         const value = project(await transport.request({ path: `${pathPrefix}/project/${id}`, signal }));

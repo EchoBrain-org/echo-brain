@@ -62,7 +62,7 @@ export function createJiraPersonConnectionV1(options: {
     },
     /**
      * The Ask source check's tickets (Ask timeline v1, C1; ADR-0047): the ids of those this person can read now, read in bulk
-     * with their own connection, at most 100 ids in two calls.
+     * with their own connection, 100 ids per call (Jira's bulk-fetch maximum).
      */
     readableTickets(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlySet<string>> {
       return readTickets<ReadonlySet<string>>(input, readJiraReadableTicketsV1, new Set());

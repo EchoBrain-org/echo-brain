@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
+import { PERSON_EVIDENCE_LABEL_MAX_BYTES_V1, type PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReleaseV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { createConfluenceCloudTransportV1 } from '../src/confluence-cloud-transport-v1.js';
@@ -83,16 +83,16 @@ describe('Confluence spaces as a tool container source (research tool contract v
     expect((await source.list({})).items[0]!.citation.permalink).toBe(`${ORIGIN}/wiki/spaces/~557058%3Aab-12`);
   });
 
-  it('finds a space by key, name or mapped ECHO project, and says when the spaces it looked through were cut short', async () => {
+  it('finds a space by key, name or mapped ECHO project, looking through every page of spaces', async () => {
     const f = fixture(); const source = await f.make();
     expect((await source.search({ query: 'Launchscope' })).items.map(item => item.label)).toEqual(['Engineering']);
     expect((await source.search({ query: 'ops space' })).items.map(item => item.label)).toEqual(['Operations']);
     expect((await source.search({ query: 'confluence spaces', limit: 2 })).items.map(item => item.label)).toEqual(['Echo Product', 'Engineering']);
     f.state.spaces = Array.from({ length: 1001 }, (_, index) => ({ id: String(1000 + index), key: `S${index}`, name: index === 1000 ? 'Far Away' : `Space ${index}` }));
     const far = await source.search({ query: 'far away' });
-    expect(far.items).toEqual([]);
-    expect(far.truncated).toBe(true);
-    expect(f.spaceLists().slice(-4).map(query => query.limit)).toEqual(['250', '250', '250', '250']);
+    expect(far.items.map(item => item.label)).toEqual(['Far Away']);
+    expect(far.truncated).toBe(false);
+    expect(f.spaceLists().slice(-5).map(query => query.limit)).toEqual(['250', '250', '250', '250', '250']);
   });
 
   it('lists a space whose CJK name fills the 1,024 UTF-16 code units a name may use, and leaves out one more', async () => {
@@ -103,7 +103,7 @@ describe('Confluence spaces as a tool container source (research tool contract v
     const listed = await source.list({});
     expect(listed.items.map(item => item.attributes)).toEqual([{ key: 'LONG', tool: 'Confluence' }]);
     expect(name.startsWith(listed.items[0]!.label)).toBe(true);
-    expect(Buffer.byteLength(listed.items[0]!.label, 'utf8')).toBeLessThanOrEqual(256);
+    expect(Buffer.byteLength(listed.items[0]!.label, 'utf8')).toBeLessThanOrEqual(PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
     expect(listed).toMatchObject({ notice: LEFT_OUT });
   });
 

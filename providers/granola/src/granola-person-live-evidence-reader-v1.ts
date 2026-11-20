@@ -1,24 +1,31 @@
 import { randomUUID } from 'node:crypto';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1, validatePersonPageCitationV1, type PersonPageCitationV1 } from '@echo-brain/organization-api';
+import { PERSON_EVIDENCE_LABEL_MAX_BYTES_V1, validatePersonPageCitationV1, type PersonPageCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1, PersonLiveEvidencePageV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { validateEvidenceDateFilterV1, matchesEvidenceDateV1, type EvidenceDateFilterV1 } from '@echo-brain/organization-authority-kernel/shared/temporal-query-v1';
 import type { PersonProviderAuthenticatedFetchV1 } from '@echo-brain/provider-runtime/person-provider-json-transport-v1';
+import { boundUtf8V1, personLiveEvidencePageFitV1 } from '@echo-brain/provider-runtime/person-provider-v1';
 import { createGranolaMcpV1, GRANOLA_PERSON_PROVIDER_V1, GRANOLA_ID_V1, type GranolaMeetingV1 } from './granola-mcp-v1.js';
 
 const fail: typeof GRANOLA_PERSON_PROVIDER_V1.failure = GRANOLA_PERSON_PROVIDER_V1.failure;
-// At most 2,400 UTF-8 bytes, including four-byte characters; the evidence contract allows 3 KiB.
+/**
+ * A released slice of notes, a summary or a transcript chunk, in characters: at most 2,400 UTF-8 bytes. Not a limit on
+ * what is read: every slice of a text is reachable, and an open continues from any slice it released.
+ */
 const SECTION = 600;
 const INDEX_NOTICE = 'Granola transcript search uses a live index that can lag. No matching passage does not prove a topic was never discussed.';
 const LEFT_OUT = 'Some Granola folders mapped to this project are not visible to your Granola account, so these results leave out their meetings.';
-const LIST_CUT = 'Your Granola account lists more than 1,000 folders and ECHO read the first 1,000; mapped folders not among them are left out of these results, with their meetings.';
 function notice(...parts: readonly (string | false)[]): { notice?: string } {
   const text = parts.filter(Boolean).join(' ');
   return text === '' ? {} : { notice: text };
 }
 type Value = PersonLiveEvidenceValueV1<PersonPageCitationV1>;
-type Cursor = { selection: string; folder: number; cursor?: string };
+/**
+ * A list's continuation: the mapped folder it reads and Granola's cursor in it, and the meetings already read that did
+ * not fit the last result, which come first.
+ */
+type Cursor = { selection: string; folder: number; cursor?: string; pending: readonly GranolaMeetingV1[]; full: boolean };
 function metadata(meeting: GranolaMeetingV1) {
   return { id: meeting.id, title: meeting.title, date: meeting.date, occurred: meeting.meeting_at ?? meeting.created_at ?? null };
 }
@@ -33,36 +40,19 @@ async function lagging<T>(read: Promise<T>): Promise<T | undefined> {
     throw error;
   }
 }
+/** Any positive limit: a read releases as many items as are asked for and one result carries. */
 function size(limit: number) {
-  if (!Number.isInteger(limit) || limit < 1 || limit > 50) fail('invalid_request');
-  return Math.min(limit, 20);
-}
-/** A search honours the limit it is asked for, up to the 50 one request allows, across passages, notes and summaries. */
-function searchSize(limit: number) {
-  if (!Number.isInteger(limit) || limit < 1 || limit > 50) fail('invalid_request');
+  if (!Number.isInteger(limit) || limit < 1) fail('invalid_request');
   return limit;
 }
-/** Meetings the mapped folders may hold, and continuation pages of 100 one folder may take to list them. */
-const MEMBERSHIP_MAX = 100_000;
-const MEMBERSHIP_PAGES_MAX = MEMBERSHIP_MAX / 100;
-/** Slices one transcript passage contributes, so one long chunk never crowds out other meetings' passages. */
-const SLICES_PER_PASSAGE = 2;
-/** Granola's largest transcript-search page. */
+/** How many of `values`, from the first, fit one result (the evidence response bound) within `maximum`. */
+function fitting(values: readonly Value[], maximum: number): number {
+  return Math.min(maximum, personLiveEvidencePageFitV1(values));
+}
+/** Granola's largest meeting page and transcript-search page, and the most meetings one transcript search may name. */
+const MEETING_PAGE_MAX = 100;
 const TRANSCRIPT_SEARCH_MAX = 20;
-/**
- * The search page's released bytes stay under the shared 64 KiB result bound with room for the wrapper's ids and
- * receipts; the rest is left out with `truncated`, never failing the page.
- */
-const SEARCH_RESULT_BYTES = PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1 - 8 * 1024;
-const ITEM_OVERHEAD_BYTES = 256;
-/**
- * Provider calls one request may make for search, list and open, and for all calls including the connection checks and
- * revalidation that fence every release: the first ends a read with what it found and BUDGET_NOTICE, the second stops a
- * runaway loop.
- */
-const MAX_CONTENT_CALLS = 2_400;
-const MAX_CALLS = 24_000;
-const BUDGET_NOTICE = 'This research run has made as many Granola reads as one run may; Granola results past them were left out.';
+const TRANSCRIPT_SEARCH_MEETINGS_MAX = 100;
 
 /** Request-memory only. Raw notes and transcripts remain in Granola; receipts contain coordinates and digests. */
 export async function createGranolaPersonLiveEvidenceReaderV1(options: {
@@ -70,53 +60,36 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
 }): Promise<PersonLiveEvidenceReaderV1<PersonPageCitationV1>> {
   const binding = GRANOLA_PERSON_PROVIDER_V1.copyBinding(options.transport.binding);
   const folders = options.folder_ids === undefined ? undefined : [...options.folder_ids];
-  if (folders !== undefined && (folders.length < 1 || folders.length > 20 || folders.some(id => !GRANOLA_ID_V1.test(id)))) fail('invalid_request');
-  let calls = 0, contentCalls = 0;
-  /** Set once the content budget ran out: a search, list or open then ends with what it found and BUDGET_NOTICE. */
-  let spent = false;
+  if (folders !== undefined && (folders.length < 1 || folders.some(id => !GRANOLA_ID_V1.test(id)))) fail('invalid_request');
   const now = new Date().toISOString();
-  const counted = (content: boolean) => createGranolaMcpV1({ binding, async fetch(url, init) {
+  /** Search, list and open reads, and the connection checks and revalidation that fence them: no count of calls. */
+  const api = createGranolaMcpV1({ binding, async fetch(url, init) {
     options.signal?.throwIfAborted();
-    if (content && ++contentCalls > MAX_CONTENT_CALLS) spent = true;
-    if (++calls > MAX_CALLS || (content && spent)) fail('unavailable');
     return options.transport.fetch(url, init);
   } });
-  /** Search, list and open reads. */
-  const api = counted(true);
-  /** Connection checks and revalidation, which fence every release and so still run once the content budget is spent. */
-  const fences = counted(false);
-  /** A read that ran out of the content budget: nothing more from it, said so. */
-  async function budgeted(signal: AbortSignal | undefined, operation: () => Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>>): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
-    try { return await operation(); } catch (error) {
-      signal?.throwIfAborted();
-      if (spent) return { items: [], truncated: true, notice: BUDGET_NOTICE };
-      throw error;
-    }
-  }
+  const fences = api;
   const issued = new Map<string, Value>(), handles = new Map<string, Value>(), cursors = new Map<string, Cursor>();
   // Project members can see different Granola folders: the reader works over the mapped folders this asker sees.
   let shown = folders;
-  /** Granola listed more folders than one listing reads, so a mapped folder left out may be past them rather than hidden. */
-  let listCut = false;
   async function verify(signal?: AbortSignal, initial = false) {
     const account = await fences.account(signal);
     if (account.workspace_id !== binding.external_scope_id || account.email !== binding.external_subject_id) fail('stale_access_state');
     if (folders !== undefined) {
-      const listed = await fences.folderList(signal), before = shown!;
-      const accessible = new Set(listed.folders.map(folder => folder.id));
+      const listed = await fences.folders(signal), before = shown!;
+      const accessible = new Set(listed.map(folder => folder.id));
       shown = folders.filter(id => accessible.has(id));
-      listCut = listed.truncated;
       // Results read from a folder that has since gone out of sight are not released.
       if (!initial && before.some(id => !accessible.has(id))) fail('unauthorized');
     }
   }
   await verify(options.signal, true);
-  const leftOut = () => shown !== undefined && shown.length < folders!.length && (listCut ? LIST_CUT : LEFT_OUT);
+  const leftOut = () => shown !== undefined && shown.length < folders!.length && LEFT_OUT;
   function remember(meeting: GranolaMeetingV1, section: string, version: string, text?: string): Value {
     const citation = validatePersonPageCitationV1({ kind: 'page', tool_id: 'granola', external_scope_id: binding.external_scope_id,
       page_id: meeting.id, section_id: section, version, permalink: meeting.url, text_sha256: sha256Digest(text ?? '') });
     const handle = randomUUID();
-    const value: Value = Object.freeze({ citation, handle, label: meeting.title ?? 'Untitled meeting', visibility: 'only_me',
+    // The meeting's title within the evidence label bound.
+    const value: Value = Object.freeze({ citation, handle, label: boundUtf8V1(meeting.title ?? 'Untitled meeting', PERSON_EVIDENCE_LABEL_MAX_BYTES_V1), visibility: 'only_me',
       ...(text === undefined ? {} : { text }), dates: dates(meeting),
       ...(dates(meeting).occurred === undefined ? {} : { occurred_at: dates(meeting).occurred!.slice(0, 10), date_kind: 'occurred' as const }),
     });
@@ -144,13 +117,13 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
     for (const folder_id of shown) {
       const seen = new Set<string>();
       for (let cursor: string | undefined;;) {
-        const page = await via.search({ folder_id, from_date: '1970-01-01', to_date: now, limit: 100, ...(cursor === undefined ? {} : { cursor }), signal });
+        const page = await via.search({ folder_id, from_date: '1970-01-01', to_date: now, limit: MEETING_PAGE_MAX, ...(cursor === undefined ? {} : { cursor }), signal });
         page.meetings.forEach(meeting => ids.add(meeting.id));
-        // A bounded read must never assert that a partial folder is its full contents. The bounds hold years of a
-        // busy team's meetings and stop a provider that pages forever.
-        if (ids.size > MEMBERSHIP_MAX || page.incomplete) fail('unavailable');
+        // A read must never assert that a partial folder is its full contents: it follows Granola's pages to the end. A
+        // cursor that comes back is a cycle, a provider fault, and fails.
+        if (page.incomplete) fail('unavailable');
         if (page.next_cursor === null) break;
-        if (seen.has(page.next_cursor) || seen.size >= MEMBERSHIP_PAGES_MAX) fail('invalid_output');
+        if (seen.has(page.next_cursor)) fail('invalid_output');
         seen.add(page.next_cursor); cursor = page.next_cursor;
       }
     }
@@ -224,14 +197,17 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
       const version = chunk?.version ?? canonicalSha256({ metadata: metadata(meeting), text });
       const items = sections(meeting, kind === 'transcript' ? `transcript:${raw}` : kind!, text, version, offset);
       await verify(signal);
-      return { items: items.slice(0, size(limit)), truncated: items.length > size(limit), anchor_truncated: items.length > size(limit) };
+      // As many slices as were asked for and one result carries; the last one shown opens the rest.
+      const shownCount = fitting(items, size(limit));
+      return { items: items.slice(0, shownCount), truncated: items.length > shownCount, anchor_truncated: items.length > shownCount };
     }
     const meeting = await api.meeting(ref.page_id, signal), items: Value[] = [];
     for (const [kind, text] of [['notes', meeting.private_notes ?? ''], ['summary', meeting.summary ?? '']] as const) {
       items.push(...sections(meeting, kind, text, canonicalSha256({ metadata: metadata(meeting), text })));
     }
     await verify(signal);
-    return { items: items.slice(0, size(limit)), truncated: items.length > size(limit), anchor_truncated: items.length > size(limit),
+    const shownCount = fitting(items, size(limit));
+    return { items: items.slice(0, shownCount), truncated: items.length > shownCount, anchor_truncated: items.length > shownCount,
       notice: 'These are meeting notes and summaries. Search the transcript for what was said, decided, or assigned.' };
   }
   return Object.freeze<PersonLiveEvidenceReaderV1<PersonPageCitationV1>>({ binding,
@@ -241,96 +217,105 @@ export async function createGranolaPersonLiveEvidenceReaderV1(options: {
       return { citation: ref, tool_id: 'granola', external_scope_id: binding.external_scope_id, coordinates: { object_id: `${ref.page_id}:${ref.section_id}:${ref.version}` } };
     },
     async list(input) {
-      const limit = size(input.limit), window = range(input);
+      const wanted = size(input.limit), limit = Math.min(wanted, MEETING_PAGE_MAX), window = range(input);
       if (input.container !== undefined && (!GRANOLA_ID_V1.test(input.container) || (folders !== undefined && !folders.includes(input.container)))) fail('invalid_request');
       const selected = input.container === undefined ? shown ?? [undefined] : shown === undefined || shown.includes(input.container) ? [input.container] : [];
       if (selected.length === 0) { await verify(input.signal); return { items: [], truncated: false, page_full: false, ...notice(LEFT_OUT) }; }
       const selection = canonicalSha256({ selected: selected.map(id => id ?? null), window, limit, date_field: input.date_field ?? null, time_zone: input.time_zone ?? null });
       const previous = input.cursor === undefined ? undefined : cursors.get(input.cursor);
       if (input.cursor !== undefined && (previous === undefined || previous.selection !== selection)) fail('invalid_request');
-      const index = previous?.folder ?? 0, folder_id = selected[index];
-      return budgeted(input.signal, async () => {
-        const page = await api.search({ ...window, limit, ...(folder_id === undefined ? {} : { folder_id }), ...(previous?.cursor === undefined ? {} : { cursor: previous.cursor }), signal: input.signal });
-        if (page.next_cursor !== null && page.next_cursor === previous?.cursor) fail('invalid_output');
-        let next_cursor: string | undefined;
-        if (page.next_cursor !== null || index + 1 < selected.length) {
-          next_cursor = randomUUID(); cursors.set(next_cursor, { selection, folder: page.next_cursor === null ? index + 1 : index, ...(page.next_cursor === null ? {} : { cursor: page.next_cursor }) });
+      return (async () => {
+        // Meetings read for the last result that did not fit come first, with no new provider read.
+        let rows: readonly GranolaMeetingV1[], folder: number, after: string | undefined, full: boolean, incomplete = false;
+        if (previous !== undefined && previous.pending.length > 0) ({ pending: rows, folder, cursor: after, full } = previous);
+        else {
+          const index = previous?.folder ?? 0, folder_id = selected[index];
+          const page = await api.search({ ...window, limit, ...(folder_id === undefined ? {} : { folder_id }), ...(previous?.cursor === undefined ? {} : { cursor: previous.cursor }), signal: input.signal });
+          if (page.next_cursor !== null && page.next_cursor === previous?.cursor) fail('invalid_output');
+          rows = page.meetings.filter(meeting => matches(meeting, input));
+          folder = page.next_cursor === null ? index + 1 : index;
+          after = page.next_cursor ?? undefined;
+          full = page.meetings.length === limit;
+          incomplete = page.incomplete === true;
         }
         await verify(input.signal);
-        return { items: page.meetings.filter(meeting => matches(meeting, input)).map(inventory), truncated: next_cursor !== undefined || page.incomplete === true,
-          ...(next_cursor === undefined ? {} : { next_cursor }), page_full: page.meetings.length === limit,
-          ...notice(page.incomplete === true && 'Granola could not finish this listing. Narrow the date range.', leftOut()) };
-      });
+        // As many as were asked for and one result carries; the rest wait in the cursor.
+        const values = rows.map(inventory);
+        const shownCount = fitting(values, wanted);
+        const pending = Object.freeze(rows.slice(shownCount));
+        let next_cursor: string | undefined;
+        if (pending.length > 0 || after !== undefined || folder < selected.length) {
+          next_cursor = randomUUID(); cursors.set(next_cursor, { selection, folder, ...(after === undefined ? {} : { cursor: after }), pending, full });
+        }
+        return { items: values.slice(0, shownCount), truncated: next_cursor !== undefined || incomplete,
+          ...(next_cursor === undefined ? {} : { next_cursor }), page_full: next_cursor === undefined && full,
+          ...notice(incomplete && 'Granola could not finish this listing. Narrow the date range.', leftOut()) };
+      })();
     },
     async search(input) {
-      const limit = searchSize(input.limit), window = range(input), items: Value[] = [], passages: Value[] = [];
+      const limit = size(input.limit), window = range(input), items: Value[] = [];
+      /** Each transcript passage's matching slices, kept apart so they can be taken in turns. */
+      const passages: { readonly meeting: GranolaMeetingV1; readonly chunk: number; readonly version: string; readonly slices: readonly { readonly offset: number; readonly text: string }[] }[] = [];
       const terms = input.query.toLowerCase().split(/\s+/u).filter(Boolean);
-      let truncated = false, transcriptLost: 'unauthorized' | 'unavailable' | undefined, budget = false;
-      try {
-        for (const folder_id of shown ?? [undefined]) {
-          const page = await api.search({ ...window, query: input.query, limit, ...(folder_id === undefined ? {} : { folder_id }), signal: input.signal });
-          items.push(...page.meetings.filter(meeting => matches(meeting, input)).map(inventory));
-          truncated ||= page.next_cursor !== null || page.incomplete === true;
+      let truncated = false, transcriptLost: 'unauthorized' | 'unavailable' | undefined;
+      for (const folder_id of shown ?? [undefined]) {
+        const page = await api.search({ ...window, query: input.query, limit: Math.min(limit, MEETING_PAGE_MAX), ...(folder_id === undefined ? {} : { folder_id }), signal: input.signal });
+        items.push(...page.meetings.filter(meeting => matches(meeting, input)).map(inventory));
+        truncated ||= page.next_cursor !== null || page.incomplete === true;
+      }
+      const allowed = await members(input.signal), ids = allowed === undefined ? undefined : [...allowed];
+      for (let offset = 0; ids === undefined ? offset === 0 : offset < ids.length; offset += TRANSCRIPT_SEARCH_MEETINGS_MAX) {
+        if (passages.length >= limit) { truncated = true; break; }
+        let page;
+        try { page = await api.searchTranscripts({ ...window, query: input.query, limit: Math.min(limit, TRANSCRIPT_SEARCH_MAX), ...(ids === undefined ? {} : { meeting_ids: ids.slice(offset, offset + TRANSCRIPT_SEARCH_MEETINGS_MAX) }), signal: input.signal }); }
+        catch (error) {
+          // Notes and transcripts can have different provider permissions, and Granola reports a failed tool call as an
+          // MCP error, not an HTTP status. Either way the notes results stand; transcript search is never retried through another tool.
+          if (!(error instanceof AuthorityOperationError) || !['unauthorized', 'unavailable', 'rate_limited'].includes(error.code)) throw error;
+          transcriptLost = error.code === 'unauthorized' ? 'unauthorized' : 'unavailable'; truncated = true; break;
         }
-        const allowed = await members(input.signal), ids = allowed === undefined ? undefined : [...allowed];
-        for (let offset = 0; ids === undefined ? offset === 0 : offset < ids.length; offset += 100) {
+        truncated ||= page.next_cursor !== null || page.incomplete;
+        for (const match of page.meetings) {
           if (passages.length >= limit) { truncated = true; break; }
-          let page;
-          try { page = await api.searchTranscripts({ ...window, query: input.query, limit: Math.min(limit, TRANSCRIPT_SEARCH_MAX), ...(ids === undefined ? {} : { meeting_ids: ids.slice(offset, offset + 100) }), signal: input.signal }); }
-          catch (error) {
-            if (spent) throw error;
-            // Notes and transcripts can have different provider permissions, and Granola reports a failed tool call as an
-            // MCP error, not an HTTP status. Either way the notes results stand; transcript search is never retried through another tool.
-            if (!(error instanceof AuthorityOperationError) || !['unauthorized', 'unavailable', 'rate_limited'].includes(error.code)) throw error;
-            transcriptLost = error.code === 'unauthorized' ? 'unauthorized' : 'unavailable'; truncated = true; break;
-          }
-          truncated ||= page.next_cursor !== null || page.incomplete;
-          for (const match of page.meetings) {
+          scope(match.meeting_id, allowed);
+          const meeting = await lagging(api.meeting(match.meeting_id, input.signal));
+          if (meeting === undefined) { truncated = true; continue; }
+          if (!matches(meeting, input)) continue;
+          for (const passage of match.passages) {
             if (passages.length >= limit) { truncated = true; break; }
-            scope(match.meeting_id, allowed);
-            const meeting = await lagging(api.meeting(match.meeting_id, input.signal));
-            if (meeting === undefined) { truncated = true; continue; }
-            if (!matches(meeting, input)) continue;
-            for (const passage of match.passages) {
-              if (passages.length >= limit) { truncated = true; break; }
-              const chunk = await lagging(api.chunk(meeting.id, passage.chunk_id, match.version, input.signal));
-              if (chunk === undefined) { truncated = true; continue; }
-              const found = matchingSlices(chunk.text, terms);
-              const kept = found.slice(0, Math.min(SLICES_PER_PASSAGE, limit - passages.length));
-              passages.push(...kept.map(slice => remember(meeting, `transcript:${passage.chunk_id}:${slice.offset}`, chunk.version, slice.text)));
-              truncated ||= found.length > kept.length;
-            }
+            const chunk = await lagging(api.chunk(meeting.id, passage.chunk_id, match.version, input.signal));
+            if (chunk === undefined) { truncated = true; continue; }
+            passages.push({ meeting, chunk: passage.chunk_id, version: chunk.version, slices: matchingSlices(chunk.text, terms) });
           }
         }
-      } catch (error) {
-        input.signal?.throwIfAborted();
-        if (!spent) throw error;
-        budget = true; truncated = true;
+      }
+      // Every matching slice of every passage, taken in turns (each passage's first, then each one's second, ...), so one
+      // long chunk never crowds out other meetings' passages.
+      const slices: Value[] = [];
+      for (let turn = 0; passages.some(passage => turn < passage.slices.length); turn += 1) {
+        for (const passage of passages) {
+          const slice = passage.slices[turn];
+          if (slice !== undefined) slices.push(remember(passage.meeting, `transcript:${passage.chunk}:${slice.offset}`, passage.version, slice.text));
+        }
       }
       // Passages and notes or summary hits alternate, so neither crowds the other out of the limit.
       const merged = new Map<string, Value>();
-      for (let index = 0; index < Math.max(passages.length, items.length); index += 1) {
-        for (const value of [passages[index], items[index]]) if (value !== undefined) merged.set(canonicalSha256(value.citation), merged.get(canonicalSha256(value.citation)) ?? value);
+      for (let index = 0; index < Math.max(slices.length, items.length); index += 1) {
+        for (const value of [slices[index], items[index]]) if (value !== undefined) merged.set(canonicalSha256(value.citation), merged.get(canonicalSha256(value.citation)) ?? value);
       }
-      const released: Value[] = [];
-      let bytes = 0;
-      for (const value of [...merged.values()].slice(0, limit)) {
-        const { handle: _handle, ...shown } = value;
-        bytes += Buffer.byteLength(JSON.stringify(shown), 'utf8') + ITEM_OVERHEAD_BYTES;
-        if (bytes > SEARCH_RESULT_BYTES) break;
-        released.push(value);
-      }
+      // As many as were asked for and one result carries; the rest are reported with `truncated`.
+      const all = [...merged.values()];
+      const released = all.slice(0, fitting(all, limit));
       await verify(input.signal);
-      return { items: released, truncated: truncated || merged.size > released.length,
+      return { items: released, truncated: truncated || all.length > released.length,
         ...notice(leftOut(), transcriptLost === 'unauthorized' ? 'Granola did not allow transcript search. These results cover accessible notes only; they cannot establish what was said in a transcript.'
-          : transcriptLost === 'unavailable' ? 'Granola could not complete transcript search. These results cover notes only; they cannot establish what was said in a transcript.' : INDEX_NOTICE,
-        budget && BUDGET_NOTICE) };
+          : transcriptLost === 'unavailable' ? 'Granola could not complete transcript search. These results cover notes only; they cannot establish what was said in a transcript.' : INDEX_NOTICE) };
     },
     async open(input) {
       const item = handles.get(input.handle); if (item === undefined) fail('invalid_request');
-      return budgeted(input.signal, () => open(item.citation, input.limit, input.signal));
+      return open(item.citation, input.limit, input.signal);
     },
-    async openCitation(input) { const ref = citation(input.citation); return budgeted(input.signal, () => open(ref, input.limit, input.signal)); },
+    async openCitation(input) { const ref = citation(input.citation); return open(ref, input.limit, input.signal); },
     async revalidate(input) {
       const allowed = input.citations.length === 0 ? undefined : await members(input.signal, true, fences), reads = new Map<string, Promise<unknown>>();
       for (const value of input.citations) {

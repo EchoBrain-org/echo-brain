@@ -1,4 +1,4 @@
-import { boundUtf8V1, type PersonProviderV1 } from './person-provider-v1.js';
+import type { PersonProviderV1 } from './person-provider-v1.js';
 
 const BLOCKS = new Set(['doc', 'paragraph', 'heading', 'blockquote', 'bulletList', 'orderedList', 'listItem', 'taskList', 'codeBlock', 'table', 'tableRow', 'tableCell', 'tableHeader', 'panel', 'expand', 'nestedExpand', 'layoutSection', 'layoutColumn']);
 const OMITTED = '[Unsupported embedded content omitted.]';
@@ -7,29 +7,19 @@ type Validation = Pick<PersonProviderV1, 'record' | 'array' | 'string' | 'failur
 /**
  * Native Atlassian Document Format only. No HTML parsing, media hydration or link fetching.
  *
- * The byte, node and depth bounds protect the host from a hostile document. With `oversize: 'reject'` (the default) a
- * document past one is refused; with `oversize: 'cut'` the text keeps what came before the bound and `cut` says the rest
- * was left out, so the caller can say so.
+ * A document's size and node count are bounded by the provider response that carried it; the text has no bound of its
+ * own. Its nesting is bounded only by the host's call stack: a subtree nested deeper than the stack can walk is left out
+ * and `cut` says so, so the caller can say what it left out.
  */
 export function normalizeAtlassianDocumentTextV1(value: unknown, provider: Validation, options: {
   readonly unsupported?: 'reject' | 'omit';
-  readonly oversize?: 'reject' | 'cut';
-  readonly maximum_bytes?: number;
-  readonly maximum_nodes?: number;
-  readonly maximum_depth?: number;
 } = {}): Readonly<{ text: string; incomplete: boolean; cut: boolean }> {
   const { record, array, string } = provider;
   const failure: Validation['failure'] = provider.failure;
-  const maximum = options.maximum_bytes ?? 256 * 1024;
-  const nodeLimit = options.maximum_nodes ?? 4096;
-  const depthLimit = options.maximum_depth ?? 32;
-  const cutting = options.oversize === 'cut';
-  // When cutting, a long child list is read and its nodes past the bound are skipped; the response bound already caps its size.
-  const childLimit = cutting ? Number.MAX_SAFE_INTEGER : nodeLimit;
+  /** A field or list is as long as the provider response that carried it; the response bound is its only limit. */
+  const CARRIED = Number.MAX_SAFE_INTEGER;
   const doc = record(value);
   if (doc.type !== 'doc' || doc.version !== 1) failure('invalid_output');
-  let nodes = 0;
-  let bytes = 0;
   let incomplete = false;
   let cut = false;
   function unsupported(): string {
@@ -39,25 +29,24 @@ export function normalizeAtlassianDocumentTextV1(value: unknown, provider: Valid
   }
   function text(value: unknown): string {
     if (typeof value !== 'string' || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\p{Cs}]/u.test(value)) failure('invalid_output');
-    const size = Buffer.byteLength(value, 'utf8');
-    if (bytes + size <= maximum) { bytes += size; return value; }
-    if (!cutting) failure('invalid_output');
-    cut = true;
-    const kept = bytes >= maximum ? '' : boundUtf8V1(value, maximum - bytes);
-    bytes = maximum;
-    return kept;
+    return value;
   }
   function walk(value: unknown, depth: number): string {
-    if (++nodes > nodeLimit || depth > depthLimit) {
-      if (!cutting) failure('invalid_output');
+    try {
+      return node(value, depth);
+    } catch (error) {
+      // The host's call stack ran out: this subtree is nested deeper than it can walk.
+      if (!(error instanceof RangeError)) throw error;
       cut = true;
       return '';
     }
+  }
+  function node(value: unknown, depth: number): string {
     const node = record(value);
-    const type = string(node.type, 64);
+    const type = string(node.type, CARRIED);
     if (type === 'text') {
       if (node.content !== undefined) failure('invalid_output');
-      if (node.marks !== undefined) for (const mark of array(node.marks, 32)) string(record(mark).type, 64);
+      if (node.marks !== undefined) for (const mark of array(node.marks, CARRIED)) string(record(mark).type, CARRIED);
       return text(node.text);
     }
     if (type === 'hardBreak' || type === 'rule') return '\n';
@@ -65,16 +54,16 @@ export function normalizeAtlassianDocumentTextV1(value: unknown, provider: Valid
       const attrs = record(node.attrs);
       if (node.content !== undefined) failure('invalid_output');
       if (attrs.data !== undefined) return unsupported();
-      return text(string(attrs.url, 8192));
+      return text(string(attrs.url, CARRIED));
     }
     if (type === 'mention' || type === 'emoji' || type === 'status') {
       const attrs = record(node.attrs);
       const label = attrs.text ?? (type === 'emoji' ? attrs.shortName : undefined);
       if (label === undefined) return unsupported();
-      return text(string(label, 512));
+      return text(string(label, CARRIED));
     }
     if (type === 'date') {
-      const timestamp = string(record(node.attrs).timestamp, 32, /^-?\d+$/);
+      const timestamp = string(record(node.attrs).timestamp, CARRIED, /^-?\d+$/);
       const date = new Date(Number(timestamp));
       if (!Number.isFinite(date.getTime())) failure('invalid_output');
       return text(date.toISOString().slice(0, 10));
@@ -82,30 +71,25 @@ export function normalizeAtlassianDocumentTextV1(value: unknown, provider: Valid
     if (type === 'taskItem') {
       const state = record(node.attrs).state;
       if (state !== 'TODO' && state !== 'DONE') failure('invalid_output');
-      return `[${state === 'DONE' ? 'x' : ' '}] ${array(node.content ?? [], childLimit).map(child => walk(child, depth + 1)).join('')}\n`;
+      return `[${state === 'DONE' ? 'x' : ' '}] ${array(node.content ?? [], CARRIED).map(child => walk(child, depth + 1)).join('')}\n`;
     }
     if (!BLOCKS.has(type)) {
       // Includes legacy macro extensions. Neither parameters nor opaque child
       // content become evidence; the caller must expose the incomplete notice.
       return unsupported();
     }
-    const content = array(type === 'doc' ? node.content : node.content ?? [], childLimit);
+    const content = array(type === 'doc' ? node.content : node.content ?? [], CARRIED);
     const body = content.map(child => walk(child, depth + 1)).join('');
     if (type === 'doc') return body;
     if (type === 'tableCell' || type === 'tableHeader') return ` | ${body.replace(/\n+$/g, '')}`;
     if (type === 'listItem') return `• ${body}`;
     if (type === 'expand' || type === 'nestedExpand') {
       const title = node.attrs === undefined ? undefined : record(node.attrs).title;
-      return `${title === undefined ? '' : `${text(string(title, 1024))}\n`}${body}\n`;
+      return `${title === undefined ? '' : `${text(string(title, CARRIED))}\n`}${body}\n`;
     }
     return `${body}\n`;
   }
-  let result = walk(doc, 0).replace(/\r\n?/g, '\n').replace(/^\n+|\n+$/g, '').normalize('NFC');
-  if (Buffer.byteLength(result, 'utf8') > maximum) {
-    if (!cutting) failure('invalid_output');
-    cut = true;
-    result = boundUtf8V1(result, maximum);
-  }
+  const result = walk(doc, 0).replace(/\r\n?/g, '\n').replace(/^\n+|\n+$/g, '').normalize('NFC');
   return Object.freeze({ text: result, incomplete, cut });
 }
 

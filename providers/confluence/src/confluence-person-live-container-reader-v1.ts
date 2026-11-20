@@ -8,9 +8,8 @@ import { CONFLUENCE_ID as ID, CONFLUENCE_PERSON_PROVIDER_V1, confluenceArray, co
 
 /** A global space key, or a personal space's "~" and its owner's account or user name. */
 const SPACE_KEY = /^~?[A-Za-z0-9][A-Za-z0-9_:.-]{0,253}$/;
-/** A search looks through at most this many pages of spaces, each as large as Confluence serves. */
-const SCAN_PAGES = 4;
-const SCAN_PAGE = 250;
+/** Confluence's largest page of spaces. */
+const SPACE_PAGE = 250;
 
 /**
  * The Confluence spaces the asker can view, as a tool container source (research tool contract v1). Confluence lists and
@@ -55,7 +54,7 @@ export async function createConfluencePersonLiveContainerReaderV1(options: {
 
   return createPersonToolContainerReaderV1({
     provider: {
-      binding, tool: 'Confluence', container: 'confluence_space', noun: 'Confluence space', failure: confluenceFailure, fence,
+      binding, tool: 'Confluence', container: 'confluence_space', noun: 'Confluence space', failure: confluenceFailure, fence, page_max: SPACE_PAGE,
       verify: async signal => (origin = await verification(signal)),
       permalink: (site, value) => `${site}/wiki/spaces/${encodeURIComponent(value.key)}`,
       async page({ cursor, limit, signal }) {
@@ -65,15 +64,18 @@ export async function createConfluencePersonLiveContainerReaderV1(options: {
       async candidates({ signal }) {
         const found: PersonToolContainerV1[] = [];
         let left_out = 0;
-        let cursor: string | undefined;
-        for (let page = 0; page < SCAN_PAGES; page += 1) {
-          const read = await spaces(SCAN_PAGE, cursor, signal);
+        // Every page of spaces to Confluence's last; a page token that comes back again is a provider fault.
+        const tokens = new Set<string>();
+        for (let cursor: string | undefined; ;) {
+          const read = await spaces(SPACE_PAGE, cursor, signal);
           found.push(...read.containers);
           left_out += read.left_out;
           cursor = read.next;
           if (cursor === undefined) break;
+          if (tokens.has(cursor)) confluenceFailure('invalid_output');
+          tokens.add(cursor);
         }
-        return { containers: Object.freeze(found), left_out, more: cursor !== undefined };
+        return { containers: Object.freeze(found), left_out, more: false };
       },
       async exact(id, signal) {
         const value = space(await transport.request({ path: `/api/v2/spaces/${id}`, signal }));

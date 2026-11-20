@@ -71,15 +71,16 @@ describe('Granola external meeting evidence', () => {
     } } });
     return { reader, calls };
   }
-  it('spreads passages across meetings, at most two per chunk, and stops transcript reads when the answer is full across 1,000 mapped meetings', async () => {
+  it('spreads passages across meetings, taking the matching slices of each chunk in turns, and stops transcript reads when the answer is full across 1,000 mapped meetings', async () => {
     const { reader, calls } = await mapped();
     const result = await reader.search({ query: 'access', limit: 20 });
     expect(result.items).toHaveLength(20);
     expect(result.truncated).toBe(true);
-    expect(new Set(result.items.map(item => item.citation.page_id)).size).toBe(10);
+    // Each long chunk has many matching slices; the first slice of each passage comes before any passage's second.
+    expect(new Set(result.items.map(item => item.citation.page_id)).size).toBe(20);
     expect(calls.filter(name => name === 'search_transcripts')).toHaveLength(1);
-    expect(calls.filter(name => name === 'get_meetings')).toHaveLength(10);
-    expect(calls.filter(name => name === 'get_meeting_transcript')).toHaveLength(10);
+    expect(calls.filter(name => name === 'get_meetings')).toHaveLength(20);
+    expect(calls.filter(name => name === 'get_meeting_transcript')).toHaveLength(20);
     await reader.revalidate({ citations: result.items.map(item => item.citation) });
   });
   it('honours a search limit over 20, keeping the page within the shared result size the audited boundary accepts', async () => {
@@ -101,18 +102,18 @@ describe('Granola external meeting evidence', () => {
     expect(calls.slice(before).filter(name => name === 'get_meetings')).toHaveLength(new Set([...first.items, ...second.items, ...opened.items].map(item => item.citation.page_id)).size);
     expect(calls.slice(before).filter(name => name === 'get_meeting_transcript')).toHaveLength(new Set([...first.items, ...second.items, ...opened.items].map(item => item.citation.page_id)).size);
     expect(calls.slice(before).filter(name => name === 'search_meetings')).toHaveLength(20);
-    expect(calls.length).toBeLessThanOrEqual(200);
+    expect(calls.length).toBeLessThanOrEqual(250);
     const settled = calls.length;
     await reader.revalidate({ citations: [] });
     expect(calls.slice(settled)).toEqual(['get_account_info', 'list_meeting_folders']);
   });
-  it('keeps reading a project whose mapped folder holds more than 1,000 meetings, and says when a mapped folder is past the folders it read', async () => {
+  it('keeps reading a project whose mapped folder holds more than 1,000 meetings, and finds a mapped folder past the first 1,000 folders', async () => {
     const key = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
     const big = key(9_000), far = key(9_001);
     const meetings = Array.from({ length: 1_500 }, (_, index) => key(index + 1));
     const xml = (ids: string[], next?: string) => `${next === undefined ? '' : `<pagination has_more="true" next_cursor="${next}" />\n\n`}${warning}<meetings_data count="${ids.length}">${ids.map(id => `<meeting id="${id}" title="Weekly" date="Jan 10, 2025" meeting_at="2025-01-10T00:30:00Z" url="https://notes.granola.ai/d/${id}"></meeting>`).join('')}</meetings_data>`;
     const folderPages = (offset: number) => {
-      // 1,200 folders: the mapped `far` folder is the 1,100th, past the 1,000 a listing reads.
+      // 1,200 folders: the mapped `far` folder is the 1,100th; every page of folders is read.
       const ids = Array.from({ length: 100 }, (_, index) => offset + index === 0 ? big : offset + index === 1_099 ? far : key(20_000 + offset + index));
       return { folders: ids.map(id => ({ id, title: 'Folder', note_count: 1 })), truncated: offset + 100 < 1_200, ...(offset + 100 < 1_200 ? { next_offset: offset + 100 } : {}) };
     };
@@ -136,23 +137,20 @@ describe('Granola external meeting evidence', () => {
     } } });
     const result = await reader.search({ query: 'budget', limit: 5 });
     expect(result.items.map(item => item.citation.page_id)).toEqual([meetings[1_400]]);
-    expect(result.notice).toContain('lists more than 1,000 folders and ECHO read the first 1,000');
+    expect(result.notice).not.toContain('not visible to your Granola account');
     await expect(reader.revalidate({ citations: result.items.map(item => item.citation) })).resolves.toBeUndefined();
   });
-  it('makes 2,400 content reads per request, then ends each read with a notice while checks and revalidation still run', async () => {
+  it('has no per-run read budget: reads, checks and revalidation keep running past any count of calls', async () => {
     const f = fixture(), reader = await f.reader();
     const content = () => f.calls.filter(call => !['get_account_info', 'list_meeting_folders'].includes(call.name)).length;
-    let notice: string | undefined;
     const released: PersonPageCitationV1[] = [];
-    for (let search = 0; search < 1_000 && !notice?.includes('as many Granola reads'); search += 1) {
+    for (let search = 0; content() <= 2_500; search += 1) {
       const result = await reader.search({ query: `access ${search}`, limit: 5 });
-      notice = result.notice;
+      expect(result.notice ?? '').not.toContain('as many Granola reads');
       released.push(...result.items.map(item => item.citation));
     }
-    expect(notice).toContain('This research run has made as many Granola reads as one run may');
-    expect(content()).toBeGreaterThanOrEqual(2_400);
-    expect(content()).toBeLessThanOrEqual(2_401);
-    await expect(reader.list({ limit: 5 })).resolves.toMatchObject({ items: [], truncated: true, notice: expect.stringContaining('as many Granola reads') });
+    const listed = await reader.list({ limit: 5 });
+    expect(listed.notice ?? '').not.toContain('as many Granola reads');
     await expect(reader.revalidate({ citations: released.slice(0, 5) })).resolves.toBeUndefined();
   });
   it('reports notes-only coverage when the provider denies transcript search, without retrying transcript access', async () => {
