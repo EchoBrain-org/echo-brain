@@ -79,7 +79,9 @@ describe('approval core: owners', () => {
   it('offers only owner proposals that the shared owner rule accepts', async () => {
     const f = await approvalCoreFixture({ actions: [{ id: 'act-1', owner: '  Rafael \t Moreno ' }, { id: 'act 2', owner: 'Odd Id' }, { id: 'act-3', owner: 'Zoë' }, { id: 'act-4', owner: 'x'.repeat(130) }] });
     const offered = f.core.ownerProposals(f.approvalId);
-    expect(offered).toEqual([{ signal_id: 'act-1', action: 'Follow up on item 1.', proposed: 'Rafael Moreno' }, { signal_id: 'act-3', action: 'Follow up on item 3.', proposed: 'Zoë' }]);
+    // A long owner is offered whole: an owner has no length of its own.
+    expect(offered).toEqual([{ signal_id: 'act-1', action: 'Follow up on item 1.', proposed: 'Rafael Moreno' }, { signal_id: 'act-3', action: 'Follow up on item 3.', proposed: 'Zoë' },
+      { signal_id: 'act-4', action: 'Follow up on item 4.', proposed: 'x'.repeat(130) }]);
     for (const item of offered) expect(isApprovalOwnerTextV1(item.proposed)).toBe(true);
     expect(f.core.ownerProposals('apr_' + '0'.repeat(64))).toEqual([]);
   });
@@ -131,7 +133,6 @@ describe('approval core: decide', () => {
       { ...base, owners: [{ signal_id: 'act-1' }] }, { ...base, owners: [{ signal_id: 'act 1', owner: 'A' }] },
       { ...base, action: 'reject' }, { ...base, action: 'reject', routes: [], owners: [{ signal_id: 'act-1', owner: 'A' }] }, null, 'approve',
       { ...base, owners: [{ signal_id: 'act-1', owner: 'A' }, { signal_id: 'act-1', owner: 'B' }] }, { ...base, owners: [{ signal_id: 'act-1', owner: ' padded ' }] },
-      { ...base, owners: [{ signal_id: 'act-1', owner: 'x'.repeat(121) }] },
       // Kept private only inside a project, and said only as `true`.
       { ...base, routes: f.routes([]).map(route => ({ ...route, private: true })) }, { ...base, routes: f.routes(id => id === 'act-1' ? null : []).map(route => ({ ...route, private: true })) },
       { ...base, routes: f.routes([f.projectA]).map(route => ({ ...route, private: false })) }, { ...base, routes: f.routes([f.projectA]).map(route => ({ ...route, private: 'true' })) },

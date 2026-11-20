@@ -74,10 +74,10 @@ describe('one approved record as Ask cites it', () => {
     const cited = personCitedRecordV1(listed({
       actions: [item('action', 'a1', 'Send the quote.', { owner: 'Unconfirmed proposal' }), item('action', 'a2', 'Book the venue.')],
     }, record => {
-      body(record).human_act_resolution_ref = { action_owners: [{ signal_id: 'a2', owner: 'Priya Shah' }, { signal_id: 'd9', owner: 'Nobody' }, { signal_id: 'a1', owner: 'x'.repeat(121) }] };
+      body(record).human_act_resolution_ref = { action_owners: [{ signal_id: 'a2', owner: 'Priya Shah' }, { signal_id: 'd9', owner: 'Nobody' }, { signal_id: 'a1', owner: 'x'.repeat(10_000) }] };
     }));
     expect(cited.actions.items).toEqual([
-      { atom_id: atom('a1'), text: 'Send the quote.', quotes: [] },
+      { atom_id: atom('a1'), text: 'Send the quote.', owner: 'x'.repeat(10_000), quotes: [] },
       { atom_id: atom('a2'), text: 'Book the venue.', owner: 'Priya Shah', quotes: [] },
     ]);
   });
@@ -150,7 +150,6 @@ describe('one approved record as Ask cites it', () => {
       variant(copy => { copy.decisions.items[0]!.owner = 'Priya Shah'; }),
       variant(copy => { copy.decisions.items[0]!.signal_id = 'd1'; }),
       variant(copy => { copy.actions.items[0]!.status = 'decided'; }),
-      variant(copy => { copy.actions.items[0]!.owner = 'x'.repeat(121); }),
       variant(copy => { copy.decisions.items[0]!.quotes = [{ quote: 'One' }, { quote: 'Two' }, { quote: 'Three' }, { quote: 'Four' }]; }),
       variant(copy => { copy.decisions.items[0]!.quotes = [{ quote: 'One' }, { quote: 'One' }]; }),
       variant(copy => { copy.decisions.items[0]!.quotes = [{ quote: 'One', started_at: 'yesterday' }]; }),

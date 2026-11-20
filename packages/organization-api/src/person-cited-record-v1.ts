@@ -17,7 +17,6 @@ export const PERSON_CITED_RECORD_PARTICIPANTS_MAX_V1 = 32;
 /** Quotes kept per item: its first distinct ones. */
 export const PERSON_CITED_RECORD_QUOTES_MAX_V1 = 3;
 /** An action's owner the approver confirmed, in characters. */
-const OWNER_MAX_CHARACTERS = 120;
 const TEXT_MAX_BYTES = 256 * 1024;
 const TIMEZONE = /^[A-Za-z0-9_+\-/]{1,64}$/;
 
@@ -91,7 +90,7 @@ function confirmedOwners(entries: unknown): ReadonlyMap<string, string> {
   for (const entry of Array.isArray(entries) ? entries : []) {
     const found = object(entry);
     const owner = displayText(found?.owner);
-    if (typeof found?.signal_id === 'string' && owner !== undefined && owner.length <= OWNER_MAX_CHARACTERS) owners.set(found.signal_id, owner);
+    if (typeof found?.signal_id === 'string' && owner !== undefined) owners.set(found.signal_id, owner);
   }
   return owners;
 }
@@ -198,7 +197,7 @@ function validSection(value: unknown, kind: Kind): PersonCitedRecordSectionV1 {
     return Object.freeze({
       atom_id: item.atom_id as Sha256Digest, text: validText(item.text, `Person cited record ${kind} text`),
       ...optional('status', Object.hasOwn(item, 'status') ? oneOf(item.status, STATUSES, 'Person cited record decision status') : undefined),
-      ...optional('owner', Object.hasOwn(item, 'owner') ? validText(item.owner, 'Person cited record action owner', OWNER_MAX_CHARACTERS) : undefined),
+      ...optional('owner', Object.hasOwn(item, 'owner') ? validText(item.owner, 'Person cited record action owner') : undefined),
       quotes: Object.freeze(quotes),
     });
   });

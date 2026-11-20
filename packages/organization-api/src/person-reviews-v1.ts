@@ -1,4 +1,4 @@
-import { APPROVAL_OWNER_MAX_CHARACTERS_V1 } from '@echo-brain/organization-protocol';
+import { isApprovalOwnerTextV1 } from '@echo-brain/organization-protocol';
 import { validateProjectIdV1 } from './project-context-v1.js';
 import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_REQUEST_MAX_BYTES_V1, type PersonToolHostV1 } from './person-tool-client.js';
 import { asEnumerableRecord, assertExactKeys, assertTimestamp, fail, isCalendarDay, utf8ByteLength } from './validation.js';
@@ -120,8 +120,8 @@ function ownerChoices(input: unknown): asserts input is readonly { readonly sign
   for (const value of input) {
     const item = asEnumerableRecord(value, label);
     assertExactKeys(item, ['signal_id', 'owner'], label);
-    text(item.signal_id, 128); text(item.owner, APPROVAL_OWNER_MAX_CHARACTERS_V1);
-    if (item.owner.trim() !== item.owner || /[\p{Cc}\p{Cf}]/u.test(item.owner) || seen.has(item.signal_id)) fail(label);
+    text(item.signal_id, 128);
+    if (!isApprovalOwnerTextV1(item.owner) || seen.has(item.signal_id)) fail(label);
     seen.add(item.signal_id);
   }
 }
@@ -197,9 +197,8 @@ export function validatePersonReviewResultV1<K extends keyof PersonReviewResults
       if (item.due_at !== null) assertTimestamp(item.due_at, 'Meeting review due date');
       // The day is a deadline's: never without one, and a real calendar day when there.
       if (item.due_on !== null && (item.due_at === null || !isCalendarDay(item.due_on))) fail('Invalid meeting review due day');
-      // An owner is an action's, one line of at most 120 characters; only a proposed one is editable.
-      if (item.owner !== null && (item.kind !== 'action' || typeof item.owner !== 'string' || item.owner.length === 0 || item.owner.length > 120
-        || item.owner.trim() !== item.owner || /[\p{Cc}\p{Cf}]/u.test(item.owner))) fail('Invalid meeting review owner');
+      // An owner is an action's, on one line (the shared owner rule); only a proposed one is editable.
+      if (item.owner !== null && (item.kind !== 'action' || !isApprovalOwnerTextV1(item.owner))) fail('Invalid meeting review owner');
       if (typeof item.owner_editable !== 'boolean' || (item.owner_editable && item.owner === null)) fail('Invalid meeting review owner');
       if (item.project_ids !== null) projectIds(item.project_ids);
       privateDestination(item, 'Invalid meeting review item');

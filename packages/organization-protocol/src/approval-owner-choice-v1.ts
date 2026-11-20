@@ -3,16 +3,15 @@
  * proposals and the approved-record codec all use these predicates, so no surface accepts an owner another refuses.
  */
 
-/** Longest confirmed owner, in UTF-16 code units (String.length). */
-export const APPROVAL_OWNER_MAX_CHARACTERS_V1 = 120;
-
 const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}]/u;
 const RECORD_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 
-/** Owner text an approver may confirm: trimmed, 1..120 code units, no control or format characters. NFC and single spacing are not required. */
+/**
+ * Owner text an approver may confirm: non-empty, trimmed, no control or format characters. It has no length of its own;
+ * the request that carries it bounds it. NFC and single spacing are not required.
+ */
 export function isApprovalOwnerTextV1(value: unknown): value is string {
-  return typeof value === 'string' && value.length >= 1 && value.length <= APPROVAL_OWNER_MAX_CHARACTERS_V1
-    && value === value.trim() && !CONTROL_OR_FORMAT.test(value);
+  return typeof value === 'string' && value.length >= 1 && value === value.trim() && !CONTROL_OR_FORMAT.test(value);
 }
 
 /** A signal id that can appear in a record reference (the record identifier pattern). */

@@ -45,12 +45,13 @@ describe("owner proposals V1", () => {
       action(1, null),
       action(2, "   "),
       action(3, "Jules\u0007"),
-      action(4, "J".repeat(121)),
+      action(4, "J".repeat(10_000)),
       action(5, "Rafael Moreno", " padded text "),
       action(6, "Cafe\u0301"),
     ]);
     expect(ownerProposalsV1(proposed)).toEqual([
       { action_index: 0, action_text: "Send the launch plan 1", owner: "Priya Shah" },
+      { action_index: 4, action_text: "Send the launch plan 5", owner: "J".repeat(10_000) },
       { action_index: 6, action_text: "Send the launch plan 7", owner: "Caf\u00e9" },
     ]);
   });

@@ -30,6 +30,9 @@ interface SlackApprovalCardInputV4 {
 }
 /** Slack's own limit on blocks in one message. */
 const SLACK_MAX_BLOCKS = 50;
+/** Slack's own limits: a plain_text_input's max_length (and so its initial_value) and an input block's label. */
+const SLACK_INPUT_MAX_CHARACTERS = 3_000;
+const SLACK_LABEL_MAX_CHARACTERS = 2_000;
 const plain = (text: string) =>
   Object.freeze({ type: "plain_text" as const, text, emoji: false });
 const key = (id: string) =>
@@ -80,9 +83,15 @@ export function buildSlackApprovalCardV4(
   const goesTo = `Goes to: ${destination.length <= 2_900 ? destination : `${destination.slice(0, 2_899).trimEnd()}…`}`;
   // Slack allows 50 blocks in a message. Owner inputs take what the review and the four closing blocks leave; when that
   // is not every owner, one block says how many more there are, and the desktop app sets them.
+  // An owner longer than an input can hold is set in the desktop app, and counted with the rest.
+  const fitting = input.owners.filter((owner) => owner.proposed.length <= SLACK_INPUT_MAX_CHARACTERS);
   const room = SLACK_MAX_BLOCKS - review.blocks.length - 4;
-  const shown = input.owners.length <= room ? input.owners : input.owners.slice(0, Math.max(0, room - 1));
+  const shown = fitting.length <= room && fitting.length === input.owners.length ? fitting : fitting.slice(0, Math.max(0, room - 1));
   const left = input.owners.length - shown.length;
+  const label = (action: string) => {
+    const text = `Owner · ${action}`;
+    return text.length <= SLACK_LABEL_MAX_CHARACTERS ? text : `${text.slice(0, SLACK_LABEL_MAX_CHARACTERS - 1).replace(/[\uD800-\uDBFF]$/u, "")}…`;
+  };
   const moreOwners = left === 0 ? undefined
     : `${left} more ${left === 1 ? "action has" : "actions have"} a proposed owner. Set ${left === 1 ? "it" : "them"} in the ECHO desktop app.`;
   const blocks: Readonly<Record<string, unknown>>[] = [
@@ -91,7 +100,7 @@ export function buildSlackApprovalCardV4(
       type: "input",
       block_id: id(input.approval_id, `owner-${owner.signal_id}`),
       optional: true,
-      label: plain(`Owner · ${owner.action.slice(0, 140)}`),
+      label: plain(label(owner.action)),
       element: {
         type: "plain_text_input",
         action_id: slackApprovalOwnerActionIdV4(
@@ -99,7 +108,7 @@ export function buildSlackApprovalCardV4(
           owner.signal_id,
         ),
         initial_value: owner.proposed,
-        max_length: 120,
+        max_length: SLACK_INPUT_MAX_CHARACTERS,
         multiline: false,
       },
     })),

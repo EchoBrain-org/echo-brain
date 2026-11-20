@@ -7,9 +7,6 @@ import type { DecisionBrief } from "../contracts/delivery.js";
  * provider-neutral so every approval surface offers the same proposals.
  */
 
-/** Longest owner a proposal offers, in characters. */
-const OWNER_MAX_CHARACTERS_V1 = 120;
-
 /** One action whose owner extraction proposed; `action_index` is its place in the brief's actions. */
 export interface OwnerProposalV1 {
   readonly action_index: number;
@@ -27,8 +24,8 @@ function isExactDisplayText(value: unknown): value is string {
 }
 
 /**
- * An owner as offered: one line, NFC, single spaces, trimmed, at most 120
- * characters, with no control or format characters. Empty or invalid is no
+ * An owner as offered: one line, NFC, single spaces, trimmed, with no control
+ * or format characters, and no length of its own. Empty or invalid is no
  * owner, and so is anything but text. Every offered owner satisfies the shared
  * confirmed-owner rule (isApprovalOwnerTextV1 in organization-protocol, which
  * this package cannot import); a services test pins that.
@@ -37,7 +34,7 @@ export function canonicalProposedOwnerV1(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const owner = value.normalize("NFC").replace(/\s+/gu, " ").trim();
   if (owner.length === 0) return null;
-  if (owner.length > OWNER_MAX_CHARACTERS_V1 || /[\p{Cc}\p{Cf}]/u.test(owner)) return null;
+  if (/[\p{Cc}\p{Cf}]/u.test(owner)) return null;
   return owner;
 }
 
