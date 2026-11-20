@@ -370,12 +370,8 @@ describe('llm decision processor extraction', () => {
       descending(26, 2).map((n) => `Long point ${n}`),
       ['Short point 27', ...descending(26, 3).map((n) => `Long point ${n}`)],
     ]);
-    // The items lost three cited units (N1; N2 and N28): the trim reaches the private sink as a count.
-    const diagnostics: CoreRuntimeDiagnosticObservationV1[] = [];
-    const instance = processor(new FakeLlmClient(output));
-    await withCoreRuntimeDiagnosticsV1((event) => { diagnostics.push(event); }, () => instance.extract(longUnits, extractionContext(instance)));
-    expect(diagnostics.filter((event) => event.kind === 'lifecycle' && event.stage === 'grounding' && event.event === 'succeeded'))
-      .toEqual([expect.objectContaining({ kind: 'lifecycle', stage: 'grounding', event: 'succeeded', data: { evidence_units_trimmed: 3 } })]);
+    // The items lost three cited units (N1; N2 and N28): the trim is counted as a correction, as a number only.
+    expect(await correctionsWith(output, longUnits)).toEqual({ extraction_evidence_trimmed: 3 });
   });
 
   it('judges a decided decision against all its cited units, before any trim', async () => {
@@ -390,7 +386,8 @@ describe('llm decision processor extraction', () => {
     const result = await extractWith(output, questions);
     expect(result.signals).toMatchObject([{ kind: 'decision', status: 'decided' }]);
     expect(result.signals[0]!.evidence).toHaveLength(25);
-    expect(await correctionsWith(output, questions)).toEqual({});
+    // N26 left out by the item budget is counted, never a downgrade.
+    expect(await correctionsWith(output, questions)).toEqual({ extraction_evidence_trimmed: 1 });
   });
 
   it('keeps an action\'s proposed owner when the meeting byte limit trims the quote that names them', async () => {
@@ -433,7 +430,8 @@ describe('llm decision processor extraction', () => {
     // Item 3 now repeats item 2 and is dropped; the rationale linked to it follows item 2.
     expect(result.signals[3]).toMatchObject({ kind: 'rationale', supports_signal_ids: [result.signals[2]!.id] });
     expect(() => assertCanonicalDecisionSet(result, wide, instance.identity)).not.toThrow();
-    expect(await correctionsWith(output, wide)).toEqual({ extraction_repeat_dropped: 1 });
+    // Nine spans left out by the meeting ceiling, counted as a number only.
+    expect(await correctionsWith(output, wide)).toEqual({ extraction_repeat_dropped: 1, extraction_evidence_trimmed: 9 });
   });
 
   it('reads cited IDs in any case and a split turn\'s parent ID as its parts', async () => {
