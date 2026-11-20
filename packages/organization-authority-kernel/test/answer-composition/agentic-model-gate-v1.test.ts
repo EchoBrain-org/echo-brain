@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, AgenticAskDeadlineErrorV1, AgenticAskPostRevalidationNoTimeErrorV1, AgenticResearchBudgetErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
-import { AgenticAskOutputErrorV1, cleanLine, repairInput, repairInstruction } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
+import { AgenticAskOutputErrorV1, cleanLine, REJECTED_REPLY_MAX_CHARS_V1, repairInput, repairInstruction } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import type { StructuredGenerationInput, StructuredGenerationJsonSchema } from "../../src/answer-composition/structured-generation-v1.js";
 
 const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
@@ -386,20 +386,23 @@ describe("agentic model gate", () => {
     expect(gate.stats()).toMatchObject({ calls: 2, repairs: 1, stopped: false });
   });
 
-  it("sends the rejected reply back as one clean line of at most 4,000 characters", async () => {
-    // A rejected reply longer than 4,000 characters, with a line separator and a double space.
-    const refused = { blocks: [{ block: "text", sentences: [{ text: `Priya Raman owns it.\u2028Then  ${"more ".repeat(1_000)}`, evidence: ["E1"] }] }], not_found: [] };
+  it("sends a writer-sized rejected reply back whole, as one clean line, cut only past the output allowance", async () => {
+    // A rejected reply of about 9,000 characters (a full writer reply), with a line separator and a double space.
+    const refused = { blocks: [{ block: "text", sentences: [{ text: `Priya Raman owns it.\u2028Then  ${"more ".repeat(1_800)}end`, evidence: ["E1"] }] }], not_found: [] };
     const { gate, inputs } = harness({ replies: [refused, { good: true }] });
     await gate.withRepair(STEP, "system", { question: "q" }, schema, () => 20_000, reply => {
       if ((reply as { good?: boolean }).good !== true) throw new AgenticAskOutputErrorV1("blocks[0] must be the answer block");
       return reply;
     }, () => undefined);
     expect(inputs[1]!.user_prompt).toBe(JSON.stringify(repairInput({ question: "q" }, refused, "blocks[0] must be the answer block")));
-    // Where a plain cut would keep the separator and both spaces and end mid-word, the repair's is one clean line.
     const sent = (JSON.parse(inputs[1]!.user_prompt) as { readonly rejected_response: string }).rejected_response;
-    expect(sent).toBe(cleanLine(JSON.stringify(refused), 4_000));
-    expect(sent).not.toBe(JSON.stringify(refused).slice(0, 4_000));
-    expect([[...sent].length <= 4_000, sent.endsWith("…"), sent.includes("\u2028"), sent.includes("  ")]).toEqual([true, true, false, false]);
+    // The whole reply, made one clean line: nothing of it is cut.
+    expect(sent).toBe(cleanLine(JSON.stringify(refused), REJECTED_REPLY_MAX_CHARS_V1));
+    expect([sent.endsWith('"not_found":[]}'), sent.includes("\u2028"), sent.includes("  ")]).toEqual([true, false, false]);
+    // A reply past the largest output allowance is cut there.
+    const huge = { text: "word ".repeat(20_000) };
+    const cut = repairInput({}, huge, "x").rejected_response as string;
+    expect([[...cut].length <= REJECTED_REPLY_MAX_CHARS_V1, cut.endsWith("…")]).toEqual([true, true]);
   });
 
   describe("counts each retry and repair it makes, by why it was needed", () => {

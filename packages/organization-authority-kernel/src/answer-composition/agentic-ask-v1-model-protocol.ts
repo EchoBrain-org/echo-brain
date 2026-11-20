@@ -1190,13 +1190,18 @@ export function repairInstruction(reason: string): string {
 }
 
 /**
- * A repair's user content: the rejected call's, then the rejected reply, when there was one, as one line of at most 4,000
- * characters, and the repair instruction. Both go last, so the repair repeats the rejected call's prompt as its prefix.
+ * The longest rejected reply a repair is shown, in characters: the largest output allowance (16,000 tokens) at about four
+ * characters per token, so any reply the model could write is shown whole.
+ */
+export const REJECTED_REPLY_MAX_CHARS_V1 = 64_000;
+/**
+ * A repair's user content: the rejected call's, then the rejected reply, when there was one, as one line, and the repair
+ * instruction. Both go last, so the repair repeats the rejected call's prompt as its prefix.
  */
 export function repairInput(user: unknown, rejected: unknown, reason: string): Record<string, unknown> {
   return {
     ...object(user),
-    ...(rejected === undefined ? {} : { rejected_response: cleanLine(JSON.stringify(rejected), 4_000) }),
+    ...(rejected === undefined ? {} : { rejected_response: cleanLine(JSON.stringify(rejected), REJECTED_REPLY_MAX_CHARS_V1) }),
     validation_error: repairInstruction(reason),
   };
 }
