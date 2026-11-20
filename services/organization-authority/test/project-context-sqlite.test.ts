@@ -150,9 +150,15 @@ function expectNotFound(action: () => void): void {
 /** A note's whole text as `person open --ref note:<context_id>` reads it (ADR-0024), for `actor`. */
 function openNote(database: Database.Database, actor: AuthorityPersonMembershipBinding, contextId: string): string {
   const items = new SqlitePersonOriginalItemsV1(database, { authenticateAccess: () => authorization(actor) }, OWNER.organization_id);
-  const opened = items.open({ access_token: "fixture", ref: { kind: "note", id: contextId as `ctx_${string}` } });
-  if (opened.kind !== "note") throw new Error("expected a note");
-  return opened.text;
+  // A note opens a page at a time; read every page.
+  let text = "";
+  for (let from: number | null | undefined = undefined; from !== null;) {
+    const opened = items.open({ access_token: "fixture", ref: { kind: "note", id: contextId as `ctx_${string}` }, ...(from === undefined ? {} : { from_ordinal: from }) });
+    if (opened.kind !== "note") throw new Error("expected a note");
+    text += opened.text;
+    from = opened.next_offset ?? null;
+  }
+  return text;
 }
 
 describe("SQLite project context V1", () => {
@@ -548,7 +554,8 @@ describe("SQLite project context V1", () => {
   it("round-trips the largest valid original byte-for-byte through open, filed in its project", () => {
     const { database, repository } = open();
     const project = createProject(repository, OWNER, 1500);
-    const text = "\n".repeat(8040) + "a";
+    // No size of its own: a newline escapes to two JSON bytes, so about half a million fill the 1 MiB request.
+    const text = "\n".repeat(524_000) + "a";
     const request: PersonUpdateSubmitV3 = {
       schema_version: 3, kind: "echo-person-update-submit-v3", request_id: requestId(1501),
       title: "Maximum source", text, association_project_ids: [project.project_id],
@@ -556,7 +563,7 @@ describe("SQLite project context V1", () => {
     };
     // The largest newline-heavy original the V3 request byte bound admits: one more newline exceeds it.
     expect(() => validatePersonUpdateSubmitV3(request)).not.toThrow();
-    expect(() => validatePersonUpdateSubmitV3({ ...request, text: `\n${text}` })).toThrow("exceeds JSON byte bound");
+    expect(() => validatePersonUpdateSubmitV3({ ...request, text: `${"\n".repeat(400)}${text}` })).toThrow("exceeds JSON byte bound");
     const receipt = repository.withWriteTransaction(transaction => transaction.submitUploadV3(
       snapshot(transaction, OWNER, { operation: "upload_submit_v3", request }), request,
     ));
