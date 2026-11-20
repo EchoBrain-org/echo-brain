@@ -55,6 +55,33 @@ describe("OpenRouter reply capacity measures what is kept", () => {
     await expect(adapter.generate(request)).resolves.toEqual({ ok: true });
   });
 
+  it("charges every retained top-level field: distinct fields past the capacity fail", async () => {
+    const big = "m".repeat(64 * 1024);
+    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
+      for (let index = 0; index < 20; index += 1) yield `data: {"field_${index}":"${big}","choices":[]}\n\n`;
+      yield 'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}\n\n';
+    }, 0) });
+    await expect(adapter.generate(request)).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response" } });
+  });
+
+  it("charges every retained tool-call id: calls whose ids pass the capacity fail", async () => {
+    const big = "i".repeat(64 * 1024);
+    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
+      for (let index = 0; index < 20; index += 1) yield `data: {"choices":[{"delta":{"tool_calls":[{"index":${index},"id":"${big}${index}"}]}}]}\n\n`;
+      yield 'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}\n\n';
+    }, 0) });
+    await expect(adapter.generate(request)).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response" } });
+  });
+
+  it("charges nothing for what is discarded: reasoning past the capacity, or a field replaced many times, still fits", async () => {
+    const piece = "r".repeat(64 * 1024);
+    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
+      for (let index = 0; index < 20; index += 1) yield `data: {"provider":"${piece}","choices":[{"delta":{"reasoning":"${piece}"}}]}\n\n`;
+      yield 'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"},"finish_reason":"stop"}]}\n\n';
+    }, 0) });
+    await expect(adapter.generate(request)).resolves.toEqual({ ok: true });
+  });
+
   it("fits a legitimate reply at the capacity whose text arrives escaped", async () => {
     // Each "é" is two kept bytes and six wire bytes (\u00e9): about 0.86 of the capacity kept, 2.6 times it on the wire.
     const chars = Math.floor(ONE_TOKEN_CAPACITY * 0.43);

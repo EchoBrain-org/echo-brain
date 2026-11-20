@@ -11,11 +11,12 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * The text one OpenRouter reply can keep, from the model profile's own output maximum: the content, reasoning, refusal
- * and tool-call text the model produced, in UTF-8 bytes as decoded (escapes count once). No output token decodes to
- * 4 KiB, and 256 more such allowances hold the framing kept beside it (a choice error, a non-streamed refusal). What is
- * discarded as read (comments, repeated routing metadata, usage) never counts. One stream line still being read, and a
- * non-streamed body, may hold six wire bytes per kept byte (`\u00e9` for `é`): see `openRouterLineCapacityV1`.
+ * What one OpenRouter reply can retain, from the model profile's own output maximum: everything the assembled reply
+ * keeps (content, refusal, tool calls with their ids, the finish reason, a choice error, and the last value of each
+ * top-level field), in UTF-8 bytes as decoded (escapes count once). No output token decodes to 4 KiB, and 256 more such
+ * allowances hold the framing kept beside the output. What is discarded as read (comments, reasoning text, a field's
+ * earlier values) never counts. One stream line still being read, and a non-streamed body, may hold six wire bytes per
+ * kept byte (`\u00e9` for `é`): see `openRouterLineCapacityV1`.
  */
 export function openRouterReplyCapacityBytesV1(maxOutputTokens: number): number {
   return (Math.max(0, maxOutputTokens) + 256) * 4096;
@@ -61,7 +62,9 @@ function isOpenRouterStreamV1(response: Response): boolean {
  */
 class OpenRouterStreamAssemblerV1 {
   constructor(private readonly capacityBytes: number) {}
+  /** Bytes retained now: appended text, plus the current size of each replaced value (see `replace`). */
   private kept = 0;
+  private readonly replaced = new Map<string, number>();
   private readonly root: Record<string, unknown> = {};
   private content = '';
   private refusal = '';
@@ -77,15 +80,15 @@ class OpenRouterStreamAssemblerV1 {
     if (data === '' || data === '[DONE]') return false;
     const event = record(JSON.parse(data) as unknown);
     if (event === undefined) return false;
-    for (const [key, value] of Object.entries(event)) if (key !== 'choices' && value !== undefined && value !== null) this.root[key] = value;
+    for (const [key, value] of Object.entries(event)) if (key !== 'choices' && value !== undefined && value !== null) { this.replace(`root:${key}`, value); this.root[key] = value; }
     const choice = Array.isArray(event['choices']) ? event['choices'].map(record).find(value => value !== undefined) : undefined;
     if (choice === undefined) return false;
     let produced = false;
     const delta = record(choice['delta']) ?? {};
     if (typeof delta['content'] === 'string' && delta['content'] !== '') { this.keep(delta['content']); this.content += delta['content']; produced = true; }
     if (typeof delta['refusal'] === 'string' && delta['refusal'] !== '') { this.keep(delta['refusal']); this.refusal += delta['refusal']; produced = true; }
-    // Reasoning is the model's output and counts against what it can produce, though its text is not retained.
-    if (typeof delta['reasoning'] === 'string' && delta['reasoning'] !== '') { this.keep(delta['reasoning']); produced = true; }
+    // Reasoning is progress, but its text is discarded as read, so it is not charged.
+    if (typeof delta['reasoning'] === 'string' && delta['reasoning'] !== '') produced = true;
     if (Array.isArray(delta['reasoning_details']) && delta['reasoning_details'].length > 0) produced = true;
     for (const raw of Array.isArray(delta['tool_calls']) ? delta['tool_calls'] : []) {
       const call = record(raw);
@@ -95,19 +98,28 @@ class OpenRouterStreamAssemblerV1 {
       if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0 || index > this.calls.size) throw new SyntaxError('OpenRouter tool call index is out of sequence');
       let kept = this.calls.get(index);
       if (kept === undefined) this.calls.set(index, kept = { name: '', arguments: '' });
-      if (call['id'] !== undefined) kept.id = call['id'];
-      if (call['type'] !== undefined) kept.type = call['type'];
+      if (call['id'] !== undefined) { this.replace(`call:${index}:id`, call['id']); kept.id = call['id']; }
+      if (call['type'] !== undefined) { this.replace(`call:${index}:type`, call['type']); kept.type = call['type']; }
       const fn = record(call['function']);
       if (typeof fn?.['name'] === 'string' && fn['name'] !== '') { this.keep(fn['name']); kept.name += fn['name']; produced = true; }
       if (typeof fn?.['arguments'] === 'string' && fn['arguments'] !== '') { this.keep(fn['arguments']); kept.arguments += fn['arguments']; produced = true; }
     }
-    if (choice['finish_reason'] !== undefined && choice['finish_reason'] !== null) { this.finishReason = choice['finish_reason']; produced = true; }
-    if (choice['error'] !== undefined && choice['error'] !== null) { this.choiceError = choice['error']; produced = true; }
+    if (choice['finish_reason'] !== undefined && choice['finish_reason'] !== null) { this.replace('finish', choice['finish_reason']); this.finishReason = choice['finish_reason']; produced = true; }
+    if (choice['error'] !== undefined && choice['error'] !== null) { this.replace('error', choice['error']); this.choiceError = choice['error']; produced = true; }
     return produced;
   }
 
+  /** Charges appended text. */
   private keep(text: string): void {
     this.kept += bytesOf(text);
+    if (this.kept > this.capacityBytes) throw new OpenRouterReplyTooLargeErrorV1(this.capacityBytes);
+  }
+
+  /** Charges a value that replaces the slot's earlier one: only the value now retained counts, measured as JSON. */
+  private replace(slot: string, value: unknown): void {
+    const size = bytesOf(JSON.stringify(value) ?? '');
+    this.kept += size - (this.replaced.get(slot) ?? 0);
+    this.replaced.set(slot, size);
     if (this.kept > this.capacityBytes) throw new OpenRouterReplyTooLargeErrorV1(this.capacityBytes);
   }
 
