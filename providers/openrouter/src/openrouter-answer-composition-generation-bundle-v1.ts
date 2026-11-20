@@ -9,8 +9,8 @@ export const OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1 =
 export const OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 =
   "anthropic/claude-sonnet-5.5" as const;
 /**
- * How long one call may send nothing. The adapter does not stream, so a call is silent until its reply is whole: ten
- * minutes lets a long reply finish. Research and the writer have no clock of their own.
+ * How long one call may send nothing: the adapter streams the reply, and every piece (or OpenRouter's keep-alive)
+ * resets it, so a reply that keeps arriving runs as long as it needs. Research and the writer have no clock of their own.
  */
 export const OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 = 600_000;
 /** Claude Sonnet 5.5's own context window, in tokens (Anthropic's model table). */

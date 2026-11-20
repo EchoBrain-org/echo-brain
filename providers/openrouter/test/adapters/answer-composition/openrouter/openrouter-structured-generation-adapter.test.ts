@@ -32,6 +32,36 @@ async function observed(
   return generate(structuredRequest);
 }
 
+/** A streamed reply: each event `gap` ms after the last, then the stream ends (or, with `hang`, stays open). */
+function streamed(events: readonly string[], gap: number, hang = false): typeof fetch {
+  return (async (_url: string, init: RequestInit) => new Response(new ReadableStream<Uint8Array>({ async start(controller) {
+    init.signal?.addEventListener("abort", () => controller.error(init.signal!.reason));
+    for (const event of events) { await new Promise(resolve => setTimeout(resolve, gap)); controller.enqueue(new TextEncoder().encode(`${event}\n\n`)); }
+    if (!hang) controller.close();
+  } }), { status: 200, headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
+}
+
+describe("OpenRouter structured generation, streamed", () => {
+  it("assembles a streamed reply that keeps arriving past the silence period, text or the reply tool's arguments", async () => {
+    const text = streamed([": OPENROUTER PROCESSING", 'data: {"id":"gen-1","choices":[{"delta":{"content":"{\\"ok\\":"}}]}',
+      'data: {"id":"gen-1","choices":[{"delta":{"content":"true}"},"finish_reason":"stop"}]}', "data: [DONE]"], 40);
+    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: text });
+    // 160 ms of events 40 ms apart, under a 100 ms silence period.
+    await expect(adapter.generate({ ...structuredRequest, timeout_ms: 100 })).resolves.toEqual({ ok: true });
+    const schema = { type: "object", additionalProperties: false, required: ["f0"], properties: Object.fromEntries(Array.from({ length: 60 }, (_, index) => [`f${index}`, { type: "string" }])) };
+    const tool = streamed(['data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"StructuredOutput","arguments":"{\\"f0\\":"}}]}}]}',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"x\\"}"}}]},"finish_reason":"tool_calls"}]}', "data: [DONE]"], 5);
+    const toolAdapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: tool });
+    await expect(toolAdapter.generate({ ...structuredRequest, schema })).resolves.toEqual({ f0: "x" });
+  });
+
+  it("treats a stream silent for the silence period as a timeout", async () => {
+    const silent = streamed(['data: {"choices":[{"delta":{"content":"{"}}]}'], 1, true);
+    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: silent });
+    await expect(adapter.generate({ ...structuredRequest, timeout_ms: 50 })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_timeout" } });
+  });
+});
+
 describe("OpenRouter structured generation", () => {
   it("retains measured failure latency in canonical metadata without inventing token counts", async () => {
     const events: CoreRuntimeObservationV1[] = [];
@@ -79,7 +109,7 @@ describe("OpenRouter structured generation", () => {
     });
     expect(typeof request?.body).toBe("string");
     expect(JSON.parse(request?.body as string)).toMatchObject({
-      stream: false,
+      stream: true,
       // The caller's allowance is the model's whole output, reasoning included: nothing is added to it.
       max_tokens: 300,
       reasoning: { effort: "medium" },
@@ -566,9 +596,7 @@ describe("OpenRouter structured generation", () => {
           ok: true,
           status: 200,
           headers: new Headers(),
-          text: async () => {
-            throw testCase.error;
-          },
+          body: new ReadableStream<Uint8Array>({ pull() { throw testCase.error; } }),
         }) as unknown as Response) as typeof fetch,
     });
 

@@ -17,6 +17,8 @@ import {
   type StructuredGenerationResult,
 } from "@echo-brain/organization-processing/llm/llm-provider";
 
+import { assembledOpenRouterStreamV1, isOpenRouterStreamV1, readOpenRouterBodyV1 } from '../openrouter-stream-v1.js';
+
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
 export interface OpenRouterClientOptions {
@@ -51,56 +53,6 @@ function generationUsageObservation(
     ...(totalTokens === undefined ? {} : { totalTokens }),
     ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
     ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
-  };
-}
-
-/** The whole body as text, calling `alive` at each piece that arrives. */
-async function readAlive(response: Response, alive: () => void): Promise<string> {
-  if (response.body === null) return '';
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let text = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) return text + decoder.decode();
-    alive();
-    text += decoder.decode(value, { stream: true });
-  }
-}
-
-/**
- * A streamed Chat Completions reply (server-sent events) as the one JSON reply it stands for: its id, usage, any error,
- * and its first choice's content, refusal, finish reason and error. Comment lines (OpenRouter's keep-alives) carry nothing.
- */
-function assembledStream(body: string): Record<string, unknown> {
-  let id: unknown;
-  let usage: unknown;
-  let error: unknown;
-  let content = '';
-  let refusal = '';
-  let finishReason: unknown;
-  let choiceError: unknown;
-  for (const line of body.split(/\r?\n/u)) {
-    if (!line.startsWith('data:')) continue;
-    const data = line.slice('data:'.length).trim();
-    if (data === '' || data === '[DONE]') continue;
-    const event = JSON.parse(data) as unknown;
-    if (!isRecord(event)) continue;
-    if (event['id'] !== undefined) id = event['id'];
-    if (event['usage'] !== undefined && event['usage'] !== null) usage = event['usage'];
-    if (event['error'] !== undefined) error = event['error'];
-    const choice = Array.isArray(event['choices']) ? event['choices'].find(isRecord) : undefined;
-    if (choice === undefined) continue;
-    const delta = isRecord(choice['delta']) ? choice['delta'] : {};
-    if (typeof delta['content'] === 'string') content += delta['content'];
-    if (typeof delta['refusal'] === 'string') refusal += delta['refusal'];
-    if (choice['finish_reason'] !== undefined && choice['finish_reason'] !== null) finishReason = choice['finish_reason'];
-    if (choice['error'] !== undefined) choiceError = choice['error'];
-  }
-  const message = { content, ...(refusal === '' ? {} : { refusal }) };
-  return {
-    ...(id === undefined ? {} : { id }), ...(usage === undefined ? {} : { usage }), ...(error === undefined ? {} : { error }),
-    choices: [{ message, ...(finishReason === undefined ? {} : { finish_reason: finishReason }), ...(choiceError === undefined ? {} : { error: choiceError }) }],
   };
 }
 
@@ -155,7 +107,7 @@ export class OpenRouterClient implements LlmProviderClient {
       alive();
       annotateCoreRuntimeV1({ counts: { http_status: response.status } });
       let body: string;
-      try { body = await readAlive(response, alive); } catch (error) { return stalled(error); }
+      try { body = await readOpenRouterBodyV1(response, alive); } catch (error) { return stalled(error); }
       // A prompt past the model's own context window: the one real limit on how long a meeting one call can read.
       if (response.status === 400) {
         let refusal: unknown;
@@ -170,8 +122,7 @@ export class OpenRouterClient implements LlmProviderClient {
 
   private parsed(body: string, response: Response): { readonly payload: unknown; readonly response: Response } {
     try {
-      const streamed = (response.headers.get('content-type') ?? '').includes('text/event-stream');
-      const payload: unknown = observeCoreRuntimeSyncV1("model_parse", () => streamed ? assembledStream(body) : JSON.parse(body) as unknown);
+      const payload: unknown = observeCoreRuntimeSyncV1("model_parse", () => isOpenRouterStreamV1(response) ? assembledOpenRouterStreamV1(body) : JSON.parse(body) as unknown);
       try {
         // Usage is observational, never a business input.
         const usage = isRecord(payload) ? generationUsageObservation(payload) : {};

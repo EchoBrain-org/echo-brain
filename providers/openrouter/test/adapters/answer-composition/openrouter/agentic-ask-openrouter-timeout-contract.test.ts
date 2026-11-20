@@ -102,11 +102,12 @@ describe("Agentic Ask and OpenRouter timeout contract", () => {
       { blocks: [{ block: "answer", sentences: [{ text: "Launch is Tuesday.", evidence: ["E1"] }] }], not_found: [] },
     ];
     const timeouts: number[] = [];
-    const nativeTimeout = AbortSignal.timeout;
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
-      timeouts.push(milliseconds);
-      return nativeTimeout(milliseconds);
-    });
+    // The adapter's silence watchdog is a timer of the profile's integer period, armed for each call.
+    const nativeTimeout = globalThis.setTimeout;
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void, milliseconds?: number) => {
+      if (typeof milliseconds === "number") timeouts.push(milliseconds);
+      return nativeTimeout(handler, milliseconds);
+    }) as typeof setTimeout);
     const fetch = vi.fn<typeof globalThis.fetch>(async (): Promise<Response> => {
       const index = fetch.mock.calls.length - 1;
       clock += elapsed[index]!;
@@ -139,7 +140,8 @@ describe("Agentic Ask and OpenRouter timeout contract", () => {
 
       expect(answer).toMatchObject({ outcome: "answered", citations: [{ citation: launchEvidence().citation }] });
       expect(fetch).toHaveBeenCalledTimes(4);
-      expect(timeouts).toEqual([180_000, 180_000, 180_000, 180_000]);
+      expect(timeouts.filter(milliseconds => milliseconds === 180_000).length).toBeGreaterThanOrEqual(4);
+      expect(timeouts.every(milliseconds => Number.isSafeInteger(milliseconds))).toBe(true);
       expect(audit).toEqual([expect.objectContaining({ outcome: "answered", model_calls: 4, repairs: 0, fallbacks: 0, citation_count: 1 })]);
       expect(audit[0]!.checked_at).toBe(checkedAt);
     } finally {
