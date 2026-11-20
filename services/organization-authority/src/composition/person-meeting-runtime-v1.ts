@@ -186,8 +186,11 @@ export function createPersonMeetingRuntimeV1(options: {
   /** The owner's status for a source: its oldest authorized held meeting, else its oldest held one, then any connection or access error. */
   function sourceError(sourceKey: string): string | null {
     const rows = held(sourceKey), granted = rows.find(authorized), first = granted ?? rows[0];
-    const parts = [first && `Meeting ${first.external_id} is held after extraction attempt ${first.attempt} failed at ${first.failure_stage}. Later meetings continue. ${
-      granted ? 'A retry is authorized and runs on the next check.' : 'An operator can authorize one more attempt.'}`, observed.get(sourceKey)?.error];
+    const parts = [first && (first.failure_stage === 'output_too_long'
+      ? `Meeting ${first.external_id} is held: it is too long for one extraction pass, and the model's reply stopped at its output limit. Later meetings continue. ${
+        granted ? 'A retry is authorized and runs on the next check.' : 'Another attempt would stop the same way; an operator can still authorize one.'}`
+      : `Meeting ${first.external_id} is held after extraction attempt ${first.attempt} failed at ${first.failure_stage}. Later meetings continue. ${
+        granted ? 'A retry is authorized and runs on the next check.' : 'An operator can authorize one more attempt.'}`), observed.get(sourceKey)?.error];
     const text = parts.filter(part => part !== undefined && part !== null).join(' ');
     return text === '' ? null : text.slice(0, 512);
   }

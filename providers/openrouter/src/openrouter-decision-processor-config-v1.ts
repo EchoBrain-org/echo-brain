@@ -5,6 +5,11 @@ import { credentialReferenceSha256V1 } from "./fixed-decision-processor-bundle-v
 import { openrouterProcessingVersion } from "./llm/openrouter-decision-processor.js";
 
 export const OPENROUTER_DECISION_PROCESSOR_MODEL_V1 = "anthropic/claude-sonnet-4.6";
+/**
+ * Extraction may write as much as the model can: Claude Sonnet's own maximum output, 64,000 tokens (the figure the
+ * structured-generation adapter records). Both fixed processors run a Sonnet model.
+ */
+export const DECISION_PROCESSOR_MAX_OUTPUT_TOKENS_V1 = 64_000;
 
 export function fixedOpenRouterDecisionProcessorConfigV1(
   instanceId: string,
@@ -19,7 +24,7 @@ export function fixedOpenRouterDecisionProcessorConfigV1(
     settings: {
       provider: "openrouter",
       model: OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
-      max_output_tokens: 8192,
+      max_output_tokens: DECISION_PROCESSOR_MAX_OUTPUT_TOKENS_V1,
       request_timeout_ms: 600_000,
     },
   };

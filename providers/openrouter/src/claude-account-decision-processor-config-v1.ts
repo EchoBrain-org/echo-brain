@@ -3,10 +3,12 @@ import type { AdapterConfig } from '@echo-brain/organization-processing/core/con
 import { llmProcessingVersion, LLM_DECISION_PROCESSOR_PROMPT_VERSION, LLM_DECISION_PROCESSOR_SCHEMA_VERSION } from '@echo-brain/organization-processing/llm/llm-decision-processor';
 import { assertClaudeAccountProfileV1, CLAUDE_ACCOUNT_MODEL_V1, type ClaudeAccountProfileV1 } from './claude-research/account-profile.js';
 import { credentialReferenceSha256V1 } from './fixed-decision-processor-bundle-v1.js';
+import { DECISION_PROCESSOR_MAX_OUTPUT_TOKENS_V1 } from './openrouter-decision-processor-config-v1.js';
 
 export const CLAUDE_ACCOUNT_DECISION_PROCESSOR_PROVIDER_V1 = 'claude-account';
 export const CLAUDE_ACCOUNT_DECISION_PROCESSOR_TRANSPORT_V1 = 'claude-account-sdk-single-generation-v1';
-export const CLAUDE_ACCOUNT_DECISION_PROCESSOR_MAX_OUTPUT_TOKENS_V1 = 8192;
+/** The model's own maximum output (Claude Sonnet, 64,000 tokens), as for the OpenRouter processor. */
+export const CLAUDE_ACCOUNT_DECISION_PROCESSOR_MAX_OUTPUT_TOKENS_V1 = DECISION_PROCESSOR_MAX_OUTPUT_TOKENS_V1;
 export const CLAUDE_ACCOUNT_DECISION_PROCESSOR_TIMEOUT_MS_V1 = 600_000;
 
 /** Only operator-selected paths identify the account. Native Claude alone reads the sign-in. */

@@ -6,6 +6,7 @@ import {
   extractionGroundingFailureStage,
   extractionSchemaFailureStage,
 } from '../llm/llm-decision-processor.js';
+import { StructuredGenerationAttemptError } from '../llm/llm-provider.js';
 import { EXTRACTION_ATTEMPT_FAILURE_CODES_V1 } from './extraction-attempt-store-v1.js';
 
 /**
@@ -19,6 +20,8 @@ export const EXTRACTION_FAILURE_STAGES_V1 = [
   ...EXTRACTION_SCHEMA_FAILURE_STAGES.map(stage => `schema_${stage}` as const),
   'output_json',
   'output_contract',
+  // The model's reply reached its own output limit: the meeting is too long for one extraction pass.
+  'output_too_long',
   ...EXTRACTION_ATTEMPT_FAILURE_CODES_V1,
   'interrupted',
   'output_not_saved',
@@ -44,6 +47,7 @@ export function classifyExtractionFailureStageV1(
   const schema = extractionSchemaFailureStage(error);
   if (schema !== undefined) return `schema_${schema}`;
   if (!(error instanceof AdapterError)) return 'unknown';
+  if (error instanceof StructuredGenerationAttemptError && error.observation.stopReason === 'length') return 'output_too_long';
   return error.message === EXTRACTION_OUTPUT_JSON_FAILURE_MESSAGE ? 'output_json' : error.code;
 }
 

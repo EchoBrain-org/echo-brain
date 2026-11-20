@@ -146,10 +146,11 @@ describe('OpenRouter provider client', () => {
 
   it.each([
     {
+      // Stopped at the model's own output limit: billed, and it would stop there again, so never retried.
       finishReason: 'length',
       reply: 'content',
-      code: 'temporarily_unavailable',
-      retryable: true,
+      code: 'permanently_rejected',
+      retryable: false,
     },
     {
       finishReason: 'content_filter',

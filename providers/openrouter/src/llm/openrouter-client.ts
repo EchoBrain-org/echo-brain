@@ -171,11 +171,12 @@ export class OpenRouterClient implements LlmProviderClient {
         'response generation failed',
       );
     }
+    // A reply that stopped at the model's own output limit was billed and would stop there again: never retried.
     if (finishReason === 'length') {
       throw new StructuredGenerationAttemptError(
-        'temporarily_unavailable',
+        'permanently_rejected',
         'OpenRouter response reached the configured output-token limit',
-        true,
+        false,
         { ...attemptObservation, stopReason: finishReason },
       );
     }

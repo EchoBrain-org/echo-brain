@@ -41,6 +41,10 @@ function extractionFailure(error: unknown): AdapterError {
       return providerStatusError('Claude account', status, status === 429 || status >= 500);
     }
     if (diagnostic['failure_class'] === 'adapter_timeout') return new AdapterError('timeout', 'Claude account extraction timed out', true);
+    // A reply that stopped at the model's own output limit was billed and would stop there again: never retried.
+    if (diagnostic['failure_class'] === 'adapter_finish' && diagnostic['finish_reason'] === 'length') {
+      return new StructuredGenerationAttemptError('permanently_rejected', 'Claude account extraction reached its output-token limit', false, { stopReason: 'length' });
+    }
     if (diagnostic['failure_class'] === 'adapter_response') return new AdapterError('permanently_rejected', 'Claude account extraction returned no structured result', false);
   }
   return new AdapterError('unknown_outcome', 'Claude account extraction did not complete', false);

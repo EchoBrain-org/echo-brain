@@ -15,6 +15,7 @@ import {
   llmProcessingVersion as processingVersion,
 } from "../../src/llm/llm-decision-processor.js";
 import {
+  StructuredGenerationAttemptError,
   type LlmProviderClient,
   type LlmProviderId,
   type StructuredGenerationRequest,
@@ -691,6 +692,10 @@ describe('llm decision processor extraction', () => {
     const notJson = await extractWith('not json at all').catch((caught: unknown) => caught);
     expect(notJson).toMatchObject({ code: 'temporarily_unavailable', retryable: true, message: EXTRACTION_OUTPUT_JSON_FAILURE_MESSAGE });
     expect(classifyExtractionFailureStageV1(notJson, modelFailure)).toBe('output_json');
+    // A reply stopped at the model's own output limit holds as too long for one pass, never as a transient failure.
+    const tooLong = new StructuredGenerationAttemptError('permanently_rejected', 'reached the output-token limit', false, { stopReason: 'length' });
+    expect(classifyExtractionFailureStageV1(tooLong, modelFailure)).toBe('output_too_long');
+    expect(classifyExtractionFailureStageV1(new StructuredGenerationAttemptError('permanently_rejected', 'refused', false, { stopReason: 'content_filter' }), modelFailure)).toBe('permanently_rejected');
     expect(extractionSchemaFailureStage(new AdapterError('temporarily_unavailable', `${SCHEMA}untrusted-value`, true))).toBeUndefined();
     expect(extractionGroundingFailureStage(new AdapterError('temporarily_unavailable', `${GROUNDING}${modelValue}`, true))).toBeUndefined();
   });

@@ -68,7 +68,8 @@ it('runs the unchanged extraction prompt, schema and evidence checks through one
   const forward = vi.fn(async ({ res }) => { res.end('{}'); return {}; });
   const processor = createClaudeAccountDecisionProcessorV1(config, { account, forward,
     run: async input => {
-      expect(input).toMatchObject({ account, model, max_output_tokens: 8192, single_generation: true });
+      // The model's own maximum output, not a smaller allowance of ECHO's.
+      expect(input).toMatchObject({ account, model, max_output_tokens: 64_000, single_generation: true });
       expect(input.system).toContain('Extract only explicit decisions, actions, and rationales');
       expect(input.prompt).toContain('Use vendor X for hosting');
       expect(input.schema).toMatchObject({ required: ['signals'], additionalProperties: false });
@@ -118,6 +119,16 @@ it.each([
     run: async input => { await send(input); throw new ClaudeResearchResultErrorV1(); },
   });
   await expect(client.generateStructured(request)).rejects.toMatchObject({ code, unbilled, retryable: unbilled });
+});
+
+it('holds a reply that stopped at the model\'s output limit as too long, never retried', async () => {
+  const client = createClaudeAccountLlmProviderClientV1({ account,
+    forward: async ({ res }) => { res.end('{}'); return { usage: { input_tokens: 11, output_tokens: 64_000, total_tokens: 64_011, cached_input_tokens: null, reasoning_tokens: null }, finish_reason: 'length' }; },
+    run: async input => { await send(input); throw new ClaudeResearchResultErrorV1({ subtype: 'error_max_structured_output_retries', stop_reason: 'max_tokens' }); },
+  });
+  const failure = await client.generateStructured(request).catch(error => error);
+  expect(failure).toBeInstanceOf(StructuredGenerationAttemptError);
+  expect(failure).toMatchObject({ code: 'permanently_rejected', retryable: false, unbilled: false, observation: { stopReason: 'length' } });
 });
 
 it('maps a transport failure without authorizing a free retry', async () => {

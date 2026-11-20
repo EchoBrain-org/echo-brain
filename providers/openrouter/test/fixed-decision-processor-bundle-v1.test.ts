@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { LLM_DECISION_PROCESSOR_ADAPTER_VERSION, LLM_DECISION_PROCESSOR_PROMPT_VERSION, LLM_DECISION_PROCESSOR_SCHEMA_VERSION } from "@echo-brain/organization-processing/llm/llm-decision-processor";
 import { createClaudeAccountDecisionProcessorBundleV1 } from "../src/claude-account-decision-processor-bundle-v1.js";
 import { createOpenRouterDecisionProcessorBundleV1 } from "../src/openrouter-decision-processor-bundle-v1.js";
-import { OPENROUTER_DECISION_PROCESSOR_MODEL_V1 } from "../src/openrouter-decision-processor-config-v1.js";
+import { fixedOpenRouterDecisionProcessorConfigV1, OPENROUTER_DECISION_PROCESSOR_MODEL_V1 } from "../src/openrouter-decision-processor-config-v1.js";
+import { fixedClaudeAccountDecisionProcessorConfigV1 } from "../src/claude-account-decision-processor-config-v1.js";
 
 const source = { adapter_id: "synthetic-source", instance_id: "synthetic-source", version: "1.0.0",
   custodian_sha256: `sha256:${"a".repeat(64)}`, credential_reference_sha256: `sha256:${"b".repeat(64)}` } as const;
@@ -15,13 +16,15 @@ describe("fixed decision-processor commitments", () => {
   // Every source admission stores these. A change must be deliberate: it re-admits every source.
   it("commits each payer's exact processor version, configuration and credential reference", () => {
     expect([LLM_DECISION_PROCESSOR_ADAPTER_VERSION, LLM_DECISION_PROCESSOR_PROMPT_VERSION, LLM_DECISION_PROCESSOR_SCHEMA_VERSION, OPENROUTER_DECISION_PROCESSOR_MODEL_V1])
-      .toEqual(["2.0.0", "decision-extraction-v11", "decision-extraction-schema-v8", "anthropic/claude-sonnet-4.6"]);
+      .toEqual(["2.1.0", "decision-extraction-v12", "decision-extraction-schema-v8", "anthropic/claude-sonnet-4.6"]);
+    expect(fixedOpenRouterDecisionProcessorConfigV1("fixed-processor").settings.max_output_tokens).toBe(64_000);
+    expect(fixedClaudeAccountDecisionProcessorConfigV1("fixed-processor").settings.max_output_tokens).toBe(64_000);
     expect(payers.map(([, bundle]) => bundle.current_commitments("fixed-processor"))).toEqual([
-      { adapter_id: "llm", instance_id: "fixed-processor", version: "2.0.0+processing.49fc4c7d63646820",
-        configuration_sha256: "sha256:86b11493c033a79c13652e98298a6fa3cf9a80fbe8ee91b880ab3c1f71171c6e",
+      { adapter_id: "llm", instance_id: "fixed-processor", version: "2.1.0+processing.f07948a0e16bd789",
+        configuration_sha256: "sha256:fdfb3554e6c26a46f9f556ea7a27611c7216653a1376568e091228b18797b33c",
         credential_reference_sha256: "sha256:fee20b471db316d5878cf953f357c235be482bc104afcb4729a826584c72830e" },
-      { adapter_id: "llm", instance_id: "fixed-processor", version: "2.0.0+processing.0f3b80a38e6b98ba",
-        configuration_sha256: "sha256:ceb1c4173ff60907192dd23cc17a251c500cc4f5c3611942ff82869bd36a55bb",
+      { adapter_id: "llm", instance_id: "fixed-processor", version: "2.1.0+processing.a3aa25789098530a",
+        configuration_sha256: "sha256:1b5a38ecaae78c1cfdb9a8cefcab62b7da9ea9bde5fc7483e8e634b0501b6bf6",
         credential_reference_sha256: "sha256:e4902f78de5f9820e38d0c63a3e478dd7165ffb62a534a1010cf445e9f181c01" },
     ]);
   });
