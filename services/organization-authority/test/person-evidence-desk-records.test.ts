@@ -339,7 +339,7 @@ describe('Person evidence desk over the real approved-record route', () => {
     expect(result.notice_kind).toBe('informational');
   });
 
-  it('asks the records for the desk search's own page, any size, and for every match when it names none', async () => {
+  it('asks the records for the page the desk search names, any size, and for every match when it names none', async () => {
     const value = await fixture();
     const searchBatch = vi.fn(value.route.searchBatch);
     const desk = createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, originals: emptyOriginals(), records: { ...value.route, searchBatch } });
