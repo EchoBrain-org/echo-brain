@@ -1314,7 +1314,7 @@ describe("Person Layer 2 route: approved records carry their dates and their mee
         brief: (brief) => ({ ...brief, meeting: { ...brief.meeting, title: "THERM DVT sync", time: { actual_start_at: "2026-10-04T16:00:00.000Z" },
           participants: [{ id: "ari", display_name: "Ari Employee", identities: [{ kind: "email", value: "ari-identity@example.test" }] }, { id: "maya", display_name: "Maya Chen" }, { id: "maya-again", display_name: "Maya Chen" }, { id: "unnamed" }] },
           actions: brief.actions.map((signal) => ({ ...signal, due_at: "2026-10-09T17:00:00.000Z" })) }) },
-      // Its approver has left, so the directory names none; forty participants are more than open releases.
+      // Its approver has left, so the directory names none; forty participants, every one named.
       { name: "crowd", approval_id: "apr_crowd", projects: [EVERYONE], final_approver: { principal_id: "prn_departed", membership_id: "mem_departed" }, issued_at: T(10),
         brief: (brief) => ({ ...brief, meeting: { ...brief.meeting, participants: people(40) } }) },
     ] });
@@ -1328,8 +1328,8 @@ describe("Person Layer 2 route: approved records carry their dates and their mee
         // An action's due date is its day in the meeting's own time zone (UTC here: the meeting names none), never the instant (ADR-0053).
         ["action", { occurred: "2026-10-04T16:00:00.000Z", approved: "2026-10-05T23:30:00.000Z", due: "2026-10-09" }, { due_at: "2026-10-09", participants: "Ari Employee, Maya Chen", approved_by: "Olive Owner" }],
       ]);
-      // The open's names, "and more" past its 32, and no approver a record does not name.
-      expect(of("crowd")[0]!.attributes).toEqual({ status: "decided", participants: `${people(32).map((person) => person.display_name).join(", ")}, and more` });
+      // Every participant's name, and no approver a record does not name.
+      expect(of("crowd")[0]!.attributes).toEqual({ status: "decided", participants: people(40).map((person) => person.display_name).join(", ") });
       expect(of("r1")[0]).toMatchObject({ dates: { occurred: "2026-09-01T02:00:00.000Z", approved: T(1) }, attributes: { status: "decided" } });
       expect(of("r3")[0]!.dates).toEqual({ approved: T(3) });
       // Names only: no identity, id or membership of a participant or the approver.

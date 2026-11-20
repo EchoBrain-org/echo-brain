@@ -12,12 +12,6 @@ import { asRecord, assertDigest, assertExactKeys, fail, oneOf } from './validati
  * trimmed, never empty), each no longer than the record it comes from.
  */
 export const PERSON_CITED_RECORD_KIND_V1 = 'echo-person-cited-record-v1';
-/**
- * Read only by the evidence desk's meeting participants row fact
- * (person-meeting-items-v1.ts); a cited record names every participant. Goes
- * once the desk stops reading it.
- */
-export const PERSON_CITED_RECORD_PARTICIPANTS_MAX_V1 = 32;
 const TIMEZONE = /^[A-Za-z0-9_+\-/]{1,64}$/;
 
 export type PersonCitedRecordPolicyV1 = 'restricted-reviewer-person-v2' | 'project-members-readable-person-v1';
