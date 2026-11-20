@@ -169,9 +169,10 @@ test("lets the kernel's own reading, repair and downgrades decide what is releas
   assert.match(trial.attempts[0].problems[0], /"blocks" must be an array/u);
   const repair = JSON.parse(trial.attempts[1].user_prompt);
   assert.deepEqual([repair.validation_error, JSON.parse(repair.rejected_response)], [trial.attempts[0].problems[0], { not_found: [] }]);
-  // Downgraded, the quote and both events read as text after the answer: no quote, and no timeline of one event.
-  assert.deepEqual(trial.read.blocks.map((block) => block.kind), ["answer", "prose"]);
-  assert.deepEqual(trial.read.blocks[1].claims.map((claim) => claim.text), ["DVT readiness review: Priya owns the soak from now on.", "2026-10-27: The soak was assigned.", "The chamber was ordered."]);
+  // Downgraded, the quote and the undated event read as text; the event E1 dates stays a timeline of one event.
+  assert.deepEqual(trial.read.blocks.map((block) => block.kind), ["answer", "prose", "timeline", "prose"]);
+  assert.deepEqual(trial.read.blocks[1].claims.map((claim) => claim.text), ["DVT readiness review: Priya owns the soak from now on."]);
+  assert.deepEqual(trial.read.blocks[3].claims.map((claim) => claim.text), ["The chamber was ordered."]);
   assert.deepEqual([report.summary.repairs, report.summary.valid_at_once, report.summary.valid], [1, 0, 1]);
 });
 

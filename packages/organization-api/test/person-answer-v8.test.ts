@@ -25,13 +25,14 @@ const response = (citations: readonly { readonly visibility: string }[] = [proje
 });
 
 describe('Workspace answer V8 (research tool contract v1)', () => {
-  it('carries bounded typed explanations separately from technical diagnostic gaps', () => {
+  it('carries typed explanations, of any length, separately from technical diagnostic gaps', () => {
     const value = { ...response([]), outcome: 'partial', parts: [{ question: 'Find a rule and change it.', status: 'not_found', statements: [],
       gap: 'Some evidence could not fit in this response.', gap_details: { unsupported_action: true, interrupted: true, not_found: 'Not found: the owner.' } }] };
     expect(validatePersonAnswerResponseV8(value).parts[0]).toMatchObject({ gap_details: value.parts[0]!.gap_details });
-    for (const gap_details of [{}, { unsupported_action: false }, { interrupted: 'yes' }, { technical: true }, { not_found: '' }, { not_found: 'x'.repeat(2049) }]) {
+    for (const gap_details of [{}, { unsupported_action: false }, { interrupted: 'yes' }, { technical: true }, { not_found: '' }]) {
       expect(() => validatePersonAnswerResponseV8({ ...value, parts: [{ ...value.parts[0], gap_details }] })).toThrow();
     }
+    expect(validatePersonAnswerResponseV8({ ...value, parts: [{ ...value.parts[0], gap_details: { not_found: `Not found: ${'x'.repeat(5_000)}.` } }] }).parts[0]!.gap_details!.not_found).toHaveLength(5_012);
     expect(() => validatePersonAnswerResponseV8({ ...value, outcome: 'not_found' })).toThrow();
   });
 

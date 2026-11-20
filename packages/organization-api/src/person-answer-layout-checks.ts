@@ -1,4 +1,4 @@
-import { assertExactKeys, asEnumerableRecord as object, fail, utf8ByteLength } from './validation.js';
+import { assertExactKeys, asEnumerableRecord as object, fail } from './validation.js';
 
 /**
  * What answer layout v2 (ADR-0051) checks of its blocks: a text, a block's
@@ -6,16 +6,14 @@ import { assertExactKeys, asEnumerableRecord as object, fail, utf8ByteLength } f
  * the layout's own validator, never these.
  */
 
-const TABLE_MIN_COLUMNS = 2;
-export const LAYOUT_COLUMN_MAX_BYTES = 100;
-export const LAYOUT_CELL_MAX_BYTES = 300;
-export const LAYOUT_CAPTION_MAX_BYTES = 600;
-
-/** Single-line, NFC, trimmed text within `maximumBytes`; empty only when `empty`. */
-export function layoutLine(value: unknown, label: string, maximumBytes: number, empty = false): string {
+/**
+ * Single-line, NFC, trimmed text; empty only when `empty`. A layout field has no length of its own: the response's
+ * transport bound is what limits an answer.
+ */
+export function layoutLine(value: unknown, label: string, empty = false): string {
   if (
     typeof value !== 'string' || (value.length === 0 && !empty) || value.trim() !== value || value !== value.normalize('NFC') ||
-    /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value) || utf8ByteLength(value) > maximumBytes
+    /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)
   ) fail(`${label} is invalid`);
   return value as string;
 }
@@ -33,7 +31,7 @@ export function layoutIndexes(value: unknown, label: string, bound: number, mini
 
 /**
  * A table's columns, rows and caption, against the statements it shows (`own`, indexes into `statements`) and the
- * answer's citation count: at least 2 distinct columns and `minimumRows` rows, as many of each as its statements hold,
+ * answer's citation count: at least one column, each distinct, and `minimumRows` rows, as many as its statements hold,
  * of one cell per column, none empty, and rows that together cite exactly what its statements cite.
  */
 export function layoutTable(
@@ -46,8 +44,8 @@ export function layoutTable(
 ): {
   readonly columns: readonly string[]; readonly rows: readonly { readonly cells: readonly string[]; readonly citation_indexes: readonly number[] }[]; readonly caption?: string;
 } {
-  if (!Array.isArray(input.columns) || input.columns.length < TABLE_MIN_COLUMNS) fail(`${label} columns is invalid`);
-  const columns = Object.freeze((input.columns as unknown[]).map(column => layoutLine(column, `${label} column`, LAYOUT_COLUMN_MAX_BYTES)));
+  if (!Array.isArray(input.columns) || input.columns.length === 0) fail(`${label} columns is invalid`);
+  const columns = Object.freeze((input.columns as unknown[]).map(column => layoutLine(column, `${label} column`)));
   if (new Set(columns).size !== columns.length) fail(`${label} columns contains duplicates`);
   if (!Array.isArray(input.rows) || input.rows.length < minimumRows) fail(`${label} rows is invalid`);
   const cited = new Set(own.flatMap(index => statements[index]!.citation_indexes));
@@ -56,9 +54,9 @@ export function layoutTable(
     const row = object(rawRow, `${label} row`);
     assertExactKeys(row, ['cells', 'citation_indexes'], `${label} row`);
     if (!Array.isArray(row.cells) || row.cells.length !== columns.length) fail(`${label} row cells is invalid`);
-    const cells = Object.freeze((row.cells as unknown[]).map(cell => layoutLine(cell, `${label} cell`, LAYOUT_CELL_MAX_BYTES, true)));
+    const cells = Object.freeze((row.cells as unknown[]).map(cell => layoutLine(cell, `${label} cell`, true)));
     if (cells.every(cell => cell === '')) fail(`${label} row is empty`);
-    const rowIndexes = layoutIndexes(row.citation_indexes, `${label} row citation_indexes`, citationCount, 1, 40);
+    const rowIndexes = layoutIndexes(row.citation_indexes, `${label} row citation_indexes`, citationCount, 1, Number.MAX_SAFE_INTEGER);
     for (const index of rowIndexes) {
       if (!cited.has(index)) fail(`${label} row cites what its statements do not`);
       rowCited.add(index);
@@ -68,6 +66,6 @@ export function layoutTable(
   if (rowCited.size !== cited.size) fail(`${label} rows leave a citation of its statements out`);
   return {
     columns, rows,
-    ...(Object.hasOwn(input, 'caption') ? { caption: layoutLine(input.caption, `${label} caption`, LAYOUT_CAPTION_MAX_BYTES) } : {}),
+    ...(Object.hasOwn(input, 'caption') ? { caption: layoutLine(input.caption, `${label} caption`) } : {}),
   };
 }

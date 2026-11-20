@@ -231,7 +231,7 @@ describe("agentic Ask model protocol parity", () => {
   it("names each selection field, and either bound, in the list block's schema (ADR-0041, ADR-0054)", () => {
     const list = ((((answerBlocksSchema.properties as Schema).blocks as Schema).items as Schema).anyOf as Schema[]).find(variant => variant.properties.block.enum[0] === "list")!;
     expect((list.properties as Schema).where).toEqual({ type: "object", additionalProperties: false, required: ["field"], properties: {
-      field: { type: "string", enum: ["owner", "status", "due", "created", "updated", "received", "occurred", "approved", "sent", "reassigned", "checked"] }, value: { type: "string", maxLength: 120 }, since: { type: "string", maxLength: 10 }, until: { type: "string", maxLength: 10 },
+      field: { type: "string", enum: ["owner", "status", "due", "created", "updated", "received", "occurred", "approved", "sent", "reassigned", "checked"] }, value: { type: "string" }, since: { type: "string", maxLength: 10 }, until: { type: "string", maxLength: 10 },
     } });
   });
 
@@ -362,11 +362,11 @@ describe("agentic Ask model protocol parity", () => {
     expect(step.parts[0]!.needs[4]).not.toHaveProperty("id");
   });
 
-  it("truncates over-long text to its bound instead of rejecting it", () => {
+  it("truncates an over-long part question or need to its bound instead of rejecting it, and keeps notes whole", () => {
     const step = parseStep({ parts: [{ question: "q".repeat(900), needs: [{ need: "n".repeat(900), status: "open", evidence: [] }], notes: "n".repeat(5_000) }], actions: [{ tool: "finish", args: {} }] });
     expect([...step.parts[0]!.question].length).toBeLessThanOrEqual(400);
     expect([...step.parts[0]!.needs[0]!.need].length).toBeLessThanOrEqual(200);
-    expect([...step.parts[0]!.notes].length).toBeLessThanOrEqual(800);
+    expect(step.parts[0]!.notes).toBe("n".repeat(5_000));
   });
 
   it("keeps evidence ids out of the prose", () => {
@@ -428,7 +428,7 @@ describe("agentic Ask model protocol parity", () => {
       ["six parts in a step: no cap, nothing to correct", step({ parts: Array.from({ length: 6 }, (_, index) => ({ question: `q${index}`, needs: [], notes: "" })) }), ask, {}],
       ["many actions in an Ask step: no cap, nothing to correct", actions(Array.from({ length: 30 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), ask, {}],
       ["many actions in a task step: no cap, nothing to correct", actions(Array.from({ length: 12 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), task, {}],
-      ["text past its cap", step({ parts: [{ question: "q".repeat(401), needs: [content({ need: "n".repeat(201) })], notes: "n".repeat(801) }], actions: [{ tool: "search", args: { query: "x".repeat(241) } }] }), ask, { model_text_truncated: 4 }],
+      ["text past its cap (notes have none)", step({ parts: [{ question: "q".repeat(401), needs: [content({ need: "n".repeat(201) })], notes: "n".repeat(801) }], actions: [{ tool: "search", args: { query: "x".repeat(241) } }] }), ask, { model_text_truncated: 3 }],
       ["an argument with no text, or one its tool does not take", actions([{ tool: "search", args: { query: "OPS-17", since: "" } }, { tool: "open", args: { id: "E1", query: "OPS-17" } }]), ask, { model_entry_dropped: 2 }],
     ] as const)("in a step: %s", (_name, value, options, expected) => {
       expect(corrected(() => parseStep(value, options))).toEqual(expected);
@@ -623,20 +623,20 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(read([{ block: "chart" }, { block: " Answer ", sentences: sentences("First.") }])).toEqual([["First.", "answer"]]);
   });
 
-  it("caps no table's columns or cells, but reads a row too wide for one statement as text, cut to a statement's bytes", () => {
+  it("caps no table's columns or cells, and keeps a row of any width as a row, whole", () => {
     const wide = Array.from({ length: 35 }, (_, at) => `${"x".repeat(115)} ${at}`);
     const columns = Array.from({ length: 35 }, (_, at) => `Column ${at + 1}`);
     const eight = columns.slice(0, 8);
     const parsed = parseBlocksAnswer(reply([{ block: "table", columns, rows: [
       { cells: wide, evidence: ["E1"] }, { cells: ["a", 7], evidence: ["E1"] }, { cells: eight.map((_, at) => `${at}`), evidence: ["E1"] },
     ] }, { block: "table", columns: eight, rows: [{ cells: eight.map((_, at) => `${at}`), evidence: ["E1"] }, { cells: eight.map((_, at) => `${at + 1}`), evidence: ["E1"] }] }]));
-    // 35 columns of long cells pass a statement's 4 KiB: text, cut; a row whose cells do not match its columns: text.
-    expect(parsed.sentences.map(sentence => sentence.item?.kind)).toEqual(["text", "text", "text", "row", "row"]);
-    expect(Buffer.byteLength(parsed.sentences[0]!.text)).toBeLessThanOrEqual(4 * 1024);
-    expect(parsed.sentences[0]!.text.endsWith("…")).toBe(true);
+    // 35 columns of long cells: a row, whole; a row whose cells do not match its columns: text.
+    expect(parsed.sentences.map(sentence => sentence.item?.kind)).toEqual(["row", "text", "text", "row", "row"]);
+    expect(Buffer.byteLength(parsed.sentences[0]!.text)).toBeGreaterThan(4 * 1024);
+    expect(parsed.sentences[0]!.text.endsWith("…")).toBe(false);
     expect(parsed.sentences[1]!.text).toBe("a.");
     expect(parsed.sentences[3]!.item).toMatchObject({ kind: "row", columns: eight });
-    expect(corrected(() => parseBlocksAnswer(reply([{ block: "table", columns, rows: [{ cells: wide, evidence: ["E1"] }, { cells: wide, evidence: ["E1"] }] }])))).toEqual({ model_enum_respelled: 2, model_text_truncated: 2 });
+    expect(corrected(() => parseBlocksAnswer(reply([{ block: "table", columns, rows: [{ cells: wide, evidence: ["E1"] }, { cells: wide, evidence: ["E1"] }] }])))).toEqual({});
   });
 
   it("writes a row's whole claim from its cells, past the 700 characters a writer's sentence holds, so rows that end apart stay apart", () => {
@@ -649,7 +649,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(texts[0]).toBe(`${columns.map((column, at) => `${column}: ${row(`${"y".repeat(114)} ALLOW`).cells[at]}`).join("; ")}.`);
   });
 
-  it("keeps a long sentence and a long cell whole, cutting only past the contract's own bytes for them", () => {
+  it("keeps a long sentence and a long cell whole: neither has a length of its own", () => {
     const long = `${"The vendor confirmed the thermal-pad retest finishes before the build review. ".repeat(13)}`.trim();
     expect(long.length).toBeGreaterThan(1_000);
     const parsed = parseBlocksAnswer(writerReply([{ text: long, evidence: ["E1"] }]));
@@ -657,13 +657,13 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     const cell = "c".repeat(250);
     const table = parseBlocksAnswer(reply([{ block: "table", columns: ["Item", "Note"], rows: [{ cells: ["Fix", cell], evidence: ["E1"] }, { cells: ["Run", "ok"], evidence: ["E1"] }] }]));
     expect(table.sentences[0]!.text).toContain(cell);
-    expect(Buffer.byteLength(parseBlocksAnswer(writerReply([{ text: "語".repeat(4_000), evidence: ["E1"] }])).sentences[0]!.text, "utf8")).toBeLessThanOrEqual(4 * 1024);
+    expect(parseBlocksAnswer(writerReply([{ text: "語".repeat(4_000), evidence: ["E1"] }])).sentences[0]!.text).toBe("語".repeat(4_000));
   });
 
-  it("reads a card's title once, as its name, counting a cut only past a name's own cap", () => {
+  it("reads a card's title once, as its name, whole however long", () => {
     const card = (title: string) => reply([{ block: "card", title, kind: "ticket", facts: [{ label: "Status", value: "Open", evidence: ["E1"] }, { label: "Owner", value: "Ana", evidence: ["E1"] }] }]);
     expect(corrected(() => parseBlocksAnswer(card("t".repeat(200))))).toEqual({});
-    expect(corrected(() => parseBlocksAnswer(card("t".repeat(201))))).toEqual({ model_text_truncated: 1 });
+    expect(corrected(() => parseBlocksAnswer(card("t".repeat(2_001))))).toEqual({});
   });
 
   it("reads an item its block cannot show as text in its block, and counts each reading", () => {
@@ -675,11 +675,11 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
       { block: "card", title: "Ana", kind: "team", facts: [{ label: "Role", value: "Lead", evidence: ["E1"] }] },
     ];
     expect(read(blocks)).toEqual([
-      ["Fix BUG-412.", "text"], ["Action: Run DVT-R2; Owner: QA.", "row"], ["One.", "text"], ["Two.", "text"],
+      ["Fix BUG-412.", "text"], ["Action: Run DVT-R2; Owner: QA.", "row"], ["Only: One.", "row"], ["Only: Two.", "row"],
       ["Ana: Not a day.", "text"], ["Written.", "text"], ["Status: Done.", "text"], ["Team: Ana; Role: Lead.", "fact"],
     ]);
-    // Two rows and both of a one-column table, two events, and the untitled card are read again; a team card is a card of its own kind; an empty row, event and value are dropped.
-    expect(corrected(() => parseBlocksAnswer(reply(blocks)))).toEqual({ model_enum_respelled: 7, model_entry_dropped: 3 });
+    // One row, two events, and the untitled card are read again (a one-column table is a table); a team card is a card of its own kind; an empty row, event and value are dropped.
+    expect(corrected(() => parseBlocksAnswer(reply(blocks)))).toEqual({ model_enum_respelled: 5, model_entry_dropped: 3 });
   });
 
   it("drops a block it cannot read, and caps no count of blocks or items: the part's bounds decide what is kept", () => {

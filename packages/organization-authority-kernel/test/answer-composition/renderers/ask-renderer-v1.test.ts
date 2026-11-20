@@ -1,5 +1,5 @@
 import { canonicalJsonBytes, canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
-import { PERSON_ANSWER_RESPONSE_MAX_BYTES_V4, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4, PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4, validatePersonAnswerBlocksV2 } from "@echo-brain/organization-api";
+import { PERSON_ANSWER_RESPONSE_MAX_BYTES_V4, PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4, validatePersonAnswerBlocksV2 } from "@echo-brain/organization-api";
 import { describe, expect, it } from "vitest";
 import { agenticAskContextBudgetBytesV1 } from "../../../src/answer-composition/agentic-ask-v1.js";
 import {
@@ -746,7 +746,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rows.at(-1)!.cells[columns.indexOf("Due")]).toBe("2026-11-06");
       expect(blocks.every(block => block.kind === "table" && block.rows.every(row => row.cells.length === block.columns.length))).toBe(true);
       expect(rendered.cited).toEqual(selected);
-      expect(part.statements.every(statement => Buffer.byteLength(statement.text, "utf8") <= PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 && statement.citation_indexes.length <= 40)).toBe(true);
+      expect(part.statements.every(statement => statement.citation_indexes.length <= 40)).toBe(true);
       expect(part.statements.map(statement => statement.text).join(" ")).not.toContain("and 99 more");
     });
     it("reads a member selected by its opened body as that body's listed row", async () => {
@@ -1068,14 +1068,13 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.cited).toEqual(["E49", ...ids(41, 8), ...ids(1, 8)]);
       expect(corrections).not.toHaveProperty("writer_unknown_id_dropped");
     });
-    it("bounds the response's notice to its 2 KiB, keeping whole notices in order while they fit", async () => {
-      // Two 1,000-byte coverage notices, and a third that does not fit beside them.
+    it("keeps every notice whole, in order: a notice has no length of its own", async () => {
+      // Three 1,000-byte coverage notices: all of them are said.
       const research = listBundle(48, 1, Array.from({ length: 6 }, (_, at) => list(`L${at + 1}`, ids(at * 8 + 1, 8))), [C(["E49"])]);
       const long = (n: number) => `Coverage note ${n}: ${"x".repeat(1_000 - `Coverage note ${n}: `.length)}`;
       const rendered = await alone({ bundle: { ...research, coverage: { reads: [], inventories: [], notices: [long(1), long(2), long(3)] } }, replies: [placedOn("E49")] }).render(Q);
       const notice = rendered.result.response.notice!;
-      expect(Buffer.byteLength(notice, "utf8")).toBeLessThanOrEqual(2 * 1024);
-      expect(notice.startsWith(`${long(1)} ${long(2)} `)).toBe(true);
+      expect(notice.startsWith(`${long(1)} ${long(2)} ${long(3)}`)).toBe(true);
     });
     it("writes from notes that say nothing: an interrupted Claude account run's one synthetic open need", async () => {
       const research: AgenticEvidenceBundleV1 = { ...records(1), plan: [{ part: 1, question: Q, notes: "", needs: [{ need: Q, kind: "content", status: "open", evidence: [] }] }], stop: { reason: "stalled", completed: false } };
@@ -1207,12 +1206,12 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
     expect(corrections).toMatchObject({ writer_quote_unquoted: 1, writer_event_undated: 1 });
   });
 
-  it("leaves out an item that cites no text it read (W1), reading a block left with one item as text and no answer it was not given", async () => {
+  it("leaves out an item that cites no text it read (W1), keeping a block left with one item as that block, and no answer it was not given", async () => {
     const steps = { ...STEPS, items: [STEPS.items[0], { text: "Book the line.", evidence: ["E9"] }] };
     const unread = { block: "answer", sentences: [{ text: "PVT can start.", evidence: ["E9"] }] };
     const rendered = await alone({ bundle: therm(), replies: [reply(unread, steps, CARD)] }).render("Can PVT start?");
     expect(part(rendered).statements.map(value => value.text)).toEqual(["Freeze the firmware.", "Ticket: THERM-48; Status: In review.", "Ticket: THERM-48; Owner: Tomas Okafor."]);
-    expect(blocksOf(rendered)).toEqual([{ kind: "text", title: "Before PVT", statements: [0] }, { kind: "card", title: "THERM-48", entity: "ticket", statements: [1, 2], facts: [{ label: "Status", value: "In review" }, { label: "Owner", value: "Tomas Okafor" }] }]);
+    expect(blocksOf(rendered)).toEqual([{ kind: "points", title: "Before PVT", ordered: true, statements: [0] }, { kind: "card", title: "THERM-48", entity: "ticket", statements: [1, 2], facts: [{ label: "Status", value: "In review" }, { label: "Owner", value: "Tomas Okafor" }] }]);
     // A writer that gave no answer block has its first item read as the answer, when it is untitled text.
     const untitled = await alone({ bundle: therm(), replies: [reply({ block: "text", sentences: ANSWER.sentences }, STEPS)] }).render("Can PVT start?");
     expect(blocksOf(untitled).map(block => block.kind)).toEqual(["answer", "points"]);

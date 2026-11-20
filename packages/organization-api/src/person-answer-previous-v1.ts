@@ -31,7 +31,6 @@ import type { PersonAnswerCitationV8 } from './person-answer-v8.js';
  * go with that check.
  */
 export const PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1 = 200;
-/** UTF-8 bytes of one earlier sentence: a released statement's own bound (PERSON_ANSWER_STATEMENT_MAX_BYTES_V4). */
 export const PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1 = 4 * 1024;
 export const PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1 = 400;
 export const PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1 = 40;

@@ -8,12 +8,12 @@ import {
  * person's question and never as evidence, and never in place of evidence.
  */
 describe("research notes for the writer (ADR-0054)", () => {
-  it("gives each need as research worded it, cut to 240 bytes, with the ids the writer was shown", () => {
+  it("gives each need as research worded it, whole, with the ids the writer was shown", () => {
     const plan = [{ part: 1, question: "Which tickets?", notes: "scratch", needs: [
       { need: "é".repeat(200), kind: "which_items" as const, status: "found" as const, evidence: ["E3", "L1", "L7", "E99"] },
       { need: "who approved it", status: "not_found" as const, evidence: [] }] }];
     const notes = agenticResearchNotesV1({ plan, shown: id => id === "L1" || id === "E3", not_shown: { lists: 1, list_rows: 24 }, max_bytes: 4096 });
-    expect(Buffer.byteLength(notes.needs[0]!.need, "utf8")).toBeLessThanOrEqual(240);
+    expect(notes.needs[0]!.need).toBe("é".repeat(200));
     expect(notes.needs[0]).toMatchObject({ part: 1, kind: "which_items", status: "found", on_desk: ["L1", "E3"], not_shown: 2 });
     expect(notes.needs[1]).toEqual({ part: 1, need: "who approved it", kind: "content", status: "not_found", on_desk: [] });
     expect(notes).toMatchObject({ about: AGENTIC_RESEARCH_NOTES_ABOUT_V1, not_shown: { lists: 1, list_rows: 24 } });
@@ -27,16 +27,17 @@ describe("research notes for the writer (ADR-0054)", () => {
     expect(notes.needs.length + notes.needs_omitted!).toBe(50);
     expect(notes.needs.map(need => need.need.split(" ")[1])).toEqual(Array.from({ length: notes.needs.length }, (_, n) => String(n)));
     expect(agenticResearchNotesV1({ plan: [], shown: () => true, not_shown: { lists: 0, list_rows: 0 }, max_bytes: 2048 }).needs).toEqual([]);
-    expect(agenticResearchNotesV1({ plan, shown: () => true, not_shown: { lists: 0, list_rows: 0 }, max_bytes: 1_000_000 }).needs.length).toBeLessThan(50);
+    // With room, every need is given: the window, not a count of its own, bounds the notes.
+    expect(agenticResearchNotesV1({ plan, shown: () => true, not_shown: { lists: 0, list_rows: 0 }, max_bytes: 1_000_000 }).needs).toHaveLength(50);
   });
 
-  it("keeps a need's list ids and its first 40 item ids", () => {
+  it("keeps a need's list ids and every item id the writer was shown", () => {
     const evidence = [...Array.from({ length: 60 }, (_, n) => `E${n + 1}`), "L1"];
     const notes = agenticResearchNotesV1({ plan: [{ part: 1, question: "q", notes: "", needs: [{ need: "every ticket", kind: "which_items", status: "found", evidence }] }],
       shown: () => true, not_shown: { lists: 0, list_rows: 0 }, max_bytes: 8192 });
-    expect(notes.needs[0]!.on_desk).toHaveLength(41);
+    expect(notes.needs[0]!.on_desk).toHaveLength(61);
     expect(notes.needs[0]!.on_desk.slice(0, 2)).toEqual(["L1", "E1"]);
-    expect(notes.needs[0]!.not_shown).toBe(20);
+    expect(notes.needs[0]).not.toHaveProperty("not_shown");
   });
 
   it("says, per list shown, how many members research read in full of how many, as advice", () => {

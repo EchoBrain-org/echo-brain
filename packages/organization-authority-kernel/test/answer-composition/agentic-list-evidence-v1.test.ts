@@ -2,7 +2,6 @@ import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import {
-  AGENTIC_LIST_STATEMENT_BYTES_V1,
   agenticCalendarDayV1, agenticListCompleteV1, agenticListEndUnverifiedV1, agenticListFillV1, agenticListFilterNoticeV1, agenticListFilterPhraseV1, agenticListIdV1,
   agenticListMembersNounV1, agenticListMembershipV1, agenticListNounV1, agenticListSelectionNotFoundV1, agenticListSelectV1, agenticListShownNoteV1,
   agenticListStatementsV2, agenticListTableV1,
@@ -304,7 +303,7 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     const statements = agenticListStatementsV2({ noun: TICKETS, filter: {}, count: selected.length, complete: true, selected, by_id: byId });
     expect(statements.length).toBeGreaterThan(1);
     expect(statements.flatMap(statement => statement.cited)).toEqual(Array.from({ length: selected.length }, (_, index) => index));
-    expect(statements.every(statement => statement.cited.length <= 40 && Buffer.byteLength(statement.text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1)).toBe(true);
+    expect(statements.every(statement => statement.cited.length <= 40)).toBe(true);
     expect(new Set(statements.map(statement => statement.caption)).size).toBe(1);
     expect(statements.map(statement => statement.text).join(" ")).not.toMatch(/and \d+ more/u);
   });
@@ -313,7 +312,8 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     const selected = [{ title: text, status: text, owner: text, due: text, dates: { created: text, updated: text, occurred: text, received: text } }];
     const statements = agenticListStatementsV2({ noun: TICKETS, filter: { owner: text, kind: "ticket", status: "open", role: "lead" }, count: 1, complete: true, selected, by_id: true, where: { field: "owner", value: text } });
     expect(statements.flatMap(statement => statement.cited)).toEqual([0]);
-    expect(statements.every(statement => Buffer.byteLength(statement.text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1)).toBe(true);
+    // A statement is split only every 40 names: no byte bound cuts a long name's statement.
+    expect(statements.every(statement => statement.cited.length <= 40)).toBe(true);
   });
   const titles = ["ECHO Product Pipeline — Start Here", "Assumptions and decisions — source facts versus proposals", "Gate reviews — EVT pass, DVT hold, PVT pending"];
   const pages = titles.map(title => ({ title, status: "current" }));
@@ -439,11 +439,11 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     expect(titled(agenticListSelectV1(owners, { field: "owner", value: " DANA LEE " }))).toEqual(["THERM-1: A", "THERM-3: C"]);
   });
 
-  it("goes on in another statement before one passes its byte bound, and names no list with no member", () => {
+  it("names long titles in one statement, splitting only every 40 names, and names no list with no member", () => {
     const selected = Array.from({ length: 25 }, (_, index) => ({ title: `${index} ${"𝔸".repeat(118)}` }));
     const wide = agenticListStatementsV2({ noun: PAGES, filter: OCTOBER_4.filter, count: 25, complete: true, selected });
-    expect(wide.length).toBeGreaterThan(1);
-    expect(wide.every(value => Buffer.byteLength(value.text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1)).toBe(true);
+    expect(wide).toHaveLength(1);
+    expect(wide.every(value => value.cited.length <= 40)).toBe(true);
     expect(wide.flatMap(value => value.cited)).toEqual(Array.from({ length: 25 }, (_, index) => index));
     expect(() => statement({ noun: PAGES, selected: [] })).toThrow(RangeError);
   });

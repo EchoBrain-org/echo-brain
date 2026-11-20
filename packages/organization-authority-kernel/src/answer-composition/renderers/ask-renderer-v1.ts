@@ -1,8 +1,5 @@
 import {
-  PERSON_ANSWER_CAPTION_MAX_BYTES_V1,
-  PERSON_ANSWER_STATEMENT_MAX_BYTES_V4,
   PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4,
-  PERSON_ANSWER_PART_GAP_MAX_BYTES_V4,
   personAnswerCitationKeyV8,
   validatePersonAnswerBlocksV2,
   type PersonAnswerBlockV2,
@@ -105,10 +102,8 @@ const FIT_GAP = "Some evidence could not fit in this response.";
  * A sentence left out whole because, with the private rows its lists carry, it cites more items than one statement may
  * (ADR-0054): the response had room; the sentence could not stand with only some of its citations.
  */
-/** A part's gap as one line, cut only at the Person protocol's own bound for it. */
-function gapLine(text: string): string { return boundedBytes(cleanLine(text, PERSON_ANSWER_PART_GAP_MAX_BYTES_V4), PERSON_ANSWER_PART_GAP_MAX_BYTES_V4); }
-/** UTF-8 bytes of the response's notice, as the Person protocol bounds it. */
-const NOTICE_MAX_BYTES = 2 * 1024;
+/** A part's gap as one line, whole: a gap has no length of its own. */
+function gapLine(text: string): string { return cleanLine(text, Number.POSITIVE_INFINITY); }
 /** What an answer that drafted follow-ups (ADR-0053) and found nothing about them says, after it says what it drafted. */
 const FOLLOW_UP_NOT_FOUND_GAP = "I couldn't find anything more about it in the sources you can access.";
 /** What an answer says it drafted: the drafts are the question, so it never asks. */
@@ -651,13 +646,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const shown = list === null ? undefined : writerById.get(list);
           return shown === undefined ? [] : [...new Set([...shown.members.map(member => member.id), ...(placedRows.get(shown.id) ?? [])])];
         };
-        /** The sentence with code's note within a statement's 4 KiB: one too long to take the note whole, a wide row, is cut, never the note. */
-        const fittedNote = (text: string, note: string) => {
-          const whole = withNote(text, note);
-          if (bytes(whole) <= PERSON_ANSWER_STATEMENT_MAX_BYTES_V4) return whole;
-          correct("model_text_truncated");
-          return `${boundedBytes(text, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 - bytes(` ${note}`))} ${note}`;
-        };
+        /** The sentence with code's note, whole: a statement has no length of its own. */
+        const fittedNote = (text: string, note: string) => withNote(text, note);
         /**
          * A writer's or `since` sentence as code keeps it (W1): on the text the writer read, then the rows it may carry, and
          * the lists it uses; with no text, on the rows or lists it cites (rowFacts); or, citing nothing it saw, none.
@@ -865,7 +855,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const note = sentence.listed === undefined ? undefined : agenticListShownNoteV1(shownOf.get(sentence.group!)!, sentence.listed.selected);
           if (note === undefined) return sentence;
           const shape: DraftShape = sentence.shape.kind !== "list" ? sentence.shape
-            : { ...sentence.shape, caption: `${boundedBytes(sentence.shape.caption, PERSON_ANSWER_CAPTION_MAX_BYTES_V1 - bytes(` ${note}`))} ${note}` };
+            : { ...sentence.shape, caption: `${sentence.shape.caption} ${note}` };
           return { ...sentence, text: fittedNote(sentence.text, note), shape };
         });
         const statements: Statement[] = order.map(sentence => statementOf(sentence.text, sentence.shorts));
@@ -959,7 +949,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           })]),
           citations: Object.freeze(anyEvidence ? used.map(entry => citationOfAgenticEvidenceItemV8(entry.item, timeZone)) : []),
           // The response holds a notice of 2 KiB: whole notices in order while they fit, the first that does not cut.
-          ...(responseNotices.length === 0 ? {} : { notice: boundedBytes(responseNotices.join(" "), NOTICE_MAX_BYTES) }),
+          ...(responseNotices.length === 0 ? {} : { notice: responseNotices.join(" ") }),
           // Only an answer to a request that carried its previous turn names its question and says what is different since (ADR-0047).
           ...(options.answers === undefined ? {} : { question: options.answers }),
           ...(since === undefined ? {} : { since: Object.freeze({ statements: released(since) }) }),

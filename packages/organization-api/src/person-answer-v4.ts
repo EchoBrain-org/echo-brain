@@ -13,7 +13,6 @@ import { validatePersonAnswerScopeV3, validatePersonSourceRevisionCitationV1, ty
 import { validatePersonItemRefV1, type PersonItemRefV1 } from './person-list-v1.js';
 import { validatePersonAnswerBlocksV2, type PersonAnswerBlockV2 } from './person-answer-layout-v2.js';
 import {
-  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1,
   type PersonAnswerChoiceV1,
   type PersonAnswerPreviousStatementV1,
   type PersonAnswerPreviousV1,
@@ -35,8 +34,6 @@ import {
   utf8ByteLength,
 } from './validation.js';
 
-/** A statement's text: one claim, within 4 KiB. */
-export const PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 = 4 * 1024;
 
 /** Optional Ask headers; older Authorities ignore them, preserving client-first upgrades. */
 export const PERSON_ASK_CLIENT_NOW_HEADER_V1 = 'x-echo-client-now';
@@ -61,8 +58,6 @@ export function validatePersonAskTimeContextV1(now: unknown, timeZone: unknown):
  * Ask progress answer event and stream, the desktop's CLI output, timeline put and copy) is sized from this one.
  */
 export const PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 = 256 * 1024;
-/** UTF-8 bytes of a part's gap, and of its not-found explanation: what was not found, said in full. */
-export const PERSON_ANSWER_PART_GAP_MAX_BYTES_V4 = 2 * 1024;
 /** A released answer's fallback record: the evidence's own words, cut to a short quotation (evidence text in transit is `PERSON_EVIDENCE_TEXT_MAX_BYTES_V1`). */
 export const PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4 = 3 * 1024;
 export const PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1 = 64 * 1024;
@@ -105,7 +100,7 @@ export function validatePersonAnswerGapDetailsV1(value: unknown): PersonAnswerGa
   assertExactKeys(input, keys, 'Ask gap details');
   if (keys.length === 0) fail('Ask gap details is empty');
   for (const flag of ['unsupported_action', 'interrupted']) if (Object.hasOwn(input, flag) && input[flag] !== true) fail('Ask gap flag must be true');
-  if (Object.hasOwn(input, 'not_found')) text(input.not_found, 'Ask not-found explanation', PERSON_ANSWER_PART_GAP_MAX_BYTES_V4, true);
+  if (Object.hasOwn(input, 'not_found')) text(input.not_found, 'Ask not-found explanation', Number.MAX_SAFE_INTEGER, true);
   return Object.freeze({ ...(input.unsupported_action === true ? { unsupported_action: true as const } : {}),
     ...(input.interrupted === true ? { interrupted: true as const } : {}), ...(Object.hasOwn(input, 'not_found') ? { not_found: input.not_found as string } : {}) });
 }
@@ -252,7 +247,7 @@ function statement(value: unknown, citations: readonly PersonAnswerCitationV8[],
   const input = object(value, label);
   assertExactKeys(input, ['text', 'citation_indexes', 'private'], label);
   if (fallback) evidenceText(input.text, `${label} text`, PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4);
-  else text(input.text, `${label} text`, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4, true);
+  else text(input.text, `${label} text`, Number.MAX_SAFE_INTEGER, true);
   // A statement cites at least one item, and every item it rests on: its visibility follows all of them.
   if (!Array.isArray(input.citation_indexes) || input.citation_indexes.length === 0 || typeof input.private !== 'boolean') fail(`${label} is invalid`);
   const indexes = citationIndexes(input.citation_indexes, `${label} citation_indexes`, citations.length);
@@ -294,7 +289,7 @@ function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): Per
   text(input.question, 'Ask response part question', 1024);
   // A part's statements have no count of their own (ADR-0051): its blocks arrange them, and the answer's bytes bound them.
   if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements)) fail('Ask response part is invalid');
-  if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', PERSON_ANSWER_PART_GAP_MAX_BYTES_V4, true);
+  if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', Number.MAX_SAFE_INTEGER, true);
   if (Object.hasOwn(input, 'records') && (!Array.isArray(input.records) || input.records.length > 40)) fail('Ask response part records is invalid');
   const statements = Object.freeze(input.statements.map((item) => statement(item, citations, 'Ask response statement')));
   // Blocks arrange written statements (answer layout v2, ADR-0051): a part with statements has them, and one with none has nothing to arrange.
@@ -373,7 +368,7 @@ function previousTurn(value: unknown): PersonAnswerPreviousV1 {
     const item = object(raw, 'Ask previous statement');
     assertExactKeys(item, ['text', 'citation_indexes'], 'Ask previous statement');
     // An answer's sentence as it was released: trimmed NFC text, line breaks allowed.
-    text(item.text, 'Ask previous statement text', PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1, true);
+    text(item.text, 'Ask previous statement text', Number.MAX_SAFE_INTEGER, true);
     return Object.freeze({
       text: item.text as string,
       citation_indexes: citationIndexes(item.citation_indexes, 'Ask previous statement citation_indexes', citations.length),
@@ -431,7 +426,7 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   const clarify = input.outcome === 'clarify';
   // An answer has no count of citations of its own (ADR-0051): its bytes bound it.
   if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1)) fail('Ask response is invalid');
-  if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', 2 * 1024, true);
+  if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', Number.MAX_SAFE_INTEGER, true);
   const citations = input.citations.map(item => answerCitation(item, 8));
   const citationKeys = new Set<string>();
   for (const item of citations) { const key = personAnswerCitationKeyV8(item.citation); if (citationKeys.has(key)) fail('Ask response contains duplicate citations'); citationKeys.add(key); }

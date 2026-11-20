@@ -492,8 +492,6 @@ export type AgenticListSelectionV1 =
 
 // ---- the statement code writes ----------------------------------------
 
-/** UTF-8 bytes of one code-written statement: the response's statement bound. */
-export const AGENTIC_LIST_STATEMENT_BYTES_V1 = 4 * 1024;
 
 const MONTHS = Object.freeze(["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]);
 const CALENDAR_DAY = /^(\d{4})-(\d{2})-(\d{2})$/u;
@@ -790,7 +788,7 @@ const LIST_NAMES_PER_STATEMENT = 40;
 
 /**
  * The statements code writes for a list the answer uses: every selected member, named in list order, split only at a
- * statement's byte bound and every LIST_NAMES_PER_STATEMENT names; the renderer groups them as one table with one caption. No statement changes the
+ * every LIST_NAMES_PER_STATEMENT names; the renderer groups them as one table with one caption. No statement changes the
  * selected set or counts its tail as omitted.
  */
 export function agenticListStatementsV2(input: AgenticListStatementInputV1): readonly ListBlockStatement[] {
@@ -812,7 +810,7 @@ export function agenticListStatementsV2(input: AgenticListStatementInputV1): rea
   };
   for (const group of groups) {
     const next = [...names, group];
-    if (names.length > 0 && (next.flat().length > LIST_NAMES_PER_STATEMENT || Buffer.byteLength(textOf(next), "utf8") > AGENTIC_LIST_STATEMENT_BYTES_V1)) flush();
+    if (names.length > 0 && (next.flat().length > LIST_NAMES_PER_STATEMENT)) flush();
     names.push(group);
   }
   flush();

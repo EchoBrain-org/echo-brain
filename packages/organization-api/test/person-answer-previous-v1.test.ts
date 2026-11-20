@@ -44,9 +44,8 @@ describe('the previous turn on the Ask request (ADR-0047)', () => {
     const statements = [...Array.from({ length: 249 }, (_, index) => ({ text: `S${index}.`, citation_indexes: [index % 60] })),
       { text: `${'é'.repeat(1_000)}`, citation_indexes: Array.from({ length: 60 }, (_, index) => index) }];
     expect(validatePersonAnswerRequestV3(ask(previous({ citations, statements }))).previous!.statements).toHaveLength(250);
-    for (const value of [
-      previous({ citations, statements: [{ text: 'é'.repeat(PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1 / 2 + 1), citation_indexes: [] }] }),
-    ]) expect(() => validatePersonAnswerRequestV3(ask(value))).toThrow();
+    // A sentence of any length: only the request's own transport bound limits it.
+    expect(validatePersonAnswerRequestV3(ask(previous({ statements: [{ text: 'é'.repeat(PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1), citation_indexes: [] }] }))).previous!.statements).toHaveLength(1);
     // A sentence may cite nothing the asker can still read; one that cites nothing at all is still the asker's context.
     expect(validatePersonAnswerRequestV3(ask(previous({ statements: [{ text: 'It is on hold.', citation_indexes: [] }] }))).previous!.statements[0]!.citation_indexes).toEqual([]);
   });
