@@ -275,7 +275,7 @@ function checkedDueAt(
 }
 
 /**
- * Both stage lists are fixed: the Authority V17 CHECK and the pre-Slack evaluator
+ * Both stage lists are fixed: the Authority V18 CHECK and the pre-Slack evaluator
  * depend on them. Some stages (quote checks, corrected fields, rationale links)
  * are never produced but stay listed.
  */

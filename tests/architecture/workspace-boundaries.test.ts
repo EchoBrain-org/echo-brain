@@ -406,7 +406,7 @@ describe("workspace source boundaries", () => {
 
   const expectedByRoot: Record<string, string[]> = {
     "packages/organization-authority-kernel": [
-      "authority-baseline-v17.sql",
+      "authority-baseline-v18.sql",
     ],
     "packages/organization-control-plane": [
       "organization-control-plane-baseline-v4.sql",

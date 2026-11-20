@@ -505,7 +505,7 @@ Every `/v2/person/updates` route is retired
 ([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)): the write,
 status and content routes on 2026-10-25 and its search on 2026-11-11. No
 current Authority holds a V2 note. Every note reader selects V3 rows only, so
-a V2 row the V17 table could still hold, admitted or not, is simply absent: the
+a V2 row the V18 table could still hold, admitted or not, is simply absent: the
 inbox never pulls it, source admission refuses it, and the person list and
 open, Ask retrieval and project activity do not find it. The client-less
 `/v1/person/updates` route and its V1 search-hint worker are retired. Retained

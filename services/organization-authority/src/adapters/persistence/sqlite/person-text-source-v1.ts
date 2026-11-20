@@ -14,7 +14,7 @@ type TextRow = {
   audience_project_ids_json: string | null; received_at: string;
 };
 
-/** One retained note as custody stores it. Every reader selects V3 rows only; a retired V2 row the V17 table could still hold also fails custody. */
+/** One retained note as custody stores it. Every reader selects V3 rows only; a retired V2 row the V18 table could still hold also fails custody. */
 export type PersonTextCustodyRowV1 = TextRow;
 
 /**

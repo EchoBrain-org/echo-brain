@@ -69,9 +69,9 @@ function seededWithSources(): Database.Database {
   return database;
 }
 
-describe("Authority baseline V17", () => {
+describe("Authority baseline V18", () => {
   it("is fresh-only and stamps the Authority application id", () => {
-    expect(authorityBaselineSha256()).toBe("sha256:d037af1328e0719532506c732e13db649082aaf5c3a9c770dadc09265568a3cb");
+    expect(authorityBaselineSha256()).toBe("sha256:62e1838a772a9f6edfdb92348e00f9d6dd3cbc4cad5e33aaa8eaa552344b6694");
     const database = seeded();
     expect(() => applyAuthorityBaseline(database)).toThrow("completely empty");
     expect(database.pragma("application_id", { simple: true })).toBe(AUTHORITY_BASELINE_APPLICATION_ID_V1);
@@ -80,12 +80,12 @@ describe("Authority baseline V17", () => {
     expect(database.pragma("foreign_key_check")).toEqual([]);
   });
 
-  it("stamps user_version 17 on a fresh database", () => {
+  it("stamps user_version 18 on a fresh database", () => {
     const database = new Database(":memory:");
     databases.push(database);
     applyAuthorityBaseline(database);
-    expect(database.pragma("user_version", { simple: true })).toBe(17);
-    expect(AUTHORITY_BASELINE_SCHEMA_VERSION).toBe(17);
+    expect(database.pragma("user_version", { simple: true })).toBe(18);
+    expect(AUTHORITY_BASELINE_SCHEMA_VERSION).toBe(18);
   });
 
   it("does not install storage for the removed pasted-meeting input", () => {

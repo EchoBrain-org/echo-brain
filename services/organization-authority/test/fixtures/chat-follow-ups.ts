@@ -5,7 +5,7 @@ import { CLOUD, openItemsFixture, type FixturePerson } from './open-items.js';
 
 /**
  * Follow-ups from a chat (ADR-0053) with no meeting behind them, over the
- * open-items fixture's people and real Authority V17 database: Ari, Mina
+ * open-items fixture's people and real Authority V18 database: Ari, Mina
  * Patel, Rafael Moreno (project A) and S. Okafor (outside it). An Ask answer's
  * drafts are saved through the asker's sink, exactly as the Ask route will
  * save a released answer's. The fixture's meeting is approved but its impact

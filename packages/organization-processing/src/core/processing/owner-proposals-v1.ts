@@ -12,7 +12,7 @@ const OWNER_MAX_CHARACTERS_V1 = 120;
 /**
  * At most this many owner proposals are offered: the first ones in brief order.
  * A decision stores at most 40 confirmed owners (APPROVAL_OWNERS_MAX_V1, held
- * by the Authority V17 decision CHECK), and the Slack card has room for 40.
+ * by the Authority V18 decision CHECK), and the Slack card has room for 40.
  */
 export const OWNER_PROPOSALS_MAX_V1 = 40;
 

@@ -1,8 +1,9 @@
--- Authority baseline V17: independent personal meeting-source progress, one approval proposal per meeting with one shared decision table,
+-- Authority baseline V18: independent personal meeting-source progress, one approval proposal per meeting with one shared decision table,
 -- plus project context, raw Person uploads, and optional search enrichment.
 -- An open item may come from a chat answer (ADR-0053): it has no run and no record, and its creator may change its one
 -- line and its due date until it is closed. Any open item may carry a due date, a calendar day.
--- Fresh initialization only; no V16-to-V17 transition or backfill exists, and
+-- V18 holds no size of its own on follow-up lines, notes or decision owners: the request that carries them bounds them (ADR-0055).
+-- Fresh initialization only; no V17-to-V18 transition or backfill exists, and
 -- this file is never an in-place upgrade.
 
 CREATE TABLE authority_metadata (
@@ -2334,7 +2335,7 @@ BEGIN
    WHERE organization_id = OLD.organization_id;
 END;
 
-PRAGMA user_version = 17;
+PRAGMA user_version = 18;
 
 -- A malformed legacy retained note must not pin the source-admission worker.
 -- The disposition carries no title, body, request ID or exception text.
