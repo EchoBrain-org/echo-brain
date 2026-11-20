@@ -72,7 +72,6 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
           if (total !== null && (seen.size > total || (page.next_cursor === null && seen.size !== total))) fail('unavailable');
           if (meetings.length >= 50 || page.next_cursor === null) break;
           if (cursors.has(page.next_cursor)) fail('invalid_output');
-          if (cursors.size >= 10) fail('unavailable');
           cursors.add(page.next_cursor); cursor = page.next_cursor;
         }
         await verify();
@@ -139,7 +138,7 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
       const gone = (error: unknown) => error instanceof Error && 'code' in error && (error.code === 'not_found' || error.code === 'unauthorized');
       const read = (meeting: GranolaMeetingV1) => result.set(meeting.id, meeting.updated_at ?? canonicalSha256(meeting));
       // A cited id that is no Granola id is simply not readable; it never fails the check.
-      const pages = [...new Set(input.page_ids)].slice(0, 100).filter(page => GRANOLA_ID_V1.test(page));
+      const pages = [...new Set(input.page_ids)].filter(page => GRANOLA_ID_V1.test(page));
       for (let at = 0; at < pages.length; at += 10) {
         const batch = pages.slice(at, at + 10);
         try { (await session.api.present(batch, input.signal)).forEach(read); }

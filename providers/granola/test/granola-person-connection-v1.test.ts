@@ -196,7 +196,7 @@ describe('Granola verified account and meeting listings', () => {
       calls.length = 0;
       expect(await session.recent(null)).toEqual([]);
       expect(await session.recent(folder)).toEqual([]);
-      const listed = { from_date: '1970-01-01', to_date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T.*Z$/), limit: 50, max_participants: 50 };
+      const listed = { from_date: '1970-01-01', to_date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T.*Z$/), limit: 50, max_participants: 0 };
       expect(calls.filter(call => call.name !== 'get_account_info')).toEqual([
         { name: 'search_meetings', arguments: { ...listed, attended_only: true, include_shared: false } },
         { name: 'list_meeting_folders', arguments: { limit: 100, offset: 0 } },
@@ -217,7 +217,7 @@ describe('Granola verified account and meeting listings', () => {
       calls.length = 0;
       await session.watchable({ watch: 'mine', folder_id: null });
       await session.watchable({ watch: 'folder', folder_id: folder });
-      const days = { ...granolaWatchWindowV1(Date.now()), to_date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T.*Z$/), limit: 100, max_participants: 50 };
+      const days = { ...granolaWatchWindowV1(Date.now()), to_date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T.*Z$/), limit: 100, max_participants: 0 };
       expect(calls.filter(call => call.name !== 'get_account_info')).toEqual([
         { name: 'search_meetings', arguments: { ...days, attended_only: true, include_shared: false } },
         { name: 'list_meeting_folders', arguments: { limit: 100, offset: 0 } },

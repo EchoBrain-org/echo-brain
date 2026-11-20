@@ -28,13 +28,9 @@ const prefix = 'granola-watch-v1:';
  * any number of meetings; the cursor column has no length of its own.
  */
 const WINDOW_DAYS = 30;
-/** A queued import is one id per person's request; the queue keeps 50 at a time. */
-const MAX_MANUAL = 50;
 /** A meeting changed this recently may still be recording; a later pull takes it. */
 const SETTLE_MS = 10 * 60_000;
 const DAY_MS = 86_400_000;
-/** Unreadable meetings one pull passes over before it stops; the next pull goes on from there. */
-const MAX_PASSED_OVER = 5;
 const MARK = /^sha256:[a-f0-9]{64}$/;
 /** An unreadable historical baseline has no known revision against which to prove an edit. */
 const UNREADABLE = `sha256:${'0'.repeat(64)}`;
@@ -55,7 +51,8 @@ export function readGranolaCheckpointV1(cursor: string): GranolaCheckpointV1 {
   if (!['baseline,folder,manual,mode,seen,since', 'baseline,folder,manual,mode,retry_after,seen,since'].includes(Object.keys(row).sort().join(',')) || !['off', 'mine', 'folder'].includes(row.mode as string) || typeof row.baseline !== 'boolean'
     || (row.mode === 'folder' ? typeof row.folder !== 'string' || !GRANOLA_ID_V1.test(row.folder) : row.folder !== null) || (row.mode === 'off' && row.baseline)
     || (row.since !== null && !isInstant(row.since))) fail();
-  const manual = GRANOLA_PERSON_PROVIDER_V1.array(row.manual, MAX_MANUAL);
+  // A queued import is one id per person's request, with no count of its own.
+  const manual = GRANOLA_PERSON_PROVIDER_V1.array(row.manual, Number.MAX_SAFE_INTEGER);
   if (manual.some(id => typeof id !== 'string' || !GRANOLA_ID_V1.test(id)) || new Set(manual).size !== manual.length) fail();
   const seen = Object.entries(GRANOLA_PERSON_PROVIDER_V1.record(row.seen));
   if (seen.some(([key, mark]) => !GRANOLA_ID_V1.test(key) || !(isInstant(mark) || (typeof mark === 'string' && MARK.test(mark))))
@@ -136,14 +133,12 @@ export class GranolaWatchSourceV1 implements MeetingSourceAdapter {
     const now = this.now();
     const { retry_after, ...previous } = checkpoint;
     const retry: Record<string, string> = { ...retry_after };
-    let failed = 0;
+    // A meeting Granola cannot give is passed over and retried after RETRY_MS; a pull passes over as many as it meets.
     const readEligible = async (id: string, previousMark?: string) => {
-      if (failed >= MAX_PASSED_OVER || Date.parse(retry[id] ?? '') > now) return undefined;
+      if (Date.parse(retry[id] ?? '') > now) return undefined;
       const read = await this.attempt(session, id, operation, previousMark);
-      if (read === undefined) {
-        retry[id] = new Date(now + RETRY_MS).toISOString();
-        failed++;
-      } else delete retry[id];
+      if (read === undefined) retry[id] = new Date(now + RETRY_MS).toISOString();
+      else delete retry[id];
       return read;
     };
     const finish = async (state: GranolaCheckpointV1, meeting?: MeetingDocument) => {
@@ -154,7 +149,6 @@ export class GranolaWatchSourceV1 implements MeetingSourceAdapter {
     };
     const priority = (id: string) => retry[id] === undefined ? 0 : Date.parse(retry[id]!);
     for (const id of [...checkpoint.manual].sort((a, b) => priority(a) - priority(b))) {
-      if (checkpoint.mode !== 'off' && failed >= MAX_PASSED_OVER - 1) break;
       const meeting = await readEligible(id);
       if (meeting !== undefined) return finish({ ...previous, manual: checkpoint.manual.filter(other => other !== id) }, meeting.document);
     }
@@ -188,7 +182,6 @@ export class GranolaWatchSourceV1 implements MeetingSourceAdapter {
       for (const meeting of listed) { const mark = checkpoint.seen[meeting.id]; if (mark !== undefined) seen[meeting.id] = mark; }
 
       for (const meeting of listed.sort((a, b) => priority(a.id) - priority(b.id))) {
-        if (failed >= MAX_PASSED_OVER) break;
         if (checkpoint.manual.includes(meeting.id)) continue;
         const at = instant(meeting.updated_at);
         if (at !== undefined && (seen[meeting.id] === at || Date.parse(at) > now - SETTLE_MS)) continue;

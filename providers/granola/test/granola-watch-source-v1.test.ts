@@ -174,7 +174,7 @@ describe('Granola watch over a rolling window, through the shared source cursor'
       expect(ids(await source.pull({ cursor: baseline.next_cursor }))).toEqual([c]);
     }
   });
-  it('passes over at most five unreadable meetings in one pull, and the next pull goes on from there', async () => {
+  it('passes over every unreadable meeting in one pull, with no count of its own, and imports the next readable one', async () => {
     const f = fixture(), source = f.source(), unusable = await granolaFailure('<meetings_data count="2"></meetings_data>');
     const meetings = Array.from({ length: 7 }, (_, index) => `00000000-0000-4000-8000-0000000002${String(index).padStart(2, '0')}`);
     const baseline = await source.pull({});
@@ -182,12 +182,9 @@ describe('Granola watch over a rolling window, through the shared source cursor'
     f.list(...meetings.map((meeting, index) => f.row(meeting, ago(100 - index))).reverse());
     for (const meeting of meetings.slice(0, 6)) f.fail(meeting, unusable);
     const first = await source.pull({ cursor: baseline.next_cursor });
-    expect(first.meetings).toEqual([]);
-    expect(f.reads).toEqual(meetings.slice(0, 5));
-    expect(Object.keys(readGranolaCheckpointV1(first.next_cursor!).retry_after!)).toEqual(meetings.slice(0, 5));
-    const second = await source.pull({ cursor: first.next_cursor });
-    expect(ids(second)).toEqual([meetings[6]]);
+    expect(ids(first)).toEqual([meetings[6]]);
     expect(f.reads).toEqual(meetings);
+    expect(Object.keys(readGranolaCheckpointV1(first.next_cursor!).retry_after!)).toEqual(meetings.slice(0, 6));
   });
   it('baselines the first readable version of an unavailable historical meeting and imports its later edit', async () => {
     const f = fixture(), source = f.source();
