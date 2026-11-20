@@ -8,6 +8,7 @@ import { createPersonLiveAnswerRouteV1 } from '../src/composition/person-live-an
 import { createPersonAskCheckV1 } from '../src/composition/person-ask-check-v1.js';
 import { readablePreviousV1 } from '../src/composition/person-ask-previous-check-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
+import { PersonRecordSearchSnapshotChangedV1 } from '../src/composition/person-record-search-route.js';
 import { SqlitePersonImportedMeetingsV1 } from '../src/adapters/persistence/sqlite/person-imported-meetings-v1.js';
 import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
 import { askClient, auditBodies, closeAskServers, decodeAll, liveAskOptions, myOpenTasksPlanner, serveAsk, streamedAnswer } from './fixtures/ask-over-http.js';
@@ -224,6 +225,59 @@ describe('the previous turn as the Authority lets its model read it (ADR-0047)',
     await streamedAnswer(await ask(await serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(unchecked) }), { body: body(previousOf(f), 'And who leads it?') }));
     expect(run.seen()).not.toContain(ROSTER);
     expect(run.seen()).toContain(EARLIER);
+  });
+
+  it('checks the previous turn again on a snapshot restart: access lost after the first attempt keeps the roster from the second', async () => {
+    const f = await sentFixture();
+    const run = recording();
+    const options = liveAskOptions(f, run.model);
+    const [jira] = options.live_sources!;
+    let first = true;
+    // The first attempt's desk sees the snapshot move, and Mina leaves the project before the restart.
+    const live_sources = [{ ...jira!, application: { source: async (input: Parameters<typeof jira.application.source>[0]) => {
+      if (first) { first = false; leave(f); throw new PersonRecordSearchSnapshotChangedV1(); }
+      return jira!.application.source(input);
+    } } }];
+    const base = await serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1({ ...options, live_sources }) });
+    expect((await streamedAnswer(await ask(base, { body: body(previousOf(f), 'And who leads it?') }))).outcome).toBe('answered');
+    expect(first).toBe(false);
+    expect(run.seen()).not.toContain(ROSTER);
+    expect(run.seen()).not.toContain(LABEL);
+    expect(run.seen()).toContain(EARLIER);
+  });
+
+  it.each([false, true])('reuses the follow-up resolution across a snapshot restart only while the checked turn is the same (access lost: %s)', async lost => {
+    const f = await sentFixture();
+    const tasks = myOpenTasksPlanner();
+    const prompts: string[] = [];
+    let resolutions = 0;
+    let restarted = false;
+    // The resolver answers once per call; the first research step after it sees the snapshot move.
+    const model: StructuredGenerationPort = { async generate(input) {
+      if ((input.schema.properties as Readonly<Record<string, unknown>>).resolution !== undefined) {
+        resolutions += 1;
+        prompts.push(input.user_prompt);
+        return { resolution: 'same' };
+      }
+      if (!restarted) { restarted = true; if (lost) leave(f); throw new PersonRecordSearchSnapshotChangedV1(); }
+      return tasks.model.generate(input);
+    } };
+    const base = await v7Checked(f, model);
+    expect((await streamedAnswer(await ask(base, { body: body(previousOf(f), 'And who leads it?') }))).outcome).toBe('answered');
+    expect(restarted).toBe(true);
+    // Unchanged: the paid resolution is not repeated. Changed: resolved again, from the turn as checked now.
+    expect(resolutions).toBe(lost ? 2 : 1);
+    if (lost) expect(prompts[1]).not.toContain(ROSTER);
+  });
+
+  it('carries no sentence that rests on no citation, with a check or without one', async () => {
+    const f = await sentFixture();
+    const bare = { ...previousOf(f), statements: [{ text: 'Uncited: the roster is Mina and Rafael.', citation_indexes: [] }, { text: ROSTER, citation_indexes: [0] }] };
+    for (const check of [checkOf(f), undefined]) {
+      const kept = await readablePreviousV1(bare, { access_token: 'mina', check });
+      expect(kept.statements.map(statement => statement.text)).not.toContain('Uncited: the roster is Mina and Rafael.');
+    }
+    expect((await readablePreviousV1(bare, { access_token: 'mina', check: checkOf(f) })).statements.map(statement => statement.text)).toEqual([ROSTER]);
   });
 
   it('answers an unknown project and one the asker is not a member of identically', async () => {

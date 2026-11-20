@@ -241,12 +241,14 @@ export function answeredNow(turn: TimelineTurn): TurnChecks {
  * reach it. A source no check asks about (a person, a tool, a tool
  * container), one the answer has no source for, and one the check gave no
  * state for are not known readable, so a sentence citing one stays back, and
- * so does its label. A turn an older desktop saved (no `citations_complete`)
+ * so does its label. `earlier` is the earlier question it names: the turn's
+ * own unless the caller says which (the person's typed words, ask). A turn an older desktop saved (no `citations_complete`)
  * carries its question only: a sentence of it may rest on a row it no longer
  * cites. Sentences go from the end until the request, asking
  * `question` in `scope`, fits the Ask body's bound.
  */
-export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope): AskPrevious {
+export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope,
+  earlier: string = askText(turn.question)): AskPrevious {
   const sources = turn.answer.sources;
   const read = (at: number) => sources[at] !== undefined && checkOf(sources[at]) !== undefined && known?.[at] === 'same';
   const readable = known === null || turn.citations_complete !== true ? [] : [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
@@ -268,7 +270,7 @@ export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], 
       // Trimmed and NFC, as C3 takes a sentence.
       return { text: statement.text.trim().normalize('NFC'), citation_indexes: places };
     });
-    return { purpose, question: askText(turn.question), asked_at: turn.asked_at, statements, citations };
+    return { purpose, question: earlier, asked_at: turn.asked_at, statements, citations };
   };
   const chosen: AnswerStatement[] = [...readable];
   let previous = build(chosen);

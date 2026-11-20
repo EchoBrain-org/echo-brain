@@ -314,6 +314,7 @@ export function timelineTurn(value: unknown): TimelineTurn | null {
   if (value.since !== undefined && !statements(value.since)) return null;
   if (value.again_of !== undefined && !(string(value.again_of) && ID.test(value.again_of))) return null;
   if (value.citations_complete !== undefined && value.citations_complete !== true) return null;
+  if (value.typed !== undefined && !string(value.typed)) return null;
   // The sources a check found unreadable: distinct places among the answer's own sources.
   const sources = (value.answer as TimelineAnswer).sources.length;
   if (value.unreadable !== undefined && !(indexes(value.unreadable) && new Set(value.unreadable).size === value.unreadable.length
