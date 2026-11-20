@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import type { ClaudeAccountProfileV1 } from './account-profile.js';
 import { ClaudeResearchResultErrorV1, runClaudeStructuredV1 } from './sdk-client.js';
+import { REASONING_HEADROOM_TOKENS } from '../adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js';
 import { claudeAccountForwarderV1, ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1, startClaudeModelTransportV1, type ClaudeModelForwarderV1 } from './model-transport.js';
 
 export class ClaudeSingleGenerationLimitErrorV1 extends Error {
@@ -21,6 +22,9 @@ export function createClaudeAccountStructuredGenerationV1(options: {
     async generate() { throw new Error('Native structured generation requires per-request admission'); },
     async generate_with_admission(input, admit) {
       if (input.model !== options.model) throw new Error('Unexpected native writer model');
+      // The writer thinks before it answers, and Claude Code's max_tokens holds both: give it the same reasoning headroom
+      // OpenRouter does, so thinking never comes out of the answer's allowance. Extraction's single attempt keeps its own.
+      const allowance = input.max_output_tokens + (options.max_model_requests === 1 ? 0 : REASONING_HEADROOM_TOKENS);
       const stop = new AbortController();
       const timeout = AbortSignal.timeout(input.timeout_ms);
       const signal = AbortSignal.any([...(input.signal === undefined ? [] : [input.signal]), stop.signal, timeout]);
@@ -37,7 +41,7 @@ export function createClaudeAccountStructuredGenerationV1(options: {
             }
             const payload = JSON.parse(body.toString('utf8'));
             if (payload.model !== input.model) throw new Error('Unexpected native writer model');
-            if (operation === 'messages' && (!Number.isSafeInteger(payload.max_tokens) || payload.max_tokens <= 0 || payload.max_tokens > input.max_output_tokens)) throw new Error('Native writer exceeded its output allowance');
+            if (operation === 'messages' && (!Number.isSafeInteger(payload.max_tokens) || payload.max_tokens <= 0 || payload.max_tokens > allowance)) throw new Error('Native writer exceeded its output allowance');
             const strings: string[] = [];
             const collect = (value: unknown): void => {
               if (typeof value === 'string') strings.push(value);
@@ -66,7 +70,7 @@ export function createClaudeAccountStructuredGenerationV1(options: {
       });
       try {
         const value = await (options.run ?? runClaudeStructuredV1)({ prompt: input.user_prompt, system: input.system_prompt, schema: input.schema,
-          model: input.model, max_output_tokens: input.max_output_tokens, base_url: fence.base_url, account: options.account, signal,
+          model: input.model, max_output_tokens: allowance, base_url: fence.base_url, account: options.account, signal,
           ...(options.max_model_requests === 1 ? { single_generation: true } : {}) });
         if (terminal !== undefined) throw terminal;
         if (fence.forwarded() === 0) throw new Error('Native writer did not use model admission');

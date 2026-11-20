@@ -54,7 +54,7 @@ interface OpenRouterObservedResult extends StructuredGenerationObservedResultV1 
  * allowance, so reasoning never comes out of the reply's room. This is
  * headroom, not a separate provider-enforced reasoning-token budget.
  */
-const REASONING_HEADROOM_TOKENS = 4_096;
+export const REASONING_HEADROOM_TOKENS = 4_096;
 
 /**
  * A schema too large for Claude's strict grammar travels the way the Claude Agent SDK sends every output schema, and

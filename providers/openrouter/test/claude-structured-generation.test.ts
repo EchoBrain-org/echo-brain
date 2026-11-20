@@ -16,9 +16,10 @@ it('uses native account writing with the original evidence/schema and fresh admi
   const port = createClaudeAccountStructuredGenerationV1({ account, model,
     forward: async ({ res }) => { expect(admitted).toBe(++forwarded); res.end('{}'); return { content: [{ type: 'text', text: 'synthetic' }], finish_reason: 'stop' }; },
     run: async request => {
-      expect(request).toMatchObject({ account, schema: input.schema, prompt: input.user_prompt, system: input.system_prompt, max_output_tokens: 1500 });
-      for (const path of ['messages', 'messages/count_tokens', 'messages']) {
-        const response = await fetch(`${request.base_url}/v1/${path}`, { method: 'POST', body });
+      // The writer's allowance plus the same reasoning headroom OpenRouter gives it: thinking never comes out of the answer's room.
+      expect(request).toMatchObject({ account, schema: input.schema, prompt: input.user_prompt, system: input.system_prompt, max_output_tokens: 5596 });
+      for (const [index, path] of ['messages', 'messages/count_tokens', 'messages'].entries()) {
+        const response = await fetch(`${request.base_url}/v1/${path}`, { method: 'POST', body: index === 2 ? body.replace('1500', '5596') : body });
         expect(response.status).toBe(200); await response.text();
       }
       return { answer: 'Synthetic E1' };
@@ -38,7 +39,7 @@ it('refuses an SDK request exceeding the admitted writer allowance', async () =>
   const forward = vi.fn();
   const port = createClaudeAccountStructuredGenerationV1({ account, model, forward,
     run: async request => {
-      await fetch(`${request.base_url}/v1/messages`, { method: 'POST', body: body.replace('1500', '32000') }).catch(() => undefined);
+      await fetch(`${request.base_url}/v1/messages`, { method: 'POST', body: body.replace('1500', '5597') }).catch(() => undefined);
       return {};
     },
   });
