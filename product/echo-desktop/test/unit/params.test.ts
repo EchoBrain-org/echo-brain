@@ -1,5 +1,15 @@
 import { expect, it } from 'vitest';
-import { MAX_PARAMS_BYTES, MAX_TIMELINE_PUT_BYTES, paramsLimit, plainJsonBytes } from '../../src/shared/protocol.js';
+import { PERSON_ANSWER_RESPONSE_MAX_BYTES_V4, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1 } from '@echo-brain/organization-api';
+import { MAX_OUTPUT_BYTES } from '../../src/host/cli.js';
+import { MAX_COPY_CHARACTERS, MAX_PARAMS_BYTES, MAX_TIMELINE_PUT_BYTES, paramsLimit, plainJsonBytes } from '../../src/shared/protocol.js';
+
+it('sizes each bound a whole answer passes through above the one beneath it', () => {
+  // One turn holds an answer and its sources' citations beside it; Copy answer takes what a turn holds.
+  expect(MAX_TIMELINE_PUT_BYTES).toBeGreaterThanOrEqual(4 * PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
+  expect(MAX_COPY_CHARACTERS).toBe(MAX_TIMELINE_PUT_BYTES);
+  // The CLI prints every step and the answer: more than a whole Ask stream.
+  expect(MAX_OUTPUT_BYTES).toBeGreaterThan(PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1);
+});
 
 it('lets a call that carries one whole answer take one, and every other call the broker\'s own bound', () => {
   expect(paramsLimit('timeline.put')).toBe(MAX_TIMELINE_PUT_BYTES);

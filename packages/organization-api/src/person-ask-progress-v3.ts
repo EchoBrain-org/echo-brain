@@ -1,7 +1,7 @@
 import { canonicalJson, canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import type { OrganizationApiErrorV1 } from './contracts.js';
 import type { PersonAnswerCitationV8, PersonAnswerResponseV8 } from './person-answer-v8.js';
-import { validatePersonAnswerCitationV8, validatePersonAnswerResponseV8 } from './person-answer-v4.js';
+import { PERSON_ANSWER_RESPONSE_MAX_BYTES_V4, validatePersonAnswerCitationV8, validatePersonAnswerResponseV8 } from './person-answer-v4.js';
 import { asEnumerableRecord as object, assertExactKeys, assertToolId, fail, validateOrganizationApiError } from './validation.js';
 
 /**
@@ -46,16 +46,20 @@ export const PERSON_ASK_PROGRESS_COUNT_MAX_V1 = 1000;
 export const PERSON_ASK_RECEIPT_ROWS_MAX_V1 = 64;
 export const PERSON_ASK_RECEIPT_MAX_BYTES_V1 = 64 * 1024;
 export const PERSON_ASK_RECEIPT_ELAPSED_MAX_MS_V1 = 300_000;
-/** Canonical JSON bytes of any one event, the answer event included. */
-const PERSON_ASK_PROGRESS_EVENT_MAX_BYTES_V1 = 192 * 1024;
-/** Characters of one stream line the decoder buffers before it fails closed. */
-export const PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1 = 256 * 1024;
+/**
+ * Canonical JSON bytes of any one event, the answer event included: above a whole answer (256 KiB) and its receipt
+ * (64 KiB), with 64 KiB for the event's own keys, so a valid answer always fits its event (384 KiB).
+ */
+const PERSON_ASK_PROGRESS_EVENT_MAX_BYTES_V1 = PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 + PERSON_ASK_RECEIPT_MAX_BYTES_V1 + 64 * 1024;
+/** Characters of one stream line the decoder buffers before it fails closed: above the largest event and its `data: ` framing. */
+export const PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1 = PERSON_ASK_PROGRESS_EVENT_MAX_BYTES_V1 + 128 * 1024;
 /**
  * UTF-8 bytes of one whole stream; a client stops reading and fails closed
- * beyond it. The bounds above keep a run well under it (about 610 KB at
- * worst), and the CLI's lines then stay under the desktop's 1 MiB output cap.
+ * beyond it. The bounds above keep a run well under it (about 810 KB at
+ * worst: the answer event plus every step event), and the desktop's CLI
+ * output cap sits above it.
  */
-export const PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1 = 768 * 1024;
+export const PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1 = 1536 * 1024;
 
 /**
  * What ECHO is doing now, from what it actually ran: `searching` while a

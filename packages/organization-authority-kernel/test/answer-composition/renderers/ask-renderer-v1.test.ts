@@ -14,6 +14,8 @@ import type { EvidenceDeskItemV2 } from "../../../src/shared/evidence-desk-v2.js
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../../src/shared/core-runtime-observation-v1.js";
 import { ids } from "../fixtures/agentic-lists.js";
 import { EMPTY_BUNDLE, LIST_READ_AT, listed, record, scriptedGate, writerReply } from "../fixtures/agentic-scenarios.js";
+/** List rows more than one answer can hold: a 180-row list filled 64 KiB, so four times as many plus a margin fill the bound. */
+const OVERFULL_LIST = Math.ceil(180 * PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 / (64 * 1024)) + 40;
 
 /** Ask's renderer on its own: a hand-built bundle, a gate over scripted writer replies, and no desk. */
 function alone(input: {
@@ -779,8 +781,8 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(part.blocks).toEqual([{ kind: "answer", statements: [0] }]);
     });
     it("cuts a selection too large for the answer's bytes from its end, in its table, and marks it partial", async () => {
-      const members = ids(1, 180);
-      const rendered = await alone({ bundle: listBundle(180, 0, [list("L1", members)], [WI(["L1"])]), replies: [{
+      const members = ids(1, OVERFULL_LIST);
+      const rendered = await alone({ bundle: listBundle(OVERFULL_LIST, 0, [list("L1", members)], [WI(["L1"])]), replies: [{
         blocks: [{ block: "list", list: "L1" }], not_found: [],
       }] }).render("Show every ticket with its owner and status.");
       const part = rendered.result.response.parts[0]!;
@@ -889,11 +891,12 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.result.response.parts[0]!.gap).toBeUndefined();
     });
     it("reports the limits only of lists the answer still uses after fitting", async () => {
-      // A complete 180-row L1 placed first, then a sentence citing the cut-short L2: fitting leaves that sentence out.
-      const research = listBundle(182, 1, [list("L1", ids(1, 180)), list("L2", ids(181, 2), { ended: false, truncated: true })], [C(["E183"])]);
+      // A complete L1 too large for the answer placed first, then a sentence citing the cut-short L2: fitting leaves that sentence out.
+      const review = `E${OVERFULL_LIST + 3}`;
+      const research = listBundle(OVERFULL_LIST + 2, 1, [list("L1", ids(1, OVERFULL_LIST)), list("L2", ids(OVERFULL_LIST + 1, 2), { ended: false, truncated: true })], [C([review])]);
       const rendered = await alone({ bundle: research, replies: [{ blocks: [
-        { block: "answer", sentences: [{ ...REVIEW, evidence: ["E183"] }] }, { block: "list", list: "L1" },
-        { block: "text", sentences: [{ text: "The review also covers the open work.", evidence: ["L2", "E183"] }] },
+        { block: "answer", sentences: [{ ...REVIEW, evidence: [review] }] }, { block: "list", list: "L1" },
+        { block: "text", sentences: [{ text: "The review also covers the open work.", evidence: ["L2", review] }] },
       ], not_found: ["the Harbor owner"] }] }).render("Which tickets were created on October 4, and who owns Harbor?");
       const part = rendered.result.response.parts[0]!;
       expect(statementsOf(rendered)).not.toContain("The review also covers the open work.");
@@ -942,8 +945,8 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(untested.result.response.parts[0]).not.toHaveProperty("gap_details");
     });
     it("says how many rows are shown when fitting cuts a placed list", async () => {
-      const members = ids(1, 180);
-      const rendered = await alone({ bundle: listBundle(180, 0, [list("L1", members)], [C([])]), replies: [{ blocks: [{ block: "list", list: "L1" }], not_found: [] }] })
+      const members = ids(1, OVERFULL_LIST);
+      const rendered = await alone({ bundle: listBundle(OVERFULL_LIST, 0, [list("L1", members)], [C([])]), replies: [{ blocks: [{ block: "list", list: "L1" }], not_found: [] }] })
         .render("Show every ticket with its owner and status.");
       const part = rendered.result.response.parts[0]!;
       const table = blocksOf(rendered).find(block => block.kind === "table")!;
@@ -1289,20 +1292,21 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
   });
 
   it("cuts an answer too large for its byte bound from its end, keeping its blocks: a row still its cells' claim", async () => {
-    // Forty records with long labels, a long answer and nine rows of six long cells each citing four records: past 64 KiB,
-    // so the rows that cannot fit are left out from the end, and the answer says some evidence could not fit.
-    const research = records(40, { label: "𝔸".repeat(250) });
+    // Records with long labels, a long answer and rows of six long cells each citing four records: past the answer's byte
+    // bound (about 6 KB a row), so the rows that cannot fit are left out from the end, and the answer says some evidence could not fit.
+    const rows = Math.ceil(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 / 6_000) + 4;
+    const research = records(4 * (rows + 1), { label: "𝔸".repeat(250) });
     const columns = ["One", "Two", "Three", "Four", "Five", "Six"];
     const big = reply(
       { block: "answer", sentences: [{ text: `${"𝔹".repeat(690)} 0.`, evidence: ["E1", "E2", "E3", "E4"] }] },
-      { block: "table", columns, rows: Array.from({ length: 9 }, (_, index) => ({ cells: columns.map(column => `${column} ${"𝔸".repeat(70)} ${index + 1}`), evidence: [1, 2, 3, 4].map(n => `E${4 * (index + 1) + n}`) })) },
+      { block: "table", columns, rows: Array.from({ length: rows }, (_, index) => ({ cells: columns.map(column => `${column} ${"𝔸".repeat(70)} ${index + 1}`), evidence: [1, 2, 3, 4].map(n => `E${4 * (index + 1) + n}`) })) },
     );
     // A production context window, so the writer is shown all forty records its rows cite.
     const on = await alone({ bundle: research, replies: [big], context_tokens: 131_072 }).render("What applies?");
     const released = part(on);
     expect(released).not.toHaveProperty("gap_details");
     expect(released).toMatchObject({ status: "partial", gap: "Some evidence could not fit in this response." });
-    expect(released.statements.length).toBeLessThan(10);
+    expect(released.statements.length).toBeLessThan(rows + 1);
     expect(released.statements.slice(1).map(value => value.text.startsWith(`One: One ${"𝔸".repeat(70)} `))).toEqual(released.statements.slice(1).map(() => true));
     expect(blocksOf(on).map(block => block.kind)).toEqual(["answer", "table"]);
     expect(canonicalJsonBytes(on.result.response).byteLength).toBeLessThanOrEqual(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);

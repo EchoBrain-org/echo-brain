@@ -274,14 +274,17 @@ describe("fitting an Ask again's answer to its byte bound (ADR-0047)", () => {
     kind: "decision" as const, label: "Decision", visibility: "team" as const };
   const long = (index: number) => `${index} ${"x".repeat(4_080)}.`;
   const statement = (index: number) => ({ text: long(index), citation_indexes: [0], private: false });
+  // The answer's sentences take a little over half the byte bound, so its since list alone can take it past the bound.
+  const SAID = Math.ceil(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 / 2 / 4_096);
+  const SINCE = Math.ceil(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 / 2 / 4_096);
   const response = (since: number): PersonAnswerResponseV8 => ({
     schema_version: 8, kind: "echo-clean-person-answer-v8", scope: { kind: "global" }, outcome: "answered", citations: [citation],
-    parts: [{ question: "Q", status: "answered", statements: Array.from({ length: 10 }, (_, index) => statement(index)), blocks: [{ kind: "answer", statements: [0] }, { kind: "text", statements: Array.from({ length: 9 }, (_, index) => index + 1) }] }],
-    question: "Who owns the THERM-482 fix?", since: { statements: Array.from({ length: since }, (_, index) => statement(100 + index)) },
+    parts: [{ question: "Q", status: "answered", statements: Array.from({ length: SAID }, (_, index) => statement(index)), blocks: [{ kind: "answer", statements: [0] }, { kind: "text", statements: Array.from({ length: SAID - 1 }, (_, index) => index + 1) }] }],
+    question: "Who owns the THERM-482 fix?", since: { statements: Array.from({ length: since }, (_, index) => statement(1_000 + index)) },
   });
 
   it("preserves typed actionable reasons when byte compaction removes the since list", () => {
-    const base = response(6);
+    const base = response(SINCE);
     const gap_details = { unsupported_action: true as const, interrupted: true as const, not_found: "Not found: the reviewer." };
     const over: PersonAnswerResponseV8 = { ...base, outcome: "partial", parts: [{ ...base.parts[0]!, status: "partial", gap: "Some list rows did not fit.", gap_details }] };
     expect(canonicalJsonBytes(over).byteLength).toBeGreaterThan(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
@@ -290,17 +293,17 @@ describe("fitting an Ask again's answer to its byte bound (ADR-0047)", () => {
     expect(fitted.outcome).toBe("partial");
     expect(fitted.parts[0]!.gap_details).toEqual(gap_details);
     // A part compaction rebuilds reads as one text block (ADR-0051).
-    expect(fitted.parts[0]!.blocks).toEqual([{ kind: "text", statements: Array.from({ length: 10 }, (_, index) => index) }]);
+    expect(fitted.parts[0]!.blocks).toEqual([{ kind: "text", statements: Array.from({ length: SAID }, (_, index) => index) }]);
     expect(canonicalJsonBytes(fitted).byteLength).toBeLessThanOrEqual(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
   });
 
   it("drops since first and whole, keeping the answer, its outcome and its question", () => {
-    const over = response(6);
+    const over = response(SINCE);
     expect(canonicalJsonBytes(over).byteLength).toBeGreaterThan(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
     const fitted = compactAndValidateAgenticAskResponseV1(over);
     expect(fitted).not.toHaveProperty("since");
     expect(fitted).toMatchObject({ outcome: "answered", question: "Who owns the THERM-482 fix?", citations: [citation] });
-    expect(fitted.parts[0]!.statements).toHaveLength(10);
+    expect(fitted.parts[0]!.statements).toHaveLength(SAID);
     // One that fits keeps its since.
     expect(compactAndValidateAgenticAskResponseV1(response(1)).since!.statements).toHaveLength(1);
   });

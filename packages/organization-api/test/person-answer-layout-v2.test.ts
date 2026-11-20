@@ -70,8 +70,9 @@ describe('Answer layout v2 (ADR-0051)', () => {
     const answerAndPoints = { blocks: [{ kind: 'answer', statements: [0] }, { kind: 'points', ordered: false, statements: said.slice(1).map((_, at) => at + 1) }] };
     const arranged = validatePersonAnswerResponseV8(answer(answerAndPoints));
     expect([arranged.citations.length, arranged.parts[0]!.statements.length]).toEqual([45, 15]);
-    // ADR-0041's ten statements a part and forty citations an answer went with the answer without blocks: past its 64 KiB, the same answer is refused.
-    const long = answer({ ...answerAndPoints, statements: said.map(value => ({ ...value, text: `${value.text} ${'x'.repeat(4_050)}` })) });
+    // ADR-0041's ten statements a part and forty citations an answer went with the answer without blocks: past its byte bound, such an answer is refused.
+    const longSaid = Array.from({ length: Math.ceil(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 / 4_000) + 1 }, (_, at) => statement(`Tool ${at % 45} is set up. ${'x'.repeat(4_000)}`, [at % 45]));
+    const long = answer({ statements: longSaid, blocks: [{ kind: 'answer', statements: [0] }, { kind: 'points', ordered: false, statements: longSaid.slice(1).map((_, at) => at + 1) }] });
     expect(canonicalJsonBytes(long).byteLength).toBeGreaterThan(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
     expect(() => validatePersonAnswerResponseV8(long)).toThrow('Ask response exceeds JSON byte bound');
   });

@@ -410,11 +410,13 @@ export interface TimelineTurn {
 export const MAX_TIMELINE_TURNS = 200;
 export const TIMELINE_DAYS = 90;
 /**
- * The most a put may send: one turn, whose answer is at most the API's 64 KiB
- * with its sources' citations kept beside them. Every other call keeps the
- * broker's MAX_PARAMS_BYTES.
+ * The most a put may send: one turn, whose answer is at most the API's 256 KiB
+ * (PERSON_ANSWER_RESPONSE_MAX_BYTES_V4) with its sources' citations kept
+ * beside them, so four times the answer's bound. Every other call keeps the
+ * broker's MAX_PARAMS_BYTES. A literal, as the sandboxed renderer imports this
+ * file; a test holds it above the API's bound.
  */
-export const MAX_TIMELINE_PUT_BYTES = 256 * 1024;
+export const MAX_TIMELINE_PUT_BYTES = 1024 * 1024;
 
 /** What a check says of one cited source (C1): readable by you (`same`), no longer readable, or not known now. */
 export type AskCheckState = PersonAskCheckStateV1;
