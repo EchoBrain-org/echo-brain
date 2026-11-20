@@ -81,16 +81,25 @@ describe("Ask answer layout v2 (ADR-0051)", () => {
 
   describe("reading order", () => {
     type Sentence = { readonly id: string; readonly item: AnswerItem };
+    /** A list statement: code's own (no block) or one the writer placed. */
+    type Listed = { readonly id: string; readonly block?: number };
     const sentence = (id: string, item: AnswerItem): Sentence => ({ id, item });
-    const ids = (order: readonly (string | Sentence)[]) => order.map(entry => typeof entry === "string" ? entry : `${entry.id}:${entry.item.kind}`);
+    const ids = (order: readonly (Listed | Sentence)[]) => order.map(entry => "item" in entry ? `${entry.id}:${entry.item.kind}` : entry.id);
 
     it("puts the answer first, then the lists, then each block's own items before those read as text, a timeline's oldest first", () => {
-      const order = orderAskBlocksV2(["L1"], [
+      const order = orderAskBlocksV2<Listed, Sentence>([{ id: "L1" }], [
         sentence("a", ANSWER()),
         sentence("e1", event(1, "2026-10-23", "Passed.")), sentence("x", { block: 1, kind: "text", title: "This week" }), sentence("e2", event(1, "2026-10-20", "Started.")),
         sentence("e3", event(1, "2026-10-23", "Logged.")), sentence("p", point(2)),
       ], true);
       expect(ids(order)).toEqual(["a:answer", "L1", "e2:event", "e1:event", "e3:event", "x:text", "p:point"]);
+    });
+
+    it("keeps a placed list where the writer put it, after the answer, and code's own lists right after the answer", () => {
+      const s = (block: number, kind: "answer" | "text") => ({ item: { block, kind } as AnswerItem });
+      const [answer, text] = [s(1, "answer"), s(2, "text")];
+      const [early, late, own]: readonly Listed[] = [{ block: 0, id: "early" }, { block: 3, id: "late" }, { id: "own" }];
+      expect(orderAskBlocksV2([late, own, early], [answer, text], true)).toEqual([answer, own, early, text, late]);
     });
 
     it("reads the first kept item as the answer only when the writer gave none, and it is untitled text", () => {

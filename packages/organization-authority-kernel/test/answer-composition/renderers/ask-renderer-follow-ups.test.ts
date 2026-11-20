@@ -13,8 +13,9 @@ import { askFollowUpItemIdV1 } from "../../../src/answer-composition/ask-follow-
 import { createAskRendererV1 } from "../../../src/answer-composition/renderers/ask-renderer-v1.js";
 import type { EvidenceDeskItemV2 } from "../../../src/shared/evidence-desk-v2.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../../src/shared/core-runtime-observation-v1.js";
-import { followUpItem, ticketBody } from "../fixtures/agentic-lists.js";
-import { EMPTY_BUNDLE, record, scriptedGate, writerReply } from "../fixtures/agentic-scenarios.js";
+import { createAgenticListEvidenceV1 } from "../../../src/answer-composition/agentic-list-evidence-v1.js";
+import { followUpItem, ticketBody, ticketRow } from "../fixtures/agentic-lists.js";
+import { EMPTY_BUNDLE, LIST_READ_AT, record, scriptedGate, writerReply } from "../fixtures/agentic-scenarios.js";
 
 /**
  * The follow-ups Ask's writer drafts (ADR-0053), through the renderer alone: a hand-built bundle, scripted writer replies,
@@ -132,6 +133,31 @@ describe("Ask renderer: follow-ups the writer drafts (ADR-0053)", () => {
     ]);
     expect(rendered.result.follow_ups.map(draft => draft.item_id)).toEqual([0, 1, 2, 3].map(at => askFollowUpItemIdV1(REQUEST, at)));
     expect(corrections).toMatchObject({ follow_up_date_dropped: 2, follow_up_link_dropped: 2, writer_repeat_dropped: 1 });
+  });
+
+  it("never points a draft at a row only code filled into a placed list (ADR-0054)", async () => {
+    // 80 ticket rows after the record, whose long participant lists fill the writer's half of the prompt: it is shown only
+    // the first of them, and code fills the whole list.
+    const participants = Array.from({ length: 40 }, (_, at) => `Person ${at + 1}`).join(", ");
+    const rows = Array.from({ length: 80 }, (_, index) => {
+      const row = ticketRow(index + 1);
+      return Object.freeze({ short: `E${index + 2}`, source: "tickets", item: { ...row, attributes: { ...row.attributes, participants } }, full: false, opened: false, preloaded: false, touched: index + 2, cited_by_plan: false });
+    });
+    const research = bundle([decided]);
+    const last = `E${rows.length + 1}`;
+    const listed: AgenticEvidenceBundleV1 = Object.freeze({ ...research, items: [...research.items, ...rows], lists: [createAgenticListEvidenceV1({
+      id: "L1", source: "tickets", filter: {}, filter_applied: {}, members: rows.map(row => row.short), shown: rows.length, ended: true, unverified_end: false,
+      available: true, truncated: false, read_at: LIST_READ_AT,
+    })] });
+    const run = alone({ bundle: listed, request_id: REQUEST, replies: [{
+      ...answered([{ task: "Check the last ticket", about: last }]), blocks: [...answered().blocks, { block: "list", list: "L1" }],
+    }] });
+    const { rendered, corrections } = await observed(() => run.render());
+    expect(JSON.parse(run.inputs[0]!.user_prompt).lists[0].members.map((member: { id: string }) => member.id)).not.toContain(last);
+    expect(rendered.result.response.citations).toHaveLength(rows.length + 1);
+    expect(rendered.result.follow_ups[0]).toMatchObject({ task: "Check the last ticket" });
+    expect(rendered.result.follow_ups[0]).not.toHaveProperty("about");
+    expect(corrections).toMatchObject({ follow_up_link_dropped: 1 });
   });
 
   it("stores no title of an item read from outside ECHO: it becomes \"a cited item\", and a task that was only a title is dropped", async () => {
@@ -252,6 +278,16 @@ describe("Ask renderer: follow-ups the writer drafts (ADR-0053)", () => {
       gap: "I drafted a follow-up for you to review and send. I couldn't find anything more about it in the sources you can access." });
     expect(response.parts[0]!.gap_details).not.toHaveProperty("unsupported_action");
     expect(rendered.result.follow_ups).toEqual([{ item_id: askFollowUpItemIdV1(REQUEST, 0), task: "Call the vendor", owner_name: "Sam", due_on: "2026-11-20" }]);
+  });
+
+  it("adds no record research read beside a reply of only a draft: the reply is usable, and says only what it drafted (ADR-0054)", async () => {
+    const rendered = await alone({ bundle: bundle([decided]), request_id: REQUEST, replies: [{ blocks: [], not_found: [], follow_ups: [{ task: "Call the vendor", owner: "Sam" }] }] }).render();
+    const response = rendered.result.response;
+    expect(rendered.fallbacks).toBe(0);
+    expect(response).toMatchObject({ outcome: "not_found", citations: [], follow_ups: [askFollowUpItemIdV1(REQUEST, 0)] });
+    expect(response.parts[0]).not.toHaveProperty("records");
+    expect(response.parts[0]).toMatchObject({ status: "not_found", statements: [],
+      gap: "I drafted a follow-up for you to review and send. I couldn't find anything more about it in the sources you can access." });
   });
 
   it("says plainly what it could not do when research asks for a follow-up the request cannot save, and never calls the writer for nothing", async () => {

@@ -279,8 +279,8 @@ export function agenticListUncheckedNoticeV1(list: Pick<AgenticListEvidenceV1, "
 
 /**
  * Whether code reads a list for a need (ADR-0041), from its declared kind alone: a which_items need research has not
- * given up on (found, or open when research stopped), whose lists code states, or a which_say need of any status, whose
- * list code counts, since "k of N checked" qualifies "none of them" as much as "these". A content need's list ids, and
+ * given up on (found, or open when research stopped), whose lists code states, or a which_say need of any status, which
+ * must cite the list whose members it reads. A content need's list ids, and
  * a need without a kind, carry no meaning. The finish check and the answer read this one definition.
  */
 export function agenticNeedReadsListV1(need: Pick<AgenticResearchNeedV1, "kind" | "status">): boolean {
@@ -288,18 +288,16 @@ export function agenticNeedReadsListV1(need: Pick<AgenticResearchNeedV1, "kind" 
 }
 
 /**
- * The lists a plan's declared kinds read (ADR-0041), each once in plan order, from the needs code reads a list for:
- * those its which_items needs cite by id, which code states, and those its which_say needs cite, which research
- * checks. `unlisted` when one of those needs cites none: research stopped before it found its list. `known` says which
- * ids name a list research read.
+ * The lists a plan's which_items needs cite by id (ADR-0041), each once in plan order, which code states with no usable
+ * writer reply (ADR-0054), from the needs code reads a list for. `unlisted` when one of those needs, which_items or
+ * which_say, cites none: research stopped before it found its list. `known` says which ids name a list research read.
  */
 export function agenticPlanListsV1(
   needs: readonly Pick<AgenticResearchNeedV1, "kind" | "status" | "evidence">[],
   known: (id: AgenticListIdV1) => boolean,
-): { readonly stated: readonly AgenticListIdV1[]; readonly checking: readonly AgenticListIdV1[]; readonly unlisted: boolean } {
+): { readonly stated: readonly AgenticListIdV1[]; readonly unlisted: boolean } {
   const read = needs.filter(agenticNeedReadsListV1).map(need => ({ kind: need.kind, lists: need.evidence.flatMap(id => { const list = parseAgenticListIdV1(id); return list !== null && known(list) ? [list] : []; }) }));
-  const cited = (kind: "which_items" | "which_say") => Object.freeze([...new Set(read.filter(need => need.kind === kind).flatMap(need => need.lists))]);
-  return Object.freeze({ stated: cited("which_items"), checking: cited("which_say"), unlisted: read.some(need => need.lists.length === 0) });
+  return Object.freeze({ stated: Object.freeze([...new Set(read.filter(need => need.kind === "which_items").flatMap(need => need.lists))]), unlisted: read.some(need => need.lists.length === 0) });
 }
 
 // ---- opens: what research read by opening an item ------------------------
@@ -439,10 +437,6 @@ export interface AgenticWriterListV1 {
   /** Members research checked, out of `count`. */
   readonly checked: number;
   readonly read_at: string;
-  /** A which_items need research has not given up on cites this inventory; selection remains separate from presentation. */
-  readonly stated: boolean;
-  /** Exact requested members from which_items needs research has not given up on, mapped from any opened bodies to inventory row ids. */
-  readonly requested_members?: readonly string[];
   /** Members that fit the writer prompt, in list order. */
   readonly members: readonly AgenticWriterListMemberV1[];
   /** Members past the writer's bound; present only when some were left out. */
@@ -480,13 +474,13 @@ export function agenticWriterListMemberV1(entry: { readonly short: string; reado
  * `max_members` when the writer's prompt has less room. The default includes
  * every row: an unrelated fixed row ceiling must not invent a coverage gap.
  */
-export function agenticWriterListV1(list: AgenticListEvidenceV1, members: readonly AgenticWriterListMemberV1[], stated: boolean, max_members: number = members.length): AgenticWriterListV1 {
+export function agenticWriterListV1(list: AgenticListEvidenceV1, members: readonly AgenticWriterListMemberV1[], max_members: number = members.length): AgenticWriterListV1 {
   if (members.length !== list.members.length || members.some((member, index) => member.id !== list.members[index])) invalid("writer members must be the list's members, in order");
   if (!Number.isSafeInteger(max_members) || max_members < 0) invalid("max_members must be a whole, non-negative count");
   const shown = members.slice(0, max_members);
   return Object.freeze({
     id: list.id, source: list.source, filter: list.filter, filter_applied: list.filter_applied, complete: list.complete,
-    count: list.members.length, checked: members.filter(member => member.checked).length, read_at: list.read_at, stated,
+    count: list.members.length, checked: members.filter(member => member.checked).length, read_at: list.read_at,
     members: Object.freeze(shown), ...(shown.length === members.length ? {} : { members_omitted: members.length - shown.length }),
     ...(list.unchecked === undefined ? {} : { unchecked: list.unchecked }),
   });
@@ -498,19 +492,6 @@ export const AGENTIC_LIST_SELECTION_FIELDS_V1 = Object.freeze(["owner", "status"
 export type AgenticListSelectionV1 =
   | { readonly field: "owner" | "status"; readonly value: string }
   | { readonly field: EvidenceDateFieldV1; readonly since?: string; readonly until?: string };
-
-/**
- * The writer's use of a list: code names its members, all of them, those
- * one row fact selects (`where`), or those `members` names by id, each with
- * every row fact it records ("who owns THERM-46"). The writer never writes
- * the names or the row facts itself.
- */
-export interface AgenticAnswerListUseV1 {
-  readonly id: AgenticListIdV1;
-  readonly where?: AgenticListSelectionV1;
-  /** Members selected by their E ids, every one named. A `where` beside them selects only when they name no member. */
-  readonly members?: readonly string[];
-}
 
 // ---- the statement code writes ----------------------------------------
 
@@ -685,10 +666,71 @@ export function agenticListSelectV1<T extends AgenticListNamedMemberV1>(members:
   }));
 }
 
-/** Whether every row records the fact needed to decide the selection; missing facts cannot prove an empty subset. */
+/**
+ * Whether every row records the fact needed to decide the selection; missing facts cannot prove an empty subset. An
+ * owner "none recorded" (ADR-0021) is row projection's word for an owner no record confirms: no fact either.
+ */
 export function agenticListSelectionVerifiedV1(members: readonly AgenticListNamedMemberV1[], where: AgenticListSelectionV1, timeZone?: string): boolean {
-  return members.every(member => "value" in where ? member[where.field] !== undefined
+  return members.every(member => "value" in where ? member[where.field] !== undefined && !(where.field === "owner" && member.owner === "none recorded")
     : evidenceDayV1(memberDate(member, where.field) ?? "", timeZone ?? "UTC") !== undefined);
+}
+
+/** A list block as the writer placed it: whole, by one row fact, or by members' ids (ADR-0054). It never carries a title. */
+export interface AgenticPlacedListV1 {
+  readonly list: AgenticListIdV1;
+  readonly where?: AgenticListSelectionV1;
+  readonly members?: readonly string[];
+}
+
+/**
+ * What code fills a placed list with: the rows it shows (`unknown` counts ids that named no row the writer was shown),
+ * a selection that matched none (`testable` when every member records the fact; `confirmed` only when the list is also
+ * complete and has no untested items), a list with no member or a hand-pick of none (the writer saying no member
+ * answers), or a hand-picked block left with none.
+ */
+export type AgenticListFillV1 =
+  | { readonly kind: "rows"; readonly selected: readonly AgenticWriterListMemberV1[]; readonly by_id: boolean; readonly where?: AgenticListSelectionV1; readonly unknown: number }
+  | { readonly kind: "none_matched"; readonly where: AgenticListSelectionV1; readonly testable: boolean; readonly confirmed: boolean }
+  | { readonly kind: "empty" }
+  | { readonly kind: "dropped"; readonly unknown: number };
+
+/**
+ * Fills a placed list from the desk (ADR-0054). The whole list and a `where` read every member, including rows past
+ * the writer's prompt, so nothing is retyped and the count is the desk's. Hand-picked `members` are kept only when the
+ * writer was shown the member's row or the id it names (an opened body counts as its row), each once and in list order:
+ * a writer never reaches a row it did not see by naming its id.
+ */
+export function agenticListFillV1(input: {
+  readonly placed: AgenticPlacedListV1;
+  /** Every member of the desk list, in list order. */
+  readonly all: readonly AgenticWriterListMemberV1[];
+  /** Ids the writer was shown: rows of this list, and items whose text it read. */
+  readonly shown: ReadonlySet<string>;
+  /** The member of this list an id is, or is part of (agenticListMembershipV1's `in`). */
+  readonly member_of: (id: string) => string | undefined;
+  readonly list: Pick<AgenticListEvidenceV1, "complete" | "unchecked" | "filter">;
+}): AgenticListFillV1 {
+  const { placed, all, list } = input;
+  if (placed.members?.length === 0) return Object.freeze({ kind: "empty" });
+  if (placed.members !== undefined) {
+    const picked = new Set<string>();
+    let unknown = 0;
+    for (const id of placed.members) {
+      const member = input.member_of(id);
+      if (member === undefined || !(input.shown.has(member) || input.shown.has(id))) unknown += 1;
+      else picked.add(member);
+    }
+    const selected = all.filter(member => picked.has(member.id));
+    return selected.length === 0 ? Object.freeze({ kind: "dropped", unknown }) : Object.freeze({ kind: "rows", selected: Object.freeze(selected), by_id: true, unknown });
+  }
+  if (placed.where !== undefined) {
+    const where = placed.where;
+    const selected = agenticListSelectV1(all, where, list.filter.time_zone);
+    if (selected.length > 0) return Object.freeze({ kind: "rows", selected, by_id: false, where, unknown: 0 });
+    const testable = agenticListSelectionVerifiedV1(all, where, list.filter.time_zone);
+    return Object.freeze({ kind: "none_matched", where, testable, confirmed: list.complete && !list.unchecked?.count && testable });
+  }
+  return all.length === 0 ? Object.freeze({ kind: "empty" }) : Object.freeze({ kind: "rows", selected: all, by_id: false, unknown: 0 });
 }
 
 /** A selection as a statement says it: "have owner Dana Lee", "are due from October 18 to October 24, 2026", "were updated since October 11, 2026". */
@@ -819,13 +861,7 @@ export function agenticListSelectionNotFoundV1(noun: AgenticListNounFormsV1, fil
   return `${noun.plural}${phraseAfter(noun, filter)} ${condition}`;
 }
 
-/**
- * What code adds to a sentence citing the text of members of a list a
- * which_say need checks (addition 4) when not every member was checked: "(4 of
- * 8 checked so far)"; for a list not read to its end, "(4 of at least 8
- * checked so far)". Undefined once every member of a complete list was checked.
- */
-export function agenticListCheckedNoteV1(list: Pick<AgenticWriterListV1, "checked" | "count" | "complete">): string | undefined {
-  if (list.complete && list.checked >= list.count) return undefined;
-  return `(${list.checked} of ${list.complete ? "" : "at least "}${list.count} checked so far)`;
+/** What a placed list's caption adds when fitting the response cut some of its selected rows: "(first 7 shown)". */
+export function agenticListShownNoteV1(shown: number, selected: number): string | undefined {
+  return shown < selected ? `(first ${shown} shown)` : undefined;
 }

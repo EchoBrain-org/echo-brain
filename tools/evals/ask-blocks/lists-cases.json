@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "kind": "echo-ask-lists-eval-cases-v1",
+  "description": "Pre-registered list cases for Ask's writer (ADR-0054, README.md \"List cases\"). Synthetic hardware-program content for one project, THERM. Research is scripted: it lists the tickets created on October 4 (the case's listed items, E1 to En), opens some of them or searches, then finishes with needs of each kind and status; only the writer is the product's model.",
+  "today": "2026-10-08",
+  "time_zone": "America/Los_Angeles",
+  "asked_at": "2026-10-08T17:00:00.000Z",
+  "asker": "Noor Haddad",
+  "cases": [
+    {
+      "id": "which-items",
+      "question": "Which THERM tickets were created on October 4?",
+      "research": {
+        "needs": ["THERM tickets created on October 4"],
+        "steps": [
+          { "actions": [{ "tool": "list", "args": { "source": "tickets", "date_field": "created", "since": "2026-10-04", "until": "2026-10-04" } }],
+            "needs": [{ "kind": "which_items", "status": "open", "evidence": [] }] },
+          { "actions": [{ "tool": "open", "args": { "id": "E1" } }, { "tool": "open", "args": { "id": "E2" } }],
+            "needs": [{ "kind": "which_items", "status": "open", "evidence": ["L1"] }] },
+          { "actions": [{ "tool": "finish", "args": {} }],
+            "needs": [{ "kind": "which_items", "status": "found", "evidence": ["L1"] }] }
+        ]
+      },
+      "items": [
+        { "kind": "ticket", "listed": true, "key": "THERM-601", "title": "Replace the probe tip supplier", "text": "Find a second supplier for the probe tips before PVT.", "status": "In Progress", "owner": "Dana Lee", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-602", "title": "Update the battery door drawing", "text": "The battery door drawing still shows the old latch.", "status": "To Do", "owner": "Sam Roy", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-603", "title": "Rerun the drop test", "text": "Rerun the 1.2 m drop test on the DVT units.", "status": "Done", "owner": "Ana Silva", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-604", "title": "Translate the quick start guide", "text": "Translate the quick start guide into French and German.", "status": "To Do", "owner": "Dana Lee", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-605", "title": "Check the display contrast", "text": "The display contrast is low in direct sunlight.", "status": "In Review", "owner": "Sam Roy", "created": "2026-10-04" }
+      ],
+      "expect": { "list": "whole" }
+    },
+    {
+      "id": "part-by-fact",
+      "question": "Which of the THERM tickets created on October 4 does Sam Roy own?",
+      "research": {
+        "needs": ["THERM tickets created on October 4 that Sam Roy owns"],
+        "steps": [
+          { "actions": [{ "tool": "list", "args": { "source": "tickets", "date_field": "created", "since": "2026-10-04", "until": "2026-10-04" } }],
+            "needs": [{ "kind": "which_items", "status": "open", "evidence": [] }] },
+          { "actions": [{ "tool": "open", "args": { "id": "E2" } }, { "tool": "open", "args": { "id": "E5" } }],
+            "needs": [{ "kind": "which_items", "status": "open", "evidence": ["L1"] }] },
+          { "actions": [{ "tool": "finish", "args": {} }],
+            "needs": [{ "kind": "which_items", "status": "found", "evidence": ["L1"] }] }
+        ]
+      },
+      "items": [
+        { "kind": "ticket", "listed": true, "key": "THERM-611", "title": "Order the PVT enclosures", "text": "Order 200 PVT enclosures from the molder.", "status": "In Progress", "owner": "Dana Lee", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-612", "title": "Fix the button bounce", "text": "The power button registers two presses about one time in fifty.", "status": "In Progress", "owner": "Sam Roy", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-613", "title": "Book the EMC lab", "text": "Book two days at the EMC lab for the PVT units.", "status": "To Do", "owner": "Ana Silva", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-614", "title": "Review the label artwork", "text": "Review the regulatory label artwork with the agency.", "status": "Done", "owner": "Dana Lee", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-615", "title": "Tune the sensor filter", "text": "Tune the sensor filter so readings settle within two seconds.", "status": "Done", "owner": "Sam Roy", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-616", "title": "Write the PVT test plan", "text": "Write the PVT test plan and share it with the factory.", "status": "To Do", "owner": "Ana Silva", "created": "2026-10-04" }
+      ],
+      "expect": { "list": "part", "members": ["E2", "E5"], "by": "where_or_members" }
+    },
+    {
+      "id": "part-by-meaning",
+      "question": "Which of the THERM tickets created on October 4 mention the probe recall?",
+      "research": {
+        "needs": ["THERM tickets created on October 4 that mention the probe recall"],
+        "steps": [
+          { "actions": [{ "tool": "list", "args": { "source": "tickets", "date_field": "created", "since": "2026-10-04", "until": "2026-10-04" } }],
+            "needs": [{ "kind": "which_say", "status": "open", "evidence": [] }] },
+          { "actions": [{ "tool": "open", "args": { "id": "E1" } }, { "tool": "open", "args": { "id": "E2" } }, { "tool": "open", "args": { "id": "E3" } },
+            { "tool": "open", "args": { "id": "E4" } }, { "tool": "open", "args": { "id": "E5" } }, { "tool": "open", "args": { "id": "E6" } }],
+            "needs": [{ "kind": "which_say", "status": "open", "evidence": ["L1"] }] },
+          { "actions": [{ "tool": "finish", "args": {} }],
+            "needs": [{ "kind": "which_say", "status": "found", "evidence": ["L1", "E1", "E3", "E6"] }] }
+        ]
+      },
+      "items": [
+        { "kind": "ticket", "listed": true, "key": "THERM-621", "title": "Pull back the shipped probes", "text": "Part of the probe recall: pull back the 400 probes shipped to the pilot sites.", "status": "In Progress", "owner": "Dana Lee", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-622", "title": "Clean up the build scripts", "text": "Remove the unused build scripts from the firmware repository.", "status": "Done", "owner": "Sam Roy", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-623", "title": "Draft the customer letter", "text": "Draft the letter that tells pilot customers about the probe recall.", "status": "To Do", "owner": "Ana Silva", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-624", "title": "Measure the standby current", "text": "Measure the standby current on ten DVT units.", "status": "In Progress", "owner": "Dana Lee", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-625", "title": "Update the charger spec", "text": "The charger spec still lists the old cable length.", "status": "To Do", "owner": "Sam Roy", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-626", "title": "Re-test the returned probes", "text": "Re-test every probe returned in the probe recall for seal leaks.", "status": "In Review", "owner": "Sam Roy", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-627", "title": "Refresh the factory checklist", "text": "Refresh the end-of-line checklist with the new torque values.", "status": "To Do", "owner": "Ana Silva", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-628", "title": "Plan the PVT build", "text": "Plan the PVT build slots with the factory.", "status": "In Progress", "owner": "Dana Lee", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-629", "title": "Archive the EVT data", "text": "Archive the EVT test data to the shared drive.", "status": "Done", "owner": "Ana Silva", "created": "2026-10-04" }
+      ],
+      "expect": { "list": "part", "members": ["E1", "E3", "E6"], "says": [["6 of the 9", "six of the nine"]] }
+    },
+    {
+      "id": "one-named-item",
+      "question": "Who owns THERM-633?",
+      "research": {
+        "needs": ["owner of THERM-633"],
+        "steps": [
+          { "actions": [{ "tool": "list", "args": { "source": "tickets", "date_field": "created", "since": "2026-10-04", "until": "2026-10-04" } }],
+            "needs": [{ "kind": "content", "status": "open", "evidence": [] }] },
+          { "actions": [{ "tool": "open", "args": { "id": "E3" } }],
+            "needs": [{ "kind": "content", "status": "open", "evidence": [] }] },
+          { "actions": [{ "tool": "finish", "args": {} }],
+            "needs": [{ "kind": "content", "status": "found", "evidence": ["E3"] }] }
+        ]
+      },
+      "items": [
+        { "kind": "ticket", "listed": true, "key": "THERM-631", "title": "Swap the gasket material", "text": "Swap the gasket material to the silicone grade the supplier proposed.", "status": "In Progress", "owner": "Dana Lee", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-632", "title": "Check the USB enumeration", "text": "The device enumerates twice on some laptops.", "status": "To Do", "owner": "Sam Roy", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-633", "title": "Calibrate the reference probes", "text": "Calibrate the reference probes against the lab standard before PVT. Ana Silva owns the calibration.", "status": "In Progress", "owner": "Ana Silva", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-634", "title": "Shorten the boot time", "text": "Boot takes four seconds; the target is two.", "status": "Done", "owner": "Dana Lee", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-635", "title": "Order the PVT cables", "text": "Order 250 USB cables for the PVT build.", "status": "To Do", "owner": "Sam Roy", "created": "2026-10-04" }
+      ],
+      "expect": { "list": "none", "says": [["Ana Silva"]] }
+    },
+    {
+      "id": "note-not-found",
+      "question": "When does the probe recall go ahead, and who approved it?",
+      "research": {
+        "needs": ["when the probe recall goes ahead", "who approved the probe recall"],
+        "steps": [
+          { "actions": [{ "tool": "list", "args": { "source": "tickets", "date_field": "created", "since": "2026-10-04", "until": "2026-10-04" } }, { "tool": "search", "args": { "query": "probe recall" } }],
+            "needs": [{ "kind": "content", "status": "open", "evidence": [] }, { "kind": "content", "status": "open", "evidence": [] }] },
+          { "actions": [{ "tool": "open", "args": { "id": "E5" } }],
+            "needs": [{ "kind": "content", "status": "open", "evidence": [] }, { "kind": "content", "status": "open", "evidence": [] }] },
+          { "actions": [{ "tool": "finish", "args": {} }],
+            "needs": [{ "kind": "content", "status": "found", "evidence": ["E5"] }, { "kind": "content", "status": "not_found", "evidence": [] }] }
+        ]
+      },
+      "items": [
+        { "kind": "ticket", "listed": true, "key": "THERM-641", "title": "Pull back the pilot probes", "text": "Pull back the probes shipped to the pilot sites.", "status": "In Progress", "owner": "Dana Lee", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-642", "title": "Draft the recall letter", "text": "Draft the letter for pilot customers.", "status": "To Do", "owner": "Sam Roy", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-643", "title": "Re-test the returned probes", "text": "Re-test the returned probes for seal leaks.", "status": "To Do", "owner": "Ana Silva", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-644", "title": "Stock replacement probes", "text": "Stock 400 replacement probes for the pilot sites.", "status": "Done", "owner": "Dana Lee", "created": "2026-10-04" },
+        { "kind": "decision", "label": "Probe recall plan", "occurred_at": "2026-10-05", "text": "The probe recall goes ahead on October 13, after the seal re-test of the returned probes." }
+      ],
+      "expect": { "says": [["October 13", "Oct 13", "2026-10-13"]], "not_found_mentions": [["approved", "approval", "approver", "approve"]] }
+    },
+    {
+      "id": "note-disagrees",
+      "question": "Who signed off the THERM probe seal re-test?",
+      "research": {
+        "needs": ["who signed off the probe seal re-test"],
+        "steps": [
+          { "actions": [{ "tool": "list", "args": { "source": "tickets", "date_field": "created", "since": "2026-10-04", "until": "2026-10-04" } }],
+            "needs": [{ "kind": "content", "status": "open", "evidence": [] }] },
+          { "actions": [{ "tool": "open", "args": { "id": "E1" } }, { "tool": "open", "args": { "id": "E2" } }],
+            "needs": [{ "kind": "content", "status": "open", "evidence": [] }] },
+          { "actions": [{ "tool": "finish", "args": {} }],
+            "needs": [{ "kind": "content", "status": "not_found", "evidence": [] }] }
+        ]
+      },
+      "items": [
+        { "kind": "ticket", "listed": true, "key": "THERM-651", "title": "Order seal test fixtures", "text": "Order two fixtures for the probe seal test.", "status": "Done", "owner": "Dana Lee", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-652", "title": "Re-test the probe seal", "text": "Ana Silva signed off the probe seal re-test on October 6: the seal holds at 2 bar.", "status": "Done", "owner": "Sam Roy", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-653", "title": "Update the seal drawing", "text": "Update the seal drawing with the new groove depth.", "status": "In Progress", "owner": "Dana Lee", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-654", "title": "Log the seal test results", "text": "Log the seal test results in the quality system.", "status": "To Do", "owner": "Sam Roy", "created": "2026-10-04" }
+      ],
+      "expect": { "says": [["Ana Silva"]], "not_found_never_mentions": ["signed", "sign-off", "signoff", "seal"] }
+    },
+    {
+      "id": "how-many",
+      "question": "How many THERM tickets were created on October 4?",
+      "research": {
+        "needs": ["THERM tickets created on October 4"],
+        "steps": [
+          { "actions": [{ "tool": "list", "args": { "source": "tickets", "date_field": "created", "since": "2026-10-04", "until": "2026-10-04" } }],
+            "needs": [{ "kind": "which_items", "status": "open", "evidence": [] }] },
+          { "actions": [{ "tool": "open", "args": { "id": "E1" } }],
+            "needs": [{ "kind": "which_items", "status": "open", "evidence": ["L1"] }] },
+          { "actions": [{ "tool": "finish", "args": {} }],
+            "needs": [{ "kind": "which_items", "status": "found", "evidence": ["L1"] }] }
+        ]
+      },
+      "items": [
+        { "kind": "ticket", "listed": true, "key": "THERM-661", "title": "Lower the idle current", "text": "Lower the idle current below 20 microamps.", "status": "In Progress", "owner": "Dana Lee", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-662", "title": "Fix the low battery icon", "text": "The low battery icon shows a bar too early.", "status": "To Do", "owner": "Sam Roy", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-663", "title": "Add a probe self-test", "text": "Add a probe self-test at power on.", "status": "To Do", "owner": "Ana Silva", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-664", "title": "Review the packaging drop test", "text": "Review the packaging drop test results.", "status": "Done", "owner": "Dana Lee", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-665", "title": "Move the reset pin", "text": "Move the reset pin away from the battery contact.", "status": "In Review", "owner": "Sam Roy", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-666", "title": "Retire the EVT firmware branch", "text": "Retire the EVT firmware branch after PVT starts.", "status": "Done", "owner": "Ana Silva", "created": "2026-10-04" },
+        { "kind": "ticket", "listed": true, "key": "THERM-667", "title": "Check the strap anchor", "text": "Check the strap anchor after 500 pulls.", "status": "To Do", "owner": "Dana Lee", "created": "2026-10-04" }
+      ],
+      "expect": { "list": "whole", "count": 7, "count_noun": "tickets" }
+    }
+  ]
+}

@@ -125,7 +125,8 @@ export function readReleased(response, ids) {
       case "answer": return { kind: "answer", claims: block.statements.map(claim) };
       case "text": return { kind: "prose", ...titled(block), claims: block.statements.map(claim) };
       case "points": return { kind: "list", ordered: block.ordered, ...titled(block), claims: block.statements.map(claim) };
-      case "table": return { kind: "table", ...titled(block), columns: [...block.columns], rows: block.rows.map((row) => ({ cells: [...row.cells], evidence: cites(row.citation_indexes) })) };
+      // A table that shows a list keeps its caption, which says how many it shows of how many (lists.mjs).
+      case "table": return { kind: "table", ...titled(block), ...(block.caption === undefined ? {} : { caption: block.caption }), columns: [...block.columns], rows: block.rows.map((row) => ({ cells: [...row.cells], evidence: cites(row.citation_indexes) })) };
       // An event, a fact and a quote are each one statement, and cite what it cites.
       case "timeline": return { kind: "timeline", ...titled(block), events: block.events.map((event, at) => ({ date: event.date, text: event.text, ...(event.who === undefined ? {} : { who: event.who }), evidence: claim(block.statements[at]).evidence })) };
       case "card": return { kind: "card", title: block.title, card_kind: block.entity, facts: block.facts.map((fact, at) => ({ label: fact.label, value: fact.value, evidence: claim(block.statements[at]).evidence })) };

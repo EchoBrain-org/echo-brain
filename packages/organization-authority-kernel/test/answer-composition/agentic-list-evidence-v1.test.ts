@@ -3,11 +3,12 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import {
   AGENTIC_LIST_STATEMENT_BYTES_V1,
-  agenticCalendarDayV1, agenticListCheckedNoteV1, agenticListCompleteV1, agenticListEndUnverifiedV1, agenticListFilterNoticeV1, agenticListFilterPhraseV1, agenticListIdV1,
-  agenticListMembersNounV1, agenticListMembershipV1, agenticListNounV1, agenticListSelectionNotFoundV1, agenticListSelectV1, agenticListStatementsV2, agenticListTableV1,
+  agenticCalendarDayV1, agenticListCompleteV1, agenticListEndUnverifiedV1, agenticListFillV1, agenticListFilterNoticeV1, agenticListFilterPhraseV1, agenticListIdV1,
+  agenticListMembersNounV1, agenticListMembershipV1, agenticListNounV1, agenticListSelectionNotFoundV1, agenticListSelectV1, agenticListShownNoteV1,
+  agenticListStatementsV2, agenticListTableV1,
   agenticNeedReadsListV1, agenticOpenReadsV1, agenticPlanListsV1, agenticWriterListMemberV1, agenticWriterListV1, createAgenticListEvidenceV1, parseAgenticListIdV1,
-  type AgenticAnswerListUseV1, type AgenticListEvidenceInputV1, type AgenticListEvidenceV1, type AgenticListFilterApplicationV1, type AgenticListIdV1,
-  type AgenticListNounFormsV1, type AgenticListSelectionV1, type AgenticListStatementInputV1, type AgenticOpenActionV1, type AgenticWriterListMemberV1,
+  type AgenticListEvidenceInputV1, type AgenticListEvidenceV1, type AgenticListFilterApplicationV1, type AgenticListIdV1,
+  type AgenticListNounFormsV1, type AgenticListSelectionV1, type AgenticListStatementInputV1, type AgenticOpenActionV1, type AgenticPlacedListV1, type AgenticWriterListMemberV1,
 } from "../../src/answer-composition/agentic-list-evidence-v1.js";
 import type { AgenticResearchResultV1 } from "../../src/answer-composition/agentic-research-v1.js";
 import type { EvidenceDeskResultV1 } from "../../src/shared/evidence-desk-v1.js";
@@ -189,18 +190,18 @@ describe("what a need's declared kind asks of lists", () => {
       .toEqual([[true, true, false], [true, true, true], [false, false, false], [false, false, false]]);
   });
 
-  it("names the lists code states and the lists research checks, each once in plan order, never a content need's, and a need with none", () => {
+  it("names the lists code states, each once in plan order, never a which_say or content need's, and a need with none", () => {
     const known = (id: AgenticListIdV1) => id !== "L9";
     const plan = [
       need("content", "found", ["L4", "E1"]), need("which_say", "found", ["L2", "E9", "L1"]), need("which_items", "found", ["L3", "L1", "L9"]),
       need("which_items", "open", ["l5"]), need("which_items", "not_found", ["L6"]), need("which_say", "not_found", ["L7"]), need(undefined, "found", ["L8"]),
     ] as const;
-    expect(agenticPlanListsV1(plan, known)).toEqual({ stated: ["L3", "L1", "L5"], checking: ["L2", "L1", "L7"], unlisted: false });
+    expect(agenticPlanListsV1(plan, known)).toEqual({ stated: ["L3", "L1", "L5"], unlisted: false });
     // A need code reads a list for that cites only rows, or only a list research never read, has no list (W3's gap).
     expect(agenticPlanListsV1([...plan, need("which_items", "found", ["E1", "E2"])], known)).toMatchObject({ stated: ["L3", "L1", "L5"], unlisted: true });
-    expect(agenticPlanListsV1([need("which_say", "not_found", ["L9"])], known)).toEqual({ stated: [], checking: [], unlisted: true });
+    expect(agenticPlanListsV1([need("which_say", "not_found", ["L9"])], known)).toEqual({ stated: [], unlisted: true });
     // A not_found which_items need or a content need asks for no list, so it never makes the plan unlisted.
-    for (const value of [[need("which_items", "not_found"), need("content", "found", ["E1"])], []]) expect(agenticPlanListsV1(value, known)).toEqual({ stated: [], checking: [], unlisted: false });
+    for (const value of [[need("which_items", "not_found"), need("content", "found", ["E1"])], []]) expect(agenticPlanListsV1(value, known)).toEqual({ stated: [], unlisted: false });
   });
 });
 
@@ -248,7 +249,7 @@ describe("the writer's view", () => {
     const ids = Array.from({ length: 105 }, (_, index) => `E${index + 1}`);
     const list = createAgenticListEvidenceV1({ ...OCTOBER_4, members: ids, shown: 105 });
     const rows = ids.map((id, index) => agenticWriterListMemberV1({ short: id, item: pageRow(String(index + 1), `Page ${index + 1}`) }, false));
-    const view = agenticWriterListV1(list, rows, true);
+    const view = agenticWriterListV1(list, rows);
     expect(view.members).toHaveLength(105);
     expect(view).not.toHaveProperty('members_omitted');
   });
@@ -256,32 +257,33 @@ describe("the writer's view", () => {
   it("preserves a long list and counts all checked members, reducing rows only for an explicit prompt bound", () => {
     const short = createAgenticListEvidenceV1(OCTOBER_4);
     const eight = short.members.map((id, index) => agenticWriterListMemberV1({ short: id, item: pageRow(String(index + 1), `Page ${index + 1}`) }, false));
-    expect(agenticWriterListV1(short, eight, true, 3)).toMatchObject({ count: 8, members: eight.slice(0, 3), members_omitted: 5 });
-    expect(agenticWriterListV1(short, eight, true, 0)).toMatchObject({ count: 8, members: [], members_omitted: 8 });
-    expect(() => agenticWriterListV1(short, eight, true, -1)).toThrow(/max_members/u);
-    expect(agenticWriterListV1(short, eight, false)).not.toHaveProperty("members_omitted");
+    expect(agenticWriterListV1(short, eight, 3)).toMatchObject({ count: 8, members: eight.slice(0, 3), members_omitted: 5 });
+    expect(agenticWriterListV1(short, eight, 0)).toMatchObject({ count: 8, members: [], members_omitted: 8 });
+    expect(() => agenticWriterListV1(short, eight, -1)).toThrow(/max_members/u);
+    expect(agenticWriterListV1(short, eight)).not.toHaveProperty("members_omitted");
     const ids = Array.from({ length: 120 }, (_, index) => `E${index + 1}`);
     const list = createAgenticListEvidenceV1({ ...OCTOBER_4, members: ids, shown: 120 });
     const rows = ids.map((id, index) => agenticWriterListMemberV1({ short: id, item: pageRow(String(index + 1), `Page ${index + 1}`) }, index === 0 || index === 110));
-    const view = agenticWriterListV1(list, rows, true);
-    expect(view).toMatchObject({ id: "L1", source: "pages", complete: true, count: 120, checked: 2, stated: true, read_at: OCTOBER_4.read_at });
+    const view = agenticWriterListV1(list, rows);
+    expect(view).toMatchObject({ id: "L1", source: "pages", complete: true, count: 120, checked: 2, read_at: OCTOBER_4.read_at });
+    expect(view).not.toHaveProperty("stated");
     expect(view.members).toHaveLength(120);
     expect(view).not.toHaveProperty("members_omitted");
-    expect(() => agenticWriterListV1(list, [...rows].reverse(), true)).toThrow(/the list's members, in order/u);
+    expect(() => agenticWriterListV1(list, [...rows].reverse())).toThrow(/the list's members, in order/u);
   });
 
-  it("lets the writer choose a list and select by one row fact other than its title, never write names", () => {
-    const mine: AgenticAnswerListUseV1 = { id: "L1", where: { field: "owner", value: "Dana Lee" } };
-    const week: AgenticAnswerListUseV1 = { id: "L1", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } };
+  it("lets the writer place a list and select by one row fact other than its title, never write names", () => {
+    const mine: AgenticPlacedListV1 = { list: "L1", where: { field: "owner", value: "Dana Lee" } };
+    const week: AgenticPlacedListV1 = { list: "L1", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } };
     expect([mine.where?.field, week.where?.field]).toEqual(["owner", "due"]);
-    expectTypeOf<NonNullable<AgenticAnswerListUseV1["where"]>>().toEqualTypeOf<AgenticListSelectionV1>();
-    expectTypeOf<NonNullable<AgenticAnswerListUseV1["where"]>["field"]>().toEqualTypeOf<"owner" | "status" | "due" | "created" | "updated" | "received" | "occurred" | "approved" | "sent" | "reassigned" | "checked">();
+    expectTypeOf<NonNullable<AgenticPlacedListV1["where"]>>().toEqualTypeOf<AgenticListSelectionV1>();
+    expectTypeOf<NonNullable<AgenticPlacedListV1["where"]>["field"]>().toEqualTypeOf<"owner" | "status" | "due" | "created" | "updated" | "received" | "occurred" | "approved" | "sent" | "reassigned" | "checked">();
     // @ts-expect-error a selection is never by title
-    const byTitle: AgenticAnswerListUseV1 = { id: "L1", where: { field: "title", value: "PRD" } };
+    const byTitle: AgenticPlacedListV1 = { list: "L1", where: { field: "title", value: "PRD" } };
     // @ts-expect-error the writer names lists, never member names
-    const named: AgenticAnswerListUseV1 = { id: "L1", names: ["PRD"] };
+    const named: AgenticPlacedListV1 = { list: "L1", names: ["PRD"] };
     // It selects members for their row facts by id, never by what it would write of them.
-    const prd: AgenticAnswerListUseV1 = { id: "L1", members: ["E5"] };
+    const prd: AgenticPlacedListV1 = { list: "L1", members: ["E5"] };
     expect([byTitle, named, prd]).toHaveLength(3);
   });
 });
@@ -445,9 +447,48 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     expect(wide.flatMap(value => value.cited)).toEqual(Array.from({ length: 25 }, (_, index) => index));
     expect(() => statement({ noun: PAGES, selected: [] })).toThrow(RangeError);
   });
+});
 
-  it("says how many members were checked for content across a list (addition 4)", () => {
-    expect([{ checked: 4, count: 8, complete: true }, { checked: 25, count: 25, complete: false }, { checked: 8, count: 8, complete: true }].map(agenticListCheckedNoteV1))
-      .toEqual(["(4 of 8 checked so far)", "(25 of at least 25 checked so far)", undefined]);
+describe("a placed list (ADR-0054)", () => {
+  const row = (id: string, status: string, owner?: string): AgenticWriterListMemberV1 => Object.freeze({
+    id, kind: "ticket", title: `THERM-${id.slice(1)}`, status, ...(owner === undefined ? {} : { owner }), checked: false,
+  });
+  const all = Object.freeze([row("E1", "open", "Dana Lee"), row("E2", "open", "Sam Roy"), row("E3", "done", "Dana Lee")]);
+  const rowWithoutOwner = row("E4", "open");
+  /** Fills a placed L1 over `members`, every one shown, from a complete list unless `list` says otherwise. */
+  const fill = (placed: Omit<AgenticPlacedListV1, "list">, list: Partial<Pick<AgenticListEvidenceV1, "complete" | "unchecked" | "filter">> = {}, members: readonly AgenticWriterListMemberV1[] = all) =>
+    agenticListFillV1({
+      placed: { list: "L1", ...placed }, all: members, shown: new Set(members.map(member => member.id)),
+      member_of: (id: string) => members.some(member => member.id === id) ? id : undefined, list: { complete: true, filter: {}, ...list },
+    });
+
+  it("fills a whole list from every member, a where from every member that matches, and members only from rows the writer was shown", () => {
+    const base = { all, shown: new Set(["E1", "E2"]), member_of: (id: string) => all.some(m => m.id === id) ? id : undefined, list: { complete: true, filter: {} } };
+    expect(agenticListFillV1({ ...base, placed: { list: "L1" } })).toEqual({ kind: "rows", selected: all, by_id: false, unknown: 0 });
+    expect(agenticListFillV1({ ...base, placed: { list: "L1", where: { field: "status", value: "OPEN" } } })).toMatchObject({ kind: "rows", selected: [all[0], all[1]], by_id: false });
+    expect(agenticListFillV1({ ...base, placed: { list: "L1", members: ["E3", "E2", "E9"] } })).toEqual({ kind: "rows", selected: [all[1]], by_id: true, unknown: 2 });
+    expect(agenticListFillV1({ ...base, placed: { list: "L1", members: ["E3"] } })).toEqual({ kind: "dropped", unknown: 1 });
+  });
+
+  it("is empty for a whole list with no member, and keeps hand-picked members once each, in list order", () => {
+    expect(fill({}, {}, [])).toEqual({ kind: "empty" });
+    expect(fill({ members: ["E3", "E1", "E3"] })).toEqual({ kind: "rows", selected: [all[0], all[2]], by_id: true, unknown: 0 });
+  });
+
+  it("confirms that none matched only for a complete list whose members all record the fact", () => {
+    const where = { field: "owner", value: "Nobody" } as const;
+    expect(fill({ where })).toEqual({ kind: "none_matched", where, testable: true, confirmed: true });
+    expect(fill({ where }, { complete: false })).toMatchObject({ confirmed: false });
+    expect(fill({ where }, {}, [...all, rowWithoutOwner])).toMatchObject({ testable: false, confirmed: false });
+  });
+
+  it("counts an action whose owner is not recorded as untestable by owner, never as a confirmed no-match", () => {
+    // Row projection writes "none recorded" for a meeting action with no confirmed owner (ADR-0021): a value, but no fact.
+    const unowned = [row("E1", "open", "none recorded"), row("E2", "open", "none recorded")].map(member => Object.freeze({ ...member, kind: "action" }));
+    expect(fill({ where: { field: "owner", value: "Dana" } }, {}, unowned)).toEqual({ kind: "none_matched", where: { field: "owner", value: "Dana" }, testable: false, confirmed: false });
+  });
+
+  it("says how many rows are shown only when fitting cut some", () => {
+    expect([agenticListShownNoteV1(7, 12), agenticListShownNoteV1(12, 12)]).toEqual(["(first 7 shown)", undefined]);
   });
 });

@@ -76,6 +76,8 @@ describe('synthesis receives observed research coverage', () => {
       { tool: 'search', source: 'pages', returned_items: 1, truncated: true, notice: true },
     ] });
     expect(JSON.stringify(writer)).not.toContain('Speculative planner assertion');
+    // Research's plan reaches the writer only as research_notes, its needs (ADR-0054), never the planner's free-text notes.
+    expect(writer.research_notes).toMatchObject({ about: expect.any(String), needs: expect.any(Array) });
     expect(JSON.stringify(audit)).not.toContain(body);
     expect(JSON.stringify(audit)).not.toContain('Some page sections');
   });
@@ -95,7 +97,8 @@ describe('synthesis receives observed research coverage', () => {
     // The writer sees the list by id with its rows and filter (ADR-0041); research no longer reports a bare count.
     expect(writer.research).toMatchObject({ completed: true, omitted_evidence_items: 0 });
     expect(writer.research).not.toHaveProperty('inventories');
-    expect(writer.lists).toEqual([expect.objectContaining({ id: 'L1', source: 'pages', complete: false, count: 1, stated: false, members: [expect.objectContaining({ id: 'E1', title: 'Gate guide' })] })]);
+    expect(writer.lists).toEqual([expect.objectContaining({ id: 'L1', source: 'pages', complete: false, count: 1, members: [expect.objectContaining({ id: 'E1', title: 'Gate guide' })] })]);
+    expect((writer.lists as readonly object[])[0]).not.toHaveProperty('stated');
     expect(JSON.stringify(writer.lists)).not.toContain(body);
   });
 });

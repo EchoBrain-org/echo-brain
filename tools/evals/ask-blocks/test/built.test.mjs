@@ -71,7 +71,7 @@ test("reads every block of a released answer into the common blocks, each claim 
     { kind: "answer", claims: [{ text: "Three things block the DVT gate.", evidence: ["E1", "E2"] }] },
     { kind: "prose", title: "Why", claims: [{ text: "The gate opens only when all three are done.", evidence: ["E1"] }] },
     { kind: "list", ordered: true, title: "Steps", claims: [{ text: "Fix the fan stall in firmware 2.3.", evidence: ["E2"] }, { text: "Run the 72-hour soak.", evidence: ["E4"] }] },
-    { kind: "table", title: "Blocking tickets", columns: ["Ticket", "Status"], rows: [{ cells: ["THERM-482", "In Progress"], evidence: ["E2"] }, { cells: ["THERM-488", "Blocked"], evidence: ["E3"] }] },
+    { kind: "table", title: "Blocking tickets", caption: "2 tickets block the gate", columns: ["Ticket", "Status"], rows: [{ cells: ["THERM-482", "In Progress"], evidence: ["E2"] }, { cells: ["THERM-488", "Blocked"], evidence: ["E3"] }] },
     { kind: "timeline", title: "Dates", events: [{ date: "2026-10-08", text: "THERM-482 was opened.", evidence: ["E2"] }, { date: "2026-10-27", text: "The soak was set.", who: "Priya Raman", evidence: ["E4"] }] },
     { kind: "card", title: "THERM-488", card_kind: "ticket", facts: [{ label: "Status", value: "Blocked", evidence: ["E3"] }, { label: "Owner", value: "Dev Mehta", evidence: ["E3"] }] },
     { kind: "quote", text: "The DVT gate opens only when THERM-482 is fixed", from: "DVT readiness review", evidence: ["E1"] },
@@ -115,7 +115,7 @@ function route(reply) {
 }
 
 /** ticket-profile answered with a card, a timeline, a quote, steps and text; the answer cites the follow-up (E2) first. */
-const TICKET_REPLY = Object.freeze({ lists: [], not_found: [], blocks: [
+const TICKET_REPLY = Object.freeze({ not_found: [], blocks: [
   { block: "answer", sentences: [{ text: "It is a High priority Jira issue: the fan stalls at cold start.", evidence: ["E2", "E1"] }] },
   { block: "card", title: "THERM-482", kind: "ticket", facts: [{ label: "Status", value: "In Progress", evidence: ["E1"] }, { label: "Owner", value: "Tomas Okafor", evidence: ["E1"] }] },
   { block: "timeline", title: "Dates", events: [{ date: "2026-11-05", text: "The fix is due to be verified.", who: "Priya Raman", evidence: ["E2"] }, { date: "2026-10-08", text: "THERM-482 was opened.", evidence: ["E1"] }] },
@@ -158,7 +158,7 @@ test("lets the kernel's own reading, repair and downgrades decide what is releas
   const out = mkdtempSync(join(tmpdir(), "ask-blocks-built-kernel-"));
   // The first reply has no blocks, which the kernel refuses; its repair quotes words E1 does not have and dates an event
   // on a day E2 does not record, which the kernel reads as text.
-  const writer = route((_input, call) => (call === 1 ? { lists: [], not_found: [] } : { lists: [], not_found: [], blocks: [
+  const writer = route((_input, call) => (call === 1 ? { not_found: [] } : { not_found: [], blocks: [
     { block: "answer", sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] },
     { block: "quote", text: "Priya owns the soak from now on.", from: "DVT readiness review", evidence: ["E1"] },
     { block: "timeline", events: [{ date: "2026-10-27", text: "The soak was assigned.", evidence: ["E1"] }, { date: "2026-09-01", text: "The chamber was ordered.", evidence: ["E2"] }] },
@@ -168,7 +168,7 @@ test("lets the kernel's own reading, repair and downgrades decide what is releas
   assert.deepEqual(trial.attempts.map((attempt) => [attempt.kind, attempt.valid]), [["first", false], ["repair", true]]);
   assert.match(trial.attempts[0].problems[0], /"blocks" must be an array/u);
   const repair = JSON.parse(trial.attempts[1].user_prompt);
-  assert.deepEqual([repair.validation_error, JSON.parse(repair.rejected_response)], [trial.attempts[0].problems[0], { lists: [], not_found: [] }]);
+  assert.deepEqual([repair.validation_error, JSON.parse(repair.rejected_response)], [trial.attempts[0].problems[0], { not_found: [] }]);
   // Downgraded, the quote and both events read as text after the answer: no quote, and no timeline of one event.
   assert.deepEqual(trial.read.blocks.map((block) => block.kind), ["answer", "prose"]);
   assert.deepEqual(trial.read.blocks[1].claims.map((claim) => claim.text), ["DVT readiness review: Priya owns the soak from now on.", "2026-10-27: The soak was assigned.", "The chamber was ordered."]);
@@ -178,7 +178,7 @@ test("lets the kernel's own reading, repair and downgrades decide what is releas
 test("makes a complete gate run, every case three times, and decides it", async () => {
   const out = mkdtempSync(join(tmpdir(), "ask-blocks-built-gate-"));
   // A reply that says nothing wrong and nothing asked: valid and grounded, but it loses every case's facts.
-  const writer = route((input) => ({ lists: [], not_found: [], blocks: [{ block: "answer", sentences: [{ text: "The evidence covers it.", evidence: JSON.parse(input.user_prompt).evidence.map((item) => item.id) }] }] }));
+  const writer = route((input) => ({ not_found: [], blocks: [{ block: "answer", sentences: [{ text: "The evidence covers it.", evidence: JSON.parse(input.user_prompt).evidence.map((item) => item.id) }] }] }));
   const { report } = await run(options(out, { caseIds: null, trials: 3, concurrency: 6 }), { loaded: { structured_output: writer, generation }, progress: () => undefined });
   assert.deepEqual([report.complete, report.summary.trials, writer.inputs.length], [true, 45, 45]);
   assert.deepEqual(report.decision, { complete: true, passes: false, rules: { valid: true, grounded: true, nothing_lost: false, fit: false, stable: true } });
@@ -194,7 +194,7 @@ test("counts the writer calls that failed and the trials left without a reply", 
   const failing = { inputs: [], async generate_with_observation(input) {
     this.inputs.push(input);
     if (this.inputs.length > 1) throw outage(402);
-    return { value: { lists: [], not_found: [] }, finish_reason: "stop", usage: null, provider_latency_ms: 1 };
+    return { value: { not_found: [] }, finish_reason: "stop", usage: null, provider_latency_ms: 1 };
   } };
   const { report } = await run(options(out), { loaded: { structured_output: failing, generation }, progress: () => undefined });
   assert.deepEqual(report.trials[0].attempts.map((attempt) => [attempt.kind, attempt.error?.http_status ?? null]), [["first", null], ["repair", 402]]);

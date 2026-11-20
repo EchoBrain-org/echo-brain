@@ -53,7 +53,7 @@ function drafting(inputs = []) {
     const expect = entry.expect;
     const follow_ups = expect.drafts === 0 ? [] : [{ task: `Handle the ${expect.task_mentions.join(" and ")}`,
       ...(typeof expect.owner === "string" ? { owner: expect.owner } : {}), ...(expect.due_on === undefined ? {} : { due_on: expect.due_on }) }];
-    return { value: { lists: [], blocks: [{ block: "answer", sentences: [{ text: "The review approved it.", evidence: [shown.evidence[0].id] }] }], not_found: [], follow_ups },
+    return { value: { blocks: [{ block: "answer", sentences: [{ text: "The review approved it.", evidence: [shown.evidence[0].id] }] }], not_found: [], follow_ups },
       finish_reason: "stop", usage: null, provider_latency_ms: 1 };
   } };
 }

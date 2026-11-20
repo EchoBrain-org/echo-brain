@@ -6,6 +6,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ANSWER_BLOCK_CATALOG, ANSWER_BLOCKS_PROMPT, answerBlocksSchema } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
+import { caseAsk, caseItems, scriptedModel } from "../../shared/ask-cases.mjs";
 import { pooled } from "../../shared/runner.mjs";
 import { help, parseArgs, researchStep, run } from "../run.mjs";
 import { loadCases } from "../grade.mjs";
@@ -15,7 +16,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072 };
 const document = loadCases();
 /** The writer's answer that Priya Raman owns it, in blocks. */
-const REPLY = Object.freeze({ lists: [], blocks: [{ block: "answer", sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }], not_found: [] });
+const REPLY = Object.freeze({ blocks: [{ block: "answer", sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }], not_found: [] });
 /** A run over soak-owner, one trial, with `fields` changed. */
 const options = (out, fields = {}) => ({ run: true, credentialFile: null, out, caseIds: ["soak-owner"], trials: 1, concurrency: 1, timeoutMs: 20_000, ...fields });
 /** A route that answers each writer call with REPLY, keeping every input. */
@@ -35,7 +36,7 @@ function privateRoot(t) {
   return { root, credential };
 }
 /** A layout v2 reply: one answer block whose sentence cites `evidence`. */
-const answerBlock = (text, evidence) => ({ lists: [], blocks: [{ block: "answer", sentences: [{ text, evidence }] }], not_found: [] });
+const answerBlock = (text, evidence) => ({ blocks: [{ block: "answer", sentences: [{ text, evidence }] }], not_found: [] });
 /**
  * A writer for the wording cases that answers with `lead(case)` (by default every required fact, briefly) as its answer
  * block and cites everything it was shown; it never sees a credential.
@@ -82,7 +83,7 @@ test("makes no request without an explicit run and a private credential file, an
   assert.deepEqual([parsed.caseSet, parsed.trials, parsed.concurrency, parsed.timeoutMs, parsed.caseIds], ["main", 1, 4, 120_000, ["soak-owner"]]);
   assert.deepEqual([parseArgs(base).trials, parseArgs(base).caseIds, parseArgs([...base, "--case-set", "main"]).caseSet], [3, null, "main"]);
   // Each case set names its own cases and its own timeout bounds.
-  assert.throws(() => parseArgs([...base, "--case-set", "other"]), /--case-set must be main, wording or follow_ups/u);
+  assert.throws(() => parseArgs([...base, "--case-set", "other"]), /--case-set must be main, wording, follow_ups or lists/u);
   assert.throws(() => parseArgs([...base, "--case-set", "wording", "--cases", "soak-owner"]), /--cases must select known cases/u);
   assert.deepEqual([parseArgs([...base, "--case-set", "wording", "--cases", "owner-plain"]).caseIds, parseArgs([...base, "--case-set", "wording"]).timeoutMs], [["owner-plain"], 60_000]);
   assert.equal(parseArgs([...base, "--timeout-ms", "180000"]).timeoutMs, 180_000);
@@ -126,6 +127,48 @@ test("scripts research as one search, every item opened, then finish", () => {
   assert.deepEqual(researchStep(steps, 3).actions, [{ tool: "finish", args: {} }]);
 });
 
+/** Four tickets research lists, one decision it finds by search; it lists, then opens two of the tickets, then finishes. */
+const listedCase = Object.freeze({
+  id: "listed-tickets", question: "Which tickets were created on October 4, and who approved the recall?",
+  research: {
+    needs: ["tickets created on October 4", "who approved the recall"],
+    steps: [
+      { actions: [{ tool: "list", args: { source: "tickets" } }, { tool: "search", args: { query: "recall approval" } }],
+        needs: [{ kind: "which_items", status: "open", evidence: [] }, { kind: "content", status: "open", evidence: [] }] },
+      { actions: [{ tool: "open", args: { id: "E1" } }, { tool: "open", args: { id: "E2" } }],
+        needs: [{ kind: "which_items", status: "open", evidence: ["L1"] }, { kind: "content", status: "open", evidence: [] }] },
+      { actions: [{ tool: "finish", args: {} }],
+        needs: [{ kind: "which_items", status: "found", evidence: ["L1"] }, { kind: "content", status: "not_found", evidence: [] }] },
+    ],
+  },
+  items: [
+    ...[["THERM-501", "Recall the probe tips", "Open", "Dana Lee"], ["THERM-502", "Re-test the probe seal", "Open", "Sam Roy"],
+      ["THERM-503", "Update the recall notice", "Done", "Dana Lee"], ["THERM-504", "Order spare probes", "Done", "Sam Roy"]]
+      .map(([key, title, status, owner]) => ({ kind: "ticket", listed: true, key, title, text: `${title}, as filed on October 4.`, status, owner, created: "2026-10-04" })),
+    { kind: "decision", label: "Probe recall", text: "The probe recall goes ahead on October 6.", occurred_at: "2026-10-05" },
+  ],
+});
+/** A writer that answers in one sentence and never reaches a model. */
+const stubWriter = () => ({ value: answerBlock("THERM-501 recalls the probe tips.", ["E1"]), finish_reason: "stop", usage: null, provider_latency_ms: null });
+
+test("scripts a list read, opens of some rows, and a finish with needs of each kind and status", async () => {
+  const items = caseItems("lists", listedCase);
+  const audits = [];
+  const ask = caseAsk(items, document, document.asked_at, scriptedModel(listedCase, stubWriter, "refused").model, generation, undefined,
+    { listed: items.slice(0, 4), on_audit: (entry) => audits.push(entry) });
+  const { research } = await ask.answerWithResearch({ question: listedCase.question });
+  assert.deepEqual(research.rounds.flatMap((round) => round.rejected), []);
+  assert.equal(research.stop.completed, true);
+  // The listed tickets are E1 to E4, in case order, so evidenceIdsOf names the cited items as the writer saw them.
+  assert.deepEqual(research.lists.map((list) => [list.id, list.members, list.complete]), [["L1", ["E1", "E2", "E3", "E4"], true]]);
+  assert.deepEqual(research.plan[0].needs.map((need) => [need.kind, need.status]), [["which_items", "found"], ["content", "not_found"]]);
+  assert.deepEqual(research.items.slice(0, 4).map((item) => item.read_in_full), [true, true, false, false]);
+  assert.equal(audits.at(-1).fallbacks, 0);
+  // Past its last step, research finishes again.
+  assert.deepEqual(researchStep(listedCase, 4).actions, [{ tool: "finish", args: {} }]);
+  assert.deepEqual(researchStep(listedCase, 2).parts[0].needs[0], { id: "N1", need: "tickets created on October 4", kind: "which_items", status: "open", evidence: ["L1"] });
+});
+
 test("writes through the personal Claude account port, admitting each request and adding up its usage", async () => {
   const out = mkdtempSync(join(tmpdir(), "ask-blocks-account-"));
   const admittedRequests = [];
@@ -151,7 +194,7 @@ test("fingerprints its cases, its pre-registration and every module the run load
   const out = mkdtempSync(join(tmpdir(), "ask-blocks-code-"));
   const { report } = await run(options(out), { loaded: { structured_output: answering(), generation }, progress: () => undefined });
   const fingerprinted = Object.keys(report.code.before.files_sha256);
-  assert.deepEqual(fingerprinted, ["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/wording-cases.json", "tools/evals/ask-blocks/follow-ups-cases.json", "tools/evals/ask-blocks/README.md", ...loadedModules("tools/evals/ask-blocks/run.mjs")]);
+  assert.deepEqual(fingerprinted, ["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/wording-cases.json", "tools/evals/ask-blocks/follow-ups-cases.json", "tools/evals/ask-blocks/lists-cases.json", "tools/evals/ask-blocks/README.md", ...loadedModules("tools/evals/ask-blocks/run.mjs")]);
   // Among them layout v2's checks and title bound, and the kernel's shared modules on the writer's path.
   for (const file of ["packages/organization-api/dist/person-answer-layout-checks.js", "packages/organization-api/dist/person-answer-layout-v2.js",
     "packages/organization-authority-kernel/dist/shared/core-runtime-observation-v1.js", "packages/organization-authority-kernel/dist/shared/evidence-desk-v2.js"]) assert.ok(fingerprinted.includes(file), file);

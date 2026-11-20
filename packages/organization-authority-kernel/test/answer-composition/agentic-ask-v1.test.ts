@@ -700,7 +700,7 @@ describe("agentic Ask: research loop", () => {
     expect(audit[0]).toMatchObject({ outcome: 'partial', model_calls: 2, repairs: 1, fallbacks: 1 });
   });
 
-  it('keeps planner hypotheses out of the writer and retains supported facts when research cannot finish', async () => {
+  it('shows the writer planner hypotheses only as research notes, never its free-text notes, and retains supported facts when research cannot finish', async () => {
     const question = 'What did we decide about launch?';
     const plan = [{ question, needs: [{ need: 'decision' }, { need: 'speculative vendor biography' }], notes: 'Speculative planner claim: the vendor resigned.' }];
     const script = scripted([
@@ -709,7 +709,12 @@ describe("agentic Ask: research loop", () => {
         const user = JSON.parse(input.user_prompt);
         expect(user.question).toBe(question);
         expect(user).not.toHaveProperty('research_plan');
-        expect(input.user_prompt).not.toMatch(/speculative vendor biography|vendor resigned/iu);
+        // ADR-0054: a need's text reaches the writer only inside research_notes, marked as research's own advice; the
+        // planner's free-text notes never do.
+        expect(input.user_prompt).not.toMatch(/vendor resigned/iu);
+        const { research_notes: notes, ...rest } = user;
+        expect(JSON.stringify(rest)).not.toMatch(/speculative vendor biography/iu);
+        expect(notes.needs.map((note: { need: string }) => note.need)).toContain('speculative vendor biography');
         expect(user.evidence).toEqual([expect.objectContaining({ text: 'We approved launch on Tuesday.' })]);
         return answer([{ text: 'We approved launch on Tuesday.', evidence: ['E1'] }]);
       },
@@ -1011,7 +1016,8 @@ describe("agentic Ask: research loop", () => {
       step([{}], [search("atlas")]),
       step([{}], actions.slice(0, 4)), step([{}], actions.slice(4, 8)), step([{}], actions.slice(8, 12)),
       finish([missing()]), finish([missing()]),
-      answer([{ text: "x.", evidence: ["E1"] }]),
+      // The writer cites the passage research opened last, which its small window still holds, so its reply survives (ADR-0054).
+      answer([{ text: "x.", evidence: ["E12"] }]),
     ]);
     const evidence = desk({ search: () => passages, open: id => passages.filter(value => value.id === id) });
     await ask({ desk: evidence, model: script.model, context_tokens: 16_000 }).answer({ question: "When is launch?" });
