@@ -5,7 +5,7 @@ import type {
   PersonMeetingResultsV2, PersonReviewRequestV1, PersonReviewResultsV1, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonProjectActivityItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
 import {
-  PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1,
+  PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1,
   PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
 } from '@echo-brain/organization-api/person-answer-previous-v1';
 // The only shapes that cross process boundaries. Everything here is
@@ -434,7 +434,7 @@ export const MAX_CHECK_REQUEST_BYTES = 64 * 1024;
 export type AskPrevious = PersonAnswerPreviousV1;
 /** C3's bounds on `previous`, as the API states them. */
 export const PREVIOUS_LIMITS = {
-  statements: PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1, statement_chars: PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1,
+  statements: PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1, statement_bytes: PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1,
   citations: PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, statement_citations: PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
 } as const;
 /** The Ask request body's bound, which `previous` shares: the Authority's own request body bound. */
