@@ -468,8 +468,27 @@ describe("agentic model gate", () => {
       ["a permanent provider error, which is never repaired", [failure("adapter_http", { http_status: 401 })], {}],
       ["a declined reply, which is never repaired", [failure("adapter_refusal")], {}],
       ["a usable reply", [{ good: true }], {}],
+      // A stream cut part way through an event, after a 200: the reply never arrived whole, so it is neither repaired nor,
+      // its billing unknown, sent again.
+      ["a stream cut mid-event, which is never repaired or repeated", [failure("adapter_transport", { http_status: 200 }), { good: true }], {}],
     ])("for %s", async (_name, replies, expected) => {
       expect(await corrected({ replies })).toEqual(expected);
+    });
+
+    // A repair is admitted only for a reply that arrived whole and failed validation, and it carries the rejected reply.
+    it.each([
+      ["not JSON", failure("adapter_json"), "repair"],
+      ["with no usable content", failure("adapter_response", { http_status: 200 }), "repair"],
+      ["cut off at its length", failure("adapter_finish", { finish_reason: "length" }), "repair"],
+      ["cut mid-event (a transport loss)", failure("adapter_transport", { http_status: 200 }), "none"],
+      ["cut mid-event, a transport loss the adapter calls unbilled", failure("adapter_transport", { http_status: 200, unbilled: true }), "unchanged"],
+    ] as const)("repairs a reply %s only when it arrived whole", async (_name, error, next) => {
+      const { gate, inputs } = harness({ replies: [error, { good: true }] });
+      await gate.withRepair(STEP, "system", { q: 1 }, schema, value => value).catch(() => undefined);
+      const second = inputs[1];
+      // A repair sends guidance with the reply; a transport loss is at most sent again unchanged, never repaired.
+      expect(second === undefined ? "none" : second.user_prompt === inputs[0]!.user_prompt ? "unchanged" : "repair").toBe(next);
+      expect(gate.stats().repairs).toBe(second === undefined ? 0 : 1);
     });
 
     // A paid attempt is never repeated automatically: only a failure known to be unbilled earns the one retry.
