@@ -1,5 +1,5 @@
 import { observeCoreModelCorrectionV1, observeCoreModelMetadataV1, annotateCoreRuntimeV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
-import { assembledOpenRouterStreamV1, isOpenRouterStreamV1, readOpenRouterBodyV1 } from "../../../openrouter-stream-v1.js";
+import { openRouterReplyCapacityBytesV1, OpenRouterReplyTooLargeErrorV1, readOpenRouterReplyV1, type OpenRouterReplyV1 } from "../../../openrouter-stream-v1.js";
 import { claudeGrammarHolds, claudeStructuredSchema } from "./claude-structured-schema.js";
 import {
   type StructuredGenerationFailureClassV1,
@@ -341,8 +341,9 @@ export function createOpenRouterStructuredGenerationAdapter(
       );
     }
     const strict = claudeGrammarHolds(input.schema);
-    // Liveness, not a whole-call clock: the reply streams, and the call is stalled only when nothing arrives (headers, an
-    // event or OpenRouter's keep-alive comment) for `timeout_ms`. A reply that keeps arriving runs as long as it needs.
+    // Liveness, not a whole-call clock: the reply streams, and the call is stalled only when the model produces nothing
+    // (content, reasoning, tool-call text or a finish reason; OpenRouter's keep-alive comments do not count) for
+    // `timeout_ms`. A reply that keeps arriving runs as long as it needs.
     const silence = new AbortController();
     const timeoutSignal = silence.signal;
     let silenceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -399,7 +400,6 @@ export function createOpenRouterStructuredGenerationAdapter(
     alive();
     try {
       response = await fetchImpl(OPENROUTER_CHAT_COMPLETIONS_URL, request);
-      alive();
     } catch (error) {
       clearTimeout(silenceTimer);
       fail("OpenRouter request failed", {
@@ -412,15 +412,21 @@ export function createOpenRouterStructuredGenerationAdapter(
       });
     }
     let providerLatency: number | null = null;
-    let payloadText: string;
+    let reply: OpenRouterReplyV1;
     try {
       annotateCoreRuntimeV1({ counts: { http_status: response.status } });
-      payloadText = await readOpenRouterBodyV1(response, alive);
+      reply = await readOpenRouterReplyV1(response, { capacity_bytes: openRouterReplyCapacityBytesV1(input.max_output_tokens), progress: alive });
       clearTimeout(silenceTimer);
-      annotateCoreRuntimeV1({ counts: { output_bytes: Buffer.byteLength(payloadText) } });
+      annotateCoreRuntimeV1({ counts: { output_bytes: reply.bytes } });
       providerLatency = elapsed(providerStartedAt, nowMs);
     } catch (error) {
       clearTimeout(silenceTimer);
+      // A reply past its transport capacity, or a stream event that is not JSON, is an invalid reply, not a lost one.
+      if (error instanceof OpenRouterReplyTooLargeErrorV1 || error instanceof SyntaxError) {
+        fail(response.ok ? "OpenRouter response is invalid" : "OpenRouter request failed", {
+          failure_class: response.ok ? "adapter_response" : "adapter_http", response, provider_latency_ms: elapsed(providerStartedAt, nowMs),
+        });
+      }
       fail(
         response.ok
           ? "OpenRouter response is invalid"
@@ -438,7 +444,7 @@ export function createOpenRouterStructuredGenerationAdapter(
     }
     let payload: unknown;
     try {
-      payload = isOpenRouterStreamV1(response) ? assembledOpenRouterStreamV1(payloadText) : JSON.parse(payloadText);
+      payload = reply.streamed ? reply.payload : JSON.parse(reply.text);
     } catch {
       fail(
         response.ok

@@ -17,7 +17,7 @@ import {
   type StructuredGenerationResult,
 } from "@echo-brain/organization-processing/llm/llm-provider";
 
-import { assembledOpenRouterStreamV1, isOpenRouterStreamV1, readOpenRouterBodyV1 } from '../openrouter-stream-v1.js';
+import { openRouterReplyCapacityBytesV1, OpenRouterReplyTooLargeErrorV1, readOpenRouterReplyV1, type OpenRouterReplyV1 } from '../openrouter-stream-v1.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -70,11 +70,12 @@ export class OpenRouterClient implements LlmProviderClient {
 
   /**
    * One request with the resolved bearer credential: the reply's JSON (a streamed reply assembled into the same shape),
-   * or the provider's refusal. Liveness, not a whole-call clock: the call is stalled only when nothing arrives (its
-   * headers, a stream event or OpenRouter's keep-alive comment) for `requestTimeoutMs`; a reply that keeps arriving is
-   * never cut off, however long it runs.
+   * or the provider's refusal. Liveness, not a whole-call clock: the call is stalled only when the model produces
+   * nothing (no content, reasoning, tool-call text or finish reason; OpenRouter's keep-alive comments do not count) for
+   * `requestTimeoutMs`; a reply that keeps arriving is never cut off, however long it runs. The reply is held to its
+   * transport capacity (`openRouterReplyCapacityBytesV1` of `maxOutputTokens`) while it is read.
    */
-  private async request(path: string, init: RequestInit, signal?: AbortSignal): Promise<{ readonly payload: unknown; readonly response: Response }> {
+  private async request(path: string, init: RequestInit, signal: AbortSignal | undefined, maxOutputTokens: number): Promise<{ readonly payload: unknown; readonly response: Response; readonly streamed: boolean }> {
     let credential: string | undefined;
     try {
       credential = this.options.credentialResolver(this.options.credentialRef);
@@ -104,32 +105,37 @@ export class OpenRouterClient implements LlmProviderClient {
           signal: signal === undefined ? silence.signal : AbortSignal.any([silence.signal, signal]),
         });
       } catch (error) { return stalled(error); }
-      alive();
       annotateCoreRuntimeV1({ counts: { http_status: response.status } });
-      let body: string;
-      try { body = await readOpenRouterBodyV1(response, alive); } catch (error) { return stalled(error); }
+      let reply: OpenRouterReplyV1;
+      try {
+        reply = await readOpenRouterReplyV1(response, { capacity_bytes: openRouterReplyCapacityBytesV1(maxOutputTokens), progress: alive });
+      } catch (error) {
+        if (error instanceof OpenRouterReplyTooLargeErrorV1) throw invalidProviderResponse('OpenRouter', `reply passed its ${error.capacity_bytes}-byte transport capacity`);
+        if (error instanceof SyntaxError) throw new AdapterError('temporarily_unavailable', 'OpenRouter returned a non-JSON response body', true);
+        return stalled(error);
+      }
       // A prompt past the model's own context window: the one real limit on how long a meeting one call can read.
-      if (response.status === 400) {
+      if (response.status === 400 && !reply.streamed) {
         let refusal: unknown;
-        try { refusal = JSON.parse(body) as unknown; } catch { refusal = undefined; }
+        try { refusal = JSON.parse(reply.text) as unknown; } catch { refusal = undefined; }
         if (isContextWindowRefusal(response.status, refusal)) throw new ExtractionInputTooLongError('OpenRouter');
       }
       // OpenRouter bills no non-2xx reply; a billing, rate-limit or 5xx refusal is the transient, unbilled kind.
       if (!response.ok) throw providerStatusError('OpenRouter', response.status, response.status === 402 || response.status === 429 || response.status >= 500);
-      return this.parsed(body, response);
+      return this.parsed(reply, response);
     } finally { clearTimeout(timer); }
   }
 
-  private parsed(body: string, response: Response): { readonly payload: unknown; readonly response: Response } {
+  private parsed(reply: OpenRouterReplyV1, response: Response): { readonly payload: unknown; readonly response: Response; readonly streamed: boolean } {
     try {
-      const payload: unknown = observeCoreRuntimeSyncV1("model_parse", () => isOpenRouterStreamV1(response) ? assembledOpenRouterStreamV1(body) : JSON.parse(body) as unknown);
+      const payload: unknown = observeCoreRuntimeSyncV1("model_parse", () => reply.streamed ? reply.payload : JSON.parse(reply.text) as unknown);
       try {
         // Usage is observational, never a business input.
         const usage = isRecord(payload) ? generationUsageObservation(payload) : {};
         annotateCoreRuntimeV1({ counts: { input_tokens: optionalPositiveInteger(usage.inputTokens) ?? null,
           output_tokens: optionalPositiveInteger(usage.outputTokens) ?? null, total_tokens: optionalPositiveInteger(usage.totalTokens) ?? null } });
       } catch { /* provider usage is not a business input */ }
-      return { payload, response };
+      return { payload, response, streamed: reply.streamed };
     } catch {
       throw new AdapterError('temporarily_unavailable', 'OpenRouter returned a non-JSON response body', true);
     }
@@ -163,6 +169,7 @@ export class OpenRouterClient implements LlmProviderClient {
         }),
       },
       request.signal,
+      request.maxOutputTokens,
     );
     if (!isRecord(payload)) {
       throw invalidProviderResponse(
@@ -269,6 +276,8 @@ export class OpenRouterClient implements LlmProviderClient {
       `/model/${path}`,
       { method: 'GET' },
       signal,
+      // A model lookup generates nothing: its reply fits in the capacity's framing alone.
+      0,
     );
     const data = isRecord(payload) ? payload['data'] : undefined;
     if (!isRecord(data) || !nonEmptyString(data['id'])) {
