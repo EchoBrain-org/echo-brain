@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AGENTIC_ASK_LIST_LIMIT_MAX_V1, ASK_STEP_PROMPT, createStepSchema } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
+import { ASK_STEP_PROMPT, createStepSchema } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
 import { createAgenticAskV5 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import { PROJECTS_SOURCE_DESCRIPTOR_V1 } from '../../src/shared/workspace-evidence-v1.js';
@@ -55,7 +55,8 @@ describe('Ask tool argument contracts', () => {
     expect(argsFor(calls[0]!.schema, 'search').since.format).toBe('date');
     expect(argsFor(calls[0]!.schema, 'list').status.enum).toEqual(['open', 'done', 'active', 'archived']);
     // A list's limit and role take only what research reads: the loop refuses a limit past its most, and a role its source lacks.
-    expect(argsFor(calls[0]!.schema, 'list').limit).toMatchObject({ minimum: 1, maximum: AGENTIC_ASK_LIST_LIMIT_MAX_V1 });
+    expect(argsFor(calls[0]!.schema, 'list').limit).toMatchObject({ minimum: 1 });
+    expect(argsFor(calls[0]!.schema, 'list').limit).not.toHaveProperty('maximum');
     expect(argsFor(calls[0]!.schema, 'list').role.enum).toEqual(PROJECTS_SOURCE_DESCRIPTOR_V1.capabilities.filters.role);
   });
 });

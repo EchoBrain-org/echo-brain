@@ -54,7 +54,7 @@ import {
 export { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticResearchResultV1 } from "./agentic-research-v1.js";
 export { AgenticAskStalledErrorV1, AgenticAskGenerationFailureV1 } from "./agentic-model-gate-v1.js";
 // The SDK research driver describes the list tool by the same page bound.
-export { AGENTIC_ASK_LIST_LIMIT_MAX_V1 } from "./agentic-ask-v1-model-protocol.js";
+export { AGENTIC_ASK_LIST_PAGE_ROWS_V1 } from "./agentic-ask-v1-model-protocol.js";
 export type { AgenticResearchDriverV1, AgenticResearchDriverSessionV1 } from './agentic-research-driver-v1.js';
 export { ASK_FOLLOW_UP_ABOUT_KINDS_V1, askFollowUpItemIdV1, askFollowUpPointerV1, type AskFollowUpDraftV1, type AskFollowUpSinkV1 } from "./ask-follow-ups-v1.js";
 export type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "./agentic-release-v1.js";

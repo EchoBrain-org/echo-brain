@@ -366,17 +366,17 @@ describe("research loop: starting evidence", () => {
     expect(view.items.map(item => item.title)).toEqual(many.map(item => item.label));
   });
 
-  it("gives each starting item its own context budget", async () => {
+  it("admits every passage a starting read returns, for each starting item", async () => {
     const context = (key: string, index: number) => ticket(`${key}-CTX-${index}`, `${key} context ${index}: ${"x".repeat(40 * 1024)}`);
     const openCitation = vi.fn(async (input: EvidenceDeskOpenCitationInputV2) => {
       const anchor = items.find(item => (item.citation as { readonly ticket_id: string }).ticket_id === keyOf(input))!;
       return result([anchor, ...[1, 2, 3].map(index => context(anchor.label.slice(0, 8), index))]);
     });
-    const h = harness([found("E1", "E4")], { live_sources: [JIRA], openCitation });
+    const h = harness([found("E1", "E5")], { live_sources: [JIRA], openCitation });
     const view = await h.research.research({ trigger: "approved_record", brief: brief(`Recheck ${agenticStartingSlotV1(1)} and ${agenticStartingSlotV1(2)}.`, items.slice(0, 2).map(item => item.citation), {}, "report") });
-    // An anchor and the two 40 KB passages that fit its 96 KB, for each item; the third passage of each is left out.
-    expect(h.prompt(0).task).toBe("Recheck E1 and E4.");
-    expect(view.items.map(item => item.title)).toEqual([items[0]!.label, "THERM-48-CTX-1: Unrelated work", "THERM-48-CTX-2: Unrelated work", items[1]!.label, "THERM-46-CTX-1: Unrelated work", "THERM-46-CTX-2: Unrelated work"]);
+    // An anchor and its three 40 KB passages, for each item: the loop cuts no read; the prompt shows what fits its window.
+    expect(h.prompt(0).task).toBe("Recheck E1 and E5.");
+    expect(view.items.map(item => item.title)).toEqual([items[0]!.label, ...[1, 2, 3].map(index => `THERM-48-CTX-${index}: Unrelated work`), items[1]!.label, ...[1, 2, 3].map(index => `THERM-46-CTX-${index}: Unrelated work`)]);
   });
 
   it("stops the reads after a starting read that fails in a way that cannot be reported, and research with it", async () => {
@@ -547,7 +547,7 @@ describe("research loop: prompt layout", () => {
     expect(h.prompt(1).seen).toEqual([expect.objectContaining({ id: "E3", title: panel.label, text: panel.text, full: true })]);
   });
 
-  it("keeps what the latest reads returned when the scratchpad is full, and leaves out the newest others", async () => {
+  it("shows every entry that fits the window: no count of seen entries", async () => {
     const many = Array.from({ length: 310 }, (_, index) => listed(`row-${index}`));
     const h = harness([
       reads("open", [{ tool: "search", args: { query: "rows" } }]),
@@ -556,9 +556,9 @@ describe("research loop: prompt layout", () => {
     ], { openCitation: async () => result([first]), search: async input => result(input.query === "rows" ? many : [listed("late-1"), listed("late-2")]) });
     await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [first.citation]) });
     const ids = (index: number) => (h.prompt(index).seen as readonly { readonly id: string }[]).map(entry => entry.id);
-    // At most 300 entries: the first search's newest rows are left out, then the second search's two rows are kept.
-    expect(ids(1)).toEqual(Array.from({ length: 300 }, (_, index) => `E${index + 2}`));
-    expect(ids(2)).toEqual([...Array.from({ length: 298 }, (_, index) => `E${index + 2}`), "E312", "E313"]);
+    // All 310 rows, then all 312: the window, not a count, decides what the step sees.
+    expect(ids(1)).toEqual(Array.from({ length: 310 }, (_, index) => `E${index + 2}`));
+    expect(ids(2)).toEqual(Array.from({ length: 312 }, (_, index) => `E${index + 2}`));
     expect(h.prompt(2).last_results).toEqual([{ tool: "search", args: { query: "more rows" }, results: ["E312", "E313"] }]);
   });
 });

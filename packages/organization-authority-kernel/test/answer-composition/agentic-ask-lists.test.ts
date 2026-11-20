@@ -308,7 +308,8 @@ const gateOpen = (defect: string) => vi.fn(async (input: { readonly item: string
   if (!row.label.startsWith("Gate reviews")) return result([section(row, "No defects are discussed.")]) as EvidenceDeskResultV2;
   return result(Array.from({ length: 10 }, (_, index) => section(row, `Section ${index + 1}. ${"Gate review narrative. ".repeat(520).slice(0, 11_840)}${index === 9 ? ` ${defect} holds the DVT gate.` : ""}`, index + 1))) as EvidenceDeskResultV2;
 });
-const GATE_CUT = { opened: ids(11, 8), truncated: true };
+/** The loop cuts no open: every section the desk returned is admitted, and the open is whole. */
+const GATE_WHOLE = { opened: ids(11, 10) };
 /** THERM-3 links four tickets: its open returns its whole text and the linked rows, truncated, and says whether its own text was cut. */
 const anchorJira = (own: { readonly anchor_truncated?: boolean }) => jira(tickets(1, 4), { open: vi.fn(async (input: { readonly item: string }) => {
   const n = Number(/THERM-(\d+)/u.exec(input.item)![1]);
@@ -640,13 +641,14 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     { id: "X31b", name: "keeps it beside a where selection naming none, partial with its not-found phrase", ...WEEK, w: [say(UNSELECTED, ["E1"], [due("2026-10-23", "2026-10-29")])], out: "partial", says: [UNSELECTED], gap: `${NOT_DUE} Some list items do not record the fact used to select them.` },
     { id: "X31c", name: "keeps the detail as written, stating no list the writer did not place (ADR-0054)", ...WEEK, w: [say(UNSELECTED, ["E1"])], out: "answered", says: [UNSELECTED] },
     { id: "X31d", name: "keeps the detail beside a where selection holding every member", ...WEEK, w: [say(UNSELECTED, ["E1"], [{ id: "L1", where: { field: "status", value: "open" } }])], out: "answered", says: [UNSELECTED, expect.stringMatching(/^12 of the 12 follow-ups with owner Mara Lind and status open have status open: /u)] },
-    { id: "X33a", name: "checks no page whose sections the loop left out to fit an open, and tells research the open was cut (addition 4)", ...B4, desk: () => oct4({ open: gateOpen("BUG-412") }),
-      steps: [read([OCT4_LIST], WS), read(opens(ids(1, 4)), WS, "open", ["L1"]), read(opens(ids(5, 4)), WS, "open", ["L1"]), fin(WS, "L1", "E19")], w: [say(TRACE, ["E19"])],
-      out: "answered", says: [TRACE], wl: { id: "L1", count: 8, checked: 7 },
+    { id: "X33a", name: "checks a page whose every section an open returned: the loop cuts no open, only a desk may (addition 4)", ...B4, desk: () => oct4({ open: gateOpen("BUG-412") }),
+      steps: [read([OCT4_LIST], WS), read(opens(ids(1, 4)), WS, "open", ["L1"]), read(opens(ids(5, 4)), WS, "open", ["L1"]), fin(WS, "L1", "E21")], w: [say(TRACE, ["E21"])],
+      out: "answered", says: [TRACE], wl: { id: "L1", count: 8, checked: 8 },
       check: ({ research, steps, writer }) => {
-        expect(research.rounds[1].actions[2].result).toMatchObject({ id: "E3", ...GATE_CUT });
-        expect(steps[2]!.last_results[2]).toEqual({ tool: "open", args: { id: "E3" }, ...GATE_CUT });
-        expect(writer[0]!.lists[0].members[2]).toMatchObject({ id: "E3", checked: false }); } },
+        expect(research.rounds[1].actions[2].result).toMatchObject({ id: "E3", ...GATE_WHOLE });
+        expect(research.rounds[1].actions[2].result).not.toHaveProperty("truncated");
+        expect(steps[2]!.last_results[2]).toEqual({ tool: "open", args: { id: "E3" }, ...GATE_WHOLE });
+        expect(writer[0]!.lists[0].members[2]).toMatchObject({ id: "E3", checked: true }); } },
     { id: "X33b", name: "qualifies its absence too: the unread tenth section is the one that names BUG-999", q: "Which pages created on October 4, 2026 mention BUG-999?", need: "pages created on 2026-10-04 that mention BUG-999", desk: () => oct4({ open: gateOpen("BUG-999") }),
       steps: [read([OCT4_LIST], WS), read(opens(ids(1, 4)), WS, "open", ["L1"]), read(opens(ids(5, 4)), WS, "open", ["L1"]), none(WS, "L1")], w: [nothing("pages created on October 4 that mention BUG-999")],
       out: "not_found", status: "not_found", says: [], gap: `Not found: pages created on October 4 that mention BUG-999.` },
@@ -672,9 +674,9 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       out: "answered", notice: COVERAGE, says: ["THERM-3 mentions BUG-412."], check: ({ research }) => expect(research.rounds[1].actions[2].result).not.toHaveProperty("anchor_truncated"),
     })),
     ...[0, 11_840].map((pad): Row => ({
-      id: "addition 4", name: pad === 0 ? "checks an action whose open was cut beside it, its meeting's other records" : "checks it when the loop also leaves out other records that do not fit", ...VENDOR_ACTIONS, desk: () => vendorMeeting(pad),
+      id: "addition 4", name: pad === 0 ? "checks an action whose open was cut beside it, its meeting's other records" : "checks it with long other records too, every one of which the open admits", ...VENDOR_ACTIONS, desk: () => vendorMeeting(pad),
       steps: [read([MARA_LIST], WS), read(opens(ids(1, 4)), WS, "open", ["L1"]), fin(WS, "L1", "E4")], w: [say("Mara will chase the vendor about the fixture drawings.", ["E4"])], out: "answered", notice: COVERAGE, wl: { id: "L1", count: 4, checked: 4 },
-      check: ({ research }) => { expect(research.rounds[1].actions[3].result).toMatchObject({ id: "E4", truncated: true, anchor_truncated: false }); if (pad > 0) expect(research.rounds[1].actions[3].result.opened.length).toBeLessThan(10); },
+      check: ({ research }) => { expect(research.rounds[1].actions[3].result).toMatchObject({ id: "E4", truncated: true, anchor_truncated: false }); },
     })),
     ...([[{ anchor_truncated: false }, 1], [{ anchor_truncated: true }, 2]] as const).map(([own, calls]): Row => ({
       id: "rev 12", name: own.anchor_truncated ? "opens a repeated item whose own text was cut again" : "answers a repeated open of an item cut only beside it from the scratchpad", q: "What does THERM-3 say about BUG-412?", need: "what THERM-3 says about BUG-412",
@@ -743,7 +745,7 @@ describe("a task goal keeps the rules before ADR-0041", () => {
     expect([view.stop, view.plan[0]!.needs[0]!.evidence, "lists" in view]).toEqual([{ reason: "unusable_step", completed: false }, [], false]);
   });
 
-  it("X33: sees an open the loop cut to fit its bounds as before: only the desk says it was truncated", async () => {
+  it("X33: admits every section an open returns: only the desk says an open was truncated", async () => {
     const gate = PAGES[2]!;
     const sections = Array.from({ length: 10 }, (_, index) => section(gate, `Section ${index + 1}. ${"Gate review narrative. ".repeat(520).slice(0, 11_840)}`, index + 1));
     const steps = [[[{ tool: "list", args: { source: "pages" } }], []], [opens(["E4"]), []], [[FINISH], ["E10"]]] as const;
@@ -751,8 +753,8 @@ describe("a task goal keeps the rules before ADR-0041", () => {
       live_sources: [CONFLUENCE], openCitation: async () => result([approved]), list: vi.fn(async () => result(PAGES) as EvidenceDeskResultV2), open: vi.fn(async () => result(sections) as EvidenceDeskResultV2),
     });
     await h.research.research({ trigger: "approved_record", brief: task });
-    // The rows are E2..E9 and Gate reviews is E4; the loop admits 8 of its 10 sections, and a task goal's step is told nothing more.
-    expect((h.prompt(2).last_results as readonly unknown[])[0]).toEqual({ tool: "open", args: { id: "E4" }, opened: ids(10, 8) });
+    // The rows are E2..E9 and Gate reviews is E4; the loop admits all 10 of its sections.
+    expect((h.prompt(2).last_results as readonly unknown[])[0]).toEqual({ tool: "open", args: { id: "E4" }, opened: ids(10, 10) });
   });
 
   it("X12: gives a task goal over the same meeting rows the same model inputs, with or without their list labels", async () => {

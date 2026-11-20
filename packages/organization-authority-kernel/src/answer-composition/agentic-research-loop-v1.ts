@@ -16,7 +16,7 @@ import {
 } from "../shared/evidence-desk-v2.js";
 import { followUpOwnerMatchesV1 } from "../shared/follow-up-evidence-v1.js";
 import {
-  AGENTIC_ASK_LIST_LIMIT_MAX_V1,
+  AGENTIC_ASK_LIST_PAGE_ROWS_V1,
   AGENTIC_ASK_SEARCH_LIMIT_V1,
   AgenticAskOutputErrorV1,
   cleanId,
@@ -83,18 +83,14 @@ import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
  */
 
 const SEARCH_LIMIT = AGENTIC_ASK_SEARCH_LIMIT_V1;
-/** One list page: as many rows as one desk fetch returns. */
-const LIST_PAGE = AGENTIC_ASK_LIST_LIMIT_MAX_V1;
-const LIST_FETCH = 50;
+/** One list page: as many rows as one desk fetch returns; a list with more says so and continues on the next call. */
+const LIST_PAGE = AGENTIC_ASK_LIST_PAGE_ROWS_V1;
+const LIST_FETCH = AGENTIC_ASK_LIST_PAGE_ROWS_V1;
 const PREVIEW_CHARS = 240;
 /** Complete released packets admitted directly from search/list, as the Person protocol bounds a released text; larger bodies require open. */
 const PASSAGE_BYTES = PERSON_EVIDENCE_TEXT_MAX_BYTES_V1;
-/** Context items an `open` may admit beyond its anchor (a page's later sections, a meeting's other records). */
-const OPEN_EXTRA_ITEMS = 20;
 /** Document passages on each side of an opened passage (desk maximum). */
 const OPEN_NEIGHBOURS = 2;
-/** Text one open admits: a long document's sections, or a meeting's records, in one read. */
-const OPEN_BYTES = 96 * 1024;
 /** The SDK hands a tool result over 50,000 characters to the model only as a file it cannot open. */
 const DRIVEN_RESULT_CHARS = 45_000;
 /**
@@ -102,7 +98,6 @@ const DRIVEN_RESULT_CHARS = 45_000;
  * provider's rate limit): a concurrency bound, not a count; every starting item is read.
  */
 const STARTING_READS_AT_ONCE = 4;
-const MAX_SEEN_ENTRIES = 300;
 /** What a search-only brief's planner is told when it proposes list. */
 const LIST_UNAVAILABLE = "list is unavailable in this run; use search and open";
 
@@ -488,7 +483,7 @@ function normalizeAskListArgs(raw: StepArgs, today: string, descriptor: AgenticR
   let limit: number | undefined;
   if (raw.limit !== undefined) {
     limit = Number(raw.limit);
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > AGENTIC_ASK_LIST_LIMIT_MAX_V1) return { error: `limit must be a whole number from 1 to ${AGENTIC_ASK_LIST_LIMIT_MAX_V1}` };
+    if (!Number.isSafeInteger(limit) || limit < 1) return { error: "limit must be a whole number of 1 or more" };
   }
   if (since != null) applied.since = "applied";
   if (until != null) applied.until = "applied";
@@ -752,13 +747,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const anchor = result.items.find(item => item.id === entry.item.id && item.text !== undefined);
       const others = result.items.filter(item => item.id !== entry.item.id && item.text !== undefined);
       const texts = anchor === undefined ? others : [anchor, ...others];
+      // Every text the open returned is admitted; the step's prompt shows what fits its window (the scratchpad), and an
+      // opened text it leaves out is not read.
       const admitted: Entry[] = [];
-      let used = 0;
       for (const item of texts) {
-        if (admitted.length > OPEN_EXTRA_ITEMS || (admitted.length > 0 && used + bytes(item.text) > OPEN_BYTES)) break;
         const opened = register(item);
         if (!opened.full || !opened.opened) { retrievalProgress += 1; evidenceNovelty += 1; }
-        opened.opened = true; used += bytes(item.text);
+        opened.opened = true;
         admitted.push(opened);
       }
       // For a question goal, an open whose bodies the loop left out to fit its bounds is truncated, as one the desk cut is:
@@ -1203,7 +1198,6 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     }
     const seen: { readonly entry: Entry; readonly value: Record<string, unknown> }[] = [];
     for (const entry of keptFirst(all.filter(entry => !shownIds.has(entry.short)))) {
-      if (seen.length >= MAX_SEEN_ENTRIES) break;
       const text = entry.item.text;
       let value: Record<string, unknown> = text !== undefined && bytes(text) <= PASSAGE_BYTES
         ? { ...describe(entry), text, full: true }
@@ -1368,10 +1362,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         unreadableStarting.push(citation); startingIds.push(null);
         continue;
       }
-      let used = 0;
       for (const item of [anchor, ...readable.filter(value => value !== anchor)]) {
-        if (item !== anchor && used + bytes(item.text) > OPEN_BYTES) break;
-        const entry = register(item); entry.opened = true; entry.preloaded = true; used += bytes(item.text);
+        const entry = register(item); entry.opened = true; entry.preloaded = true;
         if (item === anchor) { startingIds.push(entry.short); entry.direct = true; }
       }
       if (anchor.citation.kind !== "source_revision") anchorsRead.add(anchor.id);

@@ -33,8 +33,8 @@ import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.
  * prompt can correct it before a tool runs. Each normalization is counted by
  * name (observeCoreModelCorrectionV1), never with the text it changed.
  */
-/** The most rows a list call with `limit` asks for: one list page, as many as one desk fetch returns. */
-export const AGENTIC_ASK_LIST_LIMIT_MAX_V1 = 50;
+/** Rows one list page holds: as many as one desk fetch returns (the desk's page). A longer list says more and continues on the next call. */
+export const AGENTIC_ASK_LIST_PAGE_ROWS_V1 = 50;
 /** Hits one search returns: the desks' own maximum for one search (records, originals and live sources each return up to 25). */
 export const AGENTIC_ASK_SEARCH_LIMIT_V1 = 25;
 const QUESTION_CHARS = 400;
@@ -152,7 +152,7 @@ const ARGUMENT_DESCRIPTIONS = Object.freeze({
   since: "Inclusive lower calendar-day bound, exactly YYYY-MM-DD in the request time_zone, without a time or UTC offset. Use equal since and until for one day.",
   until: "Inclusive upper calendar-day bound, exactly YYYY-MM-DD in the request time_zone, without a time or UTC offset. Use equal since and until for one day.",
   date_field: "One of the source's capabilities.dates. Leave it out with since or until to match any of an item's dates, where the source's capabilities.any_date is true. Search requires source when this is set.",
-  limit: `List only: return at most this many items (1 to ${AGENTIC_ASK_LIST_LIMIT_MAX_V1}), for a short look at a source.`,
+  limit: `List only: return at most this many items of the next page (a page holds up to ${AGENTIC_ASK_LIST_PAGE_ROWS_V1}), for a short look at a source.`,
 } as const satisfies Readonly<Record<keyof StepArgs, string>>);
 
 /**
@@ -172,7 +172,7 @@ function argumentSchema(argument: keyof StepArgs, sources: readonly StepSource[]
     : argument === "date_field" ? closedString(EVIDENCE_DATE_FIELDS_V1)
     : argument === "status" ? closedString(["open", "done", "active", "archived"])
     : argument === "role" ? closedString(["lead", "member"])
-    : argument === "limit" ? { type: "integer", minimum: 1, maximum: AGENTIC_ASK_LIST_LIMIT_MAX_V1 }
+    : argument === "limit" ? { type: "integer", minimum: 1 }
     : argString;
   return { ...base, description: ARGUMENT_DESCRIPTIONS[argument] };
 }
