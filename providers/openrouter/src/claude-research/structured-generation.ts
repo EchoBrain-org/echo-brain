@@ -21,11 +21,8 @@ export function createClaudeAccountStructuredGenerationV1(options: {
     async generate() { throw new Error('Native structured generation requires per-request admission'); },
     async generate_with_admission(input, admit) {
       if (input.model !== options.model) throw new Error('Unexpected native writer model');
-      // Claude Code's max_tokens holds thinking and the answer together; the caller's allowance is the model's own maximum.
-      const allowance = input.max_output_tokens;
-      // `timeout_ms` is a silence period, not a whole-session clock: the SDK streams each model reply through the local
-      // transport, and every piece of model output in it resets it (and is reported to the caller as `on_progress`).
-      // A session whose model produces nothing for it is stalled.
+      // `timeout_ms` is a silence period, not a whole-session clock: each piece of model output streamed through the local
+      // transport resets it and is reported to the caller as `on_progress`.
       const stop = new AbortController();
       const silence = new AbortController();
       const timeout = silence.signal;
@@ -52,7 +49,7 @@ export function createClaudeAccountStructuredGenerationV1(options: {
             }
             const payload = JSON.parse(body.toString('utf8'));
             if (payload.model !== input.model) throw new Error('Unexpected native writer model');
-            if (operation === 'messages' && (!Number.isSafeInteger(payload.max_tokens) || payload.max_tokens <= 0 || payload.max_tokens > allowance)) throw new Error('Native writer exceeded its output allowance');
+            if (operation === 'messages' && (!Number.isSafeInteger(payload.max_tokens) || payload.max_tokens <= 0 || payload.max_tokens > input.max_output_tokens)) throw new Error('Native writer exceeded its output allowance');
             const strings: string[] = [];
             const collect = (value: unknown): void => {
               if (typeof value === 'string') strings.push(value);
@@ -84,7 +81,7 @@ export function createClaudeAccountStructuredGenerationV1(options: {
       });
       try {
         const value = await (options.run ?? runClaudeStructuredV1)({ prompt: input.user_prompt, system: input.system_prompt, schema: input.schema,
-          model: input.model, max_output_tokens: allowance, base_url: fence.base_url, account: options.account, signal,
+          model: input.model, max_output_tokens: input.max_output_tokens, base_url: fence.base_url, account: options.account, signal,
           ...(options.max_model_requests === 1 ? { single_generation: true } : {}) });
         if (terminal !== undefined) throw terminal;
         if (fence.forwarded() === 0) throw new Error('Native writer did not use model admission');

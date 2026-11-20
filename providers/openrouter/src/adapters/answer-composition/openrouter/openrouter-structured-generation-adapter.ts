@@ -1,5 +1,5 @@
 import { observeCoreModelCorrectionV1, observeCoreModelMetadataV1, annotateCoreRuntimeV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
-import { openRouterReplyCapacityBytesV1, OpenRouterReplyTooLargeErrorV1, openRouterSilenceV1, readOpenRouterReplyV1, type OpenRouterReplyV1 } from "../../../openrouter-stream-v1.js";
+import { callOpenRouterV1, OpenRouterCallFailureV1, type OpenRouterReplyV1 } from "../../../openrouter-stream-v1.js";
 import { claudeGrammarHolds, claudeStructuredSchema } from "./claude-structured-schema.js";
 import { UNBILLED_REFUSAL_STATUSES_V1 } from "../../../unbilled-refusal-v1.js";
 import {
@@ -247,27 +247,6 @@ export function parseModelJson(content: string): unknown {
   }
 }
 
-function isTimeoutFailure(value: unknown): boolean {
-  return value instanceof Error && value.name === "TimeoutError";
-}
-
-/**
- * Connection-setup failures (name resolution, connect, TLS): the request never reached OpenRouter, so it was not billed.
- * Any other network failure may have happened after OpenRouter accepted the request.
- */
-const CONNECT_FAILURE_CODES: ReadonlySet<string> = new Set([
-  "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH", "UND_ERR_CONNECT_TIMEOUT",
-  "CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "ERR_TLS_CERT_ALTNAME_INVALID",
-]);
-
-function failedBeforeSending(error: unknown): boolean {
-  for (let cause: unknown = error, depth = 0; cause instanceof Error && depth < 4; cause = cause.cause, depth += 1) {
-    const code = (cause as { readonly code?: unknown }).code;
-    if (typeof code === "string" && CONNECT_FAILURE_CODES.has(code)) return true;
-  }
-  return false;
-}
-
 /** Known unbilled: a refusal the provider documents as made before generation. Any other 5xx can follow a generation. */
 function unbilledRefusal(response: Response | undefined): boolean {
   return response !== undefined && UNBILLED_REFUSAL_STATUSES_V1.has(response.status);
@@ -368,20 +347,6 @@ export function createOpenRouterStructuredGenerationAdapter(
       );
     }
     const strict = claudeGrammarHolds(input.schema);
-    // Liveness, not a whole-call clock: the reply streams, and the call is stalled only when the model produces nothing
-    // (content, reasoning, tool-call text or a finish reason; OpenRouter's keep-alive comments do not count) for
-    // `timeout_ms`. A reply that keeps arriving runs as long as it needs.
-    const silence = new AbortController();
-    const timeoutSignal = silence.signal;
-    const quiet = openRouterSilenceV1(input.timeout_ms, () => silence.abort(new DOMException("OpenRouter sent nothing for the silence period", "TimeoutError")));
-    const restart = quiet.output;
-    // Model output restarts this call's silence period and is reported to the caller (the model gate times it too).
-    const alive = (): void => { restart(); input.on_progress?.(); };
-    // Bytes of an event still arriving hold this call's period until the event ends, and tell the caller the call is alive;
-    // an event that ends with no model output gives the period back (openRouterSilenceV1), which ends this call if overdue.
-    const arriving = (): void => { quiet.arriving(); input.on_progress?.(); };
-    const signals: AbortSignal[] = [timeoutSignal];
-    if (input.signal !== undefined) signals.push(input.signal);
     const request: RequestInit = {
       method: "POST",
       headers: {
@@ -390,9 +355,6 @@ export function createOpenRouterStructuredGenerationAdapter(
         // Documented routing metadata names the endpoint that served the call.
         "x-openrouter-metadata": "enabled",
       },
-      signal: AbortSignal.any(signals),
-      // A model request is never re-sent by a redirect: the first endpoint may already have run (and billed) it.
-      redirect: "error",
       body: JSON.stringify({
         model: input.model,
         messages: [
@@ -428,56 +390,30 @@ export function createOpenRouterStructuredGenerationAdapter(
     annotateCoreRuntimeV1({ counts: { input_bytes: Buffer.byteLength(request.body as string), input_tokens: null, output_tokens: null, total_tokens: null } });
     const providerStartedAt = safeNow(nowMs);
     let response: Response;
-    restart();
-    try {
-      response = await fetchImpl(OPENROUTER_CHAT_COMPLETIONS_URL, request);
-    } catch (error) {
-      quiet.stop();
-      const timedOut = isTimeoutFailure(error) || timeoutSignal.aborted;
-      fail("OpenRouter request failed", {
-        // The call's own timeout can surface as an AbortError through
-        // AbortSignal.any; the timeout signal itself is the reliable witness.
-        failure_class: timedOut ? "adapter_timeout" : "adapter_transport",
-        provider_latency_ms: elapsed(providerStartedAt, nowMs),
-        ...(!timedOut && failedBeforeSending(error) ? { unbilled: true as const } : {}),
-      });
-    }
-    // A redirect answered a request the first endpoint may have run: a failure whose billing is unknown.
-    if (response.status >= 300 && response.status < 400) {
-      quiet.stop();
-      fail("OpenRouter request failed", { failure_class: "adapter_transport", provider_latency_ms: elapsed(providerStartedAt, nowMs) });
-    }
-    let providerLatency: number | null = null;
     let reply: OpenRouterReplyV1;
     try {
-      annotateCoreRuntimeV1({ counts: { http_status: response.status } });
-      reply = await readOpenRouterReplyV1(response, { capacity_bytes: openRouterReplyCapacityBytesV1(input.max_output_tokens), progress: alive, arriving, nothing: quiet.nothing });
-      quiet.stop();
-      annotateCoreRuntimeV1({ counts: { output_bytes: reply.bytes } });
-      providerLatency = elapsed(providerStartedAt, nowMs);
+      // Streamed: the call stalls only when the model sends nothing for `timeout_ms`, so a reply that keeps arriving
+      // runs as long as it needs. Model output is reported to the caller, whose gate times silence too.
+      ({ response, reply } = await callOpenRouterV1({ fetch: fetchImpl, url: OPENROUTER_CHAT_COMPLETIONS_URL, init: request,
+        ...(input.signal === undefined ? {} : { signal: input.signal }), silence_ms: input.timeout_ms,
+        max_output_tokens: input.max_output_tokens, ...(input.on_progress === undefined ? {} : { on_progress: input.on_progress }) }));
     } catch (error) {
-      quiet.stop();
-      // A reply past its transport capacity, or a stream event that is not JSON, is an invalid reply, not a lost one.
-      if (error instanceof OpenRouterReplyTooLargeErrorV1 || error instanceof SyntaxError) {
-        fail(response.ok ? "OpenRouter response is invalid" : "OpenRouter request failed", {
-          failure_class: response.ok ? "adapter_response" : "adapter_http", response, provider_latency_ms: elapsed(providerStartedAt, nowMs),
-        });
-      }
-      fail(
-        response.ok
-          ? "OpenRouter response is invalid"
-          : "OpenRouter request failed",
-        {
-          failure_class: isTimeoutFailure(error) || timeoutSignal.aborted
-            ? "adapter_timeout"
-            : response.ok
-              ? "adapter_transport"
-              : "adapter_http",
-          response,
-          provider_latency_ms: elapsed(providerStartedAt, nowMs),
-        },
-      );
+      if (!(error instanceof OpenRouterCallFailureV1)) throw error;
+      // A reply past its capacity or with an invalid event is an invalid reply; a redirect, a cut stream or a lost
+      // connection is a transport failure whose billing is unknown unless the request was never sent.
+      const invalid = error.kind === "too_large" || error.kind === "not_json";
+      const failureClass: OpenRouterFailureClass = error.kind === "timeout" ? "adapter_timeout"
+        : error.kind !== "redirect" && error.response !== undefined && !error.response.ok ? "adapter_http"
+          : invalid ? "adapter_response" : "adapter_transport";
+      fail(failureClass === "adapter_response" ? "OpenRouter response is invalid" : "OpenRouter request failed", {
+        failure_class: failureClass,
+        ...(error.response === undefined ? {} : { response: error.response }),
+        provider_latency_ms: elapsed(providerStartedAt, nowMs),
+        ...(error.unsent ? { unbilled: true as const } : {}),
+      });
     }
+    annotateCoreRuntimeV1({ counts: { output_bytes: reply.bytes } });
+    const providerLatency = elapsed(providerStartedAt, nowMs);
     let payload: unknown;
     try {
       payload = reply.streamed ? reply.payload : JSON.parse(reply.text);

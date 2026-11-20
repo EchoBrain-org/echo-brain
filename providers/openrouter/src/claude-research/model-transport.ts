@@ -52,8 +52,7 @@ export class ClaudeModelTransportErrorV1 extends Error {
  * with an explicit rate-limit or overloaded status. The SDK's retry of anything else could repeat a billed generation.
  */
 export function claudeModelFailureUnbilledV1(error: unknown): boolean {
-  if (error instanceof ClaudeModelTransportErrorV1) return error.unbilled;
-  return error instanceof ClaudeModelResponseErrorV1 && UNBILLED_REFUSAL_STATUSES_V1.has(error.diagnostic.http_status);
+  return (error instanceof ClaudeModelTransportErrorV1 || error instanceof ClaudeModelResponseErrorV1) && error.diagnostic.unbilled === true;
 }
 
 /** A model request refused because an earlier one in the same session failed with its billing unknown. */
@@ -185,8 +184,7 @@ export async function startClaudeModelTransportV1(input: {
         const checked = AbortSignal.any([signal, admittedSignal]); checked.throwIfAborted();
         if (stopped) throw new Error('Research stopped');
         forwarded++;
-        const alive = input.alive === undefined && progress === undefined ? undefined : () => { input.alive?.(); progress?.(); };
-        return input.forward({ req, res, path: `${path}${url.search}`, body, signal: checked, ...(alive === undefined ? {} : { alive }) });
+        return input.forward({ req, res, path: `${path}${url.search}`, body, signal: checked, alive: () => { input.alive?.(); progress?.(); } });
       });
     } catch (error) {
       // A provider refusal has already been delivered to the SDK. A retry must
