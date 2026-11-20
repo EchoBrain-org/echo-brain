@@ -214,8 +214,8 @@ describe('llm decision processor extraction', () => {
       "[T2] Zhen: I'll send the signed copy tonight.",
     ].join('\n'));
     expect(request.model).toBe('fixture-model');
-    // A configuration without its own allowance leaves room for a long meeting's items.
-    expect(request.maxOutputTokens).toBe(32_000);
+    // A configuration without its own allowance gets the extraction model's own maximum output.
+    expect(request.maxOutputTokens).toBe(128_000);
     expect(request.systemPrompt).toContain('For each signal, list in evidence_units the IDs of every unit that supports it');
     expect(request.systemPrompt).toContain('Never infer an owner from who spoke');
     expect(request.schema).toMatchObject({

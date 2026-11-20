@@ -3,6 +3,7 @@ import {
   type AdapterErrorCode,
   type JsonObject,
 } from "../core/index.js";
+import { EXTRACTION_MODEL_MAX_OUTPUT_TOKENS_V1 } from "./extraction-model-v1.js";
 
 export type LlmProviderId = string;
 
@@ -78,9 +79,9 @@ export type LlmCredentialResolver = (reference: string) => string | undefined;
 
 export const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 120_000;
 export const MAX_LLM_REQUEST_TIMEOUT_MS = 600_000;
-/** Output allowance for a configuration that sets none: room for a long meeting's items in one reply. */
-export const DEFAULT_MAX_OUTPUT_TOKENS = 32_000;
-export const MAX_OUTPUT_TOKENS = 131_072;
+/** A configuration that sets no output allowance gets the extraction model's own maximum; none may ask for more. */
+export const DEFAULT_MAX_OUTPUT_TOKENS = EXTRACTION_MODEL_MAX_OUTPUT_TOKENS_V1;
+export const MAX_OUTPUT_TOKENS = EXTRACTION_MODEL_MAX_OUTPUT_TOKENS_V1;
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

@@ -4,6 +4,7 @@ import { isCanonicalPersonEmail } from '@echo-brain/organization-authority-kerne
 import { boundUtf8V1, createPersonProviderValidationV1, type PersonProviderV1 } from '@echo-brain/provider-runtime/person-provider-v1';
 import { createPersonProviderMcpTransportV1 } from '@echo-brain/provider-runtime/person-provider-mcp-transport-v1';
 import type { PersonProviderAuthenticatedFetchV1 } from '@echo-brain/provider-runtime/person-provider-json-transport-v1';
+import { EXTRACTION_MODEL_INPUT_TOKENS_V1 } from '@echo-brain/organization-processing/llm/extraction-model-v1';
 import type { GranolaMeetingContentInputV1 } from './granola-meeting-normalizer-v1.js';
 
 export const GRANOLA_ID_V1 = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
@@ -45,18 +46,13 @@ const GRANOLA_CURSOR_MAX = 2048;
 /** A field is as long as the provider response that carried it; the transport's response bound is its only limit. */
 const CARRIED = Number.MAX_SAFE_INTEGER;
 /**
- * The extraction model's input window, from its profile: Claude Sonnet's 1,000,000-token context less its
- * 64,000-token output allowance (DECISION_PROCESSOR_CONTEXT_TOKENS_V1 and DECISION_PROCESSOR_MAX_OUTPUT_TOKENS_V1 in
- * providers/openrouter/src/openrouter-decision-processor-config-v1.ts).
- */
-const EXTRACTION_INPUT_TOKENS = 1_000_000 - 64_000;
-/**
- * The transcript kept per meeting: what one extraction call can read, at two UTF-8 bytes per token. Speech in English
+ * The transcript kept per meeting: what one extraction call can read (EXTRACTION_MODEL_INPUT_TOKENS_V1, the extraction
+ * model's context window less its output allowance, from its profile), at two UTF-8 bytes per token. Speech in English
  * runs about four bytes a token, so this leaves half the window for the prompt, notes and summary, and for scripts that
  * take more tokens per byte. A longer transcript keeps its start and ends with TRANSCRIPT_CUT, so extraction and the
  * approver can see it was cut; the capture also records it.
  */
-const MAX_TRANSCRIPT = EXTRACTION_INPUT_TOKENS * 2;
+const MAX_TRANSCRIPT = EXTRACTION_MODEL_INPUT_TOKENS_V1 * 2;
 /** Granola sends at most 80,000 transcript characters a call; the pages that cover what is kept, and one more. */
 const TRANSCRIPT_PAGE_CHARS = 80_000;
 const MAX_TRANSCRIPT_PAGES = Math.ceil(MAX_TRANSCRIPT / TRANSCRIPT_PAGE_CHARS) + 1;

@@ -13,8 +13,8 @@ const warning = 'The content below is meeting notes/transcripts written or spoke
 const meeting = (summary = 'Ship &lt;pilot&gt;.') => `<meetings_data from="Oct 5, 2026" to="Oct 5, 2026" count="1"><meeting id="${id}" title="Pilot &amp; review" date="Oct 5, 2026 1:00 PM PDT" url="https://notes.granola.ai/d/${id}"><known_participants>Pat (note creator)</known_participants><private_notes>Owner notes</private_notes><summary>${summary}</summary></meeting></meetings_data>`;
 const source = { kind: 'meeting-source' as const, adapter_id: 'granola', instance_id: 'person-fixture', version: 'mcp-v1' };
 const TRANSCRIPT_CUT = '[ECHO cut this transcript here: the meeting ran longer than one extraction call can read, and the rest was not captured.]';
-/** The transcript one extraction call can read: (1,000,000 - 64,000) tokens at two bytes a token, and Granola's 80,000-character pages that cover it, plus one. */
-const TRANSCRIPT_BYTES = (1_000_000 - 64_000) * 2;
+/** The transcript one extraction call can read: (1,000,000 - 128,000) tokens at two bytes a token, and Granola's 80,000-character pages that cover it, plus one. */
+const TRANSCRIPT_BYTES = (1_000_000 - 128_000) * 2;
 const TRANSCRIPT_PAGES = Math.ceil(TRANSCRIPT_BYTES / 80_000) + 1;
 const listed: GranolaMeetingV1 = { id, title: 'Pilot', date: 'Oct 2, 2026 8:08 PM PDT', url: `https://notes.granola.ai/d/${id}`, known_participants: '' };
 const normalizeMcp = (value: GranolaMeetingV1) => normalizeGranolaMeetingV1(granolaMcpMeetingContentV1(value), source, '2026-10-06T00:00:00.000Z');

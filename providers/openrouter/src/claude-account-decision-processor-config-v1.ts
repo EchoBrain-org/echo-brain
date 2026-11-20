@@ -7,7 +7,7 @@ import { DECISION_PROCESSOR_MAX_OUTPUT_TOKENS_V1 } from './openrouter-decision-p
 
 export const CLAUDE_ACCOUNT_DECISION_PROCESSOR_PROVIDER_V1 = 'claude-account';
 export const CLAUDE_ACCOUNT_DECISION_PROCESSOR_TRANSPORT_V1 = 'claude-account-sdk-single-generation-v1';
-/** The model's own maximum output (Claude Sonnet, 64,000 tokens), as for the OpenRouter processor. */
+/** The model's own maximum output (Claude Sonnet, 128,000 tokens), as for the OpenRouter processor. */
 export const CLAUDE_ACCOUNT_DECISION_PROCESSOR_MAX_OUTPUT_TOKENS_V1 = DECISION_PROCESSOR_MAX_OUTPUT_TOKENS_V1;
 export const CLAUDE_ACCOUNT_DECISION_PROCESSOR_TIMEOUT_MS_V1 = 600_000;
 
