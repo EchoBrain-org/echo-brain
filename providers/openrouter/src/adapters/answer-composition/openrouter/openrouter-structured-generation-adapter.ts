@@ -10,7 +10,13 @@ import {
   type StructuredGenerationUsageV1,
 } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 
-const OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS = 120_000;
+/** One call may run as long as Ask's whole-run deadline: Ask's own budget, not this adapter, decides how long a call waits. */
+const OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS = 300_000;
+/**
+ * The largest output allowance a caller may ask for. Claude Sonnet's own maximum output is 64,000 tokens; 32,000 plus
+ * the reasoning headroom stays well inside it, and above Ask's largest role allowance (16,000).
+ */
+const OPENROUTER_STRUCTURED_GENERATION_MAX_OUTPUT_TOKENS = 32_000;
 
 type OpenRouterFailureClass = StructuredGenerationFailureClassV1;
 
@@ -44,9 +50,9 @@ interface OpenRouterObservedResult extends StructuredGenerationObservedResultV1 
 /**
  * Claude Sonnet 5.5 requires reasoning and does not advertise temperature
  * support (ADR-0037). Medium effort shares the completion budget with the
- * visible JSON. Reserve 4,096 extra tokens even for small background calls, at
- * most 8,192 combined. This is headroom, not a separate provider-enforced
- * reasoning-token budget.
+ * visible JSON. Reserve 4,096 extra tokens on top of every caller's
+ * allowance, so reasoning never comes out of the reply's room. This is
+ * headroom, not a separate provider-enforced reasoning-token budget.
  */
 const REASONING_HEADROOM_TOKENS = 4_096;
 
@@ -326,7 +332,7 @@ export function createOpenRouterStructuredGenerationAdapter(
       "OpenRouter timeout",
       OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS,
     );
-    boundedInteger(input.max_output_tokens, "OpenRouter output limit", 4_096);
+    boundedInteger(input.max_output_tokens, "OpenRouter output limit", OPENROUTER_STRUCTURED_GENERATION_MAX_OUTPUT_TOKENS);
     if (!nonEmpty(input.system_prompt) || !nonEmpty(input.user_prompt)) {
       throw new OpenRouterStructuredGenerationError(
         "OpenRouter request is invalid",
