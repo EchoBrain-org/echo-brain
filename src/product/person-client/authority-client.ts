@@ -918,7 +918,8 @@ export class PersonAuthorityClient {
     return this.json({
       path: PERSON_ASK_CHECK_PATH_V1, body: request, validate_request: validatePersonAskCheckRequestV1,
       validate_response: response => validatePersonAskCheckV1(response, request), access_token: accessToken,
-      maximum_request_bytes: PERSON_ASK_CHECK_LIMITS_V1.body_bytes, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_CHECK_TIMEOUT_MS, signal,
+      // A check's reply names one state per item it was asked, less than each item's request: its request bound holds it.
+      maximum_request_bytes: PERSON_ASK_CHECK_LIMITS_V1.body_bytes, maximum_response_bytes: PERSON_ASK_CHECK_LIMITS_V1.body_bytes, timeout_ms: ASK_CHECK_TIMEOUT_MS, signal,
     });
   }
 

@@ -31,10 +31,10 @@ import {
 
 const MAXIMUM_PULL_LIMIT = 1;
 /**
- * A pending attempt younger than this may still be running elsewhere; it outlasts the 600 s extraction timeout.
- * It assumes the model-call limiter's queue wait, which that timeout does not count, fits in the margin. A longer
- * wait during a two-process overlap can park a live extraction as interrupted: never a second spend, but its late
- * result may not stage.
+ * A pending attempt younger than this may still be running elsewhere: it outlasts one 600 s extraction silence period.
+ * An extraction that keeps streaming can run longer, and so can the model-call limiter's queue wait; during a
+ * two-process overlap such a live extraction can be parked as interrupted: never a second spend, but its late result
+ * may not stage. Telling a live attempt apart without a clock needs the attempt ledger to record progress.
  */
 const EXTRACTION_IN_FLIGHT_MS = 660_000;
 
