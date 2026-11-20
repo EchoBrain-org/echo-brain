@@ -211,7 +211,7 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(f.calls).toHaveLength(before);
   });
 
-  it('resolves renamed and personal space keys live before scoped CQL and normalizes v1 hits through v2 metadata', async () => {
+  it('resolves renamed and personal space keys live once per reader before scoped CQL and normalizes v1 hits through v2 metadata', async () => {
     const f = await fixture({ selected: ['42', '43'] });
     f.state.keys.set('42', 'RENAMED');
     const first = await f.source.search({ query: 'EVT requirements', limit: 5 });
@@ -223,9 +223,36 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(f.calls.some(call => call.path === '/api/v2/pages/123' && !call.query.has('body-format'))).toBe(true);
     expect(f.bodyCalls()).toEqual([]);
     for (const value of ['Search excerpt', 'Untrusted v1']) expect(JSON.stringify(first)).not.toContain(value);
-    f.state.keys.set('42', 'RENAMED_AGAIN');
+    // The keys are read once per reader (one request): a later search spends no reads on them.
+    const spaceReads = f.calls.filter(call => call.path.startsWith('/api/v2/spaces/')).length;
+    expect(spaceReads).toBe(2);
     await f.source.search({ query: 'EVT requirements' });
-    expect(f.calls.filter(call => call.path === '/rest/api/search').at(-1)!.query.get('cql')).toContain('"RENAMED_AGAIN"');
+    expect(f.calls.filter(call => call.path.startsWith('/api/v2/spaces/'))).toHaveLength(spaceReads);
+    // A failed key read is not kept: the next search reads the keys again.
+    const retry = await fixture({ selected: ['42'] });
+    retry.state.statuses.set('/api/v2/spaces/42', 500);
+    await expect(retry.source.search({ query: 'EVT requirements' })).rejects.toMatchObject({ code: 'unavailable' });
+    retry.state.statuses.delete('/api/v2/spaces/42');
+    expect((await retry.source.search({ query: 'EVT requirements' })).items).toHaveLength(1);
+  });
+
+  it('returns up to 25 search matches, and says when more matched', async () => {
+    const ids = Array.from({ length: 25 }, (_, index) => String(200 + index));
+    const f = await fixture({ pages: ids.map(id => page({ id })) });
+    f.state.searchIds = ids; f.state.searchNext = '/wiki/rest/api/search?cursor=second';
+    const found = await f.source.search({ query: 'requirements', limit: 50 });
+    expect(found.items.map(item => item.citation.page_id)).toEqual(ids);
+    expect(found.truncated).toBe(true);
+    expect(f.calls.find(call => call.path === '/rest/api/search')!.query.get('limit')).toBe('25');
+  });
+
+  it('spends no content reads on space keys, so many scoped searches run within the content budget', async () => {
+    const selected = Array.from({ length: 20 }, (_, index) => String(100 + index));
+    const f = await fixture({ selected: ['42', ...selected.slice(1)] });
+    for (const id of selected.slice(1)) f.state.keys.set(id, `S${id}`);
+    // Each search spends two content reads (the CQL search and one exact page read); twenty searches with twenty
+    // mapped spaces would have spent 440 under a per-search key lookup.
+    for (let index = 0; index < 60; index += 1) expect((await f.source.search({ query: `requirements ${index}` })).items).toHaveLength(1);
   });
 
   it('leaves out a mapped space Confluence does not find for the asker (404), and every page of the result says so', async () => {
@@ -246,11 +273,11 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(second).toMatchObject({ truncated: false, notice: SPACES_LEFT_OUT });
     expect(f.calls.filter(call => call.path === '/rest/api/search').at(-1)!.query.get('cql')).toBe('type = page AND space IN ("ECHO") AND lastmodified >= "2026-09-29"');
     // None found: no CQL read at all, and an empty result that still is not complete.
-    f.state.keys.delete('42');
-    const searchCount = f.calls.filter(call => call.path === '/rest/api/search').length;
-    expect(await f.source.search({ query: 'requirements' })).toMatchObject({ items: [], truncated: false, notice: SPACES_LEFT_OUT });
-    expect(await f.source.list({ since: '2026-10-01', limit: 20 })).toMatchObject({ items: [], truncated: false, page_full: false, notice: SPACES_LEFT_OUT });
-    expect(f.calls.filter(call => call.path === '/rest/api/search')).toHaveLength(searchCount);
+    const none = await fixture({ selected: ['42', '43'] });
+    none.state.keys.clear();
+    expect(await none.source.search({ query: 'requirements' })).toMatchObject({ items: [], truncated: false, notice: SPACES_LEFT_OUT });
+    expect(await none.source.list({ since: '2026-10-01', limit: 20 })).toMatchObject({ items: [], truncated: false, page_full: false, notice: SPACES_LEFT_OUT });
+    expect(none.calls.filter(call => call.path === '/rest/api/search')).toHaveLength(0);
   });
 
   it('says nothing was left out when every mapped space is found', async () => {

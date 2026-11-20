@@ -159,11 +159,20 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
    * A refused connection (unauthorized: HTTP 401 or 403) says nothing about one space, so it fails the read rather than
    * end a search without that space's pages.
    */
-  async function spaceKeys(signal?: AbortSignal): Promise<Readonly<{ keys: readonly string[]; left_out: boolean }> | undefined> {
+  let spaceKeysRead: Promise<Readonly<{ keys: readonly string[]; left_out: boolean }>> | undefined;
+  /**
+   * Read once per reader (one request), as fence traffic: a search or dated list does not spend its content reads on
+   * them. A failed read is not kept, so the next search reads them again.
+   */
+  function spaceKeys(signal?: AbortSignal): Promise<Readonly<{ keys: readonly string[]; left_out: boolean }>> | undefined {
     if (selected === undefined) return undefined;
-    const keys = await parallel(selected, async id => {
+    spaceKeysRead ??= readSpaceKeys(selected, signal).catch((error: unknown) => { spaceKeysRead = undefined; throw error; });
+    return spaceKeysRead;
+  }
+  async function readSpaceKeys(spaces: readonly string[], signal?: AbortSignal): Promise<Readonly<{ keys: readonly string[]; left_out: boolean }>> {
+    const keys = await parallel(spaces, async id => {
       try {
-        const space = confluenceRecord(await transport.request({ path: `/api/v2/spaces/${id}`, signal }));
+        const space = confluenceRecord(await fences.request({ path: `/api/v2/spaces/${id}`, signal }));
         if (confluenceString(space.id, 20, ID) !== id) confluenceFailure('invalid_output');
         return confluenceString(space.key, 256);
       } catch (error) {
@@ -305,7 +314,8 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     },
     async search(input): Promise<PersonLiveEvidencePageV1<PersonPageCitationV1>> {
       validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
-      const maximum = limit(input.limit, 5);
+      // One search page: up to 25 pages, a list page's size.
+      const maximum = limit(input.limit, 25);
       const query = confluenceString(input.query, 1024).trim();
       if (query === '') confluenceFailure('invalid_request');
       await verify(input.signal);
