@@ -5,7 +5,7 @@
  * writer's.
  */
 import { readFileSync } from "node:fs";
-import { validatePersonQueryText } from "@echo-brain/organization-api";
+import { validatePersonQuestionText } from "@echo-brain/organization-api";
 import { nonEmptyStrings, says, words } from "../shared/grading.mjs";
 import { claimsOf } from "./grade.mjs";
 
@@ -35,7 +35,7 @@ export function caseProblems(document) {
   if (JSON.stringify(ids) !== JSON.stringify(CASE_IDS)) problems.push(`the cases are ${ids.join(", ")}, not ${CASE_IDS.join(", ")}`);
   for (const entry of cases) {
     const where = `case ${entry?.id}`;
-    try { validatePersonQueryText(entry.question); } catch { problems.push(`${where}: the question is not a valid Ask question`); continue; }
+    try { validatePersonQuestionText(entry.question); } catch { problems.push(`${where}: the question is not a valid Ask question`); continue; }
     const items = Array.isArray(entry.items) ? entry.items : [];
     const listed = items.filter((item) => item?.listed === true);
     // The list comes first, so its members are E1 to En; at least two, differing in status or owner, so it is a table.

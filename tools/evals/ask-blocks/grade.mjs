@@ -4,7 +4,7 @@
  * given. No model judges.
  */
 import { readFileSync } from "node:fs";
-import { validatePersonAnswerResponseV8, validatePersonQueryText } from "@echo-brain/organization-api";
+import { validatePersonAnswerResponseV8, validatePersonQuestionText } from "@echo-brain/organization-api";
 import { ITEM_KINDS, nonEmptyStrings, says, wordIndex, words } from "../shared/grading.mjs";
 
 export const CASES_FILE = new URL("./cases.json", import.meta.url);
@@ -60,7 +60,7 @@ export function caseProblems(document) {
     const where = `case ${entry?.id}`;
     if (typeof entry?.id !== "string" || !/^[a-z0-9-]{3,80}$/u.test(entry.id) || ids.has(entry.id)) problems.push(`${where}: id is missing or repeated`);
     ids.add(entry?.id);
-    try { validatePersonQueryText(entry.question); } catch { problems.push(`${where}: the question is not a valid Ask question`); continue; }
+    try { validatePersonQuestionText(entry.question); } catch { problems.push(`${where}: the question is not a valid Ask question`); continue; }
     const items = Array.isArray(entry.items) ? entry.items : [];
     if (items.length === 0 || !items.every((item) => ITEM_KINDS.has(item?.kind))) problems.push(`${where}: items must be follow-ups, decisions or tickets`);
     if (typeof entry.research?.query !== "string" || typeof entry.research?.need !== "string") problems.push(`${where}: research needs a query and a need`);

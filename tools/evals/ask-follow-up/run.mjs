@@ -26,7 +26,8 @@ const ALL_CASES = Object.values(GROUPS).reduce((total, count) => total + count, 
 /** One call and its one repair per trial. */
 const MAX_TOTAL_MODEL_CALLS = ALL_CASES * MAX_TRIALS * 2;
 const MIN_TIMEOUT_MS = 15_000;
-const MAX_TIMEOUT_MS = 85_000;
+/** Above the Authority's 300 s whole-Ask deadline, so a trial is never cut short before the product would be. */
+const MAX_TIMEOUT_MS = 330_000;
 
 export function help() {
   return [
@@ -37,7 +38,7 @@ export function help() {
     "Options:",
     `  --cases id,id     Select cases (default: all ${ALL_CASES}); only the whole set decides whether follow-ups ship.`,
     `  --trials N        Trials per case, 1 through ${MAX_TRIALS} (default: ${MAX_TRIALS}, as pre-registered).`,
-    "  --timeout-ms N    Per-trial timeout, 15000 through 85000 (default: 60000).",
+    "  --timeout-ms N    Per-trial timeout, 15000 through 330000 (default: 60000).",
     "  --help            Show this text without reading a credential or making a request.",
     "",
     "Each trial runs the kernel's follow-up resolver once (one call and at most one repair) on a synthetic previous",
