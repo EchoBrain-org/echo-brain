@@ -23,6 +23,7 @@ import type {
   PersonOriginalContextEvidenceDeskPortV1,
 } from "../application/ports/person-original-context-retrieval-v1.js";
 import { LOCAL_SOURCE_KINDS_V1 } from "@echo-brain/organization-authority-kernel/shared/source-capabilities-v1";
+import { READABLE_SEARCH_RESPONSE_MAX_V1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import { PERSON_DOCUMENT_DATE_FIELDS_V1, PERSON_MEETING_DATE_FIELDS_V1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { personUnknownScopeV1 } from "../adapters/persistence/sqlite/person-original-access-v1.js";
 import { mergeUncheckedV1 } from "../application/evidence-unchecked-v1.js";
@@ -217,14 +218,19 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
       return save(Object.freeze({ id: itemId(citation), citation, kind: value.item_kind as EvidenceDeskKindV1, ...(includeText ? { text: value.text } : {}), label: value.label, list_label: value.list_label, visibility: value.visibility, ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at, date_kind: "occurred" as const }), ...(value.dates === undefined ? {} : { dates: value.dates }), ...(value.attributes === undefined ? {} : { attributes: value.attributes }), receipt_sha256: result.release.record_read_audit_row_sha256, ref: `meeting:${value.record_sha256}` as PersonItemRefV1 }), { record: result.release, record_anchor: { atom_id: value.atom_id, record_sha256: value.record_sha256, record_position: value.record_position, envelope_sha256: value.envelope_sha256, atom_order: value.atom_order, audience_project_count: value.audience_project_count, item_kind: value.item_kind, text: value.text, policy_id: value.policy_id } });
     });
   };
-  const searchRecords = (query: string, kinds?: readonly EvidenceDeskKindV1[], dates: EvidenceDateFilterV1 = {}): readonly EvidenceDeskItemV1[] => {
+  const searchRecords = (query: string, limit: number, kinds?: readonly EvidenceDeskKindV1[], dates: EvidenceDateFilterV1 = {}): readonly EvidenceDeskItemV1[] => {
     if (recordsUnavailableAtStart) return [];
     try {
       const recordKinds = recordKindsOf(kinds);
       if (recordKinds !== undefined && recordKinds.length === 0) return [];
-      return records(options.records.searchBatch({ ...dates, access_token: options.access_token, query, limit: 10, desk: true, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }), ...recordExclusion }));
+      return records(options.records.searchBatch({ ...dates, access_token: options.access_token, query, limit: Math.min(limit, READABLE_SEARCH_RESPONSE_MAX_V1), desk: true, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }), ...recordExclusion }));
     } catch (error) {
       if (pointer === undefined && unavailableAtStart(error)) { recordsUnavailableAtStart = true; return []; }
+      // Words the records' query rule refuses leave the originals' results standing; research is told why records were not searched.
+      if (error instanceof AuthorityOperationError && error.code === "invalid_request") {
+        readNotices.add(`Meeting records could not be searched with these words: ${error.message}`);
+        return [];
+      }
       throw error;
     }
   };
@@ -264,7 +270,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   const search = async (input: EvidenceDeskSearchInputV1): Promise<PersonEvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();
     initialize();
-    const limit = input.limit ?? (input.query === undefined ? 50 : 10);
+    const limit = input.limit ?? (input.query === undefined ? 50 : READABLE_SEARCH_RESPONSE_MAX_V1);
     if (input.query === undefined) {
       latestRecordTruncated = false;
       const sourceKinds = sourceKindsOf(input.kinds);
@@ -285,7 +291,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     const sourceKinds = sourceKindsOf(input.kinds);
     const released = options.originals.deskSearch({ ...evidenceDateFilterV1(input), ...(input.source === "meeting" || input.source === "document" ? { source: input.source } : {}), access_token: options.access_token, scope: options.scope, query: input.query, limit, ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }), ...originalExclusion });
     const beforeRecords = recordReleases.length;
-    const echoItems = [originals(released), input.source === "document" ? [] : searchRecords(input.query, input.kinds, evidenceDateFilterV1(input))].map((list) => list.filter((item) => input.kinds === undefined || input.kinds.includes(item.kind)));
+    const echoItems = [originals(released), input.source === "document" ? [] : searchRecords(input.query, limit, input.kinds, evidenceDateFilterV1(input))].map((list) => list.filter((item) => input.kinds === undefined || input.kinds.includes(item.kind)));
     const items = balanced(echoItems[0]!, echoItems[1]!);
     return result(items.slice(0, limit), released.truncated || latestRecordTruncated || items.length > limit, [released.receipt, ...recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256)]);
   };
