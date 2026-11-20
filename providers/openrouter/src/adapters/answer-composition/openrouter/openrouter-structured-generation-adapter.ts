@@ -347,10 +347,12 @@ export function createOpenRouterStructuredGenerationAdapter(
     const silence = new AbortController();
     const timeoutSignal = silence.signal;
     let silenceTimer: ReturnType<typeof setTimeout> | undefined;
-    const alive = (): void => {
+    const restart = (): void => {
       clearTimeout(silenceTimer);
       silenceTimer = setTimeout(() => silence.abort(new DOMException("OpenRouter sent nothing for the silence period", "TimeoutError")), input.timeout_ms);
     };
+    // Model output restarts this call's silence period and is reported to the caller (the model gate times it too).
+    const alive = (): void => { restart(); input.on_progress?.(); };
     const signals: AbortSignal[] = [timeoutSignal];
     if (input.signal !== undefined) signals.push(input.signal);
     const request: RequestInit = {
@@ -397,7 +399,7 @@ export function createOpenRouterStructuredGenerationAdapter(
     annotateCoreRuntimeV1({ counts: { input_bytes: Buffer.byteLength(request.body as string), input_tokens: null, output_tokens: null, total_tokens: null } });
     const providerStartedAt = safeNow(nowMs);
     let response: Response;
-    alive();
+    restart();
     try {
       response = await fetchImpl(OPENROUTER_CHAT_COMPLETIONS_URL, request);
     } catch (error) {

@@ -55,7 +55,7 @@ export function createClaudeResearchDriverV1(options: {
             operation,
             ...(operation === 'messages' ? { diagnostic_input: { model: options.model, system_prompt: JSON.stringify(payload.system ?? []),
               user_prompt: JSON.stringify(payload.messages ?? []), schema: { tools: payload.tools ?? [] }, max_output_tokens: payload.max_tokens ?? 0, timeout_ms: session.silence_ms } } : {}),
-          }, async admittedSignal => { const result = await forward(admittedSignal); return { ...result, value: result.content ?? null }; });
+          }, async (admittedSignal: AbortSignal, progress?: () => void) => { const result = await forward(admittedSignal, progress); return { ...result, value: result.content ?? null }; });
         } catch (error) {
           // Provider replies already reached the SDK, which owns its one retry; anything else stops research.
           if (!(error instanceof ClaudeModelResponseErrorV1 || error instanceof ClaudeModelTransportErrorV1)) fail(error);

@@ -24,7 +24,8 @@ export function createClaudeAccountStructuredGenerationV1(options: {
       // Claude Code's max_tokens holds thinking and the answer together; the caller's allowance is the model's own maximum.
       const allowance = input.max_output_tokens;
       // `timeout_ms` is a silence period, not a whole-session clock: the SDK streams each model reply through the local
-      // transport, and every piece that arrives resets it. A session that receives nothing for it is stalled.
+      // transport, and every piece of model output in it resets it (and is reported to the caller as `on_progress`).
+      // A session whose model produces nothing for it is stalled.
       const stop = new AbortController();
       const silence = new AbortController();
       const timeout = silence.signal;
@@ -33,12 +34,13 @@ export function createClaudeAccountStructuredGenerationV1(options: {
         clearTimeout(silenceTimer);
         silenceTimer = setTimeout(() => silence.abort(new DOMException('The native session sent nothing for the silence period', 'TimeoutError')), input.timeout_ms);
       };
+      const produced = (): void => { alive(); input.on_progress?.(); };
       alive();
       const signal = AbortSignal.any([...(input.signal === undefined ? [] : [input.signal]), stop.signal, timeout]);
       let terminal: unknown;
       let providerFailure: unknown;
       let messages = 0;
-      const fence = await startClaudeModelTransportV1({ signal, alive, forward: options.forward ?? claudeAccountForwarderV1(options.model),
+      const fence = await startClaudeModelTransportV1({ signal, alive: produced, forward: options.forward ?? claudeAccountForwarderV1(options.model),
         admit: async (body, operation, forward) => {
           try {
             // Claim before awaiting admission, so concurrent SDK requests cannot share one attempt.
@@ -62,8 +64,8 @@ export function createClaudeAccountStructuredGenerationV1(options: {
               ...(operation === 'messages' ? { diagnostic_input: { model: input.model, system_prompt: JSON.stringify(payload.system ?? []),
                 user_prompt: JSON.stringify(payload.messages ?? []), schema: { tools: payload.tools ?? [] }, max_output_tokens: payload.max_tokens ?? 0,
                 timeout_ms: input.timeout_ms } } : {}),
-            }, async admittedSignal => {
-              const result = await forward(admittedSignal);
+            }, async (admittedSignal: AbortSignal, progress?: () => void) => {
+              const result = await forward(admittedSignal, progress);
               providerFailure = undefined;
               return { ...result, value: result.content ?? null };
             });

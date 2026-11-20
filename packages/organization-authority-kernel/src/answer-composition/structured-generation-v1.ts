@@ -31,6 +31,8 @@ export interface StructuredGenerationInput {
   readonly max_output_tokens: number;
   readonly timeout_ms: number;
   readonly signal?: AbortSignal;
+  /** Called at each meaningful piece of the reply (a content or tool delta, never a keep-alive comment). */
+  readonly on_progress?: () => void;
 }
 
 export interface StructuredGenerationPort {

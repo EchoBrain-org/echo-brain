@@ -2,8 +2,17 @@ import { StringDecoder } from 'node:string_decoder';
 import type { StructuredGenerationUsageV1 } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 
 export interface ClaudeMessageMetadataV1 { readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string; readonly content?: readonly unknown[] }
-/** Retains numeric usage and finish metadata while the unmodified SSE bytes pass through. */
-export function messageUsageObserverV1(capture = false) {
+/**
+ * Model events that carry something the model produced: a content block opening or growing (text, tool input, thinking)
+ * and the reply's stop. `message_start` and `ping` (Anthropic's keep-alive) carry nothing produced.
+ */
+const PRODUCED_EVENTS = new Set(['content_block_start', 'content_block_delta', 'message_delta']);
+
+/**
+ * Retains numeric usage and finish metadata while the unmodified SSE bytes pass through, and calls `produced` at each
+ * event that carries model output (see PRODUCED_EVENTS): the liveness a caller timing silence reads.
+ */
+export function messageUsageObserverV1(capture = false, produced?: () => void) {
   const decoder = new StringDecoder('utf8');
   let pending = '', input: number | undefined, output: number | undefined, cached = 0, created = 0, finish: string | undefined;
   const blocks = new Map<number, { type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: unknown; json: string }>();
@@ -11,6 +20,7 @@ export function messageUsageObserverV1(capture = false) {
   const line = (value: string) => {
     if (!value.startsWith('data:')) return;
     let event; try { event = JSON.parse(value.slice(5).trim()); } catch { return; }
+    if (typeof event?.type === 'string' && PRODUCED_EVENTS.has(event.type)) produced?.();
     // The selected private trace receives visible text/tool output; reasoning blocks are not retained.
     if (capture && Number.isSafeInteger(event?.index)) {
       const block = event.content_block;

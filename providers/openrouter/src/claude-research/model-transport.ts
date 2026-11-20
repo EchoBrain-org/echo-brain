@@ -7,7 +7,11 @@ import { isContextWindowRefusal } from '@echo-brain/organization-processing/llm/
 
 interface ClaudeModelForwardV1 {
   readonly req: IncomingMessage; readonly res: ServerResponse; readonly body: Buffer; readonly path: string; readonly signal: AbortSignal;
-  /** Called as each piece of the provider's reply arrives: liveness for a caller timing silence, never a clock. */
+  /**
+   * Called at each piece of model output in the provider's reply (a content, tool-input or thinking delta, or the stop;
+   * never a `ping` keep-alive), and at each piece of a reply that is not a stream: liveness for a caller timing silence,
+   * never a clock.
+   */
   readonly alive?: () => void;
 }
 export type ClaudeModelForwarderV1 = (input: ClaudeModelForwardV1) => Promise<ClaudeMessageMetadataV1>;
@@ -70,11 +74,11 @@ function providerForwarderV1(options: {
       }
       const upstream = request({ hostname: options.hostname, port: 443, method: 'POST', path: `${options.path_prefix}${input.path}`, headers, signal: input.signal }, reply => {
         annotateCoreRuntimeV1({ counts: { http_status: reply.statusCode ?? 0 } });
-        const usage = messageUsageObserverV1(true);
+        const streamed = String(reply.headers['content-type'] ?? '').includes('text/event-stream');
+        const usage = messageUsageObserverV1(true, streamed ? input.alive : undefined);
         // A refusal's body is read only to tell a context-window refusal by its message; it never leaves this function.
         const refusal: Buffer[] = [];
-        reply.on('data', chunk => { input.alive?.(); usage.write(chunk); if ((reply.statusCode ?? 502) >= 400) refusal.push(Buffer.from(chunk)); });
-        input.alive?.();
+        reply.on('data', chunk => { if (!streamed) input.alive?.(); usage.write(chunk); if ((reply.statusCode ?? 502) >= 400) refusal.push(Buffer.from(chunk)); });
         input.res.writeHead(reply.statusCode ?? 502, { 'content-type': reply.headers['content-type'] ?? 'application/json' });
         reply.pipe(input.res);
         reply.on('end', () => {
@@ -104,8 +108,12 @@ function providerForwarderV1(options: {
 export async function startClaudeModelTransportV1(input: {
   readonly signal: AbortSignal;
   readonly forward: ClaudeModelForwarderV1;
-  readonly admit: (body: Buffer, operation: 'messages' | 'count_tokens', forward: (signal: AbortSignal) => Promise<ClaudeMessageMetadataV1>) => Promise<unknown>;
-  /** Called as each piece of a forwarded reply arrives (see ClaudeModelForwardV1). */
+  /**
+   * `forward` takes the admission's signal and its `progress`, which it calls at each piece of model output in the
+   * forwarded reply, so the admitting gate restarts its silence timer for this request.
+   */
+  readonly admit: (body: Buffer, operation: 'messages' | 'count_tokens', forward: (signal: AbortSignal, progress?: () => void) => Promise<ClaudeMessageMetadataV1>) => Promise<unknown>;
+  /** Called at each piece of model output in any forwarded reply (see ClaudeModelForwardV1). */
   readonly alive?: () => void;
 }) {
   input.signal.throwIfAborted();
@@ -125,11 +133,12 @@ export async function startClaudeModelTransportV1(input: {
       signal.throwIfAborted();
       const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk));
       const body = Buffer.concat(chunks);
-      await input.admit(body, path.endsWith('count_tokens') ? 'count_tokens' : 'messages', async admittedSignal => {
+      await input.admit(body, path.endsWith('count_tokens') ? 'count_tokens' : 'messages', async (admittedSignal, progress) => {
         const checked = AbortSignal.any([signal, admittedSignal]); checked.throwIfAborted();
         if (stopped) throw new Error('Research stopped');
         forwarded++;
-        return input.forward({ req, res, path: `${path}${url.search}`, body, signal: checked, ...(input.alive === undefined ? {} : { alive: input.alive }) });
+        const alive = input.alive === undefined && progress === undefined ? undefined : () => { input.alive?.(); progress?.(); };
+        return input.forward({ req, res, path: `${path}${url.search}`, body, signal: checked, ...(alive === undefined ? {} : { alive }) });
       });
     } catch (error) {
       // A provider refusal has already been delivered to the SDK. A retry must
