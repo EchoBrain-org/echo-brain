@@ -2135,6 +2135,7 @@ continue_staged_initial_onboarding() {
     step="$(next_step_from_status "$status_json")"
     case "$step" in
       enable_personal_claude)
+        require_ready_candidate_runtime
         print_personal_claude_setup_action
         print_status "$status_json"
         return

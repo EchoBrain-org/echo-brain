@@ -1287,6 +1287,19 @@ import json, os, pathlib, sys, tempfile`;
       expect(stillStopped.stdout).not.toContain("candidate_initial_onboarding_ready=true");
     }
 
+    {
+      const fixture = preparedStatusFixture();
+      prepareCandidate(fixture);
+      writeFileSync(fixture.runtimeStoppedMarker, "stopped");
+      const result = fixture.run("continue-staged-initial-onboarding", {
+        ECHO_FAKE_SETUP_STATUS: '{"next_step":"enable_personal_claude"}',
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(fixture.runtimeStoppedMarker)).toBe(false);
+      expect(result.stdout).toContain("personal-claude login");
+      expect(result.stdout).not.toContain("candidate_initial_onboarding_ready=true");
+    }
+
     for (const fault of ["missing_marker", "marker_mismatch", "runtime_drift", "unexpected_step"]) {
       const fixture = preparedStatusFixture();
       const { candidate, setupReadiness } = prepareCandidate(fixture);
