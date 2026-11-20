@@ -10,8 +10,7 @@ import { checkOf, MAX_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.
 import { askText } from '../shared/query.js';
 import { answerSentences, sourceGroups, type Sentence, type Shows, type SourceGroup } from './answer.js';
 
-/** Opening Ask checks the sources of this many of the newest turns, and a check is good for five minutes. */
-export const CHECK_TURNS = 10;
+/** A check is good for five minutes: opening Ask then checks every turn of its place's thread again. */
 export const CHECK_FRESH_MS = 5 * 60_000;
 
 /** What a check said of one turn's sources, by their place among its answer's sources. */

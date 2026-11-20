@@ -15,7 +15,7 @@ import { askText } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
-  answeredNow, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, checksHiding, followedTurn, foundUnreadable, freshChecks, freshStates, knownStates,
+  answeredNow, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, checkedOf, checkPlan, checksHiding, followedTurn, foundUnreadable, freshChecks, freshStates, knownStates,
   previousOf, sameScope, shownInFull, showsOf, threadOf, unreadableAfter, visibleTurns, turnGroups, type CheckPlan, type Suggestion, type TurnCheck, type TurnChecks,
 } from './timeline.js';
 import { openerOf } from './openers.js';
@@ -3635,8 +3635,8 @@ function threadKey(scope: AskScope): string {
 }
 
 /**
- * Ask opened: whether you can still read what the newest ten turns its
- * place's thread shows cited, in one check (C5), unless that place's last one
+ * Ask opened: whether you can still read what every turn its place's thread
+ * shows cited, in one check (C5), unless that place's last one
  * went under five minutes ago (ADR-0049); and what the turn a suggestion
  * opened it at (`opened`) cited, first in that check or in one of its own,
  * unless what its sources are now is known or on its way.
@@ -3644,7 +3644,8 @@ function threadKey(scope: AskScope): string {
 function checkTimeline(opened?: TimelineTurn): Promise<void> {
   const key = threadKey(state.barScope);
   const fresh = Date.now() - (newestCheckedAt.get(key) ?? Number.NEGATIVE_INFINITY) < CHECK_FRESH_MS;
-  const newest = fresh ? [] : askThread().slice(-CHECK_TURNS).reverse();
+  // Every turn, newest first: the plan splits them into requests by the body bound, sent one at a time.
+  const newest = fresh ? [] : [...askThread()].reverse();
   const first = opened !== undefined && (newest.includes(opened) || (freshChecksOf(opened) === undefined && !checking.has(opened.id))) ? [opened] : [];
   return checkTurns([...first, ...newest.filter(turn => turn !== opened)], newest.length > 0 ? key : null);
 }

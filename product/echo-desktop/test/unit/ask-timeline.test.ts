@@ -375,7 +375,7 @@ describe('Ask on the timeline', () => {
     expect(byTestId(thread(store), 'timeline-question').map(text)).toEqual(['What is open on THERM?', 'What else?', 'Who owns THERM-482?']);
   });
 
-  it('checks the newest ten turns\' sources once when Ask opens, keeps that five minutes, and leaves out by it', async () => {
+  it('checks every turn\'s sources once when Ask opens, keeps that five minutes, and leaves out by it', async () => {
     const turns = Array.from({ length: 11 }, (_, at) => turn(`Turn ${at}?`, (11 - at) * DAY, status()));
     seed(...turns);
     checks = items => ok({ items: items.map(item => (item.citation.kind === 'follow_up'
@@ -384,10 +384,10 @@ describe('Ask on the timeline', () => {
     await store.ask('What changed?');
     await flush();
     const [asked] = calls('ask.check');
-    // The ten newest, newest first, three sources each.
-    expect((asked!.items as unknown[]).length).toBe(30);
+    // Every turn, newest first, three sources each.
+    expect((asked!.items as unknown[]).length).toBe(33);
     expect((asked!.items as { asked_at: string }[])[0]!.asked_at).toBe(turns[10]!.asked_at);
-    expect(Object.keys(store.getState().timeline.checks)).toHaveLength(10);
+    expect(Object.keys(store.getState().timeline.checks)).toHaveLength(11);
     const thread = await view();
     // Past the newest three, earlier questions fold into one line: opened, every line shows. The latest is in full.
     store.toggleEarlier();
@@ -864,17 +864,19 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect(calls('ask.run')[1]!.previous).toMatchObject({ purpose: 'follow_up', question: 'Older?', asked_at: older.asked_at });
   });
 
-  it('checks a turn past the newest ten once it is opened, and a follow-up of it waits for that check', async () => {
+  it('checks an old turn again once it is opened after its check went stale, and a follow-up of it waits for that check', async () => {
     const turns = Array.from({ length: 12 }, (_, at) => turn(`Turn ${at}?`, (12 - at) * DAY, status()));
     seed(...turns);
     checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
     const store = await startStore();
     await store.ask('What changed?');
     await flush();
-    // The newest ten, when Ask opened: the oldest two were not checked.
+    // Every turn, when Ask opened, the oldest too.
     const [opening] = calls('ask.check');
-    expect(new Set((opening!.items as { asked_at: string }[]).map(item => item.asked_at)).has(turns[0]!.asked_at)).toBe(false);
-    expect(new Set(Object.keys(store.getState().timeline.checks))).toEqual(new Set(turns.slice(2).map(each => each.id)));
+    expect(new Set((opening!.items as { asked_at: string }[]).map(item => item.asked_at)).has(turns[0]!.asked_at)).toBe(true);
+    expect(new Set(Object.keys(store.getState().timeline.checks))).toEqual(new Set(turns.map(each => each.id)));
+    // Six minutes on, what that check said is no longer good.
+    vi.setSystemTime(NOW.getTime() + 6 * 60_000);
     const thread = await view();
     store.toggleEarlier();
     // Opened: its own check, whose reply waits here.
@@ -899,7 +901,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
       .toEqual(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
   });
 
-  it('opens a suggestion past the newest ten checked first, in the one check Ask opening makes', async () => {
+  it('opens a suggestion\'s turn checked first, in the one check Ask opening makes', async () => {
     const turns = Array.from({ length: 12 }, (_, at) => turn(`Turn ${at}?`, (12 - at) * DAY, status()));
     seed(...turns);
     checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
@@ -909,7 +911,8 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     const [opening] = calls('ask.check');
     expect(calls('ask.check')).toHaveLength(1);
     expect((opening!.items as { asked_at: string }[]).slice(0, 3).map(item => item.asked_at)).toEqual(Array(3).fill(turns[0]!.asked_at));
-    expect((opening!.items as unknown[]).length).toBe(33);
+    // Then every other turn: twelve turns, three sources each.
+    expect((opening!.items as unknown[]).length).toBe(36);
     const opened = byTestId((await view())(store), 'opened-turn')[0]!;
     expect(byTestId(opened, 'statement-text').map(text)).toEqual(status().parts[0]!.statements.map(statement => statement.text));
   });
@@ -1169,7 +1172,7 @@ describe('one thread per place (ADR-0049)', () => {
   const opening = () => calls('ask.check').filter(call => (call.items as unknown[]).length > 1).map(call => (call.items as { asked_at: string }[]).map(item => item.asked_at));
 
   it('checks each place\'s newest turns when Ask opens there, each place on its own five minutes', async () => {
-    // Apollo's one turn is older than Home's newest ten, so Home's opening check leaves it out.
+    // Home's thread shows every place's turns, so Home's opening check asks about Apollo's too.
     const apolloTurn = turn('What is left in Apollo?', 20 * DAY, status(), { scope: inApollo });
     const homeTurns = Array.from({ length: 10 }, (_, at) => turn(`Home ${at}?`, (10 - at) * DAY, status()));
     seed(apolloTurn, ...homeTurns);
@@ -1178,8 +1181,8 @@ describe('one thread per place (ADR-0049)', () => {
     await store.ask('Anything new?');
     await flush();
     expect(opening()).toHaveLength(1);
-    expect(opening()[0]).not.toContain(apolloTurn.asked_at);
-    // A minute on, Ask opens in Apollo: Apollo's thread has not been checked, so it is now.
+    expect(opening()[0]).toContain(apolloTurn.asked_at);
+    // A minute on, Ask opens in Apollo: Apollo's thread has not had its own opening check, so it has one now.
     store.closeAsk();
     vi.setSystemTime(NOW.getTime() + 60_000);
     await store.openProject(apollo);
