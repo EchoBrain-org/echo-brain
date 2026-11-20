@@ -797,6 +797,22 @@ describe("research loop: corrections of model output (model scaffolding audit 20
   }
   const research = (h: ReturnType<typeof harness>) => () => h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
   /** The need research planned in its first step, found with the items it cites. */
+  it.each(["search", "list"] as const)("never takes a %s with items its date filter could not test as a finished read for not_found", async tool => {
+    // Zero matches, and two items that lack the date asked for: the read did not test them, so it proves no absence.
+    const read = vi.fn(async () => result([], { unchecked: { count: 2, dates: ["approved"] } }));
+    const dated = { source: "meetings", date_field: "occurred", since: "2026-10-01", until: "2026-10-06" };
+    const h = harness([
+      reads("open", [{ tool, args: tool === "search" ? { query: "vendor replaced", ...dated } : dated }]),
+      affects("not_found"),
+      affects("not_found"),
+    ], { openCitation: async () => result([approved]), [tool]: read });
+    const view = await h.research.research({ trigger: "approved_record", brief: brief(`Find what ${agenticStartingSlotV1(1)} affects.`, [approved.citation]) });
+    expect(read).toHaveBeenCalledTimes(1);
+    // The finish and its repair are both refused.
+    expect(view.rounds[1]!.rejected).toEqual([expect.stringContaining("is not_found before any completed search"), expect.stringContaining("is not_found before any completed search")]);
+    expect(view.stop.completed).toBe(false);
+  });
+
   const settled = (...evidence: readonly string[]) => step([part("What does E1 affect?", [need("tickets the record affects", "found", evidence)])], [{ tool: "finish", args: {} }]);
 
   it("counts each repeat list answered from what was listed, and the stop that follows", async () => {

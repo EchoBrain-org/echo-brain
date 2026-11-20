@@ -694,7 +694,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       cover('search', source, result);
       // Progress finds what a read gives research: every hit of a search (ADR-0043).
       report?.returned('search', source, result.items);
-      const complete = !result.truncated && result.notice === undefined;
+      // A search is finished only when it tested every candidate: one cut short, with a notice, or with items its date
+      // filter could not test (unchecked) never shows that something is absent.
+      const complete = !result.truncated && result.notice === undefined && (result.unchecked?.count ?? 0) === 0;
       if (!repeat && result.notice !== undefined) noticedSearches.add(fingerprint);
       researchObservations.push({ operation: 'search', fingerprint, complete, source: source ?? null });
       if (complete) searchedSources.add(source ?? null);
@@ -916,7 +918,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       // confirmed end (addition 1). A task goal keeps its rule.
       const readToEnd = currentState.available && !more && !currentState.truncated && !(ask && currentState.unverified_end);
       if (currentState.unfiltered && readToEnd && currentState.items.length === 0) exhaustivelyEmptySources.add(request.source);
-      if (!before.fetched || before.paged !== currentState.paged || before.cursor !== currentState.cursor) researchObservations.push({ operation: 'list', fingerprint: key, complete: readToEnd });
+      if (!before.fetched || before.paged !== currentState.paged || before.cursor !== currentState.cursor) researchObservations.push({ operation: 'list', fingerprint: key, complete: readToEnd && (currentState.unchecked?.count ?? 0) === 0 });
       // An empty page is never "nothing more" while pages remain: a filter applied after each page can empty one. A repeat
       // of an inventory read to its end makes no desk call and no progress, and says so; only a complete one is "in full".
       // For a question goal, an exactly full last page is not trusted as the end (addition 1).
