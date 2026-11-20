@@ -3,9 +3,10 @@ import {
   PERSON_ANSWER_CHOICES_MAX_V1,
   PERSON_ANSWER_CHOICES_MIN_V1,
   PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1,
+  PERSON_QUESTION_MAX_CODE_POINTS_V1,
   PersonQueryInputError,
   validatePersonAnswerResponseV8,
-  validatePersonQueryText,
+  validatePersonQuestionText,
   type PersonAnswerChoiceV1,
   type PersonAnswerPreviousV1,
   type PersonAnswerResponseV8,
@@ -49,8 +50,8 @@ import type { StructuredGenerationJsonSchema, StructuredGenerationPort } from ".
 const RESOLVE_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_resolve" });
 /** One resolver call's time at most, so research keeps the rest. */
 const RESOLVE_TIMEOUT_MS = 15_000;
-/** The question rules' bound (validatePersonQueryText): a resolved or offered question is asked as it is. */
-const QUESTION_CHARS = 240;
+/** The Ask question rule's bound (validatePersonQuestionText): a resolved or offered question is asked as it is. */
+const QUESTION_CHARS = PERSON_QUESTION_MAX_CODE_POINTS_V1;
 const RESOLUTIONS = ["same", "resolved", "clarify"] as const;
 /** Kinds research opens from a citation before its first step: approved records, originals, tickets and pages. */
 const OPENABLE: ReadonlySet<string> = new Set(["approved_record", "source_revision", "ticket", "page"]);
@@ -85,7 +86,7 @@ export const FOLLOW_UP_RESOLVER_PROMPT = [
   "Rules:",
   "- Resolve only when exactly one thing fits. When two or more could fit, return \"clarify\" with one choice for each. Never guess, and never pick the one that seems likelier.",
   "- A thing fits when it is of the kind the question names and the question's words can mean it: \"that ticket\" fits only tickets, \"that meeting\" only meetings, \"that person\" only people; \"it\" or \"that\" can fit anything the earlier answer names.",
-  "- Each question you write is one line of at most 240 characters, in the person's words and language, that a person could ask without having seen the earlier answer.",
+  "- Each question you write is one line, in the person's words and language, that a person could ask without having seen the earlier answer.",
   "- Never answer the question, and never add facts or names the earlier question and answer do not give.",
   "",
   "Reply with ONLY a JSON object in exactly one of these shapes:",
@@ -108,12 +109,11 @@ export const followUpResolutionSchema: StructuredGenerationJsonSchema = Object.f
   },
 });
 
-/** A question the resolver wrote: one line that passes the question rules, so it is asked as it is. */
+/** A question the resolver wrote: one line that passes the Ask question rule, so it is asked as it is. The repair hears which rule it broke. */
 function fullQuestion(value: unknown, label: string): string {
   const text = cleanLine(value, Number.MAX_SAFE_INTEGER);
   if (text.length === 0) throw new AgenticAskOutputErrorV1(`${label} must be the full question`);
-  if ([...text].length > QUESTION_CHARS) throw new AgenticAskOutputErrorV1(`${label} must be at most ${QUESTION_CHARS} characters`);
-  try { return validatePersonQueryText(text); }
+  try { return validatePersonQuestionText(text); }
   catch (error) {
     if (!(error instanceof PersonQueryInputError)) throw error;
     throw new AgenticAskOutputErrorV1(`${label}: ${error.message}`);

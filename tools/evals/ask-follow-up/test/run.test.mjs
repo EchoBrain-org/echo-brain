@@ -50,6 +50,9 @@ test("makes no request, and reads no credential, unless asked to run with a priv
   assert.throws(() => parseArgs(["--run", "--credential-file", credential, "--out", join(ROOT, "tools", "evals", "ask-follow-up")]), /outside the repository/u);
   assert.throws(() => parseArgs(["--run", "--credential-file", credential]), /--out must be an absolute private directory/u);
   assert.throws(() => parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out"), "--trials", "4"]), /--trials/u);
+  // A trial may wait past the Authority's 300 s whole-Ask deadline, and no longer than 330 s.
+  assert.equal(parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out-long"), "--timeout-ms", "330000"]).timeoutMs, 330_000);
+  assert.throws(() => parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out-long"), "--timeout-ms", "330001"]), /--timeout-ms/u);
   assert.throws(() => parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out"), "--cases", "no-such-case"]), /known cases/u);
   const options = parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out")]);
   assert.deepEqual({ trials: options.trials, caseIds: options.caseIds, timeoutMs: options.timeoutMs }, { trials: 3, caseIds: null, timeoutMs: 60_000 });

@@ -1,8 +1,10 @@
-// The bar's text as the API takes it. The page uses this to decide what to
-// send; the host uses it again before anything reaches the client.
+// The bar's text as it is sent. The page uses this to decide what to send;
+// the host uses it again before anything reaches the client.
 
-/** A question the API accepts: NFC, one line, trimmed, at most 240 code points. */
+/**
+ * A question as it is sent: NFC, trimmed, with every control but tab and line breaks made a space. It is never cut:
+ * the Authority judges its length and says when it is too long.
+ */
 export function askText(question: string): string {
-  const line = question.normalize('NFC').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ').trim();
-  return [...line].slice(0, 240).join('').trim();
+  return question.normalize('NFC').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]+/gu, ' ').trim();
 }

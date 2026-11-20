@@ -9,11 +9,11 @@ import {
   PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_ACTIVITY_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_PROJECT_RENAME_PATH_V1, PERSON_RECORDS_PATH_V1,
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, PERSON_RESEARCH_EVAL_READ_PATH_V1, PERSON_RESEARCH_EVAL_START_PATH_V1, PERSON_RUNS_MAX_RESPONSE_BYTES_V1, PERSON_RUNS_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1,
-  PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PersonQueryInputError, createPersonAskProgressDecoderV3,
+  PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_ANSWER_REQUEST_MAX_BYTES_V3, PERSON_QUERY_INPUT_MESSAGES_V1, PERSON_ANSWER_BLOCK_KINDS_V2, PERSON_ANSWER_CARD_ENTITIES_V2, PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1, validatePersonAskProgressStepEventV3, PersonQueryInputError, createPersonAskProgressDecoderV3, personQuestionToSend,
   isOrganizationApiValidationError, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, validateOrganizationPersonToolsV4,
-  validatePersonAnswerRequestV3, validatePersonAskCheckRequestV1, validatePersonAskCheckV1, validatePersonChangesV1,
+  validatePersonAskCheckRequestV1, validatePersonAskCheckV1, validatePersonChangesV1,
   validatePersonDocumentAssociateV1, validatePersonDocumentAssociationReceiptV1,
   validatePersonDocumentDissociateV1, validatePersonDocumentIdV1, validatePersonDocumentMetadataV2, validatePersonDocumentSearchResultV2, validatePersonDocumentSearchV2,
   validatePersonDocumentStatusV2, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV2,
@@ -40,7 +40,15 @@ import {
 import type { DocumentSnapshot } from './document-file.js';
 
 export const DEFAULT_TIMEOUT_MS = 15_000;
-export const ASK_TIMEOUT_MS = 135_000;
+/** The Authority's whole-Ask deadline (the kernel's AGENTIC_ASK_DEADLINE_MS_V1). */
+export const ASK_SERVER_DEADLINE_MS = 300_000;
+/**
+ * How long the client waits for an Ask: the Authority's whole deadline, plus room for the queue before research starts
+ * and for the final check and release after it, so the client never gives up on an Ask the Authority is still finishing.
+ */
+export const ASK_TIMEOUT_MS = ASK_SERVER_DEADLINE_MS + 45_000;
+/** A cited passage is one synchronous read: the ordinary timeout. The desktop host waits longer than this and the session's. */
+export const ASK_SOURCE_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
 /** The Ask source check answers within its own 15 seconds; the client waits twice that. */
 export const ASK_CHECK_TIMEOUT_MS = 30_000;
 const MAXIMUM_ORDINARY_RESPONSE_BYTES = 64 * 1024;
@@ -176,6 +184,14 @@ async function readBoundedBody(response: Response, maximumBytes: number): Promis
   }
 }
 
+/**
+ * What a refusal says: the rule an Ask or search input broke, named by its code from the client's own copy of the rule
+ * table, else the client's generic words. Server text is never shown, so a diagnostic can never leak through.
+ */
+function refusalMessage(code: string, generic = "Person Authority rejected the request"): string {
+  return Object.hasOwn(PERSON_QUERY_INPUT_MESSAGES_V1, code) ? PERSON_QUERY_INPUT_MESSAGES_V1[code]! : generic;
+}
+
 function parsedJson(text: string, status: number): unknown {
   try { return JSON.parse(text) as unknown; } catch { throw new PersonAuthorityClientError("invalid_response", status, "Person Authority returned invalid JSON"); }
 }
@@ -217,13 +233,65 @@ function lostAskStream(): PersonAuthorityClientError {
   return new PersonAuthorityClientError("transport_failed", null, "Person Authority request failed");
 }
 
+type JsonRecord = Record<string, unknown>;
+const isRecord = (value: unknown): value is JsonRecord => value !== null && typeof value === "object" && !Array.isArray(value);
+const BLOCK_KINDS: ReadonlySet<unknown> = new Set(PERSON_ANSWER_BLOCK_KINDS_V2);
+const CARD_ENTITIES: ReadonlySet<unknown> = new Set(PERSON_ANSWER_CARD_ENTITIES_V2);
+
+/**
+ * A block this client can show: one of a kind it does not know (an Authority newer than the client), or a card of an
+ * entity it does not know, reads as a text block of the same statements, with its title when it has one.
+ */
+function readableBlock(block: unknown): unknown {
+  if (!isRecord(block) || (BLOCK_KINDS.has(block.kind) && (block.kind !== "card" || CARD_ENTITIES.has(block.entity)))) return block;
+  return { kind: "text", ...(typeof block.title === "string" ? { title: block.title } : {}), statements: block.statements };
+}
+
+/** An answer whose blocks this client can show (readableBlock); the answer is validated as usual afterwards. */
+function readableAnswer(response: unknown): unknown {
+  if (!isRecord(response) || !Array.isArray(response.parts)) return response;
+  return { ...response, parts: response.parts.map(part => isRecord(part) && Array.isArray(part.blocks) ? { ...part, blocks: part.blocks.map(readableBlock) } : part) };
+}
+
+/**
+ * The text of a progress stream as this client reads it, frame by frame: a step event it cannot read is left out (a
+ * progress step is only a view of the work, so the Ask goes on without it), and an answer's blocks become ones it can
+ * show (readableAnswer). Everything else, framing included, passes unchanged to the progress V3 decoder.
+ */
+function tolerantAskFrames(): (text: string, end?: boolean) => string {
+  let partial = "";
+  const data = (json: string): string | null => {
+    let value: unknown;
+    try { value = JSON.parse(json); } catch { return json; }
+    if (!isRecord(value) || value.type === "error") return json;
+    if (value.type === "answer") return JSON.stringify({ ...value, response: readableAnswer(value.response) });
+    try { validatePersonAskProgressStepEventV3(value); return json; } catch { return null; }
+  };
+  return (text, end = false) => {
+    const lines = (partial + text).split("\n");
+    partial = lines.pop()!;
+    const read = lines.map(line => {
+      if (!line.startsWith("data: ")) return `${line}\n`;
+      const kept = data(line.slice("data: ".length));
+      return kept === null ? "" : `data: ${kept}\n`;
+    }).join("");
+    // At the end, or past the line bound, the unfinished line goes to the decoder, which refuses it.
+    if (!end && partial.length <= PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1) return read;
+    const rest = partial;
+    partial = "";
+    return read + rest;
+  };
+}
+
 /**
  * Reads a streamed Ask (ADR-0039) to its end with the progress V3 decoder, hands
  * each step event to `onProgress` as it arrives, and returns the one terminal
- * event. Fails closed: a malformed frame or event, invalid UTF-8, or an end
- * without exactly one terminal event is `invalid_response`, and a stream past
- * its byte bound is `response_too_large`. Either failure cancels the body, so
- * the Authority sees the disconnect and stops the Ask.
+ * event. A step event it cannot read is skipped, and an answer block it does not
+ * know reads as text (tolerantAskFrames). Otherwise it fails closed: a malformed
+ * frame or answer, invalid UTF-8, or an end without exactly one terminal event
+ * is `invalid_response`, and a stream past its byte bound is
+ * `response_too_large`. Either failure cancels the body, so the Authority sees
+ * the disconnect and stops the Ask.
  */
 async function readAskProgressStream(response: Response, signal: AbortSignal, onProgress: PersonAskProgressSinkV3): Promise<PersonAskProgressTerminalEventV3> {
   if (response.status !== 200 || response.body === null) {
@@ -235,10 +303,11 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
   signal.addEventListener("abort", cancel, { once: true });
   const utf8 = new TextDecoder("utf-8", { fatal: true });
   const frames = createPersonAskProgressDecoderV3();
+  const tolerant = tolerantAskFrames();
   const decode = (chunk: Uint8Array | undefined) => {
     try {
-      if (chunk !== undefined) return frames.push(utf8.decode(chunk, { stream: true }));
-      const events = frames.push(utf8.decode());
+      if (chunk !== undefined) return frames.push(tolerant(utf8.decode(chunk, { stream: true })));
+      const events = frames.push(tolerant(utf8.decode(), true));
       frames.end();
       return events;
     } catch (error) {
@@ -279,11 +348,14 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
 
 type AskScope = ProjectIdV1 | undefined;
 
-/** The Ask's V3 request, which may carry the asker's previous turn (ADR-0047). */
+/**
+ * The Ask's V3 request, which may carry the asker's previous turn (ADR-0047). Its question is sent as
+ * personQuestionToSend makes it; the Authority alone applies the question rule and says which rule a question breaks.
+ */
 function askRequest(question: string, scope: AskScope, previous?: PersonAnswerPreviousV1) {
-  return validatePersonAnswerRequestV3({ schema_version: 3, question,
+  return { schema_version: 3, question: personQuestionToSend(question),
     ...(scope === undefined ? {} : { project_id: scope }),
-    ...(previous === undefined ? {} : { previous }) });
+    ...(previous === undefined ? {} : { previous }) };
 }
 
 /** Every Ask sends the client's clock and time zone. */
@@ -339,7 +411,7 @@ const DOCUMENT_FAMILY: ClosedFamily = Object.freeze({ not_json: 'Document respon
  * as `rejected` makes it, by default the family's rejection), and success only with `expectedStatus`.
  */
 async function closedReply<T>(response: Response, family: ClosedFamily, maximumBytes: number, validate: (value: unknown) => T, expectedStatus: number,
-  rejected: (code: string) => PersonAuthorityClientError = code => new PersonAuthorityClientError(code, response.status, family.rejected)): Promise<T> {
+  rejected: (code: string, message: string) => PersonAuthorityClientError = (code, message) => new PersonAuthorityClientError(code, response.status, message)): Promise<T> {
   if (!isJsonResponse(response)) {
     if (family.cancel) await response.body?.cancel();
     throw new PersonAuthorityClientError('invalid_response', response.status, family.not_json);
@@ -349,7 +421,7 @@ async function closedReply<T>(response: Response, family: ClosedFamily, maximumB
     const failure = validateSuccess(value, response.status, validateOrganizationApiError);
     // The generic API envelope permits extension codes; these closed families cannot infer rejection from one.
     if (!CLOSED_CONTEXT_ERROR_CODES.has(failure.error.code)) throw new PersonAuthorityClientError('invalid_response', response.status, family.noncanonical);
-    throw rejected(failure.error.code);
+    throw rejected(failure.error.code, refusalMessage(failure.error.code, family.rejected));
   }
   if (response.status !== expectedStatus) throw new PersonAuthorityClientError('invalid_response', response.status, family.unexpected_status);
   return validateSuccess(value, response.status, validate);
@@ -483,13 +555,13 @@ export class PersonAuthorityClient {
     if (!isJsonResponse(response)) throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a non-JSON response");
     const value = parsedJson(await readBoundedBody(response, maximumBytes), response.status);
     if (!response.ok) {
-      let code = "request_failed";
+      let failure: ReturnType<typeof validateOrganizationApiError>['error'];
       try {
-        code = validateOrganizationApiError(value).error.code;
+        failure = validateOrganizationApiError(value).error;
       } catch {
         throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a malformed error");
       }
-      throw new PersonAuthorityClientError(code, response.status, "Person Authority rejected the request");
+      throw new PersonAuthorityClientError(failure.code, response.status, refusalMessage(failure.code));
     }
     if (expectedStatus !== undefined && response.status !== expectedStatus) {
       throw new PersonAuthorityClientError('invalid_response', response.status, 'Person Authority returned an unexpected status');
@@ -538,7 +610,7 @@ export class PersonAuthorityClient {
       const { request_id: requestId } = input;
       const result = await closedReply(response, CONTEXT_FAMILY, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, input.validate, input.status ?? 200,
         requestId !== undefined && response.status >= 400 && response.status < 500
-          ? code => new PersonContextMutationError(code, response.status, CONTEXT_FAMILY.rejected, requestId, 'not_submitted') : undefined);
+          ? (code, message) => new PersonContextMutationError(code, response.status, message, requestId, 'not_submitted') : undefined);
       if (input.matches !== undefined && !input.matches(result)) {
         throw new PersonAuthorityClientError('invalid_response', status, 'Person Authority returned different request coordinates');
       }
@@ -666,7 +738,7 @@ export class PersonAuthorityClient {
       const value = parsedJson(text, response.status);
       try {
         const error = validateOrganizationApiError(value);
-        throw new PersonAuthorityClientError(error.error.code, response.status, "Person Authority rejected the request");
+        throw new PersonAuthorityClientError(error.error.code, response.status, refusalMessage(error.error.code));
       } catch (error) {
         if (error instanceof PersonAuthorityClientError) throw error;
       }
@@ -738,7 +810,9 @@ export class PersonAuthorityClient {
   async askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
     const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
-    const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, previous), validate_request: validatePersonAnswerRequestV3,
+    // Sent as built, within the Ask's own body bound: the Authority validates the request once (askRequest).
+    const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, previous), validate_request: request => request,
+      maximum_request_bytes: PERSON_ANSWER_REQUEST_MAX_BYTES_V3,
       access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json` } }, deadline);
     if (!isAskProgressStream(response)) {
       await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
@@ -746,7 +820,7 @@ export class PersonAuthorityClient {
     }
     const terminal = await readAskProgressStream(response, deadline, onProgress);
     if (terminal.type === 'error') {
-      throw new PersonAuthorityClientError(terminal.error.code, terminal.status, 'Person Authority rejected the request');
+      throw new PersonAuthorityClientError(terminal.error.code, terminal.status, refusalMessage(terminal.error.code));
     }
     return Object.freeze({ result: inAskScope(terminal.response, scope, previous), receipt: terminal.receipt });
   }
@@ -816,7 +890,7 @@ export class PersonAuthorityClient {
     const request = validatePersonSourceEvidenceReadRequestV1(value);
     const response = await this.json({ path: PERSON_SOURCE_EVIDENCE_PATH_V1, body: request,
       validate_request: validatePersonSourceEvidenceReadRequestV1, validate_response: validatePersonSourceEvidenceV1,
-      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS });
+      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_SOURCE_TIMEOUT_MS });
     const { label: _label, ...citation } = response.citation;
     if (canonicalJson(response.scope) !== canonicalJson(request.scope) || canonicalJson(citation) !== canonicalJson(request.citation)) {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different source evidence coordinates');

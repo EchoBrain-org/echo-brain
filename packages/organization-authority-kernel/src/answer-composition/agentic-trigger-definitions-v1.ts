@@ -1,7 +1,7 @@
 import {
   validatePersonEvidenceOpenRequestV1,
   validatePersonPageCitationV1,
-  validatePersonQueryText,
+  validatePersonQuestionText,
   validatePersonTicketCitationV1,
 } from "@echo-brain/organization-api";
 import { AuthorityOperationError } from "../domain/errors.js";
@@ -80,8 +80,8 @@ const ask = define<AskEventV1>({
   name: "ask", budget: "live", scope: "requested",
   parseEvent(input: unknown): AskEventV1 {
     const event = fields(input, ["question"], "Ask");
-    // The product's question limits, so the evaluation sees what people see.
-    try { return Object.freeze({ question: validatePersonQueryText(event.question) }); }
+    // The product's question rule, so the evaluation sees what people see.
+    try { return Object.freeze({ question: validatePersonQuestionText(event.question) }); }
     catch (error) { return invalid(error instanceof Error ? error.message : "Ask question is invalid"); }
   },
   brief: (event: AskEventV1) => ({ goal: { kind: "question", question: event.question }, starting: [], options: {} }),

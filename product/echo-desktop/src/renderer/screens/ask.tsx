@@ -19,7 +19,7 @@ import {
   UNTITLED,
   type AskClarify, type AskTook, type PaneTarget, type Read, type State,
 } from '../store.js';
-import { MAX_QUESTION, questionCount } from '../bar.js';
+import { questionCount, questionLimitNote } from '../bar.js';
 import {
   allOmitted, behindEarlierLine, shownInFull, showsOf, turnGroups, type Suggestion, type TurnChecks,
 } from '../timeline.js';
@@ -103,7 +103,7 @@ export function Bar({ state }: { state: State }) {
         )}
         <label for="ask-field" class="sr-only">{name}</label>
         <input
-          id="ask-field" data-testid="ask-field" type="text" autocomplete="off" spellcheck maxLength={MAX_QUESTION} placeholder={name}
+          id="ask-field" data-testid="ask-field" type="text" autocomplete="off" spellcheck placeholder={name}
           role="combobox" aria-autocomplete="list" aria-expanded={shown.length > 0} aria-controls={shown.length > 0 ? 'ask-suggestions' : undefined}
           aria-activedescendant={active >= 0 ? `ask-suggestion-${active}` : undefined} aria-describedby={count?.full ? 'ask-limit' : undefined}
           value={text} readOnly={covered} onMouseDown={() => { if (text === '') setSuggesting({ open: true, active: -1 }); }} onKeyDown={onKeyDown}
@@ -112,10 +112,10 @@ export function Bar({ state }: { state: State }) {
         />
         {count && <span class={`bar-count${count.full ? ' full' : ''}`} data-testid="ask-count" aria-hidden="true">{count.words}</span>}
         <button type="submit" class="circle primary" aria-label="Ask" data-testid="ask-send"
-          disabled={text.trim() === '' || Boolean(state.ask?.asking)}><Up /></button>
+          disabled={text.trim() === '' || (count?.over ?? 0) > 0 || Boolean(state.ask?.asking)}><Up /></button>
       </form>
-      {/* Always there, so a screen reader hears it when the limit is reached; the page's one status line stays the toast's. */}
-      <div id="ask-limit" class={count?.full ? 'bar-note' : 'sr-only'} aria-live="polite" data-testid="ask-limit">{count?.full ? `Questions are up to ${MAX_QUESTION} characters` : ''}</div>
+      {/* Always there, so a screen reader hears it when the limit is reached; the page's one status line stays the toast's. Nothing is cut: past the limit it says by how much to shorten. */}
+      <div id="ask-limit" class={count?.full ? 'bar-note' : 'sr-only'} aria-live="polite" data-testid="ask-limit">{count?.full ? questionLimitNote(count) : ''}</div>
     </div>
   );
 }

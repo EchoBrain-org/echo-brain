@@ -819,8 +819,10 @@ export type HostMethodName = keyof HostMethods;
 export const HOST_TIMEOUT_MS: Readonly<Record<HostMethodName, number>> = {
   'app.status': 5_000, 'signin.begin': 660_000, 'signin.invitation': 660_000, 'projects.list': 45_000, 'changes.read': 15_000,
   'list.page': 45_000, 'open.ref': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
-  // A record read is also the reader's meeting open, which waited 45 s as `open.ref` does.
-  'ask.run': 145_000, 'ask.cancel': 5_000, 'ask.source': 15_000, 'ask.record': 45_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
+  // An Ask waits out the client's 345 s (the Authority's 300 s deadline, its queue and release) and 10 s more; a cited
+  // passage waits out the client's 15 s read and its session's 15 s. A record read is also the reader's meeting open,
+  // which waited 45 s as `open.ref` does.
+  'ask.run': 355_000, 'ask.cancel': 5_000, 'ask.source': 45_000, 'ask.record': 45_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
   'account.signOut': 45_000, 'account.tools': 45_000,
   'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000,
   'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,

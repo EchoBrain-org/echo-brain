@@ -861,7 +861,8 @@ describe("Person client", () => {
         return askStream(v8Answer({ text: "Use simple pricing.", citations: [{ ...RECORD_CITATION, citation: { ...RECORD_CITATION.citation, unexpected: true } }] }));
       });
 
-      await expect(client.askWithLiveSources(" pricing")).rejects.toMatchObject({ code: "query_whitespace" });
+      // Not empty is the client's only check of a question; the Authority judges the rest.
+      await expect(client.askWithLiveSources(" \n ")).rejects.toMatchObject({ code: "question_empty" });
       expect(asks).toBe(0);
       await expect(client.askWithLiveSources("pricing")).rejects.toThrow(
           "malformed progress stream",
@@ -912,15 +913,52 @@ describe("Person client", () => {
     });
   });
 
+  it("sends a long natural-language question on two lines as asked, trimmed and NFC, with its 64 KiB body bound", async () => {
+    await withHome(async (home) => {
+      const sent: unknown[] = [];
+      const client = await signedInClient(home, async (_input, init) => {
+        sent.push(JSON.parse(String(init?.body)));
+        return askStream(v8Answer());
+      });
+      const question = "Can you summarize what the hardware and firmware teams decided about the thermal fix, who owns each follow-up, "
+        + "what's still blocked on supplier samples, and what changed since last Tuesday's review?\nAnd which of those are due before Friday's build review?";
+      expect(question.length).toBeGreaterThan(240);
+      await client.askWithLiveSources(`  ${question}\n`);
+      expect(sent).toEqual([{ schema_version: 3, question }]);
+      await client.askWithLiveSources("Caf\u0065\u0301?");
+      expect(sent[1]).toEqual({ schema_version: 3, question: "Caf\u00e9?" });
+      // Nothing but the Authority judges length: a request over 16 KiB of UTF-8 is sent.
+      const long = "😀".repeat(4_000);
+      await client.askWithLiveSources(long, undefined, undefined, { purpose: "follow_up", question: long, asked_at: "2026-11-19T17:05:00.000Z", statements: [], citations: [] });
+      expect(sent).toHaveLength(3);
+    });
+  });
+
+  it("names the question rule an Authority refusal broke, by its code, and never shows the Authority's text", async () => {
+    await withHome(async (home) => {
+      const client = await signedInClient(home, async () => json({ error: { code: "question_too_long", message: "private diagnostic" } }, 400));
+      await expect(client.askWithLiveSources("x".repeat(4_001))).rejects.toMatchObject({
+        code: "question_too_long", status: 400, message: "Shorten the question to at most 4,000 characters.",
+      });
+    });
+  });
+
   it("reports actionable bounded query rules without echoing input or calling transport", async () => {
     await withHome(async home => {
+    let asked = "";
+    const empty = await runPersonClientCli(["ask", "--question", " \n "], {
+      home_directory: home, stderr: { write: value => ((asked += String(value)), true) },
+      stdout: { write: () => { throw new Error("no success output expected"); } }, fetch: async () => { throw new Error("must not reach transport"); },
+    });
+    expect(empty).toBe(1);
+    expect(JSON.parse(asked)).toMatchObject({ code: "question_empty", error: "Enter a question." });
     for (const [text, code] of [
       ["", "query_empty"], [" x", "query_whitespace"], ["e\u0301", "query_normalization"],
       ["x\ny", "query_controls"], ["x ".repeat(121).trim(), "query_too_long"],
       ["!!!", "query_term_count"],
       ["é".repeat(33), "query_term_too_long"],
     ]) {
-      for (const argv of [["ask", "--question", text], ["records", "--query", text]]) {
+      for (const argv of [["records", "--query", text]]) {
         let stderr = "";
         const status = await runPersonClientCli(argv, {
           home_directory: home,

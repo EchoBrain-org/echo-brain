@@ -23,6 +23,7 @@ import type { PersonDocumentUploadStagingV1 } from '../application/ports/documen
 import { createPersonDocumentsHttpHandlerV1, uniqueMemberJsonV1 } from './person-documents-http-route-v1.js';
 import { PERSON_DOCUMENTS_PATH_V2, MAX_ORGANIZATION_API_BODY_BYTES } from '@echo-brain/organization-api';
 import { PERSON_EMPLOYEES_PATH_V1, PERSON_RECORDS_PATH_V1, validatePersonRecordSearchRequestV2 } from "@echo-brain/organization-api";
+import { PersonQueryInputError, isOrganizationApiValidationError } from "@echo-brain/organization-api";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
@@ -375,13 +376,41 @@ function expiredHandoffHtml(response: ServerResponse): void {
   html(response, page, "default-src 'none'; base-uri 'none'");
 }
 
-function fail(response: ServerResponse, status: number, code: string): void {
-  json(response, status, { error: { code, message: "request failed" } });
+function fail(response: ServerResponse, status: number, code: string, message = "request failed"): void {
+  json(response, status, { error: { code, message } });
 }
 
-/** The status and code a failed request answers with, in a JSON body or as a streamed Ask's error event. */
-function failureOf(error: unknown): { readonly status: PersonAskProgressErrorStatusV1; readonly code: string } {
-  if (!(error instanceof AuthorityOperationError)) return { status: 500, code: "internal" };
+/**
+ * A request its validator refused, answered with the validator's own code and message so the person learns which rule
+ * it broke. Only the API's validation errors become one: their messages are static, name a field or rule, and never
+ * echo the request's content. It is an `invalid_request` wherever an Authority error is passed on.
+ */
+class RequestRefusal extends AuthorityOperationError {
+  constructor(readonly wire_code: string, message: string) {
+    super("invalid_request", message);
+    this.name = "RequestRefusal";
+  }
+}
+
+/** What an error envelope may say: a short, trimmed line with no control character. */
+const SAYABLE = (message: string): boolean => message.length > 0 && message.length <= 1000 && message.trim() === message && !/[\u0000-\u001f\u007f]/u.test(message);
+
+/** The refusal a validator's error becomes. Any other error is a generic refusal: its message may not be static. */
+function requestRefusal(error: unknown, codes: "own" | "invalid_request" = "own"): Error {
+  if (error instanceof PersonQueryInputError && /^[a-z][a-z0-9_]*$/u.test(error.code) && SAYABLE(error.message)) {
+    return new RequestRefusal(codes === "own" ? error.code : "invalid_request", error.message);
+  }
+  if (isOrganizationApiValidationError(error)) {
+    const message = error.message.replace(/^organization API: /u, "");
+    if (SAYABLE(message)) return new RequestRefusal("invalid_request", message);
+  }
+  return new AuthorityOperationError("invalid_request", "request is invalid");
+}
+
+/** The status, code and message a failed request answers with, in a JSON body or as a streamed Ask's error event. */
+function failureOf(error: unknown): { readonly status: PersonAskProgressErrorStatusV1; readonly code: string; readonly message: string } {
+  if (error instanceof RequestRefusal) return { status: 400, code: error.wire_code, message: error.message };
+  if (!(error instanceof AuthorityOperationError)) return { status: 500, code: "internal", message: "request failed" };
   const status =
     error.code === "unauthorized"
       ? 401
@@ -396,7 +425,7 @@ function failureOf(error: unknown): { readonly status: PersonAskProgressErrorSta
               : error.code === "rate_limited"
                 ? 429
                 : 400;
-  return { status, code: error.code };
+  return { status, code: error.code, message: "request failed" };
 }
 
 async function rawBody(request: IncomingMessage, maximum = MAXIMUM_BODY_BYTES): Promise<Buffer> {
@@ -436,10 +465,19 @@ async function body(request: IncomingMessage): Promise<unknown> {
   }
 }
 
-/** Person JSON reads share transport mechanics while application ports own authorization and audit. */
+/**
+ * Person JSON reads share transport mechanics while application ports own authorization and audit. A body that is too
+ * large or not JSON, and a request its validator refuses, say so (requestRefusal).
+ */
 async function personBody<Request>(request: IncomingMessage, validate: (value: unknown) => Request): Promise<Request> {
-  try { return validate(await body(request)); }
-  catch { throw new AuthorityOperationError("invalid_request", "request is invalid"); }
+  let value: unknown;
+  try { value = await body(request); }
+  catch (error) {
+    if (error instanceof AuthorityOperationError && error.code === "invalid_request") throw new RequestRefusal("invalid_request", error.message);
+    throw error;
+  }
+  try { return validate(value); }
+  catch (error) { throw requestRefusal(error); }
 }
 
 type PersonPostHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
@@ -516,9 +554,9 @@ function personAskV7Post(application: PersonAnswerV7HttpApplication): PersonPost
       if (stream === undefined) throw error;
       if (disconnect.signal.aborted) stream.close();
       else {
-        const { status, code } = failureOf(error);
+        const { status, code, message } = failureOf(error);
         streamedFailureStatus.set(response, status);
-        stream.end({ type: "error", status, error: { code, message: "request failed" } });
+        stream.end({ type: "error", status, error: { code, message } });
       }
     } finally { disconnect.dispose(); }
   };
@@ -586,13 +624,13 @@ function recordSearchInput(value: unknown): {
   readonly limit?: number;
 } {
   try { return validatePersonRecordSearchRequestV2(value); }
-  catch { throw new AuthorityOperationError("invalid_request", "request is invalid"); }
+  catch (error) { throw requestRefusal(error); }
 }
 
-/** Validate transport input without exposing codec diagnostics to the caller. */
+/** Validate transport input; a refusal names its rule, under the project family's one refusal code. */
 function projectInput<T>(validate: (value: unknown) => T, value: unknown): T {
   try { return validate(value); }
-  catch { throw new AuthorityOperationError('invalid_request', 'request failed'); }
+  catch (error) { throw requestRefusal(error, "invalid_request"); }
 }
 
 async function projectBody(request: IncomingMessage): Promise<unknown> {
@@ -1054,8 +1092,8 @@ export function createOrganizationAuthorityHttpServer(
       }
       fail(response, 404, "not_found");
     } catch (error) {
-      const { status, code } = failureOf(error);
-      fail(response, status, code);
+      const { status, code, message } = failureOf(error);
+      fail(response, status, code, message);
     } finally {
       if (responseFinished !== undefined) await responseFinished;
       activeHttp -= 1;

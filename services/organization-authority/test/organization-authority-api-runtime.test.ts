@@ -887,7 +887,7 @@ describe("Organization Authority API runtime", () => {
       expect(members).toMatchObject({ items: [{ membership_id: initialized.owner_membership_id, role: "lead" }] });
       expect(await post("/v1/person/projects/directory", { project_id, query: "Founder" })).toMatchObject({ items: [{ membership_id: initialized.owner_membership_id }] });
       expect(await post("/v1/person/directory", { query: "Founder" })).toEqual({ schema_version: 1, kind: "echo-organization-directory-v1", items: [{ membership_id: initialized.owner_membership_id, display_name: expect.any(String) }], next_cursor: null });
-      expect(await post("/v1/person/directory", { project_id }, 400)).toEqual({ error: { code: "invalid_request", message: "request failed" } });
+      expect(await post("/v1/person/directory", { project_id }, 400)).toEqual({ error: { code: "invalid_request", message: "Organization directory search has an unexpected shape" } });
       await post("/v1/person/projects/members/set", { schema_version: 1, kind: "echo-project-member-set-v1", request_id: "00000000-0000-4000-8000-000000000003", project_id, membership_id: initialized.owner_membership_id, role: "lead" });
       expect(await post("/v1/person/projects/members/remove", { schema_version: 1, kind: "echo-project-member-remove-v1", request_id: "00000000-0000-4000-8000-000000000004", project_id, membership_id: initialized.owner_membership_id }, 409)).toEqual({ error: { code: "conflict", message: "request failed" } });
       await post("/v1/person/projects/context/dissociate", { schema_version: 1, kind: "echo-project-context-dissociate-v1", request_id: "00000000-0000-4000-8000-000000000005", project_id, context_id });
@@ -954,12 +954,12 @@ describe("Organization Authority API runtime", () => {
         next_cursor: null,
       });
       // The list has no global or mine scope: a request names a project or only me.
-      for (const body of [{ schema_version: 1 }, { schema_version: 1, mine: true }]) {
-        expect(await post("/v1/person/list", body, 400)).toEqual({ error: { code: "invalid_request", message: "request failed" } });
+      for (const [body, message] of [[{ schema_version: 1 }, "Person list request scope is invalid"], [{ schema_version: 1, mine: true }, "Person list request has an unexpected shape"]] as const) {
+        expect(await post("/v1/person/list", body, 400)).toEqual({ error: { code: "invalid_request", message } });
       }
       expect(await post("/v1/person/open", { schema_version: 1, ref: `note:${context_id}` })).toMatchObject({ kind: "echo-person-open-v1", text: upload.text, next_cursor: null });
       // A listed meeting is read as its record, never opened (2026-11-11).
-      expect(await post("/v1/person/open", { schema_version: 1, ref: `meeting:sha256:${"0".repeat(64)}` }, 400)).toEqual({ error: { code: "invalid_request", message: "request failed" } });
+      expect(await post("/v1/person/open", { schema_version: 1, ref: `meeting:sha256:${"0".repeat(64)}` }, 400)).toEqual({ error: { code: "invalid_request", message: "Person open request ref is invalid" } });
 
       const searchBeforeGeneration = await fetch(
         `${origin}/v1/person/records`,

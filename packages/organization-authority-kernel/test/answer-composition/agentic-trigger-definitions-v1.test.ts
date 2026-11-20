@@ -51,8 +51,10 @@ describe("Ask definition", () => {
     });
   });
 
-  it("applies the product question limits", () => {
-    for (const input of [{ question: "x ".repeat(130).trim() }, { question: " padded" }, { question: "q", extra: true }, {}, "Why?", null]) refused("ask", input);
+  it("applies the product question rule: a long question on two lines is asked, one over 4,000 characters is not", () => {
+    const question = `${"Who owns the thermal retest and what is blocked on supplier samples? ".repeat(5).trim()}\nAnd what changed since Tuesday?`;
+    expect(brief("ask", { question }).goal).toEqual({ kind: "question", question });
+    for (const input of [{ question: "x".repeat(4_001) }, { question: " padded" }, { question: "q", extra: true }, {}, "Why?", null]) refused("ask", input);
   });
 });
 

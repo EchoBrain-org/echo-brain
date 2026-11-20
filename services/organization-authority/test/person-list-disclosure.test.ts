@@ -55,7 +55,9 @@ const NONEXISTENT = "prj_eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 const QUOTE = "QUOTE-SECRET-EVIDENCE";
 const FORBIDDEN_KEYS = new Set(["count", "total", "position", "log_position", "record_position", "generation_id", "audit_sequence", "approval_id", "request_id", "envelope", "source_id", "revision_id", "source_sha256"]);
 const NOT_FOUND_BODY = '{"error":{"code":"not_found","message":"request failed"}}';
-const INVALID_BODY = '{"error":{"code":"invalid_request","message":"request failed"}}';
+/** An invalid request names the rule it broke, the same for every reader: it is checked before any access. */
+const INVALID_BODY = expect.stringMatching(/^\{"error":\{"code":"invalid_request","message":"[^"]+"\}\}$/u);
+const INVALID_REF_BODY = '{"error":{"code":"invalid_request","message":"Person open request ref is invalid"}}';
 const UNAUTHORIZED_BODY = '{"error":{"code":"unauthorized","message":"request failed"}}';
 
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -482,7 +484,7 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
       // Readable, unreadable and unknown alike: a listed meeting is read as its record.
       ["emp_a", f.meeting("r4")], ["emp_b", f.meeting("r4")], ["owner", f.meeting("r2")], ["owner", `meeting:${sha256Digest("pending-approval-without-a-record")}`],
     ] as const;
-    for (const [token, ref] of refused) expect(await f.open(token, ref)).toEqual({ status: 400, text: INVALID_BODY });
+    for (const [token, ref] of refused) expect(await f.open(token, ref)).toEqual({ status: 400, text: INVALID_REF_BODY });
   });
 
   it("N-14: a session revoked or a grant changed after collect releases nothing and audits nothing", async () => {

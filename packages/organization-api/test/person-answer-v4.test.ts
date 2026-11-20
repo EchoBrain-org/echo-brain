@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PERSON_QUESTION_MAX_CODE_POINTS_V1,
+  PersonQueryInputError,
+  personQuestionToSend,
   validatePersonAnswerRequestV3,
+  validatePersonQueryText,
+  validatePersonQuestionText,
   validatePersonAnswerResponseV8,
   validatePersonEvidenceOpenRequestV1,
 } from '../src/index.js';
@@ -17,6 +22,43 @@ describe('Agentic Ask V1 public contracts', () => {
   it('defines the Ask request', () => {
     expect(validatePersonAnswerRequestV3({ schema_version: 3, question: 'What changed?', project_id }))
       .toEqual({ schema_version: 3, question: 'What changed?', project_id });
+  });
+
+  it('takes a long natural-language question on two lines: no distinct-word count, no 240-character cap', () => {
+    const question = 'Can you summarize what the hardware and firmware teams decided about the thermal fix, who owns each follow-up, '
+      + "what's still blocked on supplier samples, and what changed since last Tuesday's review?\nAnd which of those are due before Friday's build review?";
+    expect(new Set(question.match(/[\p{L}\p{N}]+/gu)!.map(word => word.toLowerCase())).size).toBeGreaterThan(32);
+    expect(question.length).toBeGreaterThan(240);
+    expect(validatePersonAnswerRequestV3({ schema_version: 3, question })).toEqual({ schema_version: 3, question });
+    // The keyword search rule is unchanged: one line.
+    expect(() => validatePersonQueryText(question)).toThrow(PersonQueryInputError);
+  });
+
+  it('bounds a question at 4,000 code points, and names the rule each refusal breaks', () => {
+    expect(PERSON_QUESTION_MAX_CODE_POINTS_V1).toBe(4_000);
+    expect(validatePersonQuestionText('😀'.repeat(4_000))).toHaveLength(8_000);
+    expect(validatePersonQuestionText('Who owns it?\tAnd\r\nwhen?')).toBe('Who owns it?\tAnd\r\nwhen?');
+    // A symbol is a question: there is no term rule.
+    expect(validatePersonQuestionText('?')).toBe('?');
+    for (const [value, code] of [
+      ['', 'question_empty'], [' \n ', 'question_empty'], [42, 'question_empty'], ['e\u0301', 'question_normalization'], [' Who owns it?', 'question_whitespace'],
+      ['Who owns it?\n', 'question_whitespace'], ['Who\u0000 owns it?', 'question_controls'], ['Who\u007f owns it?', 'question_controls'],
+      ['Who \ud800owns it?', 'question_controls'], ['😀'.repeat(4_001), 'question_too_long'],
+    ] as const) {
+      let caught: unknown;
+      try { validatePersonQuestionText(value); } catch (error) { caught = error; }
+      expect(caught, String(value)).toBeInstanceOf(PersonQueryInputError);
+      expect((caught as PersonQueryInputError).code, String(value)).toBe(code);
+      // The Ask request reports the question's own rule.
+      expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: value })).toThrow((caught as Error).message);
+    }
+  });
+
+  it('gives clients one way to send a question: NFC and trimmed, and not empty', () => {
+    expect(personQuestionToSend('  e\u0301 and\nmore \n')).toBe('\u00e9 and\nmore');
+    expect(() => personQuestionToSend(' \n\t ')).toThrow(expect.objectContaining({ code: 'question_empty' }));
+    // Whatever it sends, the rule takes, apart from a length or control the Authority names.
+    expect(validatePersonQuestionText(personQuestionToSend(' Who owns it? '))).toBe('Who owns it?');
   });
 
   it('accepts a structured answer with cited prose and bounded deterministic fallback records', () => {

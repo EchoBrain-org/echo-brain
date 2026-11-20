@@ -748,6 +748,13 @@ describe("research loop: need kinds (ADR-0041)", () => {
       step([part("When is launch?", [])], [{ tool: "search", args: { query: "launch" } }]), step([part("When is launch?", [withId("N1", need("When is launch?", "found", ["E1"]))])], [{ tool: "finish", args: {} }]), writer,
     ], { search: async () => result([launch]) });
     expect((await bare.research.research({ trigger: "ask", brief: question("When is launch?") })).plan[0]!.needs).toEqual([{ need: "When is launch?", kind: "content", status: "found", evidence: ["E1"] }]);
+    // Ask's question follows the API's question rule: a long question on two lines runs, one over 4,000 characters does not.
+    const asked = `${"When is launch, and who owns the thermal retest that blocks it? ".repeat(6).trim()}\nAnd what changed since Tuesday?`;
+    const long = harness([
+      step([part("When is launch?", [])], [{ tool: "search", args: { query: "launch" } }]), step([part("When is launch?", [withId("N1", need("When is launch?", "found", ["E1"]))])], [{ tool: "finish", args: {} }]), writer,
+    ], { search: async () => result([launch]) });
+    expect((await long.research.research({ trigger: "ask", brief: question(asked) })).plan[0]!.needs[0]!.status).toBe("found");
+    await expect(long.research.research({ trigger: "ask", brief: question("x".repeat(4_001)) })).rejects.toThrow("question is invalid");
     expect(bare.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ id: "N1", need: "When is launch?", kind: "content", status: "open", evidence: [] }] }]);
     // A task goal declares nothing: its schema, plan view and bundle have no kind.
     const plain = harness([

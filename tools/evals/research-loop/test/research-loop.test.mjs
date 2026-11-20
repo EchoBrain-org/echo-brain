@@ -196,9 +196,8 @@ test("start requests are envelopes the API and each trigger definition accept; a
     assert.equal(Object.hasOwn(request, "project_id"), entry.scope.kind === "project", entry.id);
     const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === request.trigger);
     assert.ok(definition !== undefined, entry.id);
-    // The product's question limit now refuses an overlong question on the Authority, which the runner counts as rejected at ingress.
-    if (entry.id === "overlong-dvt-schedule-check") assert.throws(() => definition.parseEvent(request.input), { code: "invalid_request" });
-    else assert.doesNotThrow(() => definition.parseEvent(request.input), entry.id);
+    // Every case's question passes the product's question rule: the long DVT schedule question (over 240 characters) is asked.
+    assert.doesNotThrow(() => definition.parseEvent(request.input), entry.id);
   }
   // Only an Ask question has a product ingress limit; any other refusal is the runner's or the bindings' error.
   const overlong = caseById("overlong-dvt-schedule-check");

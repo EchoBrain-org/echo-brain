@@ -3,7 +3,7 @@
 // prints while it works. Kept apart from host.ts so the whole path, Authority
 // to page, is tested as it runs.
 import {
-  PERSON_ASK_CHECK_REQUEST_KIND_V1, validatePersonAnswerRequestV3, validatePersonAskCheckRequestV1, validatePersonQueryText, validateProjectIdV1,
+  PERSON_ASK_CHECK_REQUEST_KIND_V1, validatePersonAnswerPreviousV1, validatePersonAskCheckRequestV1, validateProjectIdV1,
 } from '@echo-brain/organization-api';
 import type { AskPrevious, AskProgressNotice, AskScope, AskStep, Expect, RecordRead, SourceRef } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
@@ -29,17 +29,16 @@ const checks = (validate: (value: unknown) => unknown, value: unknown): boolean 
 
 /**
  * The earlier turn an Ask of `question` (already askText's) in `scope`
- * carries, checked as the client checks it (C3): with the whole request it
- * rides on, by the API's own validator, its earlier question as askText would
- * send it. Null when that refuses it. A question or project that fails on its
- * own is the client's to report, as it does with or without the earlier turn,
- * so then the turn goes as it came.
+ * carries, checked as the client checks it (C3): on its own, by the API's own
+ * validator, its earlier question as askText would send it. Null when that
+ * refuses it. The question itself is the Authority's to judge, and a project
+ * that fails on its own is the client's to report, as it does with or without
+ * the earlier turn, so then the turn goes as it came.
  */
 export function askPrevious(value: unknown, question: string, scope: AskScope): AskPrevious | null {
-  if (!checks(validatePersonQueryText, question) || (scope.kind === 'project' && !checks(validateProjectIdV1, scope.project_id))) return value as AskPrevious;
-  const where = scope.kind === 'project' ? { project_id: scope.project_id } : {};
+  if (scope.kind === 'project' && !checks(validateProjectIdV1, scope.project_id)) return value as AskPrevious;
   try {
-    const previous = validatePersonAnswerRequestV3({ schema_version: 3, question, ...where, previous: value }).previous!;
+    const previous = validatePersonAnswerPreviousV1(value, question);
     return askText(previous.question) === previous.question ? value as AskPrevious : null;
   } catch {
     return null;

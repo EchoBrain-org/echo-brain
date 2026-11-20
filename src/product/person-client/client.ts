@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import {
   PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, isCanonicalPersonEmail, isExpectedPersonEmail, validateOrganizationPersonSession, validatePersonDocumentAssociateV1,
   validatePersonDocumentDissociateV1, validatePersonDocumentIdV1, validatePersonDocumentSearchV2, validatePersonListRequestV1, validatePersonOpenRequestV1,
-  validatePersonQueryText, validatePersonSourceEvidenceReadRequestV1, validatePersonUpdateRequestId, validateProjectIdV1,
+  personQuestionToSend, validatePersonSourceEvidenceReadRequestV1, validatePersonUpdateRequestId, validateProjectIdV1,
   type OrganizationDirectorySearchV1, type OrganizationPersonSessionV2, type PersonAnswerPreviousV1, type PersonAskCheckRequestV1, type PersonAskCheckV1,
   type PersonChangesV1, type PersonDocumentAssociateV1,
   type PersonDocumentDissociateV1, type PersonDocumentSearchV2, type PersonListRequestV1, type PersonOpenRequestV1, type PersonProjectActivityV1,
@@ -13,7 +13,7 @@ import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots,
 import {
   CONTEXT_ROUTES,
   PersonAuthorityClient,
-  DEFAULT_TIMEOUT_MS, ASK_TIMEOUT_MS, ASK_CHECK_TIMEOUT_MS,
+  DEFAULT_TIMEOUT_MS, ASK_TIMEOUT_MS, ASK_CHECK_TIMEOUT_MS, ASK_SOURCE_TIMEOUT_MS,
   PersonAuthorityClientError,
   PersonContextMutationError,
   unknownContextMutation,
@@ -125,9 +125,12 @@ function invitationOutputPath(path: string): string {
   catch (error) { throw new EmployeeMutationError("invitation_output_invalid", "not_submitted", (error as Error).message); }
 }
 
-/** Preserve the public query error type before transport schema validation. */
+/**
+ * The Ask's only checks before sending: a question that is not empty once trimmed, and a well-formed project. The
+ * Authority applies the question rule and says which rule a question breaks.
+ */
 function validateAskInput(question: string, scope: ProjectIdV1 | undefined): void {
-  validatePersonQueryText(question);
+  personQuestionToSend(question);
   if (scope !== undefined) validateProjectIdV1(scope, 'Ask project_id');
 }
 
@@ -556,7 +559,7 @@ export class PersonClient {
 
   async askSourceEvidence(value: PersonSourceEvidenceReadRequestV1): Promise<PersonAskSourceEvidenceV1> {
     const request = validatePersonSourceEvidenceReadRequestV1(value);
-    return this.withReadSession((authority, token) => authority.askSourceEvidence(token, request), undefined, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
+    return this.withReadSession((authority, token) => authority.askSourceEvidence(token, request), undefined, ASK_SOURCE_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
   }
 
   async withToolSession<T>(operation: (session: PersonToolSessionV1) => Promise<T>, signal?: AbortSignal): Promise<T> {

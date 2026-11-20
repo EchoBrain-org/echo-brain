@@ -187,7 +187,7 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     }
   });
 
-  it('drops the connection on a malformed event while the Authority is still writing, and names nothing after it', async () => {
+  it('skips a progress step it cannot read and keeps reading to the answer', async () => {
     const stream = openStream();
     const progress: PersonAskProgressStepEventV3[] = [];
     const pending = authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream.response))
@@ -195,9 +195,26 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     stream.write(frames(STEPS.slice(0, 1)));
     await vi.waitFor(() => expect(progress).toHaveLength(1));
     stream.write('data: {"type":"read","items":[{"id":"E5"}]}\n\n');
-    await expect(pending).rejects.toMatchObject({ code: 'invalid_response' });
-    expect(stream.state.cancelled).toBe(true);
-    expect(progress).toEqual(STEPS.slice(0, 1));
+    stream.write(frames([...STEPS.slice(1), ANSWERED]));
+    stream.close();
+    await expect(pending).resolves.toEqual({ result: answer(), receipt: receipt() });
+    expect(progress).toEqual(STEPS);
+  });
+
+  it('shows an answer block or card entity it does not know as a text block of the same statements', async () => {
+    const two = { ...answer(), parts: [{ ...answer().parts[0]!, statements: [answer().parts[0]!.statements[0]!, { text: 'Lin owns the retest.', citation_indexes: [0], private: false }],
+      blocks: [{ kind: 'answer', statements: [0] }, { kind: 'gallery', title: 'Photos', statements: [1] }] }] };
+    const card = { ...answer(), parts: [{ ...answer().parts[0]!, statements: [answer().parts[0]!.statements[0]!, { text: 'A', citation_indexes: [0], private: false }, { text: 'B', citation_indexes: [0], private: false }],
+      blocks: [{ kind: 'answer', statements: [0] }, { kind: 'card', title: 'Acme', entity: 'customer', facts: [{ label: 'Plan', value: 'A' }, { label: 'Owner', value: 'B' }], statements: [1, 2] }] }] };
+    for (const [response, blocks] of [
+      [two, [{ kind: 'answer', statements: [0] }, { kind: 'text', title: 'Photos', statements: [1] }]],
+      [card, [{ kind: 'answer', statements: [0] }, { kind: 'text', title: 'Acme', statements: [1, 2] }]],
+    ] as const) {
+      const body = `${frames(STEPS)}data: ${JSON.stringify({ type: 'answer', response, receipt: receipt() })}\n\n`;
+      const result = await authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(body, 7)))
+        .askV7WithProgress('bearer', 'What did we decide?', undefined, undefined, () => undefined);
+      expect(result.result.parts[0]!.blocks).toEqual(blocks);
+    }
   });
 
   it('accepts a stream only as a 200', async () => {
@@ -331,7 +348,8 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     timeout.abort();
     await expect(pending).rejects.toMatchObject({ code: 'transport_failed' });
     expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy).toHaveBeenCalledWith(135_000);
+    // The Authority's 300 s whole-Ask deadline and 45 s for its queue and release.
+    expect(spy).toHaveBeenCalledWith(345_000);
     expect(stream.state.cancelled).toBe(true);
   });
 
