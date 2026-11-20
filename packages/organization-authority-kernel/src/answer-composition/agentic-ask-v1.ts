@@ -55,6 +55,8 @@ import {
 // Other workspaces reach these through this entry point.
 export { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticResearchResultV1 } from "./agentic-research-v1.js";
 export { AgenticAskDeadlineErrorV1, AgenticAskGenerationFailureV1 } from "./agentic-model-gate-v1.js";
+// The SDK research driver describes the list tool by the same page bound.
+export { AGENTIC_ASK_LIST_LIMIT_MAX_V1 } from "./agentic-ask-v1-model-protocol.js";
 export type { AgenticResearchDriverV1, AgenticResearchDriverSessionV1 } from './agentic-research-driver-v1.js';
 export { ASK_FOLLOW_UP_ABOUT_KINDS_V1, askFollowUpItemIdV1, askFollowUpPointerV1, type AskFollowUpDraftV1, type AskFollowUpSinkV1 } from "./ask-follow-ups-v1.js";
 export type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "./agentic-release-v1.js";
@@ -66,11 +68,10 @@ export { createAgenticAskProgressRequestV1 } from "./agentic-ask-progress-record
 export { resolveAgenticFollowUpOnceV1, type AgenticFollowUpResolutionV1, type AgenticFollowUpResolvedV1 } from "./agentic-follow-up-resolver-v1.js";
 
 /**
- * The whole request, research through audit (ADR-0022). The Authority is
- * reached through Cloudflare, whose proxy drops an origin response that takes
- * more than 100 s (HTTP 524), so a longer loop could never return. 90 s
- * leaves room for the network; per-call time is also capped by the
- * generation profile.
+ * The whole request, research through audit. Ask streams its progress with a
+ * heartbeat from the first byte (ADR-0039), so the bound is ECHO's own choice
+ * of how long a person waits; per-call time is also capped by the generation
+ * profile.
  */
 export const AGENTIC_ASK_DEADLINE_MS_V1 = AGENTIC_RESEARCH_LIVE_BUDGET_V1.deadline_ms;
 /** Context window assumed when the generation profile does not state one. */

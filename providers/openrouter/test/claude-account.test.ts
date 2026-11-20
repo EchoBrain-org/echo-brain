@@ -70,3 +70,19 @@ it('disables native retries and bounds extraction to one structured-output turn'
     base_url: 'http://127.0.0.1:1/test', max_output_tokens: 8192, single_generation: true, signal: new AbortController().signal }, fake)).resolves.toEqual({ signals: [] });
   expect(options).toMatchObject({ maxTurns: 1, env: { CLAUDE_CODE_MAX_RETRIES: '0' }, allowedTools: ['StructuredOutput'], tools: [] });
 });
+
+it.each([
+  [{ type: 'result', subtype: 'error_max_structured_output_retries', is_error: true, stop_reason: 'max_tokens' }, { subtype: 'error_max_structured_output_retries', stop_reason: 'max_tokens' }],
+  [{ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn' }, { subtype: 'no_structured_output', stop_reason: 'end_turn' }],
+  [{ type: 'result', subtype: 'error_during_execution', is_error: true, stop_reason: 'Some private text!' }, { subtype: 'error_during_execution', stop_reason: 'other' }],
+])('records a failed session\'s result subtype and stop reason, content-free (%#)', async (message, recorded) => {
+  const fake = (() => Object.assign((async function* () { yield message; })(), { close() {} })) as unknown as typeof query;
+  await expect(runClaudeStructuredV1({ schema: { type: 'object' }, model: 'claude-sonnet-5-5', prompt: 'Synthetic evidence', system: 'Write',
+    base_url: 'http://127.0.0.1:1/test', max_output_tokens: 1500, signal: new AbortController().signal }, fake)).rejects.toMatchObject({ name: 'ClaudeResearchResultErrorV1', ...recorded });
+});
+
+it('records a session that failed mid-stream as session_failed', async () => {
+  const fake = (() => Object.assign((async function* () { throw new Error('private child output'); })(), { close() {} })) as unknown as typeof query;
+  await expect(runClaudeResearchV1({ prompt: 'synthetic', system: 'synthetic', model: 'claude-sonnet-5-5', base_url: 'http://127.0.0.1:1/test',
+    signal: new AbortController().signal, servers: {}, tools: [] }, fake)).rejects.toMatchObject({ subtype: 'session_failed', stop_reason: null });
+});

@@ -10,7 +10,7 @@ import {
   createAgenticAskV5,
   type AgenticAskAuditEntryV1,
 } from "../../src/answer-composition/agentic-ask-v1.js";
-import { ANSWER_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
+import { ANSWER_PROMPT, queryRefusal } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
@@ -19,7 +19,7 @@ import type { EvidenceDeskItemV1, EvidenceDeskListInputV1, EvidenceDeskPortV1, E
 import type { EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
 import { writerReply } from "./fixtures/agentic-scenarios.js";
 
-const generation = { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 30_000 };
+const generation = { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 180_000 };
 const checked = "2026-09-27T00:00:00.000Z";
 
 function item(id: string, text: string | undefined = `Released body for ${id}.`, options: Partial<EvidenceDeskItemV1> = {}): EvidenceDeskItemV1 {
@@ -185,7 +185,7 @@ describe("agentic Ask: research loop", () => {
 
   it('does not mark short text read when the research time budget prevents prompt admission', async () => {
     let clock = 0;
-    const evidence = desk({ search: () => { clock = 60_001; return [item('launch', 'Launch is Tuesday.')]; } });
+    const evidence = desk({ search: () => { clock = 176_001; return [item('launch', 'Launch is Tuesday.')]; } });
     const script = scripted([step([{}], [search('launch')]), { wrong: true }, { still: 'wrong' }]);
     const result = await ask({ desk: evidence, model: script.model, now: () => clock }).answer({ question: 'When is launch?' });
     expect(script.inputs).toHaveLength(3);
@@ -649,7 +649,7 @@ describe("agentic Ask: research loop", () => {
     const evidence = desk();
     await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
     expect(script.prompt(1).last_results).toEqual([
-      expect.objectContaining({ tool: "search", error: expect.stringContaining("at most 240 Unicode code points") }),
+      expect.objectContaining({ tool: "search", error: queryRefusal("!!!") }),
     ]);
     expect(evidence.open).not.toHaveBeenCalled();
   });
@@ -1155,7 +1155,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
   it("reports an incomplete search when slow retrieval consumes the research reserve", async () => {
     let clock = 0;
     const script = scripted([step([{}], [search("launch")])]);
-    const evidence = desk({ search: () => { clock = 60_000.25; return []; } });
+    const evidence = desk({ search: () => { clock = 176_000.25; return []; } });
     const result = await ask({ desk: evidence, model: script.model, now: () => clock }).answer({ question: "When is launch?" });
     expect(result.parts[0]!.gap).toContain("couldn't complete the search");
     expect(script.inputs).toHaveLength(1);
@@ -1171,7 +1171,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
     const result = await ask({ desk: evidence, model }).answer({ question: "When is launch?" });
     expect(result.parts[0]!.gap).toContain("couldn't complete the search");
     expect(result.citations).toEqual([]);
-    expect(queries).toBe(10);
+    expect(queries).toBe(AGENTIC_RESEARCH_LIVE_BUDGET_V1.max_rounds);
   });
 
   it.each([
@@ -1191,10 +1191,10 @@ describe("agentic Ask: failures never lose found evidence", () => {
     const launch = item("a");
     const evidence = desk({ search: () => [launch], open: () => [launch], revalidate: async () => {
       checks += 1;
-      // Steps of 10 s leave the third step room to start; its permission check then takes 30 s, which still leaves the 12.5 s
-      // the step needs after the longest step call so far.
-      if (checks === 3) clock += 30_000.25;
-      if (checks === 4) clock += 15_000.25;
+      // Steps of 10 s leave the third step room to start; its permission check then takes 145 s, which still leaves the
+      // 12.5 s the step needs after the longest step call so far. The writer's check takes 110 s, leaving it 13 s.
+      if (checks === 3) clock += 145_000.25;
+      if (checks === 4) clock += 110_000.25;
       return { checked_at: checked };
     } });
     const timeouts: number[] = [];
@@ -1214,7 +1214,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
     let checks = 0;
     const evidence = desk({ search: () => [item("a")], revalidate: async () => {
       checks += 1;
-      if (checks === 3) clock = 60_000.25;
+      if (checks === 3) clock = 176_000.25;
       return { checked_at: checked };
     } });
     const script = scripted([
@@ -1277,9 +1277,10 @@ describe("agentic Ask: failures never lose found evidence", () => {
     const evidence = desk({ search: () => [launch], open: () => [launch] });
     const audit: AgenticAskAuditEntryV1[] = [];
     const script = scripted([
-      // The third step starts with less than a whole step's time, but more than it needs after 19.5 s steps.
-      () => { clock += 19_000.25; return step([{}], [search("launch")]); },
-      () => { clock += 19_500.125; return step([{}], [open("E1")]); },
+      // The fourth step starts with less than a whole step's time, but more than it needs after 40.5 s steps.
+      () => { clock += 40_000.25; return step([{}], [search("launch")]); },
+      () => { clock += 40_500.125; return step([{}], [open("E1")]); },
+      () => { clock += 40_000.25; return step([{}], [search("tuesday")]); },
       () => { clock += 21_000.25; return finish([found(["E1"])]); },
       answer([{ text: "Launch is Tuesday.", evidence: ["E1"] }]),
     ]);
@@ -1300,16 +1301,16 @@ describe("agentic Ask: failures never lose found evidence", () => {
       // Use the default performance.now clock, including its fractional milliseconds.
       const result = await ask({ desk: evidence, model, audit }).answer({ question: "When is launch?" });
       expect(result).toMatchObject({ outcome: "answered", citations: [{ citation: launch.citation }] });
-      expect(calls).toHaveLength(4);
-      expect(calls[2]!.timeout).toBeLessThan(25_000);
-      expect(calls[3]!.timeout).toBeLessThan(generation.timeout_ms);
-      for (const call of calls.slice(0, 3)) {
+      expect(calls).toHaveLength(5);
+      expect(calls[3]!.timeout).toBeLessThan(60_000);
+      expect(calls[4]!.timeout).toBeLessThan(generation.timeout_ms);
+      for (const call of calls.slice(0, 4)) {
         expect(call.at + call.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_RESEARCH_LIVE_BUDGET_V1.writer_reserve_ms - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
       }
-      expect(calls[3]!.at + calls[3]!.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
-      expect(evidence.revalidate).toHaveBeenCalledTimes(6);
-      expect(audit[0]).toMatchObject({ outcome: "answered", model_calls: 4, repairs: 0, fallbacks: 0 });
-      expect(audit[0]!.generations.map(value => value.role)).toEqual(["step", "step", "step", "answer"]);
+      expect(calls[4]!.at + calls[4]!.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
+      expect(evidence.revalidate).toHaveBeenCalledTimes(7);
+      expect(audit[0]).toMatchObject({ outcome: "answered", model_calls: 5, repairs: 0, fallbacks: 0 });
+      expect(audit[0]!.generations.map(value => value.role)).toEqual(["step", "step", "step", "step", "answer"]);
     } finally {
       monotonic.mockRestore();
     }

@@ -132,12 +132,13 @@ describe('Answer layout v2 (ADR-0051)', () => {
     expect(() => check(changed(4, { rows: [{ cells: ['TRACE-01', ''], citation_indexes: [1] }, { cells: ['DVT-R2', ''], citation_indexes: [1] }] }))).toThrow('leave a citation of its statements out');
   });
 
-  it('checks a timeline: one event a statement, each a real day, never going back', () => {
+  it('checks a timeline: one event a statement, each a real day, oldest or newest first', () => {
     const events = (blocks[1] as { events: readonly Record<string, unknown>[] }).events;
     expect(check(changed(1, { events: [{ date: '2026-10-20', text: 'Started the 72-hour soak.' }, events[1]] }))[1]).toMatchObject({ events: [{ date: '2026-10-20', text: 'Started the 72-hour soak.' }, events[1]] });
     expect(check(changed(1, { events: [events[0], { ...events[1], date: '2026-10-20' }] }))[1]).toMatchObject({ kind: 'timeline' });
     expect(() => check(changed(1, { events: [events[0]] }))).toThrow('events is invalid');
-    expect(() => check(changed(1, { events: [events[1], events[0]] }))).toThrow('out of date order');
+    // Newest first is a timeline too ("what changed recently").
+    expect(check(changed(1, { events: [events[1], events[0]] }))[1]).toMatchObject({ kind: 'timeline', events: [events[1], events[0]] });
     // Any real day the kernel reads, years 0000 to 0099 too.
     for (const date of ['0000-01-01', '0050-01-01', '0099-12-31']) expect(check(changed(1, { events: [{ ...events[0], date }, events[1]] }))[1]).toMatchObject({ events: [{ date }, events[1]] });
     for (const date of ['2026-02-30', '2026-10-2', 'Oct 20', '2026-10-20T00:00:00Z']) expect(() => check(changed(1, { events: [{ ...events[0], date }, events[1]] }))).toThrow('date is invalid');
@@ -149,7 +150,9 @@ describe('Answer layout v2 (ADR-0051)', () => {
   it('checks a card: its title, what it shows, and one fact a statement', () => {
     const facts = (blocks[2] as { facts: readonly Record<string, unknown>[] }).facts;
     for (const entity of ['person', 'project', 'ticket', 'decision']) expect(check(changed(2, { entity }))[2]).toMatchObject({ kind: 'card', entity });
-    expect(() => check(changed(2, { entity: 'meeting' }))).toThrow('entity is invalid');
+    // Any one lowercase kind word: a meeting, a document, a customer; never a phrase or another case.
+    for (const entity of ['meeting', 'customer_account']) expect(check(changed(2, { entity }))[2]).toMatchObject({ kind: 'card', entity });
+    for (const entity of ['Meeting', 'a meeting', '', 7]) expect(() => check(changed(2, { entity }))).toThrow('entity is invalid');
     expect(() => check(changed(2, { title: undefined }))).toThrow('unexpected shape');
     expect(() => check(changed(2, { facts: [facts[0]] }))).toThrow('facts is invalid');
     expect(() => check(changed(2, { facts: [{ label: 'Status', value: '' }, facts[1]] }))).toThrow('value is invalid');

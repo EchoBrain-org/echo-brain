@@ -170,6 +170,25 @@ describe("OpenRouter structured generation", () => {
     expect((bodies[0]?.provider as Record<string, unknown>)).not.toHaveProperty("ignore");
   });
 
+  it("sends a writer-sized allowance with its reasoning headroom, and refuses one past the model's own maximum", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const adapter = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "openrouter-production",
+      credential_resolver: () => "secret-not-in-errors",
+      fetch_impl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(JSON.parse(init!.body as string) as Record<string, unknown>);
+        return new Response(JSON.stringify({ choices: [{ message: { content: '{"queries":[]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+    });
+    await adapter.generate({ ...structuredRequest, model: "anthropic/claude-sonnet-5.5", max_output_tokens: 16_000, timeout_ms: 180_000 });
+    expect(bodies[0]).toMatchObject({ max_tokens: 20_096 });
+    await adapter.generate({ ...structuredRequest, model: "anthropic/claude-sonnet-5.5", max_output_tokens: 32_000 });
+    expect(bodies[1]).toMatchObject({ max_tokens: 36_096 });
+    await expect(adapter.generate({ ...structuredRequest, model: "anthropic/claude-sonnet-5.5", max_output_tokens: 32_001 })).rejects.toThrow("OpenRouter output limit is invalid");
+    await expect(adapter.generate({ ...structuredRequest, model: "anthropic/claude-sonnet-5.5", timeout_ms: 300_001 })).rejects.toThrow("OpenRouter timeout is invalid");
+    expect(bodies).toHaveLength(2);
+  });
+
   it.each([
     ["the selected endpoint in routing metadata", { openrouter_metadata: { endpoints: { total: 2, available: [
       { provider: "SiliconFlow", model: "deepseek/deepseek-v3.2", selected: false },

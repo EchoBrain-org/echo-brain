@@ -18,9 +18,8 @@ import {
   PERSON_ANSWER_CHOICES_MIN_V1,
   PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1,
   PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1,
-  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1,
+  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1,
   PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
-  PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1,
   type PersonAnswerChoiceV1,
   type PersonAnswerPreviousStatementV1,
   type PersonAnswerPreviousV1,
@@ -66,6 +65,8 @@ export function validatePersonAskTimeContextV1(now: unknown, timeZone: unknown):
 }
 
 export const PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 = 64 * 1024;
+/** UTF-8 bytes of a part's gap, and of its not-found explanation: what was not found, said in full. */
+export const PERSON_ANSWER_PART_GAP_MAX_BYTES_V4 = 2 * 1024;
 /** A released answer's fallback record: the evidence's own words, cut to a short quotation (evidence text in transit is `PERSON_EVIDENCE_TEXT_MAX_BYTES_V1`). */
 export const PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4 = 3 * 1024;
 export const PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1 = 64 * 1024;
@@ -108,7 +109,7 @@ export function validatePersonAnswerGapDetailsV1(value: unknown): PersonAnswerGa
   assertExactKeys(input, keys, 'Ask gap details');
   if (keys.length === 0) fail('Ask gap details is empty');
   for (const flag of ['unsupported_action', 'interrupted']) if (Object.hasOwn(input, flag) && input[flag] !== true) fail('Ask gap flag must be true');
-  if (Object.hasOwn(input, 'not_found')) text(input.not_found, 'Ask not-found explanation', 2 * 1024, true);
+  if (Object.hasOwn(input, 'not_found')) text(input.not_found, 'Ask not-found explanation', PERSON_ANSWER_PART_GAP_MAX_BYTES_V4, true);
   return Object.freeze({ ...(input.unsupported_action === true ? { unsupported_action: true as const } : {}),
     ...(input.interrupted === true ? { interrupted: true as const } : {}), ...(Object.hasOwn(input, 'not_found') ? { not_found: input.not_found as string } : {}) });
 }
@@ -296,7 +297,7 @@ function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): Per
   text(input.question, 'Ask response part question', 1024);
   // A part's statements have no count of their own (ADR-0051): its blocks arrange them, and the answer's bytes bound them.
   if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements)) fail('Ask response part is invalid');
-  if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', 2 * 1024, true);
+  if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', PERSON_ANSWER_PART_GAP_MAX_BYTES_V4, true);
   if (Object.hasOwn(input, 'records') && (!Array.isArray(input.records) || input.records.length > 40)) fail('Ask response part records is invalid');
   const statements = Object.freeze(input.statements.map((item) => statement(item, citations, 'Ask response statement')));
   // Blocks arrange written statements (answer layout v2, ADR-0051): a part with statements has them, and one with none has nothing to arrange.
@@ -357,9 +358,9 @@ function citationIndexes(value: unknown, label: string, bound: number, maximum: 
 }
 
 /**
- * The asker's previous turn (ADR-0047): its purpose, full question and time, 0 to 8 of its answer's sentences of at
- * most 400 characters, and 0 to 12 of its citations, each once, as that answer carried them, which each sentence cites
- * by index (at most 4). The whole request keeps its 64 KiB bound.
+ * The asker's previous turn (ADR-0047): its purpose, full question and time, its answer's sentences as released (each
+ * within a statement's bytes), and its citations, each once, as that answer carried them, which each sentence cites by
+ * index (at most a statement's 40). The whole request keeps its 64 KiB bound.
  */
 function previousTurn(value: unknown): PersonAnswerPreviousV1 {
   const input = object(value, 'Ask previous');
@@ -374,8 +375,7 @@ function previousTurn(value: unknown): PersonAnswerPreviousV1 {
     const item = object(raw, 'Ask previous statement');
     assertExactKeys(item, ['text', 'citation_indexes'], 'Ask previous statement');
     // An answer's sentence as it was released: trimmed NFC text, line breaks allowed.
-    text(item.text, 'Ask previous statement text', 4 * PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1, true);
-    if ([...item.text as string].length > PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1) fail('Ask previous statement text is invalid');
+    text(item.text, 'Ask previous statement text', PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1, true);
     return Object.freeze({
       text: item.text as string,
       citation_indexes: citationIndexes(item.citation_indexes, 'Ask previous statement citation_indexes', citations.length, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1),
@@ -398,11 +398,11 @@ function answerChoices(value: unknown): readonly PersonAnswerChoiceV1[] {
   return choices;
 }
 
-/** What is different since the earlier answer (ADR-0047): 0 to 6 statements, each citing the answer's citations. */
+/** What is different since the earlier answer (ADR-0047): its statements, each citing the answer's citations; the response's bytes bound them. */
 function answerSince(value: unknown, citations: readonly PersonAnswerCitationV8[]): PersonAnswerSinceV1 {
   const input = object(value, 'Ask response since');
   assertExactKeys(input, ['statements'], 'Ask response since');
-  return Object.freeze({ statements: Object.freeze(boundedList(input.statements, 'Ask response since', PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1).map(item => statement(item, citations, 'Ask response since statement'))) });
+  return Object.freeze({ statements: Object.freeze(boundedList(input.statements, 'Ask response since', Number.MAX_SAFE_INTEGER).map(item => statement(item, citations, 'Ask response since statement'))) });
 }
 
 /** One V6 response citation, as the impact card (person-impact-card-v1.ts) cites items: never a follow-up or a workspace item. */
@@ -432,7 +432,7 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   // A clarify outcome (ADR-0047) asks which one instead of answering: no part and no citation.
   const clarify = input.outcome === 'clarify';
   // An answer has no count of citations of its own (ADR-0051): its bytes bound it.
-  if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
+  if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1)) fail('Ask response is invalid');
   if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', 2 * 1024, true);
   const citations = input.citations.map(item => answerCitation(item, 8));
   const citationKeys = new Set<string>();

@@ -8,7 +8,8 @@ export const OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1 =
   "openrouter" as const;
 export const OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 =
   "anthropic/claude-sonnet-5.5" as const;
-export const OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 = 60_000;
+/** One model call: room for a 16,000-token writer reply, inside Ask's whole-run deadline. */
+export const OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 = 180_000;
 /** Kept conservative so changing the model does not expand Ask's prompt-size contract. */
 export const OPENROUTER_ANSWER_COMPOSITION_CONTEXT_TOKENS_V1 = 131_072;
 /**

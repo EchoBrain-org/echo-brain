@@ -409,12 +409,12 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     expect(agenticListTableV1({ selected: [prd, { ...prd, title: "MRD" }], names: [[0], [1]], by_id: true, time_zone: "America/Los_Angeles" })).toEqual({ columns: ["Item", "Status", "Created", "Updated"], rows: [
       { cells: [prd.title, "current", "2026-10-04", "2026-10-05"], members: [0] }, { cells: ["MRD", "current", "2026-10-04", "2026-10-05"], members: [1] },
     ] });
-    // One name, names with no fact beside their titles, or more facts than six columns hold: the statement stays prose.
+    // One name, or names with no fact beside their titles: the statement stays prose.
+    expect([agenticListTableV1({ selected: pages, names: [[0]] }), agenticListTableV1({ selected: sixty, names: [[0], [1]] })]).toEqual([undefined, undefined]);
+    // A table has as many columns as its members record facts: every fact is a column, never prose.
     const everything = { title: "THERM-1", status: "Open", owner: "Dana", due: "2026-10-30", dates: { created: "2026-10-01", updated: "2026-10-02", occurred: "2026-10-03", received: "2026-10-04" } };
-    expect([
-      agenticListTableV1({ selected: pages, names: [[0]] }), agenticListTableV1({ selected: sixty, names: [[0], [1]] }),
-      agenticListTableV1({ selected: [everything, { ...everything, title: "THERM-2" }], names: [[0], [1]], by_id: true }),
-    ]).toEqual([undefined, undefined, undefined]);
+    expect(agenticListTableV1({ selected: [everything, { ...everything, title: "THERM-2" }], names: [[0], [1]], by_id: true, time_zone: "UTC" })?.columns)
+      .toEqual(["Item", "Status", "Owner", "Due", "Created", "Updated", "Dated", "Received"]);
   });
 
   it("writes a selection's not-found phrase, and selects by owner, status or a row date within an inclusive range, each day the list's", () => {

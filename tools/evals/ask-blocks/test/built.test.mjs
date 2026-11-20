@@ -134,14 +134,14 @@ test("runs the built writer through the kernel end to end, keeping each call and
   assert.equal(writer.inputs.length, 1);
   const [input] = writer.inputs;
   assert.ok(input.system_prompt.startsWith("You write Echo's final answer") && input.system_prompt.endsWith(`\n\n${ANSWER_BLOCKS_PROMPT}`));
-  assert.deepEqual([JSON.parse(input.user_prompt).block_catalog, input.schema, input.max_output_tokens], [ANSWER_BLOCK_CATALOG, answerBlocksSchema, 2_000]);
+  assert.deepEqual([JSON.parse(input.user_prompt).block_catalog, input.schema, input.max_output_tokens], [ANSWER_BLOCK_CATALOG, answerBlocksSchema, 16_000]);
   // The writer was asked exactly as the capture recorded it, so its call keeps the prompts the report holds.
   const prompts = report.prompts["ticket-profile"];
   assert.deepEqual([prompts.user_prompt, prompts.system_prompt_sha256, report.system_prompts[prompts.system_prompt_sha256]], [input.user_prompt, sha256(input.system_prompt), input.system_prompt]);
   const [trial] = report.trials;
   const { elapsed_ms: elapsed, ...attempt } = trial.attempts[0];
   assert.ok(Number.isSafeInteger(elapsed));
-  assert.deepEqual(attempt, { attempt: 1, kind: "first", system_prompt_sha256: prompts.system_prompt_sha256, max_output_tokens: 2_000, value: TICKET_REPLY, finish_reason: "stop",
+  assert.deepEqual(attempt, { attempt: 1, kind: "first", system_prompt_sha256: prompts.system_prompt_sha256, max_output_tokens: 16_000, value: TICKET_REPLY, finish_reason: "stop",
     usage: { input_tokens: 900, output_tokens: 120, total_tokens: 1020 }, provider_latency_ms: 3, valid: true });
   // The released answer is kept and graded: its citations in first-use order, the follow-up first, map back to E2 and E1.
   assert.deepEqual(trial.response.citations.map((entry) => entry.kind), ["follow_up", "ticket"]);

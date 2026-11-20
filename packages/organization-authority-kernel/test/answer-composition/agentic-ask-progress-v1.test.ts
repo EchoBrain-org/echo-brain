@@ -310,9 +310,9 @@ describe("the receipt counts what research looked through (ADR-0043)", () => {
     expect(response.outcome).toBe("answered");
     expect(response.parts[0]).toMatchObject({ status: "answered", statements: [{ citation_indexes: Array.from({ length: 30 }, (_, index) => index) }] });
     expect(run.generate).toHaveBeenCalledTimes(4);
-    // One fetch returned all 30; the second page came from it.
+    // One fetch returned all 30, and one page of 50 showed them all.
     expect(run.list).toHaveBeenCalledTimes(1);
-    expect(run.events.filter(event => event.type === "searched")).toEqual([{ type: "searched", sources: jira, found: 25 }, { type: "searched", sources: jira, found: 5 }]);
+    expect(run.events.filter(event => event.type === "searched")).toEqual([{ type: "searched", sources: jira, found: 30 }]);
     expect(run.events.filter(event => event.type === "read")).toEqual([]);
     expect(validatePersonAskReceiptV3(receipt)).toEqual(receipt);
     expect(receipt).toMatchObject({ looked_through: 30, rows: [{ type: "searched", sources: jira, found: 30 }] });

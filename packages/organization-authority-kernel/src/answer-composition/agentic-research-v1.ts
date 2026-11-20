@@ -16,18 +16,28 @@ export interface AgenticResearchBudgetV1 {
   readonly max_model_calls: number;
   /** Time research leaves for the consumer's writer call. */
   readonly writer_reserve_ms: number;
-  /** Release receipts one request's audit row holds. */
+  /**
+   * Release receipts one request's audit row holds. The audit store's check of the row repeats this number and nothing
+   * else bounds the row, so it is sized never to be what stops research (a read adds at most 51); research stops reading,
+   * on every research path, before it would pass it.
+   */
   readonly max_receipts: number;
 }
 
-/** Ask in the app: the Cloudflare proxy drops responses after 100 s (ADR-0022). */
+/**
+ * Ask in the app. Ask streams its progress with a heartbeat (ADR-0039), so no proxy bounds how long it runs: the
+ * deadline is ECHO's own choice of how long a person waits. The writer's reserve lets a 16,000-token reply finish.
+ */
 export const AGENTIC_RESEARCH_LIVE_BUDGET_V1: AgenticResearchBudgetV1 = Object.freeze({
-  deadline_ms: 90_000, max_rounds: 10, max_model_calls: 24, writer_reserve_ms: 25_000, max_receipts: 128,
+  deadline_ms: 300_000, max_rounds: 30, max_model_calls: 60, writer_reserve_ms: 120_000, max_receipts: 4_096,
 });
 
-/** Background triggers: starting values, tuned by the evaluation. */
+/**
+ * Background triggers: never less room than an Ask in the app, and a longer deadline, since nobody waits on the
+ * screen. A budget past the live one is what marks a run's audit row as background.
+ */
 export const AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1: AgenticResearchBudgetV1 = Object.freeze({
-  deadline_ms: 300_000, max_rounds: 20, max_model_calls: 48, writer_reserve_ms: 25_000, max_receipts: 512,
+  deadline_ms: 600_000, max_rounds: 30, max_model_calls: 60, writer_reserve_ms: 120_000, max_receipts: 4_096,
 });
 
 /** The one place a budget profile's label becomes its limits: trigger definitions and the staging request's override both read it. */

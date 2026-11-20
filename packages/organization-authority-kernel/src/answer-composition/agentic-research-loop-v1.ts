@@ -2,6 +2,7 @@ import { parseAgenticDriverFinishV1, type AgenticResearchDriverV1 } from './agen
 import { calendarDateV1, EVIDENCE_ANY_DATE_V1, evidenceDateFilterV1, matchedEvidenceDatesV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDateFieldV1, type EvidenceDateSelectionV1 } from "../shared/temporal-query-v1.js";
 import { askQuestionCompletionProblemsV1, askResearchCompletionProblemsV1, type AskResearchListV1, type AskResearchObservationV1 } from './agentic-ask-research-state-v1.js';
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
+import { PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 } from "@echo-brain/organization-api";
 import {
   evidenceDeskSourceV2,
   type EvidenceDeskItemV2,
@@ -16,13 +17,14 @@ import {
 import { followUpOwnerMatchesV1 } from "../shared/follow-up-evidence-v1.js";
 import {
   AGENTIC_ASK_LIST_LIMIT_MAX_V1,
+  AGENTIC_ASK_SEARCH_LIMIT_V1,
   AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1,
-  AGENTIC_ASK_MAX_NEEDS_PER_PART_V1,
   AgenticAskOutputErrorV1,
   cleanId,
   cleanLine,
   createStepSchema,
   normalizeQuery,
+  queryRefusal,
   parseStep,
   partQuestion,
   type NeedStatus,
@@ -86,28 +88,37 @@ import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
  */
 
 /** One research step's model call; a stalled host fails fast and research goes on. */
-const STEP_TIMEOUT_MS = 25_000;
+const STEP_TIMEOUT_MS = 60_000;
 /**
  * A step starts only with this many times the longest step call so far (or a whole step's time): 2233bad1 started its
  * last step with 7.54 s after 6 to 8 s steps, timed out, and reported an unusable step instead of a budget stop.
  */
 const STEP_TIME_MARGIN = 1.25;
-const SEARCH_LIMIT = 8;
-const LIST_PAGE = 25;
+const SEARCH_LIMIT = AGENTIC_ASK_SEARCH_LIMIT_V1;
+/** One list page: as many rows as one desk fetch returns. */
+const LIST_PAGE = AGENTIC_ASK_LIST_LIMIT_MAX_V1;
 const LIST_FETCH = 50;
 const PREVIEW_CHARS = 240;
-/** Complete released packets admitted directly from search/list; larger bodies require open. */
-const PASSAGE_BYTES = 3 * 1024;
+/** Complete released packets admitted directly from search/list, as the Person protocol bounds a released text; larger bodies require open. */
+const PASSAGE_BYTES = PERSON_EVIDENCE_TEXT_MAX_BYTES_V1;
 /** Context items an `open` may admit beyond its anchor (a page's later sections, a meeting's other records). */
 const OPEN_EXTRA_ITEMS = 20;
 /** Document passages on each side of an opened passage (desk maximum). */
 const OPEN_NEIGHBOURS = 2;
-const OPEN_BYTES = 24 * 1024;
+/** Text one open admits: a long document's sections, or a meeting's records, in one read. */
+const OPEN_BYTES = 96 * 1024;
 /** The SDK hands a tool result over 50,000 characters to the model only as a file it cannot open. */
 const DRIVEN_RESULT_CHARS = 45_000;
 /** Starting reads in flight at once: as many as one planner step's reads, so a brief of many starting items never floods a source. */
 const STARTING_READS_AT_ONCE = AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1;
 const MAX_SEEN_ENTRIES = 300;
+/**
+ * The most release receipts one read can add: a list fetch's items, a search's hits or an open's items, and the read's own
+ * receipt. A read starts only while this much room is left under the audit row's receipt bound (the budget's max_receipts).
+ */
+const READ_RECEIPTS_MAX = Math.max(LIST_FETCH, SEARCH_LIMIT, OPEN_EXTRA_ITEMS + 1 + 2 * OPEN_NEIGHBOURS) + 1;
+/** What a read refused because the audit row's receipt bound is near says. It is not an availability failure. */
+const READ_BUDGET_SPENT = 'The read budget is used up; finish with the evidence already gathered.';
 /** What a search-only brief's planner is told when it proposes list. */
 const LIST_UNAVAILABLE = "list is unavailable in this run; use search and open";
 
@@ -271,7 +282,8 @@ function toolRefusal(error: unknown): string | null {
   const value = object(error);
   if (value?.name !== "AuthorityOperationError") return null;
   if (value.code === "not_found") return "that item is not available";
-  if (value.code === "invalid_request") return typeof value.message === "string" && value.message.length <= 200 ? value.message : "that request is not valid";
+  // The desk's own static message names the rule the request broke; it carries no source content.
+  if (value.code === "invalid_request") return typeof value.message === "string" && value.message.length > 0 ? value.message : "that request is not valid";
   return null;
 }
 /** The desk says the person cannot read this item now: deleted, or no longer visible to them. */
@@ -668,7 +680,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   };
   const search = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
     const query = normalizeQuery(args.query);
-    if (query === null) return { tool: "search", args, error: "query must include a letter or number and fit on one line of at most 240 Unicode code points, with at most 64 UTF-8 bytes per term" };
+    if (query === null) return { tool: "search", args, error: queryRefusal(args.query) ?? "query is invalid" };
     const source = sourceOf(args);
     if (args.source !== undefined && source === undefined) return { tool: 'search', args, error: `source must be ${sourceCatalog.map(value => value.source).join(', ')}; omit it to search all available sources` };
     // Ask checks a dated search against the source's capabilities (research tool contract v1): a date it does not record
@@ -1005,6 +1017,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
    * ids, receipts and the next prompt stay deterministic. Only repeated
    * lists with the same normalized selection depend on an earlier read.
    */
+  /** Whether a read fits under the audit row's receipt bound with `ahead` reads of the same batch before it. */
+  const readFits = (ahead: number) => receipts.length + (ahead + 1) * READ_RECEIPTS_MAX <= budget.max_receipts;
   const runReads = async (actions: readonly StepAction[]): Promise<readonly ToolResult[]> => {
     const batchAbort = new AbortController();
     const signal = AbortSignal.any([activeSignal, batchAbort.signal]);
@@ -1045,7 +1059,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const listTasks = new Map<string, Promise<ToolResult>>();
     // Ask: the same read twice in one step waits for the first, so a refusal is remembered before its copy runs.
     const readTasks = new Map<string, Promise<ToolResult>>();
+    // Reads that would not fit under the audit row's receipt bound are refused unsent, the same on every research path.
+    const fitting = actions.findIndex((_action, index) => !readFits(index));
     const tasks = actions.map((action, index) => {
+      if (fitting !== -1 && index >= fitting) {
+        skip(index);
+        return Promise.resolve<ToolResult>(Object.freeze({ tool: action.tool, error: READ_BUDGET_SPENT }));
+      }
       let key: string | undefined;
       if (action.tool === 'list') {
         const normalized = normalizeListArgs(action.args, requestDay, sourcesById, readSource, ask);
@@ -1120,7 +1140,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         // with no id left the original open, so a correct finish was refused). The first proposal for a need wins.
         const match = byId(need) ?? existing.needs.find(value => needKey(value.need) === needKey(need.need));
         if (match !== undefined) settle(match, need);
-        else if (existing.needs.length < AGENTIC_ASK_MAX_NEEDS_PER_PART_V1) existing.needs.push(newNeed(need.need, need.status, need.evidence, need.kind));
+        else existing.needs.push(newNeed(need.need, need.status, need.evidence, need.kind));
       }
     }
     return next;
@@ -1302,7 +1322,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     if (!finishAvailable) problems.unshift(`no source has been read; use ${listAvailable ? 'search or list' : 'search'} first`);
     if (problems.length > 0) {
       observeCoreModelCorrectionV1('research_finish_refused');
-      throw new AgenticAskOutputErrorV1(`finish was not accepted: ${problems.slice(0, 8).join('; ')}. ${listAvailable ? 'Search, list or open more' : 'Search or open more'}, or correct the need status and evidence.`);
+      throw new AgenticAskOutputErrorV1(`finish was not accepted: ${problems.join('; ')}. ${listAvailable ? 'Search, list or open more' : 'Search or open more'}, or correct the need status and evidence.`);
     }
   };
 
@@ -1614,11 +1634,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
               const action = parsed.actions[0]!;
               if (tool === 'open' && entryOf(action.args.id ?? '') === undefined) throw new AgenticAskOutputErrorV1('Open only a returned E id');
               // A read adds at most one release receipt per item it returns; stop before the audit row would overflow.
-              // Research its read budget stopped short could not read what it still needed: an availability failure.
-              if (receipts.length + OPEN_EXTRA_ITEMS + 1 > budget.max_receipts) {
-                availabilityFailures += 1;
-                throw new AgenticAskOutputErrorV1('The read budget is used up; finish with the evidence already gathered.');
-              }
+              if (!readFits(0)) throw new AgenticAskOutputErrorV1(READ_BUDGET_SPENT);
               report?.reads(tool !== 'open');
               const observationsBefore = researchObservations.length;
               let raw: ToolResult;

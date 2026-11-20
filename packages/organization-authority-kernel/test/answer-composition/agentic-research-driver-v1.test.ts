@@ -197,25 +197,37 @@ describe('native research harness shares the real ECHO tool state', () => {
 
   // Two clean meeting searches pass the not_found check, but a source could not be read during the request: absence there is
   // unproven, so the not_found need stays unconfirmed whatever completed says, and the reader is asked to try again.
-  it.each([
-    ['an availability notice', true], ['an availability notice', false], ['the read budget', true], ['the read budget', false],
-  ] as const)('keeps a not_found need unconfirmed after %s (completed=%s)', async (failure, completed) => {
+  it.each([true, false])('keeps a not_found need unconfirmed after an availability notice (completed=%s)', async completed => {
     const h = harness(async session => {
       await admit(session);
-      if (failure === 'an availability notice') await session.call('search', { query: 'Harbor owner', source: 'documents' });
+      await session.call('search', { query: 'Harbor owner', source: 'documents' });
       await session.call('search', { query: 'Harbor owner', source: 'meetings' });
       await session.call('search', { query: 'Harbor lead', source: 'meetings' });
-      // Each meeting search adds its own receipt, so a third read no longer fits the 22-receipt budget.
-      if (failure === 'the read budget') expect(await session.call('search', { query: 'Harbor owner', source: 'documents' })).toMatchObject({ error: expect.stringContaining('read budget') });
       await admit(session, 'observed reads');
       expect(await session.call('finish', { ...harborMissing, completed })).toMatchObject({ accepted: true, completed: false });
     }, { search: documents(result([], OUTAGE)) });
-    const output = await createAgenticAskV5(h.options).answerWithResearch({ question: 'Who owns Harbor?',
-      ...(failure === 'the read budget' ? { budget: { ...AGENTIC_RESEARCH_LIVE_BUDGET_V1, max_receipts: 22 } } : {}) });
+    const output = await createAgenticAskV5(h.options).answerWithResearch({ question: 'Who owns Harbor?' });
     expect(output.research.stop).toMatchObject({ reason: 'finished', completed: false });
     expect(output.response.outcome).toBe('partial');
     expect(output.response.parts[0]).toMatchObject({ gap: "I couldn't complete the search. Please try again.", gap_details: { interrupted: true } });
     expect(output.response.parts[0]?.gap_details).not.toHaveProperty('not_found');
+  });
+
+  // The read budget is ECHO's own bound on the audit row, not a source that could not be read: the refusal tells the model
+  // to finish, and a plan whose needs are all settled is a complete run.
+  it.each([true, false])('refuses a read past the read budget without counting it as unavailable (completed=%s)', async completed => {
+    const h = harness(async session => {
+      await admit(session);
+      await session.call('search', { query: 'Harbor owner', source: 'meetings' });
+      await session.call('search', { query: 'Harbor lead', source: 'meetings' });
+      // Each meeting search adds its own receipt, so a third read no longer fits the 52-receipt budget.
+      expect(await session.call('search', { query: 'Harbor owner', source: 'documents' })).toMatchObject({ error: expect.stringContaining('read budget') });
+      await admit(session, 'observed reads');
+      expect(await session.call('finish', { ...harborMissing, completed })).toMatchObject({ accepted: true, completed: true });
+    }, { search: documents(result([], OUTAGE)) });
+    const output = await createAgenticAskV5(h.options).answerWithResearch({ question: 'Who owns Harbor?', budget: { ...AGENTIC_RESEARCH_LIVE_BUDGET_V1, max_receipts: 52 } });
+    expect(output.research.stop).toMatchObject({ reason: 'finished', completed: true });
+    expect(output.response.parts[0]?.gap_details ?? {}).not.toHaveProperty('interrupted');
   });
 
   it('leaves a found need answered after an availability notice', async () => {
@@ -351,7 +363,7 @@ describe('native research harness shares the real ECHO tool state', () => {
       await admit(session, 'after');
       expect(await session.call('finish', finish())).toMatchObject({ accepted: true });
     });
-    const { research } = await createAgenticAskV5(h.options).answerWithResearch({ question: 'What was decided?', budget: { ...AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, max_receipts: 21 } });
+    const { research } = await createAgenticAskV5(h.options).answerWithResearch({ question: 'What was decided?', budget: { ...AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, max_receipts: 51 } });
     expect(research.stop.reason).toBe('finished');
   });
 

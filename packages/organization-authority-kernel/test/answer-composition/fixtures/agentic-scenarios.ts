@@ -13,7 +13,7 @@ import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } fro
  * replies, Ask scenarios and their replay, a research core over a
  * scripted desk, and a model gate over scripted replies for renderer tests.
  */
-export const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000 };
+export const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 180_000, context_tokens: 131_072 };
 export const checked = { checked_at: "2026-10-06T00:00:00.000Z" };
 /** The pinned wall clock: when a fixture's lists are read (ADR-0041). */
 export const LIST_READ_AT = "2026-10-06T09:30:00.000Z";

@@ -123,6 +123,11 @@ describe("Ask answer layout v2 (ADR-0051)", () => {
       expect([...daysWrittenV2("Moved from 2026-10-12 to Oct 16, then to October 20th, 2025, and Sept. 3.", ["2026-10-01"])]).toEqual(["2026-10-12", "2026-10-16", "2025-10-20", "2026-09-03"]);
       expect([...daysWrittenV2("Room 12, may be late; DVT-R2 runs 3 times.", ["2026-10-01"])]).toEqual([]);
       expect([...daysWrittenV2("Ship by Nov 3.", ["2025-10-27"])]).toEqual(["2025-11-03"]);
+      // Day first, numeric year first, a numeric day with only one possible reading, and a Chinese or Japanese day.
+      expect([...daysWrittenV2("Met on 4 November 2026, the 5th of Nov, 2026/11/06, 17/11/2026, 11/18/2026 and 2026年11月20日; then 11月21日.", ["2026-11-01"])])
+        .toEqual(["2026-11-04", "2026-11-05", "2026-11-06", "2026-11-20", "2026-11-21", "2026-11-17", "2026-11-18"]);
+      // 04/11/2026 is April 11 or November 4: never read, so an event it would date stays undated.
+      expect([...daysWrittenV2("Due 04/11/2026.", ["2026-10-01"])]).toEqual([]);
       // Across a year's end, in both directions.
       expect([...daysWrittenV2("Ship by Jan 4.", ["2026-12-28"])]).toEqual(["2027-01-04"]);
       expect([...daysWrittenV2("Reviewed on Dec 30.", ["2027-01-02"])]).toEqual(["2026-12-30"]);

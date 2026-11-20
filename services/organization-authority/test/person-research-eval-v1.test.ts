@@ -191,7 +191,7 @@ describe('staging research evaluation runs', () => {
     const h = harness({ recordProjects: () => [PROJECT], openRecord: openedRecord });
     const run = await h.application.start({ access_token: 'token-a', request: approved() });
     const result = await h.settled('token-a', run.run_id);
-    expect(result).toMatchObject({ status: 'completed', research: { trigger: 'approved_record', budget: { deadline_ms: 300_000 }, items: [expect.objectContaining({ id: 'E1', text: 'Approved: firmware shows two decimals.' })] } });
+    expect(result).toMatchObject({ status: 'completed', research: { trigger: 'approved_record', budget: { deadline_ms: 600_000 }, items: [expect.objectContaining({ id: 'E1', text: 'Approved: firmware shows two decimals.' })] } });
     expect(result).not.toHaveProperty('ask');
     // The scope comes from the record, looked up with the person's own access before the desk exists.
     expect(h.recordProjects).toHaveBeenCalledWith({ access_token: 'token-a', record_sha256: record.record_sha256 });
@@ -224,7 +224,7 @@ describe('staging research evaluation runs', () => {
       const h = harness({ recordProjects: () => projects, openRecord: openedRecord });
       const run = await h.application.start({ access_token: 'token-a', request: approved({ budget: 'live' }) });
       // The request's own budget still overrides the definition's profile.
-      expect(await h.settled('token-a', run.run_id), JSON.stringify(projects)).toMatchObject({ status: 'completed', research: { trigger: 'approved_record', budget: { deadline_ms: 90_000 } } });
+      expect(await h.settled('token-a', run.run_id), JSON.stringify(projects)).toMatchObject({ status: 'completed', research: { trigger: 'approved_record', budget: { deadline_ms: 300_000 } } });
       expect(h.deskAuthorize).toHaveBeenCalledWith(expect.objectContaining({ scope: { kind: 'global' } }));
       expect(h.openDeskCitation).toHaveBeenCalledWith(expect.not.objectContaining({ project_id: expect.anything() }));
     }

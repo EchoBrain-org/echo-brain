@@ -13,6 +13,7 @@ import {
   cleanId,
   createStepSchema,
   normalizeQuery,
+  queryRefusal,
   parseBlocksAnswer,
   parseStep,
   SEARCH_ONLY_STEP_PROMPT,
@@ -158,22 +159,22 @@ describe("agentic Ask model protocol parity", () => {
     expect(kinds(["which_items"], {})).toEqual(["none", "none"]);
   });
 
-  it("keeps list ids in a need's evidence only for Ask, within the 12-id cap", () => {
+  it("keeps list ids in a need's evidence only for Ask, within the 40-id cap", () => {
     const items = (from: number, count: number) => Array.from({ length: count }, (_, index) => `E${from + index}`);
     const need = (evidence: readonly string[], options?: Parameters<typeof parseStep>[1]) =>
       parseStep({ parts: [{ question: "q", needs: [{ need: "which pages", status: "found", evidence }], notes: "" }], actions: [{ tool: "finish", args: {} }] }, options).parts[0]!.needs[0]!.evidence;
-    // A task goal, and every caller before ADR-0041, drops them; a list id after 12 item ids is never the one cut: research
+    // A task goal, and every caller before ADR-0041, drops them; a list id after 40 item ids is never the one cut: research
     // cited the rows, was asked for the list's id, and appended it.
     const mixed = ["L1", "[l2]", " L 3 ", "E4", "4", "L1", "N1", "L0"];
-    expect([need(mixed, { lists: true }), need(mixed), need([...items(1, 11), "L1", "L2"], { lists: true }).length, need([...items(1, 15), "L1"], { lists: true })])
-      .toEqual([["L1", "L2", "L3", "E4"], ["E4"], 12, [...items(1, 11), "L1"]]);
-    // A sentence's list ids support nothing (W1), so a list id takes no item's slot: its 12 item ids stay wherever its list
+    expect([need(mixed, { lists: true }), need(mixed), need([...items(1, 39), "L1", "L2"], { lists: true }).length, need([...items(1, 43), "L1"], { lists: true })])
+      .toEqual([["L1", "L2", "L3", "E4"], ["E4"], 40, [...items(1, 39), "L1"]]);
+    // A sentence's list ids support nothing (W1), so a list id takes no item's slot: its 40 item ids stay wherever its list
     // ids stand, and the list ids beside them, which the writer's repair and the renderer read. A sentence citing more than
-    // 12 items is dropped whole, never kept with some of its citations.
+    // 40 items is dropped whole, never kept with some of its citations.
     const sentence = (evidence: readonly string[]) => parseBlocksAnswer(writerReply([{ text: "x", evidence }])).sentences[0]?.evidence;
     for (const [evidence, kept] of [
-      [[...items(1, 13), "L2"], undefined], [[...items(1, 12), "L1"], [...items(1, 12), "L1"]], [["L1", ...items(1, 12)], ["L1", ...items(1, 12)]],
-      [[...items(1, 6), "L1", ...items(7, 7)], undefined], [["L1", "E2"], ["L1", "E2"]],
+      [[...items(1, 41), "L2"], undefined], [[...items(1, 40), "L1"], [...items(1, 40), "L1"]], [["L1", ...items(1, 40)], ["L1", ...items(1, 40)]],
+      [[...items(1, 6), "L1", ...items(7, 35)], undefined], [["L1", "E2"], ["L1", "E2"]],
     ]) expect(sentence(evidence!)).toEqual(kept);
     // The same twelve items whatever the list ids' positions.
     for (const evidence of [["L1", ...items(9, 11), "E1"], [...items(9, 11), "E1", "L1"], [...items(9, 5), "L1", ...items(14, 6), "E1"]]) {
@@ -183,9 +184,9 @@ describe("agentic Ask model protocol parity", () => {
 
   it("drops whole a writer's entry citing more items than it may, never keeping some of its citations (ADR-0054)", () => {
     const items = (from: number, count: number) => Array.from({ length: count }, (_, index) => `E${from + index}`);
-    const over = items(1, 13);
+    const over = items(1, 41);
     // Repeats and ids code cannot read are cleaned first, and list ids take no item's slot: only distinct readable items count.
-    const within = [...items(1, 12), "e1", "E1", "THERM-48", "L1", "L2"];
+    const within = [...items(1, 40), "e1", "E1", "THERM-48", "L1", "L2"];
     const blocks = [
       { block: "answer", sentences: [{ text: "Over.", evidence: over }, { text: "Within.", evidence: within }] },
       { block: "points", ordered: false, items: [{ text: "Over point.", evidence: over }, { text: "Point.", evidence: ["E1"] }] },
@@ -197,11 +198,11 @@ describe("agentic Ask model protocol parity", () => {
     let parsed: ReturnType<typeof parseBlocksAnswer> | undefined;
     expect(corrected(() => { parsed = parseBlocksAnswer({ blocks, not_found: [] }); })).toEqual({ model_entry_dropped: 7, model_repeat_dropped: 2 });
     expect(parsed!.sentences.map(sentence => [sentence.text, sentence.evidence.length])).toEqual([
-      ["Within.", 14], ["Point.", 1], ["Item: Fix; Owner: Ana.", 1], ["2026-10-21: Event.", 1], ["Ticket: THERM-48; Status: Open.", 1],
+      ["Within.", 42], ["Point.", 1], ["Item: Fix; Owner: Ana.", 1], ["2026-10-21: Event.", 1], ["Ticket: THERM-48; Status: Open.", 1],
     ]);
-    // A since sentence over its bound is dropped whole, and a since list missing one of its sentences says nothing changed of none.
+    // A since sentence over its bound is dropped whole, and alone: the since list keeps its other sentences.
     const since = (evidence: readonly string[]) => parseBlocksAnswer({ ...writerReply([{ text: "x", evidence: ["E1"] }]), since: [{ text: "Changed.", evidence }, { text: "Also.", evidence: ["E1"] }] }, { since: true }).since;
-    expect([since(over), since(items(1, 12))?.length]).toEqual([undefined, 2]);
+    expect([since(over), since(items(1, 12))?.length]).toEqual([[{ text: "Also.", evidence: ["E1"] }], 2]);
   });
 
   it("preserves every requested member of a which_items need beyond the old evidence and read caps", () => {
@@ -270,22 +271,27 @@ describe("agentic Ask model protocol parity", () => {
     }
   });
 
-  it("reads an Ask again's since only when asked: its first 6 sentences, as a writer's sentence is read (ADR-0047)", () => {
+  it("reads an Ask again's since only when asked: every sentence, as a writer's sentence is read (ADR-0047)", () => {
     const since = [{ text: " The owner changed (E2). ", evidence: ["e2", "L1"] },
       ...Array.from({ length: 7 }, (_, index) => ({ text: `Change ${index}.`, evidence: ["E1"] }))];
     const reply = writerReply([{ text: "Dev owns it.", evidence: ["E1"] }], { since });
     expect(parseBlocksAnswer(reply)).not.toHaveProperty("since");
     expect(parseBlocksAnswer(reply, { since: true }).since).toEqual([
-      { text: "The owner changed.", evidence: ["E2", "L1"] }, ...Array.from({ length: 5 }, (_, index) => ({ text: `Change ${index}.`, evidence: ["E1"] })),
+      { text: "The owner changed.", evidence: ["E2", "L1"] }, ...Array.from({ length: 7 }, (_, index) => ({ text: `Change ${index}.`, evidence: ["E1"] })),
     ]);
     expect(parseBlocksAnswer({ ...reply, since: [] }, { since: true }).since).toEqual([]);
-    // An entry with no text, or no entry at all, is a comparison the reply cannot stand behind: none, never "nothing changed".
-    for (const broken of [[{ text: "", evidence: ["E1"] }], [{ text: "   ", evidence: [] }], ["The owner changed."], [since[0], { text: "", evidence: ["E1"] }]]) {
+    // A list whose every entry has no text, or is no entry at all, is a comparison the reply cannot stand behind: none, never
+    // "nothing changed".
+    for (const broken of [[{ text: "", evidence: ["E1"] }], [{ text: "   ", evidence: [] }], ["The owner changed."]]) {
       expect(parseBlocksAnswer({ ...reply, since: broken }, { since: true })).not.toHaveProperty("since");
     }
+    // One bad entry is left out alone; the others stand.
+    expect(parseBlocksAnswer({ ...reply, since: [since[0], { text: "", evidence: ["E1"] }, since[1]] }, { since: true }).since)
+      .toEqual([{ text: "The owner changed.", evidence: ["E2", "L1"] }, { text: "Change 0.", evidence: ["E1"] }]);
     // A reply with no list of it has none; it is not sent back for that.
     expect(parseBlocksAnswer({ ...reply, since: "nothing" }, { since: true })).not.toHaveProperty("since");
-    expect(answerBlocksSinceSchema).toMatchObject({ required: ["blocks", "not_found", "since"], properties: { since: { maxItems: 6 } } });
+    expect(answerBlocksSinceSchema).toMatchObject({ required: ["blocks", "not_found", "since"] });
+    expect((answerBlocksSinceSchema.properties as Record<string, Record<string, unknown>>).since).not.toHaveProperty("maxItems");
   });
 
   it("reads the follow-ups a writer drafts (ADR-0053): a task each, the rest optional, at most 10", () => {
@@ -412,12 +418,12 @@ describe("agentic Ask model protocol parity", () => {
       ["a task need's kind, which is never read", needs([content({ need: "A", kind: "Which Items" })]), task, {}],
       ["need ids in other spellings, or unreadable", needs([content({ id: " n2 ", need: "A" }), content({ id: 4, need: "B" }), content({ id: "E5", need: "C" })]), ask, { model_id_respelled: 2, model_entry_dropped: 1 }],
       ["evidence ids respelled, repeated or unreadable", needs([content({ need: "A", evidence: ["e4", "E4", "THERM-48"] })]), ask, { model_id_respelled: 1, model_repeat_dropped: 1, model_entry_dropped: 1 }],
-      ["more evidence ids than a need holds", needs([content({ need: "A", evidence: items(1, 13) })]), ask, { model_items_capped: 1 }],
-      ["more evidence ids than a task need holds", needs([content({ need: "A", evidence: items(1, 13) })]), task, { model_items_capped: 1 }],
+      ["more evidence ids than a need holds", needs([content({ need: "A", evidence: items(1, 41) })]), ask, { model_items_capped: 1 }],
+      ["more evidence ids than a task need holds", needs([content({ need: "A", evidence: items(1, 41) })]), task, { model_items_capped: 1 }],
       ["a blank or repeated need", needs([content({ need: " " }), content({ need: "A" }), content({ need: "a" })]), ask, { model_entry_dropped: 1, model_repeat_dropped: 1 }],
-      ["more needs than a part holds", needs(Array.from({ length: 7 }, (_, index) => content({ need: `need ${index}` }))), ask, { model_items_capped: 1 }],
-      ["more parts than a step holds", step({ parts: Array.from({ length: 6 }, (_, index) => ({ question: `q${index}`, needs: [], notes: "" })) }), ask, { model_items_capped: 1 }],
-      ["more actions than an Ask step runs", actions(Array.from({ length: 11 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), ask, { model_items_capped: 1 }],
+      ["seven needs in a part: no cap, nothing to correct", needs(Array.from({ length: 7 }, (_, index) => content({ need: `need ${index}` }))), ask, {}],
+      ["six parts in a step: no cap, nothing to correct", step({ parts: Array.from({ length: 6 }, (_, index) => ({ question: `q${index}`, needs: [], notes: "" })) }), ask, {}],
+      ["more actions than an Ask step runs", actions(Array.from({ length: 21 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), ask, { model_items_capped: 1 }],
       ["more actions than a task step runs", actions(Array.from({ length: 5 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), task, { model_items_capped: 1 }],
       ["text past its cap", step({ parts: [{ question: "q".repeat(401), needs: [content({ need: "n".repeat(201) })], notes: "n".repeat(801) }], actions: [{ tool: "search", args: { query: "x".repeat(241) } }] }), ask, { model_text_truncated: 4 }],
       ["an argument with no text, or one its tool does not take", actions([{ tool: "search", args: { query: "OPS-17", since: "" } }, { tool: "open", args: { id: "E1", query: "OPS-17" } }]), ask, { model_entry_dropped: 2 }],
@@ -430,7 +436,7 @@ describe("agentic Ask model protocol parity", () => {
       ["an answer the schema already holds", answer({ placed: [{ list: "L1" }], sentences: [{ text: "Mara owns OPS-17.", evidence: ["E1", "L1"] }] }), {}],
       ["evidence ids written into a sentence", answer({ sentences: [{ text: "Mara owns OPS-17 (E1).", evidence: ["E1"] }] }), { model_inline_ids_stripped: 1 }],
       ["a sentence that is not an object, or has no text", answer({ sentences: ["Mara owns it.", { text: " ", evidence: [] }, { text: "Mara owns OPS-17.", evidence: ["E1"] }] }), { model_entry_dropped: 2 }],
-      ["a blank, repeated or extra not_found phrase", answer({ not_found: ["", "owner", "owner", "a", "b", "c", "d", "e"] }), { model_entry_dropped: 1, model_repeat_dropped: 1, model_items_capped: 1 }],
+      ["a blank or repeated not_found phrase, with no cap on how many", answer({ not_found: ["", "owner", "owner", "a", "b", "c", "d", "e"] }), { model_entry_dropped: 1, model_repeat_dropped: 1 }],
       ["sentence evidence ids in other spellings", answer({ sentences: [{ text: "Done.", evidence: ["e2", "[E3]"] }] }), { model_id_respelled: 2 }],
       ["a list id in another spelling", answer({ placed: [{ list: "[L3]" }] }), { model_id_respelled: 1 }],
       ["a list block that names no list", answer({ placed: [{ list: "E6" }, { list: 7 }] }), { model_entry_dropped: 2 }],
@@ -456,6 +462,11 @@ describe("agentic Ask model protocol parity", () => {
     const query = Array.from({ length: 40 }, (_, index) => `t${index}`).join(" ");
     expect(normalizeQuery(query)).toBe(query);
     expect(normalizeQuery("?!")).toBeNull();
+    // The rule a refused query broke reaches the model in its own words, not one message for every rule.
+    const refused = queryRefusal("?!");
+    expect(refused).toEqual(expect.any(String));
+    expect(refused).not.toBe(queryRefusal("x".repeat(65)));
+    expect(queryRefusal("launch date")).toBeNull();
   });
 
   it("preserves identifiers and punctuation for each provider to interpret", () => {
@@ -635,10 +646,21 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(texts[0]).toBe(`${columns.map((column, at) => `${column}: ${row(`${"y".repeat(114)} ALLOW`).cells[at]}`).join("; ")}.`);
   });
 
+  it("keeps a long sentence and a long cell whole, cutting only past the contract's own bytes for them", () => {
+    const long = `${"The vendor confirmed the thermal-pad retest finishes before the build review. ".repeat(13)}`.trim();
+    expect(long.length).toBeGreaterThan(1_000);
+    const parsed = parseBlocksAnswer(writerReply([{ text: long, evidence: ["E1"] }]));
+    expect(parsed.sentences[0]!.text).toBe(long);
+    const cell = "c".repeat(250);
+    const table = parseBlocksAnswer(reply([{ block: "table", columns: ["Item", "Note"], rows: [{ cells: ["Fix", cell], evidence: ["E1"] }, { cells: ["Run", "ok"], evidence: ["E1"] }] }]));
+    expect(table.sentences[0]!.text).toContain(cell);
+    expect(Buffer.byteLength(parseBlocksAnswer(writerReply([{ text: "語".repeat(4_000), evidence: ["E1"] }])).sentences[0]!.text, "utf8")).toBeLessThanOrEqual(4 * 1024);
+  });
+
   it("reads a card's title once, as its name, counting a cut only past a name's own cap", () => {
     const card = (title: string) => reply([{ block: "card", title, kind: "ticket", facts: [{ label: "Status", value: "Open", evidence: ["E1"] }, { label: "Owner", value: "Ana", evidence: ["E1"] }] }]);
-    expect(corrected(() => parseBlocksAnswer(card("t".repeat(79))))).toEqual({});
-    expect(corrected(() => parseBlocksAnswer(card("t".repeat(121))))).toEqual({ model_text_truncated: 1 });
+    expect(corrected(() => parseBlocksAnswer(card("t".repeat(200))))).toEqual({});
+    expect(corrected(() => parseBlocksAnswer(card("t".repeat(201))))).toEqual({ model_text_truncated: 1 });
   });
 
   it("reads an item its block cannot show as text in its block, and counts each reading", () => {
@@ -651,10 +673,10 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     ];
     expect(read(blocks)).toEqual([
       ["Fix BUG-412.", "text"], ["Action: Run DVT-R2; Owner: QA.", "row"], ["One.", "text"], ["Two.", "text"],
-      ["Ana: Not a day.", "text"], ["Written.", "text"], ["Status: Done.", "text"], ["Role: Lead.", "text"],
+      ["Ana: Not a day.", "text"], ["Written.", "text"], ["Status: Done.", "text"], ["Team: Ana; Role: Lead.", "fact"],
     ]);
-    // Two rows and both of a one-column table, two events, and two cards are read again; an empty row, event and value are dropped.
-    expect(corrected(() => parseBlocksAnswer(reply(blocks)))).toEqual({ model_enum_respelled: 8, model_entry_dropped: 3 });
+    // Two rows and both of a one-column table, two events, and the untitled card are read again; a team card is a card of its own kind; an empty row, event and value are dropped.
+    expect(corrected(() => parseBlocksAnswer(reply(blocks)))).toEqual({ model_enum_respelled: 7, model_entry_dropped: 3 });
   });
 
   it("drops a block it cannot read, and caps no count of blocks or items: the part's bounds decide what is kept", () => {
@@ -665,7 +687,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     // The schema bounds only the answer's sentences, and every text's length.
     const variants = (((answerBlocksSchema.properties as Schema).blocks as Schema).items as Schema).anyOf as Schema[];
     const most = (value: Schema): readonly string[] => Object.entries(value).flatMap(([key, child]) => key === "maxItems" ? [String(child)] : child !== null && typeof child === "object" ? most(child as Schema) : []);
-    expect([(answerBlocksSchema.properties as Schema).blocks.maxItems, ...variants.map(variant => most(variant).join(","))]).toEqual([undefined, "2,12", "12", "12", "12", "12", "12", "12", ""]);
+    expect([(answerBlocksSchema.properties as Schema).blocks.maxItems, ...variants.map(variant => most(variant).join(","))]).toEqual([undefined, "2,40", "40", "40", "40", "40", "40", "40", ""]);
   });
 
   it("bounds each list and text in its reply schemas exactly where the parser cuts it", () => {

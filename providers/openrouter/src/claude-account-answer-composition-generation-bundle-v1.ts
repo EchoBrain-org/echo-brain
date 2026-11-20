@@ -17,7 +17,8 @@ export function createClaudeAccountAnswerCompositionGenerationBundleV1(input: {
           generation_adapter_id: 'claude-account-research-writer-v1',
           planner_model: CLAUDE_ACCOUNT_MODEL_V1,
           answer_model: CLAUDE_ACCOUNT_MODEL_V1,
-          timeout_ms: 60_000,
+          // One model call: room for a 16,000-token writer reply, inside Ask's whole-run deadline.
+          timeout_ms: 180_000,
           // Retain Ask's conservative prompt-size contract when changing payer.
           context_tokens: 131_072,
         }),
