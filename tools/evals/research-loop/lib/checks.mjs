@@ -172,8 +172,8 @@ function statementOf(statement, members, nameable, items, answer) {
   return { named: new Set(members.flatMap((value, index) => nameable[index] && value.some(item => cited.has(item)) && value.some(says) ? [index] : [])) };
 }
 
-/** Characters of a label in a code-written name (AGENTIC_LIST_NAME_CHARS_V1). */
-const NAME_CHARS = 120;
+/** A label in a code-written name is whole (AGENTIC_LIST_NAME_CHARS_V1). */
+const NAME_CHARS = Number.POSITIVE_INFINITY;
 /** One line, as code writes a label in a name. */
 function oneLine(value) {
   return String(value ?? "").normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/gu, " ").trim();

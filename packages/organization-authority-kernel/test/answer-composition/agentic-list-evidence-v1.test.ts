@@ -382,7 +382,8 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     expect(statement({ noun: TICKETS, complete: false, selected: reviewed }))
       .toEqual({ text: `At least 25 Jira tickets: ${reviewed.map(value => value.title).join("; ")}.`, cited: Array.from({ length: 25 }, (_, index) => index) });
     const long = statement({ selected: [{ title: `${"x".repeat(200)}\nsecond line` }] }).text.slice("1 item: ".length, -1);
-    expect([[...long].length, long.endsWith("…")]).toEqual([120, true]);
+    // A long title is named whole, on one line.
+    expect(long).toBe(`${"x".repeat(200)} second line`);
   });
 
   it("takes the noun as the renderer builds it, and gives the text and the members it cites, in blocks with its caption and its names: all the renderer reads", () => {

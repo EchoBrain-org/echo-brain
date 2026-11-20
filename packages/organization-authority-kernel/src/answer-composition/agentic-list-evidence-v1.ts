@@ -397,8 +397,8 @@ export function agenticListMembershipV1(
 
 // ---- the writer -------------------------------------------------------
 
-/** Characters of a member's label in a code-written name. */
-export const AGENTIC_LIST_NAME_CHARS_V1 = 120;
+/** A member's label in a code-written name is whole: no length of its own (the answer's response bound carries it). */
+export const AGENTIC_LIST_NAME_CHARS_V1 = Number.POSITIVE_INFINITY;
 
 /** A list member as the writer sees it: its row facts only. It never carries text. */
 export interface AgenticWriterListMemberV1 {
@@ -575,8 +575,8 @@ function nameGroups(members: readonly AgenticListNamedMemberV1[]): readonly (rea
 }
 
 /**
- * Names for groups of `members` (nameGroups), in order, as a code-written statement names them: each title, cut to
- * AGENTIC_LIST_NAME_CHARS_V1 characters, then its status, owner and due date wherever those differ between the groups
+ * Names for groups of `members` (nameGroups), in order, as a code-written statement names them: each title, whole,
+ * then its status, owner and due date wherever those differ between the groups
  * named (ignoring case), and a group's kinds counted ("2 actions"). No source-specific rule: a page reads by title, a
  * ticket by key and summary, a follow-up by title, a meeting record by a line of its own text and its meeting (its list
  * label).
