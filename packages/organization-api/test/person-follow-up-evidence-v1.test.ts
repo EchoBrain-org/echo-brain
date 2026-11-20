@@ -63,6 +63,9 @@ describe('Follow-up evidence V1', () => {
     expect(validatePersonFollowUpEvidenceV1(minimal)).toEqual(minimal);
     const { first_line: _line, ...decision } = decided.decision;
     expect(validatePersonFollowUpEvidenceV1({ ...decided, decision }).decision).toEqual(decision);
+    // The line has no length of its own; the response that carries it bounds it.
+    const long = { ...decided, expected: 'e'.repeat(2_000) };
+    expect(validatePersonFollowUpEvidenceV1(long)).toEqual(long);
   });
 
   it('refuses unknown fields, out-of-range values and a repeated title', () => {

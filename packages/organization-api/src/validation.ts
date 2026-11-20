@@ -209,8 +209,12 @@ export function openItemId(value: unknown, label: string): string {
   return value;
 }
 
-/** One trimmed NFC line of 1 to `maximum` characters (code points). */
-export function boundedLine(value: unknown, label: string, maximum: number): string {
+/**
+ * One trimmed NFC line of 1 to `maximum` characters (code points). With no
+ * `maximum`, the line has no length of its own and the message carrying it is
+ * its bound.
+ */
+export function boundedLine(value: unknown, label: string, maximum = Number.POSITIVE_INFINITY): string {
   if (typeof value !== 'string' || value.length === 0 || value.trim() !== value || value !== value.normalize('NFC') ||
       /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value) || [...value].length > maximum) fail(`${label} is invalid`);
   return value;

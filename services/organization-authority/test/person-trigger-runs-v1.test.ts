@@ -510,10 +510,9 @@ describe('open items written when an impact check finishes', () => {
       owner_membership_id: f.membership('rafael'), owner_match: 'name', state: 'unsent', record_sha256: f.record });
     expect(Object.keys(first.pointer).sort()).toEqual(['kind', 'record_sha256', 'signal_id']);
     expect(first.item_key).toBe(impactItemKeyV1(first.pointer));
-    // A long action is one line of at most 120 characters; no unique member, or no confirmed owner: the approver.
-    expect([...actions.get('act-2')!.expected!].length).toBeGreaterThan(110);
-    expect([...actions.get('act-2')!.expected!].length).toBeLessThanOrEqual(120);
-    expect(actions.get('act-2')!.expected!.endsWith('…')).toBe(true);
+    // A long action keeps every word on one line; no unique member, or no confirmed owner: the approver.
+    expect([...actions.get('act-2')!.expected!].length).toBeGreaterThan(120);
+    expect(actions.get('act-2')!.expected!.endsWith('…')).toBe(false);
     expect(actions.get('act-2')).toMatchObject({ owner_membership_id: f.membership('ari'), owner_match: 'approver' });
     expect(actions.get('act-4')).toMatchObject({ expected: 'Order spare fans', owner_membership_id: f.membership('ari'), owner_match: 'approver' });
   });

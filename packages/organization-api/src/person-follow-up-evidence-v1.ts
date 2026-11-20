@@ -21,8 +21,10 @@ export type PersonFollowUpRefV1 = `follow_up:itm_${string}`;
 
 /**
  * The bounds of a follow-up's fields: the open items API's bounds for the
- * same values (names, decided lines, `expected`, an item's status and due
- * date), and a title of one line as long as an item's `says_now`.
+ * same values (names, decided lines, an item's status and due date), and a
+ * title of one line as long as an item's `says_now`. `expected` has no
+ * length of its own here: `expected_chars` bounds only the model's own reply
+ * schema in the kernel (a follow-up task the writer drafts).
  */
 export const PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1 = Object.freeze({ title_chars: 300, owner_chars: 200, due_chars: 128, expected_chars: 120, decision_title_chars: 200, first_line_chars: 300 });
 
@@ -111,7 +113,7 @@ export function validatePersonFollowUpEvidenceV1(value: unknown): PersonFollowUp
       ref: raw.ref as PersonMeetingRefV1,
     });
   }
-  const expected = Object.hasOwn(entry, 'expected') ? line(entry.expected, 'Follow-up expected', LIMITS.expected_chars) : undefined;
+  const expected = Object.hasOwn(entry, 'expected') ? line(entry.expected, 'Follow-up expected') : undefined;
   if (expected === title) fail('Follow-up expected repeats its title');
   return Object.freeze({
     item_id: itemId(entry.item_id, 'Follow-up item_id'),

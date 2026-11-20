@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { RESTRICTED_REVIEWER_PERSON_POLICY_ID } from '@echo-brain/organization-protocol';
-import { isOrganizationApiValidationError, PERSON_IMPACT_CARD_LIMITS_V1, PERSON_RUNS_LIST_LIMIT_V1, validatePersonImpactCardV1, type PersonImpactCardV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
+import { isOrganizationApiValidationError, PERSON_RUNS_LIST_LIMIT_V1, validatePersonImpactCardV1, type PersonImpactCardV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { impactCardLineV1, impactItemKeyV1, refreshImpactCardV1, storableImpactCardV1, type FreshImpactItemV1, type StoredImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
@@ -56,6 +56,8 @@ interface CreatePersonTriggerRunsV1Options {
 
 const LEASE_MS = 600_000;
 const MAX_RUNNING = 4;
+/** A meeting action's own words on one line, never cut: an open item's line has no length of its own. */
+const actionLine = (text: unknown): string => impactCardLineV1(text, Number.POSITIVE_INFINITY);
 const actorOf = (value: PersonAccessAuthorization): ApprovalActorV1 => ({ organization_id: value.organization_id, principal_id: value.principal_id, membership_id: value.membership_id });
 const sameActor = (left: ApprovalActorV1, right: ApprovalActorV1) => left.organization_id === right.organization_id && left.principal_id === right.principal_id && left.membership_id === right.membership_id;
 function unavailable(error: unknown): boolean {
@@ -76,7 +78,7 @@ type ItemCandidateV1 = Omit<ImpactItemDraftV1, 'owner_membership_id' | 'owner_ma
  * the card cites it. The card's owner name comes from the item's own
  * details. Then one per action the approved meeting decided, in brief
  * order: it needs doing, its expected line is the action's own text on one
- * line of at most 120 characters, and its owner name is the one the approver
+ * line, never cut, and its owner name is the one the approver
  * confirmed. Every approved action with printable text makes a draft, with the
  * action's day as its due date when it has a deadline (ADR-0053).
  */
@@ -105,7 +107,7 @@ function itemCandidates(record_sha256: Sha256Digest, siblings: readonly Sha256Di
     return [{ item_key, pointer, relation, expected: expected ?? null, ...(row.owner === undefined ? {} : { owner_name: row.owner }) }];
   });
   const decided = actions
-    .map(action => ({ action, expected: impactCardLineV1(action.text, PERSON_IMPACT_CARD_LIMITS_V1.expected_chars) }))
+    .map(action => ({ action, expected: actionLine(action.text) }))
     .filter(({ expected }) => expected !== '')
     .flatMap(({ action, expected }): ItemCandidateV1[] => {
       const pointer = Object.freeze({ kind: 'meeting_action', record_sha256, signal_id: action.signal_id });
@@ -179,7 +181,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
       // A timeout or an outage is tried again while the run has attempts left: a finished run is frozen, so falling back
       // on the first one would lose the impact check for good. Only the attempt that would fail the run falls back.
       const triedAgain = (unavailable(error) || error instanceof AgenticAskDeadlineErrorV1) && row.attempts + 1 < TRIGGER_RUN_ATTEMPTS_MAX_V1;
-      if (triedAgain || !actions.some(action => impactCardLineV1(action.text, PERSON_IMPACT_CARD_LIMITS_V1.expected_chars) !== '') ||
+      if (triedAgain || !actions.some(action => actionLine(action.text) !== '') ||
           error instanceof PersonRecordSearchIndexLagV1 ||
           (error instanceof AuthorityOperationError && !['unavailable', 'invalid_output', 'quota_exceeded'].includes(error.code))) throw error;
       // Research adds external impact. The approved action itself already has an authorized source. The run finishes as

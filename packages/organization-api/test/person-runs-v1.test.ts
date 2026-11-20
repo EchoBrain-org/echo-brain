@@ -512,10 +512,13 @@ describe('runs API open-item results', () => {
     expect(validatePersonRunsRequestV1(edit({ due_on: '2026-11-20' }))).toEqual(edit({ due_on: '2026-11-20' }));
     expect(validatePersonRunsRequestV1(edit({ due_on: null }))).toEqual(edit({ due_on: null }));
     expect(validatePersonRunsRequestV1(edit({ expected: 'Call the vendor', due_on: null }))).toEqual(edit({ expected: 'Call the vendor', due_on: null }));
+    // A line has no length of its own: the request body that carries it is its bound.
+    const long = 'e'.repeat(5_000);
+    expect(validatePersonRunsRequestV1(edit({ expected: long }))).toEqual(edit({ expected: long }));
+    expect(validatePersonRunsResultV1('edit', { expected: long, due_on: null })).toEqual({ expected: long, due_on: null });
     for (const [name, value] of [
       ['an edit that changes nothing', edit({})],
       ['an edit with empty text', edit({ expected: '' })],
-      ['an edit with text over 120 characters', edit({ expected: 'e'.repeat(121) })],
       ['an edit with two lines', edit({ expected: 'Call\nthe vendor' })],
       ['an edit with a day that does not exist', edit({ due_on: '2026-02-30' })],
       ['an edit that names an owner', edit({ expected: 'Call the vendor', owner_membership_id: MINA })],
@@ -554,7 +557,6 @@ describe('runs API open-item results', () => {
     ['a run id that is an item id', withItem({ run_id: ITEM })],
     ['an unknown kind', withItem({ kind: 'issue' })],
     ['a confirms relation', withItem({ relation: 'confirms' })],
-    ['an expected phrase over 120 characters', withItem({ expected: 'e'.repeat(121) })],
     ['an expected phrase on two lines', withItem({ expected: 'launch\nnext week' })],
     ['an expected phrase with a trailing space', withItem({ expected: 'launch next week ' })],
     ['an empty expected phrase', withItem({ expected: '' })],

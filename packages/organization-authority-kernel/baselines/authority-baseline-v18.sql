@@ -904,7 +904,7 @@ CREATE TABLE authority_impact_items_v1 (
   approver_principal_id TEXT NOT NULL,
   approver_membership_id TEXT NOT NULL REFERENCES authority_memberships(membership_id),
   relation TEXT CHECK (relation IS NULL OR relation IN ('conflicts', 'needs_updating')),
-  expected TEXT CHECK (expected IS NULL OR length(expected) BETWEEN 1 AND 120),
+  expected TEXT CHECK (expected IS NULL OR length(expected) >= 1),
   -- A real calendar day.
   due_on TEXT CHECK (due_on IS NULL OR (due_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND date(due_on) IS due_on)),
   owner_membership_id TEXT NOT NULL REFERENCES authority_memberships(membership_id),

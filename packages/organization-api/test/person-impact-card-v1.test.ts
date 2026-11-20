@@ -70,16 +70,17 @@ describe('impact card', () => {
   });
 
   it('rejects any text field over its limit, and text that is not one trimmed line', () => {
-    const { line_chars: line, name_chars: name, milestone_chars: milestone, expected_chars: expected } = PERSON_IMPACT_CARD_LIMITS_V1;
-    expect({ line, name, milestone, expected }).toEqual({ line: 300, name: 200, milestone: 120, expected: 120 });
+    const { line_chars: line, name_chars: name } = PERSON_IMPACT_CARD_LIMITS_V1;
+    expect({ line, name }).toEqual({ line: 300, name: 200 });
     // At the limit is accepted; one over is refused.
     expect(() => validatePersonImpactCardV1({ ...assessed, decided: [{ text: 'd'.repeat(line), citation_index: 0 }] })).not.toThrow();
+    // A follow-up line and a milestone have no length of their own; the response that carries the card bounds them.
+    expect(() => validatePersonImpactCardV1(affectedWith(assessed, 0, { ...ticket, date_at_risk: { date: '2026-10-15', milestone: 'm'.repeat(2_000) } }))).not.toThrow();
+    expect(() => validatePersonImpactCardV1(assessedCard({ expected: 'e'.repeat(2_000) }))).not.toThrow();
     for (const [label, value] of [
       ['decided text', { ...assessed, decided: [{ text: 'd'.repeat(line + 1), citation_index: 0 }] }],
       ['says_now', affectedWith(assessed, 0, { ...ticket, says_now: 's'.repeat(line + 1) })],
       ['owner', { ...affectedWith(assessed, 0, { ...ticket, owner: 'o'.repeat(name + 1) }), people: [{ name: 'o'.repeat(name + 1), items: [1] }] }],
-      ['milestone', affectedWith(assessed, 0, { ...ticket, date_at_risk: { date: '2026-10-15', milestone: 'm'.repeat(milestone + 1) } })],
-      ['expected', assessedCard({ expected: 'e'.repeat(expected + 1) })],
       ['unconfirmed', { ...assessed, unconfirmed: ['u'.repeat(line + 1)] }],
       ['two lines', { ...assessed, decided: [{ text: 'Show two decimals.\nAlso ship.', citation_index: 0 }] }],
       ['untrimmed', affectedWith(assessed, 0, { ...ticket, says_now: ' padded' })],

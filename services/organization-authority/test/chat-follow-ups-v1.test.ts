@@ -61,9 +61,13 @@ describe('follow-ups from a chat: the sink and the store', () => {
 
   it('saves all of an answer\'s drafts or none', async () => {
     const f = await chatFollowUpsFixture();
-    expect(() => f.draft('ari', [{ task: 'Fine' }, { task: 'x'.repeat(121) }])).toThrow(/CHECK/u);
+    expect(() => f.draft('ari', [{ task: 'Fine' }, { task: '' }])).toThrow(/CHECK/u);
     expect(() => f.draft('ari', [{ task: 'Fine' }, { task: 'Bad day', due_on: '2026-02-30' }])).toThrow(/CHECK/u);
     expect(f.db.prepare('SELECT count(*) FROM authority_impact_items_v1').pluck().get()).toBe(0);
+    // A line has no stored length of its own.
+    const long = `Send ${'the vendor plan '.repeat(40)}`.trim();
+    f.draft('ari', [{ task: long }]);
+    expect(f.db.prepare('SELECT expected FROM authority_impact_items_v1').pluck().get()).toBe(long);
   });
 
   it('keeps a run item\'s line and due date fixed, and never lets it lose its run', async () => {

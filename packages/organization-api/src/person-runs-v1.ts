@@ -294,8 +294,6 @@ const LIMITS = PERSON_IMPACT_CARD_LIMITS_V1;
 const RUN_ITEMS_MAX = PERSON_RUN_ITEMS_MAX_V1;
 /** The most decisions one `items` summary, or its stages, cover. */
 const SCOPE_DECISIONS_MAX = 100;
-/** ECHO's phrase of what the decision requires of an item. */
-const EXPECTED_CHARS = 120;
 /** An item's status or due date; the evidence desk bounds each to 128 bytes. */
 const DETAIL_CHARS = 128;
 
@@ -438,7 +436,7 @@ export function validatePersonRunsRequestV1(value: unknown): PersonRunsRequestV1
       if (!text && !due) fail('Runs request edit changes nothing');
       return Object.freeze({
         schema_version: 1 as const, operation: kind, item_id: itemId(request.item_id, 'Runs request item id'),
-        ...(text ? { expected: line(request.expected, 'Runs request edit text', EXPECTED_CHARS) } : {}),
+        ...(text ? { expected: line(request.expected, 'Runs request edit text') } : {}),
         ...(due ? { due_on: dueOn(request.due_on, 'Runs request edit due date') } : {}),
       });
     }
@@ -558,7 +556,7 @@ function openItem(value: unknown): PersonOpenItemV1 {
     ...(Object.hasOwn(entry, 'decision') ? { decision: decision(entry.decision) } : {}),
     ...(Object.hasOwn(entry, 'current') ? { current: current(entry.current) } : {}),
     relation: entry.relation === null ? null : oneOf(entry.relation, RELATIONS, 'Open item relation'),
-    expected: entry.expected === null ? null : line(entry.expected, 'Open item expected', EXPECTED_CHARS), due_on,
+    expected: entry.expected === null ? null : line(entry.expected, 'Open item expected'), due_on,
     approver: person(entry.approver, 'Open item approver'), owner: owner(entry.owner),
     waits_on: oneOf(entry.waits_on, WAITS_ON, 'Open item waits_on'), state,
     created_at: entry.created_at as string, sent_at: timestampOrNull(entry.sent_at, 'Open item sent_at'), state_set_at,
@@ -663,7 +661,7 @@ export function validatePersonRunsResultV1<K extends keyof PersonRunsResultsV1>(
     case 'send_item':
       return checked({ state: oneOf(result.state, ['open', 'not_relevant'] as const, 'Send item result') });
     case 'edit':
-      return checked({ expected: line(result.expected, 'Edited text', EXPECTED_CHARS), due_on: dueOn(result.due_on, 'Edited due date') });
+      return checked({ expected: line(result.expected, 'Edited text'), due_on: dueOn(result.due_on, 'Edited due date') });
     default:
       // assign
       return checked({ owner: person(result.owner, 'Assigned owner') });

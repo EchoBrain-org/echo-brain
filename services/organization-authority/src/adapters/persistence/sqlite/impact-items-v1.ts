@@ -27,7 +27,7 @@ export interface ImpactChatItemDraftV1 {
   readonly item_key: Sha256Digest;
   /** Its own `chat_action` pointer, or the stored pointer of the one item it is about. */
   readonly pointer: Readonly<Record<string, unknown>>;
-  /** Its one line, at most 120 characters. */
+  /** Its one line; the request that carries it is its only bound. */
   readonly expected: string;
   readonly due_on: string | null;
   readonly owner_membership_id: string;

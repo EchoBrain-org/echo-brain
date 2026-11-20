@@ -57,6 +57,9 @@ export interface PersonImpactCardV1 {
  * Entry counts, and text lengths in characters. The counts keep one card,
  * with its citations, well inside the runs response's 1 MiB; a decision that
  * affects more items than research reads in one run is not a card's concern.
+ * `milestone_chars` and `expected_chars` bound only the model's own reply
+ * schema in the kernel: the card, the API and stored open items give a
+ * follow-up line and a milestone no length of their own.
  */
 export const PERSON_IMPACT_CARD_LIMITS_V1 = Object.freeze({ decided: 100, affected: 100, unconfirmed: 100, line_chars: 300, name_chars: 200, milestone_chars: 120, expected_chars: 120 });
 
@@ -92,12 +95,12 @@ export function validatePersonImpactCardV1(value: unknown): PersonImpactCardV1 {
       const risk = object(entry.date_at_risk, 'Impact card date at risk');
       assertExactKeys(risk, ['date', 'milestone'], 'Impact card date at risk');
       if (!isPersonImpactCardDateV1(risk.date)) fail('Impact card date at risk is invalid');
-      dateAtRisk = Object.freeze({ date: risk.date, milestone: line(risk.milestone, 'Impact card milestone', limits.milestone_chars) });
+      dateAtRisk = Object.freeze({ date: risk.date, milestone: line(risk.milestone, 'Impact card milestone') });
     }
     return Object.freeze({
       citation_index: index(entry.citation_index, 'Impact card affected citation_index'), says_now: line(entry.says_now, 'Impact card says_now', limits.line_chars),
       ...(Object.hasOwn(entry, 'relation') ? { relation: entry.relation as PersonImpactRelationV1 } : {}),
-      ...(Object.hasOwn(entry, 'expected') ? { expected: line(entry.expected, 'Impact card expected', limits.expected_chars) } : {}),
+      ...(Object.hasOwn(entry, 'expected') ? { expected: line(entry.expected, 'Impact card expected') } : {}),
       ...(Object.hasOwn(entry, 'owner') ? { owner: line(entry.owner, 'Impact card owner', limits.name_chars) } : {}),
       ...(dateAtRisk === undefined ? {} : { date_at_risk: dateAtRisk }),
     });

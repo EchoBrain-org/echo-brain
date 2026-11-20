@@ -395,7 +395,8 @@ export function createPersonFollowUpsEvidenceSourceV1(options: CreatePersonFollo
     const own = row.due_on !== null || openItemIsFromChatV1(row);
     const due = own ? row.due_on ?? '' : live === undefined ? '' : openItemCurrentV1(live)?.due_at ?? '';
     const liveTitle = live === undefined ? '' : impactCardLineV1(live.label, LIMITS.title_chars);
-    const expected = impactCardLineV1(row.expected, LIMITS.expected_chars);
+    // An open item's line has no length of its own, so evidence carries it whole.
+    const expected = impactCardLineV1(row.expected, Number.POSITIVE_INFINITY);
     const decision = decisionPart(entry);
     const readable = decision === undefined || row.record_sha256 === null ? undefined : context.decisions.get(row.record_sha256);
     const evidence = (withLive: boolean, withDecision: boolean): PersonFollowUpEvidenceV1 => {

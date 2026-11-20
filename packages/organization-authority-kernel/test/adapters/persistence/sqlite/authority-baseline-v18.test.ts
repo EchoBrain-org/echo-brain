@@ -71,7 +71,7 @@ function seededWithSources(): Database.Database {
 
 describe("Authority baseline V18", () => {
   it("is fresh-only and stamps the Authority application id", () => {
-    expect(authorityBaselineSha256()).toBe("sha256:62e1838a772a9f6edfdb92348e00f9d6dd3cbc4cad5e33aaa8eaa552344b6694");
+    expect(authorityBaselineSha256()).toBe("sha256:549eb4ff0f0f577b856ea13f24210276b537d037c824979cd712181d7ddc0131");
     const database = seeded();
     expect(() => applyAuthorityBaseline(database)).toThrow("completely empty");
     expect(database.pragma("application_id", { simple: true })).toBe(AUTHORITY_BASELINE_APPLICATION_ID_V1);
@@ -153,7 +153,7 @@ describe("Authority baseline V18", () => {
       expect(() => insert(database, chatRow({ relation: "conflicts" }))).toThrow(/CHECK/u);
       expect(() => insert(database, chatRow({ relation: null, expected: null }))).toThrow(/CHECK/u);
       expect(() => insert(database, chatRow({ expected: null }))).toThrow(/CHECK/u);
-      expect(() => insert(database, chatRow({ expected: "x".repeat(121) }))).toThrow(/CHECK/u);
+      expect(() => insert(database, chatRow({ expected: "" }))).toThrow(/CHECK/u);
       for (const due_on of ["2026-02-30", "2026-1-01", "tomorrow", "2026-12-01T00:00:00Z", ""]) expect(() => insert(database, chatRow({ due_on }))).toThrow(/CHECK/u);
       expect(() => insert(database, chatRow({ state: "open" }))).toThrow(/CHECK|starts unsent/u);
       expect(() => insert(database, chatRow({ state: "unsent", state_set_by: MEMBERSHIP, state_set_at: NOW }))).toThrow("starts unsent with its creator");
@@ -192,6 +192,11 @@ describe("Authority baseline V18", () => {
       update("expected = ?, due_on = ?", "Send the vendor the final plan", null);
       update("due_on = ?", "2027-01-15");
       expect(database.prepare("SELECT expected, due_on FROM authority_impact_items_v1").get()).toEqual({ expected: "Send the vendor the final plan", due_on: "2027-01-15" });
+      // A line has no stored length of its own; the request that carries it bounds it.
+      const long = `Send the vendor ${"the final plan ".repeat(60)}`.trim();
+      update("expected = ?", long);
+      expect(database.prepare("SELECT expected FROM authority_impact_items_v1").pluck().get()).toBe(long);
+      update("expected = ?", "Send the vendor the final plan");
       expect(() => update("due_on = ?", "2027-02-30")).toThrow(/CHECK/u);
       expect(() => update("expected = NULL")).toThrow(/CHECK/u);
       // It never gains a run or a record, nor changes what it points at, who made it or its relation.

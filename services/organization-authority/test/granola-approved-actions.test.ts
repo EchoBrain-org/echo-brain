@@ -1,7 +1,5 @@
 import { expect, it, vi } from 'vitest';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import { PERSON_IMPACT_CARD_LIMITS_V1 } from '@echo-brain/organization-api';
-import { impactCardLineV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { meetingActionDueOnV1 } from '../src/composition/person-meeting-items-v1.js';
 import { openItemsFixture } from './fixtures/open-items.js';
 import { EMP_A, SHARED, T, meetingWorld } from './fixtures/person-meeting-world.js';
@@ -82,7 +80,9 @@ it("keeps a meeting action's whole line and gives its card the action's day, and
   ] });
   await fixture.finishImpactRun();
   const actions = fixture.items.forRun(fixture.runId).filter(row => row.pointer.kind === 'meeting_action').sort((left, right) => String(left.pointer.signal_id).localeCompare(String(right.pointer.signal_id)));
-  expect(actions.map(row => [row.expected, row.due_on])).toEqual([[impactCardLineV1(long, PERSON_IMPACT_CARD_LIMITS_V1.expected_chars), '2026-11-20'], ['Book the pilot room', null]]);
+  // The action's line is never cut: it is stored as the meeting worded it.
+  expect(long.length).toBeGreaterThan(120);
+  expect(actions.map(row => [row.expected, row.due_on])).toEqual([[long, '2026-11-20'], ['Book the pilot room', null]]);
   // What the impact card found carries no due date of its own.
   expect(fixture.items.forRun(fixture.runId).filter(row => row.pointer.kind !== 'meeting_action').every(row => row.due_on === null)).toBe(true);
 });
