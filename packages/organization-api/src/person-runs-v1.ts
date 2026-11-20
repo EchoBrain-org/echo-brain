@@ -1,7 +1,6 @@
-import { PERSON_RUN_ITEMS_MAX_V1 } from './person-runs-limits-v1.js';
 import { validatePersonAnswerCitationV6 } from './person-answer-v4.js';
 import type { PersonAnswerCitationV6 } from './person-answer-v8.js';
-import { PERSON_IMPACT_CARD_LIMITS_V1, validatePersonImpactCardV1, type PersonImpactCardV1 } from './person-impact-card-v1.js';
+import { validatePersonImpactCardV1, type PersonImpactCardV1 } from './person-impact-card-v1.js';
 import { PERSON_UPLOAD_PROJECT_SET_MAX } from './person-upload-audience-v3.js';
 import { validateProjectIdV1 } from './project-context-v1.js';
 import {
@@ -247,18 +246,17 @@ export interface PersonRunsResultsV1 {
   edit: { readonly expected: string; readonly due_on: string | null };
 }
 
-/** A card, or a page of open items with their citations, is far below 1 MiB. */
+/** Transport: the one bound on what a runs response carries. */
 export const PERSON_RUNS_MAX_RESPONSE_BYTES_V1 = 1024 * 1024;
-/** The most runs one list returns. */
+/** The newest runs one list returns. It has no next page: see the sweep report. No validator checks it. */
 export const PERSON_RUNS_LIST_LIMIT_V1 = 100;
-/** The most open items one `items` page returns. */
+/** Transport: the open items one `items` page returns; `next_cursor` reads on. No validator checks it. */
 export const PERSON_OPEN_ITEMS_PAGE_V1 = 50;
-/** The most Send rows, and the most item rows, one `home` returns. */
+/**
+ * Presentation: the Send rows, item rows and drafts Home shows at once; every
+ * one is in the follow-ups list, which pages. No validator checks it.
+ */
 export const PERSON_HOME_ROWS_V1 = 20;
-/** Original native-action allowance, retained for v1 wire compatibility. */
-export const PERSON_RUN_MEETING_ACTIONS_MAX_V1 = 20;
-/** Maximum choices per Send request and owner labels per Home summary. */
-export { PERSON_RUN_ITEMS_MAX_V1 } from './person-runs-limits-v1.js';
 
 const RUN_ID = /^run_[A-Za-z0-9-]{4,60}$/;
 const COMMAND_ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -288,14 +286,8 @@ const RELATIONS = ['conflicts', 'needs_updating'] as const;
 const WAITS_ON = ['owner', 'approver', 'leads'] as const;
 const REACHES = ['opened', 'no_access', 'unavailable', 'not_read'] as const;
 const CURRENT_DETAILS = ['assignee', 'status', 'due_at'] as const;
-/** Names, decided lines and what an item says now are bounded as the impact card bounds them. */
-const LIMITS = PERSON_IMPACT_CARD_LIMITS_V1;
-/** A send lists, and a Send row names the owners of, at most a run's items. */
-const RUN_ITEMS_MAX = PERSON_RUN_ITEMS_MAX_V1;
-/** The most decisions one `items` summary, or its stages, cover. */
-const SCOPE_DECISIONS_MAX = 100;
-/** An item's status or due date; the evidence desk bounds each to 128 bytes. */
-const DETAIL_CHARS = 128;
+/** No count of its own: the request or response body that carries a list bounds it. */
+const ANY = Number.POSITIVE_INFINITY;
 
 function matching(value: unknown, pattern: RegExp, label: string): string {
   if (typeof value !== 'string' || !pattern.test(value)) fail(`${label} is invalid`);
@@ -347,7 +339,7 @@ function readMode<T extends PersonOpenItemsReadV1>(request: Record<string, unkno
 }
 
 function sendItems(value: unknown): Extract<PersonRunsRequestV1, { readonly operation: 'send' }>['items'] {
-  const items = list(value, 'Runs request send list', RUN_ITEMS_MAX, 1).map(raw => {
+  const items = list(value, 'Runs request send list', ANY, 1).map(raw => {
     const entry = asEnumerableRecord(raw, 'Runs request send item');
     const picked = Object.hasOwn(entry, 'owner_membership_id');
     assertExactKeys(entry, ['item_id', 'include', ...(picked ? ['owner_membership_id'] : [])], 'Runs request send item');
@@ -473,7 +465,7 @@ function run(value: unknown): PersonRunV1 {
 
 function member(entry: Record<string, unknown>, label: string): PersonOpenItemPersonV1 {
   if (typeof entry.active !== 'boolean') fail(`${label} active flag is invalid`);
-  return { membership_id: membershipId(entry.membership_id, `${label} membership id`), name: line(entry.name, `${label} name`, LIMITS.name_chars), active: entry.active };
+  return { membership_id: membershipId(entry.membership_id, `${label} membership id`), name: line(entry.name, `${label} name`), active: entry.active };
 }
 
 function person(value: unknown, label: string): PersonOpenItemPersonV1 {
@@ -496,8 +488,8 @@ function decision(value: unknown): PersonOpenItemDecisionV1 {
   assertTimestamp(entry.approved_at, 'Open item decision approved_at');
   return Object.freeze({
     approval_id: entry.approval_id as string, record_sha256: recordId(entry.record_sha256, 'Open item decision record'),
-    title: line(entry.title, 'Open item decision title', LIMITS.name_chars),
-    first_line: entry.first_line === null ? null : line(entry.first_line, 'Open item decision first line', LIMITS.line_chars),
+    title: line(entry.title, 'Open item decision title'),
+    first_line: entry.first_line === null ? null : line(entry.first_line, 'Open item decision first line'),
     approved_at: entry.approved_at as string,
     // A decision's projects are among its record's associations.
     project_ids: Object.freeze(list(entry.project_ids, 'Open item decision project list', PERSON_UPLOAD_PROJECT_SET_MAX).map(id => validateProjectIdV1(id, 'Open item decision project id'))),
@@ -508,10 +500,10 @@ function current(value: unknown): PersonOpenItemCurrentV1 {
   const entry = asEnumerableRecord(value, 'Open item current part');
   assertExactKeys(entry, ['citation', 'says_now', ...CURRENT_DETAILS.filter(key => Object.hasOwn(entry, key))], 'Open item current part');
   return Object.freeze({
-    citation: validatePersonAnswerCitationV6(entry.citation), says_now: line(entry.says_now, 'Open item says_now', LIMITS.line_chars),
-    ...(Object.hasOwn(entry, 'assignee') ? { assignee: line(entry.assignee, 'Open item assignee', LIMITS.name_chars) } : {}),
-    ...(Object.hasOwn(entry, 'status') ? { status: line(entry.status, 'Open item status', DETAIL_CHARS) } : {}),
-    ...(Object.hasOwn(entry, 'due_at') ? { due_at: line(entry.due_at, 'Open item due date', DETAIL_CHARS) } : {}),
+    citation: validatePersonAnswerCitationV6(entry.citation), says_now: line(entry.says_now, 'Open item says_now'),
+    ...(Object.hasOwn(entry, 'assignee') ? { assignee: line(entry.assignee, 'Open item assignee') } : {}),
+    ...(Object.hasOwn(entry, 'status') ? { status: line(entry.status, 'Open item status') } : {}),
+    ...(Object.hasOwn(entry, 'due_at') ? { due_at: line(entry.due_at, 'Open item due date') } : {}),
   });
 }
 
@@ -570,7 +562,7 @@ function sendRow(value: unknown): PersonHomeSendV1 {
   assertExactKeys(entry, ['run_id', 'decision', 'items', 'kinds', 'owners', 'finished_at'], 'Home send row');
   const kinds = list(entry.kinds, 'Home send row kind list', KINDS.length).map(kind => oneOf(kind, KINDS, 'Home send row kind'));
   unique(kinds, 'Home send row kind list');
-  const owners = list(entry.owners, 'Home send row owner list', RUN_ITEMS_MAX).map(name => line(name, 'Home send row owner', LIMITS.name_chars));
+  const owners = list(entry.owners, 'Home send row owner list', ANY).map(name => line(name, 'Home send row owner'));
   unique(owners, 'Home send row owner list');
   assertTimestamp(entry.finished_at, 'Home send row finished_at');
   return Object.freeze({
@@ -585,7 +577,7 @@ function summary(value: unknown): PersonOpenItemsSummaryV1 {
   const total = (key: string) => count(entry[key], `Open items summary ${key} count`);
   return Object.freeze({
     unsent: total('unsent'), open: total('open'), done: total('done'), not_relevant: total('not_relevant'), decisions: total('decisions'),
-    by_decision: Object.freeze(list(entry.by_decision, 'Open items summary decision list', SCOPE_DECISIONS_MAX).map(raw => {
+    by_decision: Object.freeze(list(entry.by_decision, 'Open items summary decision list', ANY).map(raw => {
       const row = asEnumerableRecord(raw, 'Open items decision count');
       assertExactKeys(row, ['record_sha256', 'unsent', 'open'], 'Open items decision count');
       return Object.freeze({
@@ -618,7 +610,7 @@ export function validatePersonRunsResultV1<K extends keyof PersonRunsResultsV1>(
   };
   switch (operation) {
     case 'list':
-      if (!Array.isArray(result.runs) || result.runs.length > PERSON_RUNS_LIST_LIMIT_V1) fail('Runs list is invalid');
+      if (!Array.isArray(result.runs)) fail('Runs list is invalid');
       return checked({ runs: Object.freeze(result.runs.map(run)) });
     case 'start':
       if (typeof result.state !== 'string' || !START_STATES.includes(result.state)) fail('Runs start state is invalid');
@@ -637,10 +629,10 @@ export function validatePersonRunsResultV1<K extends keyof PersonRunsResultsV1>(
     }
     case 'home':
       return checked({
-        send: Object.freeze(list(result.send, 'Home send row list', PERSON_HOME_ROWS_V1).map(sendRow)),
-        items: Object.freeze(list(result.items, 'Home item list', PERSON_HOME_ROWS_V1).map(openItem)),
+        send: Object.freeze(list(result.send, 'Home send row list', ANY).map(sendRow)),
+        items: Object.freeze(list(result.items, 'Home item list', ANY).map(openItem)),
         waiting: count(result.waiting, 'Home waiting count'),
-        drafts: Object.freeze(list(result.drafts, 'Home draft list', PERSON_HOME_ROWS_V1).map(raw => {
+        drafts: Object.freeze(list(result.drafts, 'Home draft list', ANY).map(raw => {
           const draft = openItem(raw);
           if (draft.run_id !== null || draft.state !== 'unsent') fail('Home draft is not an unsent follow-up from a chat');
           return draft;
@@ -648,9 +640,9 @@ export function validatePersonRunsResultV1<K extends keyof PersonRunsResultsV1>(
       });
     case 'items':
       return checked({
-        items: Object.freeze(list(result.items, 'Open items page', PERSON_OPEN_ITEMS_PAGE_V1).map(openItem)),
+        items: Object.freeze(list(result.items, 'Open items page', ANY).map(openItem)),
         next_cursor: result.next_cursor === null ? null : matching(result.next_cursor, CURSOR, 'Open items next cursor'),
-        summary: summary(result.summary), stages: Object.freeze(list(result.stages, 'Impact stage list', SCOPE_DECISIONS_MAX).map(stage)),
+        summary: summary(result.summary), stages: Object.freeze(list(result.stages, 'Impact stage list', ANY).map(stage)),
       });
     case 'item':
       return checked({ item: openItem(result.item) });

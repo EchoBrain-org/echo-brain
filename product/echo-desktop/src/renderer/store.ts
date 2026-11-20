@@ -1,4 +1,3 @@
-import { PERSON_RUN_ITEMS_MAX_V1 } from '@echo-brain/organization-api/person-runs-limits-v1';
 import type {
   PersonImpactStageV1, PersonMeetingOperationV2, PersonMeetingResultsV2, PersonMeetingReviewV2, PersonReviewOperationV1, PersonReviewResultsV1, PersonOpenItemStateV1, PersonRunV1, PersonRunsRequestV1,
 } from '@echo-brain/organization-api';
@@ -6592,17 +6591,14 @@ export async function sendTicked(include: boolean): Promise<void> {
   setView({ ...list, busy: true, said: null, picker: null });
   const sends: Record<string, SendCommand> = { ...list.sends };
   const tried = new Map<string, Failure | undefined>();
-  batches: for (const batch of new Set(ticked.map(sendBatch))) {
-    const rows = ticked.filter(item => sendBatch(item) === batch);
-    // One Send lists at most so many of a run's items, so a long meeting goes in parts; a follow-up from a chat is a batch of its own.
-    for (let start = 0; start < rows.length; start += PERSON_RUN_ITEMS_MAX_V1) {
-      if (!viewOf('list', list.seq) || !sameAccount(account)) break batches;
-      const part = rows.slice(start, start + PERSON_RUN_ITEMS_MAX_V1);
-      const sent = await sendRows(part, include, sends[batch]);
-      if (sent.unknown) sends[batch] = sent.command; else delete sends[batch];
-      for (const item of part) tried.set(item.item_id, sent.failure);
-      if (sent.failure) break batches;
-    }
+  for (const batch of new Set(ticked.map(sendBatch))) {
+    // One Send takes all of a run's ticked items; a follow-up from a chat is a batch of its own.
+    const part = ticked.filter(item => sendBatch(item) === batch);
+    if (!viewOf('list', list.seq) || !sameAccount(account)) break;
+    const sent = await sendRows(part, include, sends[batch]);
+    if (sent.unknown) sends[batch] = sent.command; else delete sends[batch];
+    for (const item of part) tried.set(item.item_id, sent.failure);
+    if (sent.failure) break;
   }
   if (!viewOf('list', list.seq) || !sameAccount(account)) return;
   await readList(list.seq, 'again');

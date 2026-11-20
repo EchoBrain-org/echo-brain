@@ -15,10 +15,6 @@
       "types": "./dist/person-answer-previous-v1.d.ts",
       "import": "./dist/person-answer-previous-v1.js"
     },
-    "./person-runs-limits-v1": {
-      "types": "./dist/person-runs-limits-v1.d.ts",
-      "import": "./dist/person-runs-limits-v1.js"
-    },
     "./validation": {
       "types": "./dist/validation.d.ts",
       "import": "./dist/validation.js"

@@ -150,7 +150,9 @@ describe("impact card renderer", () => {
     // Each affected entry also says what the record requires of the item.
     const entry = (run.inputs[0]!.schema as { properties: { affected: { items: { required: string[]; properties: Record<string, unknown> } } } }).properties.affected.items;
     expect(entry.required).toContain("expected");
-    expect(entry.properties.expected).toEqual({ type: "string", maxLength: 120 });
+    // No line has a length of its own, and no list a count: the model's own maximum output bounds the reply.
+    expect(entry.properties.expected).toEqual({ type: "string" });
+    expect(JSON.stringify(run.inputs[0]!.schema)).not.toMatch(/maxLength|maxItems/u);
     const user = run.prompt(0);
     expect(user.task).toBe(bundle().goal.kind === "task" ? (bundle().goal as { task: string }).task : "");
     expect((user.record as { id: string }[]).map(value => value.id)).toEqual(["E1", "E2"]);
@@ -458,11 +460,11 @@ describe("impact card renderer", () => {
       expect(screenImpactLineV1(text, [source])).toBeNull();
     });
 
-    it("quotes a long repair line only in part", async () => {
+    it("quotes a long repair line whole", async () => {
       const long = `Alice owns THERM-48 ${"and the six DVT test bars ".repeat(6)}`.trim();
       const run = alone({ bundle: quoting, replies: [reply([{ id: "E1", text: CANARY }], [affected("E4", long, "needs_updating")]), reply([{ id: "E1", text: CANARY }])] });
       await run.render();
-      expect(JSON.parse(run.inputs[1]!.user_prompt).validation_error).toContain(`The line "${long.slice(0, 79)}…" says "owns".`);
+      expect(JSON.parse(run.inputs[1]!.user_prompt).validation_error).toContain(`The line "${long}" says "owns".`);
     });
   });
 
@@ -470,7 +472,7 @@ describe("impact card renderer", () => {
     ["a relation in another spelling", { affected: [affected("E2", "THERM-46 asks for one decimal", "Needs Updating")] }, { model_enum_respelled: 1 }],
     ["an id in another spelling", { affected: [affected("e2", "THERM-46 asks for one decimal", "conflicts")] }, { model_id_respelled: 1 }],
     ["an evidence id written into a line", { affected: [affected("E2", "THERM-46 asks for one decimal (E2)", "conflicts")] }, { model_inline_ids_stripped: 1 }],
-    ["a line past its cap", { affected: [affected("E2", `THERM-46 asks for one decimal ${"and more ".repeat(40)}`, "conflicts")] }, { model_text_truncated: 1 }],
+    ["a long line, kept whole and counted as nothing", { affected: [affected("E2", `THERM-46 asks for one decimal ${"and more ".repeat(400)}`, "conflicts")] }, {}],
     ["entries with no id, line or known relation", { affected: [affected("THERM-46", "x", "conflicts"), affected("E2", " ", "conflicts"), affected("E3", "y", "replaces")] }, { model_entry_dropped: 3 }],
     ["a date at risk with no milestone", { affected: [affected("E2", "THERM-46 asks for one decimal", "conflicts", "2026-10-15")] }, { card_date_dropped: 1 }],
   ])("counts %s, and nothing else", async (_name, reply, expected) => {

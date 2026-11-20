@@ -2,9 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
 import {
   PERSON_HOME_ROWS_V1,
-  PERSON_IMPACT_CARD_LIMITS_V1 as LIMITS,
   PERSON_OPEN_ITEMS_PAGE_V1,
-  PERSON_RUN_ITEMS_MAX_V1,
   PERSON_UPLOAD_PROJECT_SET_MAX,
   validatePersonAnswerCitationV6,
   validatePersonRunsResultV1,
@@ -147,13 +145,9 @@ const SCOPE_ROWS_MAX = 5000;
 const PERSONAL_PAGE = 1000;
 /** The most records a project scope reads (the record lookup's own bound). */
 const PROJECT_RECORDS_MAX = 500;
-/** The most decisions a summary's per-decision counts, or the stages, cover. */
-const SCOPE_DECISIONS_MAX = 100;
 /** Live opens per call, each item at most once, a few at a time. */
 const LIVE_OPENS_MAX = 50;
 const LIVE_OPENS_AT_ONCE = 4;
-/** An item's status and due date, as the API bounds them. */
-const DETAIL_CHARS = 128;
 const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
 const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const GLOBAL = Object.freeze({ kind: 'global' as const });
@@ -234,9 +228,9 @@ function cursorAfter(cursor: string): { readonly created_at: string; readonly it
   return { created_at, item_id };
 }
 
-/** A member's display name as one line of the API's name rule; directory names are not otherwise bounded. */
+/** A member's display name as one line, whole. */
 function nameOf(people: People, membershipId: string): string {
-  return impactCardLineV1(people.get(membershipId)?.name, LIMITS.name_chars) || UNKNOWN_MEMBER;
+  return impactCardLineV1(people.get(membershipId)?.name) || UNKNOWN_MEMBER;
 }
 function personOf(people: People, membershipId: string): PersonOpenItemPersonV1 {
   return Object.freeze({ membership_id: membershipId, name: nameOf(people, membershipId), active: people.get(membershipId)?.active === true });
@@ -248,9 +242,9 @@ function currentOf(item: DeskItem): PersonOpenItemCurrentV1 | undefined {
   try { citation = validatePersonAnswerCitationV6({ citation: item.citation, kind: item.kind, label: item.label, visibility: item.visibility }); } catch { return undefined; }
   const says_now = currentImpactLineV1({ citation, label: item.label, ...(item.text === undefined ? {} : { text: item.text }), ...(item.attributes === undefined ? {} : { attributes: item.attributes }) });
   if (says_now.length === 0) return undefined;
-  const assignee = impactCardLineV1(item.attributes?.owner, LIMITS.name_chars);
-  const status = impactCardLineV1(item.attributes?.status, DETAIL_CHARS);
-  const due_at = impactCardLineV1(item.attributes?.due_at, DETAIL_CHARS);
+  const assignee = impactCardLineV1(item.attributes?.owner);
+  const status = impactCardLineV1(item.attributes?.status);
+  const due_at = impactCardLineV1(item.attributes?.due_at);
   return Object.freeze({ citation, says_now, ...(assignee === '' ? {} : { assignee }), ...(status === '' ? {} : { status }), ...(due_at === '' ? {} : { due_at }) });
 }
 
@@ -376,7 +370,7 @@ function firstDecidedLines(sources: Pick<OpenItemSourcesV1, 'runs' | 'on_live_fa
 function decisionOf(decision: PersonReadableDecisionV1, first_line: string | null): PersonOpenItemDecisionV1 {
   return Object.freeze({
     approval_id: decision.approval_id, record_sha256: decision.record_sha256,
-    title: impactCardLineV1(decision.title, LIMITS.name_chars) || 'Approved meeting', first_line, approved_at: decision.approved_at,
+    title: impactCardLineV1(decision.title) || 'Approved meeting', first_line, approved_at: decision.approved_at,
     project_ids: Object.freeze(decision.project_ids.slice(0, PERSON_UPLOAD_PROJECT_SET_MAX)),
   });
 }
@@ -599,8 +593,8 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         send.push(Object.freeze({
           run_id: runId, decision: decisionOf(decision, firstLine(run)), items: rows.length,
           kinds: Object.freeze(KIND_ORDER.filter(kind => rows.some(row => openItemKindV1(row.pointer) === kind))),
-          // As many owners as a run has items: its affected rows and its meeting actions.
-          owners: Object.freeze(owners.sort((left, right) => left.localeCompare(right)).slice(0, PERSON_RUN_ITEMS_MAX_V1)), finished_at: run.updated_at,
+          // Every owner of the run's items: its affected rows and its meeting actions.
+          owners: Object.freeze(owners.sort((left, right) => left.localeCompare(right))), finished_at: run.updated_at,
         }));
       }
       send.sort((left, right) => ascending(right.finished_at, left.finished_at) || ascending(left.run_id, right.run_id));
@@ -683,9 +677,9 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         unsent: visible.filter(entry => entry.row.state === 'unsent').length, open: open.length,
         done: visible.filter(entry => entry.row.state === 'done').length, not_relevant: visible.filter(entry => entry.row.state === 'not_relevant').length,
         decisions: recordsOf(visible.map(entry => entry.row)).length,
-        // Most recent decisions first, when a scope holds more than the API carries.
+        // Most recent decisions first, every one in scope.
         by_decision: [...byDecision].sort(([leftRecord, left], [rightRecord, right]) => ascending(right.latest, left.latest) || ascending(leftRecord, rightRecord))
-          .slice(0, SCOPE_DECISIONS_MAX).map(([record_sha256, { latest: _latest, ...counts }]) => ({ record_sha256, ...counts })),
+          .map(([record_sha256, { latest: _latest, ...counts }]) => ({ record_sha256, ...counts })),
       };
 
       // Each decision's impact check stage, for the decisions in scope the policy shows the viewer: a project lists the records they read now.
@@ -701,7 +695,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         return run === undefined ? [] : [{
           record_sha256: record, run_id: run.run_id, state: triggerRunStateAtV1(run, at), error_code: run.state === 'failed' ? run.error_code ?? 'research_failed' : null, mine: runFor(run, viewer),
         }];
-      }).slice(0, SCOPE_DECISIONS_MAX);
+      });
 
       // Counts (a meeting's and a project's Follow-ups line): no item is listed, so none is opened and no desk is bound. Rows: the
       // same page with no live read, so a list shows its rows at once and reads live only what it shows (follow-ups thread v1).

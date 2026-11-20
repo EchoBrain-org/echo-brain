@@ -1,7 +1,6 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
   isPersonImpactCardDateV1,
-  PERSON_IMPACT_CARD_LIMITS_V1 as LIMITS,
   validatePersonImpactCardV1,
   type PersonImpactAffectedV1,
   type PersonImpactCardV1,
@@ -51,8 +50,6 @@ const SUGGESTED_EDIT: readonly RegExp[] = [
 const OWNERSHIP_CLAIM = /\b(?:owners?|owns|owned|owning|(?:re)?assign\w*|responsible)\b/giu;
 const EDIT_REASON = "write what the record decided and what each item says now, never what to change";
 const OWNERSHIP_REASON = "never say who owns, is assigned to or is responsible for anything; the card adds owners from item details";
-/** How much of an offending line a repair quotes back. */
-const REPAIR_LINE_CHARS = 80;
 export const IMPACT_STOPPED_NOTE_V1 = "Research stopped before it finished, so other items may be affected too.";
 
 export const IMPACT_CARD_PROMPT = [
@@ -83,24 +80,25 @@ export const IMPACT_CARD_PROMPT = [
   "{\"decided\":[{\"id\":\"E1\",\"text\":\"<one line>\"}],\"affected\":[{\"id\":\"E5\",\"says_now\":\"<one line>\",\"relation\":\"conflicts\",\"expected\":\"<short phrase>\",\"date_at_risk\":\"\",\"milestone\":\"\"}]}",
 ].join("\n");
 
-const ID = { type: "string", maxLength: 16 } as const;
+/** No count or length of its own: the model's own maximum output bounds the reply. */
+const TEXT = { type: "string" } as const;
 const IMPACT_CARD_SCHEMA: StructuredGenerationJsonSchema = Object.freeze({
   type: "object", additionalProperties: false, required: ["decided", "affected"], properties: {
-    decided: { type: "array", maxItems: LIMITS.decided, items: {
-      type: "object", additionalProperties: false, required: ["id", "text"], properties: { id: ID, text: { type: "string", maxLength: LIMITS.line_chars } },
+    decided: { type: "array", items: {
+      type: "object", additionalProperties: false, required: ["id", "text"], properties: { id: TEXT, text: TEXT },
     } },
-    affected: { type: "array", maxItems: LIMITS.affected, items: {
+    affected: { type: "array", items: {
       type: "object", additionalProperties: false, required: ["id", "says_now", "relation", "expected", "date_at_risk", "milestone"], properties: {
-        id: ID, says_now: { type: "string", maxLength: LIMITS.line_chars }, relation: { type: "string", enum: [...RELATIONS] },
-        expected: { type: "string", maxLength: LIMITS.expected_chars },
-        date_at_risk: { type: "string", maxLength: 10 }, milestone: { type: "string", maxLength: LIMITS.milestone_chars },
+        id: TEXT, says_now: TEXT, relation: { type: "string", enum: [...RELATIONS] }, expected: TEXT, date_at_risk: TEXT, milestone: TEXT,
       },
     } },
   },
 });
 
 function bytes(value: string): number { return Buffer.byteLength(value, "utf8"); }
-const line = (value: unknown, maximum: number): string => stripEvidenceIds(cleanModelLine(value, maximum));
+/** A line as one line, whole: a model line has no length of its own. */
+const WHOLE = Number.POSITIVE_INFINITY;
+const line = (value: unknown): string => stripEvidenceIds(cleanModelLine(value, WHOLE));
 
 /** A screen a line fails: an edit or an ownership claim, and the words of the line it matched. */
 export interface ImpactLineScreenFailureV1 { readonly screen: "edit" | "ownership"; readonly words: string }
@@ -189,22 +187,19 @@ type QuoteSources = (id: string, part: "decided" | "affected" | "expected") => r
 function parseCard(value: unknown, sourcesOf: QuoteSources): Draft {
   const body = object(value);
   if (body === null || !Array.isArray(body.decided) || !Array.isArray(body.affected)) throw new AgenticAskOutputErrorV1("the reply must be a JSON object with \"decided\" and \"affected\" arrays");
-  for (const [entries, most] of [[body.decided, LIMITS.decided], [body.affected, LIMITS.affected]] as const) {
-    if (entries.length > most) observeCoreModelCorrectionV1("model_items_capped", entries.length - most);
-  }
-  const decided = body.decided.slice(0, LIMITS.decided).flatMap((raw: unknown) => {
-    const entry = object(raw); const id = cleanModelId(entry?.id); const text = line(entry?.text, LIMITS.line_chars);
+  const decided = body.decided.flatMap((raw: unknown) => {
+    const entry = object(raw); const id = cleanModelId(entry?.id); const text = line(entry?.text);
     if (id === null || text.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); return []; }
     return [{ id, text }];
   });
-  const affected = body.affected.slice(0, LIMITS.affected).flatMap((raw: unknown) => {
-    const entry = object(raw); const id = cleanModelId(entry?.id); const saysNow = line(entry?.says_now, LIMITS.line_chars);
-    const relation = RELATIONS.find(value => value === cleanLine(entry?.relation, 32).toLowerCase().replace(/[\s-]+/gu, "_"));
+  const affected = body.affected.flatMap((raw: unknown) => {
+    const entry = object(raw); const id = cleanModelId(entry?.id); const saysNow = line(entry?.says_now);
+    const relation = RELATIONS.find(value => value === cleanLine(entry?.relation, WHOLE).toLowerCase().replace(/[\s-]+/gu, "_"));
     if (id === null || saysNow.length === 0 || relation === undefined) { observeCoreModelCorrectionV1("model_entry_dropped"); return []; }
     if (relation !== entry?.relation) observeCoreModelCorrectionV1("model_enum_respelled");
     // What the record requires is kept only for an item it conflicts with or changes.
-    const expected = relation === "confirms" ? "" : line(entry?.expected, LIMITS.expected_chars);
-    const date = cleanModelLine(entry?.date_at_risk, 10); const milestone = line(entry?.milestone, LIMITS.milestone_chars);
+    const expected = relation === "confirms" ? "" : line(entry?.expected);
+    const date = cleanLine(entry?.date_at_risk, WHOLE); const milestone = line(entry?.milestone);
     const atRisk = isPersonImpactCardDateV1(date) && milestone.length > 0;
     if (date.length > 0 && !atRisk) observeCoreModelCorrectionV1("card_date_dropped");
     return [{ id, says_now: saysNow, relation, ...(expected.length > 0 ? { expected } : {}), ...(atRisk ? { date_at_risk: { date, milestone } } : {}) }];
@@ -222,7 +217,7 @@ function parseCard(value: unknown, sourcesOf: QuoteSources): Draft {
   const failure = failures.find(entry => entry.screen === "edit") ?? failures[0];
   if (failure !== undefined) {
     observeCoreModelCorrectionV1("card_line_screened", failures.length);
-    throw new AgenticAskOutputErrorV1(`${failure.screen === "edit" ? EDIT_REASON : OWNERSHIP_REASON}. The line "${cleanLine(failure.text, REPAIR_LINE_CHARS)}" says "${failure.words}".`);
+    throw new AgenticAskOutputErrorV1(`${failure.screen === "edit" ? EDIT_REASON : OWNERSHIP_REASON}. The line "${failure.text}" says "${failure.words}".`);
   }
   return { decided, affected };
 }
@@ -240,7 +235,7 @@ export interface ImpactItemFactsV1 {
 /** An owner from the item's details (a ticket's assignee, an action's owner), never from model text. */
 export function ownerOfImpactItemV1(item: ImpactItemFactsV1): string | undefined {
   const owner = item.attributes?.owner;
-  return owner !== undefined && owner.length > 0 && cleanLine(owner, LIMITS.name_chars) === owner ? owner : undefined;
+  return owner !== undefined && owner.length > 0 && cleanLine(owner, WHOLE) === owner ? owner : undefined;
 }
 /** A date the item itself states: its due date, or the date written in its title or text (spec section 2: details and text prove themselves). */
 export function statesImpactDateV1(item: ImpactItemFactsV1, date: string): boolean {
@@ -249,7 +244,7 @@ export function statesImpactDateV1(item: ImpactItemFactsV1, date: string): boole
 /** What a not-yet-assessed item says: its title and details. */
 export function detailsOfImpactItemV1(item: ImpactItemFactsV1): string {
   const { status, due_at: due } = item.attributes ?? {};
-  return cleanLine([item.label, ...(status === undefined ? [] : [`status ${status}`]), ...(due === undefined ? [] : [`due ${due}`])].join("; "), LIMITS.line_chars);
+  return cleanLine([item.label, ...(status === undefined ? [] : [`status ${status}`]), ...(due === undefined ? [] : [`due ${due}`])].join("; "), WHOLE);
 }
 /**
  * A record item as a decided line with no model: its approved text on one line, without the " Owner: <name>." the record adds to
@@ -260,7 +255,7 @@ function approvedLineOf(item: Entry["item"]): string {
   if (item.kind === "decision" && item.attributes?.status !== undefined && item.attributes.status !== "decided") return "";
   const text = item.text ?? "";
   const owned = item.kind === "action" && item.attributes?.owner !== undefined ? ` Owner: ${item.attributes.owner}.` : undefined;
-  return cleanLine(owned !== undefined && text.endsWith(owned) ? text.slice(0, -owned.length) : text, LIMITS.line_chars);
+  return cleanLine(owned !== undefined && text.endsWith(owned) ? text.slice(0, -owned.length) : text, WHOLE);
 }
 /** How many items research saw and could not read, as a note: a count, never a title. */
 export function impactUnreadNoteV1(count: number): string {
@@ -287,7 +282,7 @@ function unconfirmedOf(bundle: AgenticEvidenceBundleV1): string[] {
       ? "A source representation notice limited this assessment."
       : `${bundle.coverage.notices.length} source representation notices limited this assessment.`]),
   ];
-  return [...new Set(notes.map(note => cleanLine(note, LIMITS.line_chars)).filter(note => note.length > 0))].slice(0, LIMITS.unconfirmed);
+  return [...new Set(notes.map(note => cleanLine(note, WHOLE)).filter(note => note.length > 0))];
 }
 
 export const IMPACT_CARD_RENDERER_V1: AgenticRendererV1<ImpactCardTriggerInputV1, PersonImpactCardV1> = Object.freeze({
@@ -357,8 +352,8 @@ export const IMPACT_CARD_RENDERER_V1: AgenticRendererV1<ImpactCardTriggerInputV1
     } else {
       // What was decided needs no model: the record's own approved words. Then possibly affected, not yet assessed: what research cited, with its details.
       decided = bundle.items.filter(inRecord).flatMap(entry => { const text = approvedLineOf(entry.item); return text.length === 0 ? [] : [{ entry, text }]; })
-        .slice(0, LIMITS.decided).map(({ entry, text }) => ({ text, citation_index: cite(entry) }));
-      rows = others.filter(entry => entry.cited_by_plan).slice(0, LIMITS.affected).map(entry => ({ entry, says_now: detailsOfImpactItemV1(entry.item) }));
+        .map(({ entry, text }) => ({ text, citation_index: cite(entry) }));
+      rows = others.filter(entry => entry.cited_by_plan).map(entry => ({ entry, says_now: detailsOfImpactItemV1(entry.item) }));
     }
     const affected = rows.map(({ entry, ...row }) => {
       const owner = ownerOfImpactItemV1(entry.item);
