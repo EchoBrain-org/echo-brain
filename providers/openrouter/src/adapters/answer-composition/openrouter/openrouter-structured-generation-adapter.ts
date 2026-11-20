@@ -250,6 +250,28 @@ function isTimeoutFailure(value: unknown): boolean {
   return value instanceof Error && value.name === "TimeoutError";
 }
 
+/**
+ * Connection-setup failures (name resolution, connect, TLS): the request never reached OpenRouter, so it was not billed.
+ * Any other network failure may have happened after OpenRouter accepted the request.
+ */
+const CONNECT_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH", "UND_ERR_CONNECT_TIMEOUT",
+  "CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "ERR_TLS_CERT_ALTNAME_INVALID",
+]);
+
+function failedBeforeSending(error: unknown): boolean {
+  for (let cause: unknown = error, depth = 0; cause instanceof Error && depth < 4; cause = cause.cause, depth += 1) {
+    const code = (cause as { readonly code?: unknown }).code;
+    if (typeof code === "string" && CONNECT_FAILURE_CODES.has(code)) return true;
+  }
+  return false;
+}
+
+/** OpenRouter bills no non-2xx reply; a billing, rate-limit or 5xx refusal is the transient kind worth one more send. */
+function unbilledRefusal(response: Response | undefined): boolean {
+  return response !== undefined && !response.ok && (response.status === 402 || response.status === 429 || response.status >= 500);
+}
+
 interface OpenRouterFailureInput {
   readonly failure_class: OpenRouterFailureClass;
   readonly response?: Response;
@@ -257,6 +279,8 @@ interface OpenRouterFailureInput {
   readonly finish_reason?: OpenRouterFinishReason | null;
   readonly usage?: StructuredGenerationUsageV1;
   readonly provider_latency_ms?: number | null;
+  /** The request failed before OpenRouter could accept it. */
+  readonly unbilled?: true;
 }
 
 function failureDiagnostic(
@@ -268,6 +292,8 @@ function failureDiagnostic(
     adapter_id: "openrouter",
     finish_reason: input.finish_reason ?? null,
     adapter_request_id: responseGenerationId(input.response, input.root ?? null),
+    // Where the model gate reads it: only a failure known to cost nothing earns its one retry.
+    ...(input.unbilled === true || unbilledRefusal(input.response) ? { unbilled: true as const } : {}),
   });
 }
 
@@ -404,13 +430,13 @@ export function createOpenRouterStructuredGenerationAdapter(
       response = await fetchImpl(OPENROUTER_CHAT_COMPLETIONS_URL, request);
     } catch (error) {
       clearTimeout(silenceTimer);
+      const timedOut = isTimeoutFailure(error) || timeoutSignal.aborted;
       fail("OpenRouter request failed", {
         // The call's own timeout can surface as an AbortError through
         // AbortSignal.any; the timeout signal itself is the reliable witness.
-        failure_class: isTimeoutFailure(error) || timeoutSignal.aborted
-          ? "adapter_timeout"
-          : "adapter_transport",
+        failure_class: timedOut ? "adapter_timeout" : "adapter_transport",
         provider_latency_ms: elapsed(providerStartedAt, nowMs),
+        ...(!timedOut && failedBeforeSending(error) ? { unbilled: true as const } : {}),
       });
     }
     let providerLatency: number | null = null;

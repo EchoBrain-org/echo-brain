@@ -410,6 +410,8 @@ describe("OpenRouter structured generation", () => {
       adapter_id: "openrouter",
       finish_reason: null,
       adapter_request_id: "gen-1234567890",
+      // A rate-limit refusal generated nothing: the gate may send it once more.
+      unbilled: true,
     });
     expect(JSON.stringify(error)).not.toContain("secret-not-in-errors");
     expect(JSON.stringify(error)).not.toContain("provider body secret");

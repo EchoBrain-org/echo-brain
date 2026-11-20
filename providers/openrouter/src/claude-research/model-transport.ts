@@ -25,7 +25,9 @@ export class ClaudeModelResponseErrorV1 extends Error {
    */
   constructor(status: number, contextWindow = false) {
     super('Research provider request failed');
-    this.diagnostic = { failure_class: 'adapter_http' as const, http_status: status, ...(contextWindow ? { context_window: true as const } : {}) };
+    // A rate-limited or overloaded refusal generated nothing: marked unbilled where the model gate reads it.
+    this.diagnostic = { failure_class: 'adapter_http' as const, http_status: status, ...(contextWindow ? { context_window: true as const } : {}),
+      ...(UNBILLED_REFUSAL_STATUSES.has(status) ? { unbilled: true as const } : {}) };
   }
 }
 
@@ -34,8 +36,12 @@ export class ClaudeModelResponseErrorV1 extends Error {
  * have accepted the request; any later failure leaves the generation's billing unknown.
  */
 export class ClaudeModelTransportErrorV1 extends Error {
-  readonly diagnostic = { failure_class: 'adapter_transport' as const, http_status: null };
-  constructor(readonly unbilled = false) { super('Research provider transport failed'); }
+  readonly diagnostic: { readonly failure_class: 'adapter_transport'; readonly http_status: null; readonly unbilled?: true };
+  constructor(readonly unbilled = false) {
+    super('Research provider transport failed');
+    // Where the model gate reads it; a failure whose billing is unknown carries no flag.
+    this.diagnostic = { failure_class: 'adapter_transport', http_status: null, ...(unbilled ? { unbilled: true as const } : {}) };
+  }
 }
 
 /** Statuses that say the provider refused the request without generating: rate-limited (429) or overloaded (503, 529). */

@@ -138,7 +138,7 @@ it('delivers provider errors to the SDK and freshly admits its retry without lat
     },
   });
   expect(checks).toBe(2); expect(forwards).toBe(2);
-  expect(errors).toEqual([expect.objectContaining({ diagnostic: { failure_class: 'adapter_http', http_status: 429 } })]);
+  expect(errors).toEqual([expect.objectContaining({ diagnostic: { failure_class: 'adapter_http', http_status: 429, unbilled: true } })]);
 });
 
 it('aborts in-flight provider work and closes the request gateway when the caller leaves', async () => {
@@ -216,7 +216,8 @@ it.each(['request error', 'response error', 'response aborted'] as const)('admit
   // The mock never reports the body sent, so a request error is the unbilled kind and is retried once.
   const tries = failure === 'request error' ? 2 : 1;
   expect(request).toHaveBeenCalledTimes(tries);
-  expect(errors).toEqual(Array.from({ length: tries }, () => expect.objectContaining({ diagnostic: { failure_class: 'adapter_transport', http_status: null } })));
+  expect(errors).toEqual(Array.from({ length: tries }, () => expect.objectContaining({ diagnostic: {
+    failure_class: 'adapter_transport', http_status: null, ...(failure === 'request error' ? { unbilled: true } : {}) } })));
   await expect(pending).rejects.not.toThrow('private');
 });
 
