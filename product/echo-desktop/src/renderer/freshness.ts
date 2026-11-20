@@ -13,7 +13,7 @@ import type { PersonChangesAreaV1, PersonChangesV1 } from '@echo-brain/organizat
 // in, so the Authority starts your oldest queued impact check (DSK-1). The
 // store keeps its loaders; this module only says when they run.
 import type { Expect, Failure, Notice, NoticeTarget, OpenItemView, ProjectSummary } from '../shared/protocol.js';
-import { ACCOUNT_GONE, CHANGE_AREAS, NOTICE_ITEMS_MAX, NOTICE_TEXT_MAX, sameExpect } from '../shared/protocol.js';
+import { ACCOUNT_GONE, CHANGE_AREAS, NOTICE_TEXT_MAX, sameExpect } from '../shared/protocol.js';
 import { rpc } from './api.js';
 import { clip } from './format.js';
 import { CLOSED_STATES, firstName, followUpCount, itemTitle } from './needs.js';
@@ -471,12 +471,12 @@ function eventText(event: FollowUpEvent): string {
 /**
  * One check's one notification (N4, N5), or null for nothing to tell. One
  * follow-up says what happened and opens its page; several are counted and
- * open a list of exactly those (at most a hundred). One project add names the
+ * open a list of exactly those, however many. One project add names the
  * project and opens it; several are counted and open the first. Both in one
  * check are counted together and open what the follow-ups would.
  */
 function noticeFor(events: readonly FollowUpEvent[], adds: readonly ProjectSummary[]): Notice | null {
-  const items = [...new Set(events.map(event => event.item.item_id))].slice(0, NOTICE_ITEMS_MAX);
+  const items = [...new Set(events.map(event => event.item.item_id))];
   const followUps: NoticeTarget | null = items.length === 0 ? null
     : items.length === 1 ? { kind: 'item', item_id: items[0]! } : { kind: 'items', item_ids: items };
   const changed = `${followUpCount(items.length)} changed`;

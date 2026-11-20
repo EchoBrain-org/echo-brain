@@ -963,13 +963,11 @@ export function externalSourcePermalink(kind: unknown, raw: unknown): string | n
 export const ITEM_ID = /^itm_[A-Za-z0-9-]{4,60}$/;
 /** A project's id, as the API writes one. */
 const NOTICE_PROJECT_ID = /^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-/** A name or a title a notification shows: as long as the API lets either be, in characters. */
+/** Presentation: a name or a title a notification line shows, in characters; a click opens the whole item. */
 export const NOTICE_TEXT_MAX = 200;
 /** A notification's whole line: two titles or names and the words between them, in characters. */
 const NOTICE_LINE_MAX = 2 * NOTICE_TEXT_MAX + 120;
 
-/** The most follow-ups one notification counts, and opens. */
-export const NOTICE_ITEMS_MAX = 100;
 
 /** What a notification opens: one follow-up's page, a list of exactly the follow-ups it counted, or a project. */
 export type NoticeTarget = { readonly kind: 'item'; readonly item_id: string } | { readonly kind: 'items'; readonly item_ids: readonly string[] }
@@ -984,7 +982,7 @@ export interface Notice {
 /**
  * A notification as main shows it, or null for anything else: exactly a text
  * and a target, the text one non-empty line of at most NOTICE_LINE_MAX
- * characters, and the target an item, two to NOTICE_ITEMS_MAX distinct items,
+ * characters, and the target an item, two or more distinct items,
  * or a project, by their ids.
  */
 export function noticeOf(params: unknown): Notice | null {
@@ -994,7 +992,7 @@ export function noticeOf(params: unknown): Notice | null {
   if (typeof text !== 'string' || text.trim() === '' || [...text].length > NOTICE_LINE_MAX || /\p{Cc}/u.test(text) || !record(target)) return null;
   const keys = Object.keys(target).sort().join();
   const ids = target.item_ids;
-  if (target.kind === 'items' && keys === 'item_ids,kind' && Array.isArray(ids) && ids.length >= 2 && ids.length <= NOTICE_ITEMS_MAX
+  if (target.kind === 'items' && keys === 'item_ids,kind' && Array.isArray(ids) && ids.length >= 2
       && ids.every(id => typeof id === 'string' && ITEM_ID.test(id)) && new Set(ids).size === ids.length) {
     return { text: text.trim(), target: { kind: 'items', item_ids: [...ids as string[]] } };
   }
