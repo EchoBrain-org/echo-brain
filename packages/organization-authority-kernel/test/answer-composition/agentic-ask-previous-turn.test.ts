@@ -291,9 +291,23 @@ describe("fitting an Ask again's answer to its byte bound (ADR-0047)", () => {
     expect(fitted).not.toHaveProperty("since");
     expect(fitted.outcome).toBe("partial");
     expect(fitted.parts[0]!.gap_details).toEqual(gap_details);
-    // A part compaction rebuilds reads as one text block (ADR-0051).
-    expect(fitted.parts[0]!.blocks).toEqual([{ kind: "text", statements: Array.from({ length: SAID }, (_, index) => index) }]);
+    // Dropping since cuts no statement: the part keeps the blocks it was arranged in (ADR-0051).
+    expect(fitted.parts[0]!.blocks).toEqual(over.parts[0]!.blocks);
     expect(canonicalJsonBytes(fitted).byteLength).toBeLessThanOrEqual(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
+  });
+
+  it("keeps every block a cut leaves whole, turns only the block cut part way into text, and counts that collapse", async () => {
+    // The answer, then points: too many statements to fit, so statements are cut from the end, inside the points block.
+    const said = 2 * SAID + 4;
+    const over: PersonAnswerResponseV8 = { ...response(0), parts: [{ question: "Q", status: "answered", statements: Array.from({ length: said }, (_, index) => statement(index)),
+      blocks: [{ kind: "answer", statements: [0] }, { kind: "points", ordered: false, statements: Array.from({ length: said - 1 }, (_, index) => index + 1) }] }] };
+    const { since: _since, ...plain } = over;
+    const events: CoreRuntimeObservationV1[] = [];
+    const fitted = await observeCoreRuntimeV1("research_run", async () => compactAndValidateAgenticAskResponseV1(plain as PersonAnswerResponseV8), { observer: event => { events.push(event); } });
+    const kept = fitted.parts[0]!.statements.length;
+    expect(kept).toBeLessThan(said);
+    expect(fitted.parts[0]!.blocks).toEqual([{ kind: "answer", statements: [0] }, { kind: "text", statements: Array.from({ length: kept - 1 }, (_, index) => index + 1) }]);
+    expect(events.find(event => event.event !== "started")!.model_corrections).toMatchObject({ writer_layout_collapsed: 1 });
   });
 
   it("drops since first and whole, keeping the answer, its outcome and its question", () => {
