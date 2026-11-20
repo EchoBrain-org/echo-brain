@@ -34,7 +34,7 @@ export type { PersonToolJsonRequestV1, PersonToolGetRequestV1, PersonToolTranspo
 export { PersonToolOutcomeErrorV1, PERSON_TOOL_SMALL_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_CONNECT_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_REQUEST_MAX_BYTES_V1 } from './person-tool-client.js';
 
 export {
-  PERSON_QUESTION_MAX_CODE_POINTS_V1, PersonQueryInputError, personQuestionToSend, validatePersonQueryText, validatePersonQuestionText,
+  PERSON_QUERY_INPUT_MESSAGES_V1, PERSON_QUESTION_MAX_CODE_POINTS_V1, PersonQueryInputError, personQuestionToSend, validatePersonQueryText, validatePersonQuestionText,
 } from "./person-query.js";
 
 export * from './person-changes-v1.js';

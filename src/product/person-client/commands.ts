@@ -4,14 +4,14 @@ import { DocumentFileError } from './document-file.js';
 import { validatePersonDocumentSearchV2, parseCanonicalAssociationProjectIdsJsonV1, validatePersonUploadAudienceV3 } from '@echo-brain/organization-api';
 import { readUpdateFile } from './update-file.js';
 import { validatePersonUpdateRequestId, validateProjectIdV1 } from '@echo-brain/organization-api';
-import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
+import { PersonQueryInputError, personQuestionToSend, validatePersonAnswerPreviousV1, validatePersonQueryText } from "@echo-brain/organization-api";
 import { validatePersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonRunsRequestV1, type PersonRunsRequestV1 } from '@echo-brain/organization-api';
 import { personCitedRecordV1, type PersonCitedRecordV1 } from '@echo-brain/organization-api';
 import { validatePersonAskCheckRequestV1, type PersonAskCheckRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3 } from '@echo-brain/organization-api';
-import { validatePersonAnswerRequestV3, type PersonAnswerPreviousV1 } from '@echo-brain/organization-api';
+import type { PersonAnswerPreviousV1 } from '@echo-brain/organization-api';
 import { PersonToolOutcomeErrorV1, type PersonToolProviderV1, type PersonToolVerbNameV1, type PersonToolVerbV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
@@ -687,19 +687,18 @@ async function readBoundedLine(input: NodeJS.ReadableStream, output: NodeJS.Writ
 /** A `--previous` this client refuses before anything is sent (ADR-0047). */
 class AskPreviousError extends Error {}
 
-/** `--previous` as the Ask request would carry it, validated with the whole request; anything wrong with it is an AskPreviousError. */
+/**
+ * `--previous` as the Ask request would carry it, checked on its own against the question as it is sent; anything wrong
+ * with it is an AskPreviousError. The question itself is the Authority's to judge.
+ */
 function askPreviousOf(values: Record<Option, string | boolean | undefined>): PersonAnswerPreviousV1 {
   let previous: unknown;
   try { previous = JSON.parse(requiredText(values, "previous")); }
   catch { throw new AskPreviousError("Ask previous JSON is invalid"); }
-  // The question and project are checked on their own first, so their own errors are reported as today.
-  validatePersonQueryText(values.question);
+  const question = personQuestionToSend(requiredText(values, "question"));
   if (values.project !== undefined) validateProjectIdV1(requiredText(values, "project"));
   try {
-    return validatePersonAnswerRequestV3({
-      schema_version: 3, question: values.question,
-      ...(typeof values.project === "string" ? { project_id: values.project } : {}), previous,
-    }).previous!;
+    return validatePersonAnswerPreviousV1(previous, question);
   } catch (error) {
     throw new AskPreviousError(`Ask previous is invalid: ${(error as Error).message}`);
   }
@@ -1060,8 +1059,7 @@ export async function runPersonClientCli(
       throw new Error("--expected-membership-id and --expected-authority require --progress with `echo-brain person ask`");
     }
     pin = accountPin(values);
-    // The previous turn (ADR-0047) is validated with the whole request, its 16 KiB bound included, before any network or
-    // session use.
+    // The previous turn (ADR-0047) is validated before any network or session use.
     if (action === "ask" && values.previous !== undefined) askPrevious = askPreviousOf(values);
     // List and open requests are complete and validated before any network or session use.
     if (action === "list") {
@@ -1096,6 +1094,7 @@ export async function runPersonClientCli(
       error: (error as Error).message,
       // A previous turn this client refuses fails as one an Authority refuses (ADR-0047), so a caller can ask without it.
       ...(error instanceof AskPreviousError ? { action, code: "invalid_request" } : {}),
+      ...(error instanceof PersonQueryInputError ? { action, code: error.code } : {}),
       ...(employeeMutation
         ? {
             action,
@@ -1258,8 +1257,8 @@ export async function runPersonClientCli(
         print(stdout, { ok: true });
         break;
       case "ask": {
-        validatePersonQueryText(values.question);
-        const question = requiredText(values, "question");
+        // Not empty is the client's only check: the Authority says which question rule a question breaks.
+        const question = personQuestionToSend(requiredText(values, "question"));
         const scope = values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, "project"));
         if (values.progress === true) {
           // One line per step event as it arrives; the last line is the answer's, with its receipt.

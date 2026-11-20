@@ -130,10 +130,10 @@ describe('person ask --previous (ADR-0047)', () => {
       expect(lines(run.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_request', error: expect.stringMatching(/^Ask previous (JSON )?is invalid/u) });
       expect(fetch).not.toHaveBeenCalled();
     }
-    // Its question's own errors stay its own.
+    // Its question's own error stays its own: an empty question is the client's one question check.
     const bad = cli(vi.fn<typeof globalThis.fetch>());
-    expect(await bad.run(['ask', '--question= padded ', `--previous=${JSON.stringify(PREVIOUS)}`])).toBe(2);
-    expect(lines(bad.output.stderr).at(-1)).not.toHaveProperty('code');
+    expect(await bad.run(['ask', '--question=  ', `--previous=${JSON.stringify(PREVIOUS)}`])).toBe(2);
+    expect(lines(bad.output.stderr).at(-1)).toMatchObject({ code: 'question_empty' });
   });
 
   it('reports an Authority that refuses the turn as invalid_request', async () => {

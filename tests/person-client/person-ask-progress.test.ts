@@ -331,7 +331,8 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     timeout.abort();
     await expect(pending).rejects.toMatchObject({ code: 'transport_failed' });
     expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy).toHaveBeenCalledWith(135_000);
+    // The Authority's 300 s whole-Ask deadline and 45 s for its queue and release.
+    expect(spy).toHaveBeenCalledWith(345_000);
     expect(stream.state.cancelled).toBe(true);
   });
 
