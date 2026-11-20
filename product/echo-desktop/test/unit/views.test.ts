@@ -36,6 +36,10 @@ describe('view models copy only what the renderer may see', () => {
     }
     // The same words in an ordinary note are content; its title cannot imply a review badge or strip a line.
     expect(evidenceView({ ok: true, result: packet })).toEqual({ label, text });
+    // The pane's one cut, here and nowhere else: 2,000 characters as the API counts them, marked, its lines kept.
+    const long = `Line one.\n${'x'.repeat(2_500)}`;
+    const cut = evidenceView({ ok: true, result: { ...packet, text: long } }).text;
+    expect(cut).toBe(`Line one.\n${'x'.repeat(2_000 - 'Line one.\n'.length - 1)}… (truncated)`);
   });
   it.each(['confluence', 'notion', 'knowledge-base'])('preserves %s page identity without provider coordinates', tool_id => {
     const permalink = 'https://wiki.example.test/pages/view?pageId=12345';

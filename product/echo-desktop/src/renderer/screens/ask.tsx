@@ -5,7 +5,7 @@ import type {
   ApprovedRecord, OpenItemView, RecordItem, TimelineTurn, ToolContainerKind,
 } from '../../shared/protocol.js';
 import {
-  answerGaps, answerSays, answerSentences, blockTitle, CARD_WORDS, documentName, externalSourceProvider, partShows, passageBlocks, rowId, rowStatement, shownArranged,
+  answerGaps, answerSays, answerSentences, blockTitle, cardWord, documentName, drawnBlocks, externalSourceProvider, partShows, passageBlocks, rowId, rowStatement, shownArranged,
   shownItems, statementGroups, tableDay, type AnswerTable, type Inline, type Sentence, type Shows, type SourceGroup,
 } from '../answer.js';
 import { askedToday, askedWhen, identity, initial, meetingTime } from '../format.js';
@@ -25,9 +25,6 @@ import {
 } from '../timeline.js';
 import { AskFollowUps } from './ask-follow-ups.js';
 import { Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
-
-/** What an original source may show: 2,000 characters. */
-const MAX_EVIDENCE = 2_000;
 
 /**
  * "Try asking": the empty bar's suggestions, over the page just above the bar.
@@ -294,11 +291,12 @@ function Table({ state, view, index, block, place, opens, label }: {
   </>;
 }
 
-/** A card's kind, as its icon: a person, a project's folder, a ticket's stub, or a decision's diamond, as Home marks one. */
+/** A card's kind, as its icon: a person, a project's folder, a ticket's stub, or a decision's diamond, as Home marks one; another kind has none. */
 function EntityIcon({ entity }: { entity: CardEntity }) {
   if (entity === 'person') return <OnePerson />;
   if (entity === 'project') return <Folder />;
-  return entity === 'ticket' ? <Ticket /> : <KindMark kind="approve" />;
+  if (entity === 'ticket') return <Ticket />;
+  return entity === 'decision' ? <KindMark kind="approve" /> : null;
 }
 
 /**
@@ -367,7 +365,7 @@ function ArrangedItems({ state, view, part, index, block, place, opens }: {
         </ol>
       );
     case 'card': {
-      const kind = CARD_WORDS[block.entity];
+      const kind = cardWord(block.entity);
       return (
         <div class="answer-card selectable" role="group" aria-label={`${kind} ${block.title}`}>
           <div class="answer-card-head">
@@ -401,10 +399,11 @@ function ArrangedItems({ state, view, part, index, block, place, opens }: {
 function Arranged({ state, view, part, index, blocks, opening }: {
   state: State; view: TurnView; part: AnswerPart; index: number; blocks: readonly ArrangedBlock[]; opening: boolean;
 }) {
-  const showing = shownArranged(part, blocks, view.shows);
+  const drawn = drawnBlocks(blocks);
+  const showing = shownArranged(part, drawn, view.shows);
   return (
     <div class="answer-layout">
-      {blocks.map((block, place) => {
+      {drawn.map((block, place) => {
         if (!showing[place]) return null;
         const title = blockTitle(block);
         return (
@@ -1069,7 +1068,8 @@ function OriginalSource({ state, target, source }: { state: State; target: PaneT
       {places.map((index, at) => {
         const read = all[at]!;
         if (read.loading || !('value' in read)) return null;
-        const text = read.value.text.length > MAX_EVIDENCE ? `${read.value.text.slice(0, MAX_EVIDENCE)}…` : read.value.text;
+        // Cut once, by the host (evidenceView), as the pane shows any text.
+        const text = read.value.text;
         return (
           <Fragment key={index}>
             {sharedReview === undefined && read.value.imported_meeting_review !== undefined && <SourceReviewBadge review={read.value.imported_meeting_review} />}

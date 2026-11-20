@@ -217,16 +217,8 @@ export function followedTurn(turns: readonly TimelineTurn[], opened: string | nu
   return latest && now - Date.parse(latest.asked_at) <= FOLLOW_UP_MS ? latest : null;
 }
 
-/** `text` in at most `max` characters, as both a page (UTF-16) and the API (code points) count them: cut with "…" when longer. */
-function within(text: string, max: number): string {
-  if (text.length <= max) return text;
-  let cut = '';
-  for (const character of text) {
-    if (cut.length + character.length > max - 1) break;
-    cut += character;
-  }
-  return `${cut.trimEnd()}…`;
-}
+/** Unicode characters (code points) of `text`, as the API counts a sentence. */
+const characters = (text: string): number => [...text].length;
 
 /** An Ask request's body as the client sends it (`PersonAnswerRequestV3`), for its bytes. */
 function bodyBytes(question: string, scope: AskScope, previous: AskPrevious): number {
@@ -246,14 +238,18 @@ export function answeredNow(turn: TimelineTurn): TurnChecks {
 /**
  * The earlier turn an Ask carries (C3): its full question and when it was
  * asked; its sentences you can still read, in the order the answer says
- * them, at most eight, each at most 400 characters and four citations; and
- * the citations they cite, at most twelve, as the answer's response carried
- * them, renumbered in the order first cited. A sentence goes only when what
- * is known now (`known`: what a check said in the last five minutes, or a new
- * turn's own answer) has each source it cites that a check asks about
- * readable; with nothing known (null), none goes, only
- * the question (C5). Sentences go from the end until the request, asking
- * `question` in `scope`, fits the Ask body's 16 KiB.
+ * them, each whole, with the citations they cite, as the answer's response
+ * carried them, renumbered in the order first cited, all within the API's
+ * bounds on `previous` (PREVIOUS_LIMITS). A sentence is never cut: one over a
+ * bound (its length, or its own citations) is left out whole, and so is one
+ * that would take the citations past theirs, while later sentences citing
+ * what already goes still go. A sentence goes only when what is known now
+ * (`known`: what a check said in the last five minutes, or a new turn's own
+ * answer) has each source it cites that a check asks about readable; with
+ * nothing known (null), none goes, only the question (C5): `previous` is
+ * read by the Authority's model, and a source this person may no longer read
+ * must not reach it. Sentences go from the end until the request, asking
+ * `question` in `scope`, fits the Ask body's bound.
  */
 export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope): AskPrevious {
   const sources = turn.answer.sources;
@@ -272,18 +268,20 @@ export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], 
         const key = JSON.stringify(cited);
         if (!keys.includes(key)) { keys.push(key); citations.push(cited); }
         const place = keys.indexOf(key);
-        if (!places.includes(place) && places.length < PREVIOUS_LIMITS.statement_citations) places.push(place);
+        if (!places.includes(place)) places.push(place);
       }
-      // Trimmed and NFC, as C3 takes a sentence; cut with "…" past 400 characters.
-      return { text: within(statement.text.trim(), PREVIOUS_LIMITS.statement_chars).normalize('NFC'), citation_indexes: places };
+      // Trimmed and NFC, as C3 takes a sentence.
+      return { text: statement.text.trim().normalize('NFC'), citation_indexes: places };
     });
     return { purpose, question: askText(turn.question), asked_at: turn.asked_at, statements, citations };
   };
-  // At most eight sentences, and only as many as keep their citations within twelve.
   const chosen: AnswerStatement[] = [];
   for (const statement of readable) {
     if (chosen.length === PREVIOUS_LIMITS.statements) break;
-    if (build([...chosen, statement]).citations.length > PREVIOUS_LIMITS.citations) break;
+    const next = build([...chosen, statement]);
+    const own = next.statements.at(-1)!;
+    if (characters(own.text) > PREVIOUS_LIMITS.statement_chars || own.citation_indexes.length > PREVIOUS_LIMITS.statement_citations
+        || next.citations.length > PREVIOUS_LIMITS.citations) continue;
     chosen.push(statement);
   }
   let previous = build(chosen);

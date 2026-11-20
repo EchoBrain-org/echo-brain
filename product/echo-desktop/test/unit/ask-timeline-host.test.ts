@@ -23,6 +23,7 @@ vi.mock('node:fs', async original => {
   return { ...fs, writeSync: vi.fn(writeSync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync) };
 });
 import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protocol.js';
+import { PREVIOUS_LIMITS } from '../../src/shared/protocol.js';
 import { askArgv, askCheckArgv, askCheckRequest, askPrevious } from '../../src/host/ask.js';
 import { deleteOtherTimelines, deleteTimeline, pruneTurns, putTimeline, readTimeline, timelinePath, timelineTurn } from '../../src/host/timeline.js';
 import { answerView } from '../../src/host/views.js';
@@ -119,18 +120,32 @@ describe('the timeline file (C5)', () => {
     expect(kept.at(-1)).toEqual(many.at(-1));
   });
 
-  it('reads a file that is not what a put writes as empty, and the next put replaces it', () => {
+  it('reads a file that is not a timeline file as empty, and the next put replaces it', () => {
     mkdirSync(folder(), { mode: 0o700 });
     const path = timelinePath(person, ARI);
-    for (const text of ['not json', '[]', JSON.stringify({ schema_version: 2, kind: 'echo-desktop-ask-timeline-v1', turns: [] }),
-      JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [{ ...turn(), id: 'one' }] }),
-      JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [turn(), { ...turn(), answer: { ...turn().answer, parts: 'many' } }] })]) {
+    for (const text of ['not json', '[]', JSON.stringify({ schema_version: 2, kind: 'echo-desktop-ask-timeline-v1', turns: [] })]) {
       writeFileSync(path, text, { mode: 0o600 });
       expect(readTimeline(person, ARI)).toEqual([]);
     }
     const fresh = turn();
     putTimeline(person, ARI, fresh, NOW);
     expect(readTimeline(person, ARI)).toEqual([fresh]);
+  });
+
+  it('skips only a turn it cannot show, and a put keeps that turn in the file and every other with it', () => {
+    mkdirSync(folder(), { mode: 0o700 });
+    const path = timelinePath(person, ARI);
+    const [first, second] = [turn(3), turn(2)];
+    const unshown = { ...turn(1), answer: { ...turn().answer, parts: 'many' } };
+    const nameless = { ...turn(1), id: 'one' };
+    writeFileSync(path, JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [first, unshown, nameless, second, { ...second, text: 'again' }] }), { mode: 0o600 });
+    // The rest show: one bad turn never hides them, and an id the file holds twice shows once, as first written.
+    expect(readTimeline(person, ARI)).toEqual([first, second]);
+    // Saving a new turn rewrites the file with every turn it held, the ones this page cannot show as they were.
+    const fresh = turn();
+    putTimeline(person, ARI, fresh, NOW);
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { turns: unknown[] }).turns).toEqual([first, unshown, nameless, second, fresh]);
+    expect(readTimeline(person, ARI)).toEqual([first, second, fresh]);
   });
 
   it('drops a turn an older desktop saved, asked in Mine or with a part without blocks (plain, or laid out by layout v1), and keeps the rest of the file', () => {
@@ -245,10 +260,12 @@ describe('the timeline file (C5)', () => {
     const kept = { ...original, answer: { ...original.answer, follow_ups: ['itm_chat-0001', 'itm_chat-0002'] } };
     putTimeline(person, ARI, kept, NOW);
     expect(readTimeline(person, ARI)).toEqual([kept]);
-    for (const follow_ups of [[], ['itm_chat-0001', 'itm_chat-0001'], ['run_1'], [{ item_id: 'itm_chat-0001', expected: 'Update the pricing page' }],
-      Array.from({ length: 11 }, (_, at) => `itm_chat-${String(at).padStart(4, '0')}`), 'itm_chat-0001']) {
+    for (const follow_ups of [[], ['itm_chat-0001', 'itm_chat-0001'], ['run_1'], [{ item_id: 'itm_chat-0001', expected: 'Update the pricing page' }], 'itm_chat-0001']) {
       expect(timelineTurn({ ...kept, answer: { ...kept.answer, follow_ups } })).toBeNull();
     }
+    // No count of its own: the answer's contract says how many an answer drafts.
+    const many = Array.from({ length: 11 }, (_, at) => `itm_chat-${String(at).padStart(4, '0')}`);
+    expect(timelineTurn({ ...kept, answer: { ...kept.answer, follow_ups: many } })).not.toBeNull();
   });
 
   it('keeps an answer arranged in blocks (ADR-0051) as the page wrote it, and refuses blocks the page could not draw', () => {
@@ -277,12 +294,17 @@ describe('the timeline file (C5)', () => {
     const changed = (at: number, fields: Record<string, unknown>) => ({ ...arranged, answer: { ...arranged.answer, parts: [{ ...part,
       blocks: blocks.map((block, place) => place === at ? { ...block, ...fields } : block) }] } });
     expect(timelineTurn(changed(4, { ordered: false }))).not.toBeNull();
+    // A kind of block, or a card's entity, the page does not know is kept: the page shows it as text, or by the entity's name.
+    expect(timelineTurn(changed(0, { kind: 'lead' }))).not.toBeNull();
+    expect(timelineTurn(changed(3, { entity: 'meeting' }))).not.toBeNull();
+    // No length of its own: a long question and a long sentence are kept as they were asked and answered.
+    expect(timelineTurn({ ...arranged, text: 'q'.repeat(5_000), question: 'q'.repeat(5_000) })).not.toBeNull();
     for (const bad of [
-      changed(0, { kind: 'lead' }), changed(0, { statements: [10] }), changed(5, { title: 7 }), changed(4, { ordered: 'yes' }),
+      changed(0, { kind: 7 }), changed(0, { statements: [10] }), changed(5, { title: 7 }), changed(4, { ordered: 'yes' }),
       changed(1, { rows: [{ cells: 'THERM-52', citation_indexes: [4] }] }),
       // An event, a fact and a quote are each one sentence: the page reads them by its place.
       changed(2, { events: [timeline.events[0]] }), changed(2, { events: [timeline.events[0], { text: 'No day.' }] }),
-      changed(3, { entity: 'meeting' }), changed(3, { title: undefined }), changed(3, { facts: [card.facts[0], { label: 'Owner' }] }),
+      changed(3, { entity: 7 }), changed(3, { title: undefined }), changed(3, { facts: [card.facts[0], { label: 'Owner' }] }),
       changed(6, { statements: [8, 9] }), changed(6, { text: null }),
     ]) expect(timelineTurn(bad)).toBeNull();
   });
@@ -313,16 +335,17 @@ describe('what the page sends with an Ask and a check', () => {
     for (const bad of [
       { ...previous, purpose: 'guess' }, { ...previous, question: '' }, { ...previous, question: ` ${previous.question}` }, { ...previous, asked_at: 'today' },
       { ...previous, asked_at: '2026-10-25T11:30:00Z' }, { ...previous, extra: true },
-      { ...previous, statements: many(previous.statements[0], 9) }, { ...previous, statements: [{ text: 'x'.repeat(401), citation_indexes: [0] }] },
-      { ...previous, statements: [{ text: 'Open.', citation_indexes: [1] }] }, { ...previous, statements: [{ text: 'Open.', citation_indexes: [0, 0, 0, 0, 0] }] },
-      { ...previous, statements: [{ text: 'Open.', citation_indexes: [0], private: true }] }, { ...previous, citations: many(cited, 13) },
+      { ...previous, statements: many(previous.statements[0], PREVIOUS_LIMITS.statements + 1) },
+      { ...previous, statements: [{ text: 'x'.repeat(PREVIOUS_LIMITS.statement_chars + 1), citation_indexes: [0] }] },
+      { ...previous, statements: [{ text: 'Open.', citation_indexes: [1] }] }, { ...previous, statements: [{ text: 'Open.', citation_indexes: many(0, PREVIOUS_LIMITS.statement_citations + 1) }] },
+      { ...previous, statements: [{ text: 'Open.', citation_indexes: [0], private: true }] }, { ...previous, citations: many(cited, PREVIOUS_LIMITS.citations + 1) },
       { ...previous, citations: [{ ...cited, visibility: 'everyone' }] }, { ...previous, citations: [ticketCitation] },
       // Each citation once, and each sentence citing each once.
       { ...previous, citations: [cited, cited] }, { ...previous, statements: [{ text: 'Open.', citation_indexes: [0, 0] }] },
     ]) expect(asked(bad)).toBeNull();
-    // 400 characters as the API counts them: code points, so a sentence of 400 emoji passes, and one more does not.
-    expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(400), citation_indexes: [0] }] })).not.toBeNull();
-    expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(401), citation_indexes: [0] }] })).toBeNull();
+    // Characters as the API counts them: code points, so a sentence of that many emoji passes, and one more does not.
+    expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(PREVIOUS_LIMITS.statement_chars), citation_indexes: [0] }] })).not.toBeNull();
+    expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(PREVIOUS_LIMITS.statement_chars + 1), citation_indexes: [0] }] })).toBeNull();
   });
 
   it('checks 1 to 100 items, each a citation that can go, within 64 KiB', () => {

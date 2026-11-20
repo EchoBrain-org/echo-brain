@@ -230,6 +230,29 @@ export function blockTitle(block: ArrangedBlock): string | undefined {
 /** What a card's kind reads as, before its title ("Ticket THERM-48"). */
 export const CARD_WORDS: Readonly<Record<CardEntity, string>> = { person: 'Person', project: 'Project', ticket: 'Ticket', decision: 'Decision' };
 
+/** A card's kind as words: one the page knows, or any other by its own name ("risk_item" reads "Risk item"). */
+export function cardWord(entity: string): string {
+  if (Object.hasOwn(CARD_WORDS, entity)) return CARD_WORDS[entity as CardEntity];
+  const words = entity.replace(/[_-]+/gu, ' ').trim();
+  return words === '' ? 'Card' : `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+/** The kinds of block the page draws (answer layout v2, ADR-0051). */
+const DRAWN: ReadonlySet<string> = new Set<ArrangedBlock['kind']>(['answer', 'text', 'points', 'table', 'timeline', 'card', 'quote']);
+
+/**
+ * A part's blocks as the page draws them: a kind of block it does not know
+ * (one a newer Authority writes) is shown as text, its sentences and title
+ * kept, so a richer answer never fails to show.
+ */
+export function drawnBlocks(blocks: readonly ArrangedBlock[]): ArrangedBlock[] {
+  return blocks.map(block => {
+    if (DRAWN.has(block.kind)) return block;
+    const { statements, title } = block as { readonly statements: readonly number[]; readonly title?: unknown };
+    return { kind: 'text', statements, ...(typeof title === 'string' ? { title } : {}) };
+  });
+}
+
 /** Text, then the numbers of what it cites: as Copy answer writes a claim. */
 type Cited = (text: string, citations: readonly number[]) => string;
 
@@ -251,7 +274,8 @@ function tableMarkdown(block: AnswerTable, shows: Shows, cited: Cited): string[]
  * kind and title in bold, then its facts as a list; a quote quoted, its
  * source under it. Each item is followed by its sentence's numbers.
  */
-function arrangedMarkdown(part: AnswerPart, blocks: readonly ArrangedBlock[], shows: Shows, cited: Cited): string[] {
+function arrangedMarkdown(part: AnswerPart, arranged: readonly ArrangedBlock[], shows: Shows, cited: Cited): string[] {
+  const blocks = drawnBlocks(arranged);
   const showing = shownArranged(part, blocks, shows);
   return blocks.flatMap((block, place) => {
     if (!showing[place]) return [];
@@ -268,7 +292,7 @@ function arrangedMarkdown(part: AnswerPart, blocks: readonly ArrangedBlock[], sh
         const when = [tableDay(event.date) ?? event.date, ...(event.who === undefined ? [] : [event.who])].join(', ');
         return `- ${cited(`${when}: ${event.text}`, statement.citation_indexes)}`;
       }).join('\n')];
-      case 'card': return [`**${markdownText(`${CARD_WORDS[block.entity]}: ${block.title}`)}**`, shown.map(({ statement, at }) => {
+      case 'card': return [`**${markdownText(`${cardWord(block.entity)}: ${block.title}`)}**`, shown.map(({ statement, at }) => {
         const fact = block.facts[at]!;
         return `- ${markdownText(fact.label)}: ${cited(fact.value, statement.citation_indexes)}`;
       }).join('\n')];

@@ -53,8 +53,12 @@ export interface PersonImpactCardV1 {
   readonly citations: readonly PersonAnswerCitationV6[];
 }
 
-/** Entry counts, and text lengths in characters. */
-export const PERSON_IMPACT_CARD_LIMITS_V1 = Object.freeze({ decided: 12, affected: 20, unconfirmed: 20, line_chars: 300, name_chars: 200, milestone_chars: 120, expected_chars: 120 });
+/**
+ * Entry counts, and text lengths in characters. The counts keep one card,
+ * with its citations, well inside the runs response's 1 MiB; a decision that
+ * affects more items than research reads in one run is not a card's concern.
+ */
+export const PERSON_IMPACT_CARD_LIMITS_V1 = Object.freeze({ decided: 100, affected: 100, unconfirmed: 100, line_chars: 300, name_chars: 200, milestone_chars: 120, expected_chars: 120 });
 
 const RELATIONS: readonly string[] = ['confirms', 'conflicts', 'needs_updating'];
 

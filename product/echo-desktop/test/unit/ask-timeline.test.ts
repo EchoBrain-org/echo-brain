@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, AskScope, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
-import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS } from '../../src/shared/protocol.js';
+import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_COPY_CHARACTERS, PREVIOUS_LIMITS } from '../../src/shared/protocol.js';
 import {
   allOmitted, answeredNow, askedSuggestions, checkedOf, checkPlan, followedTurn, knownStates, previousOf, shownInFull, showsOf, threadOf, turnGroups,
   unreadableAfter, visibleTurns,
@@ -237,18 +237,34 @@ describe('the earlier turn an Ask carries (C3)', () => {
     expect(previousOf(named, 'follow_up', { 0: 'same' }, 'And since?', { kind: 'global' }).statements).toHaveLength(1);
   });
 
-  it('keeps eight sentences at most, each 400 characters and four citations, and twelve citations in all', () => {
-    const sources = Array.from({ length: 16 }, (_, at) => ticket(`T-${at}`, String(2000 + at)));
-    const long = 'x'.repeat(500);
-    const answer = answerOf('Wide?', sources, [[long, [0, 1, 2, 3, 4]], ...Array.from({ length: 9 }, (_, at) => [`Sentence ${at}.`, [5 + at]] as [string, number[]])]);
+  it('carries each sentence whole within the API\'s bounds, leaving out only one that does not fit, never cutting one', () => {
+    const { statements: most, statement_chars: chars, citations: cites, statement_citations: own } = PREVIOUS_LIMITS;
+    // A sentence longer than the API takes, and one citing more than one sentence may, are left out whole; the rest go, uncut.
+    const sources = Array.from({ length: own + 2 }, (_, at) => followUp(`itm_wide-${at}`));
+    const answer = answerOf('Wide?', sources, [['x'.repeat(chars + 1), [0]], ['Cites too much.', Array.from({ length: own + 1 }, (_, at) => at)], ['Kept.', [own + 1]]]);
     const wide = turn('Wide?', HOUR, answer);
     const previous = previousOf(wide, 'ask_again', answeredNow(wide), 'Wide?', { kind: 'global' });
-    expect(previous.statements).toHaveLength(8);
-    expect(previous.statements[0]!.text.length).toBeLessThanOrEqual(400);
-    expect(previous.statements[0]!.text.endsWith('…')).toBe(true);
-    expect(previous.statements[0]!.citation_indexes).toEqual([0, 1, 2, 3]);
-    expect(previous.citations.length).toBeLessThanOrEqual(12);
-    expect(previous.statements.flatMap(statement => statement.citation_indexes).every(at => at < previous.citations.length)).toBe(true);
+    expect(previous.statements).toEqual([{ text: 'Kept.', citation_indexes: [0] }]);
+    expect(previous.citations).toEqual([sources[own + 1]!.cited]);
+    expect(previous.statements.some(statement => statement.text.includes('…'))).toBe(false);
+    // A sentence of exactly the API's length goes whole.
+    const full = turn('Full?', HOUR, answerOf('Full?', [followUp('itm_full-0')], [['y'.repeat(chars), [0]]]));
+    expect(previousOf(full, 'follow_up', answeredNow(full), 'And?', { kind: 'global' }).statements[0]!.text).toBe('y'.repeat(chars));
+    // No more sentences than the API takes.
+    const many = turn('Many?', HOUR, answerOf('Many?', [followUp('itm_many-0')], Array.from({ length: most + 1 }, (_, at) => [`Sentence ${at}.`, [0]] as [string, number[]])));
+    expect(previousOf(many, 'follow_up', answeredNow(many), 'And?', { kind: 'global' }).statements).toHaveLength(most);
+    // A sentence that would take the citations past the API's bound is left out; a later one citing what already goes still goes.
+    const groups = Math.floor(cites / own);
+    const all = Array.from({ length: (groups + 1) * own }, (_, at) => followUp(`itm_c-${at}`));
+    const sentences: [string, number[]][] = [
+      ...Array.from({ length: groups + 1 }, (_, group) => [`Group ${group}.`, Array.from({ length: own }, (_, at) => group * own + at)] as [string, number[]]),
+      ['Again the first.', [0]],
+    ];
+    const cited = turn('Cited?', HOUR, answerOf('Cited?', all, sentences));
+    const carried = previousOf(cited, 'follow_up', answeredNow(cited), 'And?', { kind: 'global' });
+    expect(carried.citations.length).toBeLessThanOrEqual(cites);
+    expect(carried.statements.map(statement => statement.text)).toEqual([...Array.from({ length: groups }, (_, group) => `Group ${group}.`), 'Again the first.']);
+    expect(carried.statements.flatMap(statement => statement.citation_indexes).every(at => at < carried.citations.length)).toBe(true);
   });
 
   it('sends each citation once, however many places of the answer cite it, and each sentence citing it once', () => {
@@ -260,13 +276,15 @@ describe('the earlier turn an Ask carries (C3)', () => {
     expect(previous.statements.map(statement => statement.citation_indexes)).toEqual([[0], [1, 0]]);
   });
 
-  it('leaves sentences off the end until the whole Ask fits its 16 KiB', () => {
-    const permalink = (at: number) => `https://example.atlassian.net/browse/${'L'.repeat(1_800)}${at}`;
-    const sources = Array.from({ length: 12 }, (_, at) => ticket(`L-${at}`, String(3000 + at), permalink(at)));
-    const answer = answerOf('Long?', sources, Array.from({ length: 8 }, (_, at) => [`${'y'.repeat(380)} ${at}.`, [at, at + 4 > 11 ? 11 : at + 4]] as [string, number[]]));
+  it('leaves sentences off the end until the whole Ask fits its body bound', () => {
+    // Eight sentences, each citing a ticket with a long link: more than the Ask body holds.
+    const permalink = (at: number) => `https://example.atlassian.net/browse/${'L'.repeat(9_000)}${at}`;
+    const sources = Array.from({ length: 8 }, (_, at) => ticket(`L-${at}`, String(3000 + at), permalink(at)));
+    const answer = answerOf('Long?', sources, Array.from({ length: 8 }, (_, at) => [`${'y'.repeat(200)} ${at}.`, [at]] as [string, number[]]));
     const long = turn('Long?', HOUR, answer);
     const previous: AskPrevious = previousOf(long, 'follow_up', answeredNow(long), 'And then?', { kind: 'global' });
     const body = JSON.stringify({ schema_version: 3, question: 'And then?', previous });
+    expect(MAX_ASK_BODY_BYTES).toBe(64 * 1024);
     expect(new TextEncoder().encode(body).length).toBeLessThanOrEqual(MAX_ASK_BODY_BYTES);
     expect(previous.statements.length).toBeGreaterThan(0);
     expect(previous.statements.length).toBeLessThan(8);
@@ -299,6 +317,17 @@ describe('Ask on the timeline', () => {
     await flush();
     expect(byTestId(thread(store), 'timeline-question').map(text)).toEqual(['Two days ago?', 'Yesterday?']);
     expect(byTestId(thread(store), 'question').map(text)).toEqual(['What now?', 'And next?']);
+  });
+
+  it('says when a turn could not be saved on this computer, and still shows it', async () => {
+    const store = await startStore();
+    const timeline = rpc.getMockImplementation()!;
+    rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => (method === 'timeline.put' ? fail('invalid_output') : timeline(method, params)));
+    await store.ask('What now?');
+    await flush();
+    expect(store.getState().timeline.turns.map(each => each.question)).toEqual(['What now?']);
+    const { TURN_NOT_SAVED } = await import('../../src/renderer/store.js');
+    expect(store.getState().toast).toBe(TURN_NOT_SAVED);
   });
 
   it.each([
@@ -716,7 +745,7 @@ describe('Ask on the timeline', () => {
 
   it('copies an Ask again whose every answer sentence a check left out as the page shows it, past what Copy answer takes: its "Since", then that nothing you can see matched', async () => {
     const sources = [followUp('itm_timeline-1'), page('31010')];
-    const long = 'x'.repeat(11_990);
+    const long = 'x'.repeat(MAX_COPY_CHARACTERS - 10);
     const answer = answerOf('What is open on THERM?', sources, [['Confirm the trace is still open.', [0]]]);
     const earlier = turn('What is open on THERM?', 3 * DAY, answer);
     const again = turn('What is open on THERM?', 2 * DAY, answer, { again_of: earlier.id,

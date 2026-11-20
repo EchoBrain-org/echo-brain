@@ -81,6 +81,7 @@ export function duration(ms: number): string {
  * Authority's own `elapsed_ms`, which leaves out the client and the network.
  */
 export function lookedThrough(receipt: AskReceipt): string {
+  if (receipt.at_least) return `Looked through ${receipt.looked_through.toLocaleString('en-US')}+ items`;
   return `Looked through ${receipt.looked_through} ${receipt.looked_through === 1 ? 'item' : 'items'}`;
 }
 

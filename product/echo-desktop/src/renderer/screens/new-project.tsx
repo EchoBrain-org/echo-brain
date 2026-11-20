@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { MAX_PROJECT_FILES } from '../../shared/protocol.js';
 import { message } from '../messages.js';
 import {
   askSkip, canDropFiles, cancelSkip, checkFile, chooseFiles, closeSheet, confirmSkip, createProject, dropFiles, EXTRACTION, keepNewProject,
@@ -305,7 +304,7 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
               {sheet.files.map(file => <FileRow key={file.id} file={file} halted={halted} queued={queued} busy={busy} />)}
             </div>
           )}
-          <button type="button" class="pill" data-testid="new-project-add-files" disabled={sheet.files.length >= MAX_PROJECT_FILES}
+          <button type="button" class="pill" data-testid="new-project-add-files"
             onClick={() => void chooseFiles()}>Add files…</button>
         </div>
         {sheet.notice && <div class="notice-line" data-testid="new-project-notice" aria-live="polite">{sheet.notice}</div>}

@@ -4,6 +4,10 @@ import type {
   PersonAskCheckCitationKindV1, PersonAskCheckItemV1, PersonAskCheckRequestItemV1, PersonAskCheckStateV1, PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2,
   PersonMeetingResultsV2, PersonReviewRequestV1, PersonReviewResultsV1, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonProjectActivityItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
+import {
+  PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1,
+  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
+} from '@echo-brain/organization-api/person-answer-previous-v1';
 // The only shapes that cross process boundaries. Everything here is
 // token-free: the person host builds these view models from the client's
 // validated output, and the renderer never sees a token, a path or a
@@ -295,6 +299,8 @@ export type AskStep = { readonly type: 'stage'; readonly stage: AskStage; readon
  */
 export interface AskReceipt {
   readonly looked_through: number;
+  /** The count reached the progress contract's bound on a count (1,000): at least that many, said "1,000+". */
+  readonly at_least?: true;
 }
 
 /** A cited statement in the Agentic Ask response. Citation indexes address Answer.sources. */
@@ -426,9 +432,13 @@ export const MAX_CHECK_REQUEST_BYTES = 64 * 1024;
  * `ask_again` has the writer say what is different since `asked_at`.
  */
 export type AskPrevious = PersonAnswerPreviousV1;
-/** C3's bounds on `previous`, and the Ask request body's own, which it shares. */
-export const PREVIOUS_LIMITS = { statements: 8, statement_chars: 400, citations: 12, statement_citations: 4 } as const;
-export const MAX_ASK_BODY_BYTES = 16 * 1024;
+/** C3's bounds on `previous`, as the API states them. */
+export const PREVIOUS_LIMITS = {
+  statements: PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1, statement_chars: PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1,
+  citations: PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, statement_citations: PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
+} as const;
+/** The Ask request body's bound, which `previous` shares: the Authority's own request body bound. */
+export const MAX_ASK_BODY_BYTES = 64 * 1024;
 
 /** The newest thing that arrived in one of your projects from someone else that you can read, or null (C2). */
 export type ProjectActivity = PersonProjectActivityItemV1;
@@ -498,10 +508,12 @@ export type Audience =
  * read it: the API's own bound (PERSON_UPLOAD_PROJECT_SET_MAX).
  */
 export const MAX_CAPTURE_PROJECTS = 20;
-/** New project takes up to 20 files. */
-export const MAX_PROJECT_FILES = 20;
-/** Copy answer takes what an answer can hold: 12,000 characters. */
-export const MAX_COPY_CHARACTERS = 12_000;
+/**
+ * Copy answer takes one whole answer, as a saved turn holds one: up to the
+ * bound of a timeline put, in characters. It bounds what the page may hand
+ * the clipboard, never what an answer may say.
+ */
+export const MAX_COPY_CHARACTERS = MAX_TIMELINE_PUT_BYTES;
 
 /** Where a saved document's text extraction stands (the Authority's own states). */
 export type Extraction = 'extracting' | 'ready' | 'partial' | 'no_text' | 'encrypted' | 'malformed' | 'limit_exceeded' | 'timed_out'
@@ -1014,9 +1026,12 @@ export function changesLogLine(params: unknown): string | null {
 
 /** Parameters larger than this are refused at the broker. */
 export const MAX_PARAMS_BYTES = 64 * 1024;
-/** The most a call's parameters may take at the broker: a timeline put carries one whole answer, every other call MAX_PARAMS_BYTES. */
+/**
+ * The most a call's parameters may take at the broker: a timeline put and
+ * Copy answer each carry one whole answer, every other call MAX_PARAMS_BYTES.
+ */
 export function paramsLimit(method: string): number {
-  return method === 'timeline.put' ? MAX_TIMELINE_PUT_BYTES : MAX_PARAMS_BYTES;
+  return method === 'timeline.put' || method === 'clipboard.writeText' ? MAX_TIMELINE_PUT_BYTES : MAX_PARAMS_BYTES;
 }
 /** Deeper than any request's parameters: it bounds the walk, and ends a cycle a structured clone can carry. */
 const MAX_PARAMS_DEPTH = 32;

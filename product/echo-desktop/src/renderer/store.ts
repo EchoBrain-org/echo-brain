@@ -11,7 +11,7 @@ import type {
   ProjectChange, ProjectGranolaMapping, ProjectConfluenceMapping, ConfluenceSpace, GranolaFolder, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
+import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
@@ -2766,7 +2766,6 @@ export function confirmMemberChange(): void {
 
 // ---- new project -----------------------------------------------------------------
 
-const TOO_MANY_FILES = 'Add up to 20 files.';
 /** Said when New project closes after Create with files that may not have been saved, people who may not have been added, or both. */
 const UNSAVED_FILES = 'Some files may not have been saved.';
 const UNADDED_PEOPLE = 'Some people may not have been added.';
@@ -3116,7 +3115,6 @@ export async function chooseFiles(): Promise<void> {
 export async function dropFiles(files: readonly File[]): Promise<void> {
   const sheet = newProjectSheet();
   if (!sheet || files.length === 0) return;
-  if (sheet.files.length + files.length > MAX_PROJECT_FILES) { setNewProject({ notice: TOO_MANY_FILES }, sheet.seq); return; }
   const chosen: { name: string; handle?: FileHandle; failure?: Failure }[] = [];
   for (const file of files) {
     const result = await dropFile(file);
@@ -3129,7 +3127,6 @@ export async function dropFiles(files: readonly File[]): Promise<void> {
 function addFiles(mine: number, chosen: readonly { name: string; handle?: FileHandle; failure?: Failure }[]): void {
   const sheet = newProjectSheet(mine);
   if (!sheet || chosen.length === 0) return;
-  if (sheet.files.length + chosen.length > MAX_PROJECT_FILES) { setNewProject({ notice: TOO_MANY_FILES }, mine); return; }
   const added: ProjectFile[] = chosen.map(file => ({
     id: ++rowIds, name: file.name, requestId: crypto.randomUUID(), kept: false,
     ...(file.handle ? { handle: file.handle, status: 'waiting' as const } : { status: 'failed' as const, failure: file.failure }),
@@ -3612,10 +3609,13 @@ function keepChecks(checks: Readonly<Record<string, TurnCheck>>): void {
   if (Number.isFinite(next)) checksExpire = setTimeout(() => { checksExpire = null; keepChecks(state.timeline.checks); }, next - now);
 }
 
+/** What the person is told when a turn could not be kept on this computer. */
+export const TURN_NOT_SAVED = 'This answer could not be saved on this computer, so it will be gone after ECHO restarts.';
+
 /**
  * Keeps a turn, here and in the account's file: in place of the turn with its
- * id, or at the end. A put that fails is not retried: the turn shows until the
- * timeline is read again.
+ * id, or at the end. A put that fails is not retried, and says so: the turn
+ * shows until the timeline is read again.
  */
 function keepTurn(turn: TimelineTurn): void {
   const account = expect();
@@ -3623,7 +3623,11 @@ function keepTurn(turn: TimelineTurn): void {
   const turns = state.timeline.turns;
   const kept = turns.some(other => other.id === turn.id) ? turns.map(other => (other.id === turn.id ? turn : other)) : [...turns, turn];
   setTimeline({ ...state.timeline, turns: kept.slice(-MAX_TIMELINE_TURNS) });
-  void rpc('timeline.put', { expect: account, turn });
+  // Said only while the same account is signed in: another's page never hears of it.
+  const same = () => expect()?.membership_id === account.membership_id && expect()?.authority === account.authority;
+  void rpc('timeline.put', { expect: account, turn }).then(result => {
+    if (!result.ok && same()) set({ toast: TURN_NOT_SAVED });
+  }, () => { if (same()) set({ toast: TURN_NOT_SAVED }); });
 }
 
 /** A place's thread, as its checks are kept: Home's, or a project's by its id. */

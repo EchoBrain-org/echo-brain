@@ -115,6 +115,20 @@ describe('impact card', () => {
     ] as const) refused(value as Card, label);
   });
 
+  it('keeps a decision that affects many items whole, up to 100 decided, affected and unconfirmed each', () => {
+    const limits = PERSON_IMPACT_CARD_LIMITS_V1;
+    expect({ decided: limits.decided, affected: limits.affected, unconfirmed: limits.unconfirmed }).toEqual({ decided: 100, affected: 100, unconfirmed: 100 });
+    // A decision that affects 30 tickets lists all 30.
+    const tickets = Array.from({ length: 30 }, (_, at) => ({ ...ticketCitation, citation: { ...ticketCitation.citation, ticket_id: String(20_000 + at), text_sha256: canonicalSha256(`ticket ${at}`) } }));
+    const many = {
+      ...assessed, people: [],
+      affected: tickets.map((_, at) => ({ citation_index: at + 1, says_now: `Ticket ${at} formats one decimal.`, relation: 'conflicts' })),
+      unconfirmed: Array.from({ length: limits.unconfirmed }, (_, at) => `Note ${at}.`),
+      citations: [recordCitation, ...tickets],
+    };
+    expect(validatePersonImpactCardV1(many).affected).toHaveLength(30);
+  });
+
   it('allows expected only on assessed conflicts and needs-updating rows', () => {
     expect(() => validatePersonImpactCardV1(assessedCard({ relation: 'confirms', expected: 'x' }))).toThrow();
     expect(() => validatePersonImpactCardV1(notAssessedCard({ expected: 'x' }))).toThrow();

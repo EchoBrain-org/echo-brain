@@ -10,6 +10,7 @@
 // answer writes Markdown.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, ArrangedBlock, TimelineTurn } from '../../src/shared/protocol.js';
+import { MAX_COPY_CHARACTERS } from '../../src/shared/protocol.js';
 import { blocksAnswer } from '../fixtures/authority.js';
 import { answerView } from '../../src/host/views.js';
 import { Folder, KindMark, OnePerson, Ticket } from '../../src/renderer/screens/icons.js';
@@ -475,9 +476,18 @@ describe('Copy answer', () => {
     expect(markdown).toMatch(/\nSources\n\n1\. Soak test plan\n2\. Soak test report\n3\. PVT readiness review\n4\. THERM-48 · Soak sign-off\n5\. THERM-52 · Thermal pad supplier\n6\. THERM-55 · Line fixture$/u);
   });
 
+  it('copies a long answer whole as Markdown', async () => {
+    const base = therm();
+    const long = 'x'.repeat(40_000);
+    const { store } = await answered({ ...base, parts: [{ question: QUESTION, status: 'answered', statements: [{ text: long, citation_indexes: [0], private: false }],
+      blocks: [{ kind: 'text', statements: [0] }] }] });
+    expect(await store.copyAnswer(paneTurn(store))).toBe(true);
+    expect(copied()[0]!.startsWith(`${long} [1]\n\nSources\n`)).toBe(true);
+  });
+
   it('copies the plain text when the Markdown is past what Copy answer takes', async () => {
     const base = therm();
-    const long = 'x'.repeat(11_990);
+    const long = 'x'.repeat(MAX_COPY_CHARACTERS - 10);
     const { store } = await answered({ ...base, parts: [{ question: QUESTION, status: 'answered', statements: [{ text: long, citation_indexes: [0], private: false }],
       blocks: [{ kind: 'text', statements: [0] }] }] });
     expect(await store.copyAnswer(paneTurn(store))).toBe(true);
