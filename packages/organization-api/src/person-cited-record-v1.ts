@@ -1,6 +1,6 @@
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import type { PersonRecordListItemV1 } from './person-records-v1.js';
-import { asRecord, assertDigest, assertExactKeys, fail, oneOf, utf8ByteLength } from './validation.js';
+import { asRecord, assertDigest, assertExactKeys, fail, oneOf } from './validation.js';
 
 /**
  * One approved meeting record as an Ask citation of it reads: what
@@ -12,13 +12,12 @@ import { asRecord, assertDigest, assertExactKeys, fail, oneOf, utf8ByteLength } 
  * trimmed, never empty), each no longer than the record it comes from.
  */
 export const PERSON_CITED_RECORD_KIND_V1 = 'echo-person-cited-record-v1';
-/** Participants named; `participants_more` says others were left out. */
+/**
+ * Read only by the evidence desk's meeting participants row fact
+ * (person-meeting-items-v1.ts); a cited record names every participant. Goes
+ * once the desk stops reading it.
+ */
 export const PERSON_CITED_RECORD_PARTICIPANTS_MAX_V1 = 32;
-/** Quotes kept per item: its first distinct ones. */
-export const PERSON_CITED_RECORD_QUOTES_MAX_V1 = 3;
-/** An action's owner the approver confirmed, in characters. */
-const OWNER_MAX_CHARACTERS = 120;
-const TEXT_MAX_BYTES = 256 * 1024;
 const TIMEZONE = /^[A-Za-z0-9_+\-/]{1,64}$/;
 
 export type PersonCitedRecordPolicyV1 = 'restricted-reviewer-person-v2' | 'project-members-readable-person-v1';
@@ -52,6 +51,7 @@ export interface PersonCitedRecordV1 {
   readonly all_day: boolean;
   readonly approved_by?: string;
   readonly participants: readonly string[];
+  /** Always false: every participant is named. Kept for the contract's shape. */
   readonly participants_more: boolean;
   readonly decisions: PersonCitedRecordSectionV1;
   readonly actions: PersonCitedRecordSectionV1;
@@ -91,7 +91,7 @@ function confirmedOwners(entries: unknown): ReadonlyMap<string, string> {
   for (const entry of Array.isArray(entries) ? entries : []) {
     const found = object(entry);
     const owner = displayText(found?.owner);
-    if (typeof found?.signal_id === 'string' && owner !== undefined && owner.length <= OWNER_MAX_CHARACTERS) owners.set(found.signal_id, owner);
+    if (typeof found?.signal_id === 'string' && owner !== undefined) owners.set(found.signal_id, owner);
   }
   return owners;
 }
@@ -109,12 +109,12 @@ function section(raw: unknown, kind: Kind, recordSha256: string, owners: Readonl
     }
     ids.add(item.id);
     const quotes: PersonCitedRecordQuoteV1[] = [];
-    for (const span of Array.isArray(item.evidence) ? item.evidence.slice(0, 32) : []) {
+    // Every distinct quote, in the item's order.
+    for (const span of Array.isArray(item.evidence) ? item.evidence : []) {
       const found = object(span);
       const quote = displayText(found?.quote);
       if (quote === undefined || quotes.some(seen => seen.quote === quote)) continue;
       quotes.push(Object.freeze({ quote, ...optional('started_at', isoTime(found?.started_at)) }));
-      if (quotes.length === PERSON_CITED_RECORD_QUOTES_MAX_V1) break;
     }
     const status = kind === 'decision' && (STATUSES as readonly unknown[]).includes(item.status) ? item.status as PersonCitedRecordItemV1['status'] : undefined;
     items.push(Object.freeze({
@@ -139,11 +139,9 @@ export function personCitedRecordV1(record: PersonRecordListItemV1): PersonCited
   if (brief === undefined || meeting === undefined) fail('Cited record brief is invalid');
   const owners = confirmedOwners(object(body.human_act_resolution_ref)?.action_owners);
   const participants: string[] = [];
-  let participants_more = false;
-  for (const entry of Array.isArray(meeting.participants) ? meeting.participants.slice(0, 10_000) : []) {
+  for (const entry of Array.isArray(meeting.participants) ? meeting.participants : []) {
     const name = displayText(object(entry)?.display_name);
     if (name === undefined || participants.includes(name)) continue;
-    if (participants.length === PERSON_CITED_RECORD_PARTICIPANTS_MAX_V1) { participants_more = true; break; }
     participants.push(name);
   }
   const time = object(meeting.time) ?? {};
@@ -156,15 +154,16 @@ export function personCitedRecordV1(record: PersonRecordListItemV1): PersonCited
     ...optional('timezone', typeof time.timezone === 'string' && TIMEZONE.test(time.timezone) ? time.timezone : undefined),
     all_day: time.all_day === true,
     ...optional('approved_by', displayText(record.source_metadata?.record_approved_by?.display_name)),
-    participants: Object.freeze(participants), participants_more,
+    // Every participant is named, so none is ever left out.
+    participants: Object.freeze(participants), participants_more: false,
     decisions: section(brief.decisions, 'decision', record.record_sha256, owners),
     actions: section(brief.actions, 'action', record.record_sha256, owners),
     rationales: section(brief.rationales, 'rationale', record.record_sha256, owners),
   });
 }
 
-function validText(value: unknown, label: string, maximumCharacters = Number.POSITIVE_INFINITY): string {
-  if (typeof value !== 'string' || displayText(value) !== value || utf8ByteLength(value) > TEXT_MAX_BYTES || [...value].length > maximumCharacters) fail(`${label} is invalid`);
+function validText(value: unknown, label: string): string {
+  if (typeof value !== 'string' || displayText(value) !== value) fail(`${label} is invalid`);
   return value;
 }
 function validTime(value: unknown, label: string): string {
@@ -175,8 +174,8 @@ function validFlag(value: unknown, label: string): boolean {
   if (typeof value !== 'boolean') fail(`${label} is invalid`);
   return value;
 }
-function validList(value: unknown, label: string, maximum = Number.POSITIVE_INFINITY): readonly unknown[] {
-  if (!Array.isArray(value) || value.length > maximum) fail(`${label} is invalid`);
+function validList(value: unknown, label: string): readonly unknown[] {
+  if (!Array.isArray(value)) fail(`${label} is invalid`);
   return value;
 }
 
@@ -189,7 +188,7 @@ function validSection(value: unknown, kind: Kind): PersonCitedRecordSectionV1 {
     const extra = (kind === 'decision' ? ['status'] : kind === 'action' ? ['owner'] : []).filter((key) => Object.hasOwn(item, key));
     assertExactKeys(item, ['atom_id', 'text', 'quotes', ...extra], `Person cited record ${kind}`);
     assertDigest(item.atom_id, `Person cited record ${kind} atom_id`);
-    const quotes = validList(item.quotes, `Person cited record ${kind} quotes`, PERSON_CITED_RECORD_QUOTES_MAX_V1).map((raw) => {
+    const quotes = validList(item.quotes, `Person cited record ${kind} quotes`).map((raw) => {
       const quote = asRecord(raw, 'Person cited record quote');
       assertExactKeys(quote, ['quote', ...(Object.hasOwn(quote, 'started_at') ? ['started_at'] : [])], 'Person cited record quote');
       return Object.freeze({ quote: validText(quote.quote, 'Person cited record quote'), ...optional('started_at', Object.hasOwn(quote, 'started_at') ? validTime(quote.started_at, 'Person cited record quote started_at') : undefined) });
@@ -198,7 +197,7 @@ function validSection(value: unknown, kind: Kind): PersonCitedRecordSectionV1 {
     return Object.freeze({
       atom_id: item.atom_id as Sha256Digest, text: validText(item.text, `Person cited record ${kind} text`),
       ...optional('status', Object.hasOwn(item, 'status') ? oneOf(item.status, STATUSES, 'Person cited record decision status') : undefined),
-      ...optional('owner', Object.hasOwn(item, 'owner') ? validText(item.owner, 'Person cited record action owner', OWNER_MAX_CHARACTERS) : undefined),
+      ...optional('owner', Object.hasOwn(item, 'owner') ? validText(item.owner, 'Person cited record action owner') : undefined),
       quotes: Object.freeze(quotes),
     });
   });
@@ -215,7 +214,7 @@ export function validatePersonCitedRecordV1(value: unknown): PersonCitedRecordV1
   if (input.schema_version !== 1 || input.kind !== PERSON_CITED_RECORD_KIND_V1) fail('Person cited record is invalid');
   assertDigest(input.record_sha256, 'Person cited record record_sha256');
   if (Object.hasOwn(input, 'timezone') && (typeof input.timezone !== 'string' || !TIMEZONE.test(input.timezone))) fail('Person cited record timezone is invalid');
-  const participants = validList(input.participants, 'Person cited record participants', PERSON_CITED_RECORD_PARTICIPANTS_MAX_V1).map((name) => validText(name, 'Person cited record participant'));
+  const participants = validList(input.participants, 'Person cited record participants').map((name) => validText(name, 'Person cited record participant'));
   if (new Set(participants).size !== participants.length) fail('Person cited record participants repeat');
   return Object.freeze({
     schema_version: 1, kind: PERSON_CITED_RECORD_KIND_V1, record_sha256: input.record_sha256 as Sha256Digest,
