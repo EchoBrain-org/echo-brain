@@ -29,14 +29,44 @@ function keepAlivesThenReply(ms: number): typeof fetch {
   }, 10);
 }
 
-/** A reply far past what a one-token model output can carry, sent as fast as it is read. */
+/** The kept-text capacity of a one-token output allowance: (1 + 256) × 4096 bytes. */
+const ONE_TOKEN_CAPACITY = 257 * 4096;
+
+/** Reply text past what a one-token model output can carry, sent as fast as it is read. */
 function oversized(): typeof fetch {
-  const comment = `: ${"x".repeat(64 * 1024)}\n\n`;
+  const piece = "x".repeat(64 * 1024);
   return stream(function* () {
-    for (let index = 0; index < 64; index += 1) yield comment;
+    for (let index = 0; index < 20; index += 1) yield `data: {"choices":[{"delta":{"content":"${piece}"}}]}\n\n`;
     yield 'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}\n\n';
   }, 0);
 }
+
+describe("OpenRouter reply capacity measures what is kept", () => {
+  it("discards comments and repeated routing metadata as read: they never count against the capacity", async () => {
+    const comment = `: ${"x".repeat(64 * 1024)}\n\n`;
+    const metadata = JSON.stringify({ provider: "Anthropic", model: "anthropic/claude-sonnet-5.5", openrouter_metadata: { padding: "m".repeat(32 * 1024) } }).slice(1, -1);
+    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
+      for (let index = 0; index < 64; index += 1) {
+        yield comment;
+        yield `data: {${metadata},"choices":[{"delta":{"reasoning":"r"}}]}\n\n`;
+      }
+      yield 'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"},"finish_reason":"stop"}]}\n\n';
+    }, 0) });
+    await expect(adapter.generate(request)).resolves.toEqual({ ok: true });
+  });
+
+  it("fits a legitimate reply at the capacity whose text arrives escaped", async () => {
+    // Each "é" is two kept bytes and six wire bytes (\u00e9): about 0.86 of the capacity kept, 2.6 times it on the wire.
+    const chars = Math.floor(ONE_TOKEN_CAPACITY * 0.43);
+    const per = 10_000;
+    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
+      yield 'data: {"choices":[{"delta":{"content":"{\\"a\\":\\""}}]}\n\n';
+      for (let sent = 0; sent < chars; sent += per) yield `data: {"choices":[{"delta":{"content":"${"\\u00e9".repeat(Math.min(per, chars - sent))}"}}]}\n\n`;
+      yield 'data: {"choices":[{"delta":{"content":"\\"}"},"finish_reason":"stop"}]}\n\n';
+    }, 0) });
+    await expect(adapter.generate(request)).resolves.toEqual({ a: "é".repeat(chars) });
+  });
+});
 
 describe("OpenRouter reply reading", () => {
   it("does not count keep-alive comments as progress: a stream of only keep-alives is stalled (answer adapter)", async () => {
