@@ -64,6 +64,14 @@ describe("OpenRouter reply capacity measures what is kept", () => {
     await expect(adapter.generate(request)).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response" } });
   });
 
+  it("charges each retained top-level field's name too: long distinct names with tiny values past the capacity fail", async () => {
+    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
+      for (let index = 0; index < 20; index += 1) yield `data: {"${"k".repeat(64 * 1024)}${index}":0,"choices":[]}\n\n`;
+      yield 'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}\n\n';
+    }, 0) });
+    await expect(adapter.generate(request)).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response" } });
+  });
+
   it("charges every retained tool-call id: calls whose ids pass the capacity fail", async () => {
     const big = "i".repeat(64 * 1024);
     const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {

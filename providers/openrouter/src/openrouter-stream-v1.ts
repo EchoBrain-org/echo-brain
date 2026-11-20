@@ -115,9 +115,12 @@ class OpenRouterStreamAssemblerV1 {
     if (this.kept > this.capacityBytes) throw new OpenRouterReplyTooLargeErrorV1(this.capacityBytes);
   }
 
-  /** Charges a value that replaces the slot's earlier one: only the value now retained counts, measured as JSON. */
+  /**
+   * Charges a value that replaces the slot's earlier one: what is retained now counts, the slot's key (a top-level
+   * field's name is retained with it) once, and its value measured as JSON.
+   */
   private replace(slot: string, value: unknown): void {
-    const size = bytesOf(JSON.stringify(value) ?? '');
+    const size = bytesOf(slot) + bytesOf(JSON.stringify(value) ?? '');
     this.kept += size - (this.replaced.get(slot) ?? 0);
     this.replaced.set(slot, size);
     if (this.kept > this.capacityBytes) throw new OpenRouterReplyTooLargeErrorV1(this.capacityBytes);
