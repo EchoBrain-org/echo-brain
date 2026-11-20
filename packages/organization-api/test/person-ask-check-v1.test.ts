@@ -24,6 +24,7 @@ const citations = {
   follow_up: { kind: 'follow_up', item_id: 'itm_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' },
   ticket: { kind: 'ticket', tool_id: 'jira', external_scope_id: '00000000-0000-4000-8000-000000000007', ticket_id: '10012', permalink: 'https://echo.atlassian.net/browse/ECHO-12', text_sha256: digest('1') },
   page: { kind: 'page', tool_id: 'confluence', external_scope_id: '00000000-0000-4000-8000-000000000007', page_id: '200', section_id: 's2', version: '3', permalink: 'https://echo.atlassian.net/wiki/pages/viewpage.action?pageId=200', text_sha256: digest('2') },
+  project: { kind: 'project', project_id: 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' },
 } as const;
 const item = (citation: unknown, fields: Record<string, unknown> = {}) => ({ asked_at: ASKED, citation, ...fields });
 const request = (items: readonly unknown[] = Object.values(citations).map(citation => item(citation)), fields: Record<string, unknown> = {}) =>
@@ -36,7 +37,7 @@ describe('Ask source check request (Ask timeline v1, C1)', () => {
     expect(PERSON_ASK_CHECK_LIMITS_V1).toEqual({ items_min: 1, body_bytes: MAX_ORGANIZATION_API_BODY_BYTES });
     expect(MAX_ORGANIZATION_API_BODY_BYTES).toBe(1024 * 1024);
     expect(Object.isFrozen(PERSON_ASK_CHECK_LIMITS_V1)).toBe(true);
-    expect([...PERSON_ASK_CHECK_CITATION_KINDS_V1]).toEqual(['approved_record', 'source_revision', 'follow_up', 'ticket', 'page']);
+    expect([...PERSON_ASK_CHECK_CITATION_KINDS_V1]).toEqual(['approved_record', 'source_revision', 'follow_up', 'ticket', 'page', 'project']);
   });
 
   it('accepts each checkable kind exactly as an answer cited it, and returns a frozen copy', () => {
@@ -63,7 +64,7 @@ describe('Ask source check request (Ask timeline v1, C1)', () => {
   });
 
   it.each([
-    ['a project', { kind: 'project', project_id: 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' }],
+    ['a project with a bad id', { kind: 'project', project_id: 'project-1' }],
     ['a person', { kind: 'person', membership_id: 'mem_0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e' }],
     ['a tool', { kind: 'tool', tool_id: 'jira' }],
     ['a tool container', { kind: 'tool_container', tool_id: 'jira', external_scope_id: 'cloud-1', container: 'jira_project', container_id: '10001', permalink: 'https://example.atlassian.net/browse/THERM' }],

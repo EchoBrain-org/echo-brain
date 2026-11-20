@@ -258,15 +258,18 @@ export type AnswerSource = (
   readonly cited?: PersonAnswerCitationV8;
 };
 
-/** The kinds of evidence a check asks about (Ask source check, C1): what an old answer cited that can go. */
-const CHECK_KINDS: readonly PersonAskCheckCitationKindV1[] = ['approved_record', 'source_revision', 'follow_up', 'ticket', 'page'];
+/**
+ * The kinds of evidence a check asks about (Ask source check, C1): what an old answer cited that can go, a project by the
+ * asker's membership of it. A source of any other kind (a person, a tool, a tool container) is never known readable.
+ */
+const CHECK_KINDS: readonly PersonAskCheckCitationKindV1[] = ['approved_record', 'source_revision', 'follow_up', 'ticket', 'page', 'project'];
 /** A checkable source's evidence citation, as the answer cited it. */
 export type CheckCitation = Extract<PersonAnswerEvidenceCitationV8, { readonly kind: PersonAskCheckCitationKindV1 }>;
 
 /**
  * What `ask.check` asks about a source (ADR-0047): its evidence citation,
  * exactly as the answer cited it, when it can go (a record's item, an
- * original's passage, a follow-up, a ticket or a page). Opaque here.
+ * original's passage, a follow-up, a ticket, a page or a project). Opaque here.
  */
 export function checkOf(source: AnswerSource): CheckCitation | undefined {
   const citation = source.cited?.citation;

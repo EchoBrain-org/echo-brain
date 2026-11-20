@@ -355,16 +355,17 @@ export interface PersonReadableDecisionProjectsV1 {
 interface PersonProjectRecordsV1 {
   /**
    * When the newest record filed in the project that this person reads now and did not approve arrived (its receipt time),
-   * else null. Every filed record is looked at, newest first, until that one is found.
+   * else null. Filed records are looked at newest first, a page at a time, until that one is found, and no further.
    */
   readonly meeting_at: string | null;
   /**
-   * Every record filed in the project, newest first: those its members read by the record's project
+   * Every record filed in the project, newest first, one page (PROJECT_RECORDS_PAGE) at a time, each page read only as the
+   * caller takes it, so a caller holds one page, never the whole history: those its members read by the record's project
    * audience, and those its approver alone reads (ADR-0049) only when this person is that approver, so another's private
    * records never take the place of a record this person reads. A lookup, not a read: it checks no current grant, so the
-   * caller checks each one it uses (`readableDecisionProjects`).
+   * caller checks each one it uses (`readableDecisionProjects`). Taken inside the caller's same synchronous read.
    */
-  readonly filed: readonly Sha256Digest[];
+  filed(): Iterable<readonly Sha256Digest[]>;
 }
 
 /** What arrived in a person's projects from approved meetings (Ask timeline v1, C2). */
@@ -726,7 +727,10 @@ function readGeneration<T>(read: () => T): T {
 }
 
 const RECORD_SHA256 = /^sha256:[0-9a-f]{64}$/;
-/** The filed records a project lookup reads per SQL page; it pages on until none is left. Batching, not a bound. */
+/**
+ * The filed records a project lookup reads per SQL page; it pages on until none is left. Batching, not a bound: host working
+ * memory, since a project activity read holds one page of a project's filed history at a time, never all of it.
+ */
 const PROJECT_RECORDS_PAGE = 100;
 
 type MeetingCollectionState = {
@@ -1495,27 +1499,33 @@ export function createPersonRecordSearchRouteV1(
       for (const projectId of new Set(input.project_ids)) {
         // A project the reader does not hold has nothing filed for them, as projectRecords answers it.
         if (!held.has(projectId)) continue;
-        const filed: Sha256Digest[] = [];
+        /** The project's filed records, newest first, a page at a time, read as they are taken. */
+        const pages = function* (): Generator<readonly { readonly record_position: number; readonly record_sha256: Sha256Digest }[]> {
+          for (let before = Number.MAX_SAFE_INTEGER; ;) {
+            const page = filedIn(projectId, before, PROJECT_RECORDS_PAGE);
+            if (page.length > 0) yield page;
+            if (page.length < PROJECT_RECORDS_PAGE) return;
+            before = page.at(-1)!.record_position;
+          }
+        };
         let meeting_at: string | null = null;
-        // A page at a time until none is left: every filed record is listed, each looked through until the newest that is not
-        // the reader's own is found.
-        for (let before = Number.MAX_SAFE_INTEGER; ;) {
-          const size = PROJECT_RECORDS_PAGE;
-          const page = filedIn(projectId, before, size);
+        // Pages until the newest record that is not the reader's own and that they read is found.
+        found: for (const page of pages()) {
           for (const candidate of page) {
-            filed.push(candidate.record_sha256);
-            if (meeting_at !== null || input.own.has(candidate.record_sha256)) continue;
+            if (input.own.has(candidate.record_sha256)) continue;
             const row = readableRecord(authorization, input.projects, candidate.record_sha256);
             if (row === undefined) continue;
             if (row.position !== candidate.record_position) metadataUnavailable();
             const approver = approverTupleV1(row.envelope, row.approval_id, options, options.record_approver);
             if (approver !== undefined && approver.principal_id === authorization.principal_id && approver.membership_id === authorization.membership_id) continue;
             meeting_at = receiptTime(receipt.get(row.position, row.record_sha256));
+            break found;
           }
-          if (page.length < size) break;
-          before = page.at(-1)!.record_position;
         }
-        result.set(projectId, Object.freeze({ meeting_at, filed: Object.freeze(filed) }));
+        const filed = function* (): Generator<readonly Sha256Digest[]> {
+          for (const page of pages()) yield Object.freeze(page.map(candidate => candidate.record_sha256));
+        };
+        result.set(projectId, Object.freeze({ meeting_at, filed }));
       }
       return result;
     },

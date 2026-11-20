@@ -34,6 +34,7 @@ import type { PersonReadableDecisionProjectsV1 } from './person-record-search-ro
  * - `follow_up`: the open item through the open-items policy (`see_row`), as `runs` `item` reads it.
  * - `ticket`: read in bulk through the caller's own connection to its tool; no ticket field is read.
  * - `page`: its version read by id through the caller's own connection; no page body is read.
+ * - `project`: the caller's active membership of it (`personChangeView`), read in the same transaction.
  *
  * The database kinds are read in one Authority read transaction: no `BEGIN IMMEDIATE`, no audit row, nothing written, since
  * the check releases nothing. The live kinds follow, each tool on its own and all within the deadline. A source whose tool
@@ -92,10 +93,18 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
   /** The database kinds, in one Authority read transaction, into `answers`. */
   function readDatabase(access_token: string, items: readonly PersonAskCheckRequestItemV1[], answers: (PersonAskCheckItemV1 | undefined)[]): void {
     const authorization = options.sessions.authenticateAccess({ access_token });
+    let view: ReturnType<CreatePersonAskCheckV1Options['projects']['personChangeView']> | undefined;
+    const projectView = () => (view ??= options.projects.personChangeView(authorization));
     let grants: RecordProjectAuthorizationV1 | undefined;
     // The record checks read the grants read in this transaction (a capture of its own would need a transaction of its own),
     // and each record once: a cited record and a cited follow-up's record are one lookup.
-    const records = openItemDecisionsReaderV1(options.records, access_token, () => (grants ??= recordProjectAuthorizationOfGrantsV1(options.projects.personChangeView(authorization).grants)));
+    const records = openItemDecisionsReaderV1(options.records, access_token, () => (grants ??= recordProjectAuthorizationOfGrantsV1(projectView().grants)));
+    // A project is readable while the caller is an active member of it, active or archived, as research cites it.
+    const projects = entriesOf(items, 'project');
+    if (projects.length > 0) {
+      const member = new Set<string>(projectView().projects.map(project => project.project_id));
+      for (const { index, citation } of projects) answers[index] = member.has(citation.project_id) ? SAME : UNREADABLE;
+    }
     const decisions = entriesOf(items, 'approved_record');
     if (decisions.length > 0) {
       const readable = records.readableDecisions({ access_token, record_sha256s: [...new Set(decisions.map(({ citation }) => citation.record_sha256))] });

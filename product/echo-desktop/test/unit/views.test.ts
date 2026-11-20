@@ -729,9 +729,9 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
     const cited = [named, ticket, followUp, page, note, project, person, tool, container];
     const answer = answerView(askLine(v8(cited)), scope);
     answer.sources.forEach((source, at) => expect(source.cited).toEqual(cited[at]));
-    // A record's item, a ticket, a follow-up, a page and an original's passage can change or go: what a check asks about, kept once.
-    expect(answer.sources.map(checkOf)).toEqual([record, ticket.citation, followUp.citation, page.citation, passage('a'),
-      undefined, undefined, undefined, undefined]);
+    // A record's item, a ticket, a follow-up, a page, an original's passage and a project (its membership) can go: what a check asks about, kept once.
+    expect(answer.sources.map(checkOf)).toEqual([record, ticket.citation, followUp.citation, page.citation, passage('a'), project.citation,
+      undefined, undefined, undefined]);
     for (const source of answer.sources) expect(source).not.toHaveProperty('check');
     // A progress row's items keep neither: only an answer's sources are checked or carried back.
     expect(JSON.stringify(askStepView({ ok: true, progress: { type: 'read', items: cited } }))).not.toMatch(/"cited"|"check"/u);
