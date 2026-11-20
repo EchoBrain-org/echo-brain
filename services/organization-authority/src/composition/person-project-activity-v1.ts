@@ -105,15 +105,18 @@ export function createPersonProjectActivityV1(options: CreatePersonProjectActivi
           access_token: input.access_token, projects, project_ids: ids, own: options.approvals.approvedRecords(authorization),
         });
         const viewer = openItemViewerV1(input.access_token, authorization);
-        // Which records the viewer reads, from the grants read in the read's own transaction; each looked up once per read.
-        const decisions = openItemDecisionsReaderV1(options.records, input.access_token, () => projects);
         for (const { project_id } of active) {
           const records = filed.get(project_id);
           if (records === undefined) continue;
           arrived(project_id, records.meeting_at);
-          // One page of the filed history at a time: its follow-ups' newest move, kept only when newer than any found.
+          // One page of the filed history at a time: its follow-ups' newest move, kept only when newer than any found. Each
+          // page has its own reader of which records the viewer reads (from the grants read in this transaction), so what
+          // one page learned is let go before the next: a read holds one page's decisions, never the whole history's.
           let moved: string | null = null;
-          for (const page of records.filed()) moved = followUpsAt(viewer, project_id, page, decisions, moved) ?? moved;
+          for (const page of records.filed()) {
+            const decisions = openItemDecisionsReaderV1(options.records, input.access_token, () => projects);
+            moved = followUpsAt(viewer, project_id, page, decisions, moved) ?? moved;
+          }
           arrived(project_id, moved);
         }
         return active.map(project => ({ project_id: project.project_id, latest_at: latest.get(project.project_id) ?? null }));
