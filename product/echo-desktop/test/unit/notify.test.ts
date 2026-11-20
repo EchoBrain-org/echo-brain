@@ -231,13 +231,13 @@ describe('a follow-up that leaves your open ones (P3)', () => {
     expect(notices()).toHaveLength(1);
   });
 
-  it('is read by its id twenty a check: the rest wait for the next', async () => {
-    const items = Array.from({ length: 22 }, (_, index) => handedOn(index + 1));
+  it('is read by its id, every one in the same check', async () => {
+    const items = Array.from({ length: 45 }, (_, index) => handedOn(index + 1));
     await signedIn(items);
     authority.items = items.map(item => owned(item, RAFAEL, MINA, 40));
     await nextCheck();
     await nextCheck();
-    expect(texts()).toEqual(['20 follow-ups changed', '2 follow-ups changed']);
+    expect(texts()).toEqual(['45 follow-ups changed']);
   });
 
   it('one new to your open ones whose change is older than the newest the last read saw is not news', async () => {

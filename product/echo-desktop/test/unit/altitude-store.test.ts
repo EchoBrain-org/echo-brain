@@ -118,13 +118,14 @@ describe('Home altitudes', () => {
     expect(store.getState().altitude.live['itm_t1']?.reach).toBe('opened');
   });
 
-  it('a person zoom reads at most twenty of their waiting follow-ups live, one by one', async () => {
+  it('a person zoom reads every one of their waiting follow-ups live, one by one', async () => {
     rows[BATTERY.project_id] = Array.from({ length: 25 }, (_, index) => row(`b${index}`, BATTERY));
     const store = await startStore();
     store.zoomTo('person', { membership_id: MINA.membership_id, name: MINA.name });
     await flush(200);
     const one = requests().filter(request => request.operation === 'item');
-    expect(one).toHaveLength(20);
+    // All 25 in Battery, and the one in Thermal.
+    expect(one).toHaveLength(26);
     expect(one.every(live)).toBe(true);
   });
 
@@ -492,7 +493,7 @@ describe('Home altitudes, when loads are cut short or the list is long', () => {
     expect(store.getState().altitude.settled).toBe(true);
   });
 
-  it('reads at most twenty of a person’s follow-ups live, however often Home zooms on them', async () => {
+  it('reads every one of a person’s follow-ups live, however often Home zooms on them', async () => {
     rows[BATTERY.project_id] = Array.from({ length: 25 }, (_, index) => row(`b${index}`, BATTERY));
     const store = await startStore();
     store.zoomTo('person', { membership_id: MINA.membership_id, name: MINA.name });
@@ -501,7 +502,7 @@ describe('Home altitudes, when loads are cut short or the list is long', () => {
     await flush(80);
     store.zoomTo('person');
     await flush(200);
-    expect(new Set(requests().filter(request => request.operation === 'item').map(request => request.item_id)).size).toBe(20);
+    expect(new Set(requests().filter(request => request.operation === 'item').map(request => request.item_id)).size).toBe(26);
   });
 });
 

@@ -20,7 +20,7 @@ import {
 } from './timeline.js';
 import { openerOf } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
-import { PERSON_LIVE_MAX, PROJECT_READS_AT_ONCE, unowned } from './altitude.js';
+import { PROJECT_READS_AT_ONCE, unowned } from './altitude.js';
 import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
 import { askedWhen } from './format.js';
@@ -5359,8 +5359,8 @@ function settle(): void {
  * person's live; never joined to a load on its way, whose reads may predate
  * the change. Otherwise (a zoom), only what is new: projects not read yet,
  * and the project zoomed into. A project zoomed into reads all its follow-ups,
- * then its waiting ones live; a person's are read live one by one, at most
- * PERSON_LIVE_MAX, from projects still on your list. When the sidebar shows
+ * then its waiting ones live; a person's are read live one by one, every
+ * one, a few at a time, from projects still on your list. When the sidebar shows
  * only its first pages, Home reads every page. A newer load, or another
  * account, stops an older one at its next project.
  */
@@ -5420,8 +5420,8 @@ export function loadAltitude(fresh = true): Promise<void> {
     if (state.altitude.level === 'person' && membership_id !== null) {
       const theirs = listed.flatMap(id => state.altitude.reads[id]?.active ?? [])
         .filter(item => item.owner.membership_id === membership_id && !unowned(item) && item.kind !== 'action');
-      // The same first PERSON_LIVE_MAX of theirs each time, however often Home zooms on them; the rest keep stored words.
-      const unread = [...new Map(theirs.map(item => [item.item_id, item])).values()].slice(0, PERSON_LIVE_MAX)
+      // Every one of theirs, once, however often Home zooms on them.
+      const unread = [...new Map(theirs.map(item => [item.item_id, item])).values()]
         .filter(item => again || !state.altitude.live[item.item_id]);
       set({ altitude: { ...state.altitude, reading: unread.length > 0 } });
       await inTurns(unread, PROJECT_READS_AT_ONCE, async item => {
