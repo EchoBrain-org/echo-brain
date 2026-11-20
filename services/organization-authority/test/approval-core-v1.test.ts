@@ -88,10 +88,12 @@ describe('approval core: owners', () => {
     const brief = { actions: owners.map((owner, i) => ({ id: `a${i}`, kind: 'action', text: 'Do it.', owner, due_at: null })) } as unknown as DecisionBrief;
     for (const proposal of ownerProposalsV1(brief)) expect(isApprovalOwnerTextV1(proposal.owner)).toBe(true);
   });
-  it('offers no owners above 40 proposals and then refuses any owner', async () => {
+  it('offers the first 40 of more owner proposals and accepts an owner only among them', async () => {
     const f = await approvalCoreFixture({ actions: Array.from({ length: 41 }, (_, i) => ({ id: `act-${i + 1}`, owner: `Owner ${i + 1}` })) });
-    expect(f.core.ownerProposals(f.approvalId)).toEqual([]);
-    expect(() => f.core.decide('desktop', f.approve({ owners: [{ signal_id: 'act-1', owner: 'Owner 1' }] }), () => f.session)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
+    const offered = f.core.ownerProposals(f.approvalId);
+    expect(offered.map(item => item.signal_id)).toEqual(Array.from({ length: 40 }, (_, i) => `act-${i + 1}`));
+    expect(() => f.core.decide('desktop', f.approve({ owners: [{ signal_id: 'act-41', owner: 'Owner 41' }] }), () => f.session)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
+    expect(f.core.decide('desktop', f.approve({ owners: [{ signal_id: 'act-1', owner: 'Owner 1' }] }), () => f.session)).toMatchObject({ kind: 'decided' });
   });
   it('refuses owners out of brief order or for an action without a proposal', async () => {
     const f = await approvalCoreFixture({ owners: { 'act-1': 'Rafael Moreno', 'act-2': 'Ana Lima' } });

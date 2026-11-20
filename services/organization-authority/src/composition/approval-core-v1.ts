@@ -143,8 +143,8 @@ export interface ApprovalCoreV1 {
   proposals(reviewer: ApprovalActorV1, limit?: number): readonly ApprovalProposalViewV1[];
   /** `proposals`' ids and statuses alone, in the same order and bound, with no proposal content read (the change check, ADR-0036). */
   proposalStatuses(reviewer: ApprovalActorV1, limit?: number): readonly { readonly approval_id: string; readonly status: ApprovalStatusV1 }[];
-  /** From ownerProposalsV1 over the candidate's uncleared brief, in brief order; [] for an unknown approval or when more
-   *  than 40 are grounded; proposals whose signal id fails isApprovalSignalIdV1 are left out. */
+  /** From ownerProposalsV1 over the candidate's uncleared brief, in brief order (its first 40); [] for an unknown approval;
+   *  proposals whose signal id fails isApprovalSignalIdV1 are left out. */
   ownerProposals(approvalId: string): readonly ApprovalOwnerProposalV1[];
 }
 

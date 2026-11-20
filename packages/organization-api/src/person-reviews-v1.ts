@@ -1,3 +1,4 @@
+import { APPROVAL_OWNER_MAX_CHARACTERS_V1, APPROVAL_OWNERS_MAX_V1 } from '@echo-brain/organization-protocol';
 import { validateProjectIdV1 } from './project-context-v1.js';
 import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_REQUEST_MAX_BYTES_V1, type PersonToolHostV1 } from './person-tool-client.js';
 import { asEnumerableRecord, assertExactKeys, assertTimestamp, fail, isCalendarDay, utf8ByteLength } from './validation.js';
@@ -112,12 +113,13 @@ function routes(value: unknown): asserts value is readonly PersonMeetingRouteV2[
   }
 }
 function ownerChoices(input: unknown): asserts input is readonly { readonly signal_id: string; readonly owner: string }[] {
-  if (!Array.isArray(input) || input.length > 40) fail(label);
+  // The shared owner rule (organization-protocol approval-owner-choice-v1.ts), which the approval core checks again.
+  if (!Array.isArray(input) || input.length > APPROVAL_OWNERS_MAX_V1) fail(label);
   const seen = new Set<string>();
   for (const value of input) {
     const item = asEnumerableRecord(value, label);
     assertExactKeys(item, ['signal_id', 'owner'], label);
-    text(item.signal_id, 128); text(item.owner, 120);
+    text(item.signal_id, 128); text(item.owner, APPROVAL_OWNER_MAX_CHARACTERS_V1);
     if (item.owner.trim() !== item.owner || /[\p{Cc}\p{Cf}]/u.test(item.owner) || seen.has(item.signal_id)) fail(label);
     seen.add(item.signal_id);
   }

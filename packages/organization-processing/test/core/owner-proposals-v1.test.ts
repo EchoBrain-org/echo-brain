@@ -56,12 +56,16 @@ describe("owner proposals V1", () => {
     ]);
   });
 
-  it("offers at most 40 proposals and none for a brief with more", () => {
+  it("offers the first 40 proposals, in brief order, of a brief with more", () => {
     expect(OWNER_PROPOSALS_MAX_V1).toBe(40);
     const forty = brief(Array.from({ length: 40 }, (_, index) => action(index, "Participant")));
     expect(ownerProposalsV1(forty)).toHaveLength(40);
-    const fortyOne = brief(Array.from({ length: 41 }, (_, index) => action(index, "Participant")));
-    expect(ownerProposalsV1(fortyOne)).toEqual([]);
+    const many = brief(Array.from({ length: 45 }, (_, index) => action(index, index === 2 ? null : `Participant ${index}`)));
+    const offered = ownerProposalsV1(many);
+    expect(offered.map((proposal) => proposal.action_index)).toEqual(
+      Array.from({ length: 41 }, (_, index) => index).filter((index) => index !== 2),
+    );
+    expect(offered[39]).toEqual({ action_index: 40, action_text: "Send the launch plan 41", owner: "Participant 40" });
   });
 
   it("clears every proposed owner and leaves a brief without proposals byte-identical", () => {
