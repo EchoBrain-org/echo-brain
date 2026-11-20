@@ -262,7 +262,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     await expect(reader.search({ query: 'ship', limit: 1 })).rejects.toMatchObject({ code: drift === 'subject' ? 'unauthorized' : 'stale_access_state' });
   });
 
-  it('opens an anchor first and admits bounded, deduplicated linked-ticket metadata through the existing item refs', async () => {
+  it('opens an anchor first and admits every deduplicated linked ticket\'s metadata through the existing item refs', async () => {
     const f = fixture();
     for (const id of ['10002', '10003', '10004', '10005', '10006', '10007']) f.state.tickets.set(id, ticket(id, `Linked ${id}`));
     f.state.tickets.set('10001', withFields({ issuelinks: [
@@ -275,30 +275,32 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
 
     const opened = await source.open({ item: anchor.id });
 
-    expect(opened.items.map(item => item.citation.ticket_id)).toEqual(['10001', '10002', '10003', '10004', '10005']);
+    expect(opened.items.map(item => item.citation.ticket_id)).toEqual(['10001', '10002', '10003', '10004', '10005', '10006', '10007']);
     expect(opened.items[0]).toHaveProperty('text', 'ECHO-1: Ship connector\n\nLaunch Friday\n@Alex');
     for (const item of opened.items.slice(1)) {
       expect(item).not.toHaveProperty('text');
       expect(item).toMatchObject({ label: `ECHO-${Number(item.citation.ticket_id) - 10000}: Linked ${item.citation.ticket_id}`, attributes: { status: 'In progress' } });
     }
-    expect(opened.truncated).toBe(true);
+    expect(opened.truncated).toBe(false);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,updated,status,assignee,duedate,description,issuelinks' } }));
-    for (const id of ['10002', '10003', '10004', '10005']) {
+    for (const id of ['10002', '10003', '10004', '10005', '10006', '10007']) {
       expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/${id}`, query: { fields: 'summary,project,created,updated,status,assignee,duedate' } }));
     }
-    expect(f.request).not.toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10006` }));
     const linked = await source.open({ item: opened.items[1]!.id });
     expect(linked.items[0]).toMatchObject({ citation: { ticket_id: '10002' }, text: 'ECHO-2: Linked 10002\n\nLaunch Friday\n@Alex' });
   });
 
   it('says an open truncated beside the ticket left its own text whole, and that a cut body cut it (ADR-0041)', async () => {
-    // Five links, one past the four an open admits: truncated, yet the anchor's text is whole.
+    // Twenty-six links, one past the 25 an open admits: truncated, yet the anchor's text is whole.
     const links = fixture();
-    for (const id of ['10002', '10003', '10004', '10005', '10006']) links.state.tickets.set(id, ticket(id, `Linked ${id}`));
-    links.state.tickets.set('10001', withFields({ issuelinks: ['10002', '10003', '10004', '10005', '10006'].map(id => ({ outwardIssue: { id } })) }));
+    const linkIds = Array.from({ length: 26 }, (_, index) => String(10002 + index));
+    for (const id of linkIds) links.state.tickets.set(id, ticket(id, `Linked ${id}`));
+    links.state.tickets.set('10001', withFields({ issuelinks: linkIds.map(id => ({ outwardIssue: { id } })) }));
     const linked = await links.make('ECHO');
     const anchor = (await linked.source.search({ query: 'ship' })).items[0]!;
-    expect(await linked.source.open({ item: anchor.id })).toMatchObject({ truncated: true, anchor_truncated: false });
+    const withLinks = await linked.source.open({ item: anchor.id, limit: 50 });
+    expect(withLinks.items).toHaveLength(26);
+    expect(withLinks).toMatchObject({ truncated: true, anchor_truncated: false });
     // A summary cut to its 256-byte label bound, no links: the label is cut, the text is whole.
     const label = fixture();
     label.state.tickets.set('10001', withFields({ summary: '温度计固件校准流程'.repeat(10).slice(0, 85) }));
@@ -306,11 +308,58 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const cut = await labelled.source.open({ item: (await labelled.source.search({ query: 'ship' })).items[0]!.id });
     expect(cut.items[0]!.text).toContain('温度计固件校准流程'.repeat(10).slice(0, 85));
     expect(cut).toMatchObject({ truncated: true, anchor_truncated: false });
-    // A description past the 3,072-byte text bound: the ticket's own text was cut.
+    // A description past the host-protection node bound: the ticket keeps its start and says its text was cut.
     const body = fixture();
-    body.state.tickets.set('10001', withFields({ description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'word '.repeat(1000) }] }] } }));
+    body.state.tickets.set('10001', withFields({ description: { type: 'doc', version: 1, content: Array.from({ length: 30_000 }, (_, index) => ({ type: 'paragraph', content: [{ type: 'text', text: `p${index}` }] })) } }));
     const long = await body.make('ECHO');
-    expect(await long.source.open({ item: (await long.source.search({ query: 'ship' })).items[0]!.id })).toMatchObject({ truncated: true, anchor_truncated: true });
+    let page = await long.source.open({ item: (await long.source.search({ query: 'ship' })).items[0]!.id });
+    for (let reads = 0; page.notice === undefined && reads < 100; reads += 1) page = await long.source.open({ item: page.items.at(-1)!.id });
+    expect(page).toMatchObject({ truncated: true, anchor_truncated: true, notice: 'This Jira ticket is longer than ECHO reads; its text after the last section shown was left out.' });
+    expect(page.items.at(-1)!.text).not.toContain('p29999');
+  });
+
+  it('reads a ticket whose sections repeat word for word, one citation per page each, losing nothing', async () => {
+    const f = fixture();
+    const repeated = 'abc '.repeat(4000).trim();
+    f.state.tickets.set('10001', withFields({ description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: repeated }] }] } }));
+    const { source } = await f.make('ECHO');
+    let page = await source.open({ item: (await source.search({ query: 'ship' })).items[0]!.id });
+    const texts = page.items.map(item => item.text);
+    for (let reads = 0; page.anchor_truncated === true && reads < 20; reads += 1) {
+      page = await source.open({ item: page.items.at(-1)!.id });
+      texts.push(...page.items.map(item => item.text));
+    }
+    expect(page.anchor_truncated).toBe(false);
+    expect(texts.join('')).toBe(`ECHO-1: Ship connector\n\n${repeated}`);
+  });
+
+  it('reads a long ticket in full: sections with a continuation, as a Confluence page is read', async () => {
+    const f = fixture();
+    const paragraphs = Array.from({ length: 12 }, (_, index) => `Section ${index} ${'detail '.repeat(420)}`.trim());
+    f.state.tickets.set('10001', withFields({ description: { type: 'doc', version: 1, content: paragraphs.map(text => ({ type: 'paragraph', content: [{ type: 'text', text }] })) } }));
+    const { source } = await f.make('ECHO');
+    const first = await source.open({ item: (await source.search({ query: 'ship' })).items[0]!.id });
+    expect(first.items).toHaveLength(8);
+    expect(first).toMatchObject({ truncated: true, anchor_truncated: true });
+    expect(first.items[0]!.label).toMatch(/^ECHO-1: Ship connector · section 1 of \d+$/);
+    expect(first.items[7]!.label).toMatch(/section 8 of \d+; open it to read on$/);
+    for (const item of first.items) {
+      expect(Buffer.byteLength(item.text!, 'utf8')).toBeLessThanOrEqual(3072);
+      expect(item.citation.text_sha256).toBe(digest(item.text!));
+    }
+    // Opening the last section shown reads on from the next one, until the whole text has been read once.
+    const rest = await source.open({ item: first.items[7]!.id });
+    expect(rest).toMatchObject({ truncated: false, anchor_truncated: false });
+    expect(rest.notice).toBeUndefined();
+    expect([...first.items, ...rest.items].map(item => item.text).join('')).toBe(`ECHO-1: Ship connector\n\n${paragraphs.join('\n')}`);
+    // A cited later section reopens at that section.
+    const cited = await source.openCitation!({ citation: rest.items[0]!.citation });
+    expect(cited.items[0]!.text).toBe(rest.items[0]!.text);
+    // A ticket edited since it was read resumes from the top, and says so.
+    f.state.tickets.set('10001', withFields({ description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Rewritten' }] }] } }));
+    const changed = await source.open({ item: first.items[7]!.id });
+    expect(changed).toMatchObject({ notice: 'The ticket changed since it was read; this is the current ticket from the top.' });
+    expect(changed.items[0]!.text).toBe('ECHO-1: Ship connector\n\nRewritten');
   });
 
   it('opens an anchor when Jira omits optional link context, without inferring that no relationship exists', async () => {
@@ -328,10 +377,12 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(opened.truncated).toBe(false);
   });
 
-  it('bounds a large valid link list without blocking the anchor, including limit one', async () => {
+  it('reads every link of a long link list without blocking the anchor, including limit one', async () => {
     const f = fixture();
-    for (const id of ['10002', '10003', '10004', '10005']) f.state.tickets.set(id, ticket(id, `Linked ${id}`));
-    f.state.tickets.set('10001', withFields({ issuelinks: Array.from({ length: 65 }, (_, index) => ({ outwardIssue: { id: String(10002 + index) } })) }));
+    const linkIds = Array.from({ length: 65 }, (_, index) => String(10002 + index));
+    for (const id of linkIds) f.state.tickets.set(id, ticket(id, `Linked ${id}`));
+    // The lowest id is the 65th link: a scan of only the first 64 links would miss it.
+    f.state.tickets.set('10001', withFields({ issuelinks: [...linkIds].reverse().map(id => ({ outwardIssue: { id } })) }));
     const { source } = await f.make('ECHO');
     const anchor = (await source.search({ query: 'ship' })).items[0]!;
     f.request.mockClear();
@@ -342,8 +393,8 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(f.request).not.toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10002` }));
 
     f.request.mockClear();
-    const expanded = await source.open({ item: anchor.id });
-    expect(expanded.items.map(item => item.citation.ticket_id)).toEqual(['10001', '10002', '10003', '10004', '10005']);
+    const expanded = await source.open({ item: anchor.id, limit: 50 });
+    expect(expanded.items.map(item => item.citation.ticket_id)).toEqual(['10001', ...linkIds.slice(0, 25)]);
     expect(expanded.truncated).toBe(true);
   });
 
@@ -578,7 +629,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const auditText = JSON.stringify(f.releases);
     for (const hidden of ['Ship connector', 'Launch Friday', 'launch', 'jira_item_', 'never-return', 'emailAddress']) expect(auditText).not.toContain(hidden);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, body: { issueIdsOrKeys: ['10001'], fields: ['summary', 'project', 'created', 'updated', 'status', 'assignee', 'duedate'] } }));
-    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ fields: ['id'], maxResults: 5 }) }));
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ fields: ['id'], maxResults: 10 }) }));
     expect(f.request.mock.calls.filter(([request]) => request.path.includes('/issue/')).every(([request]) => !(request.body?.fields as string[] | undefined)?.includes('description'))).toBe(true);
     expect(f.request.mock.calls.filter(([request]) => request.path.includes('/issue/')).every(([request]) => !request.query?.fields?.includes('description'))).toBe(true);
     const opened = await source.open({ item: item.id });
@@ -663,10 +714,9 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
   const inlineCard = (attrs: unknown) => ({ type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'inlineCard', attrs }] }] });
   it.each<[string, unknown]>([
     ['non-ADF body', 'not-v3-ADF'],
-    ['unknown body node', { type: 'doc', version: 1, content: [{ type: 'unknown' }] }],
     ['NUL body text', { type: 'doc', version: 1, content: [{ type: 'text', text: '\u0000bad' }] }],
     ...[undefined, null, 'done', 'IN_PROGRESS'].map((state): [string, unknown] => [`checklist completion state ${JSON.stringify(state)}`, checklist(state)]),
-    ...[{}, { url: 7 }, { url: 'https://example.test/\u0000' }, { url: 'https://example.test', data: {} }]
+    ...[{}, { url: 7 }, { url: 'https://example.test/\u0000' }]
       .map((attrs): [string, unknown] => [`inline link card ${JSON.stringify(attrs)}`, inlineCard(attrs)]),
   ])('refuses a malformed %s on open after metadata discovery', async (_name, description) => {
     const f = fixture();
@@ -676,6 +726,27 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(discovered.items[0]).not.toHaveProperty('text');
     await expect(source.open({ item: discovered.items[0]!.id })).rejects.toMatchObject({ code: 'invalid_output' });
     expect(f.releases.map(release => release.operation)).toEqual(['search']);
+  });
+
+  it('opens a ticket with a pasted screenshot or a macro, omitting what it cannot read and saying so', async () => {
+    const f = fixture();
+    f.state.tickets.set('10001', withFields({ description: { type: 'doc', version: 1, content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'Steps to reproduce' }] },
+      { type: 'mediaSingle', content: [{ type: 'media', attrs: { id: 'never-return-media', type: 'file', collection: 'never-return' } }] },
+      { type: 'extension', attrs: { extensionKey: 'never-return-macro', parameters: { secret: 'never-return-parameter' } } },
+      { type: 'unknown' },
+      { type: 'paragraph', content: [{ type: 'inlineCard', attrs: { url: 'https://example.test', data: { name: 'never-return-card' } } }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'Crash after login' }] },
+    ] } }));
+    const { source } = await f.make();
+    const opened = await source.open({ item: (await source.search({ query: 'ship' })).items[0]!.id });
+    const text = opened.items[0]!.text!;
+    expect(text).toContain('Steps to reproduce');
+    expect(text).toContain('[Unsupported embedded content omitted.]');
+    expect(text).toContain('Crash after login');
+    expect(text).not.toContain('never-return');
+    expect(opened).toMatchObject({ truncated: false, anchor_truncated: false, notice: 'Some Jira ticket content could not be fully represented as text.' });
+    expect(opened.items[0]!.citation.text_sha256).toBe(digest(text));
   });
 
   it('opens a ticket containing an inline link card without fetching the linked page', async () => {
@@ -767,7 +838,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const f = fixture();
     for (const id of ['10003', '10004', '10005', '10006']) f.state.tickets.set(id, ticket(id));
     const { source } = await f.make();
-    const result = await source.search({ query: 'ECHO-6 ECHO-5 ECHO-4 ECHO-3 ECHO-2 ECHO-1' });
+    const result = await source.search({ query: 'ECHO-6 ECHO-5 ECHO-4 ECHO-3 ECHO-2 ECHO-1', limit: 5 });
     expect(result.items.map(item => item.citation.ticket_id)).toEqual(['10006', '10005', '10004', '10003', '10002']);
     expect(result.truncated).toBe(true);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, body: expect.objectContaining({ issueIdsOrKeys: ['ECHO-6', 'ECHO-5', 'ECHO-4', 'ECHO-3', 'ECHO-2'] }) }));
@@ -822,8 +893,6 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     ['one term', 'launch', [page([])]],
     ['a match for every term', 'launch connector', [page(['10001'])]],
     ['a further page of matches', 'launch connector', [page([], 'next')]],
-    ['seven terms', 'one two three four five six seven', [page([])]],
-    ['seven words and a key', 'one two three four five six seven ECHO-404', [page([])]],
     ['no word but keys', 'ECHO-404 (ECHO-404),', [page([])]],
   ] as const)('does not relax a search with %s', async (_label, query, pages) => {
     const f = fixture(); f.state.pages = [...pages];
@@ -832,27 +901,91 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(f.jqls()).toHaveLength(1);
   });
 
+  it('lists past 512 items, and at the run budget ends the list with what it found and a notice, never a failure', async () => {
+    const f = fixture();
+    const pages = 210;
+    for (let index = 0; index < pages * 25; index += 1) f.state.tickets.set(String(20000 + index), ticket(String(20000 + index)));
+    f.state.pages = Array.from({ length: pages }, (_, number) => page(Array.from({ length: 25 }, (_, index) => String(20000 + number * 25 + index)), number + 1 < pages ? `token-${number}` : undefined));
+    const { reader } = await f.make();
+    let released = 0;
+    let result = await reader.list({ limit: 25 });
+    released += result.items.length;
+    while (result.next_cursor !== undefined) {
+      result = await reader.list({ limit: 25, cursor: result.next_cursor });
+      released += result.items.length;
+    }
+    expect(released).toBe(5_120);
+    expect(result).toMatchObject({ truncated: true, page_full: false, notice: 'This research run has read as many Jira items as one run can hold; Jira results past them were left out.' });
+  });
+
+  it('relaxes a long empty search to any one word, keeps named keys, and ranks tickets by how many words their titles name', async () => {
+    const literal = (term: string) => `text ~ "\\"${term}\\""`;
+    const f = fixture();
+    f.state.tickets.set('10002', ticket('10002', 'Q3 AI pricing decision for enterprise renewals'));
+    f.state.tickets.set('10003', ticket('10003', 'Pricing page copy'));
+    f.state.pages = [page([]), page(['10003', '10001', '10002'])];
+    const { source } = await f.make('ECHO');
+    const query = 'decision on Q3 AI pricing for enterprise renewals';
+    const result = await source.search({ query });
+    expect(result.items.map(item => item.citation.ticket_id)).toEqual(['10002', '10003', '10001']);
+    expect(result.notice).toBe('No Jira ticket matched every word of this search; these tickets match some of them.');
+    const words = query.split(' ');
+    expect(f.jqls()).toEqual([
+      `project = 10000 AND (${words.map(literal).join(' AND ')}) ORDER BY created DESC, id DESC`,
+      `project = 10000 AND ((${words.map(literal).join(' OR ')})) ORDER BY created DESC, id DESC`,
+    ]);
+
+    const keyed = fixture(); keyed.state.pages = [page([]), page([])];
+    const withKey = await keyed.make();
+    await withKey.source.search({ query: 'one two three four five six seven ECHO-404' });
+    expect(keyed.jqls()[1]).toBe(`${literal('ECHO\\\\-404')} AND (${['one', 'two', 'three', 'four', 'five', 'six', 'seven'].map(literal).join(' OR ')}) ORDER BY created DESC, id DESC`);
+  });
+
+  it('accepts a query of any number of words, up to the 1 KiB query bound', async () => {
+    const f = fixture(); f.state.pages = [page(['10001'])];
+    const { source } = await f.make();
+    const query = Array.from({ length: 40 }, (_, index) => `w${index}`).join(' ');
+    expect((await source.search({ query })).items.map(item => item.citation.ticket_id)).toEqual(['10001']);
+  });
+
+  it('returns up to 25 search matches and says when more matched', async () => {
+    const f = fixture();
+    const ids = Array.from({ length: 25 }, (_, index) => String(10030 - index));
+    for (const id of ids) f.state.tickets.set(id, ticket(id));
+    f.state.pages = [page(ids, 'next')];
+    const { source } = await f.make();
+    const result = await source.search({ query: 'connector', limit: 50 });
+    expect(result.items.map(item => item.citation.ticket_id)).toEqual(ids);
+    expect(result.truncated).toBe(true);
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ maxResults: 25 }) }));
+  });
+
   it('compiles keyword search as independent terms within the pinned project', async () => {
     const f = fixture(); const { source } = await f.make('ECHO');
     await source.search({ query: 'launch connector' });
     expect(f.jqls()[0]).toBe('project = 10000 AND (text ~ "\\\"launch\\\"" AND text ~ "\\\"connector\\\"") ORDER BY created DESC, id DESC');
   });
 
-  it('bounds NFC text by UTF-8 bytes before hashing, with aggregate releases accepted by the wrapper', async () => {
+  it('splits NFC text by UTF-8 bytes before hashing, losing none, with aggregate releases accepted by the wrapper', async () => {
     const f = fixture();
+    // Every section's text differs, so each is its own citation.
+    const body = Array.from({ length: 2000 }, (_, k) => `\t😀${k}`).join('');
     f.state.pages = [page(Array.from({ length: 5 }, (_, i) => String(10001 + i)))];
-    for (let i = 0; i < 5; i++) f.state.tickets.set(String(10001 + i), withFields({ summary: 'Cafe\u0301', description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: '\t😀'.repeat(3000) }] }] } }, ticket(String(10001 + i), 'Cafe\u0301')));
+    for (let i = 0; i < 5; i++) f.state.tickets.set(String(10001 + i), withFields({ summary: 'Cafe\u0301', description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: body }] }] } }, ticket(String(10001 + i), 'Cafe\u0301')));
     const { source } = await f.make(); const result = await source.search({ query: 'launch', limit: 50 });
     expect(result.items).toHaveLength(5);
     for (const discovered of result.items) {
       expect(discovered).not.toHaveProperty('text');
       const opened = await source.open({ item: discovered.id });
-      expect(opened.truncated).toBe(true);
-      const item = opened.items[0]!;
-      expect(Buffer.byteLength(item.text!, 'utf8')).toBeLessThanOrEqual(3072);
-      expect(item.text).toBe(item.text!.normalize('NFC'));
-      expect(item.text).not.toMatch(/[\uD800-\uDBFF]$/);
-      expect(item.citation.text_sha256).toBe(digest(item.text!));
+      expect(opened).toMatchObject({ truncated: false, anchor_truncated: false });
+      for (const item of opened.items) {
+        expect(Buffer.byteLength(item.text!, 'utf8')).toBeLessThanOrEqual(3072);
+        expect(item.text).toBe(item.text!.normalize('NFC'));
+        expect(item.text).not.toMatch(/[\uD800-\uDBFF]$/);
+        expect(item.citation.text_sha256).toBe(digest(item.text!));
+      }
+      // Split, never cut: the sections join back to the whole ticket text.
+      expect(opened.items.map(item => item.text).join('').endsWith(`\n\n${body.trim()}`)).toBe(true);
     }
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(65536);
   });

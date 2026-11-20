@@ -1,26 +1,37 @@
-import type { PersonProviderV1 } from './person-provider-v1.js';
+import { boundUtf8V1, type PersonProviderV1 } from './person-provider-v1.js';
 
 const BLOCKS = new Set(['doc', 'paragraph', 'heading', 'blockquote', 'bulletList', 'orderedList', 'listItem', 'taskList', 'codeBlock', 'table', 'tableRow', 'tableCell', 'tableHeader', 'panel', 'expand', 'nestedExpand', 'layoutSection', 'layoutColumn']);
 const OMITTED = '[Unsupported embedded content omitted.]';
 type Validation = Pick<PersonProviderV1, 'record' | 'array' | 'string' | 'failure'>;
 
-/** Native Atlassian Document Format only. No HTML parsing, media hydration or link fetching. */
+/**
+ * Native Atlassian Document Format only. No HTML parsing, media hydration or link fetching.
+ *
+ * The byte, node and depth bounds protect the host from a hostile document. With `oversize: 'reject'` (the default) a
+ * document past one is refused; with `oversize: 'cut'` the text keeps what came before the bound and `cut` says the rest
+ * was left out, so the caller can say so.
+ */
 export function normalizeAtlassianDocumentTextV1(value: unknown, provider: Validation, options: {
   readonly unsupported?: 'reject' | 'omit';
+  readonly oversize?: 'reject' | 'cut';
   readonly maximum_bytes?: number;
   readonly maximum_nodes?: number;
   readonly maximum_depth?: number;
-} = {}): Readonly<{ text: string; incomplete: boolean }> {
+} = {}): Readonly<{ text: string; incomplete: boolean; cut: boolean }> {
   const { record, array, string } = provider;
   const failure: Validation['failure'] = provider.failure;
   const maximum = options.maximum_bytes ?? 256 * 1024;
   const nodeLimit = options.maximum_nodes ?? 4096;
   const depthLimit = options.maximum_depth ?? 32;
+  const cutting = options.oversize === 'cut';
+  // When cutting, a long child list is read and its nodes past the bound are skipped; the response bound already caps its size.
+  const childLimit = cutting ? Number.MAX_SAFE_INTEGER : nodeLimit;
   const doc = record(value);
   if (doc.type !== 'doc' || doc.version !== 1) failure('invalid_output');
   let nodes = 0;
   let bytes = 0;
   let incomplete = false;
+  let cut = false;
   function unsupported(): string {
     if (options.unsupported !== 'omit') failure('invalid_output');
     incomplete = true;
@@ -28,12 +39,20 @@ export function normalizeAtlassianDocumentTextV1(value: unknown, provider: Valid
   }
   function text(value: unknown): string {
     if (typeof value !== 'string' || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\p{Cs}]/u.test(value)) failure('invalid_output');
-    bytes += Buffer.byteLength(value, 'utf8');
-    if (bytes > maximum) failure('invalid_output');
-    return value;
+    const size = Buffer.byteLength(value, 'utf8');
+    if (bytes + size <= maximum) { bytes += size; return value; }
+    if (!cutting) failure('invalid_output');
+    cut = true;
+    const kept = bytes >= maximum ? '' : boundUtf8V1(value, maximum - bytes);
+    bytes = maximum;
+    return kept;
   }
   function walk(value: unknown, depth: number): string {
-    if (++nodes > nodeLimit || depth > depthLimit) failure('invalid_output');
+    if (++nodes > nodeLimit || depth > depthLimit) {
+      if (!cutting) failure('invalid_output');
+      cut = true;
+      return '';
+    }
     const node = record(value);
     const type = string(node.type, 64);
     if (type === 'text') {
@@ -63,14 +82,14 @@ export function normalizeAtlassianDocumentTextV1(value: unknown, provider: Valid
     if (type === 'taskItem') {
       const state = record(node.attrs).state;
       if (state !== 'TODO' && state !== 'DONE') failure('invalid_output');
-      return `[${state === 'DONE' ? 'x' : ' '}] ${array(node.content ?? [], nodeLimit).map(child => walk(child, depth + 1)).join('')}\n`;
+      return `[${state === 'DONE' ? 'x' : ' '}] ${array(node.content ?? [], childLimit).map(child => walk(child, depth + 1)).join('')}\n`;
     }
     if (!BLOCKS.has(type)) {
       // Includes legacy macro extensions. Neither parameters nor opaque child
       // content become evidence; the caller must expose the incomplete notice.
       return unsupported();
     }
-    const content = array(type === 'doc' ? node.content : node.content ?? [], nodeLimit);
+    const content = array(type === 'doc' ? node.content : node.content ?? [], childLimit);
     const body = content.map(child => walk(child, depth + 1)).join('');
     if (type === 'doc') return body;
     if (type === 'tableCell' || type === 'tableHeader') return ` | ${body.replace(/\n+$/g, '')}`;
@@ -81,9 +100,13 @@ export function normalizeAtlassianDocumentTextV1(value: unknown, provider: Valid
     }
     return `${body}\n`;
   }
-  const result = walk(doc, 0).replace(/\r\n?/g, '\n').replace(/^\n+|\n+$/g, '').normalize('NFC');
-  if (Buffer.byteLength(result, 'utf8') > maximum) failure('invalid_output');
-  return Object.freeze({ text: result, incomplete });
+  let result = walk(doc, 0).replace(/\r\n?/g, '\n').replace(/^\n+|\n+$/g, '').normalize('NFC');
+  if (Buffer.byteLength(result, 'utf8') > maximum) {
+    if (!cutting) failure('invalid_output');
+    cut = true;
+    result = boundUtf8V1(result, maximum);
+  }
+  return Object.freeze({ text: result, incomplete, cut });
 }
 
 /** Lossless bounded chunks: code-point safe, with a nearby word boundary when available. */

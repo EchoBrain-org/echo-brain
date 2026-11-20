@@ -44,7 +44,7 @@ async function fixture(pinned?: readonly string[]) {
   const reader = await createPersonToolContainerReaderV1({ provider, echo_projects: () => state.echo, ...(pinned === undefined ? {} : { pinned }) });
   const source = createAuditedPersonLiveEvidenceSourceV1({ actor: binding, read_grant_sha256: binding.read_grant_sha256, reader, audit, authorization: { assertCurrent: () => {} },
     access: { tool_id: 'fixture', identity_status: 'linked', external_scope_id: 'site-1', external_subject_id: binding.external_subject_id, read_status: 'connected', read_capabilities: ['live_evidence'] } });
-  return { state, provider, audit, source };
+  return { state, provider, audit, source, reader };
 }
 
 describe('the shared tool container reader (research tool contract v1)', () => {
@@ -153,6 +153,39 @@ describe('the shared tool container reader (research tool contract v1)', () => {
     const found = await f.source.search({ query: 'Channel 1' });
     expect(found.items.map(item => item.label)).toEqual(['Channel 1']);
     expect(found.notice).toBe(LEFT_OUT);
+  });
+
+  it('accepts a query of any number of words and, when no container matches every word, shows those matching most and says so', async () => {
+    const f = await fixture(['1', '2', '3', '4']);
+    const long = `Launchscope ${Array.from({ length: 40 }, (_, index) => `w${index}`).join(' ')}`;
+    const found = await f.source.search({ query: long });
+    expect(found.items.map(item => item.label)).toEqual(['Channel 2']);
+    expect(found.notice).toBe('No Fixture channel matched every word of this search; these match some of them.');
+    // A query some container matches in full keeps only those, unannounced.
+    const exact = await f.source.search({ query: 'channel 2' });
+    expect(exact.items.map(item => item.label)).toEqual(['Channel 2']);
+    expect(exact.notice).toBeUndefined();
+    // Containers matching more words come first.
+    const ranked = await f.source.search({ query: '1 launchscope 2' });
+    expect(ranked.items.map(item => item.label)).toEqual(['Channel 2', 'Channel 1']);
+  });
+
+  it('returns up to 25 search matches, and says when more matched', async () => {
+    const f = await fixture();
+    for (let index = 5; index <= 30; index += 1) f.state.containers.set(String(index), { id: String(index), key: `C${index}`, name: `Channel ${index}` });
+    const found = await f.source.search({ query: 'channel', limit: 50 });
+    expect(found.items).toHaveLength(25);
+    expect(found.truncated).toBe(true);
+  });
+
+  it('releases past 512 items, and at the run budget returns what fits with a notice, never a failure', async () => {
+    const f = await fixture();
+    const listed = await f.reader.list({ limit: 25 });
+    let released = listed.items.length;
+    let opened = await f.reader.open({ handle: listed.items[0]!.handle, limit: 1 });
+    while (opened.items.length > 0) { released += 1; opened = await f.reader.open({ handle: listed.items[0]!.handle, limit: 1 }); }
+    expect(released).toBe(5_120);
+    expect(opened).toMatchObject({ truncated: true, notice: 'This research run has read as many Fixture channels as one run can hold; the rest were left out.' });
   });
 
   it("pages on from where the tool's page ended, past a container it left out", async () => {

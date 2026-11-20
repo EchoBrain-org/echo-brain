@@ -1,12 +1,12 @@
 import { evidenceDateFilterV1, evidenceDayV1, matchesEvidenceDateV1, validateEvidenceDateFilterV1, EVIDENCE_ANY_DATE_V1, type EvidenceDateFieldV1, type EvidenceDateFilterV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import { randomUUID } from 'node:crypto';
-import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonTicketCitationV1, type PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { observeCoreRuntimeDiagnosticV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { createAtlassianVerificationBatchV1, verifyAtlassianConnectionV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
-import { guardedPersonProviderOperationV1 } from '@echo-brain/provider-runtime/person-provider-v1';
+import { boundUtf8V1, guardedPersonProviderOperationV1, inBatchesOfFourV1 } from '@echo-brain/provider-runtime/person-provider-v1';
 import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { jiraProjectMatches, parseJiraIssueV1, parseJiraProject, type ParsedJiraIssueV1 } from './jira-payload-v1.js';
 import { copyJiraBindingV1, JIRA_ID, JIRA_PERSON_PROVIDER_V1, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
@@ -14,7 +14,12 @@ import { copyJiraBindingV1, JIRA_ID, JIRA_PERSON_PROVIDER_V1, JIRA_PROJECT_KEY, 
 const INVENTORY_FIELDS = 'summary,project,created,updated,status,assignee,duedate';
 const TEXT_FIELDS = `${INVENTORY_FIELDS},description`;
 const OPEN_FIELDS = `${TEXT_FIELDS},issuelinks`;
-const REQUEST_MAX_HANDLES = 512;
+/**
+ * Released items, discovered ids and list continuations one request may hold: memory protection for one research run.
+ * Reaching it ends what the run can release from Jira, with BUDGET_NOTICE and what was found, never a failure.
+ */
+const REQUEST_MAX_HANDLES = 5_120;
+const BUDGET_NOTICE = 'This research run has read as many Jira items as one run can hold; Jira results past them were left out.';
 const REVALIDATION_BATCH_SIZE = 50;
 /**
  * One list page is one search plus one bulk read. 25 matches the research
@@ -22,8 +27,22 @@ const REVALIDATION_BATCH_SIZE = 50;
  * 25 still fits the shared 64 KiB result bound, which 50 would not.
  */
 const LIST_MAX_ITEMS = 25;
-/** One-hop expansion is deliberately bounded; deeper traversal requires an explicit existing open. */
-const OPEN_RELATED_MAX_ITEMS = 4;
+/** Said with an open whose ticket text left out embedded content (a screenshot, a macro), as Confluence says it for a page. */
+const INCOMPLETE_NOTICE = 'Some Jira ticket content could not be fully represented as text.';
+/** Said with an open whose ticket text passed its host-protection bound. */
+const CUT_NOTICE = 'This Jira ticket is longer than ECHO reads; its text after the last section shown was left out.';
+/** Said with an open that resumed from a ticket that changed since it was read. */
+const CHANGED_NOTICE = 'The ticket changed since it was read; this is the current ticket from the top.';
+/** Linked tickets one open lists beside the ticket, as inventory rows: a list page's size. Deeper traversal opens a linked row. */
+const OPEN_RELATED_MAX_ITEMS = 25;
+/** Text sections one open releases, as a Confluence open does; a longer ticket's last section shown opens the rest. */
+const OPEN_SECTIONS_MAX = 8;
+const EMPTY_DIGEST = sha256Digest('');
+
+/** What a released item's handle opens: its ticket from section `start` on, while the ticket text still has `digest`. */
+interface Opening { readonly id: string; readonly start: number; readonly digest?: string }
+/** One released text section of an opened ticket, numbered from 1, and what its handle opens. */
+interface Section { readonly id: string; readonly section: number; readonly opens: Opening; readonly value: Omit<PersonLiveEvidenceValueV1<PersonTicketCitationV1>, 'handle'> }
 
 interface ListCursor {
   readonly selection: string;
@@ -38,8 +57,15 @@ function limit(value: number): number {
   return value;
 }
 
-/** A relaxed retry drops one word at a time; past this many words it would be too broad and too long. */
-const RELAXED_SEARCH_MAX_TERMS = 6;
+/**
+ * A relaxed retry of up to this many words drops one word at a time. Past it, that form would grow with the square of
+ * the words, so a longer query matches any one of its words instead, and the page is ranked by how many it matches.
+ */
+const RELAXED_DROP_ONE_MAX_WORDS = 6;
+/** One search page: a list page's size, which fits the shared 64 KiB result bound. */
+const SEARCH_MAX_ITEMS = 25;
+/** Said with a relaxed search's results, so they never read as matching every word. */
+const RELAXED_NOTICE = 'No Jira ticket matched every word of this search; these tickets match some of them.';
 
 interface SearchTerms {
   /** Distinct literal keywords, compared case-insensitively. */
@@ -53,8 +79,8 @@ interface SearchTerms {
 /** Shared keyword semantics. Never caller-authored JQL or Lucene operators. */
 function searchTerms(query: string): SearchTerms {
   if (typeof query !== 'string' || query.trim() === '' || Buffer.byteLength(query, 'utf8') > 1024 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(query)) jiraFailure('invalid_request');
+  // Any number of words: the 1 KiB query bound protects the JQL, and the relaxed retry keeps a long query from matching nothing.
   const terms = [...new Map(query.trim().split(/\s+/u).map(term => [term.toLowerCase(), term])).values()];
-  if (terms.length > 32) jiraFailure('invalid_request');
   const normalized = terms.map(term => term.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').toUpperCase());
   const keyed = normalized.map(term => JIRA_TICKET_KEY.test(term));
   const keys = [...new Set(normalized.filter((_, index) => keyed[index]))];
@@ -63,16 +89,21 @@ function searchTerms(query: string): SearchTerms {
 
 /**
  * Every term as an escaped literal text clause. The relaxed form, for one
- * retry after an empty search, matches all terms but one word: an OR of
- * each word dropped in turn, with every named key kept in every clause, so a
- * key nothing matched never falls out of the search. With two words and no
- * key that is a plain OR; with one word and a key, the key's clause alone.
+ * retry after an empty search, keeps every named key in every clause, so a
+ * key nothing matched never falls out of the search. Up to
+ * RELAXED_DROP_ONE_MAX_WORDS words it matches all terms but one word: an OR of
+ * each word dropped in turn. With two words and no key that is a plain OR;
+ * with one word and a key, the key's clause alone. Past it, it matches any
+ * one word alongside the keys.
  */
 function textJql(terms: readonly string[], keyed: readonly boolean[], relaxed: boolean, projectId?: string): string {
   const clause = (term: string) => `text ~ ${JSON.stringify(`"${term.replace(/[+\-&|!(){}\[\]^"~*?:\\/]/g, '\\$&')}"`)}`;
-  const expression = relaxed
-    ? terms.flatMap((_, dropped) => (keyed[dropped] ? [] : [`(${terms.filter((_, index) => index !== dropped).map(clause).join(' AND ')})`])).join(' OR ')
-    : terms.map(clause).join(' AND ');
+  const words = terms.filter((_, index) => !keyed[index]);
+  const keys = terms.filter((_, index) => keyed[index]);
+  const expression = !relaxed ? terms.map(clause).join(' AND ')
+    : words.length <= RELAXED_DROP_ONE_MAX_WORDS
+      ? terms.flatMap((_, dropped) => (keyed[dropped] ? [] : [`(${terms.filter((_, index) => index !== dropped).map(clause).join(' AND ')})`])).join(' OR ')
+      : [...keys.map(clause), `(${words.map(clause).join(' OR ')})`].join(' AND ');
   return `${projectId === undefined ? expression : `project = ${projectId} AND (${expression})`} ORDER BY created DESC, id DESC`;
 }
 
@@ -130,8 +161,9 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
   const cloudid = binding.external_scope_id!;
   const apiPrefix = `https://api.atlassian.com/ex/jira/${cloudid}`;
   const pathPrefix = `/ex/jira/${cloudid}/rest/api/3`;
-  const handles = new Map<string, string>();
-  const issued = new Map<string, string>();
+  const handles = new Map<string, Opening>();
+  /** Each released citation's ticket id and section number (0 for a row without text). */
+  const issued = new Map<string, { readonly id: string; readonly section: number }>();
   const cursors = new Map<string, ListCursor>();
   let pinnedOrigin: string | undefined = options.expected_origin;
   let pinnedProject: ReturnType<typeof parseJiraProject> | undefined;
@@ -231,14 +263,47 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     }
   }
 
-  function remember(items: readonly ParsedJiraIssueV1[]): readonly PersonLiveEvidenceValueV1<PersonTicketCitationV1>[] {
-    if (handles.size + items.length > REQUEST_MAX_HANDLES) jiraFailure('unavailable');
-    return Object.freeze(items.map(item => {
+  /**
+   * Released rows and sections, as many as the request can still hold, and whether some were left out (`spent`). A row
+   * without text opens its ticket from the top; a section's handle opens what `opens` says.
+   */
+  function remember(all: readonly (ParsedJiraIssueV1 | Section)[]): { readonly values: readonly PersonLiveEvidenceValueV1<PersonTicketCitationV1>[]; readonly spent: boolean } {
+    const items = all.slice(0, Math.max(0, REQUEST_MAX_HANDLES - handles.size));
+    return { spent: items.length < all.length, values: Object.freeze(items.map(item => {
       const handle = `jira_item_${randomUUID()}`;
-      handles.set(handle, item.id);
-      issued.set(canonicalSha256(item.value.citation), item.id);
+      const section = 'opens' in item ? item.section : 0;
+      handles.set(handle, 'opens' in item ? item.opens : { id: item.id, start: 0 });
+      issued.set(canonicalSha256(item.value.citation), { id: item.id, section });
       return Object.freeze({ ...item.value, handle });
-    }));
+    })) };
+  }
+
+  /**
+   * Up to `count` sections of an opened ticket from `start`. The first keeps the ticket's own row identity (a listed row
+   * and its opened body are one item); later ones are labelled by number. When more sections follow, the last section
+   * shown opens the rest; every other section opens the ticket from itself on. A section whose text repeats one already
+   * in the page would be the same citation, so the page ends before it and the next open starts there.
+   */
+  function sections(parsed: ParsedJiraIssueV1, start: number, count: number): { readonly items: readonly Section[]; readonly more: boolean } {
+    const digest = sha256Digest(parsed.sections.join(''));
+    const seen = new Set<string>();
+    let end = Math.min(start + count, parsed.sections.length);
+    for (let index = start; index < end; index += 1) {
+      const sha = sha256Digest(parsed.sections[index]!);
+      if (seen.has(sha)) end = index;
+      seen.add(sha);
+    }
+    const more = end < parsed.sections.length;
+    const items: Section[] = [];
+    for (let index = start; index < end; index += 1) {
+      const text = parsed.sections[index]!;
+      const last = more && index === end - 1;
+      const label = parsed.sections.length === 1 ? parsed.value.label
+        : `${boundUtf8V1(parsed.value.label, 256)} · section ${index + 1} of ${parsed.sections.length}${last ? '; open it to read on' : ''}`;
+      items.push(Object.freeze({ id: parsed.id, section: index + 1, opens: Object.freeze({ id: parsed.id, start: last ? index + 1 : index, digest }),
+        value: Object.freeze({ ...parsed.value, label, text, citation: Object.freeze({ ...parsed.value.citation, text_sha256: sha256Digest(text) }) }) }));
+    }
+    return { items: Object.freeze(items), more };
   }
 
   async function searchPage(input: { readonly jql: string; readonly maximum: number; readonly origin: string; readonly inventory: boolean; readonly cursor?: ListCursor; readonly projectId?: string; readonly signal?: AbortSignal }) {
@@ -249,20 +314,23 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     if (typeof page.isLast !== 'boolean') jiraFailure('invalid_output');
     const token = page.nextPageToken === undefined || page.nextPageToken === null ? undefined : jiraString(page.nextPageToken, 4096);
     if (page.isLast ? token !== undefined : token === undefined) jiraFailure('invalid_output');
+    // A list's seen ids and page tokens refuse a cycle. Once they hold as many as a request may, the list ends here.
     const tokens = new Set(input.cursor?.tokens);
+    let spent = false;
+    let next = token;
     if (token !== undefined) {
       if (tokens.has(token)) jiraFailure('invalid_output');
-      tokens.add(token);
+      if (tokens.size >= REQUEST_MAX_HANDLES) { spent = true; next = undefined; } else tokens.add(token);
     }
     const ids = new Set(input.cursor?.ids);
     const selected: ParsedJiraIssueV1[] = [];
-    const discovered = jiraArray(page.issues, input.maximum).map(raw => {
+    const discovered = jiraArray(page.issues, input.maximum).flatMap(raw => {
       const reference = jiraRecord(raw);
       const id = jiraString(reference.id, 20, JIRA_ID);
       if (ids.has(id)) jiraFailure('invalid_output');
+      if (ids.size >= REQUEST_MAX_HANDLES) { spent = true; next = undefined; return []; }
       ids.add(id);
-      if (ids.size > REQUEST_MAX_HANDLES || tokens.size > REQUEST_MAX_HANDLES) jiraFailure('unavailable');
-      return id;
+      return [id];
     });
     // Search is eventually consistent. Current reads enforce issue security
     // before exposing even a title; results keep discovery order.
@@ -270,7 +338,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       if (input.projectId !== undefined && current.project_id !== input.projectId) jiraFailure('invalid_output');
       selected.push(current);
     }
-    return { selected, token, tokens, ids };
+    return { selected, token: next, tokens, ids, spent };
   }
 
   /**
@@ -322,27 +390,51 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
    * issue receives its own current exact read before metadata is released;
    * linked bodies remain unavailable until the caller opens that item ref.
    */
-  function openIssue(id: string, maximum: number, signal?: AbortSignal, expandRelated = true): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
+  function openIssue(opening: Opening, maximum: number, signal?: AbortSignal, expandRelated = true, cited?: string): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
     return safe(async () => {
       const origin = await verifyConnection(signal);
       let selected: ParsedJiraIssueV1;
-      let relatedIds: readonly string[];
-      let related: readonly (ParsedJiraIssueV1 | undefined)[];
+      let start = opening.start;
+      let changed = false;
+      let relatedIds: readonly string[] = Object.freeze([]);
+      let related: readonly (ParsedJiraIssueV1 | undefined)[] = Object.freeze([]);
+      let page: ReturnType<typeof sections>;
       try {
-        selected = await issue(id, origin, false, signal, expandRelated);
-        relatedIds = expandRelated ? selected.related_issue_ids.slice(0, Math.min(OPEN_RELATED_MAX_ITEMS, Math.max(0, maximum - 1))) : Object.freeze([]);
-        related = await Promise.all(relatedIds.map(relatedId => relatedIssue(relatedId, origin, signal)));
+        selected = await issue(opening.id, origin, false, signal, expandRelated);
+        if (cited !== undefined && cited !== EMPTY_DIGEST) {
+          // A cited section is found by its text, so an edit above it does not lose it; a changed one shows the ticket from the top.
+          const found = selected.sections.findIndex(text => sha256Digest(text) === cited);
+          start = Math.max(found, 0);
+          changed = found < 0;
+        } else if (start > 0 && (opening.digest !== sha256Digest(selected.sections.join('')) || start >= selected.sections.length)) {
+          start = 0;
+          changed = true;
+        }
+        page = sections(selected, start, Math.min(OPEN_SECTIONS_MAX, maximum));
+        // Linked tickets come with the ticket's first read, in the slots its sections leave.
+        if (expandRelated && start === 0) {
+          relatedIds = selected.related_issue_ids.slice(0, Math.min(OPEN_RELATED_MAX_ITEMS, Math.max(0, maximum - page.items.length)));
+          related = await inBatchesOfFourV1(relatedIds, relatedId => relatedIssue(relatedId, origin, signal));
+        }
       } finally {
         // A link target may be omitted, but every open still finishes with a
         // fresh account/resource/project fence before it can issue handles.
         await verifyConnection(signal);
       }
       const visibleRelated = related.filter((item): item is ParsedJiraIssueV1 => item !== undefined);
-      // Truncated covers what the open left out beside the ticket too (a link, a hidden link, a label cut); the
-      // ticket's own text was cut only when its released text was (ADR-0041).
-      return Object.freeze({ items: remember([selected, ...visibleRelated]),
-        truncated: selected.truncated || selected.related_truncated || visibleRelated.some(item => item.truncated) || visibleRelated.length !== relatedIds.length || relatedIds.length !== selected.related_issue_ids.length,
-        anchor_truncated: selected.text_truncated });
+      const notices = [
+        ...(changed ? [CHANGED_NOTICE] : []),
+        ...(selected.incomplete ? [INCOMPLETE_NOTICE] : []),
+        ...(selected.text_truncated && !page.more ? [CUT_NOTICE] : []),
+      ];
+      // Truncated covers what the open left out beside the ticket too (a link, a hidden link, a label cut). The ticket's
+      // own text is cut when sections follow those shown, which its last section shown opens, or when it passed its bound.
+      const released = remember([...page.items, ...visibleRelated]);
+      if (released.spent) notices.push(BUDGET_NOTICE);
+      const anchorCut = page.more || selected.text_truncated || released.values.length < page.items.length;
+      return Object.freeze({ items: released.values,
+        truncated: anchorCut || released.spent || selected.truncated || selected.related_truncated || visibleRelated.some(item => item.truncated) || visibleRelated.length !== relatedIds.length || (expandRelated && start === 0 && relatedIds.length !== selected.related_issue_ids.length),
+        anchor_truncated: anchorCut, ...(notices.length === 0 ? {} : { notice: notices.join(' ') }) });
     }, signal);
   }
 
@@ -352,12 +444,14 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     binding,
     validateCitation(value: unknown) {
       const citation = validatePersonTicketCitationV1(value);
-      if (issued.get(canonicalSha256(citation)) !== citation.ticket_id || citation.tool_id !== 'jira' || citation.external_scope_id !== cloudid || !citation.permalink.startsWith(`${pinnedOrigin}/browse/`) || !JIRA_TICKET_KEY.test(new URL(citation.permalink).pathname.slice(8))) jiraFailure('invalid_output');
-      return Object.freeze({ citation, tool_id: 'jira', external_scope_id: cloudid, coordinates: Object.freeze({ object_id: citation.ticket_id }) });
+      const released = issued.get(canonicalSha256(citation));
+      if (released?.id !== citation.ticket_id || citation.tool_id !== 'jira' || citation.external_scope_id !== cloudid || !citation.permalink.startsWith(`${pinnedOrigin}/browse/`) || !JIRA_TICKET_KEY.test(new URL(citation.permalink).pathname.slice(8))) jiraFailure('invalid_output');
+      // A ticket's row and its first section are one item; a later section is its own.
+      return Object.freeze({ citation, tool_id: 'jira', external_scope_id: cloudid, coordinates: Object.freeze({ object_id: released.section <= 1 ? citation.ticket_id : `${citation.ticket_id}:s${released.section}` }) });
     },
     async search(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
-      const maximum = Math.min(limit(input.limit), 5);
+      const maximum = Math.min(limit(input.limit), SEARCH_MAX_ITEMS);
       const { terms, keys, keyed } = searchTerms(input.query);
       const projectId = pinnedProject?.id;
       const named = keys.slice(0, maximum);
@@ -374,22 +468,33 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
           return searchPage({ jql, maximum, origin, inventory: true, projectId, signal: input.signal }); };
         const [byKey, firstText] = await Promise.all([keyIssues(named, origin, input.signal), text === undefined ? undefined : textPage(false)]);
         let byText = firstText;
-        // One bounded retry when nothing at all matched every term; only words are dropped.
-        if (byKey.length === 0 && byText !== undefined && byText.selected.length === 0 && byText.token === undefined &&
-            text!.length >= 2 && words >= 1 && words <= RELAXED_SEARCH_MAX_TERMS) byText = await textPage(true);
+        // One retry when nothing at all matched every term; only words are dropped.
+        const relaxed = byKey.length === 0 && byText !== undefined && byText.selected.length === 0 && byText.token === undefined && text!.length >= 2 && words >= 1;
+        if (relaxed) byText = await textPage(true);
         await verifyConnection(input.signal);
         const seen = new Set(byKey.map(item => item.id));
-        const matches = [...byKey, ...(byText?.selected ?? []).filter(item => !seen.has(item.id))].filter(item => matchesEvidenceDateV1(item.value.dates ?? {}, input, "created"));
+        let found = (byText?.selected ?? []).filter(item => !seen.has(item.id));
+        if (relaxed) {
+          // A relaxed page is newest first; the tickets whose titles name more of the words come first, ties keeping that order.
+          const lowered = text!.filter((_, index) => !keyed[index]).map(word => word.toLowerCase());
+          const score = (item: ParsedJiraIssueV1) => lowered.filter(word => item.value.label.toLowerCase().includes(word)).length;
+          found = found.map((item, index) => ({ item, index, score: score(item) })).sort((left, right) => right.score - left.score || left.index - right.index).map(entry => entry.item);
+        }
+        const matches = [...byKey, ...found].filter(item => matchesEvidenceDateV1(item.value.dates ?? {}, input, "created"));
         const selected = matches.slice(0, maximum);
-        return Object.freeze({ items: remember(selected),
-          truncated: byText?.token !== undefined || keys.length > named.length || matches.length > selected.length || selected.some(item => item.truncated) });
+        const released = remember(selected);
+        const spent = released.spent || byText?.spent === true;
+        const notices = [...(relaxed && selected.length > 0 ? [RELAXED_NOTICE] : []), ...(spent ? [BUDGET_NOTICE] : [])];
+        return Object.freeze({ items: released.values,
+          truncated: spent || byText?.token !== undefined || keys.length > named.length || matches.length > selected.length || selected.some(item => item.truncated),
+          ...(notices.length === 0 ? {} : { notice: notices.join(' ') }) });
       }, input.signal);
     },
     async open(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       const maximum = limit(input.limit);
-      const id = handles.get(input.handle);
-      if (id === undefined) jiraFailure('not_found');
-      return openIssue(id, maximum, input.signal);
+      const opening = handles.get(input.handle);
+      if (opening === undefined) jiraFailure('not_found');
+      return openIssue(opening, maximum, input.signal);
     },
     async openCitation(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       const maximum = limit(input.limit);
@@ -398,7 +503,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       if (citation.tool_id !== binding.tool_id || citation.external_scope_id !== cloudid || !JIRA_ID.test(citation.ticket_id)) jiraFailure('unauthorized');
       // A citation refresh proves the cited anchor remains readable. It does
       // not need to discover new neighboring metadata or pay link-read costs.
-      return openIssue(citation.ticket_id, maximum, input.signal, false);
+      return openIssue({ id: citation.ticket_id, start: 0 }, maximum, input.signal, false, citation.text_sha256);
     },
     async list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
@@ -426,21 +531,23 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         // A window on any date has no single field the pages are ordered by, so it never stops early.
         const oldestDay = input.date_field === "any" ? undefined : evidenceDayV1(oldest?.value.dates?.[input.date_field ?? "created"], input.time_zone);
         const passedSince = input.since !== undefined && oldestDay !== undefined && oldestDay < input.since;
-        const token = passedSince ? undefined : page.token;
         await verifyConnection(input.signal);
-        const items = remember(selected);
+        const released = remember(selected);
+        const spent = page.spent || released.spent || (page.token !== undefined && !passedSince && cursors.size >= REQUEST_MAX_HANDLES);
+        const items = released.values;
+        const token = passedSince || spent ? undefined : page.token;
         let next_cursor: string | undefined;
         if (token !== undefined) {
-          if (cursors.size >= REQUEST_MAX_HANDLES) jiraFailure('unavailable');
           next_cursor = `jira_cursor_${randomUUID()}`;
           cursors.set(next_cursor, { selection, token, projectId: project?.id, tokens: page.tokens, ids: page.ids });
         }
         // Jira's last page can be exactly full (ADR-0041): its end is confirmed only when the page held fewer issues than
         // asked for, or when the newest-first order passed since. Counted before ECHO's own date filter.
-        const page_full = !passedSince && page.token === undefined && page.selected.length >= maximum;
-        // Only a next page means more items exist. A summary cut to its label bound is one row's title, never a sign that
-        // the list did not reach its end (ADR-0041).
-        return Object.freeze({ items, truncated: token !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }), page_full });
+        const page_full = !passedSince && !spent && page.token === undefined && page.selected.length >= maximum;
+        // Only a next page, or a run that holds no more, means more items exist. A summary cut to its label bound is one
+        // row's title, never a sign that the list did not reach its end (ADR-0041).
+        return Object.freeze({ items, truncated: token !== undefined || spent, ...(next_cursor === undefined ? {} : { next_cursor }), page_full,
+          ...(spent ? { notice: BUDGET_NOTICE } : {}) });
       }, input.signal);
     },
     async revalidate(input): Promise<void> {
@@ -454,7 +561,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         for (const raw of jiraArray(input.citations, REQUEST_MAX_HANDLES)) {
           let citation: PersonTicketCitationV1;
           try { citation = validatePersonTicketCitationV1(raw); } catch { jiraFailure('invalid_request'); }
-          const id = issued.get(canonicalSha256(citation));
+          const id = issued.get(canonicalSha256(citation))?.id;
           if (citation.tool_id !== binding.tool_id || citation.external_scope_id !== cloudid || id === undefined) jiraFailure('unauthorized');
           ids.add(id);
         }
