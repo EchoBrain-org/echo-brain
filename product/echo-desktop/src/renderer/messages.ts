@@ -80,11 +80,6 @@ export function message(failure: Failure): string {
   return Object.hasOwn(MESSAGES, failure.code) ? MESSAGES[failure.code]! : 'Something went wrong. Try again.';
 }
 
-/** A meetings request's failure, worded as any other: a watch's window has no meeting count of its own. */
-export function meetingMessage(failure: Failure): string {
-  return message(failure);
-}
-
 /** Where you stand with a tool, in the renderer's words: on its row in Tools. */
 export const TOOL_STATES: Readonly<Record<ToolStatus, string>> = {
   linked: 'Connected',

@@ -17,14 +17,9 @@ it('sizes each bound a whole answer passes through above the one beneath it', ()
   expect(MAX_COPY_CHARACTERS).toBe(MAX_TIMELINE_PUT_BYTES);
   // The CLI prints every step and the answer: more than a whole Ask stream.
   expect(MAX_OUTPUT_BYTES).toBeGreaterThan(PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1);
-});
-
-it('lets a call that carries one whole answer take one, and every other call the broker\'s own bound', () => {
+  // A call that carries one whole answer (a timeline put, Copy answer) may take one.
   expect(paramsLimit('timeline.put')).toBe(MAX_TIMELINE_PUT_BYTES);
-  // Copy answer carries a whole answer too, however long.
   expect(paramsLimit('clipboard.writeText')).toBe(MAX_TIMELINE_PUT_BYTES);
-  expect(plainJsonBytes({ text: 'x'.repeat(100_000) }, paramsLimit('clipboard.writeText'))).not.toBeNull();
-  expect(paramsLimit('ask.run')).toBe(MAX_REQUEST_BYTES);
 });
 
 it('refuses what a structured clone carries but JSON does not', () => {

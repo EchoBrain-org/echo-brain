@@ -506,8 +506,7 @@ export function evidenceView(raw: unknown): SourceEvidence {
   // Imported v1 packets keep their historical first-line heading for citation identity. The pane
   // presents the current server label separately; it never interprets the heading as review state.
   const review = evidence.imported_meeting_review;
-  const text = review === undefined ? evidence.text : evidence.text.slice(evidence.text.indexOf('\n') + 1);
-  return { label: evidence.citation.label, text,
+  return { label: evidence.citation.label, text: review === undefined ? evidence.text : evidence.text.slice(evidence.text.indexOf('\n') + 1),
     ...(review === undefined ? {} : { imported_meeting_review: review }) };
 }
 
