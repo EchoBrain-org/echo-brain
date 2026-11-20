@@ -383,7 +383,9 @@ describe('what the page sends with an Ask and a check', () => {
     const request = askCheckRequest([item, record, followUp]);
     expect(JSON.parse(request!)).toEqual({ schema_version: 1, kind: 'echo-person-ask-check-request-v1', items: [item, record, followUp] });
     expect(askCheckArgv(request!)).toEqual(['ask-check', `--request=${request}`]);
-    for (const bad of [[], Array.from({ length: 101 }, () => item), [{ ...item, asked_at: 'now' }],
+    // Any number of items within the body's bound.
+    expect(JSON.parse(askCheckRequest(Array.from({ length: 101 }, () => item))!).items).toHaveLength(101);
+    for (const bad of [[], [{ ...item, asked_at: 'now' }],
       [{ asked_at: item.asked_at, citation: { kind: 'person', membership_id: ARI.membership_id } }], [{ ...followUp, citation: { kind: 'follow_up', item_id: 'x' } }],
       [{ ...item, extra: 1 }], 'items']) expect(askCheckRequest(bad)).toBeNull();
     const long = { ...ticketCitation, permalink: `https://example.atlassian.net/browse/${'T'.repeat(1_900)}` };

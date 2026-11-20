@@ -6,7 +6,7 @@
 import type {
   Answer, AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskScope, CheckCitation, TimelineTurn,
 } from '../shared/protocol.js';
-import { checkOf, MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
+import { checkOf, MAX_ASK_BODY_BYTES, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerSentences, sourceGroups, type Sentence, type Shows, type SourceGroup } from './answer.js';
 
@@ -120,7 +120,7 @@ export function checkPlan(turns: readonly TimelineTurn[]): CheckPlan {
       const item: AskCheckItem = { asked_at: turn.asked_at, citation };
       const size = new TextEncoder().encode(JSON.stringify(item)).length + 1;
       const last = requests.at(-1);
-      if (last === undefined || last.items.length === MAX_CHECK_ITEMS || bytes + size > MAX_CHECK_REQUEST_BYTES - 1024) {
+      if (last === undefined || bytes + size > MAX_CHECK_REQUEST_BYTES - 1024) {
         requests.push({ items: [], places: [] });
         bytes = 96;
       }

@@ -419,8 +419,7 @@ export type AskCheckState = PersonAskCheckStateV1;
 export type AskCheckItem = PersonAskCheckRequestItemV1;
 /** What the check said of one item, in the request's order. */
 export type AskCheckResult = Pick<PersonAskCheckItemV1, 'state'>;
-/** The most items one check asks about, and its body's bound (C1). */
-export const MAX_CHECK_ITEMS = 100;
+/** Transport: a check's body bound (C1), its one bound; a check takes any number of items within it. */
 export const MAX_CHECK_REQUEST_BYTES = 64 * 1024;
 
 /**

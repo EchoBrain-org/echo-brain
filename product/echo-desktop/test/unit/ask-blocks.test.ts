@@ -304,28 +304,28 @@ describe('a check of an arranged answer (ADR-0047)', () => {
     expect(text(answer)).not.toContain('THERM-48');
   });
 
-  it('asks about every source of an answer past the 100 one check request takes, and leaves out what cites one past them you can no longer read', async () => {
-    // 104 pages, each a point of its own after the answer: the 104th is no longer yours to read.
-    const { store, thread } = await reopened({ 41103: 'unreadable' }, kept('1', pagesAnswer(104)));
-    expect(rpc.mock.calls.filter(([name]) => name === 'ask.check').map(([, params]) => (params as { items: unknown[] }).items.length)).toEqual([100, 4]);
+  it('asks about every source of an answer past what one check request\'s body holds, and leaves out what cites one past it you can no longer read', async () => {
+    // 175 pages, each a point of its own after the answer: the 175th is no longer yours to read. One request's 64 KiB holds 171 of them.
+    const { store, thread } = await reopened({ 41174: 'unreadable' }, kept('1', pagesAnswer(175)));
+    expect(rpc.mock.calls.filter(([name]) => name === 'ask.check').map(([, params]) => (params as { items: unknown[] }).items.length)).toEqual([171, 4]);
     const answer = byTestId(thread(), 'answer')[0]!;
-    expect(byTestId(answer, 'statement').map(words)).toHaveLength(103);
-    expect(text(answer)).not.toContain('Page 104');
+    expect(byTestId(answer, 'statement').map(words)).toHaveLength(174);
+    expect(text(answer)).not.toContain('Page 175');
     expect(await store.copyAnswer(store.getState().timeline.turns.at(-1)!.id)).toBe(true);
     const [markdown] = rpc.mock.calls.filter(([name]) => name === 'clipboard.writeText').map(([, params]) => (params as { text: string }).text);
-    expect(markdown).toContain('Page 103 applies.');
-    expect(markdown).not.toContain('Page 104');
+    expect(markdown).toContain('Page 174 applies.');
+    expect(markdown).not.toContain('Page 175');
   });
 
   it('keeps hidden what a request found you can no longer read when a later request of the check fails, and speaks for no turn', async () => {
-    // 104 pages, two requests: the first finds page 1 no longer yours to read, and the second fails.
+    // 175 pages, two requests: the first finds page 1 no longer yours to read, and the second fails.
     const sent: number[] = [];
     const first = finding({ 41000: 'unreadable' });
     const { store, thread } = await reopenedWith(params => {
       sent.push((params.items as unknown[]).length);
       return sent.length === 1 ? first(params) : { ok: false, failure: { code: 'unavailable', retryable: true } };
-    }, kept('1', pagesAnswer(104)));
-    expect(sent).toEqual([100, 4]);
+    }, kept('1', pagesAnswer(175)));
+    expect(sent).toEqual([171, 4]);
     const id = store.getState().timeline.turns.at(-1)!.id;
     expect(text(byTestId(thread(), 'answer')[0])).not.toContain('Page 1 applies.');
     expect(await store.copyAnswer(id)).toBe(true);
@@ -338,9 +338,9 @@ describe('a check of an arranged answer (ADR-0047)', () => {
   });
 
   it('hides at once what such a check found unreadable, over a check of the turn still good that found it readable', async () => {
-    // An earlier turn citing 50 pages and the latest citing 60: Ask opening checks both, in two requests.
-    const older = kept('1', pagesAnswer(50), 2, 'Which pages apply?');
-    const latest = kept('2', pagesAnswer(60));
+    // An earlier turn citing 100 pages and the latest citing 110: Ask opening checks both, in two requests.
+    const older = kept('1', pagesAnswer(100), 2, 'Which pages apply?');
+    const latest = kept('2', pagesAnswer(110));
     const failing: number[] = [];
     let fails = false;
     const same = finding({});
@@ -362,7 +362,8 @@ describe('a check of an arranged answer (ADR-0047)', () => {
     store.closeAsk();
     store.pickSuggestion({ question: QUESTION, turn: latest.id });
     await flush();
-    expect(failing).toEqual([100, 10]);
+    expect(failing.length).toBe(2);
+    expect(failing[0]! + failing[1]!).toBe(210);
     expect(store.getState().timeline.checks[older.id]?.states[0]).toBe('unreadable');
     expect(store.getState().timeline.turns.find(turn => turn.id === older.id)!.unreadable).toEqual([0]);
     expect(await store.copyAnswer(older.id)).toBe(true);

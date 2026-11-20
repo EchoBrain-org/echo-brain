@@ -32,7 +32,7 @@ const answer = (items: readonly unknown[], fields: Record<string, unknown> = {})
 describe('Ask source check request (Ask timeline v1, C1)', () => {
   it('serves one path and freezes its bounds and kinds', () => {
     expect(PERSON_ASK_CHECK_PATH_V1).toBe('/v1/person/ask/check');
-    expect(PERSON_ASK_CHECK_LIMITS_V1).toEqual({ items_min: 1, items_max: 100, body_bytes: 64 * 1024 });
+    expect(PERSON_ASK_CHECK_LIMITS_V1).toEqual({ items_min: 1, body_bytes: 64 * 1024 });
     expect(Object.isFrozen(PERSON_ASK_CHECK_LIMITS_V1)).toBe(true);
     expect([...PERSON_ASK_CHECK_CITATION_KINDS_V1]).toEqual(['approved_record', 'source_revision', 'follow_up', 'ticket', 'page']);
   });
@@ -50,11 +50,10 @@ describe('Ask source check request (Ask timeline v1, C1)', () => {
     expect(validatePersonAskCheckRequestV1(request([item(citations.page), item(citations.page, { asked_at: '2026-10-21T09:30:00.000Z' })])).items).toHaveLength(2);
   });
 
-  it('takes 1 to 100 items within 64 KiB', () => {
-    expect(validatePersonAskCheckRequestV1(request(Array.from({ length: 100 }, () => item(citations.follow_up)))).items).toHaveLength(100);
+  it('takes any number of items within 64 KiB, and at least one', () => {
+    expect(validatePersonAskCheckRequestV1(request(Array.from({ length: 300 }, () => item(citations.follow_up)))).items).toHaveLength(300);
     refused(() => validatePersonAskCheckRequestV1(request([])), 'no items');
-    refused(() => validatePersonAskCheckRequestV1(request(Array.from({ length: 101 }, () => item(citations.follow_up)))), '101 items');
-    // A hundred long source citations pass the item bound but not the byte bound.
+    // The byte bound is the request's one bound.
     const long = { ...citations.source_revision, revision_id: 'r'.repeat(512), label: 'L'.repeat(200) };
     const heavy = request(Array.from({ length: 100 }, () => item(long)));
     expect(canonicalJsonBytes(heavy).byteLength).toBeGreaterThan(PERSON_ASK_CHECK_LIMITS_V1.body_bytes);
@@ -126,7 +125,6 @@ describe('Ask source check answer (Ask timeline v1, C1)', () => {
     ['the request kind', answer([{ state: 'same' }], { kind: PERSON_ASK_CHECK_REQUEST_KIND_V1 })],
     ['an extra key', answer([{ state: 'same' }], { checked_at: ASKED })],
     ['no items', answer([])],
-    ['101 items', answer(Array.from({ length: 101 }, () => ({ state: 'same' })))],
     ['another state', answer([{ state: 'stale' }])],
     ['no state', answer([{}])],
     ['a reason', answer([{ state: 'unreadable', reason: 'deleted' }])],
