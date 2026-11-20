@@ -706,8 +706,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       if (!repeat && result.notice !== undefined) noticedSearches.add(fingerprint);
       researchObservations.push({ operation: 'search', fingerprint, complete, source: source ?? null });
       if (complete) searchedSources.add(source ?? null);
-      retrievalProgress += 1;
+      const known = entries.size;
       const found = result.items.map(item => register(item));
+      // A search is progress when it finished or found items research had not seen; one that met only an availability
+      // notice gave nothing, however it was worded.
+      if (result.notice === undefined || entries.size > known) retrievalProgress += 1;
       for (const entry of found) { entry.query = query; entry.direct = true; markMatched(entry, dates); }
       const linked = registerLinked(result);
       searchHits += found.length;
@@ -864,7 +867,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           const anyOf = deskFilters ? [] : [...(owner === undefined ? [] : ["owner" as const]), ...(status === undefined ? [] : ["status" as const])];
           currentState.unchecked = Object.freeze({ ...result.unchecked, ...(anyOf.length === 0 ? {} : { any_of: Object.freeze(anyOf) }) });
         }
-        if (!currentState.fetched || result.next_cursor !== currentState.cursor) retrievalProgress += 1;
+        // A new page is progress, unless it met only an availability notice (a page with items counts below).
+        if ((!currentState.fetched || result.next_cursor !== currentState.cursor) && result.notice === undefined) retrievalProgress += 1;
         // A list's id and read time come from its first page, in plan order (ADR-0041, addition 2: search can lag edits).
         if (!currentState.fetched) { currentState.id = agenticListIdV1(++listsRead); currentState.read_at = new Date(wallNow()).toISOString(); }
         currentState.fetched = true; currentState.cursor = result.next_cursor; currentState.truncated = result.truncated;
@@ -1396,8 +1400,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     let results: readonly ToolResult[] = [];
     let latest: ReadonlySet<string> = new Set();
     let idleSteps = 0;
-    /** Every read research has made, by its tool and exact arguments: a step that only repeats them does no new work. */
-    const readsMade = new Set<string>();
+    /** Every read the desk has run to the end, by its tool and exact arguments: a step that only repeats them does no new work. */
+    const readsCompleted = new Set<string>();
     // Research has no round, call or time limit: it runs until the planner finishes, a step is unusable, a model call
     // stalls, or the planner only repeats work it has already done.
     for (;;) {
@@ -1488,13 +1492,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const novelty = () => evidenceNovelty + listNovelty;
       const before = hadCitableEvidence ? novelty() : retrievalProgress;
       const keys = reads.map(readKey);
-      const unmade = keys.map(key => !readsMade.has(key));
-      for (const key of keys) readsMade.add(key);
       report?.reads(reads.some(action => action.tool !== "open"));
       const raw = await runReads(reads);
-      // A read never made before is new work when the desk ran it to the end: a search in other words, another source, a
-      // list page. A read refused or answered unsent produces nothing, however its arguments change.
-      const newWork = raw.some((value, index) => unmade[index]! && completedReads.has(value));
+      // A read never completed before is new work when the desk ran it to the end: a search in other words, another
+      // source, a list page, or a read that met a notice before and finishes now. A read refused, answered unsent or met
+      // with an availability notice produces nothing, however its arguments change.
+      const newWork = raw.some((value, index) => completedReads.has(value) && !readsCompleted.has(keys[index]!));
+      raw.forEach((value, index) => { if (completedReads.has(value)) readsCompleted.add(keys[index]!); });
       results = raw.map((value, index) => lastResult(reads[index]!, value));
       report?.reads_done();
       const actions = reads.map((action, index) => roundView(action.tool, action.args, results[index], raw[index]));

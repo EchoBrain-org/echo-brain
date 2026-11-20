@@ -88,6 +88,19 @@ describe('Ask research tool contract v1', () => {
     expect(events.some(event => event.model_corrections?.research_no_progress_stop === 1)).toBe(true);
   });
 
+  it('stops research whose searches only meet an availability notice, though each round words its search differently', async () => {
+    // Each search reaches the desk, finds nothing and says the source could not be searched: no round completes a read or
+    // adds evidence, so two such rounds stop research.
+    const searchFor = (n: number) => step([{ tool: 'search', args: { query: `vendor change ${n}` } }]);
+    const port = desk({ search: vi.fn(async () => result([], { notice: 'Follow-ups are temporarily unavailable.' })) });
+    const run = scripted([searchFor(1), searchFor(2), searchFor(3), searchFor(4), searchFor(5), step([{ tool: 'finish', args: {} }], 'not_found')]);
+    const events: CoreRuntimeObservationV1[] = [];
+    await observeCoreRuntimeV1('ask_request', () => ask(port, run.model).answer({ question }), { observer: event => { events.push(event); } }).catch(() => undefined);
+    expect(port.search).toHaveBeenCalledTimes(2);
+    expect(run.steps()).toHaveLength(2);
+    expect(events.some(event => event.model_corrections?.research_no_progress_stop === 1)).toBe(true);
+  });
+
   it('reads a window with no date field on any of an item\'s dates where its source declares that, and shows which matched', async () => {
     const approvedYesterday = decision('canary', { approved: '2026-10-18T21:05:00.000Z' });
     const port = desk({ list: vi.fn(async () => result([approvedYesterday])) });
