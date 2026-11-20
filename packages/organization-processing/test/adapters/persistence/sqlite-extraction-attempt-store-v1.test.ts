@@ -194,7 +194,8 @@ describe('durable extraction attempt budget', () => {
     const otherHandle = open();
     expect(claim(otherHandle).attempt).toBe(2);
     expect(store.listLatest()).toMatchObject([{ ...key, attempt: 2, retry_authorized: false }]);
-    expect(() => store.listLatest(1001)).toThrow();
+    expect(store.listLatest(1001)).toHaveLength(1);
+    expect(() => store.listLatest(0)).toThrow();
   });
 
   it('rejects malformed keys and unbounded failure text before any state mutation', () => {
