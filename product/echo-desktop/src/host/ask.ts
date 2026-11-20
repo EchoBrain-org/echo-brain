@@ -75,6 +75,17 @@ export function askSourceArgv(ref: SourceRef, scope: AskScope): string[] {
 }
 
 /**
+ * A host call's silence: `onSilent` runs once `ms` passes without `alive()`. There is no whole-call deadline; each sign
+ * of life (an Ask's printed line) starts the silence again. `stop` ends it when the call settles.
+ */
+export function silence(ms: number, onSilent: () => void): { alive(): void; stop(): void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const alive = () => { clearTimeout(timer); timer = setTimeout(onSilent, ms); };
+  alive();
+  return { alive, stop: () => clearTimeout(timer) };
+}
+
+/**
  * An Ask's progress lines: each step the page shows while the Ask runs,
  * posted tagged with the account it runs for and the page's own cancel id,
  * so the page drops a step of any other Ask or account. A line that is not a

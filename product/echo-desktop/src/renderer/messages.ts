@@ -61,6 +61,8 @@ const MESSAGES: Record<string, string> = {
   busy: 'ECHO is busy with another request. Try again in a moment.',
   quota_exceeded: 'Your organization reached its limit for this. Try again later, or ask your organization owner.',
   timed_out: 'That took too long. Try again.',
+  // An Ask that heard nothing from ECHO for a while (the client's or the host's silence): it has no time limit otherwise.
+  stalled: 'ECHO stopped responding while it worked on that. Try again.',
   research_failed: 'ECHO could not finish looking into that. Try again.',
   no_access: 'You do not have access to that.',
   forbidden: 'You do not have access to that.',

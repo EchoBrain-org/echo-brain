@@ -1,7 +1,7 @@
 // The host's side of Ask progress (ADR-0039): the command an Ask runs, and
 // what of its printed lines reaches the page.
 import { describe, expect, it, vi } from 'vitest';
-import { askArgv, askProgressLines, askRecordArgv, askSourceArgv } from '../../src/host/ask.js';
+import { askArgv, askProgressLines, askRecordArgv, askSourceArgv, silence } from '../../src/host/ask.js';
 import type { AskProgressNotice, Expect } from '../../src/shared/protocol.js';
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
@@ -30,6 +30,27 @@ describe('the command an Ask runs', () => {
   });
 });
 
+describe('a host call\'s silence', () => {
+  it('has no deadline: each sign of life starts it again, and only a silence of its whole length ends the call', () => {
+    vi.useFakeTimers();
+    try {
+      const silent = vi.fn();
+      const quiet = silence(90_000, silent);
+      // An hour of lines, each just inside the silence.
+      for (let elapsed = 0; elapsed < 3_600_000; elapsed += 89_000) { vi.advanceTimersByTime(89_000); quiet.alive(); }
+      expect(silent).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(89_999);
+      expect(silent).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(silent).toHaveBeenCalledTimes(1);
+      const stopped = vi.fn();
+      silence(90_000, stopped).stop();
+      vi.advanceTimersByTime(90_000);
+      expect(stopped).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+});
+
 describe('the progress lines of an Ask', () => {
   it('post each valid step, tagged with its Ask and account, and nothing else the command printed', () => {
     const posted: AskProgressNotice[] = [];
@@ -40,8 +61,9 @@ describe('the progress lines of an Ask', () => {
     read('not json');
     read(line({ ok: true, progress: { type: 'stage', stage: 'reading', note: 'Mara owns THERM-48' } }));
     read(line({ ok: true, progress: { type: 'read', items: [decision] } }));
-    // The answer line is the command's result, never a step.
+    // The answer line is the command's result, never a step; an alive line (a heartbeat) is neither, and is not refused.
     read(line({ ok: true, result: { schema_version: 8 } }));
+    read(line({ ok: true, alive: true }));
     expect(refused).toHaveBeenCalledTimes(1);
     expect(posted).toEqual([
       { cancel_id: CANCEL, expect: EXPECT, step: { type: 'stage', stage: 'searching' } },
