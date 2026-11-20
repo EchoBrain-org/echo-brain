@@ -30,7 +30,7 @@ import {
 } from "./agentic-model-gate-v1.js";
 import { auditAgenticTerminalV1, releaseAgenticResultV1, type AgenticAskAuditPortV1, type AgenticAuditContextV1 } from "./agentic-release-v1.js";
 import { agenticAskAnswerSha256V1 } from "./agentic-ask-v1-response.js";
-import { agenticClarifyResponseV1, agenticFollowUpStartingV1, agenticPreviousAskedOnV1, resolveAgenticFollowUpV1 } from "./agentic-follow-up-resolver-v1.js";
+import { agenticClarifyResponseV1, agenticFollowUpStartingV1, agenticPreviousAskedOnV1, resolveAgenticFollowUpV1, type AgenticFollowUpCarryV1 } from "./agentic-follow-up-resolver-v1.js";
 import type {
   AgenticAskAnswerWithReceiptV3, AgenticAskProgressInputV3, AgenticAskProgressRequestV1, AgenticAskProgressSinkV3,
 } from "./agentic-ask-progress-v1.js";
@@ -63,7 +63,7 @@ export type {
 } from "./agentic-ask-progress-v1.js";
 export { createAgenticAskProgressRequestV1 } from "./agentic-ask-progress-recorder-v1.js";
 // The follow-up resolution eval (ADR-0047) runs the product's resolver on its own.
-export { resolveAgenticFollowUpOnceV1, type AgenticFollowUpResolutionV1, type AgenticFollowUpResolvedV1 } from "./agentic-follow-up-resolver-v1.js";
+export { resolveAgenticFollowUpOnceV1, type AgenticFollowUpCarryV1, type AgenticFollowUpResolutionV1, type AgenticFollowUpResolvedV1 } from "./agentic-follow-up-resolver-v1.js";
 
 /**
  * How long an evidence read or access check may send nothing before the request treats it as stalled and stops with
@@ -279,8 +279,9 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
     /** The follow-ups an Ask answer drafted and its release saved (ADR-0053); absent for none. */
     readonly follow_ups?: readonly AskFollowUpDraftV1[];
   };
-  /** `previous`: the asker's previous turn (ADR-0047), which only an Ask carries. */
-  const request = async (input: AgenticResearchInputV1, render?: Pick<AgenticRenderedResearchInputV1<unknown, unknown>, "renderer" | "trigger_input">, previous?: PersonAnswerPreviousV1): Promise<RequestOutput> => observeAgenticLifecycleV1<RequestOutput>('run', undefined, { trigger: input.trigger }, async () => {
+  /** `previous`: the asker's previous turn (ADR-0047), which only an Ask carries; `followUp`, its resolution carried between attempts. */
+  const request = async (input: AgenticResearchInputV1, render?: Pick<AgenticRenderedResearchInputV1<unknown, unknown>, "renderer" | "trigger_input">, previous?: PersonAnswerPreviousV1,
+    followUp?: AgenticFollowUpCarryV1): Promise<RequestOutput> => observeAgenticLifecycleV1<RequestOutput>('run', undefined, { trigger: input.trigger }, async () => {
       const brief = await observeAgenticLifecycleV1('brief', 'research_brief', { trigger: input.trigger, brief: input.brief, scope: options.desk.scope }, async () => {
         const selected = runnableBrief(input.brief);
         if (selected === null) throw new AgenticAskOutputErrorV1(input.brief.goal.kind === "question" ? "question is invalid" : "research goal is invalid");
@@ -396,9 +397,12 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
         let researchBrief = brief;
         let resolvedQuestion: string | undefined;
         if (previous?.purpose === "follow_up" && goal.kind === "question") {
-          const { resolution } = await resolveAgenticFollowUpV1({
+          // A resolution an earlier attempt of this request already paid for, from the same previous turn, is used as it is.
+          const resolved = followUp?.resolved ?? await resolveAgenticFollowUpV1({
             gate, previous, question: goal.question, today: requestDay, time_zone: temporal?.time_zone ?? "UTC", signal: activeSignal,
           });
+          if (followUp?.resolved === undefined) followUp?.on_resolved?.(resolved);
+          const { resolution } = resolved;
           if (resolution.resolution === "clarify") {
             // More than one thing could fit: no research runs, and the answer asks which one, released as every answer is.
             phase = "final";
@@ -526,14 +530,14 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
   const signalOf = (signal: AbortSignal | undefined) => signal === undefined ? {} : { signal };
   return Object.freeze({
     /** `previous`: the asker's previous turn (ADR-0047). */
-    async answer(input: { readonly question: string; readonly signal?: AbortSignal; readonly previous?: PersonAnswerPreviousV1 }): Promise<PersonAnswerResponseV8> {
-      return (await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal) }, undefined, input.previous)).response!;
+    async answer(input: { readonly question: string; readonly signal?: AbortSignal; readonly previous?: PersonAnswerPreviousV1; readonly follow_up?: AgenticFollowUpCarryV1 }): Promise<PersonAnswerResponseV8> {
+      return (await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal) }, undefined, input.previous, input.follow_up)).response!;
     },
     /** Ask with its progress sent to `on_progress` while it runs, in V3, and the receipt built after release (ADR-0039). */
     async answerWithReceipt(input: AgenticAskProgressInputV3): Promise<AgenticAskAnswerWithReceiptV3> {
       if (typeof input.on_progress !== "function") throw new AgenticAskOutputErrorV1("Ask progress is unavailable");
       const output = await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal), on_progress: input.on_progress,
-        ...(input.request === undefined ? {} : { progress_request: input.request }) }, undefined, input.previous);
+        ...(input.request === undefined ? {} : { progress_request: input.request }) }, undefined, input.previous, input.follow_up);
       return Object.freeze({ response: output.response!, receipt: output.receipt! });
     },
     /** Ask plus its research result and writer input, for the research evaluation. */

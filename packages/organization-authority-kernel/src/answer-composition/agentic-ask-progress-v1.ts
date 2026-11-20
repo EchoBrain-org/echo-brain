@@ -1,4 +1,5 @@
 import type { PersonAnswerPreviousV1, PersonAnswerResponseV8, PersonAskProgressStepEventV3, PersonAskReceiptV3 } from "@echo-brain/organization-api";
+import type { AgenticFollowUpCarryV1 } from "./agentic-follow-up-resolver-v1.js";
 
 /**
  * Ask progress (ADR-0039): what a live Ask run reports while it works, and
@@ -44,6 +45,8 @@ export interface AgenticAskProgressInputV3 {
   /** The request this run is an attempt of; without it, the run is the whole request. */
   readonly request?: AgenticAskProgressRequestV1;
   readonly previous?: PersonAnswerPreviousV1;
+  /** A follow-up's resolution carried from an earlier attempt of the same request, or where to report this one's. */
+  readonly follow_up?: AgenticFollowUpCarryV1;
 }
 
 /**

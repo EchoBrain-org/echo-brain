@@ -246,6 +246,30 @@ describe('the previous turn as the Authority lets its model read it (ADR-0047)',
     expect(run.seen()).toContain(EARLIER);
   });
 
+  it.each([false, true])('reuses the follow-up resolution across a snapshot restart only while the checked turn is the same (access lost: %s)', async lost => {
+    const f = await sentFixture();
+    const tasks = myOpenTasksPlanner();
+    const prompts: string[] = [];
+    let resolutions = 0;
+    let restarted = false;
+    // The resolver answers once per call; the first research step after it sees the snapshot move.
+    const model: StructuredGenerationPort = { async generate(input) {
+      if ((input.schema.properties as Readonly<Record<string, unknown>>).resolution !== undefined) {
+        resolutions += 1;
+        prompts.push(input.user_prompt);
+        return { resolution: 'same' };
+      }
+      if (!restarted) { restarted = true; if (lost) leave(f); throw new PersonRecordSearchSnapshotChangedV1(); }
+      return tasks.model.generate(input);
+    } };
+    const base = await v7Checked(f, model);
+    expect((await streamedAnswer(await ask(base, { body: body(previousOf(f), 'And who leads it?') }))).outcome).toBe('answered');
+    expect(restarted).toBe(true);
+    // Unchanged: the paid resolution is not repeated. Changed: resolved again, from the turn as checked now.
+    expect(resolutions).toBe(lost ? 2 : 1);
+    if (lost) expect(prompts[1]).not.toContain(ROSTER);
+  });
+
   it('carries no sentence that rests on no citation, with a check or without one', async () => {
     const f = await sentFixture();
     const bare = { ...previousOf(f), statements: [{ text: 'Uncited: the roster is Mina and Rafael.', citation_indexes: [] }, { text: ROSTER, citation_indexes: [0] }] };
