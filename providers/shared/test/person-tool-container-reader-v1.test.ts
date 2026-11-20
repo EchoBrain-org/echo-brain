@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
+import { PERSON_EVIDENCE_TEXT_MAX_BYTES_V1, type PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReleaseV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
@@ -24,7 +24,7 @@ async function fixture(pinned?: readonly string[]) {
   };
   const shown = (rows: readonly PersonToolContainerV1[]) => ({ containers: rows.filter(row => !state.malformed.has(row.id)), left_out: rows.filter(row => state.malformed.has(row.id)).length });
   const provider = {
-    binding, tool: 'Fixture', container: 'confluence_space', noun: 'Fixture channel', failure, fence: vi.fn(),
+    binding, tool: 'Fixture', container: 'confluence_space', noun: 'Fixture channel', failure, fence: vi.fn(), page_max: 100,
     verify: vi.fn(async () => 'https://fixture.example.test'),
     permalink: (origin, container) => `${origin}/channels/${container.key}`,
     page: vi.fn(async ({ cursor, limit }: { readonly cursor?: string; readonly limit: number }) => {
@@ -88,33 +88,33 @@ describe('the shared tool container reader (research tool contract v1)', () => {
     expect([...twice.audit.record.mock.calls, ...other.audit.record.mock.calls]).toHaveLength(1);
   });
 
-  it('names at most ten mapped ECHO projects, then how many more', async () => {
+  it('names every mapped ECHO project that fits its text, with no count of its own', async () => {
     const f = await fixture();
-    const names = Array.from({ length: 12 }, (_, index) => `Project ${String(index + 1).padStart(2, '0')}`);
+    const names = Array.from({ length: 40 }, (_, index) => `Project ${String(index + 1).padStart(2, '0')}`);
     f.state.echo.set('1', names);
     const [item] = (await f.source.list({ limit: 1 })).items;
-    expect(item!.text).toBe(`Fixture channel C1: Channel 1\nECHO projects: ${names.slice(0, 10).join(', ')}, and 2 more`);
+    expect(item!.text).toBe(`Fixture channel C1: Channel 1\nECHO projects: ${names.join(', ')}`);
   });
 
   it('names mapped ECHO projects only whole, as many as fit its text, then how many more', async () => {
     const f = await fixture();
-    const names = Array.from({ length: 10 }, (_, index) => `Project ${String(index + 1).padStart(2, '0')} ${'x'.repeat(150)}`);
+    const names = Array.from({ length: 200 }, (_, index) => `Project ${String(index + 1).padStart(3, '0')} ${'x'.repeat(150)}`);
     f.state.echo.set('1', names);
     const text = (await f.source.list({ limit: 1 })).items[0]!.text!;
-    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1024);
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
     const [head, projects] = text.split('\nECHO projects: ');
     expect(head).toBe('Fixture channel C1: Channel 1');
     const listed = projects!.split(', ');
     const more = /^and (\d+) more$/.exec(listed.pop()!);
     expect(listed).toEqual(names.slice(0, listed.length));
-    expect(listed.length + Number(more?.[1])).toBe(10);
+    expect(listed.length + Number(more?.[1])).toBe(200);
   });
 
   it('keeps the first mapped ECHO project whole beside a very long container name, cutting that name instead', async () => {
-    const f = await fixture(); f.state.containers.set('1', { id: '1', key: 'C1', name: 'E'.repeat(1000) });
+    const f = await fixture(); f.state.containers.set('1', { id: '1', key: 'C1', name: 'E'.repeat(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1) });
     f.state.echo.set('1', ['Atlas', 'Launchscope']);
     const text = (await f.source.list({ limit: 1 })).items[0]!.text!;
-    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1024);
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
     expect(text).toMatch(/^Fixture channel C1: E+\nECHO projects: Atlas, and 1 more$/);
   });
 
@@ -170,22 +170,43 @@ describe('the shared tool container reader (research tool contract v1)', () => {
     expect(ranked.items.map(item => item.label)).toEqual(['Channel 2', 'Channel 1']);
   });
 
-  it('returns up to 25 search matches, and says when more matched', async () => {
+  it('returns as many search matches as asked for, and says when more matched', async () => {
     const f = await fixture();
-    for (let index = 5; index <= 30; index += 1) f.state.containers.set(String(index), { id: String(index), key: `C${index}`, name: `Channel ${index}` });
+    for (let index = 5; index <= 60; index += 1) f.state.containers.set(String(index), { id: String(index), key: `C${index}`, name: `Channel ${index}` });
     const found = await f.source.search({ query: 'channel', limit: 50 });
-    expect(found.items).toHaveLength(25);
+    expect(found.items).toHaveLength(50);
     expect(found.truncated).toBe(true);
   });
 
-  it('releases past 512 items, and at the run budget returns what fits with a notice, never a failure', async () => {
+  it('finds a container through every mapped ECHO project name, with no count of its own', async () => {
+    const f = await fixture();
+    f.state.containers.clear();
+    for (let index = 1; index <= 30; index += 1) {
+      f.state.containers.set(String(index), { id: String(index), key: `C${index}`, name: `Channel ${index}` });
+      f.state.echo.set(String(index), [`Atlas ${index}`]);
+    }
+    f.provider.candidates.mockResolvedValue({ containers: [], left_out: 0, more: false });
+    const found = await f.source.search({ query: 'atlas', limit: 50 });
+    expect(found.items).toHaveLength(30);
+    expect(found.truncated).toBe(false);
+  });
+
+  it('has no run budget, and keeps a list page of large containers inside the result bound, losing none', async () => {
     const f = await fixture();
     const listed = await f.reader.list({ limit: 25 });
-    let released = listed.items.length;
-    let opened = await f.reader.open({ handle: listed.items[0]!.handle, limit: 1 });
-    while (opened.items.length > 0) { released += 1; opened = await f.reader.open({ handle: listed.items[0]!.handle, limit: 1 }); }
-    expect(released).toBe(5_120);
-    expect(opened).toMatchObject({ truncated: true, notice: 'This research run has read as many Fixture channels as one run can hold; the rest were left out.' });
+    let opened = listed;
+    for (let read = 0; read < 6_000; read += 1) opened = await f.reader.open({ handle: listed.items[0]!.handle, limit: 1 });
+    expect(opened).toMatchObject({ truncated: false, items: [{ label: 'Channel 1' }] });
+    const big = await fixture();
+    big.state.containers.clear();
+    for (let index = 1; index <= 80; index += 1) big.state.containers.set(String(index), { id: String(index), key: `C${index}`, name: `${'Long channel '.repeat(70)}${index}` });
+    let page = await big.reader.list({ limit: 80 });
+    expect(page.items.length).toBeLessThan(80);
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(65536);
+    const seen = page.items.map(item => item.attributes?.key);
+    while (page.next_cursor !== undefined) { page = await big.reader.list({ limit: 80, cursor: page.next_cursor }); seen.push(...page.items.map(item => item.attributes?.key)); }
+    expect(seen).toEqual([...big.state.containers.values()].map(container => container.key));
+    expect(big.provider.page).toHaveBeenCalledTimes(1);
   });
 
   it("pages on from where the tool's page ended, past a container it left out", async () => {
