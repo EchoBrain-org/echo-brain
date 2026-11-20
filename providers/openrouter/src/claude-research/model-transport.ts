@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { messageUsageObserverV1, type ClaudeMessageMetadataV1 } from './message-usage.js';
 import { observeCoreModelMetadataV1, observeCoreRuntimeV1, annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { isContextWindowRefusal } from '@echo-brain/organization-processing/llm/llm-provider';
+import { UNBILLED_REFUSAL_STATUSES_V1 } from '../unbilled-refusal-v1.js';
 
 interface ClaudeModelForwardV1 {
   readonly req: IncomingMessage; readonly res: ServerResponse; readonly body: Buffer; readonly path: string; readonly signal: AbortSignal;
@@ -27,7 +28,7 @@ export class ClaudeModelResponseErrorV1 extends Error {
     super('Research provider request failed');
     // A rate-limited or overloaded refusal generated nothing: marked unbilled where the model gate reads it.
     this.diagnostic = { failure_class: 'adapter_http' as const, http_status: status, ...(contextWindow ? { context_window: true as const } : {}),
-      ...(UNBILLED_REFUSAL_STATUSES.has(status) ? { unbilled: true as const } : {}) };
+      ...(UNBILLED_REFUSAL_STATUSES_V1.has(status) ? { unbilled: true as const } : {}) };
   }
 }
 
@@ -44,8 +45,6 @@ export class ClaudeModelTransportErrorV1 extends Error {
   }
 }
 
-/** Statuses that say the provider refused the request without generating: rate-limited (429) or overloaded (503, 529). */
-const UNBILLED_REFUSAL_STATUSES: ReadonlySet<number> = new Set([429, 503, 529]);
 
 /**
  * True only for a failed model request that provably cost nothing: refused before the upstream accepted it, or refused
@@ -53,7 +52,7 @@ const UNBILLED_REFUSAL_STATUSES: ReadonlySet<number> = new Set([429, 503, 529]);
  */
 export function claudeModelFailureUnbilledV1(error: unknown): boolean {
   if (error instanceof ClaudeModelTransportErrorV1) return error.unbilled;
-  return error instanceof ClaudeModelResponseErrorV1 && UNBILLED_REFUSAL_STATUSES.has(error.diagnostic.http_status);
+  return error instanceof ClaudeModelResponseErrorV1 && UNBILLED_REFUSAL_STATUSES_V1.has(error.diagnostic.http_status);
 }
 
 /** A model request refused because an earlier one in the same session failed with its billing unknown. */

@@ -17,6 +17,7 @@ import {
   type StructuredGenerationResult,
 } from "@echo-brain/organization-processing/llm/llm-provider";
 
+import { UNBILLED_REFUSAL_STATUSES_V1 } from '../unbilled-refusal-v1.js';
 import { openRouterReplyCapacityBytesV1, OpenRouterReplyTooLargeErrorV1, readOpenRouterReplyV1, type OpenRouterReplyV1 } from '../openrouter-stream-v1.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -120,8 +121,9 @@ export class OpenRouterClient implements LlmProviderClient {
         try { refusal = JSON.parse(reply.text) as unknown; } catch { refusal = undefined; }
         if (isContextWindowRefusal(response.status, refusal)) throw new ExtractionInputTooLongError('OpenRouter');
       }
-      // OpenRouter bills no non-2xx reply; a billing, rate-limit or 5xx refusal is the transient, unbilled kind.
-      if (!response.ok) throw providerStatusError('OpenRouter', response.status, response.status === 402 || response.status === 429 || response.status >= 500);
+      // Known unbilled only when the status says the request was refused before generation (rate-limited or overloaded);
+      // any other 5xx, a gateway 504 included, can arrive after the model ran.
+      if (!response.ok) throw providerStatusError('OpenRouter', response.status, UNBILLED_REFUSAL_STATUSES_V1.has(response.status));
       return this.parsed(reply, response);
     } finally { clearTimeout(timer); }
   }

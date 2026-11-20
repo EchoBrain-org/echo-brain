@@ -7,6 +7,7 @@ import { CLAUDE_ACCOUNT_MODEL_V1, claudeAccountEnvironmentV1, type ClaudeAccount
 import { createClaudeAccountStructuredGenerationV1, ClaudeSingleGenerationLimitErrorV1 } from '../claude-research/structured-generation.js';
 import { claudeAccountForwarderV1, type ClaudeModelForwarderV1 } from '../claude-research/model-transport.js';
 import type { runClaudeStructuredV1 } from '../claude-research/sdk-client.js';
+import { UNBILLED_REFUSAL_STATUSES_V1 } from '../unbilled-refusal-v1.js';
 import { CLAUDE_ACCOUNT_DECISION_PROCESSOR_PROVIDER_V1, CLAUDE_ACCOUNT_DECISION_PROCESSOR_TRANSPORT_V1, CLAUDE_ACCOUNT_DECISION_PROCESSOR_TIMEOUT_MS_V1,
   claudeAccountDecisionProcessorCredentialReferenceV1 } from '../claude-account-decision-processor-config-v1.js';
 
@@ -37,10 +38,10 @@ function extractionFailure(error: unknown): AdapterError {
     // A prompt past the model's own context window: the one real limit on how long a meeting one call can read.
     if (diagnostic['failure_class'] === 'adapter_http' && diagnostic['context_window'] === true) return new ExtractionInputTooLongError('Claude account');
     if (diagnostic['failure_class'] === 'adapter_http' && typeof diagnostic['http_status'] === 'number') {
-      // A rate-limit (429) or overload/server refusal (5xx, including 529) arrives before any generation, so it is the
-      // transient, unbilled kind that earns one automatic retry. Any other refusal waits for an operator.
+      // A rate-limit (429) or overloaded (503, 529) refusal arrives before any generation, so it is the unbilled kind that
+      // earns one automatic retry. Any other 5xx can arrive after the model ran; it and every other refusal wait for an operator.
       const status = diagnostic['http_status'];
-      return providerStatusError('Claude account', status, status === 429 || status >= 500);
+      return providerStatusError('Claude account', status, UNBILLED_REFUSAL_STATUSES_V1.has(status));
     }
     if (diagnostic['failure_class'] === 'adapter_timeout') return new AdapterError('timeout', 'Claude account extraction timed out', true);
     // A reply that stopped at the model's own output limit was billed and would stop there again: never retried.

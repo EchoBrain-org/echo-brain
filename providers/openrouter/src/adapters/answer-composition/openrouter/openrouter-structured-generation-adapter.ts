@@ -1,6 +1,7 @@
 import { observeCoreModelCorrectionV1, observeCoreModelMetadataV1, annotateCoreRuntimeV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { openRouterReplyCapacityBytesV1, OpenRouterReplyTooLargeErrorV1, readOpenRouterReplyV1, type OpenRouterReplyV1 } from "../../../openrouter-stream-v1.js";
 import { claudeGrammarHolds, claudeStructuredSchema } from "./claude-structured-schema.js";
+import { UNBILLED_REFUSAL_STATUSES_V1 } from "../../../unbilled-refusal-v1.js";
 import {
   type StructuredGenerationFailureClassV1,
   type StructuredGenerationFailureDiagnosticV1,
@@ -267,9 +268,9 @@ function failedBeforeSending(error: unknown): boolean {
   return false;
 }
 
-/** OpenRouter bills no non-2xx reply; a billing, rate-limit or 5xx refusal is the transient kind worth one more send. */
+/** Known unbilled: a refusal the provider documents as made before generation. Any other 5xx can follow a generation. */
 function unbilledRefusal(response: Response | undefined): boolean {
-  return response !== undefined && !response.ok && (response.status === 402 || response.status === 429 || response.status >= 500);
+  return response !== undefined && UNBILLED_REFUSAL_STATUSES_V1.has(response.status);
 }
 
 interface OpenRouterFailureInput {

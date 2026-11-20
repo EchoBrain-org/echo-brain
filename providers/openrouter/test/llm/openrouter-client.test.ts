@@ -233,7 +233,9 @@ describe('OpenRouter provider client', () => {
     },
   );
 
-  it.each([[402, true], [429, true], [503, true], [400, false], [401, false]])(
+  // Only a status the provider documents as refused before generation is known unbilled; a 5xx such as a gateway 504
+  // can arrive after the model ran.
+  it.each([[429, true], [503, true], [529, true], [402, false], [500, false], [504, false], [400, false], [401, false]])(
     'declares a %i refusal unbilled: %s',
     async (status, unbilled) => {
       const refusal = new OpenRouterClient({
