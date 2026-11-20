@@ -7,7 +7,7 @@ import {
 import { validatePersonFollowUpCitationV1, validatePersonFollowUpRefV1 } from './person-follow-up-evidence-v1.js';
 import { validatePersonWorkspaceCitationV1 } from './person-workspace-citation-v1.js';
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
-import { validatePersonQueryText } from './person-query.js';
+import { validatePersonQuestionText } from './person-query.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import { validatePersonAnswerScopeV3, validatePersonSourceRevisionCitationV1, type PersonAnswerCitationV3, type PersonAnswerScopeV3 } from './person-answer-v3.js';
 import { validatePersonItemRefV1, type PersonItemRefV1 } from './person-list-v1.js';
@@ -310,8 +310,14 @@ function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): Per
   });
 }
 
-function boundedRequest<T>(result: T, label: string): T {
-  if (canonicalJsonBytes(result).byteLength > MAX_ORGANIZATION_API_BODY_BYTES) fail(`${label} exceeds JSON byte bound`);
+/**
+ * The Ask request's body bound: the Authority's own HTTP body bound, so a long question and the earlier turn it follows
+ * up fit together. Other Person requests keep MAX_ORGANIZATION_API_BODY_BYTES.
+ */
+export const PERSON_ANSWER_REQUEST_MAX_BYTES_V3 = 64 * 1024;
+
+function boundedRequest<T>(result: T, label: string, maximumBytes = MAX_ORGANIZATION_API_BODY_BYTES): T {
+  if (canonicalJsonBytes(result).byteLength > maximumBytes) fail(`${label} exceeds JSON byte bound`);
   return Object.freeze(result);
 }
 
@@ -319,15 +325,23 @@ export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerReque
   const input = object(value, 'Ask request');
   assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'previous') ? ['previous'] : [])], 'Ask request');
   if (input.schema_version !== 3) fail('Ask request schema_version is unsupported');
-  const request = boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'previous') ? { previous: previousTurn(input.previous) } : {}) }, 'Ask request');
-  // Ask again asks the earlier question itself (ADR-0047), and its answer names that question: one of another is refused.
-  if (request.previous?.purpose === 'ask_again' && request.previous.question !== request.question) fail('Ask previous question is not the question asked again');
-  return request;
+  const question = validatePersonQuestionText(input.question);
+  return boundedRequest({ schema_version: 3 as const, question, ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'previous') ? { previous: validatePersonAnswerPreviousV1(input.previous, question) } : {}) }, 'Ask request', PERSON_ANSWER_REQUEST_MAX_BYTES_V3);
 }
 
-/** A question an Ask request or answer carries beside its own: it passes the question rules, refused here as this contract's own failure. */
+/**
+ * The previous turn an Ask of `question` carries (ADR-0047), checked on its own, as a client checks it before sending.
+ * Ask again asks the earlier question itself, and its answer names that question: one of another is refused.
+ */
+export function validatePersonAnswerPreviousV1(value: unknown, question: string): PersonAnswerPreviousV1 {
+  const previous = previousTurn(value);
+  if (previous.purpose === 'ask_again' && previous.question !== question) fail('Ask previous question is not the question asked again');
+  return previous;
+}
+
+/** A question an Ask request or answer carries beside its own: it passes the question rule, refused here as this contract's own failure. */
 function fullQuestion(value: unknown, label: string): string {
-  try { return validatePersonQueryText(value); } catch { return fail(`${label} is invalid`); }
+  try { return validatePersonQuestionText(value); } catch { return fail(`${label} is invalid`); }
 }
 
 /** Distinct whole indexes below `bound`, at most `maximum` of them. */
@@ -343,7 +357,7 @@ function citationIndexes(value: unknown, label: string, bound: number, maximum: 
 /**
  * The asker's previous turn (ADR-0047): its purpose, full question and time, 0 to 8 of its answer's sentences of at
  * most 400 characters, and 0 to 12 of its citations, each once, as that answer carried them, which each sentence cites
- * by index (at most 4). The whole request keeps its 16 KiB bound.
+ * by index (at most 4). The whole request keeps its 64 KiB bound.
  */
 function previousTurn(value: unknown): PersonAnswerPreviousV1 {
   const input = object(value, 'Ask previous');

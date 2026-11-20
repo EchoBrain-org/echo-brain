@@ -1,5 +1,4 @@
 import { canonicalJson, canonicalJsonBytes } from '@echo-brain/federation-protocol';
-import { validatePersonQueryText } from './person-query.js';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
   asEnumerableRecord as object,
@@ -7,6 +6,7 @@ import {
   assertExactKeys,
   assertId,
   assertTimestamp,
+  boundedLine,
   fail,
   pageCursor as cursor,
 } from './validation.js';
@@ -261,9 +261,14 @@ function directoryEntry(value: unknown): ProjectDirectoryEntryV1 {
   const record = object(value, 'Project directory entry'); assertExactKeys(record, ['membership_id', 'display_name'], 'Project directory entry');
   assertId(record.membership_id, 'mem', 'Project directory entry membership_id'); displayName(record.display_name); return record as unknown as ProjectDirectoryEntryV1;
 }
+/**
+ * A name search: one trimmed NFC line of at most 240 code points, the length of the desktop's search fields. Names are
+ * matched by their letters and digits, so a query of symbols alone matches every name rather than being refused.
+ */
+function nameQuery(value: unknown, label: string): string { return boundedLine(value, label, 240); }
 export function validateProjectDirectorySearchV1(value: unknown): ProjectDirectorySearchV1 {
   const record = snapshot(value, 'Project directory search'); assertExactKeys(record, ['project_id', ...(Object.hasOwn(record, 'query') ? ['query'] : []), ...(Object.hasOwn(record, 'limit') ? ['limit'] : []), ...(Object.hasOwn(record, 'cursor') ? ['cursor'] : [])], 'Project directory search');
-  const query = Object.hasOwn(record, 'query') ? validatePersonQueryText(record.query) : undefined;
+  const query = Object.hasOwn(record, 'query') ? nameQuery(record.query, 'Project directory search query') : undefined;
   const paging = optionalPaging(record, 'Project directory search'); return { project_id: project(record, 'Project directory search'), ...(query === undefined ? {} : { query }), ...paging };
 }
 export function validateProjectDirectoryV1(value: unknown): ProjectDirectoryV1 {
@@ -275,7 +280,7 @@ export function validateProjectDirectoryV1(value: unknown): ProjectDirectoryV1 {
 /** Same query, limit and cursor rules as the project directory, with no project_id. */
 export function validateOrganizationDirectorySearchV1(value: unknown): OrganizationDirectorySearchV1 {
   const record = snapshot(value, 'Organization directory search'); assertExactKeys(record, [...(Object.hasOwn(record, 'query') ? ['query'] : []), ...(Object.hasOwn(record, 'limit') ? ['limit'] : []), ...(Object.hasOwn(record, 'cursor') ? ['cursor'] : [])], 'Organization directory search');
-  const query = Object.hasOwn(record, 'query') ? validatePersonQueryText(record.query) : undefined;
+  const query = Object.hasOwn(record, 'query') ? nameQuery(record.query, 'Organization directory search query') : undefined;
   return { ...(query === undefined ? {} : { query }), ...optionalPaging(record, 'Organization directory search') };
 }
 export function validateOrganizationDirectoryV1(value: unknown): OrganizationDirectoryV1 {
