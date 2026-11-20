@@ -334,10 +334,10 @@ export interface PersonReadableDecisionsV1 {
   /** The records among these that this person can read now (the exact Layer 1 check `admittedRecord`), with what a list row shows of each. A lookup, not a release: nothing is audited. */
   readableDecisions(input: { readonly access_token: string; readonly record_sha256s: readonly Sha256Digest[] }): ReadonlyMap<Sha256Digest, PersonReadableDecisionV1>;
   /**
-   * The records this person can read in one project now, newest first, at most `limit` (at most 500). Another's records kept
+   * The records this person can read in one project now, newest first: every one, or the newest `limit` when named. Another's records kept
    * private in the project are never candidates, so they cost no read.
    */
-  projectRecords(input: { readonly access_token: string; readonly project_id: string; readonly limit: number }): readonly Sha256Digest[];
+  projectRecords(input: { readonly access_token: string; readonly project_id: string; readonly limit?: number }): readonly Sha256Digest[];
 }
 
 /** Which decisions the change check's viewer reads, with their projects only (ADR-0036). */
@@ -355,11 +355,11 @@ export interface PersonReadableDecisionProjectsV1 {
 interface PersonProjectRecordsV1 {
   /**
    * When the newest record filed in the project that this person reads now and did not approve arrived (its receipt time),
-   * else null. Only the project's newest 500 filed records are looked at: one older than them never counts.
+   * else null. Every filed record is looked at, newest first, until that one is found.
    */
   readonly meeting_at: string | null;
   /**
-   * The newest records filed in the project, at most 500, newest first: those its members read by the record's project
+   * Every record filed in the project, newest first: those its members read by the record's project
    * audience, and those its approver alone reads (ADR-0049) only when this person is that approver, so another's private
    * records never take the place of a record this person reads. A lookup, not a read: it checks no current grant, so the
    * caller checks each one it uses (`readableDecisionProjects`).
@@ -374,8 +374,8 @@ export interface PersonProjectRecordActivityV1 {
    * position, and when the newest of them that this person reads and that is not theirs arrived. A record is theirs when it is
    * in `own` (the records their published decisions name, skipped with no record read) or when its signed record names them its
    * approver (as while the decision's receipt is not written yet). The exact Layer 1 check reads candidates only until that
-   * record is found, and never past the project's newest 500 filed records: a project whose newest 500 are all this person's
-   * own, or all unreadable to them, has no meeting time, however many older records it holds. Nothing is audited. `projects`
+   * record is found; a project whose records are all this person's own, or all unreadable to them, has no meeting time.
+   * Nothing is audited. `projects`
    * is this person's own grants, read inside the caller's own read transaction, as `readableDecisionProjects` takes them.
    */
   projectRecordActivity(input: {
@@ -725,15 +725,14 @@ function readGeneration<T>(read: () => T): T {
   }
 }
 
-const MEETING_COLLECT_MAX = 26;
-/** The Layer 1 reader page limit: a longer lag holds Only me without reading further. */
+/**
+ * The Layer 1 reader's own page maximum (organization-record's `PersonRecordReaderV1`): a longer lag holds Only me rather
+ * than list it stale, until the index catches up.
+ */
 const MEETING_WAITING_ONLY_ME_MAX = 100;
 const RECORD_SHA256 = /^sha256:[0-9a-f]{64}$/;
-/** The most records one project lookup returns, and the candidates it reads per page. */
-const PROJECT_RECORDS_MAX = 500;
+/** The filed records a project lookup reads per SQL page; it pages on until none is left. Batching, not a bound. */
 const PROJECT_RECORDS_PAGE = 100;
-/** The newest filed records project activity lists, and looks through for a meeting from someone else (Ask timeline v1, C2). */
-const PROJECT_ACTIVITY_SCAN_MAX = 500;
 
 type MeetingCollectionState = {
   readonly authorization: PersonRecordSearchReleaseAuthorizationV1;
@@ -1382,7 +1381,8 @@ export function createPersonRecordSearchRouteV1(
       });
     },
     collectMeetings(input: Parameters<PersonMeetingItemsPortV1["collectMeetings"]>[0]): PersonMeetingCollectionV1 {
-      if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > MEETING_COLLECT_MAX) invalidRequest();
+      // The page size is the person list route's, which pages on with its cursor; here only a non-count is refused.
+      if (!Number.isSafeInteger(input.limit) || input.limit < 1) invalidRequest();
       const after = meetingPosition(input.after);
       const scope = meetingScope(input.scope);
       const { authorization, projects } = reader(input.access_token, scope.project_id);
@@ -1503,10 +1503,10 @@ export function createPersonRecordSearchRouteV1(
         if (!held.has(projectId)) continue;
         const filed: Sha256Digest[] = [];
         let meeting_at: string | null = null;
-        // A page at a time, until none is left or the newest PROJECT_ACTIVITY_SCAN_MAX are listed, each looked through until the
-        // newest that is not the reader's own is found.
+        // A page at a time until none is left: every filed record is listed, each looked through until the newest that is not
+        // the reader's own is found.
         for (let before = Number.MAX_SAFE_INTEGER; ;) {
-          const size = Math.min(PROJECT_RECORDS_PAGE, PROJECT_ACTIVITY_SCAN_MAX - filed.length);
+          const size = PROJECT_RECORDS_PAGE;
           const page = filedIn(projectId, before, size);
           for (const candidate of page) {
             filed.push(candidate.record_sha256);
@@ -1518,7 +1518,7 @@ export function createPersonRecordSearchRouteV1(
             if (approver !== undefined && approver.principal_id === authorization.principal_id && approver.membership_id === authorization.membership_id) continue;
             meeting_at = receiptTime(receipt.get(row.position, row.record_sha256));
           }
-          if (page.length < size || filed.length >= PROJECT_ACTIVITY_SCAN_MAX) break;
+          if (page.length < size) break;
           before = page.at(-1)!.record_position;
         }
         result.set(projectId, Object.freeze({ meeting_at, filed: Object.freeze(filed) }));
@@ -1526,7 +1526,9 @@ export function createPersonRecordSearchRouteV1(
       return result;
     },
     projectRecords(input: Parameters<PersonReadableDecisionsV1["projectRecords"]>[0]): readonly Sha256Digest[] {
-      if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > PROJECT_RECORDS_MAX) invalidRequest();
+      // Every readable record of the project unless the caller names how many.
+      const wanted = input.limit ?? Number.POSITIVE_INFINITY;
+      if (input.limit !== undefined && (!Number.isSafeInteger(input.limit) || input.limit < 1)) invalidRequest();
       let projectId: string;
       try { projectId = validateProjectIdV1(input.project_id); } catch { invalidRequest(); }
       const { authorization, projects } = reader(input.access_token);
@@ -1536,10 +1538,10 @@ export function createPersonRecordSearchRouteV1(
       const filedIn = filedPages(authorization);
       let before = Number.MAX_SAFE_INTEGER;
       // The project's records newest first, each through the exact Layer 1 read with current grants.
-      while (found.length < input.limit) {
+      while (found.length < wanted) {
         const candidates = filedIn(projectId, before, PROJECT_RECORDS_PAGE);
         for (const candidate of candidates) {
-          if (found.length < input.limit && readableRecord(authorization, projects, candidate.record_sha256) !== undefined) found.push(candidate.record_sha256);
+          if (found.length < wanted && readableRecord(authorization, projects, candidate.record_sha256) !== undefined) found.push(candidate.record_sha256);
         }
         if (candidates.length < PROJECT_RECORDS_PAGE) break;
         before = candidates.at(-1)!.record_position;

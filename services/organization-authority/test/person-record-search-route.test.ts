@@ -1120,7 +1120,8 @@ describe("Person Layer 2 route: readable decisions for open items (open items an
       expect(route.projectRecords({ access_token: "owner", project_id: UNJOINED, limit: 500 })).toEqual([w.digest("r3")]);
       const invalid = expect.objectContaining({ code: "invalid_request" });
       expect(() => route.projectRecords({ access_token: "emp_a", project_id: SHARED, limit: 0 })).toThrow(invalid);
-      expect(() => route.projectRecords({ access_token: "emp_a", project_id: SHARED, limit: 501 })).toThrow(invalid);
+      expect(route.projectRecords({ access_token: "emp_a", project_id: SHARED, limit: 501 })).toEqual([w.digest("r4"), w.digest("r3")]);
+      expect(route.projectRecords({ access_token: "emp_a", project_id: SHARED })).toEqual([w.digest("r4"), w.digest("r3")]);
       expect(() => route.projectRecords({ access_token: "emp_a", project_id: "prj_nope", limit: 5 })).toThrow(invalid);
       expect(() => route.projectRecords({ access_token: "nobody", project_id: SHARED, limit: 5 })).toThrow(expect.objectContaining({ code: "unauthorized" }));
       expect(auditCount(w.authority)).toBe(before);

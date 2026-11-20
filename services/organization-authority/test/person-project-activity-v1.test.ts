@@ -593,7 +593,7 @@ describe('records route: what was filed in a person\'s projects (Ask timeline v1
     } finally { w.close(); }
   });
 
-  it('looks for a meeting among a project\'s newest 500 records alone: one of only the reader\'s own has none, however many it holds', async () => {
+  it('looks for a meeting past a project\'s newest 500 records: every filed record is listed and looked through', async () => {
     const w = await meetingWorld();
     try {
       // SHARED holds r3 (OWNER's) and r4 (EMP_A's); then OWNER approves 500 more into it.
@@ -602,13 +602,15 @@ describe('records route: what was filed in a person\'s projects (Ask timeline v1
       const projectsOf = (access_token: string) => createRecordProjectAuthorizationV1(new SqliteProjectContextRepositoryV1(w.authority))(w.sessions.authenticateAccess({ access_token }));
       const activity = (access_token: string, own: readonly string[] = []) =>
         route.projectRecordActivity({ access_token, projects: projectsOf(access_token), project_ids: [SHARED], own: new Set(own) }).get(SHARED);
-      const newest = w.record.prepare('SELECT record_sha256 FROM organization_record_project_association_v1 WHERE project_id = ? ORDER BY record_position DESC LIMIT 500').pluck().all(SHARED) as string[];
+      const filed = w.record.prepare('SELECT record_sha256 FROM organization_record_project_association_v1 WHERE project_id = ? ORDER BY record_position DESC').pluck().all(SHARED) as string[];
+      const newest = filed.slice(0, 500);
       const arrival = (name: string) => w.record.prepare('SELECT receipt_issued_at FROM organization_record_log WHERE record_sha256 = ?').pluck().get(w.digest(name)) as string;
-      // EMP_A's r4 is the 501st newest: OWNER's newest 500 are all his own, so the read stops there, with no meeting time.
-      expect(activity('owner')).toEqual({ meeting_at: null, filed: newest });
-      expect(activity('owner', newest)).toEqual({ meeting_at: null, filed: newest });
+      // EMP_A's r4 is the 501st newest: past OWNER's newest 500, all his own, it is still found, and every record is listed.
+      expect(filed.length).toBeGreaterThan(500);
+      expect(activity('owner')).toEqual({ meeting_at: arrival('r4'), filed });
+      expect(activity('owner', newest)).toEqual({ meeting_at: arrival('r4'), filed });
       // To EMP_A, OWNER's newest is news.
-      expect(activity('emp_a')).toEqual({ meeting_at: arrival('own-499'), filed: newest });
+      expect(activity('emp_a')).toEqual({ meeting_at: arrival('own-499'), filed });
     } finally { w.close(); }
   });
 });

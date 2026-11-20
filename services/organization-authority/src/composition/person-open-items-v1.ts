@@ -139,18 +139,13 @@ export type OpenItemLiveReadV1 = { readonly reach: 'opened'; readonly item: Desk
 type LiveRead = OpenItemLiveReadV1;
 
 const STATES: readonly ImpactItemStateV1[] = ['unsent', 'open', 'done', 'not_relevant'];
-/** `involving` and `orphaned` apply their limit before any access check and have no cursor: a bound far above one person's open items. */
-const INVOLVING_MAX = 1000;
-/** The most rows a run, record or project `items` scope reads; its pages and summary are within them. */
-const SCOPE_ROWS_MAX = 5000;
+/** The store's row reads with no count: `involving`, `orphaned` and a scope's `forRecords` have no cursor, so they read every row. */
+const EVERY_ROW = Number.MAX_SAFE_INTEGER;
 /** The rows a personal `items` scope reads at a time; it reads every page. */
 const PERSONAL_PAGE = 1000;
-/** The most records a project scope reads (the record lookup's own bound). */
-const PROJECT_RECORDS_MAX = 500;
-/** The most decisions a summary's per-decision counts, or the stages, cover. */
+/** The decisions a summary's per-decision counts, or the stages, carry: the API response's own list bound (person-runs-v1). */
 const SCOPE_DECISIONS_MAX = 100;
-/** Live opens per call, each item at most once, a few at a time. */
-const LIVE_OPENS_MAX = 50;
+/** Live opens in flight at once: every item is opened (each once); this only paces provider reads against rate limiting. */
 const LIVE_OPENS_AT_ONCE = 4;
 /** An item's status and due date, as the API bounds them. */
 const DETAIL_CHARS = 128;
@@ -467,7 +462,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
   const openLive = async (viewer: Viewer, rows: readonly ImpactItemRowV1[], signal?: AbortSignal): Promise<ReadonlyMap<Sha256Digest, LiveRead>> => {
     const targets = new Map<Sha256Digest, Pointer>();
     // A meeting action, or a follow-up from a chat about no other item, is never read live: it stays not_read.
-    for (const row of rows) if (targets.size < LIVE_OPENS_MAX && !targets.has(row.item_key) && !ownAction(row)) targets.set(row.item_key, row.pointer);
+    for (const row of rows) if (!targets.has(row.item_key) && !ownAction(row)) targets.set(row.item_key, row.pointer);
     if (targets.size === 0) return new Map();
     const withSignal = signal === undefined ? {} : { signal };
     /** The whole request could not be read: every item tried is unavailable. A cancelled request is not an outage. */
@@ -571,11 +566,11 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
       const actor = { organization_id: viewer.organization, principal_id: viewer.principal, membership_id: viewer.membership };
       // A follow-up from a chat is sent on its own, from the caller's drafts, never from a run's Send row.
       // Only rows with a run are read, so no number of chat drafts naming the caller pushes a meeting's rows out of the window.
-      const unsent = options.items.involving(viewer.organization, viewer.membership, { states: ['unsent'], limit: INVOLVING_MAX, from_run: true })
+      const unsent = options.items.involving(viewer.organization, viewer.membership, { states: ['unsent'], limit: EVERY_ROW, from_run: true })
         .filter(row => approvedBy(row, viewer));
       const open = new Map<string, ImpactItemRowV1>();
       // Leads take an item when its approver and owner have both left.
-      for (const row of [...options.items.involving(viewer.organization, viewer.membership, { states: ['open'], limit: INVOLVING_MAX }), ...options.items.orphaned(viewer.organization, { limit: INVOLVING_MAX })]) {
+      for (const row of [...options.items.involving(viewer.organization, viewer.membership, { states: ['open'], limit: EVERY_ROW }), ...options.items.orphaned(viewer.organization, { limit: EVERY_ROW })]) {
         if (row.state === 'open') open.set(row.item_id, row);
       }
       // Drafts: the caller's own unsent follow-ups from a chat, newest first (ADR-0053).
@@ -646,12 +641,12 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
         }
         case 'record':
           scopeRecords = [request.id as Sha256Digest];
-          context = assess(viewer, options.items.forRecords(scopeRecords, { states: STATES, limit: SCOPE_ROWS_MAX }), scopeRecords);
+          context = assess(viewer, options.items.forRecords(scopeRecords, { states: STATES, limit: EVERY_ROW }), scopeRecords);
           break;
         default:
           // project: the records the viewer reads in it now, newest first.
-          projectRecords = options.records.projectRecords({ access_token: input.access_token, project_id: request.id!, limit: PROJECT_RECORDS_MAX });
-          context = assess(viewer, options.items.forRecords(projectRecords, { states: STATES, limit: SCOPE_ROWS_MAX }));
+          projectRecords = options.records.projectRecords({ access_token: input.access_token, project_id: request.id! });
+          context = assess(viewer, options.items.forRecords(projectRecords, { states: STATES, limit: EVERY_ROW }));
       }
       const visible = context.assessed.filter(entry => entry.access.see_row).sort((left, right) => oldestFirst(left.row, right.row));
       const open = visible.filter(entry => entry.row.state === 'open');
