@@ -53,9 +53,22 @@ interface AskHow {
   followed?: string;
   /** The person's own words for this question when what is sent may not be them (null: not known); else the text sent. */
   typed?: string | null;
-  /** A check of the turn it builds from, made just before (checkedNow); else ask makes one. */
-  checked?: TurnChecks | null;
+  /** What `questionOf` derived for the turn it builds from, just before; else ask derives it. */
+  derived?: Derived;
+  /** The turn this question was derived from without carrying it (Ask everywhere), kept as the new turn's `follows`. */
+  follows?: string;
+  /** Where a question built from an earlier turn came from: Try again derives what to send from it again (askFrom). */
+  origin?: AskOrigin;
 }
+
+/**
+ * A question built from an earlier turn, by where it came from, so Try again derives what it sends again from that turn
+ * (askFrom) and never replays text derived before: Ask again of a turn, Ask everywhere of a turn, or a choice of "Which
+ * one?" of the follow-up of a turn.
+ */
+type AskOrigin =
+  | { readonly kind: 'again' | 'everywhere'; readonly turn: string }
+  | { readonly kind: 'choice'; readonly turn: string | undefined; readonly choice: AskChoice; readonly typed: string | null; readonly scope: AskScope };
 
 /** The question on its way, and what it has done so far (ADR-0039). */
 export interface AskAsking extends AskQuestion {
@@ -3683,14 +3696,19 @@ function checkTurn(turn: TimelineTurn): Promise<void> {
  * opening checked, made again there five minutes after it went.
  */
 function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null): Promise<void> {
+  return checkTurnsFound(turns, newest).then(() => undefined);
+}
+
+/** checkTurns, answering what this check itself found of each turn it spoke for, or null when it failed or spoke for none. */
+function checkTurnsFound(turns: readonly TimelineTurn[], newest: string | null = null): Promise<Readonly<Record<string, TurnChecks>> | null> {
   const account = expect();
-  if (!account || turns.length === 0) return Promise.resolve();
+  if (!account || turns.length === 0) return Promise.resolve(null);
   const plan = checkPlan(turns);
   const mine = checkSeq;
   const at = Date.now();
   const check = async () => {
     const asked = await askChecks(account, plan, () => mine === checkSeq && sameAccount(account));
-    if (asked === null) return;
+    if (asked === null) return null;
     const found = checkedOf(plan, asked.results);
     const before = state.timeline.checks;
     const latest = Object.entries(found).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at);
@@ -3700,51 +3718,72 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
       const hidden = gone ? {} : Object.fromEntries(latest.map(([id, states]) => [id, foundUnreadable(states)]));
       keepChecks(checksHiding(state.timeline.checks, hidden));
       keepUnreadable(Object.entries(hidden));
-      return;
+      return null;
     }
     if (newest !== null) newestCheckedAt.set(newest, at);
     keepChecks({ ...before, ...Object.fromEntries(latest.map(([id, states]) => [id, { at, states }])) });
     keepUnreadable(latest);
+    // What this check itself found, for a caller that decides on it alone (questionOf), whatever another check kept.
+    return found;
   };
-  const run = check();
+  const result = check();
+  const run = result.then(() => undefined);
   for (const id of plan.turns) checking.set(id, run);
   void run.finally(() => { for (const id of plan.turns) if (checking.get(id) === run) checking.delete(id); }).catch(() => undefined);
-  return run;
+  return result;
+}
+
+/** What `questionOf` derives for a request built from a turn. */
+interface Derived {
+  /** The earlier question it may name or send: the turn's own, or the person's typed words; none when neither may go. */
+  readonly question: string | undefined;
+  /** Whether the turn and every turn back along what it followed checked readable (its sources' content may go). */
+  readonly readable: boolean;
+  /** What the check this call made said of the turn's own sources, for the sentences a previous turn carries; null if none. */
+  readonly checks: TurnChecks | null;
+}
+
+/** Whether `checks` find `turn` with at least one source, each of a kind a check reads, each `same`. */
+function readableTurn(turn: TimelineTurn, checks: TurnChecks | undefined): boolean {
+  return checks !== undefined && turn.answer.sources.length > 0
+    && turn.answer.sources.every((source, at) => checkOf(source) !== undefined && checks[at] === 'same');
 }
 
 /**
- * A check of `turn`'s sources made now, for what a follow-up, an Ask again or
- * a choice builds from it (C5): never the five-minute one, and never what the
- * turn's own answer read. Null when it failed or spoke for none of them.
- */
-async function checkedNow(turn: TimelineTurn): Promise<TurnChecks | null> {
-  const asked = Date.now();
-  await checkTurns([turn]);
-  const check = state.timeline.checks[turn.id];
-  return check !== undefined && check.at >= asked ? knownStates(check.states, turnOf(turn.id)?.unreadable) ?? null : null;
-}
-
-/** Whether `checks` find every source of `turn` readable: each of a kind a check reads, each `same`. */
-function allReadable(turn: TimelineTurn, checks: TurnChecks | null | undefined): boolean {
-  return checks != null && turn.answer.sources.every((source, at) => checkOf(source) !== undefined && checks[at] === 'same');
-}
-
-/**
- * The earlier question a request built from `turn` may name, given a check made just then: the turn's full question,
- * which the model may have written from sources the person could read then, only when every source is readable;
- * otherwise only the person's own typed words, and none (undefined) for a turn saved before it kept them.
+ * The one rule for a question the model may have written (ADR-0047, C5), which every follow-up, Ask again, Ask
+ * everywhere and choice of "Which one?" built from an earlier turn goes through, first and on Try again alike.
+ *
+ * A turn's full question may have been written by the model from sources the person could read then: its own, and those
+ * of the turn its follow-up continued, and so on back (`follows`). It goes only when a check this call makes itself (never
+ * the five-minute one, never another check's result) finds the turn and every turn back along that chain with at least
+ * one source, each readable; a turn in the chain that is missing, or saved before `follows` was kept, fails it. A first
+ * question in the person's own words (typed is the question, following nothing) is theirs and needs no check. Otherwise
+ * only the person's typed words go, and none for a turn that never kept them.
  *
  * What this does not close: access lost between that check and the send (the Authority checks the turn's citations again
  * when the request arrives, but cannot tell typed words from resolved ones); and the text itself already sits on the
  * person's own machine, in the timeline file, where they read it when it was answered.
  */
-function earlierQuestion(turn: TimelineTurn, checks: TurnChecks | null): string | undefined {
-  return allReadable(turn, checks) ? askText(turn.question) : turn.typed === undefined ? undefined : askText(turn.typed);
+async function questionOf(turn: TimelineTurn): Promise<Derived> {
+  const chain: TimelineTurn[] = [];
+  let broken = false;
+  for (let link: TimelineTurn | undefined = turn; link !== undefined;) {
+    if (chain.includes(link) || link.follows === undefined) { broken = true; break; }
+    chain.push(link);
+    if (link.follows === null) break;
+    link = turnOf(link.follows);
+    if (link === undefined) broken = true;
+  }
+  const found = await checkTurnsFound(chain.length > 0 ? chain : [turn]);
+  const readable = !broken && found !== null && chain.every(link => readableTurn(link, found[link.id]));
+  const own = turn.follows === null && turn.typed !== undefined && askText(turn.typed) === askText(turn.question);
+  const question = readable || own ? askText(turn.question) : turn.typed === undefined ? undefined : askText(turn.typed);
+  return { question, readable, checks: found?.[turn.id] ?? null };
 }
 
-/** Whether Ask again is offered on a turn: one that kept the person's typed words, or one whose last check found all readable. */
-export function askAgainOffered(turn: TimelineTurn, current: State = state): boolean {
-  return turn.typed !== undefined || allReadable(turn, checksOf(turn, current));
+/** Whether Ask again is offered on a turn: one that kept the person's typed words, which may always go. */
+export function askAgainOffered(turn: TimelineTurn): boolean {
+  return turn.typed !== undefined;
 }
 
 /**
@@ -3817,10 +3856,12 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const from = how?.previous !== undefined ? null : againOf !== undefined ? turnOf(againOf) ?? null
     : how?.followed !== undefined ? turnOf(how.followed) ?? null
     : open && how === undefined ? followedTurn(threadOf(state.timeline.turns, scope), continued) : null;
-  // How Try again or a choice asks it again: naming the turn, so what it carries is built again then.
   // What the person typed, when this question is not their own words (Ask again, a choice) and what they typed is known.
   const typed = how?.typed !== undefined ? how.typed : text;
-  const again: AskHow = { ...(againOf !== undefined ? { againOf } : from ? { followed: from.id } : { previous: how?.previous ?? null }), typed };
+  // How Try again asks it again: from its origin when it was derived from a turn (askFrom), else naming the turn it
+  // continues, so what it carries is built again then; never a question derived before.
+  const again: AskHow = { ...(againOf !== undefined ? { againOf } : from ? { followed: from.id } : { previous: how?.previous ?? null }), typed,
+    ...(how?.follows === undefined ? {} : { follows: how.follows }), ...(how?.origin === undefined ? {} : { origin: how.origin }) };
   const view = open ?? { ...newAsk(), forQuestion: true };
   const mine = ++seq;
   const cancelId = crypto.randomUUID();
@@ -3835,14 +3876,14 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   if (!open) void checkTimeline();
   let previous = how?.previous ?? null;
   if (from) {
-    // A check made now: it decides which sentences go, and whether the earlier question the model may have written goes.
-    const known = how?.checked !== undefined ? how.checked : await checkedNow(from);
+    // What the turn may name, from a check made now: which sentences go, and whether its question goes or the typed words.
+    const derived = how?.derived ?? await questionOf(from);
     if (state.ask?.seq !== mine || !sameAccount(account)) {
       if (activeAskCancelId === cancelId) activeAskCancelId = null;
       return; // cancelled, or Ask was left, while what it carries was checked
     }
-    const earlier = earlierQuestion(from, known);
-    previous = earlier === undefined ? null : previousOf(from, againOf === undefined ? 'follow_up' : 'ask_again', known, askText(text), scope, earlier);
+    previous = derived.question === undefined ? null
+      : previousOf(from, againOf === undefined ? 'follow_up' : 'ask_again', derived.checks, askText(text), scope, derived.question);
   }
   const result = await rpc('ask.run', { expect: account, question: text, scope, cancel_id: cancelId, ...(previous ? { previous } : {}) });
   if (activeAskCancelId === cancelId) activeAskCancelId = null;
@@ -3865,7 +3906,7 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const { receipt, question: full, since, choices: _choices, ...kept } = answer;
   const turn: TimelineTurn = {
     id: crypto.randomUUID(), asked_at: new Date(started).toISOString(), text, question: full ?? text, scope, answer: kept, citations_complete: true,
-    ...(typed === null ? {} : { typed }),
+    ...(typed === null ? {} : { typed }), follows: from?.id ?? how?.follows ?? null,
     ...(since === undefined ? {} : { since }), ...(againOf === undefined ? {} : { again_of: againOf }),
   };
   keepTurn(turn);
@@ -3926,11 +3967,7 @@ export function askEverywhere(id: string): void {
   const turn = turnOf(id);
   if (!turn || state.ask?.asking || !canAskEverywhere(turn)) return;
   widenScope();
-  void (async () => {
-    // The turn's full question may be model-written: asked as it is only while every source it came from is readable.
-    const question = earlierQuestion(turn, await checkedNow(turn));
-    if (question !== undefined && !state.ask?.asking) await ask(question, { kind: 'global' }, { previous: null, typed: turn.typed ?? null });
-  })();
+  void askFrom({ kind: 'everywhere', turn: turn.id });
 }
 
 /**
@@ -3940,38 +3977,49 @@ export function askEverywhere(id: string): void {
  * lands at the end; the old turn stays where it was, without its tag.
  */
 export function askAgain(id: string): void {
-  const turn = turnOf(id);
-  if (!turn || state.ask?.asking) return;
-  void (async () => {
-    // A check made now decides the question: the full one while every source is readable, else the person's typed words,
-    // and for a turn that never kept them, no Ask again.
-    const checked = await checkedNow(turn);
-    const question = earlierQuestion(turn, checked);
-    if (question !== undefined && !state.ask?.asking) await ask(question, turn.scope, { againOf: turn.id, typed: turn.typed ?? null, checked });
-  })();
+  if (!turnOf(id) || state.ask?.asking) return;
+  void askFrom({ kind: 'again', turn: id });
 }
 
 /** A choice of "Which one?": its full question, asked with the same earlier turn. */
 export function chooseClarified(choice: AskChoice): void {
   const clarify = state.ask?.clarify;
   if (!clarify || state.ask?.asking) return;
-  const from = turnOf(clarify.followed);
-  const typed = clarify.typed ?? null;
-  void (async () => {
-    // A choice's question was written by the model from the earlier turn: it goes only while a check made now finds every
-    // source of that turn readable. Otherwise no stored choice goes: the person's own follow-up is asked again.
-    const checked = from ? await checkedNow(from) : null;
-    if (state.ask?.asking) return;
-    if (from && allReadable(from, checked)) await ask(choice.question, clarify.scope, { followed: from.id, typed, checked });
-    else if (typed !== null) await ask(typed, clarify.scope, from ? { followed: from.id, typed, checked } : { previous: null, typed });
-    else set({ ask: state.ask ? { ...state.ask, clarify: null } : null });
-  })();
+  void askFrom({ kind: 'choice', turn: clarify.followed, choice, typed: clarify.typed ?? null, scope: clarify.scope });
 }
 
-/** Try again, on a question that failed: asked as it was. */
+/**
+ * Asks a question built from an earlier turn, the first time and on Try again alike: what it sends is derived from that
+ * turn now (questionOf), never a question derived before. Ask again and Ask everywhere send the turn's question or the
+ * person's typed words as questionOf decides, and nothing for a turn that has neither to send. A choice of "Which one?"
+ * was written by the model from the turn its follow-up continued: it goes only while that turn and all it followed check
+ * readable; otherwise the person's own follow-up is asked again, and with no words of theirs known, nothing.
+ */
+async function askFrom(origin: AskOrigin): Promise<void> {
+  const turn = turnOf(origin.turn);
+  if (origin.kind !== 'choice') {
+    if (!turn) return;
+    const derived = await questionOf(turn);
+    if (derived.question === undefined || state.ask?.asking) return;
+    const typed = turn.typed ?? null;
+    if (origin.kind === 'again') await ask(derived.question, turn.scope, { againOf: turn.id, typed, derived, origin });
+    else await ask(derived.question, { kind: 'global' }, { previous: null, typed, follows: turn.id, origin });
+    return;
+  }
+  const derived = turn ? await questionOf(turn) : undefined;
+  if (state.ask?.asking) return;
+  if (turn && derived?.readable) await ask(origin.choice.question, origin.scope, { followed: turn.id, typed: origin.typed, derived, origin });
+  else if (origin.typed !== null) {
+    await ask(origin.typed, origin.scope, turn && derived ? { followed: turn.id, typed: origin.typed, derived } : { previous: null, typed: origin.typed });
+  } else set({ ask: state.ask ? { ...state.ask, clarify: null } : null });
+}
+
+/** Try again, on a question that failed: one built from an earlier turn derived again from it; any other asked as it was. */
 export function retryAsk(): void {
   const failed = state.ask?.failed;
-  if (failed && !state.ask?.asking) void ask(failed.question, failed.scope, failed.how);
+  if (!failed || state.ask?.asking) return;
+  if (failed.how.origin !== undefined) void askFrom(failed.how.origin);
+  else void ask(failed.question, failed.scope, failed.how);
 }
 
 /**

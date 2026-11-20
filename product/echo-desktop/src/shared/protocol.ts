@@ -416,6 +416,13 @@ export interface TimelineTurn {
    * Ask again is not offered for it.
    */
   readonly typed?: string;
+  /**
+   * The turn this one's question was derived from (the one its follow-up continued, Ask again asked again or Ask
+   * everywhere widened), or null when it followed none. A resolved question may name what that turn's sources said, so it
+   * goes only while every turn back along this chain checks readable (questionOf). A turn saved before this field has
+   * none, and fails that.
+   */
+  readonly follows?: string | null;
 }
 
 /**

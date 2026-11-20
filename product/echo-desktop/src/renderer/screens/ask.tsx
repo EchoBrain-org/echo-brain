@@ -627,7 +627,7 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
         </div>
       )}
       {/* With every sentence left out, its sources go too; a fixed capability or retry explanation can still be copied. */}
-      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={took} again={!current && askAgainOffered(turn, state)} copy={!omitted} />
+      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={took} again={!current && askAgainOffered(turn)} copy={!omitted} />
     </div>
   );
 }

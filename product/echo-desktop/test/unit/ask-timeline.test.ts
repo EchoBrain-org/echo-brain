@@ -73,7 +73,7 @@ let ids = 0;
 function turn(question: string, ago: number, answer: Answer, extra: Partial<TimelineTurn> = {}): TimelineTurn {
   ids += 1;
   return { id: `00000000-0000-4000-8000-${String(ids).padStart(12, '0')}`, asked_at: new Date(NOW.getTime() - ago).toISOString(), text: question, question,
-    scope: answer.scope, answer, citations_complete: true, typed: question, ...extra };
+    scope: answer.scope, answer, citations_complete: true, typed: question, follows: null, ...extra };
 }
 
 /** THERM's status, three sources: a ticket, the DVT plan and a follow-up. */
@@ -1041,7 +1041,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
 
     it('asks again with the typed words when a source is gone, and offers no Ask again for an older turn that has only its resolved question', async () => {
       const earlier = turn(resolved, 2 * DAY, status(), { text: typed, typed });
-      const { typed: _typed, ...legacy } = turn(resolved, DAY, status());
+      const { typed: _typed, follows: _follows, ...legacy } = turn(resolved, DAY, status());
       seed(earlier, legacy);
       checks = someGone;
       const store = await startStore();
@@ -1053,15 +1053,15 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
       expect(calls('ask.run')).toHaveLength(1);
       expect(store.askAgainOffered(legacy)).toBe(false);
       expect(store.askAgainOffered(earlier)).toBe(true);
-      // All readable: the older turn's question may go.
+      // All readable: still not, since what the older turn followed was never recorded.
       checks = allSame;
       store.askAgain(legacy.id);
       await flush();
-      expect(sent(1)).toMatchObject({ question: resolved, previous: { purpose: 'ask_again', question: resolved } });
+      expect(calls('ask.run')).toHaveLength(1);
     });
 
     it('sends no earlier turn at all for a follow-up of an older turn when a source is gone', async () => {
-      const { typed: _typed, ...legacy } = turn(resolved, DAY, status());
+      const { typed: _typed, follows: _follows, ...legacy } = turn(resolved, DAY, status());
       seed(legacy);
       checks = someGone;
       const store = await startStore();
@@ -1096,13 +1096,97 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
       expect(sent(1).previous).toMatchObject({ question: typed });
     });
 
+    it('re-derives what Try again sends from the turn it came from: a failed Ask again or Ask everywhere never replays the resolved question', async () => {
+      const nothing = { text: typed, typed, scope: inApollo, answer: { ...status(), scope: inApollo, outcome: 'not_found' as const,
+        parts: [{ question: resolved, status: 'not_found', statements: [], gap_details: { not_found: 'Nothing in the project.' } } as never] } };
+      const earlier = turn(resolved, 2 * DAY, status(), nothing);
+      // A second turn like it for Ask everywhere: once a check finds a source of a turn unreadable, that turn offers none.
+      const other = turn(resolved, DAY, status(), nothing);
+      seed(earlier, other);
+      checks = allSame;
+      const failing = () => {
+        const release = held.hold('ask.run');
+        return async () => { release(fail('unavailable', { retryable: true })); await flush(); };
+      };
+      const store = await startStore();
+      let failNow = failing();
+      store.askAgain(earlier.id);
+      await flush();
+      await failNow();
+      expect(sent(0).question).toBe(resolved);
+      // Access to the plan goes; Try again checks the turn afresh and sends the typed words.
+      checks = someGone;
+      store.retryAsk();
+      await flush();
+      expect(sent(1)).toMatchObject({ question: typed, previous: { purpose: 'ask_again', question: typed } });
+      // Ask everywhere, the same.
+      checks = allSame;
+      failNow = failing();
+      store.askEverywhere(other.id);
+      await flush();
+      await failNow();
+      expect(sent(2).question).toBe(resolved);
+      checks = someGone;
+      store.retryAsk();
+      await flush();
+      expect(sent(3).question).toBe(typed);
+    });
+
+    it('sends a resolved question only while every turn back along what it followed has sources, all readable', async () => {
+      const name = 'Who is Mina Park?';
+      // A: an answer with sources. B followed it, resolved a name from it, and found nothing: no sources of its own.
+      const a = turn('Who is on the launch?', 3 * DAY, status());
+      const b = turn(name, 2 * DAY, answerOf(name, [], [], { outcome: 'not_found', parts: [{ question: name, status: 'not_found', statements: [] }] }),
+        { text: 'and her?', typed: 'and her?', follows: a.id });
+      // C followed A and has sources of its own; an orphan followed a turn that is no longer kept.
+      const c = turn(resolved, DAY, status(), { text: typed, typed, follows: a.id });
+      const orphan = turn(resolved, DAY, status(), { text: typed, typed, follows: '00000000-0000-4000-8000-00000000ffff' });
+      seed(a, b, c, orphan);
+      checks = someGone;
+      const store = await startStore();
+      store.askAgain(b.id);
+      await flush();
+      expect(sent(0).question).toBe('and her?');
+      // Every source of A readable: B still has none of its own, so its name never goes.
+      checks = allSame;
+      store.askAgain(b.id);
+      await flush();
+      expect(sent(1).question).toBe('and her?');
+      // A turn whose own sources and whose chain all read same may send its resolved question; a missing link may not.
+      store.askAgain(c.id);
+      await flush();
+      expect(sent(2).question).toBe(resolved);
+      store.askAgain(orphan.id);
+      await flush();
+      expect(sent(3).question).toBe(typed);
+    });
+
+    it('decides on the result of the check it made itself, never another check\'s from the same moment', async () => {
+      const earlier = turn(resolved, 2 * DAY, status(), { text: typed, typed });
+      seed(earlier);
+      // The check made as Ask opens on the turn says all is readable and is kept first; the check Ask again makes itself,
+      // in the same instant (the clock does not move here), fails. Its own result decides: the typed words go.
+      const store = await startStore();
+      const opening = held.hold('ask.check');
+      const own = held.hold('ask.check');
+      store.pickSuggestion({ question: resolved, turn: earlier.id });
+      store.askAgain(earlier.id);
+      await flush();
+      expect(calls('ask.check')).toHaveLength(2);
+      opening(allSame(calls('ask.check')[0]!.items as never));
+      await flush();
+      own(fail('unavailable', { retryable: true }));
+      await flush();
+      expect(sent(0).question).toBe(typed);
+    });
+
     it('keeps what the person typed on a turn beside the question it answered', async () => {
       rpc.mockImplementation(rpcFor(held, {
         'ask.run': params => ok({ ...answerOf(String(params.question), [ticket('THERM-482', '20482')], [['Open.', [0]]]), question: 'What is open on THERM?' }),
       }, () => ({ active: [apollo], archived: [] })));
       const store = await startStore();
       await store.ask('whats open');
-      expect(kept()[0]).toMatchObject({ text: 'whats open', typed: 'whats open', question: 'What is open on THERM?' });
+      expect(kept()[0]).toMatchObject({ text: 'whats open', typed: 'whats open', question: 'What is open on THERM?', follows: null });
     });
   });
 
