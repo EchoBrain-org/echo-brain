@@ -36,10 +36,9 @@ describe('view models copy only what the renderer may see', () => {
     }
     // The same words in an ordinary note are content; its title cannot imply a review badge or strip a line.
     expect(evidenceView({ ok: true, result: packet })).toEqual({ label, text });
-    // The pane's one cut, here and nowhere else: 2,000 characters as the API counts them, marked, its lines kept.
-    const long = `Line one.\n${'x'.repeat(2_500)}`;
-    const cut = evidenceView({ ok: true, result: { ...packet, text: long } }).text;
-    expect(cut).toBe(`Line one.\n${'x'.repeat(2_000 - 'Line one.\n'.length - 1)}… (truncated)`);
+    // The pane shows the passage whole, its lines kept: it scrolls.
+    const long = `Line one.\n${'x'.repeat(10_000)}`;
+    expect(evidenceView({ ok: true, result: { ...packet, text: long } }).text).toBe(long);
   });
   it.each(['confluence', 'notion', 'knowledge-base'])('preserves %s page identity without provider coordinates', tool_id => {
     const permalink = 'https://wiki.example.test/pages/view?pageId=12345';
@@ -428,15 +427,15 @@ describe('an approved record shows only what the source pane or the reader needs
     expect(JSON.stringify(view)).not.toContain('private@example.test');
   });
 
-  it('in the pane shows at most 2,000 characters of any text, every item, and what the record says of more participants', () => {
-    const decisions = Array.from({ length: 40 }, (_, index) => item('decision', `d${index}`, index === 0 ? 'x'.repeat(2_001) : `Decision ${index}`));
+  it('in the pane shows every text whole, every item and every participant', () => {
+    const decisions = Array.from({ length: 40 }, (_, index) => item('decision', `d${index}`, index === 0 ? 'x'.repeat(25_000) : `Decision ${index}`));
     const participants = Array.from({ length: 40 }, (_, index) => ({ id: `p${index}`, display_name: `Person ${index}` }));
     const view = recordView(reply({ meeting: { id: 'm1', participants }, decisions }), asked);
     expect(view.title).toBeUndefined();
     expect(view.decisions.items.map(entry => entry.atom_id)).toEqual(decisions.map(entry => atom(entry.id)));
-    expect(view.decisions.items[0]!.text).toBe(`${'x'.repeat(1_999)}… (truncated)`);
-    expect(view.participants).toHaveLength(32);
-    expect(view.participants_more).toBe(true);
+    expect(view.decisions.items[0]!.text).toBe('x'.repeat(25_000));
+    expect(view.participants).toHaveLength(40);
+    expect(view.participants_more).toBe(false);
   });
 
   it('for the reader, asked by its digest alone, under either policy: every item, each text whole, its approval time, and no quote (ADR-0024)', () => {

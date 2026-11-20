@@ -477,7 +477,7 @@ export interface ApprovedRecord {
   readonly timezone?: string;
   readonly all_day: boolean;
   readonly approved_by?: string;
-  /** At most 32 names; `participants_more` says others were left out. */
+  /** Every name the record holds; `participants_more` is true only from an older Authority that left some out. */
   readonly participants: readonly string[];
   readonly participants_more: boolean;
   readonly visibility: 'project' | 'approver';

@@ -450,25 +450,14 @@ export function openItemsView(result: PersonRunsResultsV1['items']): OpenItemsVi
   return { items: result.items.map(openItemView), next_cursor: result.next_cursor, summary: result.summary, stages: result.stages };
 }
 
-/** Longest text the source pane shows, in characters; longer is cut and marked. The reader shows each whole. */
-const MAX_SOURCE_TEXT = 2_000;
-
-/** `text` in at most `maximum` characters (code points), cut and marked when longer: the source pane's one cut. */
-function clipped(text: string, maximum: number): string {
-  const characters = [...text];
-  return characters.length > maximum ? `${characters.slice(0, maximum - 1).join('')}… (truncated)` : text;
-}
-
 /**
- * Text as the source pane or the reader may show it: control and format
- * characters made spaces, trimmed, and at most `maximum` characters. Nothing
- * left is none.
+ * Text as the source pane or the reader shows it, whole: control and format
+ * characters made spaces, trimmed. Nothing left is none.
  */
-function sourceText(value: unknown, maximum = MAX_SOURCE_TEXT): string | undefined {
+function sourceText(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const cleaned = value.replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim();
-  if (cleaned === '') return undefined;
-  return clipped(cleaned, maximum);
+  return cleaned === '' ? undefined : cleaned;
 }
 
 /** An ISO 8601 time the renderer can format, or none. */
@@ -485,7 +474,7 @@ const RECORD_VISIBILITY: Readonly<Record<RecordPolicy, ApprovedRecord['visibilit
  * The one approved record asked for, as `person records --record-sha256
  * --brief` prints it (organization-api's cited record), only that record: one
  * an answer cites, only under the policy it cited, as the source pane shows
- * it, each text at most 2,000 characters; or, asked with no policy, a meeting
+ * it, each text whole; or, asked with no policy, a meeting
  * opened by its ref, as the reader shows it, every text whole and without the
  * quotes the reader never shows (ADR-0024). Only a decision still open says
  * so, and each item keeps the atom id its citations carry.
@@ -494,7 +483,7 @@ export function recordView(raw: unknown, asked: RecordRead): ApprovedRecord {
   const record = validated(validatePersonCitedRecordV1, unwrap(raw));
   const pane = asked.policy_id !== undefined;
   if (record.record_sha256 !== asked.record_sha256 || (pane && record.policy_id !== asked.policy_id)) throw new ViewError();
-  const shown = (value: string) => sourceText(value, pane ? MAX_SOURCE_TEXT : Number.POSITIVE_INFINITY)!;
+  const shown = (value: string) => sourceText(value)!;
   const section = ({ items }: PersonCitedRecordSectionV1): RecordSection => ({ items: items.map(({ atom_id, text: itemText, status, owner, quotes }) => ({
     text: shown(itemText), ...(status === 'proposed' || status === 'unresolved' ? { status } : {}), ...(owner === undefined ? {} : { owner }),
     excerpts: pane ? quotes.map(({ quote, started_at }) => ({ quote: shown(quote), ...(started_at === undefined ? {} : { at: started_at }) })) : [], atom_id,
@@ -518,7 +507,7 @@ export function evidenceView(raw: unknown): SourceEvidence {
   // presents the current server label separately; it never interprets the heading as review state.
   const review = evidence.imported_meeting_review;
   const text = review === undefined ? evidence.text : evidence.text.slice(evidence.text.indexOf('\n') + 1);
-  return { label: evidence.citation.label, text: clipped(text, MAX_SOURCE_TEXT),
+  return { label: evidence.citation.label, text,
     ...(review === undefined ? {} : { imported_meeting_review: review }) };
 }
 
