@@ -270,13 +270,13 @@ describe("agentic Ask model protocol parity", () => {
     }
   });
 
-  it("reads an Ask again's since only when asked: its first 6 sentences, as a writer's sentence is read (ADR-0047)", () => {
+  it("reads an Ask again's since only when asked: every sentence, as a writer's sentence is read (ADR-0047)", () => {
     const since = [{ text: " The owner changed (E2). ", evidence: ["e2", "L1"] },
       ...Array.from({ length: 7 }, (_, index) => ({ text: `Change ${index}.`, evidence: ["E1"] }))];
     const reply = writerReply([{ text: "Dev owns it.", evidence: ["E1"] }], { since });
     expect(parseBlocksAnswer(reply)).not.toHaveProperty("since");
     expect(parseBlocksAnswer(reply, { since: true }).since).toEqual([
-      { text: "The owner changed.", evidence: ["E2", "L1"] }, ...Array.from({ length: 5 }, (_, index) => ({ text: `Change ${index}.`, evidence: ["E1"] })),
+      { text: "The owner changed.", evidence: ["E2", "L1"] }, ...Array.from({ length: 7 }, (_, index) => ({ text: `Change ${index}.`, evidence: ["E1"] })),
     ]);
     expect(parseBlocksAnswer({ ...reply, since: [] }, { since: true }).since).toEqual([]);
     // An entry with no text, or no entry at all, is a comparison the reply cannot stand behind: none, never "nothing changed".
@@ -285,7 +285,8 @@ describe("agentic Ask model protocol parity", () => {
     }
     // A reply with no list of it has none; it is not sent back for that.
     expect(parseBlocksAnswer({ ...reply, since: "nothing" }, { since: true })).not.toHaveProperty("since");
-    expect(answerBlocksSinceSchema).toMatchObject({ required: ["blocks", "not_found", "since"], properties: { since: { maxItems: 6 } } });
+    expect(answerBlocksSinceSchema).toMatchObject({ required: ["blocks", "not_found", "since"] });
+    expect((answerBlocksSinceSchema.properties as Record<string, Record<string, unknown>>).since).not.toHaveProperty("maxItems");
   });
 
   it("reads the follow-ups a writer drafts (ADR-0053): a task each, the rest optional, at most 10", () => {
@@ -415,8 +416,8 @@ describe("agentic Ask model protocol parity", () => {
       ["more evidence ids than a need holds", needs([content({ need: "A", evidence: items(1, 13) })]), ask, { model_items_capped: 1 }],
       ["more evidence ids than a task need holds", needs([content({ need: "A", evidence: items(1, 13) })]), task, { model_items_capped: 1 }],
       ["a blank or repeated need", needs([content({ need: " " }), content({ need: "A" }), content({ need: "a" })]), ask, { model_entry_dropped: 1, model_repeat_dropped: 1 }],
-      ["more needs than a part holds", needs(Array.from({ length: 7 }, (_, index) => content({ need: `need ${index}` }))), ask, { model_items_capped: 1 }],
-      ["more parts than a step holds", step({ parts: Array.from({ length: 6 }, (_, index) => ({ question: `q${index}`, needs: [], notes: "" })) }), ask, { model_items_capped: 1 }],
+      ["seven needs in a part: no cap, nothing to correct", needs(Array.from({ length: 7 }, (_, index) => content({ need: `need ${index}` }))), ask, {}],
+      ["six parts in a step: no cap, nothing to correct", step({ parts: Array.from({ length: 6 }, (_, index) => ({ question: `q${index}`, needs: [], notes: "" })) }), ask, {}],
       ["more actions than an Ask step runs", actions(Array.from({ length: 11 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), ask, { model_items_capped: 1 }],
       ["more actions than a task step runs", actions(Array.from({ length: 5 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), task, { model_items_capped: 1 }],
       ["text past its cap", step({ parts: [{ question: "q".repeat(401), needs: [content({ need: "n".repeat(201) })], notes: "n".repeat(801) }], actions: [{ tool: "search", args: { query: "x".repeat(241) } }] }), ask, { model_text_truncated: 4 }],
@@ -430,7 +431,7 @@ describe("agentic Ask model protocol parity", () => {
       ["an answer the schema already holds", answer({ placed: [{ list: "L1" }], sentences: [{ text: "Mara owns OPS-17.", evidence: ["E1", "L1"] }] }), {}],
       ["evidence ids written into a sentence", answer({ sentences: [{ text: "Mara owns OPS-17 (E1).", evidence: ["E1"] }] }), { model_inline_ids_stripped: 1 }],
       ["a sentence that is not an object, or has no text", answer({ sentences: ["Mara owns it.", { text: " ", evidence: [] }, { text: "Mara owns OPS-17.", evidence: ["E1"] }] }), { model_entry_dropped: 2 }],
-      ["a blank, repeated or extra not_found phrase", answer({ not_found: ["", "owner", "owner", "a", "b", "c", "d", "e"] }), { model_entry_dropped: 1, model_repeat_dropped: 1, model_items_capped: 1 }],
+      ["a blank or repeated not_found phrase, with no cap on how many", answer({ not_found: ["", "owner", "owner", "a", "b", "c", "d", "e"] }), { model_entry_dropped: 1, model_repeat_dropped: 1 }],
       ["sentence evidence ids in other spellings", answer({ sentences: [{ text: "Done.", evidence: ["e2", "[E3]"] }] }), { model_id_respelled: 2 }],
       ["a list id in another spelling", answer({ placed: [{ list: "[L3]" }] }), { model_id_respelled: 1 }],
       ["a list block that names no list", answer({ placed: [{ list: "E6" }, { list: 7 }] }), { model_entry_dropped: 2 }],

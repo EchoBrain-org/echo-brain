@@ -20,7 +20,6 @@ import {
   PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1,
   PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1,
   PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
-  PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1,
   type PersonAnswerChoiceV1,
   type PersonAnswerPreviousStatementV1,
   type PersonAnswerPreviousV1,
@@ -384,11 +383,11 @@ function answerChoices(value: unknown): readonly PersonAnswerChoiceV1[] {
   return choices;
 }
 
-/** What is different since the earlier answer (ADR-0047): 0 to 6 statements, each citing the answer's citations. */
+/** What is different since the earlier answer (ADR-0047): its statements, each citing the answer's citations; the response's bytes bound them. */
 function answerSince(value: unknown, citations: readonly PersonAnswerCitationV8[]): PersonAnswerSinceV1 {
   const input = object(value, 'Ask response since');
   assertExactKeys(input, ['statements'], 'Ask response since');
-  return Object.freeze({ statements: Object.freeze(boundedList(input.statements, 'Ask response since', PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1).map(item => statement(item, citations, 'Ask response since statement'))) });
+  return Object.freeze({ statements: Object.freeze(boundedList(input.statements, 'Ask response since', Number.MAX_SAFE_INTEGER).map(item => statement(item, citations, 'Ask response since statement'))) });
 }
 
 /** One V6 response citation, as the impact card (person-impact-card-v1.ts) cites items: never a follow-up or a workspace item. */
@@ -418,7 +417,7 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   // A clarify outcome (ADR-0047) asks which one instead of answering: no part and no citation.
   const clarify = input.outcome === 'clarify';
   // An answer has no count of citations of its own (ADR-0051): its bytes bound it.
-  if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
+  if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1)) fail('Ask response is invalid');
   if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', 2 * 1024, true);
   const citations = input.citations.map(item => answerCitation(item, 8));
   const citationKeys = new Set<string>();

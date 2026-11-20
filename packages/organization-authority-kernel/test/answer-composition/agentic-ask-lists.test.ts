@@ -58,7 +58,6 @@ const useL1 = use({ id: "L1" });
 const cite = (text: string, count: number, shared = false, from = 0) => ({ text, citation_indexes: Array.from({ length: count }, (_, index) => from + index), private: !shared });
 
 /** What notice records when the writer ran and was not shown one list research read (ADR-0054). */
-const NOT_SHOWN_LIST = "1 list research read was not shown to the answer's writer.";
 const ROWS_REASON = 'a sentence cites list rows or list ids but no evidence text: place a "list" block to show which items exist and members\' title, dates, status and owner (whole, with "where" or with "members"); what no evidence text says belongs in "not_found"';
 const UNSUPPORTED = "Part of the answer was left out because no item's text supports it.";
 /** With no usable writer reply, code states the plan's which_items lists and says so (ADR-0041, kept by ADR-0054). */
@@ -300,8 +299,8 @@ function daily(days: number, kind: Kind, writer: unknown, { owner, pages = n => 
       open: vi.fn(async (input: { readonly item: string }) => result([section(dayPage(Number(/\d+/u.exec(input.item)![0]) - 2_000_000), "It traces BUG-412 to TC-D-03.")]) as EvidenceDeskResultV2),
     }),
     steps: [...reads.map(actions => read(actions, kind)), ...(opened === undefined ? [] : [read(opens(opened), kind, "open", lists)]), fin(kind, ...lists, ...cited)],
-    // The writer sees five lists; code reads every one.
-    check: ({ research, writer }: Run) => { expect(research.lists).toHaveLength(days); expect(writer[0]!.lists.map((list: { id: string }) => list.id)).toEqual(lists.slice(0, 5)); },
+    // The writer sees every list code reads.
+    check: ({ research, writer }: Run) => { expect(research.lists).toHaveLength(days); expect(writer[0]!.lists.map((list: { id: string }) => list.id)).toEqual(lists); },
   };
 }
 const day = (n: number) => `2026-10-${String(n).padStart(2, "0")}`;
@@ -619,9 +618,9 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       // A list with no member is named by its kind filter: Mara's list is of actions (research tool contract v1).
       ...(id === "X23c" ? { out: "not_found", gap: MISSING } : { out: "partial", gap: `${MISSING} ${leg("actions")}`, ...(id === "X23b" ? { notice: "Meetings are temporarily unavailable." } : {}) }),
     })),
-    { id: "X26a", name: "with nothing from the writer, the fallback states every list a which_items need reads past the writer's five, and the sixth list's filter notice", ...daily(6, WI, EMPTY, { owner: 6 }), out: "partial", gap: FALLBACK, notice: `${ownerNotice("Confluence pages")} ${NOT_SHOWN_LIST} 1 list row was not shown to the answer's writer.`, says: [1, 2, 3, 4, 5, 6].map(dayStatement) },
-    { id: "X26b", name: "with nothing from the writer, the fallback states all eleven lists past the writer's five: an answer has no count of statements", ...daily(11, WI, EMPTY), out: "partial", gap: FALLBACK, notice: "6 lists research read were not shown to the answer's writer. 6 list rows were not shown to the answer's writer.", says: Array.from({ length: 11 }, (_, index) => dayStatement(index + 1)) },
-    { id: "X26c", name: "adds no note or gap for a which_say need checking a sixth list past the writer's five", out: "answered", says: ["Day 6 plan traces BUG-412 to TC-D-03."], notice: `${NOT_SHOWN_LIST} 2 list rows were not shown to the answer's writer.`,
+    { id: "X26a", name: "with nothing from the writer, the fallback states every list a which_items need reads, six of them, and the sixth list's filter notice", ...daily(6, WI, EMPTY, { owner: 6 }), out: "partial", gap: FALLBACK, notice: ownerNotice("Confluence pages"), says: [1, 2, 3, 4, 5, 6].map(dayStatement) },
+    { id: "X26b", name: "with nothing from the writer, the fallback states all eleven lists, every one shown to the writer: an answer has no count of statements", ...daily(11, WI, EMPTY), out: "partial", gap: FALLBACK, says: Array.from({ length: 11 }, (_, index) => dayStatement(index + 1)) },
+    { id: "X26c", name: "adds no note or gap for a which_say need checking a sixth list, which the writer is shown", out: "answered", says: ["Day 6 plan traces BUG-412 to TC-D-03."],
       ...daily(6, WS, say("Day 6 plan traces BUG-412 to TC-D-03.", ["E8"]), { pages: n => n === 6 ? [dayPage(6), dayPage(7)] : [dayPage(n)], opened: ["E6"], cited: ["E8"] }) },
     { id: "X27a", name: "keeps a sentence on a list member's text while a content need research left open cites nothing, stating no list (ADR-0054)", ...X27,
       steps: [X27_LIST, step(opens(["E3"]), ["found", ["L1"], WI], ["open", [], C]), ...UNUSABLE], w: [say(DVT_GATE, ["E9"])], rejected: BAD, stop: "unusable_step", out: "partial", notice: STOPPED, says: [DVT_GATE] },

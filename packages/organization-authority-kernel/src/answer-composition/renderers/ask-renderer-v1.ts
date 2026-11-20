@@ -39,7 +39,6 @@ import {
   type AgenticEvidenceBundleV1,
 } from "../agentic-evidence-bundle-v1.js";
 import {
-  AGENTIC_LIST_WRITER_LISTS_MAX_V1,
   agenticListFillV1,
   agenticListFilterNoticeV1,
   agenticListUncheckedNoticeV1,
@@ -325,10 +324,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const viewOf = (list: (typeof lists)[number], cap?: number) => agenticWriterListV1(list, rows.get(list.id)!, cap);
       /** Every list as code reads it, past the writer's bound too: what code fills, states and reports the limits of. */
       const views = new Map(lists.map(list => [list.id, viewOf(list)]));
-      // The writer sees at most 5 lists: those the plan's needs cite, in plan order, whatever kind of need cites them, then
-      // the others in the order research read them (ADR-0054).
+      // The writer sees every list: those the plan's needs cite, in plan order, whatever kind of need cites them, then the
+      // others in the order research read them (ADR-0054). List rows take at most half its room, which bounds them.
       const planned = needs.flatMap(need => need.evidence.flatMap(id => { const list = parseAgenticListIdV1(id); return list !== null && listById.has(list) ? [list] : []; }));
-      const writerOrder = [...new Set([...planned, ...lists.map(list => list.id)])].slice(0, AGENTIC_LIST_WRITER_LISTS_MAX_V1).map(id => listById.get(id)!);
+      const writerOrder = [...new Set([...planned, ...lists.map(list => list.id)])].map(id => listById.get(id)!);
       const writerListsWith = (cap: number) => writerOrder.map(list => viewOf(list, cap));
       /** What a list's members are called: their desk kinds, after the catalog's tool (ADR-0041); an empty list's, its kind filter's. */
       const nounOf = (list: AgenticWriterListV1) => {

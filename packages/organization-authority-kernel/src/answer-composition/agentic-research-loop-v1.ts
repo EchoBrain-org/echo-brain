@@ -17,7 +17,6 @@ import { followUpOwnerMatchesV1 } from "../shared/follow-up-evidence-v1.js";
 import {
   AGENTIC_ASK_LIST_LIMIT_MAX_V1,
   AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1,
-  AGENTIC_ASK_MAX_NEEDS_PER_PART_V1,
   AgenticAskOutputErrorV1,
   cleanId,
   cleanLine,
@@ -1135,7 +1134,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         // with no id left the original open, so a correct finish was refused). The first proposal for a need wins.
         const match = byId(need) ?? existing.needs.find(value => needKey(value.need) === needKey(need.need));
         if (match !== undefined) settle(match, need);
-        else if (existing.needs.length < AGENTIC_ASK_MAX_NEEDS_PER_PART_V1) existing.needs.push(newNeed(need.need, need.status, need.evidence, need.kind));
+        else existing.needs.push(newNeed(need.need, need.status, need.evidence, need.kind));
       }
     }
     return next;

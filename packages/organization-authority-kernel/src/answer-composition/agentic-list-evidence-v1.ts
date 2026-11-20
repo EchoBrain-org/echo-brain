@@ -400,8 +400,6 @@ export function agenticListMembershipV1(
 
 /** Characters of a member's label in a code-written name. */
 export const AGENTIC_LIST_NAME_CHARS_V1 = 120;
-/** Lists the writer sees, the plan's first. */
-export const AGENTIC_LIST_WRITER_LISTS_MAX_V1 = 5;
 
 /** A list member as the writer sees it: its row facts only. It never carries text. */
 export interface AgenticWriterListMemberV1 {
@@ -849,7 +847,7 @@ export function agenticListTableV1(input: { readonly selected: readonly AgenticL
     ]) };
   });
   const columns = ["Item", ...[...TABLE_FACTS, ...TABLE_DATES.map(sentence)].filter(column => named.some(name => name.values.get(column) !== undefined))];
-  if (columns.length < 2 || columns.length > 6) return undefined;
+  if (columns.length < 2) return undefined;
   const rows = named.map(name => Object.freeze({ cells: Object.freeze(columns.map(column => name.values.get(column) ?? "")), members: Object.freeze([...name.group]) }));
   if (rows.some(row => row.cells.every(cell => cell === ""))) return undefined;
   return Object.freeze({ columns: Object.freeze(columns), rows: Object.freeze(rows) });

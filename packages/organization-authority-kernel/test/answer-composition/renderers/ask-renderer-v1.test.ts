@@ -1028,22 +1028,21 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       await run.render(Q);
       expect(run.prompt(0).research_notes.lists).toEqual([{ list: "L1", read: 2, count: 8 }]);
     });
-    it("tells the writer and the notice how many lists and rows it was not shown, and lets it place only the five", async () => {
+    it("shows the writer every list research read, so it may place a sixth", async () => {
       const research = listBundle(48, 1, Array.from({ length: 6 }, (_, at) => list(`L${at + 1}`, ids(at * 8 + 1, 8))), [C(["E49"])]);
       const run = alone({ bundle: research, replies: [placedOn("E49", { block: "list", list: "L6" }, { block: "list", list: "L1" })] });
       const { rendered, corrections } = await observed(() => run.render(Q));
-      // The sixth list's eight rows were not shown either.
-      expect(run.prompt(0).research_notes.not_shown).toEqual({ lists: 1, list_rows: 8 });
-      expect(rendered.result.response.notice).toContain("1 list research read was not shown to the answer's writer. 8 list rows were not shown to the answer's writer.");
-      expect(blocksOf(rendered).filter(block => block.kind === "table").map(block => block.kind === "table" ? block.rows.length : 0)).toEqual([8]);
-      expect(rendered.cited).toEqual(["E49", ...ids(1, 8)]);
-      expect(corrections).toMatchObject({ writer_unknown_id_dropped: 1 });
+      expect(run.prompt(0).lists.map((value: { id: string }) => value.id)).toEqual(["L1", "L2", "L3", "L4", "L5", "L6"]);
+      expect(rendered.result.response.notice ?? "").not.toContain("not shown to the answer's writer");
+      expect(blocksOf(rendered).filter(block => block.kind === "table").map(block => block.kind === "table" ? block.rows.length : 0)).toEqual([8, 8]);
+      expect(rendered.cited).toEqual(["E49", ...ids(41, 8), ...ids(1, 8)]);
+      expect(corrections).not.toHaveProperty("writer_unknown_id_dropped");
     });
     it("bounds the response's notice to its 2 KiB, keeping whole notices in order while they fit", async () => {
-      // Two 1,000-byte coverage notices, and the notice of a sixth list the writer was not shown.
+      // Two 1,000-byte coverage notices, and a third that does not fit beside them.
       const research = listBundle(48, 1, Array.from({ length: 6 }, (_, at) => list(`L${at + 1}`, ids(at * 8 + 1, 8))), [C(["E49"])]);
       const long = (n: number) => `Coverage note ${n}: ${"x".repeat(1_000 - `Coverage note ${n}: `.length)}`;
-      const rendered = await alone({ bundle: { ...research, coverage: { reads: [], inventories: [], notices: [long(1), long(2)] } }, replies: [placedOn("E49")] }).render(Q);
+      const rendered = await alone({ bundle: { ...research, coverage: { reads: [], inventories: [], notices: [long(1), long(2), long(3)] } }, replies: [placedOn("E49")] }).render(Q);
       const notice = rendered.result.response.notice!;
       expect(Buffer.byteLength(notice, "utf8")).toBeLessThanOrEqual(2 * 1024);
       expect(notice.startsWith(`${long(1)} ${long(2)} `)).toBe(true);
@@ -1090,7 +1089,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       const research = listBundle(14, 1, Array.from({ length: 7 }, (_, at) => list(`L${at + 1}`, ids(at * 2 + 1, 2))), [C(["L7", "E15"])]);
       const run = alone({ bundle: research, replies: [placedOn("E15")] });
       await run.render(Q);
-      expect(run.prompt(0).lists.map((value: { id: string }) => value.id)).toEqual(["L7", "L1", "L2", "L3", "L4"]);
+      expect(run.prompt(0).lists.map((value: { id: string }) => value.id)).toEqual(["L7", "L1", "L2", "L3", "L4", "L5", "L6"]);
     });
     it("gives evidence the whole room before the notes, which give way need by need and then entirely", async () => {
       // One passage, cited by a 30-need plan, and no list: the writer runs only when the passage is admitted.

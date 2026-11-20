@@ -32,8 +32,6 @@ export const PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1 = 400;
 export const PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1 = 12;
 /** Citations one earlier sentence names. */
 export const PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1 = 4;
-/** Sentences of what is different since the earlier answer. */
-export const PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1 = 6;
 export const PERSON_ANSWER_CHOICES_MIN_V1 = 2;
 export const PERSON_ANSWER_CHOICES_MAX_V1 = 4;
 /** Unicode characters (code points) of a choice's label. */

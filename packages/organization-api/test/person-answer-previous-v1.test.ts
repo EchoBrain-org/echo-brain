@@ -6,7 +6,6 @@ import {
   PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1,
   PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1,
   PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1,
-  PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1,
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV8,
 } from '../src/index.js';
@@ -114,13 +113,21 @@ describe('what an answer to the previous turn carries (ADR-0047)', () => {
     expect(JSON.stringify(validatePersonAnswerResponseV8(plain))).toBe(JSON.stringify(plain));
   });
 
-  it('refuses a since that is not an Ask again answer\'s: uncited, out of range, too long, without a question, or with no evidence', () => {
+  it('accepts a since of any length and an answer of any number of parts: the response\'s bytes bound them', () => {
+    const statement = { text: 'Changed.', citation_indexes: [1], private: false };
+    const many = answered({ since: { statements: Array.from({ length: 20 }, (_, index) => ({ ...statement, text: `Changed ${index}.` })) } });
+    expect(validatePersonAnswerResponseV8(many).since!.statements).toHaveLength(20);
+    const parts = answered();
+    const sixParts = { ...parts, parts: Array.from({ length: 6 }, (_, index) => ({ ...parts.parts[0]!, question: `Part ${index + 1}?` })) };
+    expect(validatePersonAnswerResponseV8(sixParts).parts).toHaveLength(6);
+  });
+
+  it('refuses a since that is not an Ask again answer\'s: uncited, out of range, without a question, or with no evidence', () => {
     const statement = { text: 'Changed.', citation_indexes: [1], private: false };
     for (const value of [
       answered({ since: { statements: [{ ...statement, citation_indexes: [] }] } }),
       answered({ since: { statements: [{ ...statement, citation_indexes: [2] }] } }),
       answered({ since: { statements: [{ ...statement, citation_indexes: [0] }] } }),
-      answered({ since: { statements: Array.from({ length: PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1 + 1 }, (_, index) => ({ ...statement, text: `Changed ${index}.` })) } }),
       answered({ since: { statements: [statement], extra: [] } }),
       (({ question: _question, ...rest }) => rest)(answered({ since: { statements: [] } })),
       { ...answered({ since: { statements: [] } }), outcome: 'not_found', citations: [], parts: [{ question: 'Q', status: 'not_found', statements: [], gap: 'Not found.' }] },
