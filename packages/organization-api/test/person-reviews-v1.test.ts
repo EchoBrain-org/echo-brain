@@ -53,8 +53,6 @@ describe('person-owned review contract', () => {
   });
 
   it.each([
-    ['more than twenty project ids in a route', { routes: routes(Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`)) }],
-    ['more than twenty project ids in all', { routes: routes(...Array.from({ length: 21 }, (_, index) => [`prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`])) }],
     ['unsorted project ids', { routes: routes([projectB, projectA]) }],
     ['duplicate project ids', { routes: routes([projectA, projectA]) }],
     ['invalid project id', { routes: routes(['project']) }],
@@ -64,7 +62,6 @@ describe('person-owned review contract', () => {
     ['a route with an invalid signal', { routes: [{ signal_id: 'sig 1', project_ids: [] }] }],
     ['a signal routed twice', { routes: [{ signal_id: 'sig-1', project_ids: [] }, { signal_id: 'sig-1', project_ids: null }] }],
     ['routes that are not a list', { routes: { 'sig-1': [] } }],
-    ['more than 500 routes', { routes: Array.from({ length: 501 }, (_, index) => ({ signal_id: `sig-${index}`, project_ids: [] })) }],
     ['an approval that keeps nothing', { routes: routes(null, null) }],
     ['an approval with no routes', { routes: [] }],
     ['the retired audience', { project_ids: [projectA] }],
@@ -122,7 +119,6 @@ describe('person-owned review contract', () => {
     ['the retired proposal text', { content: 'Review' }],
     ['the retired owner proposals', { owners: [] }],
     ['no records', { records: undefined }],
-    ['too many suggested projects', { suggested_projects: Array.from({ length: 21 }, () => ({ project_id: projectA, name: 'Project A' })) }],
     ['an item of another kind', { items: [{ ...item, kind: 'rationale' }] }],
     ['a decision without its status', { items: [{ ...item, status: null }] }],
     ['an action with a status', { items: [{ ...action, status: 'decided' }] }],
@@ -155,45 +151,30 @@ describe('person-owned review contract', () => {
     expect(() => validatePersonReviewResultV1('review_open', body)).toThrow();
   });
 
-  // The day key made every item longer (ADR-0053). A review that opened before it must still open with it: the bound
-  // grew by what the key adds to each of the most items a review holds, and still fits what the client reads.
-  it('still opens the largest review that opened before items carried a day, with a day added to every one of its 500 items', () => {
-    // An opened review's bound before the key was the one every review response had.
-    const OLD_BOUND = PERSON_REVIEW_RESPONSE_MAX_BYTES_V1, DAY_BYTES = ',"due_on":"2026-10-20"'.length;
-    // The most items a review holds, every one an action with a deadline and its day.
-    const after = largestReviewV1();
-    expect(after.items).toHaveLength(500);
-    // The same review as the Authority sent it before the key: exactly at the old limit, which the validator then accepted.
-    const before = { ...after, items: after.items.map(({ due_on: _day, ...item }) => item) };
-    expect(jsonBytes(before)).toBe(OLD_BOUND);
-    expect(jsonBytes(after)).toBe(OLD_BOUND + 500 * DAY_BYTES);
-    expect(jsonBytes(after)).toBe(PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1);
-    expect(validatePersonReviewResultV1('review_open', after).items).toHaveLength(500);
-    // No item gains more than a day: a deadline with no day adds less.
-    expect(jsonBytes({ ...after, items: after.items.map(item => ({ ...item, due_on: null })) })).toBeLessThan(jsonBytes(after));
-    // The typed bound is still a bound, and the transport reads at least as much: the Authority's response and the client's
-    // read share the tool transport's ceiling.
-    expect(() => validatePersonReviewResultV1('review_open', largestReviewV1(PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1 + 1))).toThrow('exceeds its bound');
-    expect(PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+  it('accepts routes and projects with no count of their own', () => {
+    const many = Array.from({ length: 25 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
+    const wide = routes(many, ...Array.from({ length: 600 }, () => [] as string[]));
+    expect(validatePersonReviewRequestV1(request({ routes: wide }))).toMatchObject({ routes: wide });
   });
 
-  // Only an opened review's items gained a key, so only its bound grew. The list of reviews gained nothing and keeps the
-  // bound it had (a decision's receipt is two closed fields and cannot come near either).
-  it('holds the list of reviews to the bound it had, and only an opened review to the larger one', () => {
-    expect([PERSON_REVIEW_RESPONSE_MAX_BYTES_V1, PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1]).toEqual([120_000, 131_000]);
-    // The most reviews a list holds, their titles sized so the whole list is `size` bytes as JSON.
-    const listOf = (size: number) => {
-      const titled = (first: number, rest: number) => ({ reviews: Array.from({ length: 100 }, (_, index) => ({ ...review, title: 'T'.repeat(index === 0 ? first : rest) })) });
-      const room = size - jsonBytes(titled(0, 0)), rest = Math.floor(room / 100);
-      return titled(room - 99 * rest, rest);
-    };
-    expect(jsonBytes(listOf(120_000))).toBe(120_000);
-    expect(validatePersonReviewResultV1('reviews', listOf(120_000)).reviews).toHaveLength(100);
-    expect(jsonBytes(listOf(120_001))).toBe(120_001);
-    expect(() => validatePersonReviewResultV1('reviews', listOf(120_001))).toThrow('exceeds its bound');
-    // The largest opened review, 11,000 bytes past the list's bound, still opens.
-    expect(jsonBytes(largestReviewV1())).toBe(131_000);
+  it('accepts an opened review with as many items, quotes, names, reasons and projects as the meeting has, and words of any length', () => {
+    const quotes = Array.from({ length: 300 }, (_, index) => `Quote ${index}`);
+    const items = Array.from({ length: 510 }, (_, index) => ({ ...action, signal_id: `a:${index}`, text: 'S', subject: null, owner: null, owner_editable: false,
+      due_at: null, due_on: null, quotes: index === 0 ? quotes : [] }));
+    const body = opened({ items: [{ ...item, text: 'W'.repeat(20_001) }, ...items], participants: Array.from({ length: 510 }, (_, index) => `P${index}`),
+      suggested_projects: Array.from({ length: 25 }, (_, index) => ({ project_id: `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, name: 'N'.repeat(260) })),
+      reasons: [{ signal_id: 'rationale:sha256:3', text: 'Why.', supports: Array.from({ length: 1_001 }, (_, index) => `a:${index}`), quotes: [] }] });
+    expect(jsonBytes(body)).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(validatePersonReviewResultV1('review_open', body).items).toHaveLength(511);
+    expect(validatePersonReviewResultV1('reviews', { reviews: Array.from({ length: 150 }, () => review) }).reviews).toHaveLength(150);
+  });
+
+  // One bound per transport: every review response is bounded by the tool transport that carries it.
+  it('bounds every review response by the tool transport alone', () => {
+    expect([PERSON_REVIEW_RESPONSE_MAX_BYTES_V1, PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1]).toEqual([PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1]);
+    expect(jsonBytes(largestReviewV1())).toBe(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
     expect(validatePersonReviewResultV1('review_open', largestReviewV1()).items).toHaveLength(500);
+    expect(() => validatePersonReviewResultV1('review_open', largestReviewV1(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 + 1))).toThrow('exceeds its bound');
   });
 
   it('reads an opened review up to the transport ceiling, the cap the Authority answers within', async () => {
@@ -214,7 +195,6 @@ describe('person-owned review contract', () => {
 
   it.each([
     ['an empty first line', { first_line: '' }],
-    ['a first line over 300 characters', { first_line: 'L'.repeat(301) }],
     ['a first line of two lines', { first_line: 'Launch the pilot.\nNext week.' }],
     ['a negative action count', { action_count: -1 }],
     ['an action count past the safe integers', { action_count: 2 ** 53 }],
@@ -232,7 +212,7 @@ describe('person-owned review contract', () => {
 
   it('accepts a review row without a decision line or meeting time, a whole day, the bounds themselves, and more than 40 actions', () => {
     expect(validatePersonReviewResultV1('reviews', { reviews: [{ ...review, first_line: null, action_count: 0, meeting_at: null },
-      { ...review, first_line: 'L'.repeat(300), action_count: 41 }, { ...review, action_count: Number.MAX_SAFE_INTEGER },
+      { ...review, first_line: 'L'.repeat(10_000), title: 'T'.repeat(10_000), action_count: 41 }, { ...review, action_count: Number.MAX_SAFE_INTEGER },
       { ...review, meeting_at: '2026-10-21T12:00:00.000Z', all_day: true }] }).reviews).toHaveLength(4);
     expect(() => validatePersonReviewResultV1('review_open', opened({ review: { ...review, first_line: null, action_count: 0, meeting_at: null } }))).not.toThrow();
   });

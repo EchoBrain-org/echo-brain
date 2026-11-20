@@ -73,7 +73,8 @@ describe("Slack approval card V4", () => {
     const destination = built.blocks.find((block) => (block as { block_id?: string }).block_id?.endsWith("-destination")) as { text: { text: string } };
     expect(destination.text.text.length).toBeLessThanOrEqual(3_000);
     expect(destination.text.text.endsWith("…")).toBe(true);
-    expect(() => card(Array.from({ length: 21 }, (_, index) => `P${index}`))).toThrow("Slack limits");
+    // Projects have no count of their own: the one line holds as many as Slack's section allows.
+    expect(card(Array.from({ length: 30 }, (_, index) => `P${index}`)).text).toContain("P29");
   });
   it("uses the exact closed-card outcome language and names each destination", () => {
     const approved = buildClosedApprovalCardV4({ title: "Roadmap", outcome: "approved", surface: "desktop", destinations: ["THERM", "THERM + ECHO", "Only you"] });

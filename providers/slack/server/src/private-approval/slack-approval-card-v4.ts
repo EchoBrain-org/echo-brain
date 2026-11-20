@@ -76,8 +76,6 @@ export function slackApprovalOwnerActionIdV4(
 export function buildSlackApprovalCardV4(
   input: SlackApprovalCardInputV4,
 ): SlackApprovalCardV4 {
-  if (input.destination.length > 20)
-    throw new Error("Slack approval card exceeds Slack limits");
   const review = buildPrivateSlackApprovalReviewV1(input.review);
   const destination = slackApprovalDestinationV4(input.destination);
   const goesTo = `Goes to: ${destination.length <= 2_900 ? destination : `${destination.slice(0, 2_899).trimEnd()}…`}`;

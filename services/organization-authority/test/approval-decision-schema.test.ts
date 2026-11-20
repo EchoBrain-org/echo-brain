@@ -154,7 +154,6 @@ describe("Authority approval decision schema", () => {
       ["no surface", { json: { ...body(), surface: undefined } }],
       ["routes that are not an array", { request: { routes: { "dec-1": [] } } }],
       ["no routes", { request: { routes: undefined } }],
-      ["more than 500 routes", { request: { routes: Array.from({ length: 501 }, (_, i) => ({ signal_id: `a${i}`, project_ids: [] })) } }],
       ["owners that are not an array", { request: { owners: {} } }],
       ["no membership", { actor: { membership_id: undefined } }],
       ["a numeric principal", { actor: { principal_id: 1 } }],
@@ -180,7 +179,14 @@ describe("Authority approval decision schema", () => {
     expect(database.prepare("SELECT count(*) FROM authority_approval_decisions_v1").pluck().get()).toBe(1);
   });
 
-  it("takes routes of a signal and a destination each, keeps one item and names at most 20 projects", () => {
+  it("stores a decision with any number of routes: the schema counts none", () => {
+    seedCandidate(database);
+    freeze(database, "cnd_1", "apr_1", [PROJECT_A]);
+    decide(database, { request: { routes: Array.from({ length: 501 }, (_, i) => ({ signal_id: `a${i}`, project_ids: [] })) } });
+    expect(database.prepare("SELECT json_array_length(body_json, '$.request.routes') FROM authority_approval_decisions_v1").pluck().get()).toBe(501);
+  });
+
+  it("takes routes of a signal and a destination each and keeps one item, with no count of projects of its own", () => {
     seedCandidate(database);
     freeze(database, "cnd_1", "apr_1", [PROJECT_A]);
     const many = Array.from({ length: 21 }, (_, i) => `prj_00000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
@@ -190,13 +196,13 @@ describe("Authority approval decision schema", () => {
       ["a route with a numeric signal", [{ signal_id: 7, project_ids: [] }]],
       ["a route without a destination", [{ signal_id: "dec-1" }]],
       ["a destination that is text", [{ signal_id: "dec-1", project_ids: PROJECT_A }]],
-      ["a route naming 21 projects", routes(many)],
-      ["routes naming 21 projects in all", routes(many.slice(0, 11), many.slice(11))],
       ["an approval that keeps nothing", routes(null, null)],
       ["an approval with no routes", []],
     ] as const) {
       expect(() => decide(database, { request: { routes: value } }), label).toThrow(/approval decision routes are invalid|audience needs active project membership/);
     }
+    // 21 projects are judged by membership alone: the routes rule counts none of them.
+    expect(() => decide(database, { request: { routes: routes(many) } })).toThrow(/audience needs active project membership/);
     expect(database.prepare("SELECT count(*) FROM authority_approval_decisions_v1").pluck().get()).toBe(0);
   });
 

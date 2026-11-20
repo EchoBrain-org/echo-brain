@@ -21,16 +21,12 @@ export {
 
 /** approved_payload.surface of every snapshot the core freezes, whichever screen draws it (the approval-decision codec checks it). */
 export const APPROVAL_SNAPSHOT_SURFACE_V1 = APPROVAL_DECISION_SNAPSHOT_SURFACE_V1;
-/** At most this many projects across one decision's routes, and in one route; also the cap on frozen suggestions. */
-export const APPROVAL_PROJECTS_MAX_V1 = 20;
-/** At most this many routes in one decision: one per decision and action of the frozen snapshot. */
-export const APPROVAL_ROUTES_MAX_V1 = 500;
 
 export type ApprovalSurfaceV1 = 'desktop' | 'slack';
 export interface ApprovalActorV1 { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string }
 interface ApprovalOwnerChoiceV1 { readonly signal_id: string; readonly owner: string }
 /**
- * Where one decision or action goes: null = not kept, [] = Only me, otherwise 1..20 project ids, strictly ascending.
+ * Where one decision or action goes: null = not kept, [] = Only me, otherwise project ids, strictly ascending.
  * `private: true` keeps it for the reviewer alone inside those projects (ADR-0049): only with a project, and present only
  * when true, so every other route keeps its bytes.
  */
@@ -42,7 +38,7 @@ export interface ApprovalDecisionRequestV1 {
   readonly snapshot_sha256: Sha256Digest;
   readonly action: 'approve' | 'reject';
   /** Approve: every decision and action of the frozen snapshot exactly once, in brief order (decisions, then actions),
-   *  keeping at least one and naming at most 20 projects in all. Reject: []. */
+   *  keeping at least one. Reject: []. */
   readonly routes: readonly ApprovalRouteV1[];
   /** Confirmed owners of kept proposed actions, in brief (proposal) order, each signal at most once. Reject: []. */
   readonly owners: readonly ApprovalOwnerChoiceV1[];
@@ -69,7 +65,7 @@ export interface ApprovalProposalViewV1 {
   readonly reviewer: ApprovalActorV1;
   /** False once the reviewer's membership is no longer active: nobody can decide it and presenters must not offer it. */
   readonly reviewer_active: boolean;
-  /** Meeting title or 'Untitled meeting', at most 256 code units. */
+  /** Meeting title or 'Untitled meeting', whole. */
   readonly title: string;
   readonly status: ApprovalStatusV1;
   readonly decided_on: ApprovalSurfaceV1 | null;
@@ -165,10 +161,10 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
   return actual.length === keys.length && [...keys].sort().every((key, index) => key === actual[index]);
 }
 
-/** One route's destination: null, or 0..20 valid project ids, strictly ascending (sorted, unique). */
+/** One route's destination: null, or valid project ids, strictly ascending (sorted, unique), with no count of their own. */
 function destination(value: unknown): readonly string[] | null {
   if (value === null) return null;
-  if (!Array.isArray(value) || value.length > APPROVAL_PROJECTS_MAX_V1) invalid();
+  if (!Array.isArray(value)) invalid();
   const projects = value.map((id: unknown) => {
     try { return validateProjectIdV1(id); } catch { return invalid(); }
   });
@@ -188,7 +184,8 @@ export function validateApprovalDecisionRequestV1(surface: ApprovalSurfaceV1, va
   if (surface === 'slack' ? !SLACK_COMMAND_ID.test(command_id) : command_id.startsWith('slack:')) invalid();
   if (typeof snapshot_sha256 !== 'string' || !DIGEST.test(snapshot_sha256)) invalid();
   if (action !== 'approve' && action !== 'reject') invalid();
-  if (!Array.isArray(routes) || routes.length > APPROVAL_ROUTES_MAX_V1) invalid();
+  // No count of its own: decide() accepts a route only for a decision or action of the frozen snapshot, once each.
+  if (!Array.isArray(routes)) invalid();
   const routed = routes.map((route: unknown): ApprovalRouteV1 => {
     if (!plain(route) || !(hasExactKeys(route, ['project_ids', 'signal_id']) || hasExactKeys(route, ['private', 'project_ids', 'signal_id']))
       || !isApprovalSignalIdV1(route.signal_id)) invalid();
@@ -198,7 +195,6 @@ export function validateApprovalDecisionRequestV1(surface: ApprovalSurfaceV1, va
     return Object.freeze({ signal_id: route.signal_id, project_ids, ...(route.private === true ? { private: true as const } : {}) });
   });
   if (new Set(routed.map(route => route.signal_id)).size !== routed.length) invalid();
-  if (new Set(routed.flatMap(route => route.project_ids ?? [])).size > APPROVAL_PROJECTS_MAX_V1) invalid();
   // No count of its own: an owner is accepted only for an offered proposal, once each.
   if (!Array.isArray(owners)) invalid();
   const chosen = owners.map((owner: unknown) => {
@@ -274,10 +270,10 @@ export function approvalReviewV1(snapshotJson: string): ApprovalReviewV1 {
 }
 
 /** What a Home row shows of a proposal: its first decision (else first action) on one line, how many actions it has, when the meeting started,
- *  and whether it is a whole day. The line collapses whitespace and control characters and keeps at most 300 characters, never half of one. */
+ *  and whether it is a whole day. The line collapses whitespace and control characters and keeps the whole text. */
 export function approvalProposalSummaryV1(snapshotJson: string): { readonly first_line: string | null; readonly action_count: number; readonly meeting_at: string | null; readonly all_day: boolean } {
   const brief = briefOf(snapshotJson);
-  const line = (brief.decisions[0]?.text ?? brief.actions[0]?.text)?.replace(/[\s\p{Cc}]+/gu, ' ').trim().slice(0, 300).replace(/[\uD800-\uDBFF]$/, '');
+  const line = (brief.decisions[0]?.text ?? brief.actions[0]?.text)?.replace(/[\s\p{Cc}]+/gu, ' ').trim();
   const time = brief.meeting.time, started = new Date(time?.actual_start_at ?? time?.scheduled_start_at ?? NaN);
   const meetingAt = Number.isNaN(started.getTime()) ? null : started.toISOString();
   // A whole day's time only names its UTC date, so readers show that date and no clock time.
@@ -363,7 +359,7 @@ export async function createApprovalCoreV1(database: Database.Database, context:
       const suggested = [...new Set(options.suggestions(row.source_key, meeting.provenance.external_id))];
       for (const id of suggested) validateProjectIdV1(id);
       const outbox = context.state.freezeProposal({ candidate_id: frozen.candidate_id, approved_snapshot: snapshot,
-        suggested_project_ids: suggested.sort().slice(0, APPROVAL_PROJECTS_MAX_V1) });
+        suggested_project_ids: suggested.sort() });
       annotateCoreRuntimeV1({ result: outbox.state === 'staged' ? 'published' : 'superseded' });
       return outbox.state === 'staged' ? { kind: 'staged', stage_id: approval_id } : { kind: 'state_drift' };
     });
@@ -484,7 +480,7 @@ export async function createApprovalCoreV1(database: Database.Database, context:
     const receipt = row.receipt_json === null ? null : JSON.parse(row.receipt_json) as ApprovalDecisionReceiptV1;
     return Object.freeze({
       approval_id: row.approval_id, reviewer, reviewer_active: row.membership_status === 'active',
-      title: String(row.title).slice(0, 256), status, decided_on: row.surface, decided_at: body?.decided_at ?? null,
+      title: String(row.title), status, decided_on: row.surface, decided_at: body?.decided_at ?? null,
       project_ids: body !== null ? approvalRoutedProjectsV1(body.request.routes) : Object.freeze(suggested.filter(id => readable(reviewer, id))),
       routes: body === null ? null : Object.freeze(body.request.routes.map(route =>
         Object.freeze({ signal_id: route.signal_id, project_ids: route.project_ids === null ? null : Object.freeze([...route.project_ids]),

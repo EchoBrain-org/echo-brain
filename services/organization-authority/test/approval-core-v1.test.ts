@@ -6,7 +6,7 @@ import { retainedMeetingSourceCoordinateV1 } from '@echo-brain/organization-proc
 import type { DecisionBrief } from '@echo-brain/organization-processing/core';
 import { approvalCoreFixture } from './fixtures/approval-core.js';
 import {
-  APPROVAL_PROJECTS_MAX_V1, APPROVAL_ROUTES_MAX_V1, APPROVAL_SNAPSHOT_SURFACE_V1, approvalProposalSummaryV1, approvalReviewV1,
+  APPROVAL_SNAPSHOT_SURFACE_V1, approvalProposalSummaryV1, approvalReviewV1,
   createApprovalCoreV1, validateApprovalDecisionRequestV1, type ApprovalAuthorizationV1,
 } from '../src/composition/approval-core-v1.js';
 
@@ -128,8 +128,6 @@ describe('approval core: decide', () => {
       { ...base, routes: f.routes(null) }, { ...base, routes: [] }, { ...base, routes: [{ signal_id: 'act 1', project_ids: [] }] },
       { ...base, routes: [{ signal_id: 'act-1' }] }, { ...base, routes: [{ signal_id: 'act-1', project_ids: [], note: 'x' }] },
       { ...base, routes: [{ signal_id: 'act-1', project_ids: 'prj_00000000-0000-4000-8000-0000000000a1' }] },
-      { ...base, routes: f.routes(many) }, { ...base, routes: f.routes((_id, kind) => kind === 'decision' ? many.slice(0, 11) : many.slice(11)) },
-      { ...base, routes: Array.from({ length: APPROVAL_ROUTES_MAX_V1 + 1 }, (_, i) => ({ signal_id: `act-${i}`, project_ids: [] })) },
       { ...base, owners: [{ signal_id: 'act-1' }] }, { ...base, owners: [{ signal_id: 'act 1', owner: 'A' }] },
       { ...base, action: 'reject' }, { ...base, action: 'reject', routes: [], owners: [{ signal_id: 'act-1', owner: 'A' }] }, null, 'approve',
       { ...base, owners: [{ signal_id: 'act-1', owner: 'A' }, { signal_id: 'act-1', owner: 'B' }] }, { ...base, owners: [{ signal_id: 'act-1', owner: ' padded ' }] },
@@ -141,6 +139,9 @@ describe('approval core: decide', () => {
     }
     expect(() => f.core.decide('email' as never, base, never)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
     expect(f.decisionCount()).toBe(0);
+    // Routes and projects have no count of their own: a route may name any number of projects, and a request any number of routes.
+    expect(validateApprovalDecisionRequestV1('desktop', { ...base, routes: f.routes([...many].sort()) }).routes[0]!.project_ids).toHaveLength(21);
+    expect(validateApprovalDecisionRequestV1('desktop', { ...base, routes: Array.from({ length: 501 }, (_, i) => ({ signal_id: `act-${i}`, project_ids: [] })) }).routes).toHaveLength(501);
   });
   it('binds command ids to their surface', async () => {
     const f = await approvalCoreFixture();
@@ -340,7 +341,6 @@ describe('approval core: decide', () => {
     expect(() => validateApprovalDecisionRequestV1('slack', good)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
     expect(validateApprovalDecisionRequestV1('slack', { ...good, command_id: 'slack:Zx_9-.' }).command_id).toBe('slack:Zx_9-.');
     expect(f.core.decide('desktop', good, () => f.session).kind).toBe('decided');
-    expect(APPROVAL_PROJECTS_MAX_V1).toBe(20);
   });
 });
 
@@ -376,7 +376,7 @@ describe('approval core: freeze', () => {
     await f.core.stager.reconcilePendingDeliveries();
     expect(outbox(f, f.approvalId).state).toBe('staged');
   });
-  it('freezes at most 20 suggestions, sorted, and ignores suggestions recorded later', async () => {
+  it('freezes every suggestion, sorted, and ignores suggestions recorded later', async () => {
     const f = await approvalCoreFixture({ stage: false, suggestions: 2 });
     const extra = Array.from({ length: 20 }, (_, i) => `prj_00000000-0000-4000-8000-0000000001${i.toString(16).padStart(2, '0')}`);
     for (const [i, id] of extra.entries()) {
@@ -386,7 +386,7 @@ describe('approval core: freeze', () => {
     }
     await f.core.stager.reconcilePendingDeliveries();
     const frozen = JSON.parse(outbox(f, f.approvalId).suggested_projects_json!) as string[];
-    expect(frozen).toEqual([...extra, f.projectA, f.projectB].sort().slice(0, 20));
+    expect(frozen).toEqual([...extra, f.projectA, f.projectB].sort());
     f.db.prepare('INSERT INTO authority_person_meeting_suggestions_v1 VALUES (?,?,?,?)').run(f.sourceKey, f.externalId, f.projectC, '2026-10-07T09:00:00.000Z');
     expect(JSON.parse(outbox(f, f.approvalId).suggested_projects_json!)).toEqual(frozen);
   });
@@ -535,12 +535,11 @@ describe('approval core: the Home row summary', () => {
       .toEqual({ first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', all_day: false });
     expect(approvalProposalSummaryV1(snapshot({ decisions: [], actions: ['Book the lab'] })).first_line).toBe('Book the lab');
   });
-  it('keeps the line to one line of at most 300 characters and counts every action', () => {
+  it('keeps the whole line on one line and counts every action', () => {
     expect(approvalProposalSummaryV1(snapshot({ decisions: ['  Launch the\n\tpilot\u0007 next week.  '], actions: [] })).first_line).toBe('Launch the pilot next week.');
     expect(approvalProposalSummaryV1(snapshot({ decisions: ['L'.repeat(400)], actions: Array.from({ length: 41 }, (_, i) => `Action ${i + 1}`) })))
-      .toMatchObject({ first_line: 'L'.repeat(300), action_count: 41 });
-    // The cut never leaves half of a character.
-    expect(approvalProposalSummaryV1(snapshot({ decisions: ['x'.repeat(299) + '🚀'], actions: [] })).first_line).toBe('x'.repeat(299));
+      .toMatchObject({ first_line: 'L'.repeat(400), action_count: 41 });
+    expect(approvalProposalSummaryV1(snapshot({ decisions: ['x'.repeat(299) + '🚀'], actions: [] })).first_line).toBe('x'.repeat(299) + '🚀');
   });
   it('falls back to the scheduled start, and has no line or time when the proposal has none', () => {
     expect(approvalProposalSummaryV1(snapshot({ decisions: [], actions: [], scheduled: '2026-10-06T15:30:00.000Z' })))

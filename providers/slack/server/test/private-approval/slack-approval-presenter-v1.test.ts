@@ -289,7 +289,9 @@ describe('Slack approval presenter V1', () => {
 
   it('marks an oversized staged proposal unrepresentable without opening a DM', async () => {
     const f = fixture(); f.projects = Array.from({ length: 101 }, (_, n) => ({ project_id: `prj_${n}`, name: `Project ${n}` }));
-    f.stage('apr_large', { project_ids: Array.from({ length: 21 }, (_, n) => `prj_${n}`) });
+    // Slack's own limit: a review of 60 decision groups cannot fit 50 blocks.
+    const decisions = Array.from({ length: 60 }, (_, n) => ({ id: `dec_${n}`, text: `Decision ${n}`, evidence: [{ block_id: 'blk_1' }] }));
+    f.stage('apr_large', { snapshot_json: JSON.stringify({ approved_payload: { brief: { meeting: { title: 'Roadmap' }, decisions, actions: [], rationales: [] } } }) });
     await f.presenter.reconcile(signal());
     expect(f.calls).toEqual([]); expect(row(f, 'apr_large')).toMatchObject({ delivery: 'unrepresentable' });
   });

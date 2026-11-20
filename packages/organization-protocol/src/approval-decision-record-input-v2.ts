@@ -168,9 +168,9 @@ function policy(value: unknown): ApprovalDecisionPolicyIdV1 {
 }
 const policyContract = (policyId: ApprovalDecisionPolicyIdV1): Sha256Digest => policyId === RESTRICTED_REVIEWER_PERSON_POLICY_ID
   ? restrictedReviewerPersonPolicyContractSha256() : projectMembersReadablePersonPolicyContractSha256();
-/** 0 to 20 canonical project ids, sorted and unique; 1 to 20 when required. */
+/** Canonical project ids, sorted and unique, with no count of their own; at least one when required. */
 function projectIds(value: unknown, label: string, required: boolean): readonly string[] {
-  if (!Array.isArray(value) || value.length > 20 || (required && value.length === 0)) fail(`${label} has an invalid project count`);
+  if (!Array.isArray(value) || (required && value.length === 0)) fail(`${label} has an invalid project count`);
   value.forEach((id: unknown, index) => {
     if (typeof id !== 'string' || !PROJECT_ID.test(id)) fail(`${label}[${index}] must be a canonical project ID`);
     if (index > 0 && value[index - 1] >= id) fail(`${label} must be sorted and unique`);
@@ -178,8 +178,8 @@ function projectIds(value: unknown, label: string, required: boolean): readonly 
   return Object.freeze([...value as string[]]);
 }
 /**
- * Projects: the audience is the association, 1 to 20 projects. The restricted reviewer: no audience, and an association of
- * 0 (Only me) to 20 projects (kept private inside them, ADR-0049), which narrows where the record shows and never who reads it.
+ * Projects: the audience is the association, at least one project. The restricted reviewer: no audience, and an association
+ * of no projects (Only me) or any number (kept private inside them, ADR-0049), which narrows where the record shows and never who reads it.
  */
 function consequenceOf(value: unknown): ApprovalDecisionConsequenceV2 {
   const record = exact(value, CONSEQUENCE_KEYS, 'Approval decision consequence');

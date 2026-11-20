@@ -637,8 +637,7 @@ CREATE TABLE authority_live_approval_outbox_v2 (
     length(approved_snapshot_sha256) = 71 AND substr(approved_snapshot_sha256, 1, 7) = 'sha256:'
     AND substr(approved_snapshot_sha256, 8) NOT GLOB '*[^0-9a-f]*')),
   suggested_projects_json TEXT CHECK (suggested_projects_json IS NULL OR (
-    json_valid(suggested_projects_json) AND json_type(suggested_projects_json) = 'array'
-    AND json_array_length(suggested_projects_json) <= 20)),
+    json_valid(suggested_projects_json) AND json_type(suggested_projects_json) = 'array')),
   superseded_by_candidate_id TEXT REFERENCES authority_live_source_candidates_v2(candidate_id),
   superseded_at TEXT CHECK (superseded_at IS NULL OR unixepoch(superseded_at) IS NOT NULL),
   updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
@@ -671,7 +670,6 @@ CREATE TABLE authority_approval_decisions_v1 (
     AND json_extract(body_json, '$.surface') IS surface
     AND json_type(body_json, '$.request.snapshot_sha256') IS 'text'
     AND json_type(body_json, '$.request.routes') IS 'array'
-    AND json_array_length(body_json, '$.request.routes') <= 500
     AND json_type(body_json, '$.request.owners') IS 'array'
     AND json_type(body_json, '$.actor.organization_id') IS 'text'
     AND json_type(body_json, '$.actor.principal_id') IS 'text'
@@ -682,7 +680,7 @@ CREATE TABLE authority_approval_decisions_v1 (
   -- Each published record is checked by authority_approval_decision_receipt_v1 (a CHECK cannot iterate).
   receipt_json TEXT CHECK (receipt_json IS NULL OR (json_valid(receipt_json) AND json_type(receipt_json) = 'object'
     AND json_type(receipt_json, '$.records') IS 'array'
-    AND json_array_length(receipt_json, '$.records') BETWEEN 1 AND 500)),
+    AND json_array_length(receipt_json, '$.records') >= 1)),
   CHECK ((surface = 'slack') = (command_id GLOB 'slack:*')),
   CHECK (action = 'approve' OR (json_array_length(body_json, '$.request.routes') = 0
     AND json_array_length(body_json, '$.request.owners') = 0)),
@@ -763,7 +761,7 @@ WHEN NOT EXISTS (
      AND admission.membership_id = json_extract(NEW.body_json, '$.actor.membership_id'))
 BEGIN SELECT RAISE(ABORT, 'approval decision needs the active reviewer'); END;
 -- Each route names a signal and its destination: null (not kept), [] (Only me) or projects,
--- sorted and unique. An approval keeps at least one item and names at most 20 projects in all.
+-- sorted and unique, with no count of their own. An approval keeps at least one item.
 -- Each routed project is active and the reviewer an active member of it. A route that is not an
 -- object is read as {} wherever its fields are read, so JSON functions never see a bare value.
 CREATE TRIGGER authority_approval_decision_routes_v1
@@ -772,14 +770,10 @@ WHEN EXISTS (
   SELECT 1 FROM json_each(NEW.body_json, '$.request.routes') AS route
    WHERE CASE WHEN route.type != 'object' THEN 1
      WHEN json_type(route.value, '$.signal_id') IS NOT 'text' THEN 1
-     WHEN coalesce(json_type(route.value, '$.project_ids'), '') NOT IN ('null', 'array') THEN 1
-     WHEN json_array_length(route.value, '$.project_ids') > 20 THEN 1 ELSE 0 END = 1)
+     WHEN coalesce(json_type(route.value, '$.project_ids'), '') NOT IN ('null', 'array') THEN 1 ELSE 0 END = 1)
   OR (NEW.action = 'approve' AND NOT EXISTS (
   SELECT 1 FROM json_each(NEW.body_json, '$.request.routes') AS route
    WHERE json_type(iif(route.type = 'object', route.value, '{}'), '$.project_ids') = 'array'))
-  OR (SELECT count(DISTINCT chosen.value) FROM json_each(NEW.body_json, '$.request.routes') AS route,
-    json_each(iif(route.type = 'object', route.value, '{}'), '$.project_ids') AS chosen
-   WHERE json_type(iif(route.type = 'object', route.value, '{}'), '$.project_ids') = 'array') > 20
 BEGIN SELECT RAISE(ABORT, 'approval decision routes are invalid'); END;
 CREATE TRIGGER authority_approval_decision_audience_v1
 BEFORE INSERT ON authority_approval_decisions_v1
