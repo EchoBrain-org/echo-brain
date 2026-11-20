@@ -155,3 +155,25 @@ describe("OpenRouter stream ending", () => {
     await expect(client.generateStructured(extraction)).rejects.toMatchObject({ code: "temporarily_unavailable", retryable: true, unbilled: false, message: expect.stringContaining("before it finished") });
   });
 });
+
+describe("OpenRouter tool-call indexes", () => {
+  const schema = { type: "object", additionalProperties: false, required: ["f0"], properties: Object.fromEntries(Array.from({ length: 60 }, (_, index) => [`f${index}`, { type: "string" }])) };
+  const calls = (...indexes: number[]) => createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
+    for (const index of indexes) yield `data: {"choices":[{"delta":{"tool_calls":[{"index":${index},"function":{"name":"StructuredOutput","arguments":"{\\"f0\\":\\"x\\"}"}}]}}]}\n\n`;
+    yield 'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n';
+  }, 0) });
+
+  it("refuses a huge provider index at once as an invalid reply, without building a sparse array", async () => {
+    const started = Date.now();
+    await expect(calls(4294967294).generate({ ...request, schema })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response" } });
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("refuses an index that skips past the calls seen, and keeps consecutive indexes in order", async () => {
+    await expect(calls(1).generate({ ...request, schema })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response" } });
+    await expect(calls(-1).generate({ ...request, schema })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response" } });
+    // Two calls of the reply tool are two calls, read as an invalid reply by the adapter, not merged.
+    await expect(calls(0, 1).generate({ ...request, schema })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_response" } });
+    await expect(calls(0).generate({ ...request, schema })).resolves.toEqual({ f0: "x" });
+  });
+});

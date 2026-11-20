@@ -65,7 +65,8 @@ class OpenRouterStreamAssemblerV1 {
   private readonly root: Record<string, unknown> = {};
   private content = '';
   private refusal = '';
-  private readonly calls: { id?: unknown; type?: unknown; name: string; arguments: string }[] = [];
+  /** Tool calls by the provider's index, which is taken only as the next index or one already seen. */
+  private readonly calls = new Map<number, { id?: unknown; type?: unknown; name: string; arguments: string }>();
   private finishReason: unknown;
   private choiceError: unknown;
 
@@ -89,8 +90,11 @@ class OpenRouterStreamAssemblerV1 {
     for (const raw of Array.isArray(delta['tool_calls']) ? delta['tool_calls'] : []) {
       const call = record(raw);
       if (call === undefined) continue;
-      const index = typeof call['index'] === 'number' ? call['index'] : this.calls.length;
-      const kept = this.calls[index] ?? (this.calls[index] = { name: '', arguments: '' });
+      const index = call['index'] === undefined ? this.calls.size : call['index'];
+      // Calls are numbered 0, 1, 2... as they start: any other index is a malformed event, never an array position.
+      if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0 || index > this.calls.size) throw new SyntaxError('OpenRouter tool call index is out of sequence');
+      let kept = this.calls.get(index);
+      if (kept === undefined) this.calls.set(index, kept = { name: '', arguments: '' });
       if (call['id'] !== undefined) kept.id = call['id'];
       if (call['type'] !== undefined) kept.type = call['type'];
       const fn = record(call['function']);
@@ -109,7 +113,7 @@ class OpenRouterStreamAssemblerV1 {
 
   /** The JSON reply the stream stands for. A stream that never sent a finish reason has none here. */
   payload(): Record<string, unknown> {
-    const toolCalls = this.calls.filter(call => call !== undefined).map(call => ({ ...(call.id === undefined ? {} : { id: call.id }),
+    const toolCalls = [...this.calls.keys()].sort((a, b) => a - b).map(index => this.calls.get(index)!).map(call => ({ ...(call.id === undefined ? {} : { id: call.id }),
       type: call.type ?? 'function', function: { name: call.name, arguments: call.arguments } }));
     const message = { content: this.content, ...(this.refusal === '' ? {} : { refusal: this.refusal }), ...(toolCalls.length === 0 ? {} : { tool_calls: toolCalls }) };
     return { ...this.root, choices: [{ message, ...(this.finishReason === undefined ? {} : { finish_reason: this.finishReason }),
