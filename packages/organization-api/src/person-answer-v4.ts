@@ -66,7 +66,8 @@ export function validatePersonAskTimeContextV1(now: unknown, timeZone: unknown):
 }
 
 export const PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 = 64 * 1024;
-export const PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 = 3 * 1024;
+/** A released answer's fallback record: the evidence's own words, cut to a short quotation (evidence text in transit is `PERSON_EVIDENCE_TEXT_MAX_BYTES_V1`). */
+export const PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4 = 3 * 1024;
 export const PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1 = 64 * 1024;
 export const PERSON_EVIDENCE_LABEL_MAX_BYTES_V1 = 1024;
 
@@ -252,7 +253,7 @@ function visibility(value: unknown, label: string): asserts value is PersonEvide
 function statement(value: unknown, citations: readonly PersonAnswerCitationV8[], label: string, fallback = false): PersonAnswerStatementV4 {
   const input = object(value, label);
   assertExactKeys(input, ['text', 'citation_indexes', 'private'], label);
-  if (fallback) evidenceText(input.text, `${label} text`, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
+  if (fallback) evidenceText(input.text, `${label} text`, PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4);
   else text(input.text, `${label} text`, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4, true);
   if (!Array.isArray(input.citation_indexes) || input.citation_indexes.length === 0 || input.citation_indexes.length > PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4 || typeof input.private !== 'boolean') fail(`${label} is invalid`);
   const indexes = citationIndexes(input.citation_indexes, `${label} citation_indexes`, citations.length, PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4);
