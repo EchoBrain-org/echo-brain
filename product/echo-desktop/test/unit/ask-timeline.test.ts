@@ -73,7 +73,7 @@ let ids = 0;
 function turn(question: string, ago: number, answer: Answer, extra: Partial<TimelineTurn> = {}): TimelineTurn {
   ids += 1;
   return { id: `00000000-0000-4000-8000-${String(ids).padStart(12, '0')}`, asked_at: new Date(NOW.getTime() - ago).toISOString(), text: question, question,
-    scope: answer.scope, answer, ...extra };
+    scope: answer.scope, answer, citations_complete: true, ...extra };
 }
 
 /** THERM's status, three sources: a ticket, the DVT plan and a follow-up. */
@@ -273,6 +273,22 @@ describe('the earlier turn an Ask carries (C3)', () => {
     // Still a member: it goes.
     const still = checkedOf(plan, [[{ state: 'same' }, { state: 'same' }]])[members.id]!;
     expect(previousOf(members, 'follow_up', still, 'And who leads it?', { kind: 'global' }).statements).toHaveLength(2);
+  });
+
+  it('carries only the question of a turn an older desktop saved, whatever a check says, and still shows its answer', () => {
+    // Saved before this release: a sentence may have lost the row citations it rested on, which no check can then ask about.
+    const { citations_complete: _mark, ...older } = turn('What is open on THERM?', 2 * DAY, status());
+    const all = { 0: 'same', 1: 'same', 2: 'same' } as const;
+    expect(previousOf(older, 'follow_up', all, 'Who owns it?', { kind: 'global' })).toEqual({ purpose: 'follow_up', question: 'What is open on THERM?',
+      asked_at: older.asked_at, statements: [], citations: [] });
+    expect(previousOf(older, 'ask_again', all, 'What is open on THERM?', { kind: 'global' }).statements).toEqual([]);
+    expect(older.answer.parts[0]!.statements.map(statement => showsOf(all)(statement.citation_indexes))).toEqual([true, true, true]);
+  });
+
+  it('marks every turn it keeps from an answer as citing all it rests on', async () => {
+    const store = await startStore();
+    await store.ask('First?');
+    expect(kept().map(value => value.citations_complete)).toEqual([true]);
   });
 
   it('carries no sentence whose citation a check returned no result for', () => {

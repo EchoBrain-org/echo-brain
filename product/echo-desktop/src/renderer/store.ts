@@ -3835,7 +3835,7 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   // through only while this Ask shows it; and no choices, which only "Which one?" has.
   const { receipt, question: full, since, choices: _choices, ...kept } = answer;
   const turn: TimelineTurn = {
-    id: crypto.randomUUID(), asked_at: new Date(started).toISOString(), text, question: full ?? text, scope, answer: kept,
+    id: crypto.randomUUID(), asked_at: new Date(started).toISOString(), text, question: full ?? text, scope, answer: kept, citations_complete: true,
     ...(since === undefined ? {} : { since }), ...(againOf === undefined ? {} : { again_of: againOf }),
   };
   keepTurn(turn);
