@@ -1,5 +1,6 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type { PersonAskTimeContextV1, PersonAnswerResponseV8, PersonAnswerPreviousV1, PersonAskReceiptV3 } from "@echo-brain/organization-api";
+import { validatePersonQuestionText } from "@echo-brain/organization-api";
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
 import type { StructuredGenerationPort } from "./structured-generation-v1.js";
 import type { EvidenceDeskPortV2, EvidenceDeskSourceV2 } from "../shared/evidence-desk-v2.js";
@@ -139,10 +140,11 @@ function askerName(value: { readonly display_name: string } | undefined): string
   return name.length === 0 || name.length > 200 || /[\p{Cc}\p{Cf}]/u.test(name) ? undefined : name;
 }
 
+/** Ask's question as the API takes it (validatePersonQuestionText), checked by that one rule, or null. */
 function questionText(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= 4_000 && value.trim() === value && value === value.normalize("NFC") && !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(value) ? value : null;
+  try { return validatePersonQuestionText(value); } catch { return null; }
 }
-/** A brief the request can run, or null. Ask's question keeps its existing bounds; a task's definition bounds its own text. */
+/** A brief the request can run, or null. Ask's question keeps the API's question rule; a task's definition bounds its own text. */
 function runnableBrief(brief: AgenticBriefV1): AgenticBriefV1 | null {
   const { goal, starting } = brief;
   // Only a question skips a starting item unmentioned: a task's slots name every one of its starting items.

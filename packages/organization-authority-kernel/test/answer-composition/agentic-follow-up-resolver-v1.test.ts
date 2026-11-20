@@ -80,6 +80,15 @@ describe("follow-up resolution: reading a reply (ADR-0047)", () => {
     });
   });
 
+  it("keeps a long resolved question or choice: no 240-character cap and no per-term rule", () => {
+    const question = `What did Lin and the supplier agree about THERM-482 ${"and the thermal DVT retest schedule ".repeat(10)}before Friday's build review?`;
+    expect([...question].length).toBeGreaterThan(240);
+    expect(parseFollowUpResolutionV1({ ...RESOLVED, question }, 2)).toEqual({ resolution: "resolved", question, about: [0] });
+    const long = "é".repeat(33);
+    expect(parseFollowUpResolutionV1({ resolution: "clarify", choices: [{ label: "A", question: long }, { label: "B", question }] }, 0))
+      .toMatchObject({ choices: [{ question: long }, { question }] });
+  });
+
   it("normalizes only what cannot change the meaning: a resolution's spelling, a source as a string, a repeated source, a long label", async () => {
     const { value, corrections } = await observed(async () => [
       parseFollowUpResolutionV1({ ...RESOLVED, resolution: " Resolved ", about: ["2", 2, "S1"] }, 2),
@@ -96,8 +105,7 @@ describe("follow-up resolution: reading a reply (ADR-0047)", () => {
     ["same with choices", { resolution: "same", choices: [{ label: "A", question: "What is A?" }] }, /offers no choices/u],
     ["resolved with choices", { ...RESOLVED, choices: [{ label: "A", question: "What is A?" }, { label: "B", question: "What is B?" }] }, /offers no choices/u],
     ["resolved with no question", { resolution: "resolved", about: [1] }, /full question/u],
-    ["resolved with a question too long", { ...RESOLVED, question: `What ${"x".repeat(240)}?` }, /at most 240/u],
-    ["resolved with an overlong term", { ...RESOLVED, question: "é".repeat(33) }, /at most 64 UTF-8 bytes/u],
+    ["resolved with a question too long", { ...RESOLVED, question: `What ${"x".repeat(4_000)}?` }, /"question": Shorten the question to at most 4,000 characters/u],
     ["resolved about a source not shown", { ...RESOLVED, about: [3] }, /from 1 to 2/u],
     ["resolved about no list", { ...RESOLVED, about: 1 }, /list of source numbers/u],
     ["clarify with one choice", { resolution: "clarify", choices: [{ label: "A", question: "What is A?" }] }, /2 to 4/u],
