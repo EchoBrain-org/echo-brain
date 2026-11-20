@@ -16,6 +16,7 @@ import {
   validatePersonQueryText,
   type PersonAnswerCardEntityV2,
   PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4,
+  PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1,
 } from "@echo-brain/organization-api";
 import { observeCoreModelCorrectionV1 } from "../shared/core-runtime-observation-v1.js";
 import { calendarDateV1, EVIDENCE_DATE_FIELDS_V1, type EvidenceDateFieldV1 } from "../shared/temporal-query-v1.js";
@@ -48,24 +49,28 @@ const NEED_CHARS = 200;
 const NEED_ID_CHARS = 8;
 const NOTES_CHARS = 800;
 const ARG_CHARS = 240;
-const SENTENCE_CHARS = 700;
+/** A writer's sentence: as long as a statement may be (PERSON_ANSWER_STATEMENT_MAX_BYTES_V4), cut there by its bytes. */
+const SENTENCE_CHARS = PERSON_ANSWER_STATEMENT_MAX_BYTES_V4;
 const NOT_FOUND_CHARS = 200;
 const SELECTION_CHARS = 120;
 /**
- * Answer layout v2 (ADR-0051): what a block shows, in characters, each within the contract's bytes. How many blocks,
- * and how many items a block holds, has no cap of its own (the founder, 2026-11-02): only the part's bounds limit them.
+ * Answer layout v2 (ADR-0051): what a block shows is bounded only by the contract's own bytes for it (a character is at
+ * least one byte, so these never cut before the bytes do). How many blocks, and how many items a block holds, has no cap
+ * of its own (the founder, 2026-11-02): only the part's bounds limit them.
  */
-const TITLE_CHARS = 60;
-const COLUMN_CHARS = 40;
-const CELL_CHARS = 120;
-const CARD_TITLE_CHARS = 120;
-const WHO_CHARS = 80;
+const TITLE_CHARS = PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2;
+const COLUMN_CHARS = PERSON_ANSWER_COLUMN_MAX_BYTES_V1;
+const CELL_CHARS = PERSON_ANSWER_CELL_MAX_BYTES_V1;
+const CARD_TITLE_CHARS = PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2;
+const WHO_CHARS = PERSON_ANSWER_WHO_MAX_BYTES_V2;
+const EVENT_CHARS = PERSON_ANSWER_EVENT_TEXT_MAX_BYTES_V2;
+const QUOTE_CHARS = PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2;
 const EVENT_ACTOR = "the person explicitly recorded as performing or reporting this particular event. A current owner, assignee or participant does not establish who created, updated or completed an item. Omit who when the event's actor is not recorded; show current ownership separately as a fact";
-const LABEL_CHARS = COLUMN_CHARS;
-const VALUE_CHARS = 200;
-const FROM_CHARS = 120;
-/** A drafted follow-up's task as code stores it (ADR-0053), and the longest owner name it keeps. */
-export const FOLLOW_UP_TASK_CHARS = 120;
+const LABEL_CHARS = PERSON_ANSWER_FACT_LABEL_MAX_BYTES_V2;
+const VALUE_CHARS = PERSON_ANSWER_FACT_VALUE_MAX_BYTES_V2;
+const FROM_CHARS = PERSON_ANSWER_QUOTE_FROM_MAX_BYTES_V2;
+/** A drafted follow-up's task as a follow-up stores what is expected (ADR-0053), and the longest owner name it keeps. */
+export const FOLLOW_UP_TASK_CHARS = PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1.expected_chars;
 const FOLLOW_UP_OWNER_CHARS = 200;
 
 /** A model response failed its closed, request-local protocol. */
@@ -264,7 +269,7 @@ export const answerBlocksSchema: StructuredGenerationJsonSchema = Object.freeze(
       }),
       blockShape("timeline", ["events"], { title: blockTitle, events: { type: "array", minItems: 1, items: {
         type: "object", additionalProperties: false, required: ["date", "text", "evidence"],
-        properties: { date: eventDate, text: { type: "string", maxLength: SENTENCE_CHARS }, who: { type: "string", maxLength: WHO_CHARS, description: EVENT_ACTOR }, evidence: ids },
+        properties: { date: eventDate, text: { type: "string", maxLength: EVENT_CHARS }, who: { type: "string", maxLength: WHO_CHARS, description: EVENT_ACTOR }, evidence: ids },
       } } }),
       blockShape("card", ["title", "kind", "facts"], {
         title: { type: "string", maxLength: CARD_TITLE_CHARS }, kind: closedString(PERSON_ANSWER_CARD_ENTITIES_V2),
@@ -273,7 +278,7 @@ export const answerBlocksSchema: StructuredGenerationJsonSchema = Object.freeze(
           properties: { label: { type: "string", maxLength: LABEL_CHARS }, value: { type: "string", maxLength: VALUE_CHARS }, evidence: ids },
         } },
       }),
-      blockShape("quote", ["text", "from", "evidence"], { text: { type: "string", maxLength: SENTENCE_CHARS }, from: { type: "string", maxLength: FROM_CHARS }, evidence: ids }),
+      blockShape("quote", ["text", "from", "evidence"], { text: { type: "string", maxLength: QUOTE_CHARS }, from: { type: "string", maxLength: FROM_CHARS }, evidence: ids }),
       // A list block has no title (ADR-0054): code fills it from the list and writes its caption.
       blockShape("list", ["list"], { list: { type: "string", maxLength: 8 }, where: listWhere, members: { type: "array", items: { type: "string", maxLength: 16 } } }),
     ] } },
@@ -667,7 +672,7 @@ const QUOTE_MARKS = /^["“”'‘’]+|["“”'‘’]+$/gu;
 
 /** A writer's sentence: one line within a sentence's characters, evidence ids dropped. */
 function writtenSentence(value: unknown): string {
-  return stripEvidenceIds(cleanModelLine(value, SENTENCE_CHARS), true);
+  return writtenLine(value, SENTENCE_CHARS, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4);
 }
 /** A writer's line in a row or a block: one line within its caps, evidence ids dropped. */
 function writtenLine(value: unknown, maximumChars: number, maximumBytes: number): string {
@@ -765,7 +770,7 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
       }
     } else if (name === "timeline") {
       for (const event of entries(entry.events)) {
-        const text = writtenLine(event.text, SENTENCE_CHARS, PERSON_ANSWER_EVENT_TEXT_MAX_BYTES_V2);
+        const text = writtenLine(event.text, EVENT_CHARS, PERSON_ANSWER_EVENT_TEXT_MAX_BYTES_V2);
         const who = boundedModelLine(event.who, WHO_CHARS, PERSON_ANSWER_WHO_MAX_BYTES_V2);
         const date = typeof event.date === "string" ? calendarDay(event.date.trim()) : undefined;
         if (text.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
@@ -788,7 +793,7 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
         else add(sentenceOf(`${ENTITY_WORDS[entity]}: ${named}; ${label}: ${said}`), fact.evidence, { block, kind: "fact", title: named, entity, label, value: said });
       }
     } else if (name === "quote") {
-      const text = writtenLine(entry.text, SENTENCE_CHARS, PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2).replace(QUOTE_MARKS, "").trim();
+      const text = writtenLine(entry.text, QUOTE_CHARS, PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2).replace(QUOTE_MARKS, "").trim();
       const from = boundedModelLine(entry.from, FROM_CHARS, PERSON_ANSWER_QUOTE_FROM_MAX_BYTES_V2);
       add(text.length === 0 ? "" : `${from.length === 0 ? "" : `${from}: `}“${text}”`, entry.evidence, { block, kind: "quote", text, ...(from.length === 0 ? {} : { from }) });
     }

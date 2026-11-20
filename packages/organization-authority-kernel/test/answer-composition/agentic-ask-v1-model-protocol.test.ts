@@ -636,10 +636,21 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(texts[0]).toBe(`${columns.map((column, at) => `${column}: ${row(`${"y".repeat(114)} ALLOW`).cells[at]}`).join("; ")}.`);
   });
 
+  it("keeps a long sentence and a long cell whole, cutting only past the contract's own bytes for them", () => {
+    const long = `${"The vendor confirmed the thermal-pad retest finishes before the build review. ".repeat(13)}`.trim();
+    expect(long.length).toBeGreaterThan(1_000);
+    const parsed = parseBlocksAnswer(writerReply([{ text: long, evidence: ["E1"] }]));
+    expect(parsed.sentences[0]!.text).toBe(long);
+    const cell = "c".repeat(250);
+    const table = parseBlocksAnswer(reply([{ block: "table", columns: ["Item", "Note"], rows: [{ cells: ["Fix", cell], evidence: ["E1"] }, { cells: ["Run", "ok"], evidence: ["E1"] }] }]));
+    expect(table.sentences[0]!.text).toContain(cell);
+    expect(Buffer.byteLength(parseBlocksAnswer(writerReply([{ text: "語".repeat(4_000), evidence: ["E1"] }])).sentences[0]!.text, "utf8")).toBeLessThanOrEqual(4 * 1024);
+  });
+
   it("reads a card's title once, as its name, counting a cut only past a name's own cap", () => {
     const card = (title: string) => reply([{ block: "card", title, kind: "ticket", facts: [{ label: "Status", value: "Open", evidence: ["E1"] }, { label: "Owner", value: "Ana", evidence: ["E1"] }] }]);
-    expect(corrected(() => parseBlocksAnswer(card("t".repeat(79))))).toEqual({});
-    expect(corrected(() => parseBlocksAnswer(card("t".repeat(121))))).toEqual({ model_text_truncated: 1 });
+    expect(corrected(() => parseBlocksAnswer(card("t".repeat(200))))).toEqual({});
+    expect(corrected(() => parseBlocksAnswer(card("t".repeat(201))))).toEqual({ model_text_truncated: 1 });
   });
 
   it("reads an item its block cannot show as text in its block, and counts each reading", () => {
