@@ -872,7 +872,18 @@ describe("Organization Authority API runtime", () => {
       // No search metadata is made any more: released clients still read the exact-key `metadata`, now always ready.
       expect(await get(`/v3/person/updates/${upload.request_id}`)).toMatchObject({ status: "stored", metadata: "ready" });
       const open = { schema_version: 1, ref: `note:${context_id}` };
-      expect(await post("/v1/person/open", open)).toMatchObject({ text: upload.text, item: { visibility: "project", projects: [{ project_id }] } });
+      expect(await post("/v1/person/open", open)).toMatchObject({ text: upload.text, item: { visibility: "project", projects: [{ project_id }] }, next_cursor: null });
+      // A note has no size of its own: a 300 KiB note is stored whole and read back page by page.
+      const long = { ...upload, request_id: "00000000-0000-4000-8000-0000000000aa", title: "Long original", text: `${"Plan line.\n".repeat(28_000)}`, association_project_ids: [], audience: { kind: "only_me" } };
+      expect(Buffer.byteLength(long.text)).toBeGreaterThan(300 * 1024);
+      const longReceipt = await post("/v3/person/updates", long, 202);
+      let read = ""; let cursor: string | null | undefined; let pages = 0;
+      do {
+        const page = await post("/v1/person/open", { schema_version: 1, ref: `note:${longReceipt.context_id as string}`, ...(cursor ? { cursor } : {}) });
+        read += page.text as string; cursor = page.next_cursor as string | null; pages += 1;
+      } while (cursor !== null && pages < 100);
+      expect(read).toBe(long.text);
+      expect(pages).toBeGreaterThan(30);
       // The retired reads and writes answer as routes that never existed (ADR-0048).
       for (const path of ["/v1/person/projects", `/v1/person/projects/${project_id}`, `/v1/person/projects/${project_id}/context/${context_id}`,
         `/v2/person/projects/${project_id}/context/${context_id}`, `/v2/person/updates/${upload.request_id}`, `/v2/person/updates/content/${context_id}`,

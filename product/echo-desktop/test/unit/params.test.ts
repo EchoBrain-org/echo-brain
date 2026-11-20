@@ -1,5 +1,12 @@
 import { expect, it } from 'vitest';
-import { MAX_PARAMS_BYTES, MAX_TIMELINE_PUT_BYTES, paramsLimit, plainJsonBytes } from '../../src/shared/protocol.js';
+import { PERSON_UPDATE_REQUEST_MAX_BYTES_V1 } from '@echo-brain/organization-api';
+import { MAX_NOTE_REQUEST_BYTES, MAX_PARAMS_BYTES, MAX_TIMELINE_PUT_BYTES, paramsLimit, plainJsonBytes } from '../../src/shared/protocol.js';
+
+it('lets a note take the Authority\'s whole note request bound', () => {
+  expect(MAX_NOTE_REQUEST_BYTES).toBe(PERSON_UPDATE_REQUEST_MAX_BYTES_V1);
+  expect(paramsLimit('notes.submit')).toBe(MAX_NOTE_REQUEST_BYTES);
+  expect(plainJsonBytes({ text: 'x'.repeat(512 * 1024) }, paramsLimit('notes.submit'))).not.toBeNull();
+});
 
 it('lets a call that carries one whole answer take one, and every other call the broker\'s own bound', () => {
   expect(paramsLimit('timeline.put')).toBe(MAX_TIMELINE_PUT_BYTES);

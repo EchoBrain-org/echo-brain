@@ -139,10 +139,11 @@ describe("person list and open cursors", () => {
     refused(() => decodePersonListCursorV1(`${encodePersonListCursorV1(list(), WORST)}=`, list()));
   });
 
-  it("refuses a note cursor and out-of-range open positions", () => {
+  it("pages a note by offset, and refuses out-of-range open positions", () => {
     const note = open(`note:${NOTE}`);
-    refused(() => decodePersonOpenCursorV1(frameCursorV1(3, openDigest(note), ["1"]), note));
+    expect(decodePersonOpenCursorV1(encodePersonOpenCursorV1(note, { kind: "note", offset: 8192 }), note)).toEqual({ kind: "note", offset: 8192 });
     refused(() => encodePersonOpenCursorV1(note, { kind: "document", from_ordinal: 1 }));
+    refused(() => decodePersonOpenCursorV1(frameCursorV1(3, openDigest(note), ["0"]), note));
     const document = open(`document:${DOCUMENT}`);
     const imported = open(`imported_meeting:${IMPORTED}`);
     for (const [binding, fields] of [

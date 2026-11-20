@@ -247,7 +247,7 @@ notice "meetings_unavailable" means meetings are still being indexed and come on
 `,
   open: `usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]
 
-Reads one item under your current access: a note's full text, an imported meeting's notes, or a document's extracted text. Imported meetings and documents are paged. Refs come from person list and from ask citations; an approved meeting (meeting:sha256:<digest>) is not opened here but read with person records --record-sha256 sha256:<digest> --brief. Anything you cannot read returns not_found. Pass next_cursor as --cursor with the same --ref for the next page.
+Reads one item under your current access: a note's text, an imported meeting's notes, or a document's extracted text. Each is paged. Refs come from person list and from ask citations; an approved meeting (meeting:sha256:<digest>) is not opened here but read with person records --record-sha256 sha256:<digest> --brief. Anything you cannot read returns not_found. Pass next_cursor as --cursor with the same --ref for the next page.
 `,
   reviews: `usage: echo-brain person reviews --request <json>
 
@@ -405,7 +405,7 @@ Uploads preserve the original text. Only me is the default; Team explicitly shar
 `,
   "updates-submit-v3": `usage: echo-brain person updates submit-v3 --request-id <uuid> --title <title> --file <utf8-text-file> [--association-project-ids-json <canonical-project-id-array>] [--audience <only-me|team|project|projects>] [--audience-project-id <project-id>] [--audience-project-ids-json <canonical-project-id-array>]
 
-Saves one UTF-8 text original (at most 8 KiB) with independent initial association and audience sets. Only me and no association are the defaults. Project requires --audience-project-id; projects requires --audience-project-ids-json. Both project ID arrays are canonical JSON: sorted, unique project IDs, at most 20. An association never widens the audience. Keep the same request ID and immutable fields for exact V3 status/replay after an unknown outcome.
+Saves one UTF-8 text original (of any size that fits one 1 MiB request) with independent initial association and audience sets. Only me and no association are the defaults. Project requires --audience-project-id; projects requires --audience-project-ids-json. Both project ID arrays are canonical JSON: sorted, unique project IDs, at most 20. An association never widens the audience. Keep the same request ID and immutable fields for exact V3 status/replay after an unknown outcome.
 `,
   "updates-status-v3": `usage: echo-brain person updates status-v3 --request-id <uuid>
 

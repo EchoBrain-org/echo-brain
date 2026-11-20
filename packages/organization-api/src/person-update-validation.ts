@@ -12,8 +12,8 @@ export function timestamp(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value) fail('Person update timestamp is invalid');
 }
 
-export function requestBound(value: unknown, label: string): void {
-  if (canonicalJsonBytes(value).byteLength > MAX_ORGANIZATION_API_BODY_BYTES) fail(`${label} exceeds JSON byte bound`);
+export function requestBound(value: unknown, label: string, maximumBytes = MAX_ORGANIZATION_API_BODY_BYTES): void {
+  if (canonicalJsonBytes(value).byteLength > maximumBytes) fail(`${label} exceeds JSON byte bound`);
 }
 
 export function responseBound(value: unknown, label: string): void {

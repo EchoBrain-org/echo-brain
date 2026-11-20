@@ -146,7 +146,7 @@ export function openView(raw: unknown, ref: ItemRef & { readonly kind: Exclude<I
     }
     case 'note': {
       const { text } = opened as PersonOpenNoteV1;
-      return { kind: 'note', content: { context_id: ref.id, title: item.title, text, received_at: item.added_at, audience: item.visibility, project_ids } };
+      return { kind: 'note', content: { context_id: ref.id, title: item.title, text, received_at: item.added_at, audience: item.visibility, project_ids }, next_cursor: next };
     }
     case 'document': {
       const { filename, chunks } = opened as PersonOpenDocumentV1;

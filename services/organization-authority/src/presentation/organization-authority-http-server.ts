@@ -21,7 +21,7 @@ import type { ProjectContextApplicationV1 } from '../application/ports/project-c
 import type { PersonDocumentApplicationV1 } from '../application/ports/document-v1.js';
 import type { PersonDocumentUploadStagingV1 } from '../application/ports/document-upload-staging-v1.js';
 import { createPersonDocumentsHttpHandlerV1, uniqueMemberJsonV1 } from './person-documents-http-route-v1.js';
-import { PERSON_DOCUMENTS_PATH_V2, MAX_ORGANIZATION_API_BODY_BYTES } from '@echo-brain/organization-api';
+import { PERSON_DOCUMENTS_PATH_V2, MAX_ORGANIZATION_API_BODY_BYTES, PERSON_UPDATE_REQUEST_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 import { PERSON_EMPLOYEES_PATH_V1, PERSON_RECORDS_PATH_V1, validatePersonRecordSearchRequestV2 } from "@echo-brain/organization-api";
 import { PersonQueryInputError, isOrganizationApiValidationError } from "@echo-brain/organization-api";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
@@ -633,9 +633,9 @@ function projectInput<T>(validate: (value: unknown) => T, value: unknown): T {
   catch (error) { throw requestRefusal(error, "invalid_request"); }
 }
 
-async function projectBody(request: IncomingMessage): Promise<unknown> {
+async function projectBody(request: IncomingMessage, maximum = MAX_ORGANIZATION_API_BODY_BYTES): Promise<unknown> {
   try {
-    return uniqueMemberJsonV1(await rawBody(request, MAX_ORGANIZATION_API_BODY_BYTES));
+    return uniqueMemberJsonV1(await rawBody(request, maximum));
   } catch { throw new AuthorityOperationError('invalid_request', 'request failed'); }
 }
 
@@ -672,6 +672,8 @@ const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   readonly request: (value: unknown) => unknown;
   readonly response: (value: unknown) => unknown;
   readonly status: number;
+  /** The route's request body bound, an abuse bound; the organization API's 16 KiB when absent. */
+  readonly maximum_body_bytes?: number;
 }> = new Map([
   [PERSON_PROJECTS_PATH_V1, { operation: 'createProject', request: validateProjectCreateV1, response: validateProjectCreateReceiptV1, status: 201 }],
   [PERSON_PROJECT_RENAME_PATH_V1, { operation: 'renameProject', request: validateProjectRenameV1, response: validateProjectSettingsReceiptV1, status: 200 }],
@@ -685,7 +687,8 @@ const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   [`${PERSON_PROJECTS_PATH_V1}/members/remove`, { operation: 'removeMember', request: validateProjectMemberRemoveV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/associate`, { operation: 'associateContext', request: validateProjectContextAssociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/dissociate`, { operation: 'dissociateContext', request: validateProjectContextDissociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
-  [PERSON_UPDATES_PATH_V3, { operation: 'submitUploadV3', request: validatePersonUpdateSubmitV3, response: validatePersonUpdateReceiptV3, status: 202 }],
+  // A note has no size of its own; its request body is held to 1 MiB against abuse.
+  [PERSON_UPDATES_PATH_V3, { operation: 'submitUploadV3', request: validatePersonUpdateSubmitV3, response: validatePersonUpdateReceiptV3, status: 202, maximum_body_bytes: PERSON_UPDATE_REQUEST_MAX_BYTES_V1 }],
 ]);
 
 /** Route selection returns a synchronous release callback after all input I/O. */
@@ -697,7 +700,7 @@ async function projectRoute(
   if (method === 'POST' && route !== undefined) {
     const token = accessToken(request.headers.authorization);
     if (url.search !== '') throw new AuthorityOperationError('invalid_request', 'request failed');
-    const input = projectInput(route.request, await projectBody(request));
+    const input = projectInput(route.request, await projectBody(request, route.maximum_body_bytes));
     return response => projectResponse(response, route.status, application[route.operation](token, input), route.response);
   }
   if (method !== 'GET') return undefined;

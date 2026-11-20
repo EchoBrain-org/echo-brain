@@ -492,7 +492,7 @@ export interface ApprovedRecord {
 /** One item opened by its ref: an imported meeting's or a note's text, or a page of a document's text. A meeting opens with `ask.record`. */
 export type Opened =
   | { readonly kind: 'imported_meeting'; readonly content: ContextContent; readonly next_cursor: string | null }
-  | { readonly kind: 'note'; readonly content: ContextContent }
+  | { readonly kind: 'note'; readonly content: ContextContent; readonly next_cursor: string | null }
   | { readonly kind: 'document'; readonly document: DocumentText };
 
 /** One audience per item: only you, one project's members, several projects' members, or everyone. */
@@ -1029,10 +1029,18 @@ export function changesLogLine(params: unknown): string | null {
 /** Parameters larger than this are refused at the broker. */
 export const MAX_PARAMS_BYTES = 64 * 1024;
 /**
+ * A note has no size of its own: it is bounded by the Authority's 1 MiB note
+ * request (PERSON_UPDATE_REQUEST_MAX_BYTES_V1, an abuse bound; a unit test
+ * pins the two equal). The renderer cannot import the API's runtime module.
+ */
+export const MAX_NOTE_REQUEST_BYTES = 1024 * 1024;
+/**
  * The most a call's parameters may take at the broker: a timeline put and
- * Copy answer each carry one whole answer, every other call MAX_PARAMS_BYTES.
+ * Copy answer each carry one whole answer, a note the Authority's note
+ * request bound, every other call MAX_PARAMS_BYTES.
  */
 export function paramsLimit(method: string): number {
+  if (method === 'notes.submit') return MAX_NOTE_REQUEST_BYTES;
   return method === 'timeline.put' || method === 'clipboard.writeText' ? MAX_TIMELINE_PUT_BYTES : MAX_PARAMS_BYTES;
 }
 /** Deeper than any request's parameters: it bounds the walk, and ends a cycle a structured clone can carry. */

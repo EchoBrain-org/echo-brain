@@ -211,7 +211,6 @@ describe('person open CLI', () => {
       ['open', '--ref', `sha256:${record}`],
       ['open', '--ref', DOCUMENT, '--cursor', 'bad cursor'],
       ['open', '--ref', DOCUMENT, '--cursor', 'A'.repeat(513)],
-      ['open', '--ref', NOTE, '--cursor', CURSOR],
       ['open', '--ref', NOTE, '--project', projectId],
     ];
     for (const argv of cases) {

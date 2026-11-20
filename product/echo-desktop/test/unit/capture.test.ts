@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { byTestId, cover, elements, fail, flush, Held, numbered, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text } from './harness.js';
+import { MAX_NOTE_REQUEST_BYTES } from '../../src/shared/protocol.js';
 
 const { rpc, dropFile } = vi.hoisted(() => ({ rpc: vi.fn(), dropFile: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile }));
@@ -223,17 +224,18 @@ describe('files and unresolved captures', () => {
     expect(byTestId(await sheet(store), 'compose-body')).toHaveLength(1);
   });
 
-  it('rejects a note over 8 KiB before sending, and accepts exactly 8 KiB', async () => {
+  it('sends a long note whole, and refuses before sending only one that cannot fit the 1 MiB note request', async () => {
     const store = await startStore();
-    store.openCompose(); store.setComposeText(`Long note\n${'x'.repeat(8192)}`);
+    store.openCompose(); store.setComposeText(`Long note\n${'x'.repeat(MAX_NOTE_REQUEST_BYTES)}`);
     await store.sendCompose();
-    expect(store.getState().compose).toMatchObject({ notice: 'Up to 8 KiB of text.', status: 'editing' });
+    expect(store.getState().compose).toMatchObject({ notice: expect.stringContaining('too long to send in one piece'), status: 'editing' });
     expect(sent('notes.submit')).toHaveLength(0);
     expect(byTestId(await sheet(store), 'compose-error')).toHaveLength(0);
-    store.setComposeText(`Long note\n${'x'.repeat(8182)}`);
+    // Past the old 8 KiB, a note goes as written.
+    store.setComposeText(`Long note\n${'x'.repeat(200 * 1024)}`);
     expect(store.getState().compose?.notice).toBeUndefined();
     await store.sendCompose();
-    expect(Buffer.byteLength(sent('notes.submit')[0].text)).toBe(8192);
+    expect(Buffer.byteLength(sent('notes.submit')[0].text)).toBe(200 * 1024 + 10);
   });
 
   it.each(['team', 'locked'] as const)('an unconfirmed %s save locks its audience and says what may have happened', async kind => {

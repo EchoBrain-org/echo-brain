@@ -11,7 +11,7 @@ import type {
   ProjectChange, ProjectGranolaMapping, ProjectConfluenceMapping, ConfluenceSpace, GranolaFolder, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
+import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_NOTE_REQUEST_BYTES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
@@ -1789,18 +1789,18 @@ async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string, cited
   }
   const opened = result.value;
   if (opened.kind === 'meeting') { set({ reader: { ...base, loading: false, record: opened.record } }); return; }
-  if (opened.kind === 'imported_meeting') {
+  // A note or an imported meeting's notes come a page at a time; each further page is appended.
+  if (opened.kind === 'imported_meeting' || opened.kind === 'note') {
     const content = cursor === undefined ? opened.content : kept.content ? { ...opened.content, text: kept.content.text + opened.content.text } : null;
     if (!content) return;
     set({ reader: { ...base, loading: false, content, importedNext: opened.next_cursor } }); return;
   }
-  if (opened.kind === 'note') { set({ reader: { ...base, loading: false, content: opened.content } }); return; }
   set({ reader: { ...base, loading: false, document: opened.document } });
 }
 
 export function moreImportedMeeting(): void {
   const reader = state.reader;
-  if (reader?.ref.kind !== 'imported_meeting' || !reader.importedNext || reader.loading) return;
+  if ((reader?.ref.kind !== 'imported_meeting' && reader?.ref.kind !== 'note') || !reader.importedNext || reader.loading) return;
   void openReader(reader.ref, reader.from, reader.importedNext);
 }
 
@@ -4474,9 +4474,12 @@ export function pickSuggestion(suggestion: Suggestion): void {
 // ---- capture -----------------------------------------------------------------
 
 const NOTE_OR_FILE = 'Save this note before attaching a file.';
-/** What a note may hold, as the API takes it: 8 KiB of text. */
-const MAX_NOTE_BYTES = 8 * 1024;
-const TOO_LONG = 'Up to 8 KiB of text.';
+/**
+ * A note has no size of its own; its text must fit the Authority's 1 MiB note
+ * request, with room for the request's other fields and JSON escaping.
+ */
+const MAX_NOTE_BYTES = MAX_NOTE_REQUEST_BYTES - 64 * 1024;
+const TOO_LONG = 'This note is too long to send in one piece. Split it into notes under about 1 MB each, or attach it as a file.';
 
 /** What main's quit guard was last told. */
 let unresolvedTold = '';

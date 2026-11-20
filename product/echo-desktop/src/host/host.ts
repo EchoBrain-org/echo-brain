@@ -1,5 +1,5 @@
 import {
-  validatePersonChangesV1, validatePersonDocumentIdV1, validatePersonItemRefV1, validatePersonMeetingRequestV2,
+  PERSON_UPDATE_REQUEST_MAX_BYTES_V1, validatePersonChangesV1, validatePersonDocumentIdV1, validatePersonItemRefV1, validatePersonMeetingRequestV2,
   validatePersonMeetingResultV2, validatePersonRunsRequestV1, validatePersonRunsResultV1, validatePersonUpdateRequestId, validatePersonUploadContextId, validateProjectIdV1,
   validatePersonReviewRequestV1, validatePersonReviewResultV1,
 } from '@echo-brain/organization-api';
@@ -442,11 +442,11 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       return forAccount(method, expect, ['list', ...where, ...(cursor ? [option('cursor', cursor)] : [])], stdout => listView(lastJson(stdout), asked));
     }
     case 'open.ref': {
-      // Opened under your current access, wherever it was listed: a note has one page. A meeting is read with ask.record, whole,
+      // Opened under your current access, wherever it was listed, a page at a time. A meeting is read with ask.record, whole,
       // as the source pane reads it.
       const { expect, ref, cursor } = params as Params<'open.ref'>;
       const argument = refArgument(ref);
-      if (argument === null || ref.kind === 'meeting' || !cursorOk(cursor) || (ref.kind === 'note' && cursor !== undefined)) return code('invalid_request');
+      if (argument === null || ref.kind === 'meeting' || !cursorOk(cursor)) return code('invalid_request');
       const asked = { kind: ref.kind, id: ref.id };
       return forAccount(method, expect, ['open', argument, ...(cursor ? [option('cursor', cursor)] : [])], stdout => openView(lastJson(stdout), asked));
     }
@@ -568,7 +568,8 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const { expect, request_id, text, audience, project_ids } = params as Params<'notes.submit'>;
       const title = noteTitle(text);
       const readers = audienceArgs(audience, project_ids);
-      if (title === '' || Buffer.byteLength(text) > 8 * 1024 || readers === null) return code('invalid_request', true, request_id);
+      // A note has no size of its own; the Authority's note request bound is the only one.
+      if (title === '' || Buffer.byteLength(text) > PERSON_UPDATE_REQUEST_MAX_BYTES_V1 || readers === null) return code('invalid_request', true, request_id);
       // The client saves a file unchanged; write the exact text privately.
       const folder = mkdtempSync(join(tmpdir(), 'echo-note-'));
       const file = join(folder, 'note.txt');

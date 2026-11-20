@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PERSON_DIRECTORY_PATH_V1,
+  PERSON_UPDATE_REQUEST_MAX_BYTES_V1,
   validateOrganizationDirectorySearchV1,
   validateOrganizationDirectoryV1,
   validatePersonUpdateSubmitV3,
@@ -139,7 +140,11 @@ describe('project context V1 public codecs', () => {
     expect(validatePersonUpdateSubmitV3(common)).toEqual(common);
     expect(validatePersonUpdateSubmitV3({ ...common, audience: { kind: 'team' } }).audience).toEqual({ kind: 'team' });
     expect(validatePersonUpdateSubmitV3({ ...common, title: 'é'.repeat(100), text: '😀'.repeat(2048) }).text).toBe('😀'.repeat(2048));
-    expect(() => validatePersonUpdateSubmitV3({ ...common, text: '"'.repeat(8192) })).toThrow();
+    // A note has no size of its own: only the 1 MiB request body bound applies.
+    expect(validatePersonUpdateSubmitV3({ ...common, text: 'x'.repeat(256 * 1024) }).text).toHaveLength(256 * 1024);
+    expect(validatePersonUpdateSubmitV3({ ...common, text: '"'.repeat(8192) }).text).toHaveLength(8192);
+    expect(() => validatePersonUpdateSubmitV3({ ...common, text: 'x'.repeat(PERSON_UPDATE_REQUEST_MAX_BYTES_V1) })).toThrow('byte bound');
+    expect(PERSON_UPDATE_REQUEST_MAX_BYTES_V1).toBe(1024 * 1024);
   });
 
   it('rejects hostile recursive input before any project contract can observe a different shape', () => {

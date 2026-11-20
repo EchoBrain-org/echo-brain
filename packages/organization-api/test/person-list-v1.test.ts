@@ -101,9 +101,11 @@ describe('Person list and open public contracts', () => {
       `record:sha256:${'c'.repeat(64)}`, `ctx_${'a'.repeat(64)}`, ` ${NOTE}`, `${MEETING} `, `${DOCUMENT}\n`, 42, null,
     ]) expect(() => validatePersonItemRefV1(ref)).toThrow();
     expect(validatePersonOpenRequestV1({ schema_version: 1, ref: DOCUMENT, cursor: 'AnR3' })).toEqual({ schema_version: 1, ref: DOCUMENT, cursor: 'AnR3' });
+    // A note is paged too.
+    expect(validatePersonOpenRequestV1({ schema_version: 1, ref: NOTE, cursor: 'AnR3' })).toEqual({ schema_version: 1, ref: NOTE, cursor: 'AnR3' });
     for (const request of [
       { schema_version: 1, ref: TRANSCRIPT },
-      { schema_version: 1, ref: NOTE, cursor: 'AnR3' }, { schema_version: 1, ref: DOCUMENT, scope: { kind: 'global' } },
+      { schema_version: 1, ref: DOCUMENT, scope: { kind: 'global' } },
       { schema_version: 1, ref: DOCUMENT, project_id: PROJECT_A }, { schema_version: 1, ref: DOCUMENT, mine: true },
       { schema_version: 1, ref: DOCUMENT, cursor: 'An=' }, { schema_version: 2, ref: DOCUMENT },
     ]) expect(() => validatePersonOpenRequestV1(request)).toThrow();
@@ -215,12 +217,13 @@ describe('Person list and open public contracts', () => {
     }
   });
 
-  it('opens a note whole and bounded', () => {
+  it('opens a note a page at a time, each page bounded', () => {
     expect(validatePersonOpenResponseV1(openNote)).toEqual(openNote);
     expect(validatePersonOpenResponseV1({ ...openNote, text: 'x'.repeat(8 * 1024) })).toHaveProperty('text');
     expect(() => validatePersonOpenResponseV1({ ...openNote, text: 'x'.repeat(8 * 1024 + 1) })).toThrow('text');
     expect(() => validatePersonOpenResponseV1({ ...openNote, text: 'Form\ffeed' })).toThrow('text');
-    expect(() => validatePersonOpenResponseV1({ ...openNote, next_cursor: 'AnR3' })).toThrow('next_cursor');
+    // A longer note continues on its next page.
+    expect(validatePersonOpenResponseV1({ ...openNote, next_cursor: 'AnR3' })).toHaveProperty('next_cursor', 'AnR3');
     expect(() => validatePersonOpenResponseV1({ ...openNote, item: { ...noteRow, ref: `note:ctx_${'d'.repeat(64)}` } })).toThrow('inconsistent');
     expect(() => validatePersonOpenResponseV1({ ...openNote, item: documentRow })).toThrow('inconsistent');
   });

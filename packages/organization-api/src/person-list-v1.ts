@@ -5,7 +5,7 @@ import {
   type PersonDocumentExtractionStateV1,
   type PersonDocumentMediaTypeV1,
 } from './person-documents-v1.js';
-import { PERSON_UPDATE_TEXT_MAX_BYTES } from './person-updates.js';
+import { PERSON_OPEN_TEXT_PAGE_MAX_BYTES_V1 } from './person-updates.js';
 import { PROJECT_NAME_MAX_BYTES, validateProjectIdV1, type ProjectIdV1, type ProjectRoleV1 } from './project-context-v1.js';
 import type { ProjectStatusV2 } from './project-context-v2.js';
 import { asEnumerableRecord as object, assertExactKeys, assertTimestamp, fail, utf8ByteLength } from './validation.js';
@@ -113,8 +113,8 @@ export interface PersonOpenImportedMeetingV1 extends PersonOpenBaseV1 { readonly
 export interface PersonOpenNoteV1 extends PersonOpenBaseV1 {
   readonly ref: PersonNoteRefV1;
   readonly item: PersonListNoteRowV1;
+  /** One page of the note's text; `next_cursor` reads on. */
   readonly text: string;
-  readonly next_cursor: null;
 }
 export interface PersonOpenDocumentV1 extends PersonOpenBaseV1 {
   readonly ref: PersonDocumentRefV1;
@@ -318,7 +318,6 @@ export function validatePersonOpenRequestV1(value: unknown): PersonOpenRequestV1
   assertExactKeys(input, ['schema_version', 'ref', ...optionalKeys(input, ['cursor'])], 'Person open request');
   if (input.schema_version !== 1) fail('Person open request schema_version is unsupported');
   const ref = openRef(input.ref, 'Person open request ref');
-  if (Object.hasOwn(input, 'cursor') && personRefKindV1(ref) === 'note') fail('Person open request cursor is invalid');
   return Object.freeze({ schema_version: 1 as const, ref, ...(Object.hasOwn(input, 'cursor') ? { cursor: cursor(input.cursor, 'Person open request cursor') } : {}) });
 }
 
@@ -373,13 +372,13 @@ export function validatePersonOpenResponseV1(value: unknown): PersonOpenResponse
       const item = openItem(input.item, ref as PersonImportedMeetingRefV1) as PersonListImportedMeetingRowV1;
       // A meeting tool's import can contain only a transcript, which is never
       // released, so its imported-notes text is empty.
-      body(input.text, 'Imported meeting notes', 8192, true);
+      body(input.text, 'Imported meeting notes', PERSON_OPEN_TEXT_PAGE_MAX_BYTES_V1, true);
       return bounded<PersonOpenImportedMeetingV1>({ ...base, ref: ref as PersonImportedMeetingRefV1, item, text: input.text, next_cursor }, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, 'Person open response');
     }
     case 'note': {
-      if (next_cursor !== null) fail('Person open note next_cursor is invalid');
       const item = openItem(input.item, ref as PersonNoteRefV1) as PersonListNoteRowV1;
-      body(input.text, 'Person open note text', PERSON_UPDATE_TEXT_MAX_BYTES);
+      // One page of the note; next_cursor reads on.
+      body(input.text, 'Person open note text', PERSON_OPEN_TEXT_PAGE_MAX_BYTES_V1);
       return bounded<PersonOpenNoteV1>({ ...base, ref: ref as PersonNoteRefV1, item, text: input.text, next_cursor }, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, 'Person open response');
     }
     case 'document': {

@@ -314,7 +314,9 @@ describe('an item opened by its ref', () => {
     const reply = opened(`note:${NOTE}`, { item: row(`note:${NOTE}`), text: 'Body' });
     expect(openView(reply, { kind: 'note', id: NOTE })).toEqual({ kind: 'note', content: {
       context_id: NOTE, title: 'Pricing review', text: 'Body', received_at: '2026-09-21T20:30:00.000Z', audience: 'only-me', project_ids: [APOLLO],
-    } });
+    }, next_cursor: null });
+    // A long note is paged: the page carries where to read on.
+    expect(openView(opened(`note:${NOTE}`, { item: row(`note:${NOTE}`), text: 'Body', next_cursor: 'AQ' }), { kind: 'note', id: NOTE })).toMatchObject({ next_cursor: 'AQ' });
     expect(() => openView(reply, { kind: 'note', id: `ctx_${'b'.repeat(64)}` })).toThrow(ViewError);
     expect(() => openView(reply.result, { kind: 'note', id: NOTE })).toThrow(ViewError);
   });

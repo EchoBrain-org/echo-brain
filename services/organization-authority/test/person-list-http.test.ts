@@ -83,7 +83,8 @@ describe("person list and open HTTP transport", () => {
       { schema_version: 1, only_me: true, limit: 25 }, { schema_version: 1, scope: { kind: "global" } }, { schema_version: 1, only_me: true, cursor: "a=b" }, { schema_version: 2, only_me: true },
     ]) await failure(await post(origin, PERSON_LIST_PATH_V1, body), 400, "invalid_request");
     for (const body of [
-      { schema_version: 1, ref: `record:${"a".repeat(64)}` }, { schema_version: 1, ref: NOTE_REF, cursor: "AAAA" },
+      // A note is paged, so its cursor reaches the application; a malformed one is refused here.
+      { schema_version: 1, ref: `record:${"a".repeat(64)}` }, { schema_version: 1, ref: NOTE_REF, cursor: "a=b" },
       { schema_version: 1, ref: ` ${NOTE_REF}` }, { schema_version: 1, ref: NOTE_REF, scope: { kind: "global" } },
     ]) await failure(await post(origin, PERSON_OPEN_PATH_V1, body), 400, "invalid_request");
     await failure(await post(origin, PERSON_LIST_PATH_V1, { schema_version: 1, only_me: true }, null), 401, "unauthorized");

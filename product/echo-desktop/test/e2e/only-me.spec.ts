@@ -83,11 +83,13 @@ test('the host opens only a well-formed ref, never a meeting, in a scope the app
     };
   });
   expect(replies.guessed).toMatchObject({ ok: false, failure: { code: 'not_found' } });
-  for (const reply of [replies.meeting, replies.badId, replies.transcript, replies.noteCursor, replies.badCursor, replies.global, replies.mine, replies.noScope,
+  // A note is paged, so a note's cursor reaches the Authority, which says whether it reads on.
+  expect(replies.noteCursor).toMatchObject({ ok: false });
+  for (const reply of [replies.meeting, replies.badId, replies.transcript, replies.badCursor, replies.global, replies.mine, replies.noScope,
     replies.badProject, replies.longCursor]) {
     expect(reply).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
   }
-  // Only the guessed ref reached the Authority.
-  expect(opens().map(call => call.body)).toEqual([{ schema_version: 1, ref: `note:ctx_${'0'.repeat(64)}` }]);
+  // Only the guessed ref and the note's page reached the Authority.
+  expect(opens().map(call => call.body)).toEqual([{ schema_version: 1, ref: `note:ctx_${'0'.repeat(64)}` }, { schema_version: 1, ref: `note:${'ctx_' + 'a'.repeat(64)}`, cursor: 'AQ' }]);
   expect(lists()).toHaveLength(0);
 });

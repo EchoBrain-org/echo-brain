@@ -1633,7 +1633,7 @@ CREATE TABLE authority_person_updates_v1 (
   context_id TEXT NOT NULL UNIQUE,
   payload_sha256 TEXT NOT NULL CHECK (payload_sha256 LIKE 'sha256:%'),
   title TEXT NOT NULL CHECK (length(CAST(title AS BLOB)) BETWEEN 1 AND 200),
-  text TEXT NOT NULL CHECK (length(CAST(text AS BLOB)) BETWEEN 1 AND 8192),
+  text TEXT NOT NULL CHECK (length(CAST(text AS BLOB)) >= 1),
   visibility TEXT NOT NULL CHECK (visibility IN ('only_me', 'team')),
   received_at TEXT NOT NULL CHECK (unixepoch(received_at) IS NOT NULL),
   PRIMARY KEY (organization_id, membership_id, request_id),
@@ -1740,7 +1740,7 @@ CREATE TABLE authority_person_updates_v2 (
   context_id TEXT NOT NULL UNIQUE,
   payload_sha256 TEXT NOT NULL CHECK (payload_sha256 LIKE 'sha256:%'),
   title TEXT NOT NULL CHECK (length(CAST(title AS BLOB)) BETWEEN 1 AND 200),
-  text TEXT NOT NULL CHECK (length(CAST(text AS BLOB)) BETWEEN 1 AND 8192),
+  text TEXT NOT NULL CHECK (length(CAST(text AS BLOB)) >= 1),
   audience_kind TEXT NOT NULL CHECK (audience_kind IN ('only_me', 'team', 'project', 'projects')),
   audience_project_id TEXT,
   -- Canonical JSON arrays are checked by the admission adapter. These snapshots

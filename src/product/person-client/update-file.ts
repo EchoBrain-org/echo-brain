@@ -1,6 +1,6 @@
 import { openSync, readSync, closeSync, fstatSync, constants } from 'node:fs';
 import { Buffer } from 'node:buffer';
-import { PERSON_UPDATE_TEXT_MAX_BYTES } from '@echo-brain/organization-api';
+import { PERSON_UPDATE_REQUEST_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 
 /** Reads one regular file of at most `maximumBytes` with a hard allocation and read bound, a growing file included; throws otherwise. */
 export function readBoundedFile(path: string, maximumBytes: number): Uint8Array {
@@ -21,9 +21,12 @@ export function readBoundedFile(path: string, maximumBytes: number): Uint8Array 
   } finally { if (descriptor !== undefined) closeSync(descriptor); }
 }
 
-/** Read one regular file with a hard allocation/read bound; never put its text in argv. */
+/**
+ * Read one regular file, never putting its text in argv. A note has no size of its own; the read stops at the
+ * submit request's 1 MiB bound, since a larger file could never be sent.
+ */
 export function readUpdateFile(path: string): string {
   try {
-    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(readBoundedFile(path, PERSON_UPDATE_TEXT_MAX_BYTES));
-  } catch { throw new Error('Update file must be a readable regular UTF-8 text file of at most 8 KiB.'); }
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(readBoundedFile(path, PERSON_UPDATE_REQUEST_MAX_BYTES_V1));
+  } catch { throw new Error('Update file must be a readable regular UTF-8 text file that fits in one 1 MiB request.'); }
 }
