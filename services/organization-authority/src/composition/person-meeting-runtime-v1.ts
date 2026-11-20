@@ -187,10 +187,14 @@ export function createPersonMeetingRuntimeV1(options: {
     const parts = [first && (first.failure_stage === 'output_too_long'
       ? `Meeting ${first.external_id} is held: it is too long for one extraction pass, and the model's reply stopped at its output limit. Later meetings continue. ${
         granted ? 'A retry is authorized and runs on the next check.' : 'Another attempt would stop the same way; an operator can still authorize one.'}`
+      : first && first.failure_stage === 'input_too_long'
+      ? `Meeting ${first.external_id} is held: it is longer than the extraction model's context window, so one extraction call cannot read it. Later meetings continue. ${
+        granted ? 'A retry is authorized and runs on the next check.' : 'Another attempt would be refused the same way; an operator can still authorize one.'}`
       : `Meeting ${first.external_id} is held after extraction attempt ${first.attempt} failed at ${first.failure_stage}. Later meetings continue. ${
         granted ? 'A retry is authorized and runs on the next check.' : 'An operator can authorize one more attempt.'}`), observed.get(sourceKey)?.error];
     const text = parts.filter(part => part !== undefined && part !== null).join(' ');
-    return text === '' ? null : text.slice(0, 512);
+    // Whole: the status line has no length of its own.
+    return text === '' ? null : text;
   }
   // The breaker: after a transient provider failure no source starts a pass until this time; running ones finish.
   // Shutdown (settle with stop) starts none again.

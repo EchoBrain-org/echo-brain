@@ -656,7 +656,7 @@ status through the installed wrapper. A held key also shows `held: true` and
 its `failure_stage`:
 
 ```sh
-sudo ./onboard-clean-v1.sh extraction-attempts --limit 100
+sudo ./onboard-clean-v1.sh extraction-attempts
 ```
 
 After resolving the failure, use the exact key, attempt number, and outcome

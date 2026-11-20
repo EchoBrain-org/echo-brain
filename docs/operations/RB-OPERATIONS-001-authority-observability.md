@@ -415,6 +415,10 @@ worker passes and review requests reuse. `attempt` on extraction is the durable
 attempt ledger ordinal. A parked meeting ends its worker pass with `result=held`;
 a scheduled extraction retry reports `retry_pending`. Grounding failures carry
 an allowlisted `grounding_stage`, such as `evidence_id`, without the cited IDs.
+Two held stages name a meeting one extraction call cannot take: `output_too_long`
+(the reply stopped at the model's own output maximum) and `input_too_long` (the
+provider refused a prompt past the model's context window). Neither is retried
+automatically; an operator may authorize one more attempt.
 The attempt ledger remains authoritative for holds and retry authorization.
 
 | Evidence | What it proves |
@@ -726,7 +730,6 @@ Meeting extraction (`llm-decision-processor.ts`):
 | `extraction_unknown_unit_dropped` | Dropped a cited unit id that names no unit from an item it kept |
 | `extraction_confidence_cleared` | Cleared a confidence that is not a number from 0 to 1 |
 | `extraction_rationale_link_dropped` | Dropped a rationale's repeated link, or a link to no kept decision |
-| `extraction_evidence_trimmed` | Left cited units out of kept items, by the item's evidence budget or the meeting's ceiling; counts the units left out |
 
 Research steps and the research loop (`agentic-research-loop-v1.ts`):
 

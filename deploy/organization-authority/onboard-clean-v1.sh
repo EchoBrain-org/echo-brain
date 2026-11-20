@@ -122,7 +122,7 @@ usage:
   onboard-clean-v1.sh resume [--existing-slack-app <app-id> | --create-slack-app]
   onboard-clean-v1.sh continue-staged-initial-onboarding
   onboard-clean-v1.sh status
-  onboard-clean-v1.sh extraction-attempts [--limit <1..100>]
+  onboard-clean-v1.sh extraction-attempts [--limit <count>]
   onboard-clean-v1.sh langsmith-tracing --project <project> --region <us|eu|apac|aws-us> (--hours <1..24> | --until-disabled) [--workspace-id <uuid>]
   onboard-clean-v1.sh langsmith-tracing --disable
   onboard-clean-v1.sh personal-claude <login|enable|status|disable>
@@ -2197,15 +2197,15 @@ require_extraction_recovery_lane() {
 }
 
 extraction_attempts() {
-  local limit=100
+  # Every attempt, or the newest --limit of them.
+  local -a limit=()
   if [[ $# -ne 0 ]]; then
-    [[ $# -eq 2 && "$1" == --limit && "$2" =~ ^[1-9][0-9]{0,2}$ ]] || usage
-    limit="$2"
-    (( limit <= 100 )) || usage
+    [[ $# -eq 2 && "$1" == --limit && "$2" =~ ^[1-9][0-9]{0,15}$ ]] || usage
+    limit=(--limit "$2")
   fi
   require_extraction_recovery_lane
   compose_clean run --rm --no-deps --pull never --entrypoint node authority \
-    "$EXTRACTION_ATTEMPT_COMMAND" status --state-dir /echo-clean/state --limit "$limit"
+    "$EXTRACTION_ATTEMPT_COMMAND" status --state-dir /echo-clean/state ${limit[@]+"${limit[@]}"}
 }
 
 retry_extraction() {

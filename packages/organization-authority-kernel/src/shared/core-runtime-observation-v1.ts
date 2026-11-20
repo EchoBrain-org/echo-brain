@@ -58,7 +58,7 @@ export const CORE_RUNTIME_MODEL_CORRECTIONS_V1 = Object.freeze([
   // Meeting extraction (organization-processing llm-decision-processor.ts).
   "extraction_item_set_aside", "extraction_repeat_dropped", "extraction_due_cleared", "extraction_due_coerced",
   "extraction_decided_downgraded", "extraction_unit_id_respelled", "extraction_parent_unit_cited", "extraction_unknown_unit_dropped",
-  "extraction_confidence_cleared", "extraction_rationale_link_dropped", "extraction_evidence_trimmed",
+  "extraction_confidence_cleared", "extraction_rationale_link_dropped",
   // A research step's reads as the research loop runs them, and the loop's own guards and stops.
   "step_source_alias", "step_title_as_id",
   "research_repeat_search", "research_repeat_open", "research_repeat_list", "research_repeat_refusal", "research_finish_refused",
